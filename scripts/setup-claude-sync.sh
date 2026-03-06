@@ -222,15 +222,15 @@ setup_qa_architect_license() {
 
     # Projects that use qa-architect
     local PROJECTS=(
-        "ai-learning-companion"
+        "project-6"
         "youruser"
-        "jobrecon"
-        "keyflash"
-        "postrail"
-        "retireabroad"
-        "vibebuildlab"
+        "project-1"
+        "project-2"
+        "project-3"
+        "project-4"
+        "project-5"
         "yourbrand"
-        "qa-architect"
+        "project-7"
     )
 
     local installed=0

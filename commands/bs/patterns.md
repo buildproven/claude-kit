@@ -21,7 +21,7 @@ Search accumulated patterns and best practices in CLAUDE.md files (global + proj
 /bs:patterns "bash" --interactive      # Interactive fzf search
 /bs:patterns --all                     # Show all section headers
 /bs:patterns "auth" --all-projects     # Search all projects (CS-072)
-/bs:patterns "auth" --project keyflash # Search specific project (CS-072)
+/bs:patterns "auth" --project example-project # Search specific project (CS-072)
 /bs:patterns --deprecated              # Include deprecated patterns
 /bs:patterns --since 2026-01-01        # Only patterns added since date
 /bs:patterns --list-meta               # Show all patterns with metadata
@@ -172,7 +172,7 @@ esac
 ```bash
 /bs:patterns "authentication" --all-projects        # Search all projects
 /bs:patterns "auth" --all-projects --rank           # Ranked by relevance
-/bs:patterns "deployment" --project keyflash        # Search specific project
+/bs:patterns "deployment" --project example-project        # Search specific project
 /bs:patterns --list-projects                        # List all registered projects
 ```
 

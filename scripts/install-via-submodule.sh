@@ -10,7 +10,7 @@
 #
 # Usage:
 #   cd your-project
-#   bash <(curl -sL https://raw.githubusercontent.com/vibebuildlab/claude-setup/main/scripts/install-via-submodule.sh)
+#   bash <(curl -sL https://raw.githubusercontent.com/YOUR_USER/claude-power-kit/main/scripts/install-via-submodule.sh)
 #
 # Or if you have the script locally:
 #   /path/to/claude-setup/scripts/install-via-submodule.sh

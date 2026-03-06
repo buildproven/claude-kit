@@ -128,7 +128,7 @@ All notable changes to claude-setup will be documented in this file.
 - `/bs:quality-status` command (use `/bs:quality --status` instead)
 - 8 VBL pipeline commands: validate, build, ship, launch, grow, run, project, monitor
 - 4 deprecated commands from \_archive/
-- 2 business commands moved to vibebuildlab repo: revenue, queue
+- 2 business commands moved to your-project repo: revenue, queue
 
 ## [2.0.0] - 2025-11-26
 

@@ -271,11 +271,11 @@ Scan for VBL-specific or business-specific content:
 ```bash
 # Patterns that indicate business logic:
 PATTERNS=(
-  "vibebuildlab"
+  "your-project"
   "vbl"
   "pnpm vbl"
   "/Users/youruser"
-  "~/Projects/vibebuildlab"
+  "~/Projects/your-project"
   "\$25"
   "revenue"
   "pricing"
@@ -373,7 +373,7 @@ Ask user if they want to:
 
 - Remove VBL CLI calls
 - Replace with environment variable checks
-- Move commands to vibebuildlab repo
+- Move commands to your-project repo
 
 ### 4. Fix Permissions
 

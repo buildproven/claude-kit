@@ -50,7 +50,7 @@ const baseRules = {
 // Security rules only if plugin is loaded
 const securityRules = security
   ? {
-      // Security rules from WFHroulette patterns - adjusted for build tools
+      // Security rules for defensive coding - adjusted for build tools
       'security/detect-object-injection': 'warn', // Build tools often use dynamic object access
       'security/detect-non-literal-regexp': 'error',
       'security/detect-unsafe-regex': 'error',

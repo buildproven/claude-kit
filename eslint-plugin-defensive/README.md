@@ -2,7 +2,7 @@
 
 ESLint plugin for defensive coding patterns - catches issues that standard lint/type checks miss.
 
-Based on patterns discovered during exit-number and retire-runway audits where 24 issues slipped through standard quality checks.
+Catches runtime issues that standard lint and type checks miss. 24 issues slipped through standard quality checks.
 
 ## Installation
 
