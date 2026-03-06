@@ -1,0 +1,442 @@
+/**
+ * License Validation Template
+ *
+ * Product: {{PRODUCT_NAME}}
+ *
+ * Provides:
+ * - License key validation
+ * - Middleware for protected routes
+ * - API routes for license management
+ * - Client-side validation hook
+ *
+ * License Key Format: PROD-XXXX-XXXX-XXXX-XXXX
+ */
+
+import crypto from 'crypto';
+
+// ============================================================================
+// TYPES
+// ============================================================================
+
+export interface License {
+  id: string;
+  licenseKey: string;
+  email: string;
+  stripeCustomerId: string;
+  stripeSubscriptionId?: string;
+  productId: string;
+  activatedAt?: Date;
+  expiresAt?: Date;
+  revokedAt?: Date;
+  machineId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ValidationResult {
+  valid: boolean;
+  license?: License;
+  error?: string;
+  errorCode?: 'INVALID_FORMAT' | 'NOT_FOUND' | 'EXPIRED' | 'REVOKED' | 'MACHINE_MISMATCH';
+}
+
+// ============================================================================
+// LICENSE KEY UTILITIES
+// ============================================================================
+
+const PRODUCT_PREFIX = '{{PRODUCT_PREFIX}}'; // e.g., 'ASEO' for Advanced SEO
+
+/**
+ * Generate a new license key
+ */
+export function generateLicenseKey(): string {
+  const segments = Array(4)
+    .fill(null)
+    .map(() => crypto.randomBytes(2).toString('hex').toUpperCase());
+  return `${PRODUCT_PREFIX}-${segments.join('-')}`;
+}
+
+/**
+ * Validate license key format
+ */
+export function isValidLicenseKeyFormat(key: string): boolean {
+  // Format: PROD-XXXX-XXXX-XXXX-XXXX (4 char prefix + 4 segments of 4 hex chars)
+  const pattern = /^[A-Z0-9]{2,6}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/;
+  return pattern.test(key.toUpperCase());
+}
+
+/**
+ * Normalize license key (uppercase, trim whitespace)
+ */
+export function normalizeLicenseKey(key: string): string {
+  return key.trim().toUpperCase().replace(/\s+/g, '');
+}
+
+// ============================================================================
+// DATABASE OPERATIONS (Implement with your database)
+// ============================================================================
+
+/**
+ * Find license by key - IMPLEMENT WITH YOUR DATABASE
+ */
+async function findLicenseByKey(licenseKey: string): Promise<License | null> {
+  // Example with Prisma:
+  // return prisma.license.findUnique({ where: { licenseKey } });
+
+  // Example with Drizzle:
+  // const [license] = await db.select().from(licenses).where(eq(licenses.licenseKey, licenseKey));
+  // return license || null;
+
+  throw new Error('Implement findLicenseByKey with your database');
+}
+
+/**
+ * Activate license - IMPLEMENT WITH YOUR DATABASE
+ */
+async function activateLicense(
+  licenseKey: string,
+  machineId?: string
+): Promise<License> {
+  // Example with Prisma:
+  // return prisma.license.update({
+  //   where: { licenseKey },
+  //   data: {
+  //     activatedAt: new Date(),
+  //     machineId,
+  //   },
+  // });
+
+  throw new Error('Implement activateLicense with your database');
+}
+
+/**
+ * Deactivate license - IMPLEMENT WITH YOUR DATABASE
+ */
+async function deactivateLicense(licenseKey: string): Promise<License> {
+  // Example with Prisma:
+  // return prisma.license.update({
+  //   where: { licenseKey },
+  //   data: {
+  //     activatedAt: null,
+  //     machineId: null,
+  //   },
+  // });
+
+  throw new Error('Implement deactivateLicense with your database');
+}
+
+// ============================================================================
+// VALIDATION LOGIC
+// ============================================================================
+
+/**
+ * Validate a license key
+ */
+export async function validateLicense(
+  licenseKey: string,
+  machineId?: string
+): Promise<ValidationResult> {
+  // Normalize key
+  const normalizedKey = normalizeLicenseKey(licenseKey);
+
+  // Check format
+  if (!isValidLicenseKeyFormat(normalizedKey)) {
+    return {
+      valid: false,
+      error: 'Invalid license key format',
+      errorCode: 'INVALID_FORMAT',
+    };
+  }
+
+  // Find license in database
+  const license = await findLicenseByKey(normalizedKey);
+
+  if (!license) {
+    return {
+      valid: false,
+      error: 'License key not found',
+      errorCode: 'NOT_FOUND',
+    };
+  }
+
+  // Check if revoked
+  if (license.revokedAt) {
+    return {
+      valid: false,
+      license,
+      error: 'License has been revoked',
+      errorCode: 'REVOKED',
+    };
+  }
+
+  // Check expiration
+  if (license.expiresAt && new Date() > license.expiresAt) {
+    return {
+      valid: false,
+      license,
+      error: 'License has expired',
+      errorCode: 'EXPIRED',
+    };
+  }
+
+  // Check machine ID (if license is already activated on a different machine)
+  if (license.machineId && machineId && license.machineId !== machineId) {
+    return {
+      valid: false,
+      license,
+      error: 'License is activated on a different machine',
+      errorCode: 'MACHINE_MISMATCH',
+    };
+  }
+
+  return {
+    valid: true,
+    license,
+  };
+}
+
+// ============================================================================
+// NEXT.JS MIDDLEWARE
+// ============================================================================
+
+import { NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
+
+/**
+ * Middleware to protect routes that require a valid license
+ */
+export async function licenseMiddleware(request: NextRequest) {
+  // Get license key from header or cookie
+  const licenseKey =
+    request.headers.get('x-license-key') ||
+    request.cookies.get('license_key')?.value;
+
+  if (!licenseKey) {
+    return NextResponse.json(
+      { error: 'License key required' },
+      { status: 401 }
+    );
+  }
+
+  const validation = await validateLicense(licenseKey);
+
+  if (!validation.valid) {
+    return NextResponse.json(
+      { error: validation.error, code: validation.errorCode },
+      { status: 403 }
+    );
+  }
+
+  // Add license info to request headers for downstream use
+  const response = NextResponse.next();
+  response.headers.set('x-license-valid', 'true');
+  response.headers.set('x-license-email', validation.license!.email);
+
+  return response;
+}
+
+// ============================================================================
+// API ROUTES
+// ============================================================================
+
+// POST /api/licenses/activate
+export async function handleActivateLicense(request: Request) {
+  try {
+    const { licenseKey, machineId } = await request.json();
+
+    if (!licenseKey) {
+      return NextResponse.json(
+        { error: 'License key is required' },
+        { status: 400 }
+      );
+    }
+
+    // Validate first
+    const validation = await validateLicense(licenseKey, machineId);
+
+    if (!validation.valid) {
+      return NextResponse.json(
+        { error: validation.error, code: validation.errorCode },
+        { status: 400 }
+      );
+    }
+
+    // Activate
+    const license = await activateLicense(
+      normalizeLicenseKey(licenseKey),
+      machineId
+    );
+
+    return NextResponse.json({
+      success: true,
+      message: 'License activated successfully',
+      license: {
+        email: license.email,
+        activatedAt: license.activatedAt,
+        expiresAt: license.expiresAt,
+      },
+    });
+  } catch (error) {
+    console.error('License activation error:', error);
+    return NextResponse.json(
+      { error: 'Failed to activate license' },
+      { status: 500 }
+    );
+  }
+}
+
+// GET /api/licenses/validate
+export async function handleValidateLicense(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const licenseKey = searchParams.get('key');
+  const machineId = searchParams.get('machineId') || undefined;
+
+  if (!licenseKey) {
+    return NextResponse.json(
+      { error: 'License key is required' },
+      { status: 400 }
+    );
+  }
+
+  const validation = await validateLicense(licenseKey, machineId);
+
+  return NextResponse.json({
+    valid: validation.valid,
+    error: validation.error,
+    errorCode: validation.errorCode,
+    expiresAt: validation.license?.expiresAt,
+  });
+}
+
+// POST /api/licenses/deactivate
+export async function handleDeactivateLicense(request: Request) {
+  try {
+    const { licenseKey } = await request.json();
+
+    if (!licenseKey) {
+      return NextResponse.json(
+        { error: 'License key is required' },
+        { status: 400 }
+      );
+    }
+
+    await deactivateLicense(normalizeLicenseKey(licenseKey));
+
+    return NextResponse.json({
+      success: true,
+      message: 'License deactivated successfully',
+    });
+  } catch (error) {
+    console.error('License deactivation error:', error);
+    return NextResponse.json(
+      { error: 'Failed to deactivate license' },
+      { status: 500 }
+    );
+  }
+}
+
+// ============================================================================
+// CLIENT-SIDE VALIDATION HOOK (React)
+// ============================================================================
+
+/*
+import { useState, useEffect } from 'react';
+
+interface UseLicenseResult {
+  isValid: boolean | null;
+  isLoading: boolean;
+  error: string | null;
+  expiresAt: Date | null;
+  validate: (key: string) => Promise<boolean>;
+}
+
+export function useLicense(storedKey?: string): UseLicenseResult {
+  const [isValid, setIsValid] = useState<boolean | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [expiresAt, setExpiresAt] = useState<Date | null>(null);
+
+  const validate = async (key: string): Promise<boolean> => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch(`/api/licenses/validate?key=${encodeURIComponent(key)}`);
+      const data = await response.json();
+
+      setIsValid(data.valid);
+      if (data.expiresAt) {
+        setExpiresAt(new Date(data.expiresAt));
+      }
+      if (!data.valid && data.error) {
+        setError(data.error);
+      }
+
+      return data.valid;
+    } catch (err) {
+      setError('Failed to validate license');
+      setIsValid(false);
+      return false;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (storedKey) {
+      validate(storedKey);
+    }
+  }, [storedKey]);
+
+  return { isValid, isLoading, error, expiresAt, validate };
+}
+*/
+
+// ============================================================================
+// CLI VALIDATION (for npm packages)
+// ============================================================================
+
+/*
+#!/usr/bin/env node
+// bin/activate.ts
+
+import { validateLicense, activateLicense } from '../lib/license';
+import { machineIdSync } from 'node-machine-id';
+import fs from 'fs';
+import path from 'path';
+
+const LICENSE_FILE = path.join(process.env.HOME || '~', '.{{PRODUCT_ID}}-license');
+
+async function activate(licenseKey: string) {
+  const machineId = machineIdSync();
+
+  console.log('Validating license...');
+  const validation = await validateLicense(licenseKey, machineId);
+
+  if (!validation.valid) {
+    console.error(`Error: ${validation.error}`);
+    process.exit(1);
+  }
+
+  // Store license locally
+  fs.writeFileSync(LICENSE_FILE, JSON.stringify({
+    key: licenseKey,
+    activatedAt: new Date().toISOString(),
+  }));
+
+  console.log('License activated successfully!');
+  if (validation.license?.expiresAt) {
+    console.log(`Expires: ${validation.license.expiresAt.toLocaleDateString()}`);
+  } else {
+    console.log('Lifetime license - no expiration');
+  }
+}
+
+// Run if called directly
+const key = process.argv[2];
+if (!key) {
+  console.error('Usage: npx {{PRODUCT_ID}} activate LICENSE-KEY');
+  process.exit(1);
+}
+activate(key);
+*/

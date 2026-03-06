@@ -1,0 +1,49 @@
+echo "Running pre-push checks..."
+
+# Formatting
+echo "  Checking formatting..."
+npm run format:check || {
+  echo "Format check failed! Run 'npm run format' to fix."
+  exit 1
+}
+
+# Linting
+echo "  Linting..."
+npm run lint || {
+  echo "Lint failed! Fix errors before pushing."
+  exit 1
+}
+
+# Pattern checks (shell script validation)
+if [ -f "scripts/pattern-check.sh" ]; then
+  echo "  Running pattern checks..."
+  bash scripts/pattern-check.sh --all || {
+    echo "Pattern check failed!"
+    exit 1
+  }
+fi
+
+# Secret scanning (if available) — only scan recent commits, not working tree
+if command -v gitleaks &> /dev/null; then
+  echo "  Scanning for secrets in commits..."
+  gitleaks detect --log-opts="HEAD~1..HEAD" --exit-code=1 2>/dev/null || {
+    # Fallback for first commit or shallow clone
+    gitleaks detect --staged --exit-code=1 2>/dev/null || true
+  }
+else
+  echo "  gitleaks not installed - skipping secret scan"
+fi
+
+# Doc staleness warnings (non-blocking unless DOC_STALENESS_STRICT=1)
+if [ -f "scripts/doc-staleness-check.sh" ] && [ "${DOC_STALENESS_SKIP:-0}" != "1" ]; then
+  if [ "${DOC_STALENESS_STRICT:-0}" = "1" ]; then
+    bash scripts/doc-staleness-check.sh --strict || {
+      echo "Doc staleness check failed (strict mode)!"
+      exit 1
+    }
+  else
+    bash scripts/doc-staleness-check.sh || true
+  fi
+fi
+
+echo "Pre-push passed!"

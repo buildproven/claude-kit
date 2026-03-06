@@ -1,0 +1,322 @@
+<!--
+  License Delivery Email Template
+
+  Product: {{PRODUCT_NAME}}
+
+  Variables to replace:
+  - {{PRODUCT_NAME}} - Your product name
+  - {{LICENSE_KEY}} - The generated license key
+  - {{CUSTOMER_NAME}} - Customer's name (if available)
+  - {{CUSTOMER_EMAIL}} - Customer's email
+  - {{ACTIVATION_URL}} - URL to activate license
+  - {{DOCS_URL}} - Link to documentation
+  - {{SUPPORT_EMAIL}} - Support email address
+  - {{COMPANY_NAME}} - Your company name
+  - {{EXPIRES_AT}} - Expiration date (optional, for subscriptions)
+
+  Compatible with:
+  - Resend
+  - SendGrid
+  - Postmark
+  - AWS SES
+  - Any HTML email service
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>Your {{PRODUCT_NAME}} License</title>
+  <!--[if mso]>
+  <noscript>
+    <xml>
+      <o:OfficeDocumentSettings>
+        <o:PixelsPerInch>96</o:PixelsPerInch>
+      </o:OfficeDocumentSettings>
+    </xml>
+  </noscript>
+  <![endif]-->
+  <style>
+    /* Reset styles */
+    body, table, td, p, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+    table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+    img { -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }
+
+    /* Base styles */
+    body {
+      margin: 0 !important;
+      padding: 0 !important;
+      width: 100% !important;
+      background-color: #f4f4f5;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    }
+
+    /* Responsive styles */
+    @media screen and (max-width: 600px) {
+      .container { width: 100% !important; padding: 20px !important; }
+      .content { padding: 30px 20px !important; }
+      .license-box { padding: 20px !important; }
+      .license-key { font-size: 18px !important; letter-spacing: 1px !important; }
+    }
+  </style>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f4f4f5;">
+  <!-- Preview text (hidden, shows in email preview) -->
+  <div style="display: none; max-height: 0; overflow: hidden;">
+    Your {{PRODUCT_NAME}} license key is ready! Here's everything you need to get started.
+    &nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;
+  </div>
+
+  <!-- Email wrapper -->
+  <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f4f4f5;">
+    <tr>
+      <td align="center" style="padding: 40px 20px;">
+
+        <!-- Main container -->
+        <table role="presentation" class="container" cellpadding="0" cellspacing="0" width="600" style="background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);">
+
+          <!-- Header -->
+          <tr>
+            <td align="center" style="padding: 40px 40px 20px;">
+              <!-- Logo placeholder - replace with your logo -->
+              <div style="width: 60px; height: 60px; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); border-radius: 12px; display: flex; align-items: center; justify-content: center;">
+                <span style="color: white; font-size: 28px; font-weight: bold;">{{PRODUCT_INITIAL}}</span>
+              </div>
+            </td>
+          </tr>
+
+          <!-- Content -->
+          <tr>
+            <td class="content" style="padding: 20px 40px 40px;">
+
+              <!-- Greeting -->
+              <h1 style="margin: 0 0 20px; font-size: 24px; font-weight: 700; color: #18181b; text-align: center;">
+                Welcome to {{PRODUCT_NAME}}! 🎉
+              </h1>
+
+              <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #52525b; text-align: center;">
+                Thanks for your purchase! Your license key is ready to use.
+              </p>
+
+              <!-- License Key Box -->
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 32px;">
+                <tr>
+                  <td class="license-box" style="background-color: #f8fafc; border: 2px dashed #e2e8f0; border-radius: 12px; padding: 24px; text-align: center;">
+                    <p style="margin: 0 0 8px; font-size: 12px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 1px;">
+                      Your License Key
+                    </p>
+                    <p class="license-key" style="margin: 0; font-size: 22px; font-weight: 700; color: #18181b; font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace; letter-spacing: 2px; word-break: break-all;">
+                      {{LICENSE_KEY}}
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Expiration notice (for subscriptions) -->
+              <!-- Remove this section for lifetime licenses -->
+              <!--
+              <p style="margin: 0 0 24px; font-size: 14px; color: #64748b; text-align: center;">
+                <strong>Valid until:</strong> {{EXPIRES_AT}}
+              </p>
+              -->
+
+              <!-- CTA Button -->
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 32px;">
+                <tr>
+                  <td align="center">
+                    <a href="{{ACTIVATION_URL}}" style="display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);">
+                      Activate Your License →
+                    </a>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Quick Start Steps -->
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 32px; background-color: #fafafa; border-radius: 8px; padding: 24px;">
+                <tr>
+                  <td style="padding: 24px;">
+                    <h2 style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #18181b;">
+                      Quick Start Guide
+                    </h2>
+
+                    <!-- Step 1 -->
+                    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 16px;">
+                      <tr>
+                        <td width="32" valign="top">
+                          <div style="width: 24px; height: 24px; background-color: #6366f1; border-radius: 50%; color: white; font-size: 12px; font-weight: 600; line-height: 24px; text-align: center;">1</div>
+                        </td>
+                        <td style="padding-left: 12px;">
+                          <p style="margin: 0; font-size: 14px; color: #52525b;">
+                            Copy your license key from above
+                          </p>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <!-- Step 2 -->
+                    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 16px;">
+                      <tr>
+                        <td width="32" valign="top">
+                          <div style="width: 24px; height: 24px; background-color: #6366f1; border-radius: 50%; color: white; font-size: 12px; font-weight: 600; line-height: 24px; text-align: center;">2</div>
+                        </td>
+                        <td style="padding-left: 12px;">
+                          <p style="margin: 0; font-size: 14px; color: #52525b;">
+                            Click "Activate Your License" or run:<br>
+                            <code style="background-color: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-size: 13px;">npx {{PRODUCT_ID}} activate YOUR-KEY</code>
+                          </p>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <!-- Step 3 -->
+                    <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+                      <tr>
+                        <td width="32" valign="top">
+                          <div style="width: 24px; height: 24px; background-color: #6366f1; border-radius: 50%; color: white; font-size: 12px; font-weight: 600; line-height: 24px; text-align: center;">3</div>
+                        </td>
+                        <td style="padding-left: 12px;">
+                          <p style="margin: 0; font-size: 14px; color: #52525b;">
+                            Start using {{PRODUCT_NAME}}!
+                          </p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Secondary links -->
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+                <tr>
+                  <td align="center">
+                    <p style="margin: 0 0 8px; font-size: 14px; color: #64748b;">
+                      Need help? Check out our
+                      <a href="{{DOCS_URL}}" style="color: #6366f1; text-decoration: none; font-weight: 500;">documentation</a>
+                      or
+                      <a href="mailto:{{SUPPORT_EMAIL}}" style="color: #6366f1; text-decoration: none; font-weight: 500;">contact support</a>.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 24px 40px; background-color: #fafafa; border-top: 1px solid #e4e4e7; border-radius: 0 0 12px 12px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+                <tr>
+                  <td align="center">
+                    <p style="margin: 0 0 8px; font-size: 13px; color: #71717a;">
+                      © {{CURRENT_YEAR}} {{COMPANY_NAME}}. All rights reserved.
+                    </p>
+                    <p style="margin: 0; font-size: 12px; color: #a1a1aa;">
+                      You're receiving this email because you purchased {{PRODUCT_NAME}}.
+                      <br>
+                      <a href="{{UNSUBSCRIBE_URL}}" style="color: #a1a1aa; text-decoration: underline;">Unsubscribe from marketing emails</a>
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+        </table>
+
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>
+
+<!--
+=============================================================================
+PLAIN TEXT VERSION (for email clients that don't support HTML)
+=============================================================================
+
+Welcome to {{PRODUCT_NAME}}!
+
+Thanks for your purchase! Your license key is ready to use.
+
+YOUR LICENSE KEY
+================
+{{LICENSE_KEY}}
+
+QUICK START
+===========
+1. Copy your license key from above
+2. Visit {{ACTIVATION_URL}} or run: npx {{PRODUCT_ID}} activate YOUR-KEY
+3. Start using {{PRODUCT_NAME}}!
+
+Need help?
+- Documentation: {{DOCS_URL}}
+- Support: {{SUPPORT_EMAIL}}
+
+---
+© {{CURRENT_YEAR}} {{COMPANY_NAME}}. All rights reserved.
+-->
+
+<!--
+=============================================================================
+RESEND IMPLEMENTATION EXAMPLE
+=============================================================================
+
+import { Resend } from 'resend';
+
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+async function sendLicenseEmail(
+  email: string,
+  licenseKey: string,
+  customerName?: string
+) {
+  const html = `
+    <!-- Paste this template here with variables replaced -->
+  `;
+
+  const text = `
+Welcome to {{PRODUCT_NAME}}!
+
+Your license key: ${licenseKey}
+
+Activate at: {{ACTIVATION_URL}}
+
+Need help? Email {{SUPPORT_EMAIL}}
+  `;
+
+  await resend.emails.send({
+    from: '{{PRODUCT_NAME}} <noreply@{{DOMAIN}}>',
+    to: email,
+    subject: 'Your {{PRODUCT_NAME}} License Key',
+    html,
+    text,
+  });
+}
+-->
+
+<!--
+=============================================================================
+SENDGRID IMPLEMENTATION EXAMPLE
+=============================================================================
+
+import sgMail from '@sendgrid/mail';
+
+sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
+
+async function sendLicenseEmail(
+  email: string,
+  licenseKey: string
+) {
+  await sgMail.send({
+    to: email,
+    from: 'noreply@{{DOMAIN}}',
+    subject: 'Your {{PRODUCT_NAME}} License Key',
+    html: `<!-- template here -->`,
+    text: `Your license key: ${licenseKey}`,
+  });
+}
+-->

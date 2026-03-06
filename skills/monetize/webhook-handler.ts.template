@@ -1,0 +1,282 @@
+/**
+ * Stripe Webhook Handler Template
+ *
+ * Framework: {{FRAMEWORK}} (Next.js App Router | Express | Fastify)
+ * Product: {{PRODUCT_NAME}}
+ *
+ * Handles:
+ * - checkout.session.completed: Generate and send license
+ * - customer.subscription.created: Activate subscription
+ * - customer.subscription.deleted: Revoke access
+ * - invoice.payment_succeeded: Extend subscription
+ *
+ * Setup:
+ * 1. Add STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET to .env
+ * 2. Deploy this route
+ * 3. Configure webhook in Stripe Dashboard
+ */
+
+// ============================================================================
+// NEXT.JS APP ROUTER VERSION
+// File: /app/api/webhooks/stripe/route.ts
+// ============================================================================
+
+import { headers } from 'next/headers';
+import { NextResponse } from 'next/server';
+import Stripe from 'stripe';
+import crypto from 'crypto';
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: '2024-12-18.acacia',
+});
+
+const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
+
+// License key generation
+function generateLicenseKey(productPrefix: string = 'PROD'): string {
+  const segments = Array(4)
+    .fill(null)
+    .map(() => crypto.randomBytes(2).toString('hex').toUpperCase());
+  return `${productPrefix}-${segments.join('-')}`;
+}
+
+// Webhook signature verification
+async function verifyWebhookSignature(
+  body: string,
+  signature: string
+): Promise<Stripe.Event> {
+  try {
+    return stripe.webhooks.constructEvent(body, signature, webhookSecret);
+  } catch (err) {
+    throw new Error(`Webhook signature verification failed: ${err}`);
+  }
+}
+
+// Send license email (implement with your email provider)
+async function sendLicenseEmail(
+  email: string,
+  licenseKey: string,
+  productName: string
+): Promise<void> {
+  // TODO: Implement with your email provider (Resend, SendGrid, etc.)
+  // Example with Resend:
+  // await resend.emails.send({
+  //   from: 'noreply@yourdomain.com',
+  //   to: email,
+  //   subject: `Your ${productName} License Key`,
+  //   html: generateLicenseEmailHtml(licenseKey, productName),
+  // });
+  console.log(`[License] Sending key ${licenseKey} to ${email}`);
+}
+
+// Save license to database (implement with your database)
+async function saveLicense(data: {
+  licenseKey: string;
+  email: string;
+  stripeCustomerId: string;
+  stripeSubscriptionId?: string;
+  productId: string;
+  expiresAt?: Date;
+}): Promise<void> {
+  // TODO: Implement with your database (Prisma, Drizzle, etc.)
+  // Example with Prisma:
+  // await prisma.license.create({ data });
+  console.log(`[License] Saved license:`, data);
+}
+
+// Revoke license (for subscription cancellation)
+async function revokeLicense(stripeSubscriptionId: string): Promise<void> {
+  // TODO: Implement with your database
+  // await prisma.license.update({
+  //   where: { stripeSubscriptionId },
+  //   data: { revokedAt: new Date() },
+  // });
+  console.log(`[License] Revoked subscription: ${stripeSubscriptionId}`);
+}
+
+// Extend license (for successful invoice payment)
+async function extendLicense(
+  stripeSubscriptionId: string,
+  newPeriodEnd: Date
+): Promise<void> {
+  // TODO: Implement with your database
+  // await prisma.license.update({
+  //   where: { stripeSubscriptionId },
+  //   data: { expiresAt: newPeriodEnd },
+  // });
+  console.log(`[License] Extended to ${newPeriodEnd}: ${stripeSubscriptionId}`);
+}
+
+export async function POST(request: Request) {
+  const body = await request.text();
+  const headersList = await headers();
+  const signature = headersList.get('stripe-signature');
+
+  if (!signature) {
+    return NextResponse.json(
+      { error: 'Missing stripe-signature header' },
+      { status: 400 }
+    );
+  }
+
+  let event: Stripe.Event;
+
+  try {
+    event = await verifyWebhookSignature(body, signature);
+  } catch (err) {
+    console.error('[Webhook] Signature verification failed:', err);
+    return NextResponse.json(
+      { error: 'Invalid signature' },
+      { status: 400 }
+    );
+  }
+
+  try {
+    switch (event.type) {
+      case 'checkout.session.completed': {
+        const session = event.data.object as Stripe.Checkout.Session;
+
+        if (session.payment_status !== 'paid') {
+          console.log('[Webhook] Payment not completed yet');
+          break;
+        }
+
+        const customerEmail = session.customer_email || session.customer_details?.email;
+        const customerId = session.customer as string;
+        const subscriptionId = session.subscription as string | undefined;
+
+        if (!customerEmail) {
+          console.error('[Webhook] No customer email found');
+          break;
+        }
+
+        // Generate license key
+        const licenseKey = generateLicenseKey('{{PRODUCT_PREFIX}}');
+
+        // Determine expiration (null for lifetime)
+        let expiresAt: Date | undefined;
+        if (subscriptionId) {
+          const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+          expiresAt = new Date(subscription.current_period_end * 1000);
+        }
+
+        // Save license to database
+        await saveLicense({
+          licenseKey,
+          email: customerEmail,
+          stripeCustomerId: customerId,
+          stripeSubscriptionId: subscriptionId,
+          productId: '{{PRODUCT_ID}}',
+          expiresAt,
+        });
+
+        // Send license email
+        await sendLicenseEmail(customerEmail, licenseKey, '{{PRODUCT_NAME}}');
+
+        console.log(`[Webhook] License created for ${customerEmail}`);
+        break;
+      }
+
+      case 'customer.subscription.created': {
+        const subscription = event.data.object as Stripe.Subscription;
+        console.log(`[Webhook] Subscription created: ${subscription.id}`);
+        // License already created in checkout.session.completed
+        break;
+      }
+
+      case 'customer.subscription.deleted': {
+        const subscription = event.data.object as Stripe.Subscription;
+        await revokeLicense(subscription.id);
+        console.log(`[Webhook] Subscription cancelled: ${subscription.id}`);
+        break;
+      }
+
+      case 'customer.subscription.updated': {
+        const subscription = event.data.object as Stripe.Subscription;
+
+        // Check if subscription was cancelled (cancel_at_period_end)
+        if (subscription.cancel_at_period_end) {
+          console.log(`[Webhook] Subscription marked for cancellation: ${subscription.id}`);
+        }
+        break;
+      }
+
+      case 'invoice.payment_succeeded': {
+        const invoice = event.data.object as Stripe.Invoice;
+        const subscriptionId = invoice.subscription as string | undefined;
+
+        if (subscriptionId && invoice.billing_reason === 'subscription_cycle') {
+          // This is a recurring payment, extend the license
+          const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+          const newPeriodEnd = new Date(subscription.current_period_end * 1000);
+          await extendLicense(subscriptionId, newPeriodEnd);
+          console.log(`[Webhook] License extended for subscription: ${subscriptionId}`);
+        }
+        break;
+      }
+
+      case 'invoice.payment_failed': {
+        const invoice = event.data.object as Stripe.Invoice;
+        console.log(`[Webhook] Payment failed for invoice: ${invoice.id}`);
+        // TODO: Send payment failed email, implement grace period
+        break;
+      }
+
+      default:
+        console.log(`[Webhook] Unhandled event type: ${event.type}`);
+    }
+
+    return NextResponse.json({ received: true });
+  } catch (err) {
+    console.error('[Webhook] Error processing event:', err);
+    return NextResponse.json(
+      { error: 'Webhook handler failed' },
+      { status: 500 }
+    );
+  }
+}
+
+// Disable body parsing - Stripe requires raw body for signature verification
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+// ============================================================================
+// EXPRESS VERSION (Alternative)
+// File: /routes/webhooks/stripe.ts
+// ============================================================================
+
+/*
+import express from 'express';
+import Stripe from 'stripe';
+
+const router = express.Router();
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+
+router.post(
+  '/stripe',
+  express.raw({ type: 'application/json' }),
+  async (req, res) => {
+    const signature = req.headers['stripe-signature'] as string;
+
+    let event: Stripe.Event;
+    try {
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        signature,
+        process.env.STRIPE_WEBHOOK_SECRET!
+      );
+    } catch (err) {
+      return res.status(400).send(`Webhook Error: ${err}`);
+    }
+
+    // Handle events same as above...
+
+    res.json({ received: true });
+  }
+);
+
+export default router;
+*/

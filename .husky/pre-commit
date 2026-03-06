@@ -1,0 +1,24 @@
+#!/bin/sh
+
+# =============================================================================
+# Pre-commit Hook - Lint-Staged + Pattern Analysis
+# =============================================================================
+# Runs two checks:
+# 1. lint-staged: Format and lint staged files
+# 2. pattern-check: Defensive coding pattern analysis (Step 1.8 from /bs:quality)
+#
+# BYPASS OPTIONS:
+#   --no-verify                    Skip all hooks (standard git flag)
+#   GIT_COMMIT_NO_PATTERN_CHECK=1  Skip pattern check only (logged)
+#   PATTERN_CHECK_SKIP=1           Skip pattern check (for CI)
+# =============================================================================
+
+# Run lint-staged on staged files (explicitly use local config)
+npx lint-staged --config package.json
+
+# Run pattern analysis if script exists
+if [ -f "./scripts/pattern-check.sh" ]; then
+    echo ""
+    echo "Running defensive pattern analysis..."
+    ./scripts/pattern-check.sh
+fi

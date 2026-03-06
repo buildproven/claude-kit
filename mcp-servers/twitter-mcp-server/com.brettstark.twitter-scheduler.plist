@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.brettstark.twitter-scheduler</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/brettstark/Projects/claude-setup/mcp-servers/twitter-mcp-server/.venv/bin/python</string>
+        <string>/Users/brettstark/Projects/claude-setup/scripts/twitter-post-scheduled.py</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>3600</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/brettstark/Projects/claude-setup/logs/twitter-scheduler.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/brettstark/Projects/claude-setup/logs/twitter-scheduler.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/brettstark</string>
+    </dict>
+</dict>
+</plist>

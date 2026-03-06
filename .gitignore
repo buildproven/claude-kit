@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Local settings (root level only)
+/settings.local.json
+
+# Allow config/settings.json (the source of truth)
+!config/settings.json
+
+# Logs and temp files
+*.log
+.DS_Store
+
+# Sensitive data
+*secret*
+*_token*
+*-token*
+*.token
+*key*
+!skills/**/keyword*
+.env
+
+# Session-specific files (don't share across computers)
+debug/
+file-history/
+history.jsonl
+shell-snapshots/
+todos/
+projects/
+.update_check
+
+# Cost tracking (personal usage data)
+.claude/cost-tracking.json
+cost-tracking.json
+
+# Backups
+*.backup
+
+# Claude Code statsig cache
+statsig/
+config/social-credentials.env
+mcp-servers/*/node_modules/
+mcp-servers/*/.env
+docs/node_modules/
+__pycache__/
+.serena/
+
+# License files (never commit actual licenses)
+data/licenses/*.json

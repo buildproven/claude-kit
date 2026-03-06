@@ -1,0 +1,25 @@
+{
+  "$schema": "./schemas/defensive-patterns.schema.json",
+  "version": "1.0",
+  "description": "Example per-project defensive pattern configuration",
+
+  "authMiddleware": [
+    "withAuth",
+    "requireAuth",
+    "protectedProcedure",
+    "getServerSession",
+    "getSession",
+    "authenticate"
+  ],
+
+  "safeParseHelpers": ["safeParse", "safeJsonParse", "zodParse", ".safeParse"],
+
+  "publicRoutes": [
+    "/api/health",
+    "/api/webhooks/*",
+    "/api/public/*",
+    "/api/auth/callback/*"
+  ],
+
+  "disabled": []
+}

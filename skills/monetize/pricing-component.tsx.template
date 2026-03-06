@@ -1,0 +1,548 @@
+/**
+ * Pricing Component Template
+ *
+ * Product: {{PRODUCT_NAME}}
+ * Framework: React + Tailwind CSS
+ *
+ * Features:
+ * - Monthly/Annual toggle with discount highlight
+ * - Feature comparison list
+ * - Stripe Checkout integration
+ * - Loading and error states
+ * - Responsive design
+ *
+ * Dependencies:
+ * - React 18+
+ * - Tailwind CSS
+ * - lucide-react (icons)
+ */
+
+'use client';
+
+import { useState, useCallback } from 'react';
+import { Check, Loader2, Zap } from 'lucide-react';
+
+// ============================================================================
+// TYPES
+// ============================================================================
+
+type BillingInterval = 'monthly' | 'annual' | 'lifetime';
+
+interface PricingPlan {
+  id: string;
+  name: string;
+  description: string;
+  monthlyPrice: number;
+  annualPrice: number;
+  lifetimePrice?: number;
+  features: string[];
+  highlighted?: boolean;
+  stripePriceIdMonthly: string;
+  stripePriceIdAnnual: string;
+  stripePriceIdLifetime?: string;
+}
+
+interface PricingProps {
+  plans?: PricingPlan[];
+  showLifetime?: boolean;
+  onCheckout?: (priceId: string) => Promise<void>;
+}
+
+// ============================================================================
+// DEFAULT CONFIGURATION
+// ============================================================================
+
+const DEFAULT_PLANS: PricingPlan[] = [
+  {
+    id: 'starter',
+    name: 'Starter',
+    description: 'Perfect for trying out {{PRODUCT_NAME}}',
+    monthlyPrice: 0,
+    annualPrice: 0,
+    features: [
+      'Basic features',
+      'Community support',
+      'Up to 3 projects',
+    ],
+    stripePriceIdMonthly: '',
+    stripePriceIdAnnual: '',
+  },
+  {
+    id: 'pro',
+    name: 'Pro',
+    description: 'For professionals and small teams',
+    monthlyPrice: 19,
+    annualPrice: 159, // ~30% discount
+    lifetimePrice: 299,
+    features: [
+      'All Starter features',
+      'Priority support',
+      'Unlimited projects',
+      'Advanced integrations',
+      'Custom templates',
+    ],
+    highlighted: true,
+    stripePriceIdMonthly: process.env.NEXT_PUBLIC_STRIPE_PRICE_ID_PRO_MONTHLY || '',
+    stripePriceIdAnnual: process.env.NEXT_PUBLIC_STRIPE_PRICE_ID_PRO_ANNUAL || '',
+    stripePriceIdLifetime: process.env.NEXT_PUBLIC_STRIPE_PRICE_ID_PRO_LIFETIME || '',
+  },
+  {
+    id: 'enterprise',
+    name: 'Enterprise',
+    description: 'For large teams and organizations',
+    monthlyPrice: 49,
+    annualPrice: 399,
+    features: [
+      'All Pro features',
+      'Dedicated support',
+      'SLA guarantee',
+      'Custom onboarding',
+      'Team management',
+      'SSO integration',
+    ],
+    stripePriceIdMonthly: process.env.NEXT_PUBLIC_STRIPE_PRICE_ID_ENTERPRISE_MONTHLY || '',
+    stripePriceIdAnnual: process.env.NEXT_PUBLIC_STRIPE_PRICE_ID_ENTERPRISE_ANNUAL || '',
+  },
+];
+
+// ============================================================================
+// CHECKOUT FUNCTION
+// ============================================================================
+
+async function createCheckoutSession(priceId: string): Promise<string> {
+  const response = await fetch('/api/checkout', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      priceId,
+      successUrl: `${window.location.origin}/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancelUrl: `${window.location.origin}/pricing`,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.message || 'Failed to create checkout session');
+  }
+
+  const { url } = await response.json();
+  return url;
+}
+
+// ============================================================================
+// COMPONENTS
+// ============================================================================
+
+function BillingToggle({
+  interval,
+  onChange,
+  showLifetime,
+}: {
+  interval: BillingInterval;
+  onChange: (interval: BillingInterval) => void;
+  showLifetime: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-center gap-4 mb-8">
+      <div className="inline-flex items-center rounded-lg bg-gray-100 p-1">
+        <button
+          onClick={() => onChange('monthly')}
+          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            interval === 'monthly'
+              ? 'bg-white text-gray-900 shadow-sm'
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          Monthly
+        </button>
+        <button
+          onClick={() => onChange('annual')}
+          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            interval === 'annual'
+              ? 'bg-white text-gray-900 shadow-sm'
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          Annual
+          <span className="ml-1.5 inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
+            Save 30%
+          </span>
+        </button>
+        {showLifetime && (
+          <button
+            onClick={() => onChange('lifetime')}
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              interval === 'lifetime'
+                ? 'bg-white text-gray-900 shadow-sm'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            Lifetime
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PricingCard({
+  plan,
+  interval,
+  isLoading,
+  onSelect,
+}: {
+  plan: PricingPlan;
+  interval: BillingInterval;
+  isLoading: boolean;
+  onSelect: () => void;
+}) {
+  const price =
+    interval === 'lifetime'
+      ? plan.lifetimePrice
+      : interval === 'annual'
+        ? plan.annualPrice
+        : plan.monthlyPrice;
+
+  const priceLabel =
+    interval === 'lifetime'
+      ? 'one-time'
+      : interval === 'annual'
+        ? '/year'
+        : '/month';
+
+  const isFree = price === 0;
+  const hasLifetime = interval === 'lifetime' && plan.lifetimePrice;
+
+  return (
+    <div
+      className={`relative rounded-2xl p-8 ${
+        plan.highlighted
+          ? 'bg-gray-900 text-white ring-2 ring-gray-900'
+          : 'bg-white ring-1 ring-gray-200'
+      }`}
+    >
+      {/* Popular badge */}
+      {plan.highlighted && (
+        <div className="absolute -top-4 left-1/2 -translate-x-1/2">
+          <div className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 px-4 py-1 text-sm font-semibold text-white">
+            <Zap className="h-4 w-4" />
+            Most Popular
+          </div>
+        </div>
+      )}
+
+      {/* Plan header */}
+      <div className="mb-6">
+        <h3
+          className={`text-lg font-semibold ${
+            plan.highlighted ? 'text-white' : 'text-gray-900'
+          }`}
+        >
+          {plan.name}
+        </h3>
+        <p
+          className={`mt-1 text-sm ${
+            plan.highlighted ? 'text-gray-300' : 'text-gray-600'
+          }`}
+        >
+          {plan.description}
+        </p>
+      </div>
+
+      {/* Price */}
+      <div className="mb-6">
+        <div className="flex items-baseline">
+          <span
+            className={`text-4xl font-bold tracking-tight ${
+              plan.highlighted ? 'text-white' : 'text-gray-900'
+            }`}
+          >
+            {isFree ? 'Free' : `$${price}`}
+          </span>
+          {!isFree && (
+            <span
+              className={`ml-1 text-sm ${
+                plan.highlighted ? 'text-gray-400' : 'text-gray-600'
+              }`}
+            >
+              {priceLabel}
+            </span>
+          )}
+        </div>
+        {interval === 'annual' && plan.monthlyPrice > 0 && (
+          <p
+            className={`mt-1 text-sm ${
+              plan.highlighted ? 'text-gray-400' : 'text-gray-500'
+            }`}
+          >
+            ${Math.round(plan.annualPrice / 12)}/month billed annually
+          </p>
+        )}
+      </div>
+
+      {/* CTA Button */}
+      <button
+        onClick={onSelect}
+        disabled={isLoading || isFree}
+        className={`w-full rounded-lg py-3 px-4 text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+          plan.highlighted
+            ? 'bg-white text-gray-900 hover:bg-gray-100'
+            : isFree
+              ? 'bg-gray-100 text-gray-900'
+              : 'bg-gray-900 text-white hover:bg-gray-800'
+        }`}
+      >
+        {isLoading ? (
+          <span className="flex items-center justify-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Processing...
+          </span>
+        ) : isFree ? (
+          'Current Plan'
+        ) : (
+          'Get Started'
+        )}
+      </button>
+
+      {/* Features list */}
+      <ul className="mt-8 space-y-4">
+        {plan.features.map((feature, index) => (
+          <li key={index} className="flex items-start gap-3">
+            <Check
+              className={`h-5 w-5 flex-shrink-0 ${
+                plan.highlighted ? 'text-green-400' : 'text-green-600'
+              }`}
+            />
+            <span
+              className={`text-sm ${
+                plan.highlighted ? 'text-gray-300' : 'text-gray-600'
+              }`}
+            >
+              {feature}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// ============================================================================
+// MAIN COMPONENT
+// ============================================================================
+
+export default function PricingTable({
+  plans = DEFAULT_PLANS,
+  showLifetime = true,
+  onCheckout,
+}: PricingProps) {
+  const [interval, setInterval] = useState<BillingInterval>('annual');
+  const [loadingPlanId, setLoadingPlanId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSelectPlan = useCallback(
+    async (plan: PricingPlan) => {
+      const priceId =
+        interval === 'lifetime'
+          ? plan.stripePriceIdLifetime
+          : interval === 'annual'
+            ? plan.stripePriceIdAnnual
+            : plan.stripePriceIdMonthly;
+
+      if (!priceId) {
+        setError('Pricing not configured for this plan');
+        return;
+      }
+
+      setLoadingPlanId(plan.id);
+      setError(null);
+
+      try {
+        if (onCheckout) {
+          await onCheckout(priceId);
+        } else {
+          const checkoutUrl = await createCheckoutSession(priceId);
+          window.location.href = checkoutUrl;
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Something went wrong');
+      } finally {
+        setLoadingPlanId(null);
+      }
+    },
+    [interval, onCheckout]
+  );
+
+  // Check if any plan has lifetime pricing
+  const hasLifetimePricing = plans.some((p) => p.lifetimePrice);
+
+  return (
+    <section className="py-16 px-4">
+      <div className="mx-auto max-w-7xl">
+        {/* Header */}
+        <div className="text-center mb-12">
+          <h2 className="text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">
+            Simple, transparent pricing
+          </h2>
+          <p className="mt-4 text-lg text-gray-600">
+            Choose the plan that fits your needs. All plans include a 30-day
+            money-back guarantee.
+          </p>
+        </div>
+
+        {/* Billing toggle */}
+        <BillingToggle
+          interval={interval}
+          onChange={setInterval}
+          showLifetime={showLifetime && hasLifetimePricing}
+        />
+
+        {/* Error message */}
+        {error && (
+          <div className="mb-8 mx-auto max-w-md rounded-lg bg-red-50 p-4 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
+        {/* Pricing cards */}
+        <div className="grid gap-8 lg:grid-cols-3">
+          {plans.map((plan) => (
+            <PricingCard
+              key={plan.id}
+              plan={plan}
+              interval={interval}
+              isLoading={loadingPlanId === plan.id}
+              onSelect={() => handleSelectPlan(plan)}
+            />
+          ))}
+        </div>
+
+        {/* FAQ or additional info */}
+        <div className="mt-16 text-center">
+          <p className="text-sm text-gray-600">
+            Questions?{' '}
+            <a
+              href="mailto:support@{{DOMAIN}}"
+              className="font-medium text-indigo-600 hover:text-indigo-500"
+            >
+              Contact our sales team
+            </a>
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ============================================================================
+// CHECKOUT API ROUTE (create alongside this component)
+// File: /app/api/checkout/route.ts
+// ============================================================================
+
+/*
+import { NextResponse } from 'next/server';
+import Stripe from 'stripe';
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: '2024-12-18.acacia',
+});
+
+export async function POST(request: Request) {
+  try {
+    const { priceId, successUrl, cancelUrl } = await request.json();
+
+    if (!priceId) {
+      return NextResponse.json(
+        { error: 'Price ID is required' },
+        { status: 400 }
+      );
+    }
+
+    // Get price to check if it's recurring
+    const price = await stripe.prices.retrieve(priceId);
+    const isSubscription = price.type === 'recurring';
+
+    const session = await stripe.checkout.sessions.create({
+      mode: isSubscription ? 'subscription' : 'payment',
+      payment_method_types: ['card'],
+      line_items: [
+        {
+          price: priceId,
+          quantity: 1,
+        },
+      ],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      // Collect customer email for license delivery
+      customer_creation: 'always',
+      // For one-time payments, allow invoice generation
+      ...(isSubscription ? {} : { invoice_creation: { enabled: true } }),
+    });
+
+    return NextResponse.json({ url: session.url });
+  } catch (err) {
+    console.error('Checkout session error:', err);
+    return NextResponse.json(
+      { error: 'Failed to create checkout session' },
+      { status: 500 }
+    );
+  }
+}
+*/
+
+// ============================================================================
+// SIMPLE VERSION (Single Plan)
+// ============================================================================
+
+/*
+export function SimplePricing({
+  price,
+  priceId,
+  features,
+  productName,
+}: {
+  price: number;
+  priceId: string;
+  features: string[];
+  productName: string;
+}) {
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handlePurchase = async () => {
+    setIsLoading(true);
+    try {
+      const url = await createCheckoutSession(priceId);
+      window.location.href = url;
+    } catch (err) {
+      console.error('Checkout error:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="max-w-sm mx-auto rounded-2xl bg-white p-8 shadow-lg ring-1 ring-gray-200">
+      <h3 className="text-2xl font-bold text-gray-900">{productName}</h3>
+      <p className="mt-4">
+        <span className="text-4xl font-bold">${price}</span>
+        <span className="text-gray-600"> one-time</span>
+      </p>
+      <button
+        onClick={handlePurchase}
+        disabled={isLoading}
+        className="mt-6 w-full rounded-lg bg-indigo-600 py-3 text-white font-semibold hover:bg-indigo-500 disabled:opacity-50"
+      >
+        {isLoading ? 'Processing...' : 'Buy Now'}
+      </button>
+      <ul className="mt-8 space-y-3">
+        {features.map((feature, i) => (
+          <li key={i} className="flex items-center gap-2 text-sm text-gray-600">
+            <Check className="h-5 w-5 text-green-500" />
+            {feature}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+*/

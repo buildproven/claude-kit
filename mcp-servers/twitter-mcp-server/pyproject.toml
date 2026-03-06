@@ -1,0 +1,17 @@
+[project]
+name = "twitter-mcp-server"
+version = "0.1.0"
+description = "MCP server for posting to Twitter/X"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.0.0",
+    "tweepy>=4.14.0",
+    "python-dotenv>=1.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+twitter-mcp-server = "twitter_mcp_server.server:main"

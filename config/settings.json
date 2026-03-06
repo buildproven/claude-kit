@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "cleanupPeriodDays": 0,
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Bash(**/grep *)",
+      "Bash(**/head *)",
+      "Bash(**/tail *)",
+      "Bash(**/wc *)",
+      "Bash(**/du *)",
+      "Bash(**/sort *)",
+      "Bash(**/cat *)",
+      "Bash(**/cd *)",
+      "Read",
+      "Write",
+      "Edit",
+      "MultiEdit",
+      "Glob",
+      "Grep",
+      "WebFetch",
+      "WebSearch",
+      "Task",
+      "TaskOutput",
+      "TodoWrite",
+      "NotebookEdit",
+      "Skill",
+      "SlashCommand",
+      "EnterPlanMode",
+      "ExitPlanMode",
+      "AskUserQuestion",
+      "KillShell",
+      "BashOutput",
+      "mcp__*"
+    ],
+    "deny": [
+      "Bash(sudo rm:*)",
+      "Bash(rm -rf /:*)",
+      "Bash(rm -rf /*)",
+      "Bash(> /dev/sda:*)",
+      "Bash(dd if=/dev/zero:*)",
+      "Bash(mkfs:*)",
+      "Bash(chmod -R 777 /:*)",
+      "Bash(chown -R:*)"
+    ],
+    "ask": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean -fd:*)",
+      "Bash(npm publish:*)",
+      "Bash(npx publish:*)",
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(**/*credential*)",
+      "Read(**/*secret*)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)"
+    ]
+  },
+  "model": "sonnet",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/auto-init-check.sh",
+            "timeout": 3000
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/post-edit-lint.sh",
+            "timeout": 10000
+          }
+        ]
+      },
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/post-tool-use-session-check.sh",
+            "timeout": 2000
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/block-push-main.sh",
+            "timeout": 5000
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/block-commit-main.sh",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/pre-compact-backup.sh",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "TeammateIdle": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/teammate-idle-check.sh",
+            "timeout": 30000
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/task-completed-check.sh",
+            "timeout": 60000
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/stop-validation.sh",
+            "timeout": 10000
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "bash -c '\"$(which node)\" \"$(ls -td ~/.claude/plugins/cache/claude-hud/claude-hud/*/ 2>/dev/null | head -1)dist/index.js\"'"
+  },
+  "enabledPlugins": {
+    "pyright-lsp@claude-plugins-official": true,
+    "context7@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true,
+    "github@claude-plugins-official": true,
+    "serena@claude-plugins-official": true,
+    "feature-dev@claude-plugins-official": true,
+    "code-review@claude-plugins-official": true,
+    "commit-commands@claude-plugins-official": true,
+    "security-guidance@claude-plugins-official": true,
+    "supabase@claude-plugins-official": true,
+    "agent-sdk-dev@claude-plugins-official": true,
+    "figma@claude-plugins-official": false,
+    "pr-review-toolkit@claude-plugins-official": true,
+    "playwright@claude-plugins-official": true,
+    "Notion@claude-plugins-official": false,
+    "vercel@claude-plugins-official": true,
+    "stripe@claude-plugins-official": true,
+    "claude-hud@claude-hud": true,
+    "code-simplifier@claude-plugins-official": true
+  },
+  "alwaysThinkingEnabled": true,
+  "skipDangerousModePermissionPrompt": true,
+  "mcpServers": {
+    "your-newsletter-tool": {
+      "command": "your-newsletter-tool-mcp-server"
+    }
+  },
+  "autoApproveEdits": true
+}

@@ -1,0 +1,36 @@
+[
+  {
+    "id": "3ddaa4aa-1f38-40cf-a7ee-b3e267edc7da",
+    "type": "thread",
+    "tweets": [
+      "Last thread: I upgraded the Ralph Wiggum Loop with error tracking, learning promotion, and quality gates (ralph-dev).\n\nBut ralph-dev is still a linear loop. Retry or give up.\n\nralph-next replaces that with a graph state machine. Here\u2019s how. \ud83e\uddf5",
+      "ralph-dev: PICK \u2192 IMPLEMENT \u2192 QUALITY \u2192 retry or skip.\n\nralph-next: PICK \u2192 IMPLEMENT \u2192 QUALITY \u2192 REFLECT \u2192 DECIDE.\n\nDECIDE can route to: retry, split into subtasks, speculate (parallel strategies), or block. Five possible exits instead of two.",
+      "The key addition: REFLECT.\n\nBefore deciding what to do, ralph-next classifies the failure across 13 types (lint, typecheck, import, test, build:code, build:config, security, flaky-test, env/tooling, oom, timeout, merge-conflict, runtime).\n\nEach has its own retry budget.",
+      "The retry matrix is explicit:\n\nLint \u2192 auto-fix \u2192 targeted fix \u2192 block (budget: 2)\nTest \u2192 targeted fix \u2192 split subtasks \u2192 speculate \u2192 block (budget: 3)\nSecurity critical \u2192 escalate immediately (budget: 0)\n\nNo more \u201ctry the same thing 3 times.\u201d",
+      "Every attempt gets a trajectory score:\n\nscore = (quality_coverage \u00d7 0.4) + (first_attempt \u00d7 0.2) + (duration_ratio \u00d7 0.2) + (learning_value \u00d7 0.2)\n\n\u22650.7 = PASS. 0.4-0.69 = MARGINAL (ships with warning). <0.4 = FAIL (reroute via DECIDE).",
+      "But scoring only matters AFTER the hard quality gate.\n\nIf /bs:quality fails, the item cannot PASS regardless of score. No gaming the numbers. Quality gate is binary \u2014 score is diagnostic.\n\nTwo-stage evaluation prevents score inflation.",
+      "The wildcard: SPECULATE.\n\nWhen retries aren\u2019t working, ralph-next spawns two isolated worktrees in parallel \u2014 Strategy A (minimal patch) vs Strategy B (deeper refactor).\n\nFirst branch that passes quality wins. Loser gets archived. Both fail? Block and move on.",
+      "SPLIT breaks stuck items into child tasks.\n\nIf a backlog item is too big to land cleanly, DECIDE routes to SPLIT. Source item becomes a \u201csplit-parent,\u201d children go back into the queue.\n\nThe agent decomposes its own work when scope is the problem.",
+      "Everything is logged.\n\ntrajectory-log.jsonl: every state transition with timestamps.\nevidence/<ITEM_ID>.json: per-item failure history, scores, retry paths.\n\nPost-session, I can see exactly why each item passed, failed, or got blocked. Full audit trail.",
+      "Safety rail: 8-transition hard cap per item.\n\nIf an item bounces between IMPLEMENT \u2192 QUALITY \u2192 REFLECT \u2192 DECIDE eight times, it\u2019s force-routed to BLOCK. No infinite loops.\n\nCombined with per-class budgets, the worst case is bounded and predictable.",
+      "ralph-dev made the loop smart. ralph-next made it deliberate.\n\nThe agent doesn\u2019t just retry \u2014 it reflects, scores, classifies, and routes. It splits work it can\u2019t land. It races strategies when stuck.\n\nAll open, all in Claude Code slash commands."
+    ],
+    "post_at": "2026-03-02T11:46:00-06:00",
+    "scheduled_at": "2026-03-02T00:43:44.784085+00:00",
+    "status": "posted",
+    "posted_at": "2026-03-02T18:28:37.080858+00:00",
+    "tweet_ids": [
+      "2028537979715658131",
+      "2028537980869062816",
+      "2028537982228001079",
+      "2028537983633133775",
+      "2028537984916529473",
+      "2028537986082603132",
+      "2028537987340923243",
+      "2028537988666323204",
+      "2028537989937135998",
+      "2028537991229059134",
+      "2028537992504050024"
+    ]
+  }
+]
