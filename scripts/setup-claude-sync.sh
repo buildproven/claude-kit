@@ -220,16 +220,14 @@ setup_qa_architect_license() {
         return 0
     fi
 
-    # Projects that use qa-architect
+    # Projects that use qa-architect (customize with your own project names)
     local PROJECTS=(
-        "project-6"
-        "youruser"
         "project-1"
         "project-2"
         "project-3"
         "project-4"
         "project-5"
-        "yourbrand"
+        "project-6"
         "project-7"
     )
 

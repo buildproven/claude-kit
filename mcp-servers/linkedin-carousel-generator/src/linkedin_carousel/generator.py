@@ -83,7 +83,7 @@ class CarouselGenerator:
             pdf_output = self.output_dir / f"{newsletter_data.slug}.pdf"
             metadata = {
                 "title": newsletter_data.title,
-                "author": "YourBrand",
+                "author": os.getenv("CAROUSEL_AUTHOR", "Author"),
                 "keywords": "linkedin,carousel,newsletter"
             }
 

@@ -14,7 +14,7 @@ class CarouselImageClient:
     def __init__(self):
         self.google_api_key = os.getenv("GOOGLE_GENAI_API_KEY")
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
-        self.default_model = os.getenv("CAROUSEL_DEFAULT_MODEL", "nano-banana-pro")
+        self.default_model = os.getenv("CAROUSEL_DEFAULT_MODEL", "gemini")
         self.enable_fallback = os.getenv("CAROUSEL_ENABLE_FALLBACK", "true").lower() == "true"
 
         self._validate_credentials()
@@ -35,11 +35,11 @@ class CarouselImageClient:
         model_order = [force_model] if force_model else [self.default_model, "gpt-image-1.5"] if self.enable_fallback else [self.default_model]
 
         for model in model_order:
-            if model == "nano-banana-pro" and self.google_api_key:
+            if model == "gemini" and self.google_api_key:
                 success, path = self._generate_google(prompt, slide_num, output_dir)
                 if success:
-                    return True, path, "nano-banana-pro"
-                print(f"⚠ Nano Banana Pro failed for slide {slide_num}, trying fallback...")
+                    return True, path, "gemini"
+                print(f"⚠ Gemini failed for slide {slide_num}, trying fallback...")
 
             elif model == "gpt-image-1.5" and self.openai_api_key:
                 success, path = self._generate_openai(prompt, slide_num, output_dir)

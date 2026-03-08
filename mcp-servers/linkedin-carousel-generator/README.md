@@ -4,7 +4,7 @@ Automated LinkedIn carousel generator that creates professional 7-slide PDF caro
 
 ## Features
 
-- **Dual AI Models**: Nano Banana Pro (Google Gemini) with GPT Image 1.5 (OpenAI) fallback
+- **Dual AI Models**: Google Gemini (primary) with GPT Image 1.5 (OpenAI) fallback
 - **Smart Parsing**: Extracts key points from newsletter markdown automatically
 - **Brand-Consistent**: Professional dark blue (#1a1a2e) theme with teal accents
 - **LinkedIn-Optimized**: 1080x1080px slides, <10MB PDFs
@@ -13,7 +13,7 @@ Automated LinkedIn carousel generator that creates professional 7-slide PDF caro
 ## Installation
 
 ```bash
-cd /Users/youruser/Projects/claude-setup/mcp-servers/linkedin-carousel-generator
+cd mcp-servers/linkedin-carousel-generator
 pip install -e .
 ```
 
@@ -27,8 +27,8 @@ GOOGLE_GENAI_API_KEY=your_google_api_key
 OPENAI_API_KEY=your_openai_api_key
 
 # Carousel Settings
-CAROUSEL_DEFAULT_MODEL=nano-banana-pro
-CAROUSEL_OUTPUT_DIR=/Users/youruser/Projects/yourbrand/output/carousels
+CAROUSEL_DEFAULT_MODEL=gemini
+CAROUSEL_OUTPUT_DIR=~/output/carousels
 CAROUSEL_ENABLE_FALLBACK=true
 ```
 
@@ -38,7 +38,7 @@ CAROUSEL_ENABLE_FALLBACK=true
 
 ```bash
 # Generate single carousel
-python /Users/youruser/Projects/claude-setup/scripts/generate-carousel.py newsletter.md
+python scripts/generate-carousel.py newsletter.md
 
 # Preview without API calls (free)
 python scripts/generate-carousel.py --preview newsletter.md
@@ -124,7 +124,7 @@ More insights...
 
 ### Per Carousel
 
-- **Nano Banana Pro** (default): $0.05/slide × 7 = **$0.35**
+- **Google Gemini** (default): $0.05/slide × 7 = **$0.35**
 - **GPT Image 1.5** (fallback): $0.133/slide × 7 = **$0.93**
 
 ### Annual Costs
@@ -212,11 +212,8 @@ linkedin-carousel-generator/
 
 ## License
 
-Private - Your Name
+MIT - See [LICENSE](../../LICENSE) for details.
 
 ## Support
 
-For issues or questions:
-
-- GitHub: https://github.com/youruser/claude-setup/issues
-- Email: you@example.com
+For issues or questions, open a GitHub issue in the claude-power-kit repository.

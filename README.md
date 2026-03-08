@@ -246,7 +246,7 @@ This kit is the generic, reusable core. The following were removed during extrac
 - Business-specific commands (newsletter posting, product writing)
 - Brand-specific content and voice profiles
 - Internal backlog and strategy documents
-- Service-specific integrations (OpenClaw, etc.)
+- Service-specific integrations (private business tooling)
 
 ---
 

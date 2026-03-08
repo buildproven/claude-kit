@@ -794,7 +794,7 @@ cat ~/.claude/stats-cache.json
 - [PR Review Toolkit Docs](~/.claude/plugins/.../pr-review-toolkit/)
 - [Agent SDK Docs](https://github.com/anthropics/anthropic-sdk-typescript)
 - [Claude Code Costs](https://code.claude.com/docs/en/costs.md)
-- This guide: `/Users/youruser/Projects/claude-setup/CLAUDE_CODE_OPTIMIZATION_GUIDE.md`
+- This guide: `~/Projects/claude-setup/CLAUDE_CODE_OPTIMIZATION_GUIDE.md`
 
 ---
 

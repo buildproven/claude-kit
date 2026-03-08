@@ -29,7 +29,7 @@ def main():
     )
     parser.add_argument(
         "--model",
-        choices=["nano-banana-pro", "gpt-image-1.5"],
+        choices=["gemini", "gpt-image-1.5"],
         help="Force specific AI model (overrides default)"
     )
     parser.add_argument(
