@@ -47,3 +47,9 @@ if [ -f "scripts/doc-staleness-check.sh" ] && [ "${DOC_STALENESS_SKIP:-0}" != "1
 fi
 
 echo "Pre-push passed!"
+
+# Dead code detection (knip) — non-blocking warning
+if command -v npx &> /dev/null && grep -q '"knip"' package.json 2>/dev/null; then
+  echo "  Checking for dead code..."
+  npx knip --no-exit-code 2>/dev/null || true
+fi

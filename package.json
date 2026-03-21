@@ -12,15 +12,19 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:patterns": "bash scripts/pattern-check.sh --all",
-    "pattern-check": "bash scripts/pattern-check.sh"
+    "pattern-check": "bash scripts/pattern-check.sh",
+    "dead-code": "knip --no-exit-code || echo \"Dead code found (non-blocking)\"",
+    "dead-code:strict": "knip"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.0.0",
     "@commitlint/config-conventional": "^19.0.0",
     "eslint": "^9.12.0",
+    "eslint-plugin-n": "^17.24.0",
     "eslint-plugin-security": "^3.0.1",
     "globals": "^15.9.0",
     "husky": "^9.1.4",
+    "knip": "^6.0.1",
     "lint-staged": "^15.2.10",
     "prettier": "^3.3.3",
     "vitest": "^4.0.18"
