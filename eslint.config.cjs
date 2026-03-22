@@ -40,6 +40,11 @@ if (security) {
 
 // Base rules configuration
 const baseRules = {
+  // Complexity gates (AI quality)
+  complexity: ["warn", 15],
+  "max-depth": ["warn", 4],
+  "max-params": ["warn", 5],
+
   // XSS Prevention patterns - critical for web applications
   'no-eval': 'error',
   'no-implied-eval': 'error',
@@ -121,5 +126,26 @@ configs.push({
     },
   },
 })
+
+
+// Import verification (eslint-plugin-n)
+let nPlugin = null
+try {
+  nPlugin = require('eslint-plugin-n')
+} catch {
+  // eslint-plugin-n not installed
+}
+
+if (nPlugin) {
+  configs.push({
+    files: ['**/*.{js,mjs,cjs}'],
+    plugins: { n: nPlugin },
+    rules: {
+      'n/no-missing-require': 'error',
+      'n/no-missing-import': 'off', // Often handled by bundlers
+      'n/no-unpublished-require': 'off',
+    },
+  })
+}
 
 module.exports = configs
