@@ -1,0 +1,18 @@
+// knip.config.js — Dead code detection configuration
+// Docs: https://knip.dev/overview/configuration
+module.exports = {
+  // Entry files — knip traces from these to find what's used
+  entry: ['src/index.{ts,tsx,js,jsx}', 'app/**/*.{ts,tsx,js,jsx}'],
+
+  // Project files — everything that could be referenced
+  project: ['src/**/*.{ts,tsx,js,jsx}', 'app/**/*.{ts,tsx,js,jsx}', 'lib/**/*.{ts,tsx,js,jsx}'],
+
+  // Paths to ignore entirely
+  ignore: ['**/node_modules/**', '**/dist/**', '**/build/**', '**/.next/**', '**/coverage/**'],
+
+  // Dependencies to ignore (framework-provided, global, or build-time)
+  ignoreDependencies: [],
+
+  // Binaries provided by tools (not direct imports)
+  ignoreBinaries: [],
+}
