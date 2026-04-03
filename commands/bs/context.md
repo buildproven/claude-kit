@@ -267,6 +267,6 @@ fi
 
 These commands automatically create checkpoints:
 
-- `/bs:ralph-dev` - Before each `/compact`
+- `/bs:ralph` - Before major context compression points
 - `/bs:quality --merge` - After successful merge
 - `/bs:session save --quick` - Manual checkpoint

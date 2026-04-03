@@ -309,8 +309,7 @@ This gate prevents merging when review agents were skipped — whether by shortc
 1. Push branch, create PR via `gh pr create`
 2. Wait for CI (unless `--skip-ci`)
 3. Auto-merge via `gh pr merge --squash`
-4. If `--deploy`: run `/bs:verify` post-deploy checks
-5. On failure + `--auto-rollback`: promote previous deployment
+4. Remind the user to verify deployment health with their normal deployment tooling
 
 ### Step 5: Record Quality History
 

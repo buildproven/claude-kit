@@ -7,7 +7,6 @@
 | `--level N`       | 95      | Quality level (95 or 98)                |
 | `--scope S`       | branch  | Scope: changed, branch, all             |
 | `--merge`         | false   | Auto-merge PR after quality             |
-| `--deploy`        | false   | Deploy after merge (CS-060)             |
 | `--skip-ci`       | false   | Bypass CI checks                        |
 | `--skip-rebase`   | false   | Skip auto-rebase                        |
 | `--status`        | false   | Show quality history and exit           |
@@ -103,8 +102,7 @@ Best for `--level 98` or `--scope all` (10+ min runs). Task subagents are faster
 1. Push branch, create PR
 2. Wait for CI (unless `--skip-ci`)
 3. Auto-merge via `gh pr merge --squash`
-4. If `--deploy`: run `/bs:verify`
-5. On failure + auto-rollback: promote previous deployment
+4. Manually verify the deployed system using your normal deployment tooling
 
 ## Next-Step Suggestions (CS-046)
 

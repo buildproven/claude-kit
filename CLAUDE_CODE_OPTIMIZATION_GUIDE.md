@@ -188,11 +188,8 @@ Break at natural milestones:
 # → Stops (ready for team review)
 
 # 4. After team approves & merges
-/bs:git-sync
-# → Auto-switches to main
-# → Pulls merged code
-# → Deploys
-# → Releases
+git pull
+# → Update your local checkout after the PR merges
 
 # 5. Next feature (new conversation)
 /bs:dev next-feature
@@ -414,10 +411,10 @@ Task(
 
 ## 📝 Custom Skills for Your Workflow
 
-### Create "Done Done" Quality Loop
+### Create A Reusable Quality Workflow
 
 ```bash
-/skill-creator
+Create a local skill or command pack that encodes your team's quality loop.
 ```
 
 **Example skill to create:**
@@ -559,12 +556,10 @@ claude config
 
 **Impact:** Save 2-3 hours immediately
 
-### 4. Create One Custom Skill
+### 4. Create One Custom Workflow
 
 ```bash
-/skill-creator
-
-# Create: "done-98" skill with your quality checklist
+Create a `done-98` style workflow with your quality checklist.
 ```
 
 **Impact:** Reusable quality standard across all projects
@@ -605,7 +600,7 @@ claude config
 
 ### Context Management
 
-**Automatic:** `/bs:quality` runs `/compact` before spawning agents (Step 1.7). `/bs:ralph-dev` uses fresh Task agent context per item by default.
+**Automatic:** `/bs:quality` runs `/compact` before spawning agents (Step 1.7). `/bs:ralph` should use fresh agent context per item by default.
 
 **Manual `/compact`** — only when you feel context is bloated mid-work:
 
@@ -713,7 +708,7 @@ Task(
 /bs:quality --merge   # 30-60 min autonomous quality → deployed
 /bs:quality --level 98  # 1-3 hr production-perfect → PR only
 /bs:quality --scope changed  # 2-5 min quick check → commit
-/bs:git-sync          # Pull, deploy, release after merge
+git pull              # Update local checkout after merge
 /bs:workflow          # See this guide
 /compact              # Trim conversation context
 /clear                # Start totally fresh

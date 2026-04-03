@@ -100,7 +100,7 @@ gh pr create \
 - ⚠️  Skipped: Security, A11y, Performance
 
 **Post-deploy TODO:**
-- [ ] Run \`/bs:verify\`
+- [ ] Manually verify production health
 - [ ] Run \`/bs:quality --level 98 --scope all\` within 24 hours
 - [ ] Document incident in postmortem" \
   --label "hotfix" \
@@ -152,11 +152,7 @@ fi
 ### Step 8: Verify Deployment
 
 ```bash
-if [[ "$@" != *"--skip-verify"* ]]; then
-  /bs:verify
-else
-  echo "⚠️  Skipped verification. Manually verify production is healthy!"
-fi
+echo "Manually verify production is healthy using your deployment tooling and app health checks."
 ```
 
 ### Step 9: Alert Team
@@ -180,7 +176,7 @@ Follow-up: /bs:quality --level 98 --scope all within 24h | Postmortem within 1 w
 
 | Flag            | Description                                     |
 | --------------- | ----------------------------------------------- |
-| `--skip-verify` | Skip post-deploy verification (not recommended) |
+| `--skip-verify` | Skip the reminder to manually verify production health |
 | `--notify`      | Send team notification via Slack/Discord        |
 | `--force`       | Skip all safety checks (DANGEROUS)              |
 

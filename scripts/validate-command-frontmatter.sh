@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CS-114: Validate command frontmatter
 # Ensures all commands have required frontmatter fields (name, description, category).
-# Run as part of pre-commit or /bs:maintain.
+# Run as part of pre-commit or setup validation.
 
 set -euo pipefail
 

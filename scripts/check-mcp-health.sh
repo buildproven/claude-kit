@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CS-108: MCP Server Health Check
 # Parses ~/.claude.json for configured servers and tests connectivity.
-# Called by /bs:maintain health check section.
+# Called by setup health check flows.
 
 set -euo pipefail
 

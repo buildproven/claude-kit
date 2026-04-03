@@ -61,6 +61,6 @@ Use `/bs:cleanup` with the appropriate flag:
 
 - **Kill dev servers after testing** — `next dev`, `vite`, etc. accumulate if left running
 - **Use timeouts on long operations** — prevents hung processes from consuming resources
-- **Run `/bs:cleanup` at end of long sessions** — especially after ralph-dev runs
+- **Run `/bs:cleanup` at end of long sessions** — especially after long autonomous runs
 - **Watch swap usage** — if swap > 8GB, close unused apps before continuing heavy work
 - **Clear node_modules periodically** — stale installs from branch switches waste disk

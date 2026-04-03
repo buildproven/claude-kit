@@ -1,20 +1,19 @@
 # claude-power-kit
 
-A battle-tested Claude Code setup — 45+ commands, 20+ skills, quality automation, hooks, and CI gates.
+A curated public Claude Code toolkit for planning, implementation, quality, debugging, review, and repo hygiene.
 
-Born from daily production use. Updated automatically from the private source repo.
+This repo is the public framework, not a mirror of a private operator setup.
 
 ## What's inside
 
 | Dir | Contents |
 |-----|----------|
-| `commands/` | `/bs:*`, `/gh:*`, `/cc:*` slash commands |
-| `skills/` | Auto-injected skill context files |
-| `agents/` | Reusable agent prompt templates |
-| `scripts/` | Automation scripts (hooks, lint, CI) |
-| `config/` | `settings.json` with hooks, permissions, model routing |
-| `.github/workflows/` | Quality gates, auto-release, stale cleanup |
-| `eslint-plugin-defensive/` | Custom ESLint rules for safe code patterns |
+| `commands/` | Public `/bs:*`, `/gh:*`, `/cc:*`, and utility commands |
+| `skills/` | General-purpose skill packs for quality, testing, APIs, docs, design, and workflow |
+| `agents/` | Reusable review and specialist agents |
+| `scripts/` | Hooks, validation, setup, sync, and quality automation |
+| `config/` | Generic `CLAUDE.md` and `settings.json` defaults |
+| `.github/workflows/` | CI and maintenance automation |
 
 ## Quick start
 
@@ -26,30 +25,44 @@ cd ~/Projects/claude-power-kit
 
 Then restart Claude Code.
 
-## Key commands
+## Core commands
 
+```text
+/bs:dev
+/bs:quality
+/bs:test
+/bs:plan
+/bs:ralph
+/bs:help
 ```
-/bs:dev        Start feature development
-/bs:quality    Run full quality loop before merge
-/bs:ralph      Autonomous backlog execution
-/bs:strategy   Multi-model strategy panel
-/bs:help       All commands with descriptions
-```
+
+## What this repo is for
+
+- daily coding workflow
+- quality automation
+- repo setup and hygiene
+- reusable technical skills
+- reusable review agents
+
+## What this repo is not for
+
+- private operator workflows
+- company-specific posting, product, or growth commands
+- internal service maintenance
+- premium workflow packs
+
+Those belong in private or paid extensions, not in the public core.
 
 ## Automation included
 
-- **Pre-commit hooks** — lint, conventional commits, secret scan
-- **Stop hook** — validates output quality (no `console.log`, `TODO`, `any`, `debugger`)
-- **Auto-branch hook** — never accidentally commit to main
-- **CI quality gate** — risk-tiered checks on every PR
-- **Stale branch/PR cleanup** — enforces trunk-based development
+- Pre-commit hooks for quality and safety
+- Auto-branch protection against accidental work on `main`
+- Post-edit linting and stop validation
+- CI quality gates
+- Trunk-based maintenance automation
 
-## Customise
+## Customize
 
-1. Copy `config/CLAUDE.md` and fill in your preferences
-2. Edit `config/settings.json` to adjust permissions and hooks
-3. Add your own commands in `commands/`
-
-## Updates
-
-This repo is auto-synced from source. Star it to get notified of improvements.
+1. Copy `config/CLAUDE.md` and tune it to your preferences.
+2. Edit `config/settings.json` for permissions, hooks, and model routing.
+3. Add your own commands, skills, or agents on top of the public baseline.

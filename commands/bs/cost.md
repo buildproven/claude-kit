@@ -238,4 +238,4 @@ fi
 
 - `/bs:quality` - Quality loop with cost tracking
 - `/bs:dev` - Development workflow with cost tracking
-- `/bs:ralph-dev` - Autonomous development (cost-efficient)
+- `/bs:ralph` - Autonomous development (cost-efficient)
