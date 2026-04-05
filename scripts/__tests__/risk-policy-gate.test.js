@@ -16,7 +16,7 @@ const config = {
     high: [
       'commands/bs/quality.md',
       'commands/bs/dev.md',
-      'commands/bs/ralph-dev.md',
+      'commands/bs/ralph.md',
     ],
     medium: ['commands/bs/**', 'skills/**', 'agents/**'],
     low: ['docs/**', '*.md', 'README.md'],
@@ -39,9 +39,7 @@ const config = {
 describe('calculateRiskTier', () => {
   describe('critical tier', () => {
     it('matches scripts/ glob', () => {
-      expect(calculateRiskTier('scripts/ralph-next-run.sh', config)).toBe(
-        'critical'
-      )
+      expect(calculateRiskTier('scripts/helper.js', config)).toBe('critical')
     })
 
     it('matches config/ glob', () => {
@@ -75,7 +73,7 @@ describe('calculateRiskTier', () => {
     })
 
     it('matches another exact high-priority file', () => {
-      expect(calculateRiskTier('commands/bs/ralph-dev.md', config)).toBe('high')
+      expect(calculateRiskTier('commands/bs/ralph.md', config)).toBe('high')
     })
 
     it('prefers high over medium for explicitly listed files', () => {

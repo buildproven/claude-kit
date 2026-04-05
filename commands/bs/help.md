@@ -13,14 +13,14 @@ model: haiku
 ## Instructions
 
 **This command generates its output dynamically from command frontmatter.** Do NOT hardcode command lists.
-New commands (for example `/bs:ralph-next`) appear automatically when frontmatter is valid.
+New commands appear automatically when frontmatter is valid.
 
 ### Step 1: Extract command data
 
 Run this bash command to extract frontmatter from all command files:
 
 ```bash
-for f in ~/Projects/claude-setup/commands/bs/*.md ~/Projects/claude-setup/commands/cc/*.md ~/Projects/claude-setup/commands/gh/*.md; do
+for f in ~/Projects/claude-power-kit/commands/bs/*.md ~/Projects/claude-power-kit/commands/cc/*.md ~/Projects/claude-power-kit/commands/gh/*.md; do
   fm=$(awk 'BEGIN{n=0} /^---$/{n++; if(n==2) exit; next} n==1{print}' "$f")
   name=$(echo "$fm" | awk -F': ' '/^name:/{print $2}' | tr -d "'\"")
   desc=$(echo "$fm" | awk -F': ' '/^description:/{$1=""; sub(/^ /,""); print}' | tr -d "'\"")
@@ -35,7 +35,7 @@ done
 ### Step 2: Count skills
 
 ```bash
-ls ~/Projects/claude-setup/skills/*/SKILL.md 2>/dev/null | wc -l
+ls ~/Projects/claude-power-kit/skills/*/SKILL.md 2>/dev/null | wc -l
 ```
 
 ### Step 3: Render output
@@ -101,14 +101,14 @@ At the end, add:
 
 Ask Claude naturally to invoke. Example: "Use pdf skill to extract data"
 
-**Content:** pdf, docx, xlsx
+**Documents:** pdf, docx, xlsx
 **Development:** frontend-design, webapp-testing, ui-reviewer, api-conventions, error-handling, test-strategy
-**Operations:** recover, cleanup, sota, sentry
-**Meta:** doc-coauthoring, mcp-builder, skill-creator
+**Operations:** recover, cleanup, sota, workflow, healthcheck
+**Meta:** agent-browser, seo
 
 **Full reference**: `/bs:help --full`
 **Workflow guide**: `/bs:workflow`
-**Cheat sheet**: `~/Projects/claude-setup/docs/WORKFLOW-CHEATSHEET.md`
+**Cheat sheet**: `~/Projects/claude-power-kit/commands/README.md`
 **Optimization**: `/cc:optimize`
 ```
 

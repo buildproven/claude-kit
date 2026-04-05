@@ -183,19 +183,9 @@ function scoreQuality() {
 
 function scoreAutonomousDev() {
   let score = 3
-  // ralph.md is the consolidated command (was ralph-dev.md + ralph-next.md)
-  if (
-    fs.existsSync(path.join(ROOT, 'commands', 'bs', 'ralph.md')) ||
-    fs.existsSync(path.join(ROOT, 'commands', 'bs', 'ralph-dev.md'))
-  )
-    score += 2
-  // Agent teams or collab support
-  if (
-    fs.existsSync(path.join(ROOT, 'commands', 'bs', 'collab.md')) ||
-    fs.existsSync(path.join(ROOT, 'commands', 'bs', 'ralph-next.md'))
-  )
-    score += 2
-  if (fs.existsSync(path.join(ROOT, 'scripts', 'ralph-next-run.sh'))) score += 2
+  if (fs.existsSync(path.join(ROOT, 'commands', 'bs', 'ralph.md'))) score += 2
+  if (fs.existsSync(path.join(ROOT, 'commands', 'bs', 'agent-run.md'))) score += 2
+  if (fs.existsSync(path.join(ROOT, 'skills', 'workflow', 'SKILL.md'))) score += 2
   if (fs.existsSync(path.join(ROOT, 'docs', 'ralph-patterns.md'))) score += 1
   return { score: Math.min(score, 10), gap: null }
 }
@@ -239,7 +229,7 @@ function scorePortability() {
   let score = 3
   if (fs.existsSync(path.join(ROOT, 'install.sh'))) score += 3
   if (fs.existsSync(path.join(ROOT, 'commands', 'bs', 'sync.md'))) score += 2
-  if (fs.existsSync(path.join(ROOT, 'commands', 'bs', 'onboard.md'))) score += 2
+  if (fs.existsSync(path.join(ROOT, 'commands', 'bs', 'help.md'))) score += 2
   return { score: Math.min(score, 10), gap: null }
 }
 

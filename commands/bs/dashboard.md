@@ -28,13 +28,13 @@ Starts a lightweight local web UI for monitoring parallel agent status.
 
 - **Active Agents** — name, current task, elapsed time, status (running/done/failed)
 - **Git Worktrees** — active worktree branches and paths
-- **Recent Completions** — evidence files from ralph-next with pass/fail status
+- **Recent Completions** — recent task and agent outputs
 - **Recent Task Output** — files from /tmp/claude-\*/tasks/
 
 ## Manual start
 
 ```bash
-node ~/Projects/claude-setup/scripts/agent-dashboard-server.js &
+node ~/Projects/claude-power-kit/scripts/agent-dashboard-server.js &
 open http://localhost:3847
 ```
 
@@ -45,7 +45,7 @@ When the user runs `/bs:dashboard`:
 1. Check if port 3847 is already in use: `lsof -i :3847`
 2. If not running, start the server:
    ```bash
-   node ~/Projects/claude-setup/scripts/agent-dashboard-server.js &
+   node ~/Projects/claude-power-kit/scripts/agent-dashboard-server.js &
    ```
 3. Open in browser: `open http://localhost:3847`
 4. Report: "Dashboard running at http://localhost:3847"

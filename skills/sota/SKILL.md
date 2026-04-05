@@ -21,7 +21,7 @@ Consistent, repeatable scorecard for Claude Code setups. Delegates to `/bs:sota`
 When auto-invoked, run a lightweight version:
 
 1. Count: skills, commands, hooks, plugins, CLAUDE.md lines
-2. Check key indicators: hooks configured? quality command exists? ralph-dev exists? security hooks?
+2. Check key indicators: hooks configured? quality command exists? ralph exists? security hooks?
 3. Give a quick 1-line verdict with overall score estimate
 
 Then suggest: "Run `/bs:sota` for a full detailed scorecard, or `/bs:sota --gaps` for improvement suggestions."
@@ -54,15 +54,15 @@ All 12 categories weighted equally. Overall = average of all category scores.
 
 **Commands (10/10):** 25+ commands, all have frontmatter (name, description, tags, category), total size <150KB, organized by prefix (bs:, gh:, cc:).
 
-**MCP Servers (10/10):** 5+ active servers, no unused servers enabled, health checks configured in /bs:maintain.
+**MCP Servers (10/10):** 5+ active servers, no obviously unused servers enabled, health checks available.
 
 **Quality Gates (10/10):** Autonomous loop with lint + typecheck + test + build + security. Pattern analysis. Auto-merge flow. Coverage tracking.
 
-**Autonomous Dev (10/10):** Ralph-dev with retry loops, CI recovery, learning capture, fresh context. Agent teams option. State persistence.
+**Autonomous Dev (10/10):** Ralph with learning capture, fresh context, and autonomous backlog execution.
 
 **Security (10/10):** Gitleaks in hooks, semgrep rules, pattern-check.sh, deny list for destructive commands, secrets env-only, pre-commit pattern check.
 
-**Git Workflow (10/10):** Pre-commit (lint-staged + pattern check), pre-push (typecheck + branch naming), conventional commits (commitlint), auto-rollback, branch hygiene in ralph-dev.
+**Git Workflow (10/10):** Pre-commit checks, pre-push checks, conventional commits, and branch hygiene.
 
 **Documentation (10/10):** CLAUDE.md + BACKLOG.md + help command + skill docs + cheatsheet + session learnings. Auto-doc detection in quality loop. Changelog.
 

@@ -89,8 +89,8 @@ pkill -f node
 ### 4. Restore Context
 
 ```bash
-# Check ralph-dev state (if running autonomous)
-cat .claude/ralph-dev-state.json 2>/dev/null | head -20
+# Check Ralph state (if running autonomous)
+ls .claude/*ralph*state*.json 2>/dev/null | head -5
 
 # Recent git activity
 git log --oneline -10
@@ -108,7 +108,7 @@ ls -la .claude/session-*.json 2>/dev/null
 
 1. What branch am I on? (`git branch --show-current`)
 2. Are there uncommitted changes? (`git status`)
-3. Was ralph-dev running? (check `.claude/ralph-dev-state.json`)
+3. Was Ralph running? (check `.claude/*ralph*state*.json`)
 4. What was the last backlog item? (check Linear: https://linear.app/buildproven)
 5. Any stashed work? (`git stash list`)
 
