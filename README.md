@@ -61,6 +61,10 @@ Those belong in private or paid extensions, not in the public core.
 - CI quality gates
 - Trunk-based maintenance automation
 
+## Extend
+
+See [EXTENSION-ARCHITECTURE.md](EXTENSION-ARCHITECTURE.md) for how to add personal preferences, private commands, and project-specific workflows on top of the public core without forking it.
+
 ## Customize
 
 1. Copy `config/CLAUDE.md` and tune it to your preferences.
