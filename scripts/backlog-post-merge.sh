@@ -8,15 +8,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GIT_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 
-# Find CS-NNN pattern from recently merged branch name via reflog
-MERGED_BRANCH=$(git reflog --format='%gs' -1 | grep -oE "CS-[0-9]+" | head -1 || true)
+# Find ISSUE_PREFIX-NNN pattern from recently merged branch name via reflog
+# Set ISSUE_PREFIX env var to match your Linear workspace prefix (default: CS)
+ISSUE_PREFIX="${ISSUE_PREFIX:-CS}"
+MERGED_BRANCH=$(git reflog --format='%gs' -1 | grep -oE "${ISSUE_PREFIX}-[0-9]+" | head -1 || true)
 
 if [[ -z "$MERGED_BRANCH" ]]; then
-  MERGED_BRANCH=$(git log --format='%s %b' -1 | grep -oE "CS-[0-9]+" | head -1 || true)
+  MERGED_BRANCH=$(git log --format='%s %b' -1 | grep -oE "${ISSUE_PREFIX}-[0-9]+" | head -1 || true)
 fi
 
 if [[ -z "$MERGED_BRANCH" ]]; then
-  exit 0  # No CS-NNN found — not a backlog item branch
+  exit 0  # No ${ISSUE_PREFIX}-NNN found — not a backlog item branch
 fi
 
 ITEM_ID="$MERGED_BRANCH"
@@ -43,7 +45,7 @@ if [[ -z "$LINEAR_API_KEY" ]]; then
   exit 0
 fi
 
-# Find the Linear issue by identifier (e.g. CS-164)
+# Find the Linear issue by identifier (e.g. CS-164 for ISSUE_PREFIX=CS)
 ISSUE_ID=$(curl -s \
   -H "Content-Type: application/json" \
   -H "Authorization: $LINEAR_API_KEY" \
