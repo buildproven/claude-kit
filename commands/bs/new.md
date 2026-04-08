@@ -88,7 +88,7 @@ echo "✅ Git initialized"
 
 ```bash
 # Add submodule
-git submodule add https://github.com/buildproven/claude-setup.git .claude-setup
+git submodule add https://github.com/buildproven/claude-power-kit.git .claude-setup
 
 # Create symlink to make commands available
 ln -s .claude-setup ~/.claude 2>/dev/null || true

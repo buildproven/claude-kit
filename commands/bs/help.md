@@ -116,12 +116,12 @@ Ask Claude naturally to invoke. Example: "Use pdf skill to extract data"
 
 ## Archived/Removed Commands (include in --full only)
 
-### Content Pipeline (Moved to OpenClaw)
+### Content Pipeline (Removed)
 
-| Old Command   | Status                                          |
-| ------------- | ----------------------------------------------- |
-| `/bs:pilot`   | Content pipeline moved to OpenClaw (2026-02-10) |
-| `/bs:article` | Article creation moved to OpenClaw (2026-02-15) |
+| Old Command   | Status     |
+| ------------- | ---------- |
+| `/bs:pilot`   | Removed    |
+| `/bs:article` | Removed    |
 
 ### Quality Commands (Replaced by /bs:quality)
 

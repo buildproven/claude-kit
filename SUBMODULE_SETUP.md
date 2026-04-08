@@ -16,7 +16,7 @@ This approach creates a **single source of truth** that works in Web UI, CLI, an
 
 ```bash
 # Run the install script
-bash <(curl -sL https://raw.githubusercontent.com/buildproven/claude-setup/main/scripts/install-via-submodule.sh)
+bash <(curl -sL https://raw.githubusercontent.com/buildproven/claude-power-kit/main/scripts/install-via-submodule.sh)
 
 # Commit and push
 git commit -m "Add Claude commands via submodule"
@@ -145,7 +145,7 @@ git push
 
 ```bash
 cd new-repo
-bash <(curl -sL https://raw.githubusercontent.com/buildproven/claude-setup/main/scripts/install-via-submodule.sh)
+bash <(curl -sL https://raw.githubusercontent.com/buildproven/claude-power-kit/main/scripts/install-via-submodule.sh)
 git commit -m "Add Claude commands via submodule"
 git push
 ```
@@ -239,7 +239,7 @@ Set your own repo URL:
 
 ```bash
 export CLAUDE_SETUP_REPO="https://github.com/YOUR-USERNAME/your-claude-setup.git"
-bash <(curl -sL https://raw.githubusercontent.com/buildproven/claude-setup/main/scripts/install-via-submodule.sh)
+bash <(curl -sL https://raw.githubusercontent.com/buildproven/claude-power-kit/main/scripts/install-via-submodule.sh)
 ```
 
 Or edit the script to change the default.

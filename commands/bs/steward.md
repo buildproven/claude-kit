@@ -95,7 +95,7 @@ STATE_FILE="$HOME/Projects/claude-setup/data/steward-state.json"
 | `quota-guard`         | Claude usage quota → budget mode                                 | Every run | Zero |
 | `github-hygiene`      | Stale branches (remote+local), orphan PRs, settings              | Daily     | Zero |
 | `config-freshness`    | Tool versions, symlinks, MCP                                     | Daily     | Zero |
-| `openclaw-health`     | Docker, tokens, cron, versions                                   | Daily     | Zero |
+| `gateway-health`      | Docker, tokens, cron, versions                                   | Daily     | Zero |
 | `doc-drift`           | Code churn vs doc freshness                                      | Daily     | Zero |
 | `ci-governance`       | CI minutes, cron schedules, dormant repos                        | Daily     | Zero |
 | `test-coverage-churn` | High-churn files without tests                                   | Weekly    | Zero |

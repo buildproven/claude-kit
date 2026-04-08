@@ -19,16 +19,16 @@ Polls GitHub issues labeled `agent-ready`, spawns an isolated acpx Claude sessio
 
 ```bash
 # Dry run — see what would happen without executing
-python3 scripts/symphony-dispatch.py --repo buildproven/buildproven --dry-run --once
+python3 scripts/symphony-dispatch.py --repo your-org/your-repo --dry-run --once
 
 # Poll once and exit
-python3 scripts/symphony-dispatch.py --repo buildproven/buildproven --once
+python3 scripts/symphony-dispatch.py --repo your-org/your-repo --once
 
 # Continuous polling (every 5 min)
-python3 scripts/symphony-dispatch.py --repo buildproven/buildproven
+python3 scripts/symphony-dispatch.py --repo your-org/your-repo
 
 # Custom label and interval
-python3 scripts/symphony-dispatch.py --repo buildproven/buildproven \
+python3 scripts/symphony-dispatch.py --repo your-org/your-repo \
   --label ready-for-agent --interval 120
 ```
 

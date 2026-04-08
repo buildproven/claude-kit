@@ -21,7 +21,7 @@ QUEUE_PATH = Path(__file__).parent.parent / "data" / "schedule-queue.json"
 MAX_RETRIES = 3
 DEFAULT_GRACE_MINUTES = 120
 FACEBOOK_API_VERSION = "v21.0"
-DEFAULT_CTA_URL = "https://buildproven.ai/subscribe"
+DEFAULT_CTA_URL = ""  # Set your own CTA URL here or pass via --cta-url argument
 
 PLATFORM_ENV_VARS = {
     "twitter": [

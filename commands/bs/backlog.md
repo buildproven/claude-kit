@@ -10,7 +10,7 @@ model: haiku
 
 Score = (Revenue + Retention + Differentiation) ÷ Effort (S=÷1, M=÷2, L=÷3, XL=÷4)
 
-Backlog is managed in **Linear** (https://linear.app/buildproven). Use the Linear MCP tools:
+Backlog is managed in **Linear** (https://linear.app/YOUR_WORKSPACE). Use the Linear MCP tools:
 
 ## Linear MCP Tools
 

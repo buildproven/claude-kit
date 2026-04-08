@@ -427,7 +427,7 @@ def parse_args():
         "--repo",
         required=True,
         metavar="OWNER/REPO",
-        help="Target GitHub repository (e.g. buildproven/buildproven)",
+        help="Target GitHub repository (e.g. your-org/your-repo)",
     )
     parser.add_argument(
         "--label",

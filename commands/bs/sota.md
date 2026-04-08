@@ -82,7 +82,7 @@ Score each category 1-10 against the benchmarks below. Be objective — deduct f
 | 10  | **Git Workflow**           | Pre-commit (lint-staged), pre-push (typecheck + branch naming), conventional commits, auto-rollback, branch hygiene.                                                | `.husky/`, `commitlint.config.*`                                                 |
 | 11  | **Documentation**          | CLAUDE.md + backlog (Linear or BACKLOG.md) + command help + skill docs. Auto-doc detection in quality. Cheatsheet. Session learnings.                               | `docs/`, Linear                                                                  |
 | 12  | **Portability**            | Submodule-ready. Install script. Symlink management. Cross-project sync. Setup smoke test.                                                                          | `install.sh`, `scripts/setup-claude-sync.sh`                                     |
-| 13  | **Tool Currency**          | Zero outdated global tools (`npm outdated -g` clean). CC plugins at latest. brew tools current. Vercel CLI, OpenClaw, gh all latest.                                | `npm outdated -g`, `brew outdated`, plugin cache                                 |
+| 13  | **Tool Currency**          | Zero outdated global tools (`npm outdated -g` clean). CC plugins at latest. brew tools current. Vercel CLI, gh all latest.                                          | `npm outdated -g`, `brew outdated`, plugin cache                                 |
 
 ### Step 3: Output Format
 

@@ -37,16 +37,17 @@ _env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(_env_path)
 
 
-LOGOS_DIR = Path.home() / "Projects/buildproven/docs/logos"
-DEFAULT_LOGO_PATH = LOGOS_DIR / "buildproven-dark-400w.png"
+LOGOS_DIR = Path(os.environ.get("LOGOS_DIR", str(Path.home() / "logos")))
+DEFAULT_LOGO_PATH = LOGOS_DIR / os.environ.get("DEFAULT_LOGO_FILENAME", "logo.png")
 
 # Platform-matched logos — used when --logo-overlay is passed without an explicit path
 PRESET_LOGOS: Dict[str, str] = {
-    "beehiiv": "buildproven-dark-beehiiv-publogo-800x800.png",
-    "twitter": "buildproven-dark-twitter-post-1200x675.png",
-    "facebook": "buildproven-dark-facebook-post-1200x630.png",
-    "linkedin": "buildproven-dark-linkedin-post-1200x627.png",
-    "og": "buildproven-dark-og-1200x630.png",
+    # Add platform-specific logo filenames here (relative to LOGOS_DIR)
+    # "beehiiv": "logo-beehiiv-800x800.png",
+    # "twitter": "logo-twitter-1200x675.png",
+    # "facebook": "logo-facebook-1200x630.png",
+    # "linkedin": "logo-linkedin-1200x627.png",
+    # "og": "logo-og-1200x630.png",
     # carousel has no platform-specific logo — falls back to DEFAULT_LOGO_PATH
 }
 
@@ -516,8 +517,8 @@ Examples:
         nargs="?",
         const="default",
         metavar="PATH",
-        help="Composite BuildProven logo bottom-right after generation. "
-             "Omit PATH to use default (buildproven-dark-400w.png).",
+        help="Composite logo bottom-right after generation. "
+             "Omit PATH to use default logo (set via DEFAULT_LOGO_FILENAME env var).",
     )
 
     args = parser.parse_args()

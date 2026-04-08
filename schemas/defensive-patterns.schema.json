@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://vibelab.dev/schemas/defensive-patterns.schema.json",
+  "$id": "https://github.com/YOUR_USERNAME/claude-power-kit/schemas/defensive-patterns.schema.json",
   "title": "Defensive Patterns Configuration",
   "description": "Per-project configuration for defensive pattern checks in pattern-check.sh",
   "type": "object",
@@ -80,7 +80,7 @@
     "extends": {
       "type": "string",
       "description": "Path to a base configuration file to extend (relative to project root)",
-      "examples": ["./node_modules/@vibelab/patterns/base.json"]
+      "examples": ["./node_modules/@your-org/patterns/base.json"]
     },
     "severity": {
       "type": "object",

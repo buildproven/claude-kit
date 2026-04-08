@@ -45,7 +45,7 @@ curl -X POST "https://api.dataforseo.com/v3/keywords_data/google_ads/keywords_fo
 curl -X POST "https://api.dataforseo.com/v3/dataforseo_labs/google/competitors_domain/live" \
   -H "Content-Type: application/json" \
   -u "$DATAFORSEO_LOGIN:$DATAFORSEO_PASSWORD" \
-  -d '[{"target": "buildproven.ai", "location_code": 2840, "language_code": "en"}]'
+  -d '[{"target": "yourdomain.com", "location_code": 2840, "language_code": "en"}]'
 ```
 
 ### MCP Server (for complex multi-step analysis)
@@ -60,9 +60,9 @@ DATAFORSEO_LOGIN=<login> DATAFORSEO_PASSWORD=<pass> node dist/index.js
 
 ## Common Tasks
 
-### Keyword Research for BuildProven
+### Keyword Research
 
-- Target keywords around: "vibe coding", "ai product builder", "non-developer ai tools", "domain expertise ai"
+- Define your target keywords based on your product/domain
 - Location code 2840 = United States
 - Check search volume, competition, CPC
 

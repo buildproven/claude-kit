@@ -1,6 +1,6 @@
 ---
 name: healthcheck
-description: Session start health check — verify MCP servers, repo sync status, and OpenClaw. Use when starting a session that involves social media, multi-repo work, or OpenClaw/Docker operations.
+description: Session start health check — verify MCP servers, repo sync status, and local agent gateway. Use when starting a session that involves social media, multi-repo work, or Docker operations.
 ---
 
 # Health Check
@@ -31,10 +31,10 @@ For each repo under `~/Projects/`:
 
 Skip archived repos. Flag any with push failures.
 
-## 3. OpenClaw (for bot/Docker sessions)
+## 3. Local Agent Gateway (for bot/Docker sessions)
 
-1. Check container is running: `docker ps | grep openclaw`
-2. Verify gateway token match: `~/openclaw/.env` OPENCLAW_GATEWAY_TOKEN vs `~/.openclaw/openclaw.json` gateway.auth.token — print **names** only
+1. Check container is running: `docker ps | grep agent-gateway`
+2. Verify gateway token env var is set — print **name** only, never value
 3. Check for pending device approvals
 
 ## Output Format

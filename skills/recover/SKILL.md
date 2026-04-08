@@ -109,7 +109,7 @@ ls -la .claude/session-*.json 2>/dev/null
 1. What branch am I on? (`git branch --show-current`)
 2. Are there uncommitted changes? (`git status`)
 3. Was Ralph running? (check `.claude/*ralph*state*.json`)
-4. What was the last backlog item? (check Linear: https://linear.app/buildproven)
+4. What was the last backlog item? (check Linear: https://linear.app/YOUR_WORKSPACE)
 5. Any stashed work? (`git stash list`)
 
 ## When to Escalate

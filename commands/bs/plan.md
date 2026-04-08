@@ -233,7 +233,7 @@ Update the `Status:` field in the plan doc as work progresses.
 
 ```bash
 /bs:plan dark-mode-theming
-/bs:plan rebrand-vibelab-to-buildproven --multi-repo
+/bs:plan rebrand-old-name-to-new-name --multi-repo
 /bs:plan auth-system-refactor --edit
 /bs:plan api-redesign --dry-run
 ```

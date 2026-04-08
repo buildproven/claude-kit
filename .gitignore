@@ -2,6 +2,9 @@
 node_modules/
 package-lock.json
 
+# Release artifacts
+.scrub.log
+
 # Local settings (root level only)
 /settings.local.json
 

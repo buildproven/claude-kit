@@ -28,25 +28,25 @@ fi
 
 echo "[backlog-post-merge] Detected merged item: $ITEM_ID"
 
-# Require LINEAR_BUILDPROVEN_KEY
-LINEAR_BUILDPROVEN_KEY="${LINEAR_BUILDPROVEN_KEY:-}"
-if [[ -z "$LINEAR_BUILDPROVEN_KEY" ]]; then
+# Require LINEAR_API_KEY
+LINEAR_API_KEY="${LINEAR_API_KEY:-}"
+if [[ -z "$LINEAR_API_KEY" ]]; then
   # Try loading from .env
   ENV_FILE="${GIT_ROOT}/.env"
   if [[ -f "$ENV_FILE" ]]; then
-    LINEAR_BUILDPROVEN_KEY=$(grep -E '^LINEAR_BUILDPROVEN_KEY=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' || true)
+    LINEAR_API_KEY=$(grep -E '^LINEAR_API_KEY=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' || true)
   fi
 fi
 
-if [[ -z "$LINEAR_BUILDPROVEN_KEY" ]]; then
-  echo "[backlog-post-merge] LINEAR_BUILDPROVEN_KEY not set — skipping Linear update"
+if [[ -z "$LINEAR_API_KEY" ]]; then
+  echo "[backlog-post-merge] LINEAR_API_KEY not set — skipping Linear update"
   exit 0
 fi
 
 # Find the Linear issue by identifier (e.g. CS-164)
 ISSUE_ID=$(curl -s \
   -H "Content-Type: application/json" \
-  -H "Authorization: $LINEAR_BUILDPROVEN_KEY" \
+  -H "Authorization: $LINEAR_API_KEY" \
   -d "{\"query\": \"{ issues(filter: { identifier: { eq: \\\"$ITEM_ID\\\" } }) { nodes { id identifier state { id name } } } }\"}" \
   "https://api.linear.app/graphql" \
   | python3 -c "import json,sys; d=json.load(sys.stdin); nodes=d['data']['issues']['nodes']; print(nodes[0]['id'] if nodes else '')" 2>/dev/null || true)
@@ -59,7 +59,7 @@ fi
 # Find the "Done" state for this team
 DONE_STATE_ID=$(curl -s \
   -H "Content-Type: application/json" \
-  -H "Authorization: $LINEAR_BUILDPROVEN_KEY" \
+  -H "Authorization: $LINEAR_API_KEY" \
   -d '{"query": "{ workflowStates(filter: { name: { eq: \"Done\" } }) { nodes { id name team { name } } } }"}' \
   "https://api.linear.app/graphql" \
   | python3 -c "import json,sys; d=json.load(sys.stdin); nodes=d['data']['workflowStates']['nodes']; print(nodes[0]['id'] if nodes else '')" 2>/dev/null || true)
@@ -72,7 +72,7 @@ fi
 # Update the issue state to Done
 RESULT=$(curl -s \
   -H "Content-Type: application/json" \
-  -H "Authorization: $LINEAR_BUILDPROVEN_KEY" \
+  -H "Authorization: $LINEAR_API_KEY" \
   -d "{\"query\": \"mutation { issueUpdate(id: \\\"$ISSUE_ID\\\", input: { stateId: \\\"$DONE_STATE_ID\\\" }) { success issue { identifier state { name } } } }\"}" \
   "https://api.linear.app/graphql" \
   | python3 -c "import json,sys; d=json.load(sys.stdin); u=d['data']['issueUpdate']; print('success' if u['success'] else 'failed')" 2>/dev/null || echo "error")
