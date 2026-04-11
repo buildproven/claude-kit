@@ -309,7 +309,8 @@ This gate prevents merging when review agents were skipped — whether by shortc
 1. Push branch, create PR via `gh pr create`
 2. Wait for CI (unless `--skip-ci`)
 3. Auto-merge via `gh pr merge --squash`
-4. Remind the user to verify deployment health with their normal deployment tooling
+4. Run `git checkout main && git pull` to leave the user on main
+5. Remind the user to verify deployment health with their normal deployment tooling
 
 ### Step 5: Record Quality History
 
