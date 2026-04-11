@@ -25,7 +25,7 @@ cat ~/.ssh/id_ed25519.pub
 cd /path/to/your-repo
 
 # 2. Add claude-setup as submodule (SSH URL for private repos)
-git submodule add https://github.com/buildproven/claude-power-kit.git .claude-setup
+git submodule add https://github.com/buildproven/claude-kit.git .claude-setup
 
 # 3. Create symlinks
 mkdir -p .claude
@@ -97,7 +97,7 @@ ls -la .claude/
 ## One-Liner (Copy-Paste)
 
 ```bash
-git submodule add https://github.com/buildproven/claude-power-kit.git .claude-setup && mkdir -p .claude && ln -s ../.claude-setup/commands .claude/commands && ln -s ../.claude-setup/scripts .claude/scripts && ln -s ../.claude-setup/skills .claude/skills && git add .gitmodules .claude-setup .claude && git commit -m "Add Claude commands via submodule" && git push
+git submodule add https://github.com/buildproven/claude-kit.git .claude-setup && mkdir -p .claude && ln -s ../.claude-setup/commands .claude/commands && ln -s ../.claude-setup/scripts .claude/scripts && ln -s ../.claude-setup/skills .claude/skills && git add .gitmodules .claude-setup .claude && git commit -m "Add Claude commands via submodule" && git push
 ```
 
 ## What Gets Added

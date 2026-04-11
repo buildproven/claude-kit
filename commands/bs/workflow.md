@@ -9,7 +9,7 @@ model: haiku
 
 # Daily Development Workflow
 
-Quick reference for the public `claude-power-kit` workflow.
+Quick reference for the public `claude-kit` workflow.
 
 ## Core loop
 
@@ -75,4 +75,4 @@ Use `/bs:quality --merge` when you want the quality loop to carry through merge 
 ## Notes
 
 - This public workflow stops at a clean PR and merge path.
-- Deployment, posting, product operations, and internal service workflows are intentionally out of scope for `claude-power-kit`.
+- Deployment, posting, product operations, and internal service workflows are intentionally out of scope for `claude-kit`.

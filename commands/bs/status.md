@@ -23,9 +23,9 @@ model: haiku
 ## Recent Activity (Last 7 Days)
 
 ### Commits
-  ✅ 7b00891 feat: enhanced /bs:resume (2 days ago) - Brett
-  ✅ 4354342 feat: cost tracking (2 days ago) - Brett
-  ✅ f1e7a1a docs: sync improvements (3 days ago) - Brett
+  ✅ 7b00891 feat: enhanced /bs:resume (2 days ago) - you
+  ✅ 4354342 feat: cost tracking (2 days ago) - you
+  ✅ f1e7a1a docs: sync improvements (3 days ago) - you
 
 ### Pull Requests
   🟢 #33 OPEN: Search CLAUDE.md patterns (ready to merge)

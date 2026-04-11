@@ -11,7 +11,7 @@
     "security",
     "best-practices"
   ],
-  "author": "Brett Stark",
+  "author": "Your Name",
   "license": "MIT",
   "peerDependencies": {
     "eslint": ">=8.0.0"
@@ -29,6 +29,6 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/YOUR_USERNAME/claude-power-kit"
+    "url": "https://github.com/YOUR_USERNAME/claude-kit"
   }
 }

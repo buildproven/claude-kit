@@ -20,7 +20,7 @@ New commands appear automatically when frontmatter is valid.
 Run this bash command to extract frontmatter from all command files:
 
 ```bash
-for f in ~/Projects/claude-power-kit/commands/bs/*.md ~/Projects/claude-power-kit/commands/cc/*.md ~/Projects/claude-power-kit/commands/gh/*.md; do
+for f in ~/Projects/claude-kit/commands/bs/*.md ~/Projects/claude-kit/commands/cc/*.md ~/Projects/claude-kit/commands/gh/*.md; do
   fm=$(awk 'BEGIN{n=0} /^---$/{n++; if(n==2) exit; next} n==1{print}' "$f")
   name=$(echo "$fm" | awk -F': ' '/^name:/{print $2}' | tr -d "'\"")
   desc=$(echo "$fm" | awk -F': ' '/^description:/{$1=""; sub(/^ /,""); print}' | tr -d "'\"")
@@ -35,7 +35,7 @@ done
 ### Step 2: Count skills
 
 ```bash
-ls ~/Projects/claude-power-kit/skills/*/SKILL.md 2>/dev/null | wc -l
+ls ~/Projects/claude-kit/skills/*/SKILL.md 2>/dev/null | wc -l
 ```
 
 ### Step 3: Render output
@@ -99,16 +99,16 @@ At the end, add:
 ```
 ## Skills (<count> total)
 
-Ask Claude naturally to invoke. Example: "Use pdf skill to extract data"
+Ask Claude naturally to invoke. Example: "Run the quality skill"
 
-**Documents:** pdf, docx, xlsx
-**Development:** frontend-design, webapp-testing, ui-reviewer, api-conventions, error-handling, test-strategy
-**Operations:** recover, cleanup, sota, workflow, healthcheck
-**Meta:** agent-browser, seo
+**Development:** api-conventions, error-handling, test-strategy
+**Operations:** recover, cleanup, quality, healthcheck
+
+**Upgrade to claude-kit-pro for:** frontend-design, webapp-testing, ui-reviewer, pdf, docx, xlsx, seo, agent-browser, workflow, sota, and more.
 
 **Full reference**: `/bs:help --full`
 **Workflow guide**: `/bs:workflow`
-**Cheat sheet**: `~/Projects/claude-power-kit/commands/README.md`
+**Cheat sheet**: `~/Projects/claude-kit/commands/README.md`
 **Optimization**: `/cc:optimize`
 ```
 
@@ -132,17 +132,24 @@ Ask Claude naturally to invoke. Example: "Use pdf skill to extract data"
 | `/bs:perfect`         | `/bs:quality --level 98`         |
 | `/bs:perfect --merge` | `/bs:quality --level 98 --merge` |
 
-### Commands Moved to VibeBuildLab Product (CS-004 cleanup)
+### Commands in claude-kit-pro (paid tier)
 
-| Old Command    | Status                                         |
-| -------------- | ---------------------------------------------- |
-| `/bs:validate` | Moved to VibeBuildLab product                  |
-| `/bs:build`    | Moved to VibeBuildLab product                  |
-| `/bs:ship`     | Moved to VibeBuildLab product                  |
-| `/bs:launch`   | Moved to VibeBuildLab product                  |
-| `/bs:grow`     | Moved to VibeBuildLab product                  |
-| `/bs:run`      | Moved to VibeBuildLab product                  |
-| `/bs:project`  | Moved to VibeBuildLab product                  |
-| `/bs:monitor`  | Moved to VibeBuildLab product                  |
-| `/bs:queue`    | Moved to VibeBuildLab product (`/vbl-queue`)   |
-| `/bs:revenue`  | Moved to VibeBuildLab product (`/vbl-revenue`) |
+| Command           | Available in          |
+| ----------------- | --------------------- |
+| `/bs:ralph`       | claude-kit-pro        |
+| `/bs:strategy`    | claude-kit-pro        |
+| `/bs:sota`        | claude-kit-pro        |
+| `/bs:agent-new`   | claude-kit-pro        |
+| `/bs:agent-run`   | claude-kit-pro        |
+| `/bs:session`     | claude-kit-pro        |
+| `/bs:resume`      | claude-kit-pro        |
+| `/bs:backlog`     | claude-kit-pro        |
+| `/bs:sentry`      | claude-kit-pro        |
+| `/bs:steward`     | claude-kit-pro        |
+| `/bs:office-hours`| claude-kit-pro        |
+| `/bs:cost`        | claude-kit-pro        |
+| `/bs:dashboard`   | claude-kit-pro        |
+| `/bs:context`     | claude-kit-pro        |
+| `/bs:patterns`    | claude-kit-pro        |
+| `/bs:deps`        | claude-kit-pro        |
+| `/bs:init-project`| claude-kit-pro        |

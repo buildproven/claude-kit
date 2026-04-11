@@ -1,25 +1,36 @@
-# claude-power-kit
+# claude-kit
 
-A curated public Claude Code toolkit for planning, implementation, quality, debugging, review, and repo hygiene.
+Free, open-source Claude Code toolkit. The baseline layer for planning, implementation, quality, debugging, and repo hygiene.
 
-This repo is the public framework, not a mirror of a private operator setup.
+This repo is the public core. It is designed to be extended, not forked.
+
+## Tiers
+
+| | claude-kit (this repo) | [claude-kit-pro](https://github.com/buildproven/claude-kit-pro) |
+|---|---|---|
+| **Price** | Free | Paid |
+| **Core commands** | ✅ | ✅ (superset) |
+| **Autonomous agents** | — | ✅ `/bs:ralph`, `/bs:strategy` |
+| **Session management** | — | ✅ `/bs:session`, `/bs:resume` |
+| **Backlog + planning** | — | ✅ `/bs:backlog`, `/bs:sota`, `/bs:sentry` |
+| **Premium skills** | — | ✅ frontend-design, seo, pdf, docx, xlsx, and more |
+| **All agents** | 2 | 15 |
 
 ## What's inside
 
 | Dir | Contents |
 |-----|----------|
-| `commands/` | Public `/bs:*`, `/gh:*`, `/cc:*`, and utility commands |
-| `skills/` | General-purpose skill packs for quality, testing, APIs, docs, design, and workflow |
-| `agents/` | Reusable review and specialist agents |
-| `scripts/` | Hooks, validation, setup, sync, and quality automation |
-| `config/` | Generic `CLAUDE.md` and `settings.json` defaults |
-| `.github/workflows/` | CI and maintenance automation |
+| `commands/` | `/bs:*`, `/gh:*`, `/cc:*` core commands |
+| `skills/` | Quality, testing, error-handling, API conventions |
+| `agents/` | code-reviewer, security-auditor |
+| `scripts/` | Hooks, lint, branch-protection, setup automation |
+| `config/` | Generic `CLAUDE.md` and `settings.json` templates |
 
 ## Quick start
 
 ```bash
-git clone https://github.com/YOUR_GITHUB_USERNAME/claude-power-kit.git ~/Projects/claude-power-kit
-cd ~/Projects/claude-power-kit
+git clone https://github.com/buildproven/claude-kit.git ~/Projects/claude-kit
+cd ~/Projects/claude-kit
 ./install.sh
 ```
 
@@ -28,45 +39,44 @@ Then restart Claude Code.
 ## Core commands
 
 ```text
-/bs:dev
-/bs:quality
-/bs:test
-/bs:plan
-/bs:ralph
-/bs:help
+/bs:dev       Start a feature with complexity-appropriate planning
+/bs:quality   Autonomous quality loop (tests, security, review)
+/bs:test      Run tests with auto-detected framework
+/bs:hotfix    Emergency production fix workflow
+/bs:plan      Structured spec before complex work
+/bs:new       Bootstrap a new project
+/bs:help      Full command reference
+/bs:workflow  Daily workflow guide
+/bs:sync      Verify and repair config symlinks
+/bs:read      Extract insights from any article or doc
+/bs:status    Branch and recent commit summary
+/bs:cleanup   Clean AI CLI caches and temp files
 ```
 
-## What this repo is for
+## Skills (7 included)
 
-- daily coding workflow
-- quality automation
-- repo setup and hygiene
-- reusable technical skills
-- reusable review agents
+Ask Claude naturally — `"Run the quality skill"`, `"Use error-handling skill"`
 
-## What this repo is not for
-
-- private operator workflows
-- company-specific posting, product, or growth commands
-- internal service maintenance
-- premium workflow packs
-
-Those belong in private or paid extensions, not in the public core.
-
-## Automation included
-
-- Pre-commit hooks for quality and safety
-- Auto-branch protection against accidental work on `main`
-- Post-edit linting and stop validation
-- CI quality gates
-- Trunk-based maintenance automation
+- `quality` — autonomous quality loop
+- `test-strategy` — test coverage planning
+- `error-handling` — consistent error patterns
+- `api-conventions` — API design standards
+- `recover` — crash and state recovery
+- `cleanup` — cache and temp file cleanup
+- `healthcheck` — MCP and session health
 
 ## Extend
 
-See [EXTENSION-ARCHITECTURE.md](EXTENSION-ARCHITECTURE.md) for how to add personal preferences, private commands, and project-specific workflows on top of the public core without forking it.
+See [EXTENSION-ARCHITECTURE.md](EXTENSION-ARCHITECTURE.md) for how to layer private commands and preferences on top without forking.
+
+claude-kit-pro submodules this repo — upgrading is a one-line submodule swap, no manual copying.
 
 ## Customize
 
-1. Copy `config/CLAUDE.md` and tune it to your preferences.
+1. Copy `config/CLAUDE.md` and tune it to your workflow.
 2. Edit `config/settings.json` for permissions, hooks, and model routing.
-3. Add your own commands, skills, or agents on top of the public baseline.
+3. Add your own commands, skills, or agents in a private overlay repo.
+
+## License
+
+MIT
