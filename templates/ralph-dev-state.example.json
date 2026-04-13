@@ -1,0 +1,132 @@
+{
+  "version": "1.0",
+  "project": "example-project",
+  "lastRun": "2024-01-15T10:30:00Z",
+  "lastSync": "2024-01-15T10:00:00Z",
+  "items": [
+    {
+      "id": "CS-010",
+      "description": "Add user authentication with OAuth",
+      "type": "Feature",
+      "effort": "M",
+      "valueDrivers": {
+        "revenue": 4,
+        "retention": 5,
+        "differentiation": 2
+      },
+      "score": 5.5,
+      "passes": true,
+      "retries": 0,
+      "blocked": false,
+      "blockReason": null,
+      "branch": "feature/CS-010-user-auth",
+      "pr": 123,
+      "completedAt": "2024-01-14T15:30:00Z",
+      "learnings": [
+        "OAuth callback URL must be registered in provider dashboard",
+        "Use httpOnly cookies for token storage"
+      ]
+    },
+    {
+      "id": "CS-011",
+      "description": "Fix login validation error messages",
+      "type": "Bug",
+      "effort": "S",
+      "valueDrivers": {
+        "revenue": 2,
+        "retention": 4,
+        "differentiation": 1
+      },
+      "score": 7.0,
+      "passes": true,
+      "retries": 1,
+      "blocked": false,
+      "blockReason": null,
+      "branch": "fix/CS-011-login-validation",
+      "pr": 124,
+      "completedAt": "2024-01-14T16:45:00Z",
+      "learnings": ["Zod schema errors need custom formatting for UI"]
+    },
+    {
+      "id": "CS-015",
+      "description": "Add dark mode support",
+      "type": "Feature",
+      "effort": "M",
+      "valueDrivers": {
+        "revenue": 2,
+        "retention": 4,
+        "differentiation": 3
+      },
+      "score": 4.5,
+      "passes": false,
+      "retries": 0,
+      "blocked": false,
+      "blockReason": null,
+      "branch": null,
+      "pr": null,
+      "completedAt": null,
+      "learnings": []
+    },
+    {
+      "id": "CS-016",
+      "description": "Implement search autocomplete",
+      "type": "Feature",
+      "effort": "L",
+      "valueDrivers": {
+        "revenue": 3,
+        "retention": 5,
+        "differentiation": 4
+      },
+      "score": 4.0,
+      "passes": false,
+      "retries": 3,
+      "blocked": true,
+      "blockReason": "ESLint type errors in search module after 3 attempts",
+      "branch": null,
+      "pr": null,
+      "completedAt": null,
+      "learnings": [
+        "Attempted fix: added proper generics to search handler",
+        "Root cause: third-party types incompatible with strict mode"
+      ]
+    }
+  ],
+  "checkpoints": {
+    "mvp": {
+      "items": ["CS-010", "CS-011", "CS-012"],
+      "complete": false
+    },
+    "v1.0": {
+      "items": ["CS-010", "CS-011", "CS-012", "CS-015", "CS-016"],
+      "complete": false
+    }
+  },
+  "runHistory": [
+    {
+      "id": "run-001",
+      "startedAt": "2024-01-14T14:00:00Z",
+      "endedAt": "2024-01-14T17:00:00Z",
+      "stopReason": "2 items completed",
+      "itemsAttempted": 2,
+      "itemsCompleted": 2,
+      "itemsFailed": 0,
+      "itemsBlocked": 0,
+      "prsCreated": 2,
+      "prsMerged": 2,
+      "learningsCaptured": 3,
+      "learningsPromoted": 1,
+      "flags": {
+        "fresh": false,
+        "quality": 95,
+        "merge": true
+      }
+    }
+  ],
+  "promotedLearnings": [
+    {
+      "date": "2024-01-14",
+      "pattern": "Use Zod for form validation with custom error formatters",
+      "source": ["CS-011"]
+    }
+  ]
+}

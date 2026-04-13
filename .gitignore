@@ -1,0 +1,71 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Release artifacts
+.scrub.log
+
+# Local settings (root level only)
+/settings.local.json
+
+# Allow config/settings.json (the source of truth)
+!config/settings.json
+
+# Logs and temp files
+*.log
+.DS_Store
+
+# Sensitive data
+*secret*
+*_token*
+*-token*
+*.token
+*key*
+!skills/**/keyword*
+.env
+
+# Session-specific files (don't share across computers)
+debug/
+file-history/
+history.jsonl
+shell-snapshots/
+todos/
+projects/
+.update_check
+
+# Cost tracking (personal usage data)
+.claude/cost-tracking.json
+cost-tracking.json
+
+# Backups
+*.backup
+BACKLOG.md.ralph-next-backup
+
+# Claude Code worktrees (transient parallel-agent artifacts)
+.claude/worktrees/
+
+# Session artifacts (transient — not shared across machines)
+.playwright-mcp/
+.claude/ralph-next/quality-*.json
+.claude/ralph-next/evidence/
+
+# Stryker mutation testing temp files
+.stryker-tmp/
+reports/
+
+# Claude Code statsig cache
+statsig/
+config/social-credentials.env
+mcp-servers/*/node_modules/
+mcp-servers/*/.env
+docs/node_modules/
+__pycache__/
+.serena/
+
+# Stryker mutation testing
+.stryker-tmp/
+coverage/
+reports/
+
+# License files (never commit actual licenses)
+data/licenses/*.json

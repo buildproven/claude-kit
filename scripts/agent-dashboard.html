@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent Dashboard</title>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap');
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      :root {
+        --bg: #0a0a0a;
+        --surface: #141414;
+        --surface-hover: #1a1a1a;
+        --border: #262626;
+        --text: #e5e5e5;
+        --text-muted: #737373;
+        --text-dim: #525252;
+        --accent: #3b82f6;
+        --green: #22c55e;
+        --red: #ef4444;
+        --yellow: #eab308;
+        --mono: 'Geist Mono', 'SF Mono', 'Fira Code', monospace;
+        --sans: 'Inter', -apple-system, sans-serif;
+      }
+
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 14px;
+        line-height: 1.5;
+        padding: 24px;
+        min-height: 100vh;
+      }
+
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 24px;
+        padding-bottom: 16px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      header h1 {
+        font-size: 18px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+
+      .meta {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+
+      .meta .live-dot {
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        background: var(--green);
+        border-radius: 50%;
+        margin-right: 6px;
+        animation: pulse 2s ease-in-out infinite;
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.4;
+        }
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+        gap: 16px;
+        margin-bottom: 32px;
+      }
+
+      .section-title {
+        font-size: 13px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-muted);
+        margin-bottom: 12px;
+      }
+
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 16px;
+        transition: border-color 0.15s;
+      }
+
+      .card:hover {
+        border-color: #333;
+      }
+
+      .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+
+      .card-title {
+        font-family: var(--mono);
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      .badge {
+        font-family: var(--mono);
+        font-size: 11px;
+        font-weight: 500;
+        padding: 2px 8px;
+        border-radius: 4px;
+        text-transform: uppercase;
+      }
+
+      .badge-running {
+        background: rgba(59, 130, 246, 0.15);
+        color: var(--accent);
+        border: 1px solid rgba(59, 130, 246, 0.3);
+      }
+
+      .badge-done {
+        background: rgba(34, 197, 94, 0.15);
+        color: var(--green);
+        border: 1px solid rgba(34, 197, 94, 0.3);
+      }
+
+      .badge-failed {
+        background: rgba(239, 68, 68, 0.15);
+        color: var(--red);
+        border: 1px solid rgba(239, 68, 68, 0.3);
+      }
+
+      .badge-idle {
+        background: rgba(115, 115, 115, 0.15);
+        color: var(--text-muted);
+        border: 1px solid rgba(115, 115, 115, 0.3);
+      }
+
+      .card-body {
+        font-size: 13px;
+        color: var(--text-muted);
+      }
+
+      .card-body .label {
+        color: var(--text-dim);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-bottom: 2px;
+      }
+
+      .card-body .value {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--text);
+        margin-bottom: 8px;
+        word-break: break-all;
+      }
+
+      .elapsed {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--yellow);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+
+      th {
+        text-align: left;
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--text-dim);
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      td {
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border);
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+
+      tr:hover td {
+        background: var(--surface-hover);
+      }
+
+      .empty-state {
+        text-align: center;
+        padding: 48px 24px;
+        color: var(--text-dim);
+        font-size: 13px;
+      }
+
+      .empty-state .icon {
+        font-size: 32px;
+        margin-bottom: 8px;
+        opacity: 0.3;
+      }
+
+      .worktree-path {
+        max-width: 300px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .error-banner {
+        background: rgba(239, 68, 68, 0.1);
+        border: 1px solid rgba(239, 68, 68, 0.3);
+        border-radius: 6px;
+        padding: 10px 14px;
+        font-size: 13px;
+        color: var(--red);
+        margin-bottom: 16px;
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Agent Dashboard</h1>
+      <div class="meta">
+        <span class="live-dot"></span>
+        <span id="last-update">--</span> | 5s refresh
+      </div>
+    </header>
+
+    <div id="error-banner" class="error-banner"></div>
+
+    <!-- Dev State / Active Agents -->
+    <div class="section-title">Active Agents</div>
+    <div id="agents-grid" class="grid"></div>
+
+    <!-- Worktrees -->
+    <div class="section-title">Git Worktrees</div>
+    <div id="worktrees-section" style="margin-bottom: 32px"></div>
+
+    <!-- Evidence / Recent Completions -->
+    <div class="section-title">Recent Completions</div>
+    <div id="evidence-section" style="margin-bottom: 32px"></div>
+
+    <!-- Recent Task Files -->
+    <div class="section-title">Recent Task Output</div>
+    <div id="tasks-section"></div>
+
+    <script>
+      // Agent Dashboard — local-only, data sourced from trusted local JSON files only
+      const API_URL = '/api/status'
+      const REFRESH_MS = 5000
+
+      function escapeHtml(str) {
+        const div = document.createElement('div')
+        div.textContent = str
+        return div.textContent
+      }
+
+      function elapsed(isoString) {
+        if (!isoString) return '--'
+        const ms = Date.now() - new Date(isoString).getTime()
+        const s = Math.floor(ms / 1000)
+        if (s < 60) return s + 's'
+        const m = Math.floor(s / 60)
+        if (m < 60) return m + 'm ' + (s % 60) + 's'
+        const h = Math.floor(m / 60)
+        return h + 'h ' + (m % 60) + 'm'
+      }
+
+      function shortPath(p) {
+        const home = '/Users/'
+        const idx = p.indexOf(home)
+        if (idx >= 0) {
+          const rest = p.slice(idx + home.length)
+          const slash = rest.indexOf('/')
+          return '~/' + (slash >= 0 ? rest.slice(slash + 1) : rest)
+        }
+        return p
+      }
+
+      function createBadge(status) {
+        const s = (status || 'idle').toLowerCase()
+        const cls =
+          s === 'running'
+            ? 'badge-running'
+            : s === 'done' || s === 'pass' || s === 'passed'
+              ? 'badge-done'
+              : s === 'failed' || s === 'fail' || s === 'error'
+                ? 'badge-failed'
+                : 'badge-idle'
+        const span = document.createElement('span')
+        span.className = 'badge ' + cls
+        span.textContent = s
+        return span
+      }
+
+      function createEmptyState(msg) {
+        const div = document.createElement('div')
+        div.className = 'empty-state'
+        const icon = document.createElement('div')
+        icon.className = 'icon'
+        icon.textContent = '~'
+        const text = document.createTextNode(msg)
+        div.appendChild(icon)
+        div.appendChild(text)
+        return div
+      }
+
+      function createAgentCard(agent) {
+        const name = agent.name || agent.id || 'agent'
+        const task = agent.task || agent.currentTask || '--'
+        const status = agent.status || 'running'
+        const time = agent.startedAt ? elapsed(agent.startedAt) : '--'
+        const learnings = agent.learnings
+
+        const card = document.createElement('div')
+        card.className = 'card'
+
+        const header = document.createElement('div')
+        header.className = 'card-header'
+        const title = document.createElement('span')
+        title.className = 'card-title'
+        title.textContent = name
+        header.appendChild(title)
+        header.appendChild(createBadge(status))
+        card.appendChild(header)
+
+        const body = document.createElement('div')
+        body.className = 'card-body'
+
+        const taskLabel = document.createElement('div')
+        taskLabel.className = 'label'
+        taskLabel.textContent = 'Task'
+        body.appendChild(taskLabel)
+
+        const taskValue = document.createElement('div')
+        taskValue.className = 'value'
+        taskValue.textContent = task
+        body.appendChild(taskValue)
+
+        const elapsedLabel = document.createElement('div')
+        elapsedLabel.className = 'label'
+        elapsedLabel.textContent = 'Elapsed'
+        body.appendChild(elapsedLabel)
+
+        const elapsedValue = document.createElement('div')
+        elapsedValue.className = 'elapsed'
+        elapsedValue.textContent = time
+        body.appendChild(elapsedValue)
+
+        if (learnings && Array.isArray(learnings) && learnings.length > 0) {
+          const lWrap = document.createElement('div')
+          lWrap.style.marginTop = '8px'
+          const lLabel = document.createElement('div')
+          lLabel.className = 'label'
+          lLabel.textContent = 'Learnings'
+          lWrap.appendChild(lLabel)
+          const lValue = document.createElement('div')
+          lValue.className = 'value'
+          lValue.textContent = learnings
+            .slice(-3)
+            .map(function (l) {
+              return '- ' + (typeof l === 'string' ? l : JSON.stringify(l))
+            })
+            .join('\n')
+          lValue.style.whiteSpace = 'pre-wrap'
+          lWrap.appendChild(lValue)
+          body.appendChild(lWrap)
+        }
+
+        card.appendChild(body)
+        return card
+      }
+
+      function renderAgents(devState) {
+        const el = document.getElementById('agents-grid')
+        el.replaceChildren()
+
+        if (!devState) {
+          el.appendChild(createEmptyState('No active agents detected'))
+          return
+        }
+
+        if (devState.agents && devState.agents.length > 0) {
+          devState.agents.forEach(function (a) {
+            el.appendChild(createAgentCard(a))
+          })
+          return
+        }
+
+        if (devState.task || devState.status) {
+          el.appendChild(
+            createAgentCard({
+              name: devState.name || 'ralph',
+              task: devState.task || devState.currentTask || '--',
+              status: devState.status || 'running',
+              startedAt: devState.startedAt || devState.timestamp,
+              learnings: devState.learnings,
+            })
+          )
+          return
+        }
+
+        el.appendChild(createEmptyState('No active agents detected'))
+      }
+
+      function renderWorktrees(worktrees) {
+        const el = document.getElementById('worktrees-section')
+        el.replaceChildren()
+
+        if (!worktrees || worktrees.length === 0) {
+          el.appendChild(createEmptyState('No worktrees found'))
+          return
+        }
+
+        const table = document.createElement('table')
+        const thead = document.createElement('thead')
+        const headRow = document.createElement('tr')
+        ;['Branch', 'Path'].forEach(function (h) {
+          const th = document.createElement('th')
+          th.textContent = h
+          headRow.appendChild(th)
+        })
+        thead.appendChild(headRow)
+        table.appendChild(thead)
+
+        const tbody = document.createElement('tbody')
+        worktrees.forEach(function (w) {
+          const tr = document.createElement('tr')
+          const tdBranch = document.createElement('td')
+          tdBranch.textContent = w.branch || '--'
+          const tdPath = document.createElement('td')
+          tdPath.className = 'worktree-path'
+          tdPath.textContent = shortPath(w.path)
+          tdPath.title = w.path
+          tr.appendChild(tdBranch)
+          tr.appendChild(tdPath)
+          tbody.appendChild(tr)
+        })
+        table.appendChild(tbody)
+        el.appendChild(table)
+      }
+
+      function renderEvidence(evidence) {
+        const el = document.getElementById('evidence-section')
+        el.replaceChildren()
+
+        if (!evidence || evidence.length === 0) {
+          el.appendChild(createEmptyState('No evidence files found'))
+          return
+        }
+
+        const table = document.createElement('table')
+        const thead = document.createElement('thead')
+        const headRow = document.createElement('tr')
+        ;['File', 'Status', 'Summary'].forEach(function (h) {
+          const th = document.createElement('th')
+          th.textContent = h
+          headRow.appendChild(th)
+        })
+        thead.appendChild(headRow)
+        table.appendChild(thead)
+
+        const tbody = document.createElement('tbody')
+        evidence.forEach(function (e) {
+          const status = e.status || e.result || '--'
+          const summary = e.summary || e.task || e.description || '--'
+          const tr = document.createElement('tr')
+          const tdFile = document.createElement('td')
+          tdFile.textContent = e.file || '--'
+          const tdStatus = document.createElement('td')
+          tdStatus.appendChild(createBadge(status))
+          const tdSummary = document.createElement('td')
+          tdSummary.textContent = summary
+          tdSummary.title = summary
+          tdSummary.style.maxWidth = '250px'
+          tdSummary.style.overflow = 'hidden'
+          tdSummary.style.textOverflow = 'ellipsis'
+          tdSummary.style.whiteSpace = 'nowrap'
+          tr.appendChild(tdFile)
+          tr.appendChild(tdStatus)
+          tr.appendChild(tdSummary)
+          tbody.appendChild(tr)
+        })
+        table.appendChild(tbody)
+        el.appendChild(table)
+      }
+
+      function renderTasks(tasks) {
+        const el = document.getElementById('tasks-section')
+        el.replaceChildren()
+
+        if (!tasks || tasks.length === 0) {
+          el.appendChild(createEmptyState('No task output files found'))
+          return
+        }
+
+        const table = document.createElement('table')
+        const thead = document.createElement('thead')
+        const headRow = document.createElement('tr')
+        ;['File', 'Source', 'Age', 'Size'].forEach(function (h) {
+          const th = document.createElement('th')
+          th.textContent = h
+          headRow.appendChild(th)
+        })
+        thead.appendChild(headRow)
+        table.appendChild(thead)
+
+        const tbody = document.createElement('tbody')
+        tasks.forEach(function (t) {
+          const tr = document.createElement('tr')
+          const tdFile = document.createElement('td')
+          tdFile.textContent = t.file
+          const tdSource = document.createElement('td')
+          tdSource.textContent = t.dir
+          const tdAge = document.createElement('td')
+          tdAge.textContent = elapsed(t.modified)
+          const tdSize = document.createElement('td')
+          tdSize.textContent =
+            t.size > 1024 ? Math.round(t.size / 1024) + 'KB' : t.size + 'B'
+          tr.appendChild(tdFile)
+          tr.appendChild(tdSource)
+          tr.appendChild(tdAge)
+          tr.appendChild(tdSize)
+          tbody.appendChild(tr)
+        })
+        table.appendChild(tbody)
+        el.appendChild(table)
+      }
+
+      function render(data) {
+        document.getElementById('last-update').textContent =
+          new Date().toLocaleTimeString()
+        document.getElementById('error-banner').style.display = 'none'
+        renderAgents(data.devState)
+        renderWorktrees(data.worktrees)
+        renderEvidence(data.evidence)
+        renderTasks(data.recentTasks)
+      }
+
+      function showError(msg) {
+        const banner = document.getElementById('error-banner')
+        banner.textContent = msg
+        banner.style.display = 'block'
+      }
+
+      async function poll() {
+        try {
+          const res = await fetch(API_URL)
+          if (!res.ok) throw new Error('HTTP ' + res.status)
+          const data = await res.json()
+          render(data)
+        } catch (err) {
+          showError('Failed to fetch status: ' + err.message)
+        }
+      }
+
+      poll()
+      setInterval(poll, REFRESH_MS)
+    </script>
+  </body>
+</html>

@@ -1,0 +1,114 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/buildproven/claude-kit/schemas/defensive-patterns.schema.json",
+  "title": "Defensive Patterns Configuration",
+  "description": "Per-project configuration for defensive pattern checks in pattern-check.sh",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON schema reference"
+    },
+    "version": {
+      "type": "string",
+      "description": "Configuration version",
+      "pattern": "^[0-9]+\\.[0-9]+$",
+      "default": "1.0"
+    },
+    "description": {
+      "type": "string",
+      "description": "Optional description of the project's pattern configuration"
+    },
+    "authMiddleware": {
+      "type": "array",
+      "description": "Function/method names that indicate authenticated routes. Pattern-check will look for these in API route files.",
+      "items": {
+        "type": "string"
+      },
+      "default": [
+        "withAuth",
+        "requireAuth",
+        "authenticate",
+        "getSession",
+        "getServerSession"
+      ],
+      "examples": [
+        ["withAuth", "protectedProcedure"],
+        ["requireAuth", "getServerSession", "auth"]
+      ]
+    },
+    "safeParseHelpers": {
+      "type": "array",
+      "description": "Function/method names that indicate safe JSON parsing. These are exempted from unsafe-parsing warnings.",
+      "items": {
+        "type": "string"
+      },
+      "default": ["safeParse", "safeJsonParse", ".safeParse"],
+      "examples": [
+        ["safeParse", "zodParse", "safeJsonParse"],
+        ["parseWithSchema", ".safeParse"]
+      ]
+    },
+    "publicRoutes": {
+      "type": "array",
+      "description": "File path patterns for routes that don't require auth. Supports glob patterns (* and **). These files skip auth middleware checks.",
+      "items": {
+        "type": "string"
+      },
+      "default": ["/api/health", "/api/webhooks/*"],
+      "examples": [
+        ["/api/health", "/api/webhooks/*", "/api/public/*"],
+        ["/api/auth/**", "/api/cron/*"]
+      ]
+    },
+    "disabled": {
+      "type": "array",
+      "description": "List of check IDs to disable. Valid values: UNSAFE_PARSING, EMPTY_CATCH, MISSING_AUTH, INLINE_HANDLER, DIVISION_GUARD",
+      "items": {
+        "type": "string",
+        "enum": [
+          "UNSAFE_PARSING",
+          "EMPTY_CATCH",
+          "MISSING_AUTH",
+          "INLINE_HANDLER",
+          "DIVISION_GUARD"
+        ]
+      },
+      "default": [],
+      "examples": [["INLINE_HANDLER"], ["DIVISION_GUARD", "INLINE_HANDLER"]]
+    },
+    "extends": {
+      "type": "string",
+      "description": "Path to a base configuration file to extend (relative to project root)",
+      "examples": ["./node_modules/@your-org/patterns/base.json"]
+    },
+    "severity": {
+      "type": "object",
+      "description": "Override severity levels for specific checks",
+      "properties": {
+        "UNSAFE_PARSING": {
+          "type": "string",
+          "enum": ["critical", "high", "medium", "low", "off"]
+        },
+        "EMPTY_CATCH": {
+          "type": "string",
+          "enum": ["critical", "high", "medium", "low", "off"]
+        },
+        "MISSING_AUTH": {
+          "type": "string",
+          "enum": ["critical", "high", "medium", "low", "off"]
+        },
+        "INLINE_HANDLER": {
+          "type": "string",
+          "enum": ["critical", "high", "medium", "low", "off"]
+        },
+        "DIVISION_GUARD": {
+          "type": "string",
+          "enum": ["critical", "high", "medium", "low", "off"]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

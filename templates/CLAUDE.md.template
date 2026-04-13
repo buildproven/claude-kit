@@ -1,0 +1,54 @@
+# [Project Name] - Claude Guide
+
+> [One-line description of what this project does]
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|------------|
+| Framework | [e.g., Next.js 15] |
+| Language | [e.g., TypeScript 5+] |
+| Styling | [e.g., Tailwind CSS v4] |
+| Database | [e.g., PostgreSQL / Supabase] |
+| Hosting | [e.g., Vercel] |
+
+## Key Commands
+
+```bash
+npm run dev      # Start dev server
+npm run build    # Production build
+npm test         # Run tests
+npm run lint     # Lint code
+```
+
+## Project Structure
+
+```
+src/
+├── app/          # [Purpose]
+├── components/   # [Purpose]
+├── lib/          # [Purpose]
+└── types/        # [Purpose]
+```
+
+## Critical Patterns
+
+### [Pattern 1 Name]
+[Brief explanation of project-specific pattern]
+
+### [Pattern 2 Name]
+[Brief explanation of project-specific pattern]
+
+## What NOT to Do
+
+- Don't [project-specific gotcha #1]
+- Don't [project-specific gotcha #2]
+- Don't [project-specific gotcha #3]
+
+## Key Files
+
+- `[path/to/important/file]` - [what it does]
+- `[path/to/config]` - [what it configures]
+
+---
+*See `docs/` for detailed documentation. Global rules in `~/.claude/CLAUDE.md`.*

@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "cleanupPeriodDays": 0,
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "ENABLE_TOOL_SEARCH": "auto:5"
+  },
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Bash(**/grep *)",
+      "Bash(**/head *)",
+      "Bash(**/tail *)",
+      "Bash(**/wc *)",
+      "Bash(**/du *)",
+      "Bash(**/sort *)",
+      "Bash(**/cat *)",
+      "Bash(**/cd *)",
+      "Read",
+      "Write",
+      "Edit",
+      "MultiEdit",
+      "Glob",
+      "Grep",
+      "WebFetch",
+      "WebSearch",
+      "Task",
+      "TaskOutput",
+      "TodoWrite",
+      "NotebookEdit",
+      "Skill",
+      "SlashCommand",
+      "EnterPlanMode",
+      "ExitPlanMode",
+      "AskUserQuestion",
+      "KillShell",
+      "BashOutput",
+      "mcp__*"
+    ],
+    "deny": [
+      "Bash(sudo rm:*)",
+      "Bash(rm -rf /:*)",
+      "Bash(rm -rf /*)",
+      "Bash(> /dev/sda:*)",
+      "Bash(dd if=/dev/zero:*)",
+      "Bash(mkfs:*)",
+      "Bash(chmod -R 777 /:*)",
+      "Bash(chown -R:*)"
+    ],
+    "ask": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean -fd:*)",
+      "Bash(npm publish:*)",
+      "Bash(npx publish:*)",
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)",
+      "Read(**/*credential*)",
+      "Read(**/*secret*)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)"
+    ]
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/auto-init-check.sh",
+            "timeout": 3000
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/post-edit-lint.sh",
+            "timeout": 10000
+          }
+        ]
+      },
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/post-tool-use-session-check.sh",
+            "timeout": 2000
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/block-push-main.sh",
+            "timeout": 5000
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/block-commit-main.sh",
+            "timeout": 5000
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/branch-drift-guard.sh",
+            "timeout": 3000
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/auto-branch-on-main.sh",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/pre-compact-backup.sh",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "TeammateIdle": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/teammate-idle-check.sh",
+            "timeout": 30000
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/task-completed-check.sh",
+            "timeout": 60000
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/stop-validation.sh",
+            "timeout": 10000
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/multi-session-cleanup.sh",
+            "timeout": 2000
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "osascript -e 'display notification \"Claude needs your attention\" with title \"Claude Code\"'",
+            "timeout": 3000
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/session-start-context.sh",
+            "timeout": 5000
+          },
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/multi-session-guard.sh",
+            "timeout": 3000
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "bash -c '\"$(which node)\" \"$(ls -td ~/.claude/plugins/cache/claude-hud/claude-hud/*/ 2>/dev/null | head -1)dist/index.js\"'"
+  },
+  "alwaysThinkingEnabled": true,
+  "skipDangerousModePermissionPrompt": false,
+  "autoApproveEdits": false,
+  "defaultMode": "default"
+}

@@ -1,0 +1,16 @@
+name: Cascade to claude-kit-pro
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  cascade:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger submodule bump in claude-kit-pro
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GH_CASCADE_TOKEN }}
+          repository: buildproven/claude-kit-pro
+          event-type: core-updated

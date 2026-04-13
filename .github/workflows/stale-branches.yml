@@ -1,0 +1,60 @@
+name: Stale Branch Cleanup
+
+on:
+  schedule:
+    # Monthly on the 1st at 9am CST (15:00 UTC)
+    - cron: '0 15 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  cleanup:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find and delete stale branches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Checking for stale branches (>14 days, no open PR)..."
+          echo ""
+
+          DELETED=0
+          WARNED=0
+          NOW=$(date +%s)
+
+          for branch in $(git branch -r --format='%(refname:short)' | grep -v 'origin/main$' | grep -v 'origin/HEAD' | grep -v 'origin/release/'); do
+            SHORT_NAME="${branch#origin/}"
+
+            LAST_COMMIT=$(git log -1 --format=%ct "$branch" 2>/dev/null || echo "0")
+            DAYS_OLD=$(( (NOW - LAST_COMMIT) / 86400 ))
+
+            if [ "$DAYS_OLD" -lt 7 ]; then
+              continue
+            fi
+
+            PR_COUNT=$(gh pr list --head "$SHORT_NAME" --state open --json number --jq 'length' 2>/dev/null || echo "0")
+
+            if [ "$PR_COUNT" -gt 0 ]; then
+              continue
+            fi
+
+            if [ "$DAYS_OLD" -ge 14 ]; then
+              echo "Deleting: $SHORT_NAME ($DAYS_OLD days old, no open PR)"
+              git push origin --delete "$SHORT_NAME" 2>/dev/null || echo "  Failed to delete $SHORT_NAME"
+              DELETED=$((DELETED + 1))
+            elif [ "$DAYS_OLD" -ge 7 ]; then
+              echo "Warning: $SHORT_NAME ($DAYS_OLD days old, no open PR - will delete in $(( 14 - DAYS_OLD )) days)"
+              WARNED=$((WARNED + 1))
+            fi
+          done
+
+          echo ""
+          echo "Summary: $DELETED deleted, $WARNED warned"
