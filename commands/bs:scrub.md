@@ -150,11 +150,13 @@ If sensitive files found in history, warn user and recommend `git filter-repo`.
 ### Phase 7-OS: Documentation (opensource)
 
 1. **README.md** - Project description, install, usage, env vars, contributing link
+   - If `.env.example` or `.env.template` exists, verify README documents **all** env vars and marks optional ones clearly (e.g. "optional", "leave blank to disable")
 2. **LICENSE** - Ask user preference: MIT / Apache 2.0 / GPL
 3. **CONTRIBUTING.md** - How to contribute, development setup, PR process
-4. **CODE_OF_CONDUCT.md** - Contributor Covenant v2.1
-5. **.github/ISSUE_TEMPLATE** and **PULL_REQUEST_TEMPLATE**
-6. **SECURITY.md** - Vulnerability reporting process
+4. **CHANGELOG.md** - Version history (builds contributor confidence; use Keep a Changelog format)
+5. **CODE_OF_CONDUCT.md** - Contributor Covenant v2.1
+6. **.github/ISSUE_TEMPLATE** and **PULL_REQUEST_TEMPLATE**
+7. **SECURITY.md** - Vulnerability reporting process
 
 ### Phase 7-GV: Documentation (giveaway)
 
@@ -301,8 +303,10 @@ mode: [MODE]
 - [ ] No secrets in codebase
 - [ ] .env.example exists
 - [ ] .gitignore comprehensive
-- [ ] README.md exists
+- [ ] README.md exists and documents all env vars (optional ones marked)
 - [ ] LICENSE exists (type: [license])
+- [ ] CONTRIBUTING.md exists (opensource mode)
+- [ ] CHANGELOG.md exists (opensource/sell mode)
 - [ ] No internal references
 - [ ] No dev infrastructure files
 - [ ] No audit/review files
@@ -324,7 +328,10 @@ Only complete when ALL true:
 - [ ] `.env.example` exists and documented
 - [ ] `.gitignore` includes all secret files and dev infrastructure
 - [ ] README.md exists with clear instructions
+- [ ] README documents all env vars from `.env.example`/`.env.template`, with optional ones marked
 - [ ] LICENSE file exists (appropriate for mode)
+- [ ] CONTRIBUTING.md exists (opensource mode only)
+- [ ] CHANGELOG.md exists (opensource and sell modes)
 - [ ] No internal company references (except brand name in `sell` mode)
 - [ ] No dev infrastructure files
 - [ ] No internal audit/review files
