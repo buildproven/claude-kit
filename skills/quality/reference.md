@@ -20,15 +20,8 @@
 | `--skip-docs`     | false   | Skip doc sync check                     |
 | `--teams`         | false   | Use agent teams (tmux visibility)       |
 | `--no-teams`      | -       | Force Task subagents (default)          |
-| `--no-codex`      | false   | Skip Codex cross-review                 |
 | `--skip-tests`    | false   | Skip hard test gate (config-only repos) |
 | `--preflight`     | false   | Quick readiness check (<10 sec)         |
-
-### Environment Variables
-
-| Variable        | Default | Description                                     |
-| --------------- | ------- | ----------------------------------------------- |
-| `CODEX_TIMEOUT` | 120     | Seconds to wait for Codex cross-review (0=skip) |
 
 ## Scope Options
 

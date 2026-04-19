@@ -177,64 +177,13 @@ Do NOT review unchanged code. Focus ONLY on the diff.
 
 This prevents agents from doing generic scans and forces them to review the actual changes.
 
-#### Codex Cross-Review (Default)
-
-Runs in parallel with Claude agents — different model, different blind spots. Enabled by default when `acpx` and `codex` are available. Disable with `--no-codex`.
-
-```bash
-# Check availability
-if command -v acpx &>/dev/null && command -v codex &>/dev/null && [ "$NO_CODEX" != true ]; then
-  TIMESTAMP=$(date +%s)
-  DIFF_FILE=$(mktemp)
-  git diff main...HEAD > "$DIFF_FILE"
-
-  acpx codex exec --no-wait -s "codex-review-$TIMESTAMP" \
-    "You are reviewing a code PR. Focus on P0/P1 issues only: bugs that will break in production, security vulnerabilities, data loss risks, and logic errors. Ignore style, formatting, and minor improvements.
-
-For each finding, output:
-- File and line number
-- Severity (P0 = must fix, P1 = should fix)
-- What breaks and why
-- Specific fix
-
-Files changed:
-$(git diff --name-only main...HEAD)
-
-Diff:
-$(cat "$DIFF_FILE")
-
-If no P0/P1 issues found, say so with the number of files and lines reviewed."
-
-  rm -f "$DIFF_FILE"
-fi
-```
-
-After Claude agents complete, check if Codex review is done:
-
-```bash
-if [ -n "$TIMESTAMP" ]; then
-  # Poll for completion (max 120s — Codex is fast)
-  for i in $(seq 1 40); do
-    if ! acpx status -s "codex-review-$TIMESTAMP" 2>/dev/null | grep -q "running"; then
-      break
-    fi
-    sleep 3
-  done
-  CODEX_OUT=$(acpx output -s "codex-review-$TIMESTAMP" 2>/dev/null || echo "Codex review timed out")
-fi
-```
-
-Merge Codex findings into the report. Codex findings that overlap with Claude findings increase confidence. New Codex findings get added to WARNINGS.
-
 #### Review Stamp
 
 After all agents pass, add a commit trailer to the merge commit message:
 
 ```
-Reviewed-By: claude-quality (L95, 6 agents + codex, [timestamp])
+Reviewed-By: claude-quality (L95, 6 agents, [timestamp])
 ```
-
-If Codex was unavailable or skipped: `Reviewed-By: claude-quality (L95, 6 agents, [timestamp])`
 
 CI can check for this trailer to verify local review ran. See harness-gate.yml.
 
@@ -248,19 +197,19 @@ Validate agent outputs per `checklist.md` "Agent Validation" section. Check expe
 
 After all agent results are validated, run a single synthesis pass:
 
-1. **Collect** all findings from: Claude agents + Codex cross-review
+1. **Collect** all findings from the Claude review agents
 2. **Deduplicate**: Same file:line from multiple agents → merge into one finding, note which agents flagged it (higher confidence)
 3. **Severity classify** every finding into exactly one category:
    - **BLOCKING** — Bugs, security vulns, data loss, breaking changes. Must fix before merge.
    - **WARNING** — Missing edge cases, performance concerns, weak error handling. Should fix.
    - **SUPPRESSED** — Style nits, import ordering, naming preferences, suggestions for unchanged code. Do NOT report.
-4. **Confidence boost**: Findings flagged by 2+ independent agents (e.g., Claude code-reviewer AND Codex) are promoted one severity level
+4. **Confidence boost**: Findings flagged by 2+ independent agents are promoted one severity level
 5. **Output**: Consolidated report with only BLOCKING and WARNING findings. Include finding count and agent attribution.
 
 ```
 ## Quality Review Summary
 
-**Reviewed by**: 6 Claude agents (Opus) + Codex cross-review
+**Reviewed by**: 6 Claude agents (Opus)
 **Files**: N files, M lines changed
 **Findings**: X blocking, Y warnings (Z suppressed)
 
@@ -328,36 +277,52 @@ When invoked with `--parallel`, fire security, coverage, and perf sub-reviews as
 
 ### How It Works
 
+Requires acpx ≥ 0.5.3. Commands are agent-scoped (`acpx claude …`) in current versions.
+
 1. **Check acpx availability**: `command -v acpx`. If unavailable, fall back to sequential (log a warning).
-2. **Fire sub-reviews concurrently**:
+2. **Create sessions, then fire prompts concurrently**:
 
 ```bash
 TIMESTAMP=$(date +%s)
-acpx claude exec --no-wait -s "quality-security-$TIMESTAMP" \
-  "Security review: examine [diff/files] for OWASP top 10, secrets, injection flaws. Output structured findings." \
-  > /tmp/quality-security.pid
-acpx claude exec --no-wait -s "quality-coverage-$TIMESTAMP" \
-  "Coverage review: examine [diff/files] for missing tests, uncovered branches, weak assertions. Output structured findings." \
-  > /tmp/quality-coverage.pid
-acpx claude exec --no-wait -s "quality-perf-$TIMESTAMP" \
-  "Performance review: examine [diff/files] for N+1 queries, unguarded loops, missing memoization. Output structured findings." \
-  > /tmp/quality-perf.pid
+for kind in security coverage perf; do
+  acpx claude sessions new --name "quality-${kind}-${TIMESTAMP}" >/dev/null
+done
+
+acpx claude prompt --no-wait -s "quality-security-${TIMESTAMP}" \
+  "Security review: examine [diff/files] for OWASP top 10, secrets, injection flaws. Output structured findings."
+acpx claude prompt --no-wait -s "quality-coverage-${TIMESTAMP}" \
+  "Coverage review: examine [diff/files] for missing tests, uncovered branches, weak assertions. Output structured findings."
+acpx claude prompt --no-wait -s "quality-perf-${TIMESTAMP}" \
+  "Performance review: examine [diff/files] for N+1 queries, unguarded loops, missing memoization. Output structured findings."
 ```
 
-3. **Poll until all sessions complete**:
+3. **Poll until all sessions complete** (status can stay "running" post-completion, so detect an assistant entry after the latest user entry via history):
 
 ```bash
-for session in quality-security-$TIMESTAMP quality-coverage-$TIMESTAMP quality-perf-$TIMESTAMP; do
-  while acpx status -s "$session" | grep -q "running"; do sleep 3; done
+session_done() {
+  local session="$1"
+  acpx claude sessions read "$session" --tail 4 2>/dev/null \
+    | awk '/^user/{u=NR} /^assistant/{a=NR} END{exit !(a>u)}'
+}
+
+for session in quality-security-${TIMESTAMP} quality-coverage-${TIMESTAMP} quality-perf-${TIMESTAMP}; do
+  for _ in $(seq 1 80); do
+    session_done "$session" && break
+    sleep 3
+  done
 done
 ```
 
-4. **Collect outputs**:
+4. **Collect outputs** (read session history):
 
 ```bash
-SECURITY_OUT=$(acpx output -s "quality-security-$TIMESTAMP")
-COVERAGE_OUT=$(acpx output -s "quality-coverage-$TIMESTAMP")
-PERF_OUT=$(acpx output -s "quality-perf-$TIMESTAMP")
+SECURITY_OUT=$(acpx claude sessions read "quality-security-${TIMESTAMP}" --tail 1)
+COVERAGE_OUT=$(acpx claude sessions read "quality-coverage-${TIMESTAMP}" --tail 1)
+PERF_OUT=$(acpx claude sessions read "quality-perf-${TIMESTAMP}" --tail 1)
+
+for kind in security coverage perf; do
+  acpx claude sessions close "quality-${kind}-${TIMESTAMP}" >/dev/null 2>&1 || true
+done
 ```
 
 5. **Synthesize**: combine all three outputs into the unified quality report (same format as sequential mode). Continue to Step 2 (Agent Result Validation) as normal.

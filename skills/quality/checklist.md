@@ -81,7 +81,6 @@ Every finding MUST be classified into exactly one category:
 
 - Finding flagged by 1 agent: standard severity
 - Finding flagged by 2+ agents independently: promote one level (WARNING → BLOCKING)
-- Finding flagged by both Claude AND Codex: highest confidence — always BLOCKING
 
 ### Suppression Rules (NEVER report these)
 
