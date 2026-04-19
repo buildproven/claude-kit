@@ -3,7 +3,7 @@ name: Stale Branch Cleanup
 on:
   schedule:
     # Monthly on the 1st at 9am CST (15:00 UTC)
-    - cron: '0 15 1 * *'
+    - cron: "0 15 1 * *"
   workflow_dispatch:
 
 permissions:

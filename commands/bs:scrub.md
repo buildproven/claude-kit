@@ -1,12 +1,12 @@
 ---
-description: 'Scrub/clean a project for release: open source, giveaway, or commercial sale'
+description: "Scrub/clean a project for release: open source, giveaway, or commercial sale"
 args:
   - name: path
     description: Path to project (defaults to current directory)
     type: string
     required: false
   - name: mode
-    description: 'Release mode: opensource | sell | giveaway (will prompt if omitted)'
+    description: "Release mode: opensource | sell | giveaway (will prompt if omitted)"
     type: string
     required: false
 model: sonnet

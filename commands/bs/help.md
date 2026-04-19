@@ -1,7 +1,7 @@
 ---
 name: bs:help
-description: 'Quick reference for all /bs:* commands with flags and usage'
-argument-hint: '[--full] → quick or detailed /bs:* reference'
+description: "Quick reference for all /bs:* commands with flags and usage"
+argument-hint: "[--full] → quick or detailed /bs:* reference"
 category: maintenance
 model: haiku
 ---
@@ -118,10 +118,10 @@ Ask Claude naturally to invoke. Example: "Run the quality skill"
 
 ### Content Pipeline (Removed)
 
-| Old Command   | Status     |
-| ------------- | ---------- |
-| `/bs:pilot`   | Removed    |
-| `/bs:article` | Removed    |
+| Old Command   | Status  |
+| ------------- | ------- |
+| `/bs:pilot`   | Removed |
+| `/bs:article` | Removed |
 
 ### Quality Commands (Replaced by /bs:quality)
 
@@ -134,22 +134,22 @@ Ask Claude naturally to invoke. Example: "Run the quality skill"
 
 ### Commands in claude-kit-pro (paid tier)
 
-| Command           | Available in          |
-| ----------------- | --------------------- |
-| `/bs:ralph`       | claude-kit-pro        |
-| `/bs:strategy`    | claude-kit-pro        |
-| `/bs:sota`        | claude-kit-pro        |
-| `/bs:agent-new`   | claude-kit-pro        |
-| `/bs:agent-run`   | claude-kit-pro        |
-| `/bs:session`     | claude-kit-pro        |
-| `/bs:resume`      | claude-kit-pro        |
-| `/bs:backlog`     | claude-kit-pro        |
-| `/bs:sentry`      | claude-kit-pro        |
-| `/bs:steward`     | claude-kit-pro        |
-| `/bs:office-hours`| claude-kit-pro        |
-| `/bs:cost`        | claude-kit-pro        |
-| `/bs:dashboard`   | claude-kit-pro        |
-| `/bs:context`     | claude-kit-pro        |
-| `/bs:patterns`    | claude-kit-pro        |
-| `/bs:deps`        | claude-kit-pro        |
-| `/bs:init-project`| claude-kit-pro        |
+| Command            | Available in   |
+| ------------------ | -------------- |
+| `/bs:ralph`        | claude-kit-pro |
+| `/bs:strategy`     | claude-kit-pro |
+| `/bs:sota`         | claude-kit-pro |
+| `/bs:agent-new`    | claude-kit-pro |
+| `/bs:agent-run`    | claude-kit-pro |
+| `/bs:session`      | claude-kit-pro |
+| `/bs:resume`       | claude-kit-pro |
+| `/bs:backlog`      | claude-kit-pro |
+| `/bs:sentry`       | claude-kit-pro |
+| `/bs:steward`      | claude-kit-pro |
+| `/bs:office-hours` | claude-kit-pro |
+| `/bs:cost`         | claude-kit-pro |
+| `/bs:dashboard`    | claude-kit-pro |
+| `/bs:context`      | claude-kit-pro |
+| `/bs:patterns`     | claude-kit-pro |
+| `/bs:deps`         | claude-kit-pro |
+| `/bs:init-project` | claude-kit-pro |

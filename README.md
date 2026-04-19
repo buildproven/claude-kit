@@ -6,25 +6,25 @@ This repo is the public core. It is designed to be extended, not forked.
 
 ## Tiers
 
-| | claude-kit (this repo) | [claude-kit-pro](https://github.com/buildproven/claude-kit-pro) |
-|---|---|---|
-| **Price** | Free | Paid |
-| **Core commands** | ✅ | ✅ (superset) |
-| **Autonomous agents** | — | ✅ `/bs:ralph`, `/bs:strategy` |
-| **Session management** | — | ✅ `/bs:session`, `/bs:resume` |
-| **Backlog + planning** | — | ✅ `/bs:backlog`, `/bs:sota`, `/bs:sentry` |
-| **Premium skills** | — | ✅ frontend-design, seo, pdf, docx, xlsx, and more |
-| **All agents** | 2 | 15 |
+|                        | claude-kit (this repo) | [claude-kit-pro](https://github.com/buildproven/claude-kit-pro) |
+| ---------------------- | ---------------------- | --------------------------------------------------------------- |
+| **Price**              | Free                   | Paid                                                            |
+| **Core commands**      | ✅                     | ✅ (superset)                                                   |
+| **Autonomous agents**  | —                      | ✅ `/bs:ralph`, `/bs:strategy`                                  |
+| **Session management** | —                      | ✅ `/bs:session`, `/bs:resume`                                  |
+| **Backlog + planning** | —                      | ✅ `/bs:backlog`, `/bs:sota`, `/bs:sentry`                      |
+| **Premium skills**     | —                      | ✅ frontend-design, seo, pdf, docx, xlsx, and more              |
+| **All agents**         | 2                      | 15                                                              |
 
 ## What's inside
 
-| Dir | Contents |
-|-----|----------|
-| `commands/` | `/bs:*`, `/gh:*`, `/cc:*` core commands |
-| `skills/` | Quality, testing, error-handling, API conventions |
-| `agents/` | code-reviewer, security-auditor |
-| `scripts/` | Hooks, lint, branch-protection, setup automation |
-| `config/` | Generic `CLAUDE.md` and `settings.json` templates |
+| Dir         | Contents                                          |
+| ----------- | ------------------------------------------------- |
+| `commands/` | `/bs:*`, `/gh:*`, `/cc:*` core commands           |
+| `skills/`   | Quality, testing, error-handling, API conventions |
+| `agents/`   | code-reviewer, security-auditor                   |
+| `scripts/`  | Hooks, lint, branch-protection, setup automation  |
+| `config/`   | Generic `CLAUDE.md` and `settings.json` templates |
 
 ## Quick start
 

@@ -89,11 +89,11 @@ your-project/
 
 ## Decision Guide
 
-| You want to...                              | Do this                              |
-| ------------------------------------------- | ------------------------------------ |
-| Use the core toolkit                        | Install claude-kit                   |
-| Get autonomous workflow commands            | Upgrade to claude-kit-pro            |
-| Add personal preferences                    | Private overlay (`CLAUDE.md`)        |
-| Add a private workflow command              | Private overlay (`commands/`)        |
-| Add a project-specific command              | `.claude/commands/` in that repo     |
-| Improve something for everyone              | PR to claude-kit                     |
+| You want to...                   | Do this                          |
+| -------------------------------- | -------------------------------- |
+| Use the core toolkit             | Install claude-kit               |
+| Get autonomous workflow commands | Upgrade to claude-kit-pro        |
+| Add personal preferences         | Private overlay (`CLAUDE.md`)    |
+| Add a private workflow command   | Private overlay (`commands/`)    |
+| Add a project-specific command   | `.claude/commands/` in that repo |
+| Improve something for everyone   | PR to claude-kit                 |

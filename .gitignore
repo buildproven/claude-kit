@@ -49,21 +49,16 @@ BACKLOG.md.ralph-next-backup
 .claude/ralph-next/quality-*.json
 .claude/ralph-next/evidence/
 
-# Stryker mutation testing temp files
-.stryker-tmp/
-reports/
-
 # Claude Code statsig cache
 statsig/
 config/social-credentials.env
 mcp-servers/*/node_modules/
+mcp-servers/*/dist/
 mcp-servers/*/.env
 docs/node_modules/
 __pycache__/
 .serena/
 
-# Stryker mutation testing
-.stryker-tmp/
 coverage/
 reports/
 

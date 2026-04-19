@@ -1,7 +1,7 @@
 ---
 name: bs:test
 description: Run tests with various modes (watch, coverage, specific files)
-argument-hint: '[file|pattern] [--watch|--coverage|--debug] → run tests'
+argument-hint: "[file|pattern] [--watch|--coverage|--debug] → run tests"
 tags: [testing, development, workflow]
 category: quality
 model: sonnet

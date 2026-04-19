@@ -1,8 +1,8 @@
 ---
-description: 'Deep PR code review: multi-agent local analysis with inline GH comments'
+description: "Deep PR code review: multi-agent local analysis with inline GH comments"
 name: gh:review-pr
 category: github
-argument-hint: '/gh:review-pr 456 → fetches PR #456, runs 6 specialized review agents locally, posts findings as inline comments'
+argument-hint: "/gh:review-pr 456 → fetches PR #456, runs 6 specialized review agents locally, posts findings as inline comments"
 allowed-tools: Write, Read, LS, Glob, Grep, Bash(gh:*), Bash(git:*)
 model: opus
 ---

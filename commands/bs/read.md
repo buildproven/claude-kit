@@ -1,8 +1,8 @@
 ---
 model: sonnet
 name: bs:read
-description: 'Read an article/post and extract actionable insights for your setup'
-argument-hint: '<url> → read, analyze, propose setup improvements'
+description: "Read an article/post and extract actionable insights for your setup"
+argument-hint: "<url> → read, analyze, propose setup improvements"
 category: knowledge
 ---
 

@@ -1,7 +1,7 @@
 ---
 name: bs:hotfix
 description: Fast-track production emergency fixes (5-10 min minimal quality)
-argument-hint: '<description> [--skip-verify] [--notify] → emergency fix'
+argument-hint: "<description> [--skip-verify] [--notify] → emergency fix"
 tags: [workflow, hotfix, production, emergency]
 category: quality
 model: sonnet
@@ -174,11 +174,11 @@ Follow-up: /bs:quality --level 98 --scope all within 24h | Postmortem within 1 w
 
 ## Flags
 
-| Flag            | Description                                     |
-| --------------- | ----------------------------------------------- |
+| Flag            | Description                                            |
+| --------------- | ------------------------------------------------------ |
 | `--skip-verify` | Skip the reminder to manually verify production health |
-| `--notify`      | Send team notification via Slack/Discord        |
-| `--force`       | Skip all safety checks (DANGEROUS)              |
+| `--notify`      | Send team notification via Slack/Discord               |
+| `--force`       | Skip all safety checks (DANGEROUS)                     |
 
 ## Examples
 

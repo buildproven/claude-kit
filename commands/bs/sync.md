@@ -1,7 +1,7 @@
 ---
 name: bs:sync
-description: 'Check/repair Claude config symlinks (claude-kit → ~/.claude)'
-argument-hint: '/bs:sync --mode check → verify symlinks | repair → fix broken | all → full resync'
+description: "Check/repair Claude config symlinks (claude-kit → ~/.claude)"
+argument-hint: "/bs:sync --mode check → verify symlinks | repair → fix broken | all → full resync"
 category: maintenance
 model: haiku
 ---

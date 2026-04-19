@@ -46,22 +46,22 @@ All API errors must follow this shape:
 ```typescript
 // Good: specific error handling with context
 try {
-  const user = await db.user.findUnique({ where: { id } })
-  if (!user) throw new NotFoundError('User', id)
-  return user
+  const user = await db.user.findUnique({ where: { id } });
+  if (!user) throw new NotFoundError("User", id);
+  return user;
 } catch (error) {
-  if (error instanceof NotFoundError) throw error
-  throw new DatabaseError('Failed to fetch user', { cause: error })
+  if (error instanceof NotFoundError) throw error;
+  throw new DatabaseError("Failed to fetch user", { cause: error });
 }
 
 // Bad: silent catch, generic catch, no rethrow
 try {
-  await fetchData()
+  await fetchData();
 } catch (e) {} // Silent failure
 try {
-  await fetchData()
+  await fetchData();
 } catch (e) {
-  return null
+  return null;
 } // Swallows error
 ```
 
@@ -71,17 +71,17 @@ Validate external data at system boundaries only:
 
 ```typescript
 // API route: validate incoming request
-const schema = z.object({ email: z.string().email(), name: z.string().min(1) })
-const result = schema.safeParse(req.body)
+const schema = z.object({ email: z.string().email(), name: z.string().min(1) });
+const result = schema.safeParse(req.body);
 if (!result.success) {
   return res.status(400).json({
     success: false,
     error: {
-      code: 'VALIDATION_ERROR',
-      message: 'Invalid input',
+      code: "VALIDATION_ERROR",
+      message: "Invalid input",
       details: result.error.flatten(),
     },
-  })
+  });
 }
 // From here on, result.data is typed and safe
 ```

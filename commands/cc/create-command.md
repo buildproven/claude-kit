@@ -1,5 +1,5 @@
 ---
-description: 'Create new Claude slash command with proper structure and frontmatter'
+description: "Create new Claude slash command with proper structure and frontmatter"
 name: cc:create-command
 category: claude-code
 argument-hint: "/cc:create-command deploy 'Deploy to production' → creates commands/deploy.md"

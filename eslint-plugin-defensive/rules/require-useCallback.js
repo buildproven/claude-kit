@@ -3,15 +3,15 @@
  * @description Prevents re-render storms from unstable function references
  */
 
-'use strict'
+"use strict";
 
 module.exports = {
   meta: {
-    type: 'suggestion',
+    type: "suggestion",
     docs: {
       description:
-        'Require useCallback for inline arrow function handlers in JSX',
-      category: 'Performance',
+        "Require useCallback for inline arrow function handlers in JSX",
+      category: "Performance",
       recommended: true,
     },
     messages: {
@@ -20,16 +20,16 @@ module.exports = {
     },
     schema: [
       {
-        type: 'object',
+        type: "object",
         properties: {
           ignoredProps: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Prop names to ignore (e.g., render props)',
+            type: "array",
+            items: { type: "string" },
+            description: "Prop names to ignore (e.g., render props)",
           },
           maxInlineHandlers: {
-            type: 'number',
-            description: 'Max inline handlers before warning (0 = always warn)',
+            type: "number",
+            description: "Max inline handlers before warning (0 = always warn)",
           },
         },
         additionalProperties: false,
@@ -38,77 +38,77 @@ module.exports = {
   },
 
   create(context) {
-    const options = context.options[0] || {}
+    const options = context.options[0] || {};
     const ignoredProps = options.ignoredProps || [
-      'render',
-      'renderItem',
-      'children',
-      'component',
-    ]
-    const maxInlineHandlers = options.maxInlineHandlers ?? 0
+      "render",
+      "renderItem",
+      "children",
+      "component",
+    ];
+    const maxInlineHandlers = options.maxInlineHandlers ?? 0;
 
-    let inlineHandlerCount = 0
+    let inlineHandlerCount = 0;
     const handlerProps = [
-      'onClick',
-      'onChange',
-      'onSubmit',
-      'onBlur',
-      'onFocus',
-      'onKeyDown',
-      'onKeyUp',
-      'onKeyPress',
-      'onMouseEnter',
-      'onMouseLeave',
-      'onScroll',
-      'onDrag',
-      'onDrop',
-      'onInput',
-      'onSelect',
-    ]
+      "onClick",
+      "onChange",
+      "onSubmit",
+      "onBlur",
+      "onFocus",
+      "onKeyDown",
+      "onKeyUp",
+      "onKeyPress",
+      "onMouseEnter",
+      "onMouseLeave",
+      "onScroll",
+      "onDrag",
+      "onDrop",
+      "onInput",
+      "onSelect",
+    ];
 
     return {
       JSXAttribute(node) {
         // Check if this is an event handler prop
-        const propName = node.name.name
+        const propName = node.name.name;
 
         // Skip ignored props
         if (ignoredProps.includes(propName)) {
-          return
+          return;
         }
 
         // Check if it's a handler prop (on* pattern)
         const isHandlerProp =
           handlerProps.includes(propName) ||
           (propName &&
-            propName.startsWith('on') &&
-            propName[2] === propName[2].toUpperCase())
+            propName.startsWith("on") &&
+            propName[2] === propName[2].toUpperCase());
 
         if (!isHandlerProp) {
-          return
+          return;
         }
 
         // Check if the value is an inline arrow function
         if (
           node.value &&
-          node.value.type === 'JSXExpressionContainer' &&
-          node.value.expression.type === 'ArrowFunctionExpression'
+          node.value.type === "JSXExpressionContainer" &&
+          node.value.expression.type === "ArrowFunctionExpression"
         ) {
-          inlineHandlerCount++
+          inlineHandlerCount++;
 
           if (inlineHandlerCount > maxInlineHandlers) {
             context.report({
               node,
-              messageId: 'inlineHandler',
+              messageId: "inlineHandler",
               data: { prop: propName },
-            })
+            });
           }
         }
       },
 
-      'Program:exit'() {
+      "Program:exit"() {
         // Reset counter for next file
-        inlineHandlerCount = 0
+        inlineHandlerCount = 0;
       },
-    }
+    };
   },
-}
+};

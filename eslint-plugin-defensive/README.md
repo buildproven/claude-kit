@@ -19,7 +19,7 @@ pnpm add eslint-plugin-defensive --save-dev
 ### Flat Config (eslint.config.js) - ESLint 9+
 
 ```javascript
-import defensive from 'eslint-plugin-defensive'
+import defensive from "eslint-plugin-defensive";
 
 export default [
   {
@@ -27,55 +27,55 @@ export default [
       defensive,
     },
     rules: {
-      'defensive/no-unsafe-json-parse': 'error',
-      'defensive/no-empty-catch': 'error',
-      'defensive/require-auth-middleware': 'warn',
-      'defensive/require-useCallback': 'warn',
-      'defensive/require-guard-clause': 'warn',
+      "defensive/no-unsafe-json-parse": "error",
+      "defensive/no-empty-catch": "error",
+      "defensive/require-auth-middleware": "warn",
+      "defensive/require-useCallback": "warn",
+      "defensive/require-guard-clause": "warn",
     },
   },
-]
+];
 ```
 
 ### Legacy Config (.eslintrc.js) - ESLint 8
 
 ```javascript
 module.exports = {
-  plugins: ['defensive'],
-  extends: ['plugin:defensive/recommended'],
-}
+  plugins: ["defensive"],
+  extends: ["plugin:defensive/recommended"],
+};
 ```
 
 Or configure rules individually:
 
 ```javascript
 module.exports = {
-  plugins: ['defensive'],
+  plugins: ["defensive"],
   rules: {
-    'defensive/no-unsafe-json-parse': 'error',
-    'defensive/no-empty-catch': 'error',
-    'defensive/require-auth-middleware': [
-      'warn',
+    "defensive/no-unsafe-json-parse": "error",
+    "defensive/no-empty-catch": "error",
+    "defensive/require-auth-middleware": [
+      "warn",
       {
-        authWrappers: ['withAuth', 'requireAuth'],
-        publicRoutes: ['**/api/health/**', '**/api/public/**'],
+        authWrappers: ["withAuth", "requireAuth"],
+        publicRoutes: ["**/api/health/**", "**/api/public/**"],
       },
     ],
-    'defensive/require-useCallback': [
-      'warn',
+    "defensive/require-useCallback": [
+      "warn",
       {
-        ignoredProps: ['render', 'children'],
+        ignoredProps: ["render", "children"],
         maxInlineHandlers: 0,
       },
     ],
-    'defensive/require-guard-clause': [
-      'warn',
+    "defensive/require-guard-clause": [
+      "warn",
       {
         allowLiterals: true,
       },
     ],
   },
-}
+};
 ```
 
 ## Rules
@@ -87,7 +87,7 @@ Requires `JSON.parse()` to be wrapped in try/catch or used with Zod validation.
 **Bad:**
 
 ```javascript
-const data = JSON.parse(rawData)
+const data = JSON.parse(rawData);
 ```
 
 **Good:**
@@ -95,13 +95,13 @@ const data = JSON.parse(rawData)
 ```javascript
 // Option 1: try/catch
 try {
-  const data = JSON.parse(rawData)
+  const data = JSON.parse(rawData);
 } catch (e) {
-  handleError(e)
+  handleError(e);
 }
 
 // Option 2: Zod validation
-const result = schema.safeParse(JSON.parse(rawData))
+const result = schema.safeParse(JSON.parse(rawData));
 ```
 
 ### `no-empty-catch`
@@ -112,9 +112,9 @@ Requires meaningful error handling in catch blocks. Console.log alone is not suf
 
 ```javascript
 try {
-  await saveData()
+  await saveData();
 } catch (e) {
-  console.log(e) // User never knows something failed
+  console.log(e); // User never knows something failed
 }
 ```
 
@@ -122,9 +122,9 @@ try {
 
 ```javascript
 try {
-  await saveData()
+  await saveData();
 } catch (e) {
-  setError('Failed to save: ' + e.message)
+  setError("Failed to save: " + e.message);
   // OR: throw e; // Re-throw for error boundary
 }
 ```
@@ -142,7 +142,7 @@ Flags API route handlers that aren't wrapped with auth middleware.
 ```javascript
 // app/api/users/route.ts
 export async function DELETE(req, { params }) {
-  await db.user.delete({ where: { id: params.id } })
+  await db.user.delete({ where: { id: params.id } });
 }
 ```
 
@@ -152,10 +152,10 @@ export async function DELETE(req, { params }) {
 export const DELETE = withAuth(async (req, user, { params }) => {
   // Verify ownership
   if (item.userId !== user.id) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
-  await db.user.delete({ where: { id: params.id } })
-})
+  await db.user.delete({ where: { id: params.id } });
+});
 ```
 
 **Options:**
@@ -176,8 +176,8 @@ Flags inline arrow functions in JSX event handler props.
 **Good:**
 
 ```jsx
-const handleClick = useCallback(() => handleSubmit(data), [data])
-;<Button onClick={handleClick} />
+const handleClick = useCallback(() => handleSubmit(data), [data]);
+<Button onClick={handleClick} />;
 ```
 
 **Options:**
@@ -192,16 +192,16 @@ Flags division operations without zero-check guards.
 **Bad:**
 
 ```javascript
-const share = value / total
+const share = value / total;
 ```
 
 **Good:**
 
 ```javascript
-const share = total > 0 ? value / total : 0
+const share = total > 0 ? value / total : 0;
 // OR
-if (total === 0) return 0
-const share = value / total
+if (total === 0) return 0;
+const share = value / total;
 ```
 
 **Options:**

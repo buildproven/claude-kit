@@ -8,28 +8,28 @@
  * 24 issues slipped through standard quality checks.
  */
 
-'use strict'
+"use strict";
 
-const noUnsafeJsonParse = require('./rules/no-unsafe-json-parse')
-const noEmptyCatch = require('./rules/no-empty-catch')
-const requireAuthMiddleware = require('./rules/require-auth-middleware')
-const requireUseCallback = require('./rules/require-useCallback')
-const requireGuardClause = require('./rules/require-guard-clause')
-const recommended = require('./configs/recommended')
+const noUnsafeJsonParse = require("./rules/no-unsafe-json-parse");
+const noEmptyCatch = require("./rules/no-empty-catch");
+const requireAuthMiddleware = require("./rules/require-auth-middleware");
+const requireUseCallback = require("./rules/require-useCallback");
+const requireGuardClause = require("./rules/require-guard-clause");
+const recommended = require("./configs/recommended");
 
 module.exports = {
   meta: {
-    name: 'eslint-plugin-defensive',
-    version: '1.0.0',
+    name: "eslint-plugin-defensive",
+    version: "1.0.0",
   },
   rules: {
-    'no-unsafe-json-parse': noUnsafeJsonParse,
-    'no-empty-catch': noEmptyCatch,
-    'require-auth-middleware': requireAuthMiddleware,
-    'require-useCallback': requireUseCallback,
-    'require-guard-clause': requireGuardClause,
+    "no-unsafe-json-parse": noUnsafeJsonParse,
+    "no-empty-catch": noEmptyCatch,
+    "require-auth-middleware": requireAuthMiddleware,
+    "require-useCallback": requireUseCallback,
+    "require-guard-clause": requireGuardClause,
   },
   configs: {
     recommended,
   },
-}
+};

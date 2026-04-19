@@ -1,19 +1,19 @@
 // knip.config.js — Dead code detection
 // Docs: https://knip.dev/overview/configuration
 module.exports = {
-  entry: ['src/**/*.{ts,tsx,js,jsx}', 'scripts/*.{js,mjs}'],
-  project: ['scripts/**/*.{js,mjs,cjs}'],
+  entry: ["src/**/*.{ts,tsx,js,jsx}", "scripts/*.{js,mjs}"],
+  project: ["scripts/**/*.{js,mjs,cjs}"],
   ignore: [
-    '**/node_modules/**',
-    '**/dist/**',
-    '**/build/**',
-    '**/.next/**',
-    '**/coverage/**',
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/.next/**",
+    "**/coverage/**",
   ],
   ignoreDependencies: [
-    '@eslint/js',
-    '@typescript-eslint/eslint-plugin',
-    '@typescript-eslint/parser',
+    "@eslint/js",
+    "@typescript-eslint/eslint-plugin",
+    "@typescript-eslint/parser",
   ],
   ignoreBinaries: [],
-}
+};

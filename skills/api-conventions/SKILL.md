@@ -75,24 +75,24 @@ Every route handler validates input before processing:
 const createUserSchema = z.object({
   email: z.string().email(),
   name: z.string().min(1).max(100),
-  role: z.enum(['admin', 'user']).default('user'),
-})
+  role: z.enum(["admin", "user"]).default("user"),
+});
 
 // Validate in handler
 export async function POST(req: Request) {
-  const body = await req.json()
-  const result = createUserSchema.safeParse(body)
+  const body = await req.json();
+  const result = createUserSchema.safeParse(body);
   if (!result.success) {
     return Response.json(
       {
         error: {
-          code: 'VALIDATION_ERROR',
-          message: 'Invalid input',
+          code: "VALIDATION_ERROR",
+          message: "Invalid input",
           details: result.error.flatten(),
         },
       },
-      { status: 400 }
-    )
+      { status: 400 },
+    );
   }
   // result.data is typed and safe from here
 }

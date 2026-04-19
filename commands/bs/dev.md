@@ -380,58 +380,6 @@ fi
 | `--teams`            | Use agent teams for parallel work (tmux visibility, conflict detection) |
 | `--no-teams`         | Force Task subagents for parallel work (default)                        |
 | `--merge`            | Auto-merge PRs after quality passes (use with --parallel)               |
-| `--alt`              | Get a second-opinion alternative approach via acpx codex                |
-
-## --alt: Second Opinion Mode
-
-**Usage**: `/bs:dev <task> --alt`
-
-When `--alt` is passed, after Claude generates its approach (Step 5), also fire `acpx codex` with an alternative framing of the same problem before any implementation begins.
-
-### Behavior
-
-1. Claude completes its normal planning phase (Step 4 → Step 5) and produces its proposed approach.
-2. Immediately after the plan is ready, fire:
-
-```bash
-acpx codex exec --no-wait "Alternative approach to: [task description]. Current approach: [Claude's plan summary]. Provide a different angle — different tech, pattern, or decomposition — focusing on tradeoffs vs the current approach."
-```
-
-3. Wait for the `acpx codex` response, then present **both approaches side-by-side**:
-
-```markdown
-## Two Approaches
-
-### Claude's Approach
-
-[Claude's plan]
-
-### Codex Alternative
-
-[acpx codex output]
-
----
-
-Which approach do you want to proceed with?
-
-- **1** — Claude's approach
-- **2** — Codex alternative
-- **3** — Combine elements (describe what to take from each)
-```
-
-4. Implement whichever approach (or combination) the user selects.
-
-### Fallback
-
-If `acpx` is not installed or the command fails, skip silently and continue with Claude's approach:
-
-```bash
-if ! command -v acpx &> /dev/null; then
-  echo "ℹ️  acpx unavailable — proceeding with Claude's approach only"
-fi
-```
-
-Do not error out or block implementation if `acpx` is unavailable.
 
 ## Parallel Execution Mode
 

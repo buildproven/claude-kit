@@ -174,14 +174,14 @@ grep -rE "prisma\.\w+\.(create|update|delete|findMany)" --include="*.ts"
 // Required security headers (next.config.js)
 headers: [
   {
-    key: 'Strict-Transport-Security',
-    value: 'max-age=31536000; includeSubDomains',
+    key: "Strict-Transport-Security",
+    value: "max-age=31536000; includeSubDomains",
   },
-  { key: 'X-Frame-Options', value: 'DENY' },
-  { key: 'X-Content-Type-Options', value: 'nosniff' },
-  { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
-  { key: 'Content-Security-Policy', value: "default-src 'self'..." },
-]
+  { key: "X-Frame-Options", value: "DENY" },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  { key: "Content-Security-Policy", value: "default-src 'self'..." },
+];
 ```
 
 **Environment Security:**

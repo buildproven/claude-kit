@@ -1,7 +1,7 @@
 ---
 name: bs:workflow
 description: Quick reference for the public daily development workflow
-argument-hint: '→ daily dev workflow reference'
+argument-hint: "→ daily dev workflow reference"
 tags: [workflow, guide, reference]
 category: development
 model: haiku
@@ -62,15 +62,15 @@ Use `/bs:quality --merge` when you want the quality loop to carry through merge 
 
 ## Command quick reference
 
-| Command | Use For |
-| --- | --- |
-| `/bs:dev` | Start feature work |
-| `/bs:test` | Tight test feedback loop |
+| Command       | Use For                         |
+| ------------- | ------------------------------- |
+| `/bs:dev`     | Start feature work              |
+| `/bs:test`    | Tight test feedback loop        |
 | `/bs:quality` | Quality gate before PR or merge |
-| `/bs:plan` | Structure bigger work |
-| `/bs:ralph` | Autonomous backlog execution |
-| `/bs:backlog` | Prioritization |
-| `/bs:help` | Full command lookup |
+| `/bs:plan`    | Structure bigger work           |
+| `/bs:ralph`   | Autonomous backlog execution    |
+| `/bs:backlog` | Prioritization                  |
+| `/bs:help`    | Full command lookup             |
 
 ## Notes
 

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent Dashboard</title>
     <style>
-      @import url('https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap');
+      @import url("https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap");
 
       * {
         margin: 0;
@@ -25,8 +25,8 @@
         --green: #22c55e;
         --red: #ef4444;
         --yellow: #eab308;
-        --mono: 'Geist Mono', 'SF Mono', 'Fira Code', monospace;
-        --sans: 'Inter', -apple-system, sans-serif;
+        --mono: "Geist Mono", "SF Mono", "Fira Code", monospace;
+        --sans: "Inter", -apple-system, sans-serif;
       }
 
       body {
@@ -271,316 +271,316 @@
 
     <script>
       // Agent Dashboard — local-only, data sourced from trusted local JSON files only
-      const API_URL = '/api/status'
-      const REFRESH_MS = 5000
+      const API_URL = "/api/status";
+      const REFRESH_MS = 5000;
 
       function escapeHtml(str) {
-        const div = document.createElement('div')
-        div.textContent = str
-        return div.textContent
+        const div = document.createElement("div");
+        div.textContent = str;
+        return div.textContent;
       }
 
       function elapsed(isoString) {
-        if (!isoString) return '--'
-        const ms = Date.now() - new Date(isoString).getTime()
-        const s = Math.floor(ms / 1000)
-        if (s < 60) return s + 's'
-        const m = Math.floor(s / 60)
-        if (m < 60) return m + 'm ' + (s % 60) + 's'
-        const h = Math.floor(m / 60)
-        return h + 'h ' + (m % 60) + 'm'
+        if (!isoString) return "--";
+        const ms = Date.now() - new Date(isoString).getTime();
+        const s = Math.floor(ms / 1000);
+        if (s < 60) return s + "s";
+        const m = Math.floor(s / 60);
+        if (m < 60) return m + "m " + (s % 60) + "s";
+        const h = Math.floor(m / 60);
+        return h + "h " + (m % 60) + "m";
       }
 
       function shortPath(p) {
-        const home = '/Users/'
-        const idx = p.indexOf(home)
+        const home = "/Users/";
+        const idx = p.indexOf(home);
         if (idx >= 0) {
-          const rest = p.slice(idx + home.length)
-          const slash = rest.indexOf('/')
-          return '~/' + (slash >= 0 ? rest.slice(slash + 1) : rest)
+          const rest = p.slice(idx + home.length);
+          const slash = rest.indexOf("/");
+          return "~/" + (slash >= 0 ? rest.slice(slash + 1) : rest);
         }
-        return p
+        return p;
       }
 
       function createBadge(status) {
-        const s = (status || 'idle').toLowerCase()
+        const s = (status || "idle").toLowerCase();
         const cls =
-          s === 'running'
-            ? 'badge-running'
-            : s === 'done' || s === 'pass' || s === 'passed'
-              ? 'badge-done'
-              : s === 'failed' || s === 'fail' || s === 'error'
-                ? 'badge-failed'
-                : 'badge-idle'
-        const span = document.createElement('span')
-        span.className = 'badge ' + cls
-        span.textContent = s
-        return span
+          s === "running"
+            ? "badge-running"
+            : s === "done" || s === "pass" || s === "passed"
+              ? "badge-done"
+              : s === "failed" || s === "fail" || s === "error"
+                ? "badge-failed"
+                : "badge-idle";
+        const span = document.createElement("span");
+        span.className = "badge " + cls;
+        span.textContent = s;
+        return span;
       }
 
       function createEmptyState(msg) {
-        const div = document.createElement('div')
-        div.className = 'empty-state'
-        const icon = document.createElement('div')
-        icon.className = 'icon'
-        icon.textContent = '~'
-        const text = document.createTextNode(msg)
-        div.appendChild(icon)
-        div.appendChild(text)
-        return div
+        const div = document.createElement("div");
+        div.className = "empty-state";
+        const icon = document.createElement("div");
+        icon.className = "icon";
+        icon.textContent = "~";
+        const text = document.createTextNode(msg);
+        div.appendChild(icon);
+        div.appendChild(text);
+        return div;
       }
 
       function createAgentCard(agent) {
-        const name = agent.name || agent.id || 'agent'
-        const task = agent.task || agent.currentTask || '--'
-        const status = agent.status || 'running'
-        const time = agent.startedAt ? elapsed(agent.startedAt) : '--'
-        const learnings = agent.learnings
+        const name = agent.name || agent.id || "agent";
+        const task = agent.task || agent.currentTask || "--";
+        const status = agent.status || "running";
+        const time = agent.startedAt ? elapsed(agent.startedAt) : "--";
+        const learnings = agent.learnings;
 
-        const card = document.createElement('div')
-        card.className = 'card'
+        const card = document.createElement("div");
+        card.className = "card";
 
-        const header = document.createElement('div')
-        header.className = 'card-header'
-        const title = document.createElement('span')
-        title.className = 'card-title'
-        title.textContent = name
-        header.appendChild(title)
-        header.appendChild(createBadge(status))
-        card.appendChild(header)
+        const header = document.createElement("div");
+        header.className = "card-header";
+        const title = document.createElement("span");
+        title.className = "card-title";
+        title.textContent = name;
+        header.appendChild(title);
+        header.appendChild(createBadge(status));
+        card.appendChild(header);
 
-        const body = document.createElement('div')
-        body.className = 'card-body'
+        const body = document.createElement("div");
+        body.className = "card-body";
 
-        const taskLabel = document.createElement('div')
-        taskLabel.className = 'label'
-        taskLabel.textContent = 'Task'
-        body.appendChild(taskLabel)
+        const taskLabel = document.createElement("div");
+        taskLabel.className = "label";
+        taskLabel.textContent = "Task";
+        body.appendChild(taskLabel);
 
-        const taskValue = document.createElement('div')
-        taskValue.className = 'value'
-        taskValue.textContent = task
-        body.appendChild(taskValue)
+        const taskValue = document.createElement("div");
+        taskValue.className = "value";
+        taskValue.textContent = task;
+        body.appendChild(taskValue);
 
-        const elapsedLabel = document.createElement('div')
-        elapsedLabel.className = 'label'
-        elapsedLabel.textContent = 'Elapsed'
-        body.appendChild(elapsedLabel)
+        const elapsedLabel = document.createElement("div");
+        elapsedLabel.className = "label";
+        elapsedLabel.textContent = "Elapsed";
+        body.appendChild(elapsedLabel);
 
-        const elapsedValue = document.createElement('div')
-        elapsedValue.className = 'elapsed'
-        elapsedValue.textContent = time
-        body.appendChild(elapsedValue)
+        const elapsedValue = document.createElement("div");
+        elapsedValue.className = "elapsed";
+        elapsedValue.textContent = time;
+        body.appendChild(elapsedValue);
 
         if (learnings && Array.isArray(learnings) && learnings.length > 0) {
-          const lWrap = document.createElement('div')
-          lWrap.style.marginTop = '8px'
-          const lLabel = document.createElement('div')
-          lLabel.className = 'label'
-          lLabel.textContent = 'Learnings'
-          lWrap.appendChild(lLabel)
-          const lValue = document.createElement('div')
-          lValue.className = 'value'
+          const lWrap = document.createElement("div");
+          lWrap.style.marginTop = "8px";
+          const lLabel = document.createElement("div");
+          lLabel.className = "label";
+          lLabel.textContent = "Learnings";
+          lWrap.appendChild(lLabel);
+          const lValue = document.createElement("div");
+          lValue.className = "value";
           lValue.textContent = learnings
             .slice(-3)
             .map(function (l) {
-              return '- ' + (typeof l === 'string' ? l : JSON.stringify(l))
+              return "- " + (typeof l === "string" ? l : JSON.stringify(l));
             })
-            .join('\n')
-          lValue.style.whiteSpace = 'pre-wrap'
-          lWrap.appendChild(lValue)
-          body.appendChild(lWrap)
+            .join("\n");
+          lValue.style.whiteSpace = "pre-wrap";
+          lWrap.appendChild(lValue);
+          body.appendChild(lWrap);
         }
 
-        card.appendChild(body)
-        return card
+        card.appendChild(body);
+        return card;
       }
 
       function renderAgents(devState) {
-        const el = document.getElementById('agents-grid')
-        el.replaceChildren()
+        const el = document.getElementById("agents-grid");
+        el.replaceChildren();
 
         if (!devState) {
-          el.appendChild(createEmptyState('No active agents detected'))
-          return
+          el.appendChild(createEmptyState("No active agents detected"));
+          return;
         }
 
         if (devState.agents && devState.agents.length > 0) {
           devState.agents.forEach(function (a) {
-            el.appendChild(createAgentCard(a))
-          })
-          return
+            el.appendChild(createAgentCard(a));
+          });
+          return;
         }
 
         if (devState.task || devState.status) {
           el.appendChild(
             createAgentCard({
-              name: devState.name || 'ralph',
-              task: devState.task || devState.currentTask || '--',
-              status: devState.status || 'running',
+              name: devState.name || "ralph",
+              task: devState.task || devState.currentTask || "--",
+              status: devState.status || "running",
               startedAt: devState.startedAt || devState.timestamp,
               learnings: devState.learnings,
-            })
-          )
-          return
+            }),
+          );
+          return;
         }
 
-        el.appendChild(createEmptyState('No active agents detected'))
+        el.appendChild(createEmptyState("No active agents detected"));
       }
 
       function renderWorktrees(worktrees) {
-        const el = document.getElementById('worktrees-section')
-        el.replaceChildren()
+        const el = document.getElementById("worktrees-section");
+        el.replaceChildren();
 
         if (!worktrees || worktrees.length === 0) {
-          el.appendChild(createEmptyState('No worktrees found'))
-          return
+          el.appendChild(createEmptyState("No worktrees found"));
+          return;
         }
 
-        const table = document.createElement('table')
-        const thead = document.createElement('thead')
-        const headRow = document.createElement('tr')
-        ;['Branch', 'Path'].forEach(function (h) {
-          const th = document.createElement('th')
-          th.textContent = h
-          headRow.appendChild(th)
-        })
-        thead.appendChild(headRow)
-        table.appendChild(thead)
+        const table = document.createElement("table");
+        const thead = document.createElement("thead");
+        const headRow = document.createElement("tr");
+        ["Branch", "Path"].forEach(function (h) {
+          const th = document.createElement("th");
+          th.textContent = h;
+          headRow.appendChild(th);
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
 
-        const tbody = document.createElement('tbody')
+        const tbody = document.createElement("tbody");
         worktrees.forEach(function (w) {
-          const tr = document.createElement('tr')
-          const tdBranch = document.createElement('td')
-          tdBranch.textContent = w.branch || '--'
-          const tdPath = document.createElement('td')
-          tdPath.className = 'worktree-path'
-          tdPath.textContent = shortPath(w.path)
-          tdPath.title = w.path
-          tr.appendChild(tdBranch)
-          tr.appendChild(tdPath)
-          tbody.appendChild(tr)
-        })
-        table.appendChild(tbody)
-        el.appendChild(table)
+          const tr = document.createElement("tr");
+          const tdBranch = document.createElement("td");
+          tdBranch.textContent = w.branch || "--";
+          const tdPath = document.createElement("td");
+          tdPath.className = "worktree-path";
+          tdPath.textContent = shortPath(w.path);
+          tdPath.title = w.path;
+          tr.appendChild(tdBranch);
+          tr.appendChild(tdPath);
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        el.appendChild(table);
       }
 
       function renderEvidence(evidence) {
-        const el = document.getElementById('evidence-section')
-        el.replaceChildren()
+        const el = document.getElementById("evidence-section");
+        el.replaceChildren();
 
         if (!evidence || evidence.length === 0) {
-          el.appendChild(createEmptyState('No evidence files found'))
-          return
+          el.appendChild(createEmptyState("No evidence files found"));
+          return;
         }
 
-        const table = document.createElement('table')
-        const thead = document.createElement('thead')
-        const headRow = document.createElement('tr')
-        ;['File', 'Status', 'Summary'].forEach(function (h) {
-          const th = document.createElement('th')
-          th.textContent = h
-          headRow.appendChild(th)
-        })
-        thead.appendChild(headRow)
-        table.appendChild(thead)
+        const table = document.createElement("table");
+        const thead = document.createElement("thead");
+        const headRow = document.createElement("tr");
+        ["File", "Status", "Summary"].forEach(function (h) {
+          const th = document.createElement("th");
+          th.textContent = h;
+          headRow.appendChild(th);
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
 
-        const tbody = document.createElement('tbody')
+        const tbody = document.createElement("tbody");
         evidence.forEach(function (e) {
-          const status = e.status || e.result || '--'
-          const summary = e.summary || e.task || e.description || '--'
-          const tr = document.createElement('tr')
-          const tdFile = document.createElement('td')
-          tdFile.textContent = e.file || '--'
-          const tdStatus = document.createElement('td')
-          tdStatus.appendChild(createBadge(status))
-          const tdSummary = document.createElement('td')
-          tdSummary.textContent = summary
-          tdSummary.title = summary
-          tdSummary.style.maxWidth = '250px'
-          tdSummary.style.overflow = 'hidden'
-          tdSummary.style.textOverflow = 'ellipsis'
-          tdSummary.style.whiteSpace = 'nowrap'
-          tr.appendChild(tdFile)
-          tr.appendChild(tdStatus)
-          tr.appendChild(tdSummary)
-          tbody.appendChild(tr)
-        })
-        table.appendChild(tbody)
-        el.appendChild(table)
+          const status = e.status || e.result || "--";
+          const summary = e.summary || e.task || e.description || "--";
+          const tr = document.createElement("tr");
+          const tdFile = document.createElement("td");
+          tdFile.textContent = e.file || "--";
+          const tdStatus = document.createElement("td");
+          tdStatus.appendChild(createBadge(status));
+          const tdSummary = document.createElement("td");
+          tdSummary.textContent = summary;
+          tdSummary.title = summary;
+          tdSummary.style.maxWidth = "250px";
+          tdSummary.style.overflow = "hidden";
+          tdSummary.style.textOverflow = "ellipsis";
+          tdSummary.style.whiteSpace = "nowrap";
+          tr.appendChild(tdFile);
+          tr.appendChild(tdStatus);
+          tr.appendChild(tdSummary);
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        el.appendChild(table);
       }
 
       function renderTasks(tasks) {
-        const el = document.getElementById('tasks-section')
-        el.replaceChildren()
+        const el = document.getElementById("tasks-section");
+        el.replaceChildren();
 
         if (!tasks || tasks.length === 0) {
-          el.appendChild(createEmptyState('No task output files found'))
-          return
+          el.appendChild(createEmptyState("No task output files found"));
+          return;
         }
 
-        const table = document.createElement('table')
-        const thead = document.createElement('thead')
-        const headRow = document.createElement('tr')
-        ;['File', 'Source', 'Age', 'Size'].forEach(function (h) {
-          const th = document.createElement('th')
-          th.textContent = h
-          headRow.appendChild(th)
-        })
-        thead.appendChild(headRow)
-        table.appendChild(thead)
+        const table = document.createElement("table");
+        const thead = document.createElement("thead");
+        const headRow = document.createElement("tr");
+        ["File", "Source", "Age", "Size"].forEach(function (h) {
+          const th = document.createElement("th");
+          th.textContent = h;
+          headRow.appendChild(th);
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
 
-        const tbody = document.createElement('tbody')
+        const tbody = document.createElement("tbody");
         tasks.forEach(function (t) {
-          const tr = document.createElement('tr')
-          const tdFile = document.createElement('td')
-          tdFile.textContent = t.file
-          const tdSource = document.createElement('td')
-          tdSource.textContent = t.dir
-          const tdAge = document.createElement('td')
-          tdAge.textContent = elapsed(t.modified)
-          const tdSize = document.createElement('td')
+          const tr = document.createElement("tr");
+          const tdFile = document.createElement("td");
+          tdFile.textContent = t.file;
+          const tdSource = document.createElement("td");
+          tdSource.textContent = t.dir;
+          const tdAge = document.createElement("td");
+          tdAge.textContent = elapsed(t.modified);
+          const tdSize = document.createElement("td");
           tdSize.textContent =
-            t.size > 1024 ? Math.round(t.size / 1024) + 'KB' : t.size + 'B'
-          tr.appendChild(tdFile)
-          tr.appendChild(tdSource)
-          tr.appendChild(tdAge)
-          tr.appendChild(tdSize)
-          tbody.appendChild(tr)
-        })
-        table.appendChild(tbody)
-        el.appendChild(table)
+            t.size > 1024 ? Math.round(t.size / 1024) + "KB" : t.size + "B";
+          tr.appendChild(tdFile);
+          tr.appendChild(tdSource);
+          tr.appendChild(tdAge);
+          tr.appendChild(tdSize);
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        el.appendChild(table);
       }
 
       function render(data) {
-        document.getElementById('last-update').textContent =
-          new Date().toLocaleTimeString()
-        document.getElementById('error-banner').style.display = 'none'
-        renderAgents(data.devState)
-        renderWorktrees(data.worktrees)
-        renderEvidence(data.evidence)
-        renderTasks(data.recentTasks)
+        document.getElementById("last-update").textContent =
+          new Date().toLocaleTimeString();
+        document.getElementById("error-banner").style.display = "none";
+        renderAgents(data.devState);
+        renderWorktrees(data.worktrees);
+        renderEvidence(data.evidence);
+        renderTasks(data.recentTasks);
       }
 
       function showError(msg) {
-        const banner = document.getElementById('error-banner')
-        banner.textContent = msg
-        banner.style.display = 'block'
+        const banner = document.getElementById("error-banner");
+        banner.textContent = msg;
+        banner.style.display = "block";
       }
 
       async function poll() {
         try {
-          const res = await fetch(API_URL)
-          if (!res.ok) throw new Error('HTTP ' + res.status)
-          const data = await res.json()
-          render(data)
+          const res = await fetch(API_URL);
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const data = await res.json();
+          render(data);
         } catch (err) {
-          showError('Failed to fetch status: ' + err.message)
+          showError("Failed to fetch status: " + err.message);
         }
       }
 
-      poll()
-      setInterval(poll, REFRESH_MS)
+      poll();
+      setInterval(poll, REFRESH_MS);
     </script>
   </body>
 </html>
