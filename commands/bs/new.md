@@ -408,6 +408,17 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>"
 echo "✅ Initial commit created"
 ```
 
+### Step 12.5: Create Initial Worktree
+
+Per BuildProven workflow, the primary checkout is inspection-only — all work happens in linked worktrees. After the initial commit, create a worktree on `chore/initial-setup` so the user lands somewhere immediately editable.
+
+```bash
+WORKTREE_PATH="$PROJECT_PATH-initial-setup"
+git -C "$PROJECT_PATH" worktree add "$WORKTREE_PATH" -b chore/initial-setup
+echo "✅ Linked worktree created: $WORKTREE_PATH"
+echo "   Switch to it: cd \"$WORKTREE_PATH\""
+```
+
 ### Step 13: Create GitHub Repository & Push
 
 ```bash
@@ -435,7 +446,9 @@ fi
 
 ### Step 14: Summary
 
-Print: project path, GitHub URL (or "local only"), quality maturity (prototype), workflow tier, and next step: `cd <path>` → `/bs:dev <feature>`.
+Print: project path (primary), worktree path (where to actually work), GitHub URL (or "local only"), quality maturity (prototype), workflow tier, and next step: `cd <worktree-path>` → `/bs:dev <feature>`.
+
+The user should `cd` into `<project-path>-initial-setup` for any first changes — primary checkout is inspection-only per BuildProven workflow.
 
 ## Quality Maturity Progression
 
