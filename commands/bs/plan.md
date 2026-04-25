@@ -4,7 +4,6 @@ description: "Create a structured spec doc before complex or multi-repo work —
 argument-hint: "<feature-name> [--multi-repo] [--edit] [--dry-run]"
 tags: [planning, spec, multi-repo, workflow]
 category: development
-model: sonnet
 ---
 
 # /bs:plan - Spec-First Planning for Complex Work
