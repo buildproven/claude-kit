@@ -22,6 +22,14 @@ Quick reference for the public `claude-kit` workflow.
 
 Use `/bs:quality --merge` when you want the quality loop to carry through merge as well.
 
+When invoking from a forked agent context (e.g. a parallel agent whose `cwd` is a harness scratch directory rather than the worktree), pass `--target-dir <path>`:
+
+```bash
+/bs:quality --merge --target-dir /path/to/repo
+```
+
+This is the canonical pattern for parallel agent fan-outs — without it, the quality skill operates on the wrong directory and the gate fails with no useful output.
+
 ## Common paths
 
 ### Standard feature work
