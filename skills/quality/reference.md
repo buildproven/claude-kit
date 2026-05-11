@@ -22,6 +22,7 @@
 | `--no-teams`      | -       | Force Task subagents (default)          |
 | `--skip-tests`    | false   | Skip hard test gate (config-only repos) |
 | `--preflight`     | false   | Quick readiness check (<10 sec)         |
+| `--target-dir P`  | -       | Run against repo at path P (for forked context where cwd is a harness scratch dir). Alias: `--target`. |
 
 ## Scope Options
 
