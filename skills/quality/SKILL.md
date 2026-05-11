@@ -15,7 +15,38 @@ Makes your project ship-ready in one autonomous command. Replaces manual review 
 ### Step -1: Ensure Git Root
 
 ```bash
+# Pre-parse --target-dir <path> (or --target-dir=<path>, --target <path>) so the
+# skill can be pointed at a specific repo when invoked from a forked context
+# whose own cwd is a harness scratch dir, not the target repo. Without this the
+# subsequent `git rev-parse` resolves to whatever happens to be the agent's cwd
+# — silently scanning the wrong (or empty) tree. Ported from claude-kit-pro #19.
+TARGET_DIR=""
+prev_arg=""
+for arg in "$@"; do
+  case "$prev_arg" in
+    --target-dir|--target) TARGET_DIR="$arg" ;;
+  esac
+  case "$arg" in
+    --target-dir=*|--target=*) TARGET_DIR="${arg#*=}" ;;
+  esac
+  prev_arg="$arg"
+done
+
+if [ -n "$TARGET_DIR" ]; then
+  TARGET_DIR="${TARGET_DIR/#\~/$HOME}"
+  if [ ! -d "$TARGET_DIR" ]; then
+    echo "❌ --target-dir does not exist: $TARGET_DIR"
+    exit 1
+  fi
+  cd "$TARGET_DIR" || { echo "❌ failed to cd to --target-dir: $TARGET_DIR"; exit 1; }
+fi
+
 GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -z "$GIT_ROOT" ]; then
+  echo "❌ /bs:quality could not resolve a git root from $(pwd)."
+  echo "   Pass --target-dir <path> when invoking from a forked context."
+  exit 1
+fi
 cd "$GIT_ROOT" || exit 1
 ```
 
