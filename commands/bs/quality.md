@@ -16,11 +16,16 @@ invoking the Skill tool**, write the args to a tempfile and pass its
 path to the skill via `--args-file`. The skill's Step -1 reads this
 file when `$@` is empty.
 
-Run this `Bash` call first, exactly as written:
+Run this `Bash` call first, exactly as written. The portable
+`mktemp -d` pattern works on both BSD (macOS) and GNU mktemp — a flat
+`mktemp` with a `.txt` template suffix silently fails to expand on BSD,
+producing collisions under concurrent `/bs:merge-train` invocations.
 
 ```bash
-# mktemp avoids collisions under concurrent /bs:merge-train invocations.
-QUALITY_ARGS_FILE=$(mktemp "${TMPDIR:-/tmp}/bs-quality-args-XXXXXX.txt")
+# Portable mktemp: create a unique dir, write args.txt inside.
+QUALITY_ARGS_DIR=$(mktemp -d -t bs-quality-args 2>/dev/null \
+  || mktemp -d "${TMPDIR:-/tmp}/bs-quality-args.XXXXXX")
+QUALITY_ARGS_FILE="$QUALITY_ARGS_DIR/args.txt"
 printf '%s\n' "$ARGUMENTS" > "$QUALITY_ARGS_FILE"
 echo "QUALITY_ARGS_FILE=$QUALITY_ARGS_FILE"
 echo "QUALITY_ARGS=$ARGUMENTS"
@@ -31,14 +36,15 @@ skill in the next step. The skill is responsible for deleting the
 file once it has read the args (Step -1 of the skill).
 
 If the skill fails to consume the file (e.g. version skew between
-slash command and skill), stale files accumulate under `$TMPDIR`. The
+slash command and skill), stale dirs accumulate under `$TMPDIR`. The
 slash command does not try to clean them up — that's the skill's
-responsibility, and a periodic `find $TMPDIR -name 'bs-quality-args-*.txt' -mtime +1 -delete` cron is a reasonable
+responsibility, and a periodic `find $TMPDIR -type d -name 'bs-quality-args*' -mtime +1 -exec rm -rf {} + 2>/dev/null` cron is a reasonable
 hygiene step at the user level.
 
 ## Step 2 — Invoke the quality skill
 
 Call the `Skill` tool with:
+
 - `skill="quality"`
 - `args="--args-file <QUALITY_ARGS_FILE> $ARGUMENTS"`
 
@@ -54,10 +60,8 @@ If `$ARGUMENTS` is empty (no flags passed), still call the skill —
 it has a sensible default (audit cwd, no merge).
 
 **Security note:** the tempfile contains only flag-style args
-(PR numbers, branch names, `--target-dir` paths). Do not let
-operators pass tokens or secrets in `$ARGUMENTS` — they'd land on
-disk in `$TMPDIR`. The skill rejects any arg containing `=` followed
-by a value that looks like a token.
+(PR numbers, branch names, `--target-dir` paths). Do not pass
+tokens or secrets in `$ARGUMENTS` — they'd land on disk in `$TMPDIR`.
 
 ## Flag notes
 

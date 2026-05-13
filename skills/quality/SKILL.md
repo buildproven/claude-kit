@@ -12,14 +12,68 @@ Makes your project ship-ready in one autonomous command. Replaces manual review 
 
 ## Execution Flow
 
-### Step -1: Ensure Git Root
+### Step -1: Resolve Args + Git Root
 
 ```bash
-# Pre-parse --target-dir <path> (or --target-dir=<path>, --target <path>) so the
-# skill can be pointed at a specific repo when invoked from a forked context
-# whose own cwd is a harness scratch dir, not the target repo. Without this the
-# subsequent `git rev-parse` resolves to whatever happens to be the agent's cwd
-# — silently scanning the wrong (or empty) tree. Ported from claude-kit-pro #19.
+# --- args-file bridge (added 2026-05-12) ------------------------------------
+# The /bs:quality slash command writes the user's $ARGUMENTS to a tempfile
+# and passes the path here as --args-file <path>. This is the reliable
+# channel for getting args into a forked Skill execution; the runtime does
+# not propagate `Skill(args=...)` to the fork's $@ on its own.
+#
+# Extract --args-file from $@; if found, REPLACE $@ with the file contents,
+# then remove the file so concurrent /bs:merge-train runs don't leave stale state.
+ARGS_FILE=""
+REMAINING_ARGS=()
+prev_arg=""
+for arg in "$@"; do
+  case "$prev_arg" in
+    --args-file)
+      ARGS_FILE="$arg"
+      prev_arg=""
+      continue
+      ;;
+  esac
+  case "$arg" in
+    --args-file)
+      prev_arg="--args-file"
+      continue
+      ;;
+    --args-file=*)
+      ARGS_FILE="${arg#*=}"
+      continue
+      ;;
+  esac
+  REMAINING_ARGS+=("$arg")
+  prev_arg=""
+done
+
+if [ -n "$ARGS_FILE" ] && [ -f "$ARGS_FILE" ]; then
+  FILE_ARGS=()
+  while IFS= read -r tok; do
+    [ -n "$tok" ] && FILE_ARGS+=("$tok")
+  done < <(xargs -n1 < "$ARGS_FILE" 2>/dev/null)
+  # Only delete files matching the expected mktemp-dir/args.txt pattern.
+  case "$ARGS_FILE" in
+    */bs-quality-args*/args.txt)
+      rm -f "$ARGS_FILE"
+      rmdir "$(dirname "$ARGS_FILE")" 2>/dev/null || true
+      ;;
+    *)
+      echo "[quality] WARNING: --args-file path does not match expected pattern; leaving in place: $ARGS_FILE" >&2
+      ;;
+  esac
+  # File args are the fallback; explicit args alongside --args-file win.
+  if [ "${#REMAINING_ARGS[@]}" -gt 0 ]; then
+    set -- "${REMAINING_ARGS[@]}"
+  elif [ "${#FILE_ARGS[@]}" -gt 0 ]; then
+    set -- "${FILE_ARGS[@]}"
+  else
+    set --
+  fi
+fi
+
+# --- target-dir resolution ---------------------------------------------------
 TARGET_DIR=""
 prev_arg=""
 for arg in "$@"; do
