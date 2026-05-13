@@ -22,6 +22,85 @@ const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
 const all = args.includes("--all");
 
+function makeCompletedRows(items) {
+  return items
+    .map((c) => `| ${c.id} | ${c.item.substring(0, 70)} | ${c.type} | ${c.date} |`)
+    .join("\n");
+}
+
+function appendToCompleted(content, completedItems) {
+  const rows = makeCompletedRows(completedItems);
+  if (!content.includes("## Completed")) {
+    return (
+      content +
+      `\n## Completed\n\n| ID | Item | Type | Completed |\n| --- | --- | --- | --- |\n${rows}\n`
+    );
+  }
+
+  const sectionIdx = content.indexOf("\n## Completed");
+  const headerSep = "\n| --- | --- | --- | --- |";
+  const afterHeader = content.indexOf(headerSep, sectionIdx);
+
+  if (afterHeader !== -1) {
+    const insertAt = afterHeader + headerSep.length;
+    return content.substring(0, insertAt) + "\n" + rows + content.substring(insertAt);
+  }
+
+  const insertAt = sectionIdx + "\n## Completed".length;
+  return (
+    content.substring(0, insertAt) +
+    "\n\n| ID | Item | Type | Completed |\n| --- | --- | --- | --- |\n" +
+    rows +
+    content.substring(insertAt)
+  );
+}
+
+function findCompletedItems(lines) {
+  const completedItems = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.startsWith("| CS-")) continue;
+    const parts = line.split("|").map((p) => p.trim()).filter((p) => p);
+    if (parts.length < 7) continue;
+    const [id, item, type, , , , status] = parts;
+    if (!status.includes("✅") && status.toLowerCase() !== "done") continue;
+    const dateMatch = status.match(/(\d{4}-\d{2}-\d{2})/);
+    const date = dateMatch ? dateMatch[1] : new Date().toISOString().split("T")[0];
+    completedItems.push({ id: id.trim(), item: item.trim(), type: type.trim(), date });
+  }
+  return completedItems;
+}
+
+function countPendingItems(lines) {
+  let count = 0;
+  for (const line of lines) {
+    if (!line.startsWith("| CS-")) continue;
+    const parts = line.split("|").map((p) => p.trim()).filter((p) => p);
+    if (parts.length < 7) continue;
+    const status = parts[6];
+    if (!status.includes("✅") && status.toLowerCase() !== "done") count++;
+  }
+  return count;
+}
+
+function removeCompletedSections(lines, completedIds) {
+  const filtered = [];
+  let i = 0;
+  while (i < lines.length) {
+    const sectionMatch = lines[i].match(/^### (CS-\d+):/);
+    if (sectionMatch && completedIds.has(sectionMatch[1])) {
+      i++;
+      while (i < lines.length && !lines[i].startsWith("### CS-") && !lines[i].startsWith("## ")) {
+        i++;
+      }
+      continue;
+    }
+    filtered.push(lines[i]);
+    i++;
+  }
+  return filtered;
+}
+
 function cleanupBacklog(filePath) {
   if (!fs.existsSync(filePath)) {
     console.log(`  SKIP: ${filePath} not found`);
@@ -31,36 +110,7 @@ function cleanupBacklog(filePath) {
   const content = fs.readFileSync(filePath, "utf8");
   const lines = content.split("\n");
 
-  // --- 1. Find all active-section rows that are done ---
-  const completedItems = []; // { id, item, type, date }
-  const completedLineNums = new Set();
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line.startsWith("| CS-")) continue;
-    const parts = line
-      .split("|")
-      .map((p) => p.trim())
-      .filter((p) => p);
-    if (parts.length < 7) continue;
-
-    const [id, item, type, , , , status] = parts;
-    const isDone = status.includes("✅") || status.toLowerCase() === "done";
-
-    if (!isDone) continue;
-
-    const dateMatch = status.match(/(\d{4}-\d{2}-\d{2})/);
-    const date = dateMatch
-      ? dateMatch[1]
-      : new Date().toISOString().split("T")[0];
-    completedItems.push({
-      id: id.trim(),
-      item: item.trim(),
-      type: type.trim(),
-      date,
-    });
-    completedLineNums.add(i);
-  }
+  const completedItems = findCompletedItems(lines);
 
   if (completedItems.length === 0) {
     console.log(`  OK: ${filePath} — nothing to clean up`);
@@ -69,50 +119,9 @@ function cleanupBacklog(filePath) {
 
   console.log(`  FIXING: ${filePath} — ${completedItems.length} items to move`);
 
-  // --- 2. Remove entire ### CS-XXX: section blocks for completed items ---
   const completedIds = new Set(completedItems.map((c) => c.id));
-
-  // Find all section block boundaries
-  // A section = ### CS-XXX: ... up to (not including) the next ### CS or ## heading or end
-  const filteredLines = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-
-    // Check if this is a section heading for a completed item
-    const sectionMatch = line.match(/^### (CS-\d+):/);
-    if (sectionMatch && completedIds.has(sectionMatch[1])) {
-      // Skip until next section heading or end of active section
-      i++;
-      while (i < lines.length) {
-        const next = lines[i];
-        if (next.startsWith("### CS-") || next.startsWith("## ")) {
-          break; // stop — don't consume this line
-        }
-        i++;
-      }
-      continue;
-    }
-
-    filteredLines.push(line);
-    i++;
-  }
-
-  // --- 3. Update the "Active Backlog (N pending items)" count ---
-  // Count truly active items remaining (non-completed data rows)
-  let pendingCount = 0;
-  for (const line of filteredLines) {
-    if (!line.startsWith("| CS-")) continue;
-    const parts = line
-      .split("|")
-      .map((p) => p.trim())
-      .filter((p) => p);
-    if (parts.length < 7) continue;
-    const status = parts[6];
-    if (!status.includes("✅") && status.toLowerCase() !== "done") {
-      pendingCount++;
-    }
-  }
+  const filteredLines = removeCompletedSections(lines, completedIds);
+  const pendingCount = countPendingItems(filteredLines);
 
   const newContent_step1 = filteredLines
     .join("\n")
@@ -122,57 +131,7 @@ function cleanupBacklog(filePath) {
     );
 
   // --- 4. Append to ## Completed in 4-column format ---
-  let newContent = newContent_step1;
-
-  // Check if Completed section exists
-  if (newContent.includes("## Completed")) {
-    // Insert new rows after the Completed table header line
-    const completedSectionIdx = newContent.indexOf("\n## Completed");
-    // Find the table header row in Completed section
-    const afterCompleted = newContent.indexOf(
-      "\n| --- | --- | --- | --- |",
-      completedSectionIdx,
-    );
-    if (afterCompleted !== -1) {
-      const insertAt = afterCompleted + "\n| --- | --- | --- | --- |".length;
-      const newRows =
-        "\n" +
-        completedItems
-          .map(
-            (c) =>
-              `| ${c.id} | ${c.item.substring(0, 70)} | ${c.type} | ${c.date} |`,
-          )
-          .join("\n");
-      newContent =
-        newContent.substring(0, insertAt) +
-        newRows +
-        newContent.substring(insertAt);
-    } else {
-      // No table header found, add it
-      const insertAt =
-        newContent.indexOf("\n## Completed") + "\n## Completed".length;
-      const rows = completedItems
-        .map(
-          (c) =>
-            `| ${c.id} | ${c.item.substring(0, 70)} | ${c.type} | ${c.date} |`,
-        )
-        .join("\n");
-      newContent =
-        newContent.substring(0, insertAt) +
-        "\n\n| ID | Item | Type | Completed |\n| --- | --- | --- | --- |\n" +
-        rows +
-        newContent.substring(insertAt);
-    }
-  } else {
-    // No Completed section at all — append it
-    const rows = completedItems
-      .map(
-        (c) =>
-          `| ${c.id} | ${c.item.substring(0, 70)} | ${c.type} | ${c.date} |`,
-      )
-      .join("\n");
-    newContent += `\n## Completed\n\n| ID | Item | Type | Completed |\n| --- | --- | --- | --- |\n${rows}\n`;
-  }
+  let newContent = appendToCompleted(newContent_step1, completedItems);
 
   if (dryRun) {
     console.log(`  DRY RUN — would write ${newContent.length} chars`);

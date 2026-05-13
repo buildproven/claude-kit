@@ -37,81 +37,55 @@ module.exports = {
     const options = context.options[0] || {};
     const allowLiterals = options.allowLiterals !== false; // Default true
 
+    function isComparisonGuard(test, divisorName) {
+      return (
+        test.type === "BinaryExpression" &&
+        (test.operator === ">" ||
+          test.operator === "!==" ||
+          test.operator === "!=") &&
+        test.left.type === "Identifier" &&
+        test.left.name === divisorName
+      );
+    }
+
+    function isNodeGuardedByParent(parent, divisorName) {
+      if (parent.type === "ConditionalExpression") {
+        const { test } = parent;
+        return (
+          isComparisonGuard(test, divisorName) ||
+          (test.type === "Identifier" && test.name === divisorName)
+        );
+      }
+
+      if (parent.type === "IfStatement") {
+        const { test } = parent;
+        return (
+          isComparisonGuard(test, divisorName) ||
+          (test.type === "Identifier" && test.name === divisorName) ||
+          (test.type === "UnaryExpression" &&
+            test.operator === "!" &&
+            test.argument.type === "Identifier" &&
+            test.argument.name === divisorName)
+        );
+      }
+
+      if (parent.type === "LogicalExpression" && parent.operator === "&&") {
+        return (
+          parent.left.type === "Identifier" &&
+          parent.left.name === divisorName
+        );
+      }
+
+      return false;
+    }
+
     function isDivisorGuarded(node, divisorName) {
-      // Walk up the AST to find if there's a guard
       let parent = node.parent;
       let depth = 0;
       const maxDepth = 10;
 
       while (parent && depth < maxDepth) {
-        // Check for ternary: divisor > 0 ? ... : ...
-        // or: divisor !== 0 ? ... : ...
-        // or: divisor ? ... : ...
-        if (parent.type === "ConditionalExpression") {
-          const test = parent.test;
-
-          // Check: divisor > 0
-          if (
-            test.type === "BinaryExpression" &&
-            (test.operator === ">" ||
-              test.operator === "!==" ||
-              test.operator === "!=") &&
-            test.left.type === "Identifier" &&
-            test.left.name === divisorName
-          ) {
-            return true;
-          }
-
-          // Check: divisor (truthy check)
-          if (test.type === "Identifier" && test.name === divisorName) {
-            return true;
-          }
-        }
-
-        // Check for if statement guard
-        if (parent.type === "IfStatement") {
-          const test = parent.test;
-
-          // Check: if (divisor > 0)
-          if (
-            test.type === "BinaryExpression" &&
-            (test.operator === ">" ||
-              test.operator === "!==" ||
-              test.operator === "!=") &&
-            test.left.type === "Identifier" &&
-            test.left.name === divisorName
-          ) {
-            return true;
-          }
-
-          // Check: if (divisor)
-          if (test.type === "Identifier" && test.name === divisorName) {
-            return true;
-          }
-
-          // Check: if (!divisor) return; (early return pattern)
-          if (
-            test.type === "UnaryExpression" &&
-            test.operator === "!" &&
-            test.argument.type === "Identifier" &&
-            test.argument.name === divisorName
-          ) {
-            // This is a guard if we're NOT in the consequent (the if block)
-            // We're safe if we're in code after the if
-            return true;
-          }
-        }
-
-        // Check for logical AND: divisor && (value / divisor)
-        if (parent.type === "LogicalExpression" && parent.operator === "&&") {
-          if (
-            parent.left.type === "Identifier" &&
-            parent.left.name === divisorName
-          ) {
-            return true;
-          }
-        }
-
+        if (isNodeGuardedByParent(parent, divisorName)) return true;
         parent = parent.parent;
         depth++;
       }

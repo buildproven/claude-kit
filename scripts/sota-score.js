@@ -325,155 +325,90 @@ function walkFiles(dir, extensions) {
   return results;
 }
 
-/**
- * Scans for deprecated SDK imports, outdated model references, and stale API versions.
- * Returns score 0-10 and list of findings.
- */
-function checkApiCurrency() {
-  const findings = [];
+const LOCK_FILE_PATTERNS = ["uv.lock", "package-lock", "node_modules"];
 
-  // 1. Deprecated Python imports
-  const pyFiles = walkFiles(ROOT, [".py"]);
-  for (const file of pyFiles) {
-    const content = fs.readFileSync(file, "utf8");
+function isLockFile(filePath) {
+  return LOCK_FILE_PATTERNS.some((p) => filePath.includes(p));
+}
+
+function scanDeprecatedPyImports(findings) {
+  for (const file of walkFiles(ROOT, [".py"])) {
     const rel = path.relative(ROOT, file);
-    const lines = content.split("\n");
-
+    const lines = fs.readFileSync(file, "utf8").split("\n");
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      // google.generativeai replaced by google.genai
       if (/(?:import|from)\s+google\.generativeai/.test(line)) {
-        findings.push({
-          file: rel,
-          line: i + 1,
-          issue: "Deprecated import: google.generativeai (use google.genai)",
-          severity: "high",
-        });
+        findings.push({ file: rel, line: i + 1, issue: "Deprecated import: google.generativeai (use google.genai)", severity: "high" });
       }
-      // dall-e-3 model usage with OpenAI
       if (/model\s*=\s*["']dall-e-3["']/.test(line)) {
-        findings.push({
-          file: rel,
-          line: i + 1,
-          issue: "Deprecated model: dall-e-3 (use gpt-image-1.5)",
-          severity: "high",
-        });
+        findings.push({ file: rel, line: i + 1, issue: "Deprecated model: dall-e-3 (use gpt-image-1.5)", severity: "high" });
       }
     }
   }
+}
 
-  // 2. Hardcoded API versions older than 12 months (YYYYMM or YYYY-MM patterns in strings)
-  const codeFiles = walkFiles(ROOT, [".py", ".js"]);
+function scanStaleApiVersions(findings) {
   const now = new Date();
-
-  for (const file of codeFiles) {
-    if (
-      file.includes("uv.lock") ||
-      file.includes("package-lock") ||
-      file.includes("node_modules")
-    )
-      continue;
-    const content = fs.readFileSync(file, "utf8");
+  for (const file of walkFiles(ROOT, [".py", ".js"])) {
+    if (isLockFile(file)) continue;
     const rel = path.relative(ROOT, file);
-    const lines = content.split("\n");
-
+    const lines = fs.readFileSync(file, "utf8").split("\n");
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      // Match YYYY-MM or YYYY-MM-DD API version patterns in quoted strings
-      const versionMatches = line.matchAll(/["'](\d{4})[_-](\d{2})["'_-]/g);
-      for (const match of versionMatches) {
+      for (const match of lines[i].matchAll(/["'](\d{4})[_-](\d{2})["'_-]/g)) {
         const year = parseInt(match[1]);
         const month = parseInt(match[2]);
         if (year < 2020 || year > 2030 || month < 1 || month > 12) continue;
-        const ageMonths =
-          (now.getFullYear() - year) * 12 + (now.getMonth() + 1 - month);
+        const ageMonths = (now.getFullYear() - year) * 12 + (now.getMonth() + 1 - month);
         if (ageMonths > 12) {
-          findings.push({
-            file: rel,
-            line: i + 1,
-            issue: `Possibly stale API version: ${match[0]} (${ageMonths} months old)`,
-            severity: "medium",
-          });
+          findings.push({ file: rel, line: i + 1, issue: `Possibly stale API version: ${match[0]} (${ageMonths} months old)`, severity: "medium" });
         }
       }
     }
   }
+}
 
-  // 3. Known outdated model references in any file
-  const allFiles = walkFiles(ROOT, [
-    ".py",
-    ".js",
-    ".ts",
-    ".json",
-    ".md",
-    ".yaml",
-    ".yml",
-    ".sh",
-  ]);
-  const outdatedModels = [
-    {
-      pattern: /["']imagen-3["']/g,
-      replacement: "imagen-4",
-      label: "imagen-3",
-    },
-    {
-      pattern: /model\s*=\s*["']dall-e-3["']/g,
-      replacement: "gpt-image-1.5",
-      label: "dall-e-3",
-    },
-    {
-      pattern: /["']gemini-2\.0-flash-exp["']/g,
-      replacement: "gemini-2.0-flash (stable)",
-      label: "gemini-2.0-flash-exp",
-    },
-  ];
+const OUTDATED_MODELS = [
+  { pattern: /["']imagen-3["']/g, replacement: "imagen-4", label: "imagen-3" },
+  { pattern: /model\s*=\s*["']dall-e-3["']/g, replacement: "gpt-image-1.5", label: "dall-e-3" },
+  { pattern: /["']gemini-2\.0-flash-exp["']/g, replacement: "gemini-2.0-flash (stable)", label: "gemini-2.0-flash-exp" },
+];
 
+function checkLineForModels(line, lineNum, file, rel, findings) {
+  for (const model of OUTDATED_MODELS) {
+    const matched = model.pattern.test(line);
+    model.pattern.lastIndex = 0;
+    if (matched && !(model.label === "dall-e-3" && file.endsWith(".py"))) {
+      findings.push({ file: rel, line: lineNum, issue: `Outdated model reference: ${model.label} (replaced by ${model.replacement})`, severity: "medium" });
+    }
+  }
+}
+
+function scanOutdatedModels(findings) {
+  const allFiles = walkFiles(ROOT, [".py", ".js", ".ts", ".json", ".md", ".yaml", ".yml", ".sh"]);
   for (const file of allFiles) {
-    if (
-      file.includes("uv.lock") ||
-      file.includes("package-lock") ||
-      file.includes("node_modules")
-    )
-      continue;
-    if (
-      file.includes("sota-score.js") ||
-      file.includes("check-deprecated-apis.sh")
-    )
-      continue;
-    const content = fs.readFileSync(file, "utf8");
+    if (isLockFile(file)) continue;
+    if (file.includes("sota-score.js") || file.includes("check-deprecated-apis.sh")) continue;
     const rel = path.relative(ROOT, file);
-    const lines = content.split("\n");
-
+    const lines = fs.readFileSync(file, "utf8").split("\n");
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      for (const model of outdatedModels) {
-        if (model.pattern.test(line)) {
-          // Avoid duplicate with section 1 for dall-e-3 in .py files
-          if (model.label === "dall-e-3" && file.endsWith(".py")) continue;
-          findings.push({
-            file: rel,
-            line: i + 1,
-            issue: `Outdated model reference: ${model.label} (replaced by ${model.replacement})`,
-            severity: "medium",
-          });
-        }
-        model.pattern.lastIndex = 0;
-      }
+      checkLineForModels(lines[i], i + 1, file, rel, findings);
     }
   }
+}
 
-  // Score: start at 10, deduct per finding
+function checkApiCurrency() {
+  const findings = [];
+  scanDeprecatedPyImports(findings);
+  scanStaleApiVersions(findings);
+  scanOutdatedModels(findings);
+
   const highCount = findings.filter((f) => f.severity === "high").length;
   const mediumCount = findings.filter((f) => f.severity === "medium").length;
-  const deduction = highCount * 3 + mediumCount * 1;
-  const score = Math.max(0, 10 - deduction);
+  const score = Math.max(0, 10 - (highCount * 3 + mediumCount));
 
   return {
     score: Math.min(score, 10),
-    gap:
-      findings.length > 0
-        ? `${findings.length} deprecated API/model references found`
-        : null,
+    gap: findings.length > 0 ? `${findings.length} deprecated API/model references found` : null,
     findings,
   };
 }
