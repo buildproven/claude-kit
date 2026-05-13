@@ -206,6 +206,15 @@ if [ "$SCOPE_EXPLICIT" != "true" ] && [ "$LEVEL_EXPLICIT" != "true" ]; then
   echo "┌─────────────────────────────────────────────────────────────────┐"
   echo "│  [quality] auto-scope: ${AUTO_SCOPE} (${AUTO_REASON})"
   echo "│  Files: ${FILE_COUNT}  Lines: ${TOTAL_LINES}  Highest tier: ${HIGHEST_TIER}"
+  if { [ "$HIGHEST_TIER" = "critical" ] || [ "$HIGHEST_TIER" = "high" ]; } && [ "$TOTAL_LINES" -le 50 ]; then
+    echo "│"
+    echo "│  Only ${TOTAL_LINES} lines changed in a ${HIGHEST_TIER}-tier file."
+    echo "│  If this is a version pin, config alignment, or single-value fix"
+    echo "│  with no new logic or dependencies, you can skip the agent loop:"
+    echo "│    /bs:quality --scope changed --merge"
+    echo "│  Otherwise let it run — agents catch supply-chain, permissions,"
+    echo "│  and semantic errors that lint cannot."
+  fi
   echo "│  Pass --scope or --level explicitly to override."
   echo "└─────────────────────────────────────────────────────────────────┘"
   echo ""

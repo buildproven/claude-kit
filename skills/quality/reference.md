@@ -36,6 +36,8 @@ The skill classifies changed files against the risk tiers in `harness-config.jso
 
 The skill always prints which scope was chosen and why. Pass `--scope` or `--level` explicitly to override.
 
+**Tiny critical/high changes (≤ 50 lines):** agents still run by default — a 3-line `package.json` change can introduce a supply-chain risk that lint cannot catch. However, the skill prints a coaching message explaining when it is safe to override with `--scope changed` (version pins, config alignment, single-value fixes with no new logic or dependencies).
+
 ## Scope Options
 
 ### `--scope changed` (Quick)
