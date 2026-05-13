@@ -12,62 +12,69 @@
 const TIER_RANK = { low: 1, medium: 2, high: 3, critical: 4 };
 
 /**
+ * Ordered tier classification rules: each entry is [tier, matchFn].
+ * Rules are evaluated top-to-bottom; first match wins.
+ * @type {Array<[string, (f: string) => boolean]>}
+ */
+const TIER_RULES = [
+  // critical
+  [
+    "critical",
+    (f) =>
+      /^scripts\//.test(f) ||
+      /^config\//.test(f) ||
+      /^\.github\/workflows\//.test(f) ||
+      /^\.husky\//.test(f) ||
+      f === "install.sh" ||
+      f === ".qualityrc.json" ||
+      f === "package.json",
+  ],
+  // high
+  [
+    "high",
+    (f) =>
+      f === "commands/bs/quality.md" ||
+      f === "commands/bs/dev.md" ||
+      f === "commands/bs/ralph.md" ||
+      f === "commands/bs/new.md" ||
+      /^skills\/quality\//.test(f) ||
+      /^skills\/workflow\//.test(f) ||
+      /^skills\/test-strategy\//.test(f) ||
+      f === "agents/code-reviewer.md" ||
+      f === "agents/security-auditor.md",
+  ],
+  // medium
+  [
+    "medium",
+    (f) =>
+      /^commands\/bs\//.test(f) ||
+      /^skills\//.test(f) ||
+      /^agents\//.test(f) ||
+      /^eslint-plugin-defensive\//.test(f) ||
+      /^schemas\//.test(f),
+  ],
+  // low — docs, markdown, text, data, templates
+  [
+    "low",
+    (f) =>
+      /^docs\//.test(f) ||
+      /^templates\//.test(f) ||
+      /^data\//.test(f) ||
+      f === "README.md" ||
+      /\.md$/.test(f) ||
+      /\.txt$/.test(f),
+  ],
+];
+
+/**
  * Returns the risk tier for a single file path.
  * @param {string} file
  * @returns {'critical'|'high'|'medium'|'low'}
  */
 function classifyFile(file) {
-  // critical
-  if (
-    /^scripts\//.test(file) ||
-    /^config\//.test(file) ||
-    /^\.github\/workflows\//.test(file) ||
-    /^\.husky\//.test(file) ||
-    file === "install.sh" ||
-    file === ".qualityrc.json" ||
-    file === "package.json"
-  ) {
-    return "critical";
+  for (const [tier, matches] of TIER_RULES) {
+    if (matches(file)) return tier;
   }
-
-  // high
-  if (
-    file === "commands/bs/quality.md" ||
-    file === "commands/bs/dev.md" ||
-    file === "commands/bs/ralph.md" ||
-    file === "commands/bs/new.md" ||
-    /^skills\/quality\//.test(file) ||
-    /^skills\/workflow\//.test(file) ||
-    /^skills\/test-strategy\//.test(file) ||
-    file === "agents/code-reviewer.md" ||
-    file === "agents/security-auditor.md"
-  ) {
-    return "high";
-  }
-
-  // medium
-  if (
-    /^commands\/bs\//.test(file) ||
-    /^skills\//.test(file) ||
-    /^agents\//.test(file) ||
-    /^eslint-plugin-defensive\//.test(file) ||
-    /^schemas\//.test(file)
-  ) {
-    return "medium";
-  }
-
-  // low — docs, markdown, text, data, templates
-  if (
-    /^docs\//.test(file) ||
-    /^templates\//.test(file) ||
-    /^data\//.test(file) ||
-    file === "README.md" ||
-    /\.md$/.test(file) ||
-    /\.txt$/.test(file)
-  ) {
-    return "low";
-  }
-
   // Unknown files are treated as medium (safe default).
   return "medium";
 }
