@@ -24,6 +24,18 @@
 | `--preflight`     | false   | Quick readiness check (<10 sec)                                                            |
 | `--target-dir P`  | -       | Run against repo at path P (forked context where cwd is a scratch dir). Alias: `--target`. |
 
+## Auto-Scope (default when neither `--scope` nor `--level` is passed)
+
+The skill classifies changed files against the risk tiers in `harness-config.json` and selects the lightest sufficient scope automatically:
+
+| Highest tier touched  | Lines changed | Auto-selected scope | Agent loop                           |
+| --------------------- | ------------- | ------------------- | ------------------------------------ |
+| `low` (docs, \*.md)   | ≤ 200         | `changed`           | Skipped — lint + tests only (~2 min) |
+| `medium` or `low`>200 | any           | `branch`, L95       | 6 agents (~8 min)                    |
+| `high` or `critical`  | any           | `branch`, L95       | 6 agents (~8 min)                    |
+
+The skill always prints which scope was chosen and why. Pass `--scope` or `--level` explicitly to override.
+
 ## Scope Options
 
 ### `--scope changed` (Quick)
@@ -34,9 +46,9 @@
 - Skips quality agents — automated checks sufficient
 - Auto-commits with smart message
 
-### `--scope branch` (Default)
+### `--scope branch` (Default for medium/high/critical changes)
 
-- Time: 30-60 min
+- Time: 8-15 min typical (30-60 min reference.md estimate includes worst-case fix loops)
 - All files changed in branch vs main
 - Full quality agents on changed files
 - Creates PR after quality passes

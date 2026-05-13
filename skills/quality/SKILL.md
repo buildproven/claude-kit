@@ -110,6 +110,111 @@ Read `reference.md` for flag definitions. Key flags: `--level` (95|98), `--scope
 
 Handle early exits: `--status` shows history, `--preflight` runs quick checks (<10s), `--audit` runs read-only assessment.
 
+Track whether `--scope` and `--level` were **explicitly** passed by the user — these become `SCOPE_EXPLICIT=true` / `LEVEL_EXPLICIT=true`. Auto-scope (Step 0.5) only fires when both are unset.
+
+### Step 0.5: Auto-Scope Classification
+
+**Purpose**: automatically select the lightest sufficient scope+level based on what actually changed, so low-risk PRs (docs, markdown, skill files) don't pay for a 6-agent loop they don't need.
+
+**Only runs when the user did not explicitly pass `--scope` or `--level`.**
+
+```bash
+# Auto-scope only when neither flag was explicitly provided.
+if [ "$SCOPE_EXPLICIT" != "true" ] && [ "$LEVEL_EXPLICIT" != "true" ]; then
+
+  # --- 1. Gather diff stats ---------------------------------------------------
+  CHANGED_FILES=$(git diff --name-only main...HEAD 2>/dev/null)
+  FILE_COUNT=$(echo "$CHANGED_FILES" | grep -c . 2>/dev/null || echo 0)
+  LINE_COUNT=$(git diff --stat main...HEAD 2>/dev/null \
+    | tail -1 | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)
+  # Also count deletions
+  DEL_COUNT=$(git diff --stat main...HEAD 2>/dev/null \
+    | tail -1 | grep -oE '[0-9]+ deletion' | grep -oE '[0-9]+' || echo 0)
+  TOTAL_LINES=$(( ${LINE_COUNT:-0} + ${DEL_COUNT:-0} ))
+
+  # --- 2. Classify highest risk tier touched ----------------------------------
+  # Load harness-config.json if present; fall back to built-in glob sets.
+  HARNESS_CONFIG="$GIT_ROOT/harness-config.json"
+
+  # Built-in glob patterns (mirrors harness-config.json defaults)
+  # Evaluated in descending severity so the first match wins.
+  classify_file() {
+    local f="$1"
+    # critical
+    case "$f" in
+      scripts/*|config/*|.github/workflows/*|.husky/*|install.sh|.qualityrc.json|package.json)
+        echo critical; return ;;
+    esac
+    # high
+    case "$f" in
+      commands/bs/quality.md|commands/bs/dev.md|commands/bs/ralph.md|commands/bs/new.md|\
+      skills/quality/*|skills/workflow/*|skills/test-strategy/*|\
+      agents/code-reviewer.md|agents/security-auditor.md)
+        echo high; return ;;
+    esac
+    # medium
+    case "$f" in
+      commands/bs/*|skills/*|agents/*|eslint-plugin-defensive/*|schemas/*)
+        echo medium; return ;;
+    esac
+    # low (docs, markdown, data, templates)
+    case "$f" in
+      docs/*|templates/*|data/*|README.md|*.md|*.txt)
+        echo low; return ;;
+    esac
+    # unknown files default to medium (safe side)
+    echo medium
+  }
+
+  HIGHEST_TIER="low"
+  tier_rank() {
+    case "$1" in critical) echo 4;; high) echo 3;; medium) echo 2;; *) echo 1;; esac
+  }
+
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    TIER=$(classify_file "$f")
+    if [ "$(tier_rank "$TIER")" -gt "$(tier_rank "$HIGHEST_TIER")" ]; then
+      HIGHEST_TIER="$TIER"
+    fi
+  done <<< "$CHANGED_FILES"
+
+  # --- 3. Select scope + level ------------------------------------------------
+  # Decision table:
+  #   low tier  + ≤200 total lines  → scope=changed  (lint+tests only, no agents)
+  #   medium    OR ≤500 lines       → scope=branch, level=95
+  #   high/critical                 → scope=branch, level=95 (user can override to 98)
+  #
+  # "scope=changed" means the agent loop (Step 1.8) is skipped per the existing rule.
+
+  if [ "$HIGHEST_TIER" = "low" ] && [ "$TOTAL_LINES" -le 200 ]; then
+    AUTO_SCOPE="changed"
+    AUTO_LEVEL=95
+    AUTO_REASON="all low-tier files, ${TOTAL_LINES} lines — lint+tests only"
+  elif [ "$HIGHEST_TIER" = "critical" ] || [ "$HIGHEST_TIER" = "high" ]; then
+    AUTO_SCOPE="branch"
+    AUTO_LEVEL=95
+    AUTO_REASON="${HIGHEST_TIER}-tier files touched — full agent loop"
+  else
+    # medium, or low but >200 lines
+    AUTO_SCOPE="branch"
+    AUTO_LEVEL=95
+    AUTO_REASON="${HIGHEST_TIER}-tier, ${TOTAL_LINES} lines — full agent loop"
+  fi
+
+  echo ""
+  echo "┌─────────────────────────────────────────────────────────────────┐"
+  echo "│  [quality] auto-scope: ${AUTO_SCOPE} (${AUTO_REASON})"
+  echo "│  Files: ${FILE_COUNT}  Lines: ${TOTAL_LINES}  Highest tier: ${HIGHEST_TIER}"
+  echo "│  Pass --scope or --level explicitly to override."
+  echo "└─────────────────────────────────────────────────────────────────┘"
+  echo ""
+
+  SCOPE="$AUTO_SCOPE"
+  LEVEL="$AUTO_LEVEL"
+fi
+```
+
 ### Step 1: Automated Checks
 
 1. **Determine files** based on scope (changed/branch/all)
