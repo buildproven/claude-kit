@@ -2,27 +2,27 @@
 
 ## Flags
 
-| Flag              | Default | Description                             |
-| ----------------- | ------- | --------------------------------------- |
-| `--level N`       | 95      | Quality level (95 or 98)                |
-| `--scope S`       | branch  | Scope: changed, branch, all             |
-| `--merge`         | false   | Auto-merge PR after quality             |
-| `--skip-ci`       | false   | Bypass CI checks                        |
-| `--skip-rebase`   | false   | Skip auto-rebase                        |
-| `--status`        | false   | Show quality history and exit           |
-| `--verbose`       | false   | Show trends with `--status`             |
-| `--audit`         | false   | Read-only assessment                    |
-| `--deep`          | false   | 6-agent deep review (with `--audit`)    |
-| `--dry-run`       | false   | Preview without modifying               |
-| `--fix`           | false   | Auto-fix common issues (with `--audit`) |
-| `--json`          | false   | Machine-readable output                 |
-| `--coverage-diff` | false   | Show per-file coverage changes          |
-| `--skip-docs`     | false   | Skip doc sync check                     |
-| `--teams`         | false   | Use agent teams (tmux visibility)       |
-| `--no-teams`      | -       | Force Task subagents (default)          |
-| `--skip-tests`    | false   | Skip hard test gate (config-only repos) |
-| `--preflight`     | false   | Quick readiness check (<10 sec)         |
-| `--target-dir P`  | -       | Run against repo at path P (for forked context where cwd is a harness scratch dir). Alias: `--target`. |
+| Flag              | Default | Description                                                                                |
+| ----------------- | ------- | ------------------------------------------------------------------------------------------ |
+| `--level N`       | 95      | Quality level (95 or 98)                                                                   |
+| `--scope S`       | branch  | Scope: changed, branch, all                                                                |
+| `--merge`         | false   | Auto-merge PR after quality                                                                |
+| `--skip-ci`       | false   | Bypass CI checks                                                                           |
+| `--skip-rebase`   | false   | Skip auto-rebase                                                                           |
+| `--status`        | false   | Show quality history and exit                                                              |
+| `--verbose`       | false   | Show trends with `--status`                                                                |
+| `--audit`         | false   | Read-only assessment                                                                       |
+| `--deep`          | false   | 6-agent deep review (with `--audit`)                                                       |
+| `--dry-run`       | false   | Preview without modifying                                                                  |
+| `--fix`           | false   | Auto-fix common issues (with `--audit`)                                                    |
+| `--json`          | false   | Machine-readable output                                                                    |
+| `--coverage-diff` | false   | Show per-file coverage changes                                                             |
+| `--skip-docs`     | false   | Skip doc sync check                                                                        |
+| `--teams`         | false   | Use agent teams (tmux visibility)                                                          |
+| `--no-teams`      | -       | Force Task subagents (default)                                                             |
+| `--skip-tests`    | false   | Skip hard test gate (config-only repos)                                                    |
+| `--preflight`     | false   | Quick readiness check (<10 sec)                                                            |
+| `--target-dir P`  | -       | Run against repo at path P (forked context where cwd is a scratch dir). Alias: `--target`. |
 
 ## Scope Options
 
