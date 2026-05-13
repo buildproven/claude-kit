@@ -19,7 +19,8 @@
     "security:scan:ci": "bash scripts/run-semgrep.sh --ci",
     "license:check": "license-checker --onlyAllow \"MIT;ISC;BSD-2-Clause;BSD-3-Clause;Apache-2.0;0BSD;BlueOak-1.0.0;CC0-1.0;CC-BY-3.0;CC-BY-4.0;Unlicense;Python-2.0;MPL-2.0\" --excludePrivatePackages",
     "dead-code": "knip --no-exit-code || echo \"Dead code found (non-blocking)\"",
-    "dead-code:strict": "knip"
+    "dead-code:strict": "knip",
+    "check:commands": "bash scripts/check-command-readme.sh"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.0.0",
