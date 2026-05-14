@@ -102,7 +102,30 @@ if [ -z "$GIT_ROOT" ]; then
   exit 1
 fi
 cd "$GIT_ROOT" || exit 1
+
+# --- persist git root for downstream bash blocks (fix #BUG-target-dir-drop) --
+# Each Bash tool invocation in later steps starts a fresh shell — cwd and
+# shell vars from this block do NOT survive. Without this, --target-dir is
+# silently ignored beyond Step -1 and any later "$GIT_ROOT" reference resolves
+# to empty. Write the resolved root to a session-scoped sentinel file that
+# every downstream block reads with the BS_QUALITY_LOAD_ROOT preamble below.
+BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+printf '%s\n' "$GIT_ROOT" > "$BS_QUALITY_ROOT_FILE"
+echo "BS_QUALITY_ROOT_FILE=$BS_QUALITY_ROOT_FILE"
 ```
+
+> **MANDATORY for every subsequent bash block in this skill** — start with the
+> following preamble so the working directory matches the resolved git root,
+> not the fork's harness cwd. Without it, `--target-dir` is silently dropped
+> and git operations run in the wrong repo.
+>
+> ```bash
+> # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
+> BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+> GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
+> [ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+> cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
+> ```
 
 ### Step 0: Parse Arguments
 
@@ -119,6 +142,12 @@ Track whether `--scope` and `--level` were **explicitly** passed by the user —
 **Only runs when the user did not explicitly pass `--scope` or `--level`.**
 
 ```bash
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
+BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
+[ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
+
 # Auto-scope only when neither flag was explicitly provided.
 if [ "$SCOPE_EXPLICIT" != "true" ] && [ "$LEVEL_EXPLICIT" != "true" ]; then
 
@@ -240,6 +269,12 @@ Tests must exist and pass. This is a hard blocker, not advisory. Skip with `--sk
 For each changed source file, verify a corresponding test file exists:
 
 ```bash
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
+BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
+[ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
+
 CHANGED_SRC=$(git diff --name-only main...HEAD | grep -E '\.(ts|tsx|js|jsx)$' | grep -v -E '\.(test|spec|d)\.' | grep -v -E '(config|setup|types|index\.d)\.')
 MISSING_TESTS=""
 
@@ -272,6 +307,12 @@ fi
 #### 1.3b: Run Tests (Hard Gate)
 
 ```bash
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
+BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
+[ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
+
 # Run test suite — this MUST pass
 npm test 2>&1
 TEST_EXIT=$?
@@ -301,6 +342,12 @@ echo "✅ All tests passing"
 Pass `$TEST_GAPS` to the `test-generator` agent in Step 1.8 so it generates tests for specifically identified gaps. After test-generator runs, re-run `npm test` to verify generated tests pass:
 
 ```bash
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
+BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
+[ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
+
 npm test 2>&1
 if [ $? -ne 0 ]; then
   echo "❌ Generated tests are failing — fix before continuing"
@@ -342,6 +389,12 @@ Detect API changes, new commands, modified exports. Skip with `--skip-docs`. Spa
 Before spawning agents, capture the diff and file list:
 
 ```bash
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
+BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
+[ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
+
 DIFF=$(git diff main...HEAD)
 CHANGED_FILES=$(git diff --name-only main...HEAD)
 ```
@@ -442,6 +495,12 @@ After all agent results are validated, run a single synthesis pass:
 Before calling `gh pr merge`, verify the review pipeline actually ran:
 
 ```bash
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
+BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
+[ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
+
 # Check for Reviewed-By trailer in commits on this branch
 if ! git log main..HEAD --format=%B | grep -q "Reviewed-By: claude-quality"; then
   echo "❌ MERGE BLOCKED: No 'Reviewed-By: claude-quality' trailer found."
@@ -482,6 +541,12 @@ Requires acpx ≥ 0.5.3. Commands are agent-scoped (`acpx claude …`) in curren
 2. **Create sessions, then fire prompts concurrently**:
 
 ```bash
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
+BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
+[ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
+
 TIMESTAMP=$(date +%s)
 for kind in security coverage perf; do
   acpx claude sessions new --name "quality-${kind}-${TIMESTAMP}" >/dev/null
@@ -498,6 +563,12 @@ acpx claude prompt --no-wait -s "quality-perf-${TIMESTAMP}" \
 3. **Poll until all sessions complete** (status can stay "running" post-completion, so detect an assistant entry after the latest user entry via history):
 
 ```bash
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
+BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
+[ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
+
 session_done() {
   local session="$1"
   acpx claude sessions read "$session" --tail 4 2>/dev/null \
@@ -515,6 +586,12 @@ done
 4. **Collect outputs** (read session history):
 
 ```bash
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
+BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
+[ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
+
 SECURITY_OUT=$(acpx claude sessions read "quality-security-${TIMESTAMP}" --tail 1)
 COVERAGE_OUT=$(acpx claude sessions read "quality-coverage-${TIMESTAMP}" --tail 1)
 PERF_OUT=$(acpx claude sessions read "quality-perf-${TIMESTAMP}" --tail 1)
