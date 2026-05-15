@@ -110,8 +110,18 @@ cd "$GIT_ROOT" || exit 1
 # to empty. Write the resolved root to a session-scoped sentinel file that
 # every downstream block reads with the BS_QUALITY_LOAD_ROOT preamble below.
 BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
-printf '%s\n' "$GIT_ROOT" > "$BS_QUALITY_ROOT_FILE"
+if ! printf '%s\n' "$GIT_ROOT" > "$BS_QUALITY_ROOT_FILE" 2>/dev/null; then
+  echo "❌ /bs:quality could not write git-root sentinel to $BS_QUALITY_ROOT_FILE"
+  echo "   Check that \$TMPDIR is writable: ${TMPDIR:-/tmp}"
+  exit 1
+fi
 echo "BS_QUALITY_ROOT_FILE=$BS_QUALITY_ROOT_FILE"
+
+# NOTE on within-session concurrency: the sentinel filename only varies by
+# CLAUDE_CODE_SESSION_ID, so two /bs:quality invocations sharing the same
+# session (rare — merge-train workers spawn in separate Task subagents with
+# their own session IDs) would race on this file. Last writer wins. If you
+# need parallel quality runs, ensure they're spawned as separate sessions.
 ```
 
 > **MANDATORY for every subsequent bash block in this skill** — start with the
@@ -123,7 +133,11 @@ echo "BS_QUALITY_ROOT_FILE=$BS_QUALITY_ROOT_FILE"
 > # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
 > BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
 > GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-> [ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+> if [ -z "$GIT_ROOT" ]; then
+>   echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
+>   GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+> fi
+> [ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
 > cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
 > ```
 
@@ -145,7 +159,14 @@ Track whether `--scope` and `--level` were **explicitly** passed by the user —
 # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
 BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
 GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-[ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$GIT_ROOT" ]; then
+  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
+  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+fi
+# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
+# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
+# non-empty before attempting cd.
+[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
 cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
 
 # Auto-scope only when neither flag was explicitly provided.
@@ -272,7 +293,14 @@ For each changed source file, verify a corresponding test file exists:
 # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
 BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
 GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-[ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$GIT_ROOT" ]; then
+  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
+  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+fi
+# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
+# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
+# non-empty before attempting cd.
+[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
 cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
 
 CHANGED_SRC=$(git diff --name-only main...HEAD | grep -E '\.(ts|tsx|js|jsx)$' | grep -v -E '\.(test|spec|d)\.' | grep -v -E '(config|setup|types|index\.d)\.')
@@ -310,7 +338,14 @@ fi
 # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
 BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
 GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-[ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$GIT_ROOT" ]; then
+  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
+  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+fi
+# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
+# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
+# non-empty before attempting cd.
+[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
 cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
 
 # Run test suite — this MUST pass
@@ -345,7 +380,14 @@ Pass `$TEST_GAPS` to the `test-generator` agent in Step 1.8 so it generates test
 # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
 BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
 GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-[ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$GIT_ROOT" ]; then
+  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
+  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+fi
+# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
+# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
+# non-empty before attempting cd.
+[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
 cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
 
 npm test 2>&1
@@ -392,7 +434,14 @@ Before spawning agents, capture the diff and file list:
 # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
 BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
 GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-[ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$GIT_ROOT" ]; then
+  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
+  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+fi
+# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
+# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
+# non-empty before attempting cd.
+[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
 cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
 
 DIFF=$(git diff main...HEAD)
@@ -498,7 +547,14 @@ Before calling `gh pr merge`, verify the review pipeline actually ran:
 # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
 BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
 GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-[ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$GIT_ROOT" ]; then
+  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
+  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+fi
+# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
+# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
+# non-empty before attempting cd.
+[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
 cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
 
 # Check for Reviewed-By trailer in commits on this branch
@@ -544,7 +600,14 @@ Requires acpx ≥ 0.5.3. Commands are agent-scoped (`acpx claude …`) in curren
 # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
 BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
 GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-[ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$GIT_ROOT" ]; then
+  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
+  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+fi
+# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
+# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
+# non-empty before attempting cd.
+[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
 cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
 
 TIMESTAMP=$(date +%s)
@@ -566,7 +629,14 @@ acpx claude prompt --no-wait -s "quality-perf-${TIMESTAMP}" \
 # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
 BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
 GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-[ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$GIT_ROOT" ]; then
+  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
+  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+fi
+# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
+# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
+# non-empty before attempting cd.
+[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
 cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
 
 session_done() {
@@ -589,7 +659,14 @@ done
 # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
 BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
 GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-[ -z "$GIT_ROOT" ] && GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$GIT_ROOT" ]; then
+  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
+  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+fi
+# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
+# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
+# non-empty before attempting cd.
+[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
 cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
 
 SECURITY_OUT=$(acpx claude sessions read "quality-security-${TIMESTAMP}" --tail 1)
