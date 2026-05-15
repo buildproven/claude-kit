@@ -1,6 +1,6 @@
 ---
 name: bs:scrub
-description: 'Scrub/clean a project for release: open source, giveaway, or commercial sale'
+description: "Scrub/clean a project for release: open source, giveaway, or commercial sale"
 argument-hint: "[path] [opensource|sell|giveaway]"
 tags: [release, security, opensource]
 category: release
