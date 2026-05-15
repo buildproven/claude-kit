@@ -24,7 +24,9 @@ const all = args.includes("--all");
 
 function makeCompletedRows(items) {
   return items
-    .map((c) => `| ${c.id} | ${c.item.substring(0, 70)} | ${c.type} | ${c.date} |`)
+    .map(
+      (c) => `| ${c.id} | ${c.item.substring(0, 70)} | ${c.type} | ${c.date} |`,
+    )
     .join("\n");
 }
 
@@ -43,7 +45,9 @@ function appendToCompleted(content, completedItems) {
 
   if (afterHeader !== -1) {
     const insertAt = afterHeader + headerSep.length;
-    return content.substring(0, insertAt) + "\n" + rows + content.substring(insertAt);
+    return (
+      content.substring(0, insertAt) + "\n" + rows + content.substring(insertAt)
+    );
   }
 
   const insertAt = sectionIdx + "\n## Completed".length;
@@ -60,13 +64,23 @@ function findCompletedItems(lines) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (!line.startsWith("| CS-")) continue;
-    const parts = line.split("|").map((p) => p.trim()).filter((p) => p);
+    const parts = line
+      .split("|")
+      .map((p) => p.trim())
+      .filter((p) => p);
     if (parts.length < 7) continue;
     const [id, item, type, , , , status] = parts;
     if (!status.includes("✅") && status.toLowerCase() !== "done") continue;
     const dateMatch = status.match(/(\d{4}-\d{2}-\d{2})/);
-    const date = dateMatch ? dateMatch[1] : new Date().toISOString().split("T")[0];
-    completedItems.push({ id: id.trim(), item: item.trim(), type: type.trim(), date });
+    const date = dateMatch
+      ? dateMatch[1]
+      : new Date().toISOString().split("T")[0];
+    completedItems.push({
+      id: id.trim(),
+      item: item.trim(),
+      type: type.trim(),
+      date,
+    });
   }
   return completedItems;
 }
@@ -75,7 +89,10 @@ function countPendingItems(lines) {
   let count = 0;
   for (const line of lines) {
     if (!line.startsWith("| CS-")) continue;
-    const parts = line.split("|").map((p) => p.trim()).filter((p) => p);
+    const parts = line
+      .split("|")
+      .map((p) => p.trim())
+      .filter((p) => p);
     if (parts.length < 7) continue;
     const status = parts[6];
     if (!status.includes("✅") && status.toLowerCase() !== "done") count++;
@@ -90,7 +107,11 @@ function removeCompletedSections(lines, completedIds) {
     const sectionMatch = lines[i].match(/^### (CS-\d+):/);
     if (sectionMatch && completedIds.has(sectionMatch[1])) {
       i++;
-      while (i < lines.length && !lines[i].startsWith("### CS-") && !lines[i].startsWith("## ")) {
+      while (
+        i < lines.length &&
+        !lines[i].startsWith("### CS-") &&
+        !lines[i].startsWith("## ")
+      ) {
         i++;
       }
       continue;

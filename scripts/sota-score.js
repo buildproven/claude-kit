@@ -338,10 +338,20 @@ function scanDeprecatedPyImports(findings) {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       if (/(?:import|from)\s+google\.generativeai/.test(line)) {
-        findings.push({ file: rel, line: i + 1, issue: "Deprecated import: google.generativeai (use google.genai)", severity: "high" });
+        findings.push({
+          file: rel,
+          line: i + 1,
+          issue: "Deprecated import: google.generativeai (use google.genai)",
+          severity: "high",
+        });
       }
       if (/model\s*=\s*["']dall-e-3["']/.test(line)) {
-        findings.push({ file: rel, line: i + 1, issue: "Deprecated model: dall-e-3 (use gpt-image-1.5)", severity: "high" });
+        findings.push({
+          file: rel,
+          line: i + 1,
+          issue: "Deprecated model: dall-e-3 (use gpt-image-1.5)",
+          severity: "high",
+        });
       }
     }
   }
@@ -358,9 +368,15 @@ function scanStaleApiVersions(findings) {
         const year = parseInt(match[1]);
         const month = parseInt(match[2]);
         if (year < 2020 || year > 2030 || month < 1 || month > 12) continue;
-        const ageMonths = (now.getFullYear() - year) * 12 + (now.getMonth() + 1 - month);
+        const ageMonths =
+          (now.getFullYear() - year) * 12 + (now.getMonth() + 1 - month);
         if (ageMonths > 12) {
-          findings.push({ file: rel, line: i + 1, issue: `Possibly stale API version: ${match[0]} (${ageMonths} months old)`, severity: "medium" });
+          findings.push({
+            file: rel,
+            line: i + 1,
+            issue: `Possibly stale API version: ${match[0]} (${ageMonths} months old)`,
+            severity: "medium",
+          });
         }
       }
     }
@@ -369,8 +385,16 @@ function scanStaleApiVersions(findings) {
 
 const OUTDATED_MODELS = [
   { pattern: /["']imagen-3["']/g, replacement: "imagen-4", label: "imagen-3" },
-  { pattern: /model\s*=\s*["']dall-e-3["']/g, replacement: "gpt-image-1.5", label: "dall-e-3" },
-  { pattern: /["']gemini-2\.0-flash-exp["']/g, replacement: "gemini-2.0-flash (stable)", label: "gemini-2.0-flash-exp" },
+  {
+    pattern: /model\s*=\s*["']dall-e-3["']/g,
+    replacement: "gpt-image-1.5",
+    label: "dall-e-3",
+  },
+  {
+    pattern: /["']gemini-2\.0-flash-exp["']/g,
+    replacement: "gemini-2.0-flash (stable)",
+    label: "gemini-2.0-flash-exp",
+  },
 ];
 
 function checkLineForModels(line, lineNum, file, rel, findings) {
@@ -378,16 +402,34 @@ function checkLineForModels(line, lineNum, file, rel, findings) {
     const matched = model.pattern.test(line);
     model.pattern.lastIndex = 0;
     if (matched && !(model.label === "dall-e-3" && file.endsWith(".py"))) {
-      findings.push({ file: rel, line: lineNum, issue: `Outdated model reference: ${model.label} (replaced by ${model.replacement})`, severity: "medium" });
+      findings.push({
+        file: rel,
+        line: lineNum,
+        issue: `Outdated model reference: ${model.label} (replaced by ${model.replacement})`,
+        severity: "medium",
+      });
     }
   }
 }
 
 function scanOutdatedModels(findings) {
-  const allFiles = walkFiles(ROOT, [".py", ".js", ".ts", ".json", ".md", ".yaml", ".yml", ".sh"]);
+  const allFiles = walkFiles(ROOT, [
+    ".py",
+    ".js",
+    ".ts",
+    ".json",
+    ".md",
+    ".yaml",
+    ".yml",
+    ".sh",
+  ]);
   for (const file of allFiles) {
     if (isLockFile(file)) continue;
-    if (file.includes("sota-score.js") || file.includes("check-deprecated-apis.sh")) continue;
+    if (
+      file.includes("sota-score.js") ||
+      file.includes("check-deprecated-apis.sh")
+    )
+      continue;
     const rel = path.relative(ROOT, file);
     const lines = fs.readFileSync(file, "utf8").split("\n");
     for (let i = 0; i < lines.length; i++) {
@@ -408,7 +450,10 @@ function checkApiCurrency() {
 
   return {
     score: Math.min(score, 10),
-    gap: findings.length > 0 ? `${findings.length} deprecated API/model references found` : null,
+    gap:
+      findings.length > 0
+        ? `${findings.length} deprecated API/model references found`
+        : null,
     findings,
   };
 }

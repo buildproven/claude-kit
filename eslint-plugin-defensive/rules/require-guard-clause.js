@@ -71,8 +71,7 @@ module.exports = {
 
       if (parent.type === "LogicalExpression" && parent.operator === "&&") {
         return (
-          parent.left.type === "Identifier" &&
-          parent.left.name === divisorName
+          parent.left.type === "Identifier" && parent.left.name === divisorName
         );
       }
 

@@ -38,8 +38,13 @@ file once it has read the args (Step -1 of the skill).
 If the skill fails to consume the file (e.g. version skew between
 slash command and skill), stale dirs accumulate under `$TMPDIR`. The
 slash command does not try to clean them up — that's the skill's
-responsibility, and a periodic `find $TMPDIR -type d -name 'bs-quality-args*' -mtime +1 -exec rm -rf {} + 2>/dev/null` cron is a reasonable
-hygiene step at the user level.
+responsibility, and a periodic `find $TMPDIR \( -type d -name 'bs-quality-args*' -o -type f -name 'bs-quality-gitroot-*.txt' \) -mtime +1 -exec rm -rf {} + 2>/dev/null` cron is a reasonable hygiene step at the user level.
+
+The skill also writes a per-session sentinel file `${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt`
+containing the resolved git root. This is read at the top of every
+downstream bash block in the skill so the working directory survives
+across separate Bash tool invocations. Without it, `--target-dir` is
+silently dropped beyond Step -1 (regression fixed 2026-05-14).
 
 ## Step 2 — Invoke the quality skill
 
