@@ -1,6 +1,24 @@
 # Quality Checklist — Exit Criteria & Agent Validation
 
-## Level 95 Exit Criteria
+## Tier-aware Exit Criteria (level auto)
+
+Number of review agents and Codex usage scale with the resolved risk tier (see `reference.md` §Quality Levels). Other gates apply at every tier.
+
+| Gate                                    | low | medium | high | critical |
+| --------------------------------------- | --- | ------ | ---- | -------- |
+| Tests pass + exist                      | ✓   | ✓      | ✓    | ✓        |
+| ESLint / TypeScript / build clean       | ✓   | ✓      | ✓    | ✓        |
+| Defensive pattern analysis              | ✓   | ✓      | ✓    | ✓        |
+| code-reviewer + silent-failure-hunter   | ✓   | ✓      | ✓    | ✓        |
+| type-design-analyzer + security-auditor |     | ✓      | ✓    | ✓        |
+| test-generator + pr-test-analyzer       |     |        | ✓    | ✓        |
+| Codex judge                             |     | ✓      | ✓    | ✓        |
+| Codex adversarial review                |     |        | ✓    | ✓        |
+| break-glass-approval                    |     |        |      | ✓        |
+| `Reviewed-By: claude-quality` trailer   | ✓   | ✓      | ✓    | ✓        |
+| `Quality-Skip` trailer if Codex skipped |     |        | ✓    | ✓        |
+
+## Level 95 Exit Criteria (legacy, full panel)
 
 - [ ] **Tests pass**: `npm test` exits 0 (HARD GATE — blocks everything)
 - [ ] **Tests exist**: Every changed source file has a corresponding `.test.*` or `.spec.*` (exempt: config, types, migrations)
@@ -81,6 +99,7 @@ Every finding MUST be classified into exactly one category:
 
 - Finding flagged by 1 agent: standard severity
 - Finding flagged by 2+ agents independently: promote one level (WARNING → BLOCKING)
+- Finding flagged by both Claude AND Codex: highest confidence — always BLOCKING
 
 ### Suppression Rules (NEVER report these)
 
