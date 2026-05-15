@@ -83,12 +83,31 @@ BACKLOG.md, BACKLOG-ARCHIVE.md, ROADMAP.md, DEPLOYMENT_CHECKLIST.md
 Submodules often point to private repos. For each found:
 
 1. Ask user: "This submodule points to [URL]. Remove it?"
-2. Remove completely:
+2. **Safely** remove (resolve all paths to literals first — never run `rm -rf` against an unresolved variable):
+
    ```bash
-   git submodule deinit -f <path>
-   git rm -f <path>
-   rm -rf .git/modules/<path>
+   # 1. Resolve the literal submodule path and its .git/modules path
+   SUBMODULE_PATH="<exact relative path from .gitmodules>"
+   GIT_DIR="$(git rev-parse --git-dir)"
+   MODULES_PATH="${GIT_DIR}/modules/${SUBMODULE_PATH}"
+
+   # 2. Verify both paths are inside the repo before deleting
+   case "$MODULES_PATH" in
+     "${GIT_DIR}/modules/"*) ;;
+     *) echo "REFUSING: $MODULES_PATH is outside ${GIT_DIR}/modules/"; exit 1 ;;
+   esac
+
+   # 3. Show the user the resolved paths and ask for confirmation BEFORE deleting
+   echo "Will delete: $SUBMODULE_PATH and $MODULES_PATH"
+
+   # 4. Only after explicit user confirmation, execute:
+   git submodule deinit -f -- "$SUBMODULE_PATH"
+   git rm -f "$SUBMODULE_PATH"
+   rm -rf -- "$MODULES_PATH"
    ```
+
+   Never use `rm -rf .git/modules/<path>` with `<path>` as a placeholder — the agent must print the resolved absolute path and obtain user confirmation first.
+
 3. If `.gitmodules` is now empty, remove it
 4. Search for stale references to removed paths
 
@@ -192,6 +211,44 @@ Re-run `security-auditor` to verify:
 - All security issues addressed
 - `.env.example` complete
 - `.gitignore` comprehensive
+
+---
+
+## Phase 9: Version Bump + GitHub Release (All Modes)
+
+After all exit criteria pass and `.scrub.log` is written:
+
+1. **Determine next version:**
+   - Read current version from `package.json` (or `pyproject.toml`, `Cargo.toml`, etc.)
+   - Determine bump type: patch for fixes/docs, minor for new features, major for breaking changes
+   - A scrub-only release (no new features) is always a **patch**
+
+2. **Bump version in manifest:**
+   - Edit `package.json` (or equivalent) with the new version
+   - If a `CHANGELOG.md` exists, add a new version section at the top with today's date and the scrub changes
+
+3. **Commit, tag, and push:**
+
+   ```bash
+   git add package.json CHANGELOG.md   # (or equivalent)
+   git commit -m "chore: bump version to X.Y.Z"
+   git push
+   ```
+
+4. **Cut the GitHub release:**
+   - Generate release notes from the scrub summary (security fixes, docs added, etc.)
+   - Write notes to a temp file and use `gh release create`:
+
+   ```bash
+   gh release create vX.Y.Z \
+     --title "vX.Y.Z" \
+     --notes-file /tmp/release-notes.md \
+     --latest
+   ```
+
+   - Report the release URL to the user
+
+**If no `package.json` or version manifest exists:** skip the version bump, still cut the GitHub release tagged from the current HEAD.
 
 ---
 
