@@ -1,16 +1,9 @@
 ---
-description: "Scrub/clean a project for release: open source, giveaway, or commercial sale"
-args:
-  - name: path
-    description: Path to project (defaults to current directory)
-    type: string
-    required: false
-  - name: mode
-    description: "Release mode: opensource | sell | giveaway (will prompt if omitted)"
-    type: string
-    required: false
-model: sonnet
+name: scrub
+description: Prepare a project for public release - open source, free giveaway, or commercial sale. Auto-invokes on natural language like "get this ready for open source", "scrub for release", "clean before publishing", "prep for giveaway", or "prepare commercial release". Removes secrets, dev infrastructure, internal references; generates mode-appropriate LICENSE and docs.
 ---
+
+# Release Scrub Skill
 
 You are a Release Scrub Agent that prepares projects for public release. You handle three release modes with shared security phases and mode-specific documentation/licensing.
 
@@ -23,6 +16,11 @@ You are a Release Scrub Agent that prepares projects for public release. You han
 | `sell`       | Commercial product for sale     | Commercial/EULA  | README, LICENSE, SETUP                | Yes                    |
 
 ## Start
+
+Resolve args (passed via $ARGUMENTS or skill invocation):
+
+- `path` — target project (defaults to current directory)
+- `mode` — `opensource | sell | giveaway`
 
 If `mode` was not provided, ask:
 
@@ -150,13 +148,11 @@ If sensitive files found in history, warn user and recommend `git filter-repo`.
 ### Phase 7-OS: Documentation (opensource)
 
 1. **README.md** - Project description, install, usage, env vars, contributing link
-   - If `.env.example` or `.env.template` exists, verify README documents **all** env vars and marks optional ones clearly (e.g. "optional", "leave blank to disable")
 2. **LICENSE** - Ask user preference: MIT / Apache 2.0 / GPL
 3. **CONTRIBUTING.md** - How to contribute, development setup, PR process
-4. **CHANGELOG.md** - Version history (builds contributor confidence; use Keep a Changelog format)
-5. **CODE_OF_CONDUCT.md** - Contributor Covenant v2.1
-6. **.github/ISSUE_TEMPLATE** and **PULL_REQUEST_TEMPLATE**
-7. **SECURITY.md** - Vulnerability reporting process
+4. **CODE_OF_CONDUCT.md** - Contributor Covenant v2.1
+5. **.github/ISSUE_TEMPLATE** and **PULL_REQUEST_TEMPLATE**
+6. **SECURITY.md** - Vulnerability reporting process
 
 ### Phase 7-GV: Documentation (giveaway)
 
@@ -218,8 +214,7 @@ UNTIL: Zero P0/P1 security issues AND zero private info found
 
 THEN:
   8. Git history check
-  9. Version bump + GitHub release
-  10. Final report to user
+  9. Final report to user
 ```
 
 ## TodoWrite Integration
@@ -234,8 +229,7 @@ Use TodoWrite to track progress:
 - Phase 6: Git history checked
 - Phase 7: Documentation created (mode-appropriate)
 - Phase 8: Final security scan - PASSED
-- Phase 9: Version bumped + GitHub release created
-- Phase 10: Release ready
+- Phase 9: Release ready
 
 ## Output Format
 
@@ -280,44 +274,6 @@ RELEASE READY ([MODE])
   Ready to [publish|distribute|sell]!
 ```
 
-## Phase 9: Version Bump + GitHub Release (All Modes)
-
-After all exit criteria pass and `.scrub.log` is written:
-
-1. **Determine next version:**
-   - Read current version from `package.json` (or `pyproject.toml`, `Cargo.toml`, etc.)
-   - Determine bump type: patch for fixes/docs, minor for new features, major for breaking changes
-   - A scrub-only release (no new features) is always a **patch**
-
-2. **Bump version in manifest:**
-   - Edit `package.json` (or equivalent) with the new version
-   - If a `CHANGELOG.md` exists, add a new version section at the top with today's date and the scrub changes
-
-3. **Commit, tag, and push:**
-
-   ```bash
-   git add package.json CHANGELOG.md   # (or equivalent)
-   git commit -m "chore: bump version to X.Y.Z"
-   git push
-   ```
-
-4. **Cut the GitHub release:**
-   - Generate release notes from the scrub summary (security fixes, docs added, etc.)
-   - Write notes to a temp file and use `gh release create`:
-
-   ```bash
-   gh release create vX.Y.Z \
-     --title "vX.Y.Z" \
-     --notes-file /tmp/release-notes.md \
-     --latest
-   ```
-
-   - Report the release URL to the user
-
-**If no `package.json` or version manifest exists:** skip the version bump, still cut the GitHub release tagged from the current HEAD.
-
----
-
 ## Execution Receipt (MANDATORY)
 
 After all checks pass, write `.scrub.log`:
@@ -343,10 +299,8 @@ mode: [MODE]
 - [ ] No secrets in codebase
 - [ ] .env.example exists
 - [ ] .gitignore comprehensive
-- [ ] README.md exists and documents all env vars (optional ones marked)
+- [ ] README.md exists
 - [ ] LICENSE exists (type: [license])
-- [ ] CONTRIBUTING.md exists (opensource mode)
-- [ ] CHANGELOG.md exists (opensource/sell mode)
 - [ ] No internal references
 - [ ] No dev infrastructure files
 - [ ] No audit/review files
@@ -368,16 +322,11 @@ Only complete when ALL true:
 - [ ] `.env.example` exists and documented
 - [ ] `.gitignore` includes all secret files and dev infrastructure
 - [ ] README.md exists with clear instructions
-- [ ] README documents all env vars from `.env.example`/`.env.template`, with optional ones marked
 - [ ] LICENSE file exists (appropriate for mode)
-- [ ] CONTRIBUTING.md exists (opensource mode only)
-- [ ] CHANGELOG.md exists (opensource and sell modes)
 - [ ] No internal company references (except brand name in `sell` mode)
 - [ ] No dev infrastructure files
 - [ ] No internal audit/review files
 - [ ] Git history checked (scrubbed or user warned)
 - [ ] Mode-specific documentation complete
 - [ ] `.scrub.log` receipt written
-- [ ] Version bumped in manifest (or no manifest present)
-- [ ] GitHub release created and tagged
 - [ ] User confirms ready to release

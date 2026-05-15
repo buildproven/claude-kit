@@ -130,6 +130,25 @@ Ask Claude naturally to invoke. Example: "Run the quality skill"
 | `/bs:perfect`         | `/bs:quality --level 98`         |
 | `/bs:perfect --merge` | `/bs:quality --level 98 --merge` |
 
+### Idea Commands (Consolidated into /bs:idea, 2026-05-14)
+
+| Old Command          | Replacement              |
+| -------------------- | ------------------------ |
+| `/bs:idea-roast`     | `/bs:idea roast`         |
+| `/bs:idea-fit`       | `/bs:idea fit`           |
+| `/bs:idea-offer`     | `/bs:idea offer`         |
+| `/bs:idea-compete`   | `/bs:idea compete`       |
+| `/bs:idea-money`     | `/bs:idea money`         |
+| `/bs:idea-acp`       | `/bs:idea acp`           |
+| `/bs:idea-lock`      | `/bs:idea lock`          |
+| `/bs:idea-validate`  | `/bs:idea validate`      |
+
+### Release Prep (now a Skill)
+
+| Old Command | Replacement                                                            |
+| ----------- | ---------------------------------------------------------------------- |
+| `/bs:scrub` | `/bs:scrub` still works — now backed by `scrub` skill (auto-invokes on natural language like "prep for open source") |
+
 ### Commands in claude-kit-pro (paid tier)
 
 | Command            | Available in   |
