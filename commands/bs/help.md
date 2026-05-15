@@ -130,6 +130,12 @@ Ask Claude naturally to invoke. Example: "Run the quality skill"
 | `/bs:perfect`         | `/bs:quality --level 98`         |
 | `/bs:perfect --merge` | `/bs:quality --level 98 --merge` |
 
+### Release Prep (now a Skill)
+
+| Old Command | Replacement                                                                                                          |
+| ----------- | -------------------------------------------------------------------------------------------------------------------- |
+| `/bs:scrub` | `/bs:scrub` still works — now backed by `scrub` skill (auto-invokes on natural language like "prep for open source") |
+
 ### Commands in claude-kit-pro (paid tier)
 
 | Command            | Available in   |
