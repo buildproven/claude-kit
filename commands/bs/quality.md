@@ -36,9 +36,11 @@ skill in the next step. The skill is responsible for deleting the
 file once it has read the args (Step -1 of the skill).
 
 If the skill fails to consume the file (e.g. version skew between
-slash command and skill), stale dirs accumulate under `$TMPDIR`. The
-slash command does not try to clean them up — that's the skill's
-responsibility, and a periodic `find $TMPDIR \( -type d -name 'bs-quality-args*' -o -type f -name 'bs-quality-gitroot-*.txt' \) -mtime +1 -exec rm -rf {} + 2>/dev/null` cron is a reasonable hygiene step at the user level.
+slash command and skill), stale dirs may accumulate under `$TMPDIR`.
+The slash command does not try to clean them up — that's the skill's
+responsibility. The OS will eventually reclaim them on reboot (macOS
+clears `$TMPDIR` periodically; Linux distros clear `/tmp` per their
+`tmpfiles.d` policy), so no user-level cron is needed.
 
 The skill also writes a per-session sentinel file `${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt`
 containing the resolved git root. This is read at the top of every
