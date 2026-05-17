@@ -2,6 +2,12 @@
 
 All notable changes to claude-kit are documented here.
 
+## [1.2.1] - 2026-05-17
+
+### Fixed
+
+- `commands/bs/quality.md`: removed an unsafe cleanup-cron example that suggested a periodic find-and-delete rooted at the `$TMPDIR` variable. Even bounded by `-name` and `-mtime` filters, deleting through a shell-resolved path matches the dangerous-pattern rule documented in CLAUDE.md (filesystem-safety policy, 2026-04-19 incident). The OS reclaims `$TMPDIR` on its own schedule, so no user-level cron is needed (#42).
+
 ## [1.2.0] - 2026-05-16
 
 ### Repositioned
