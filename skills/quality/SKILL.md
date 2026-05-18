@@ -4,6 +4,18 @@ description: Autonomous quality loop with configurable thoroughness (95% or 98%)
 context: fork
 ---
 
+> **FORKED SKILL INVOCATION — EXECUTE STEP -1 IMMEDIATELY.**
+>
+> This skill was already invoked by `/bs:quality`. In this forked context, the
+> active task is the quality workflow defined below; task arguments arrive via
+> the `--args-file` channel described in Step -1, not necessarily as a fresh
+> user message.
+>
+> If the visible context contains only system reminders or appears to have no
+> new user prompt, do not wait for another request and do not report "no user
+> task." Treat that state as expected fork startup context and immediately run
+> the Step -1 args-file extraction block.
+
 # Quality Skill — Autonomous Quality Loop
 
 Makes your project ship-ready in one autonomous command. Replaces manual review cycles with parallel quality agents.
