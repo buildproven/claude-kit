@@ -22,6 +22,31 @@ Makes your project ship-ready in one autonomous command. Replaces manual review 
 
 **CRITICAL: This is AUTONOMOUS. Do NOT stop and ask the user between loops.**
 
+> **NEVER divert to "investigate uncommitted state" mode.** Once Step -1 resolves
+> a target (PR, branch, worktree path, or cwd-worktree), execute the quality
+> pipeline (Step 0 → Step 1 → Step 2 → … → merge). Uncommitted files in the
+> resolved worktree are EXPECTED — they are the working changes being audited.
+> Do NOT respond with a "status report" or "let me check first" or "here's what
+> I found, what do you want me to do" — that's the failure mode this guard
+> exists to prevent (regression 2026-05-21: skill bailed to investigation mode
+> after Step -1 succeeded because the worktree had uncommitted artifacts from
+> a parallel session).
+>
+> Specifically forbidden after a successful Step -1 resolution:
+>
+> - Reporting "On main / no feature branch / no PR specified".
+> - Listing uncommitted files and asking which to commit.
+> - Bailing because of "ambiguous" state. Step -1's resolution IS the disambiguator.
+> - Refusing `--merge` after the resolver returned a non-`primary-fallback`
+>   resolution (the resolver itself owns the merge-refuse contract).
+>
+> The ONLY post-Step-1 reasons to stop early:
+>
+> - Tests/lint/build hard-fail and cannot be auto-fixed within the retry budget.
+> - High/critical tier review surfaces a finding requiring human input.
+> - CI shows a failing required check on the target PR.
+>   All other states proceed.
+
 ## Execution Flow
 
 ### Step -1: Resolve Audit Target (Git Root + Worktree Discipline)
