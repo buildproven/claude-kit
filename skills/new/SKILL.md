@@ -286,7 +286,6 @@ npm run test:coverage       # Coverage report
 ```
 ````
 
-
 _Quality infrastructure from claude-kit. Global rules in `~/.claude/CLAUDE.md`._
 
 ````
