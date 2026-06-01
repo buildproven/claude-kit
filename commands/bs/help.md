@@ -46,6 +46,7 @@ ls ~/.claude/skills/*/SKILL.md 2>/dev/null | wc -l
 ### Step 3: Render output
 
 Use the extracted data to generate the help output. Split commands into two groups based on the `tier` field:
+
 - **tier=kit** → show in the main command tables
 - **tier=pro** → collect separately, show in a "claude-kit-pro" upgrade section at the end
 
@@ -150,6 +151,6 @@ Invoked naturally — Claude picks the right skill from context.
 
 ### Release Prep (now a Skill)
 
-| Old Command | Replacement                                                    |
-| ----------- | -------------------------------------------------------------- |
-| `/bs:scrub` | `/bs:scrub` still works — now backed by the `scrub` skill      |
+| Old Command | Replacement                                               |
+| ----------- | --------------------------------------------------------- |
+| `/bs:scrub` | `/bs:scrub` still works — now backed by the `scrub` skill |
