@@ -18,6 +18,7 @@ You are running the `deps` skill. Execute all steps using your tools — do not 
 Arguments: $ARGUMENTS
 
 Extract:
+
 - **repo paths**: any absolute or `~/…` paths. If none, use current working directory.
 - **mode**: `--audit` (report only), `--upgrade` (update outdated), `--analyze` (bundle size). Default = fix audit vulns.
 
@@ -61,9 +62,9 @@ Read `package.json`. If it contains `"next"`, print: `ANALYZE=true npm run build
 
 After processing all repos, print a concise table:
 
-| Repo | Action | Result | PR |
-|------|--------|--------|----|
-| … | … | … | … |
+| Repo | Action | Result | PR  |
+| ---- | ------ | ------ | --- |
+| …    | …      | …      | …   |
 
 ## Rules
 
