@@ -22,6 +22,14 @@ Makes your project ship-ready in one autonomous command. Replaces manual review 
 
 **CRITICAL: This is AUTONOMOUS. Do NOT stop and ask the user between loops.**
 
+> **Completion condition (for `/goal`-driven runs):**
+> `/goal all tests pass, lint is clean, and type errors are zero — verified by running the full quality suite`
+>
+> When invoked via `claude -p "/goal ..."` or in a loop context, the Haiku evaluator
+> checks after each turn whether the condition is met. On failure it provides a reason
+> that guides the next turn automatically. This makes CI-mode runs self-terminating
+> without manual polling.
+
 > **NEVER divert to "investigate uncommitted state" mode.** Once Step -1 resolves
 > a target (PR, branch, worktree path, or cwd-worktree), execute the quality
 > pipeline (Step 0 → Step 1 → Step 2 → … → merge). Uncommitted files in the
