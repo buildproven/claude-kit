@@ -72,8 +72,8 @@ Group kit commands by `category` field using the display order and titles below.
 
 Also include this utility command (no frontmatter — hardcode this only):
 
-| Command            | Description                             | Category            |
-| ------------------ | --------------------------------------- | ------------------- |
+| Command               | Description                             | Category            |
+| --------------------- | --------------------------------------- | ------------------- |
 | `/cc:update-claudemd` | Update CLAUDE.md with session learnings | Strategy & Planning |
 
 ---

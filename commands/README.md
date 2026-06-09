@@ -37,13 +37,13 @@ Commands use prefixes: `/bs:` (workflow), `/gh:` (GitHub), `/cc:` (Claude Code),
 
 ## Utilities
 
-| Command              | Purpose                            |
-| -------------------- | ---------------------------------- |
-| `/cc:update-claudemd`   | Capture learnings into `CLAUDE.md` |
-| `/gh:review-pr`      | Review a pull request              |
-| `/gh:fix-issue`      | Work a GitHub issue                |
-| `/cc:optimize`       | Optimize Claude Code usage         |
-| `/cc:create-command` | Create a new command               |
+| Command               | Purpose                            |
+| --------------------- | ---------------------------------- |
+| `/cc:update-claudemd` | Capture learnings into `CLAUDE.md` |
+| `/gh:review-pr`       | Review a pull request              |
+| `/gh:fix-issue`       | Work a GitHub issue                |
+| `/cc:optimize`        | Optimize Claude Code usage         |
+| `/cc:create-command`  | Create a new command               |
 
 ## Notes
 
