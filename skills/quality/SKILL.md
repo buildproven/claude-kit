@@ -371,7 +371,18 @@ if [ "$LEVEL" = "auto" ]; then
       rm -f "$GH_OUT"
       exit 1
     fi
-    TIER=$(grep '^highestRisk=' "$GH_OUT" | cut -d= -f2)
+    # Prefer effectiveTier (path tier after change-nature may downgrade one
+    # notch, never below the security floor). Fall back to highestRisk (path
+    # tier) when the gate is older / naturePolicy is disabled — so tier is always
+    # set. Keeps the skill in lockstep with harness-gate.yml, which routes on the
+    # same effectiveTier||highestRisk value.
+    TIER=$(grep '^effectiveTier=' "$GH_OUT" | cut -d= -f2)
+    [ -z "$TIER" ] && TIER=$(grep '^highestRisk=' "$GH_OUT" | cut -d= -f2)
+    NATURE=$(grep '^changeNature=' "$GH_OUT" | cut -d= -f2)
+    PATH_TIER=$(grep '^highestRisk=' "$GH_OUT" | cut -d= -f2)
+    if [ -n "$NATURE" ] && [ "$TIER" != "$PATH_TIER" ]; then
+      echo "🧭 Change-nature: $NATURE → review tier ${PATH_TIER}→${TIER} (one-notch downgrade; floor preserved)"
+    fi
     rm -f "$GH_OUT"
   else
     # No harness present in this repo — fall back to L95 behavior (existing default).
