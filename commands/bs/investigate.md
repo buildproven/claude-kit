@@ -1,5 +1,6 @@
 ---
 name: bs:investigate
+standalone: true
 description: Root-cause debugging — find the actual cause before touching any code
 argument-hint: "<error or symptom> → systematic 4-phase investigation"
 tags: [debug, investigate, root-cause]

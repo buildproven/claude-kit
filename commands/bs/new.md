@@ -1,6 +1,7 @@
 ---
 model: opus
 name: bs:new
+invokes: new
 description: Create new project with QA Architect quality automation (framework-agnostic)
 argument-hint: "<project-name> [--path dir] → new project with QA Architect"
 category: project

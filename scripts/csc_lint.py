@@ -56,6 +56,12 @@ INVOKE_PROSE = re.compile(r"[Ii]nvoke the `?([a-z0-9-]+)`? skill")
 CODE_FENCE = re.compile(
     r"^[ \t]*(```|~~~).*?^[ \t]*\1[ \t]*$", re.DOTALL | re.MULTILINE
 )
+# Inline code spans — `` `/bs:x` `` (one or more backticks). Backticks mark text
+# as a literal NAME, not an executed directive; a doc that says "run `/bs:quality`
+# afterward" is referencing the command, not invoking it mid-skill. Stripped
+# before the scan for the same reason as fences and links. A BARE token in prose
+# (no backticks) is still treated as a genuine invocation (plan §5.4).
+INLINE_CODE = re.compile(r"(`+)[^`]*?\1")
 # Markdown inline links to a command — `[text](/bs:x)`, `[/bs:x](/bs:x)`, or
 # ``[`/bs:x`](/bs:x ...)``. A link is a cross-reference (documentation), not an
 # invocation. We strip the ENTIRE span (label + destination): stripping only the
@@ -100,6 +106,7 @@ def _strip_for_edge_scan(body: str) -> str:
     """
     body = CODE_FENCE.sub("", body)
     body = MD_LINK_TO_CMD.sub("", body)
+    body = INLINE_CODE.sub("", body)
     kept = []
     in_cross_ref_section = False
     for line in body.splitlines():
@@ -284,8 +291,13 @@ def lint(root: Path) -> Report:
     for cf in cmd_files:
         fm = _parse_frontmatter(cf.read_text(errors="replace"))
         stem = cf.stem
-        cmd_basenames.setdefault(stem, []).append(cf)
         rel = str(cf.relative_to(root))
+        # Deprecated alias stubs (plan §2.6) intentionally keep the OLD name/path
+        # during the grace window, so they're exempt from R2 identity + R5 dup
+        # checks. The deprecation-expiry rule (future) handles their removal date.
+        if fm.get("deprecated"):
+            continue
+        cmd_basenames.setdefault(stem, []).append(cf)
         # R1 command completeness
         if not fm.get("name"):
             rep.add("R1", "high", rel, "command missing frontmatter 'name'")

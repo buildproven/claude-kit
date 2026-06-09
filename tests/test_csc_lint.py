@@ -94,6 +94,50 @@ def test_r4_still_catches_real_cross_invocation(tmp_path: Path) -> None:
     assert any(v.rule == "R4" and "/bs:cleanup" in v.detail for v in rep.violations)
 
 
+def test_r4_ignores_inline_code_command_mentions(tmp_path: Path) -> None:
+    # Backtick-wrapped command tokens are NAME mentions in docs, not invocations.
+    body = (
+        "When done, run `/bs:quality --merge` afterward.\n"
+        "For anything else, use `/bs:dev`.\n"
+    )
+    _mk(tmp_path, "skills/recover/SKILL.md", _skill("recover", body))
+    _mk(tmp_path, "commands/bs/recover.md", _cmd("bs:recover", invokes="recover"))
+    rep = csc_lint.lint(tmp_path)
+    assert not any(v.rule == "R4" for v in rep.violations), [
+        v.detail for v in rep.violations if v.rule == "R4"
+    ]
+
+
+def test_r4_still_catches_bare_prose_cross_edge(tmp_path: Path) -> None:
+    # Same content WITHOUT backticks is a genuine bare-prose invocation -> R4.
+    body = "When done, run /bs:quality to ship.\n"
+    _mk(tmp_path, "skills/recover/SKILL.md", _skill("recover", body))
+    _mk(tmp_path, "commands/bs/recover.md", _cmd("bs:recover", invokes="recover"))
+    _mk(tmp_path, "commands/bs/quality.md", _cmd("bs:quality", invokes="quality"))
+    _mk(tmp_path, "skills/quality/SKILL.md", _skill("quality"))
+    rep = csc_lint.lint(tmp_path)
+    assert any(v.rule == "R4" and "/bs:quality" in v.detail for v in rep.violations)
+
+
+def test_deprecated_stub_is_exempt(tmp_path: Path) -> None:
+    # A deprecated alias keeps the OLD bare name/path during the grace window;
+    # it must not trip R2 (no namespace) or R5 (duplicate of the renamed cmd).
+    _mk(
+        tmp_path,
+        "commands/update-claudemd.md",
+        "---\nname: update-claudemd\ndescription: x\n"
+        'deprecated: "use /cc:update-claudemd; removed after 2026-07-08"\n'
+        "standalone: true\n---\nDeprecated.\n",
+    )
+    _mk(
+        tmp_path,
+        "commands/cc/update-claudemd.md",
+        "---\nname: cc:update-claudemd\ndescription: x\nstandalone: true\n---\nbody\n",
+    )
+    rep = csc_lint.lint(tmp_path)
+    assert rep.violations == [], [v.detail for v in rep.violations]
+
+
 def test_r4_allows_self_reference(tmp_path: Path) -> None:
     # SELF edge: the `quality` skill mentioning its OWN /bs:quality command is
     # self-documentation, not a recursion loop — must NOT fire R4.

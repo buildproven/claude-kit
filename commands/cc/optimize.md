@@ -1,5 +1,6 @@
 ---
 name: cc:optimize
+standalone: true
 description: Show Claude Code optimization guide and cost-saving strategies
 tags: [efficiency, cost, agents, best-practices]
 category: claude-code

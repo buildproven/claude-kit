@@ -1,5 +1,6 @@
 ---
 name: error-handling
+auto_invoke: true
 description: Auto-invoke skill for consistent error handling patterns. Activates when writing try/catch blocks, API error responses, form validation, async operations, or error boundaries. Enforces consistent patterns and flags anti-patterns like empty catches and silent failures.
 ---
 

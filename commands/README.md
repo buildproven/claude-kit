@@ -39,7 +39,7 @@ Commands use prefixes: `/bs:` (workflow), `/gh:` (GitHub), `/cc:` (Claude Code),
 
 | Command              | Purpose                            |
 | -------------------- | ---------------------------------- |
-| `/update-claudemd`   | Capture learnings into `CLAUDE.md` |
+| `/cc:update-claudemd`   | Capture learnings into `CLAUDE.md` |
 | `/gh:review-pr`      | Review a pull request              |
 | `/gh:fix-issue`      | Work a GitHub issue                |
 | `/cc:optimize`       | Optimize Claude Code usage         |

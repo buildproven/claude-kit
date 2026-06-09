@@ -1,5 +1,6 @@
 ---
 name: bs:help
+standalone: true
 description: "Quick reference for all /bs:* commands with flags and usage"
 argument-hint: "[--full] → quick or detailed /bs:* reference"
 category: maintenance
@@ -73,7 +74,7 @@ Also include this utility command (no frontmatter — hardcode this only):
 
 | Command            | Description                             | Category            |
 | ------------------ | --------------------------------------- | ------------------- |
-| `/update-claudemd` | Update CLAUDE.md with session learnings | Strategy & Planning |
+| `/cc:update-claudemd` | Update CLAUDE.md with session learnings | Strategy & Planning |
 
 ---
 

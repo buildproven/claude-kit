@@ -1,5 +1,6 @@
 ---
 name: bs:workflow
+invokes: workflow
 description: Quick reference for the public daily development workflow
 argument-hint: "→ daily dev workflow reference"
 tags: [workflow, guide, reference]
