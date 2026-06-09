@@ -5,7 +5,7 @@ description: Start development work (features, bugs, refactoring, experiments)
 
 # /bs:dev - Start Development Work
 
-**Usage**: `/bs:dev <name> [--fix|--refactor|--experiment] [--with-tests] [--tdd] [--wt] [--parallel "task1,task2,task3"] [--teams] [--next] [--alt]`
+**Usage**: `/bs:dev <name|inline-list> [--fix|--refactor|--experiment] [--with-tests] [--tdd] [--wt] [--parallel "task1,task2,task3"] [--list] [--sequential] [--max=N] [--teams] [--next] [--alt]`
 
 Generic command for all development work. Auto-detects branch type or use flags.
 
@@ -105,6 +105,54 @@ If `--next` flag is provided, automatically select the highest-priority item fro
 /bs:dev --next                    # Auto-picks highest-priority Linear item
 /bs:dev --next --experiment       # Auto-pick + experiment branch type
 ```
+
+### Step 0d: Inline-List Detection (auto)
+
+Before treating `$ARGUMENTS` as a single task name, detect whether it contains an inline
+markdown task list. If yes, switch to **list mode** (Step 9 below).
+
+```bash
+# Locate the parser. It ships with claude-kit; resolve via several candidates so
+# this works whether dev/ralph are invoked from claude-kit, claude-kit-pro (vendored
+# at core/), or a downstream consumer.
+resolve_parser() {
+  local candidates=(
+    "${KIT_REPO:-}/scripts/inline-list-parser.js"
+    "$(git rev-parse --show-toplevel 2>/dev/null)/core/core/scripts/inline-list-parser.js"
+    "$(git rev-parse --show-toplevel 2>/dev/null)/core/scripts/inline-list-parser.js"
+    "$(git rev-parse --show-toplevel 2>/dev/null)/scripts/inline-list-parser.js"
+    "$HOME/.claude/scripts/inline-list-parser.js"
+  )
+  for p in "${candidates[@]}"; do
+    [[ -n "$p" && -f "$p" ]] && { echo "$p"; return 0; }
+  done
+  return 1
+}
+PARSER=$(resolve_parser)
+
+# Pipe full arguments to the parser; it returns JSON { isList, items[], slugs[] }
+if [[ -n "$PARSER" ]]; then
+  LIST_JSON=$(printf '%s' "$ARGUMENTS" | node "$PARSER" 2>/dev/null || echo '{"isList":false,"items":[],"slugs":[]}')
+else
+  LIST_JSON='{"isList":false,"items":[],"slugs":[]}'
+fi
+IS_LIST=$(echo "$LIST_JSON" | jq -r '.isList')
+
+# `--list` forces list mode; `--sequential` and `--max=N` configure fan-out
+if [[ "$ARGUMENTS" == *"--list"* ]]; then IS_LIST=true; fi
+```
+
+Detection rules (see `scripts/inline-list-parser.js` in claude-kit for the canonical
+implementation and `scripts/__tests__/inline-list-parser.test.js` for the test suite):
+
+- Requires **2+** items. A single bullet is treated as a normal task description.
+- Accepts `-`, `*`, `+`, `1.`, `1)` styles. Mixed styles within one list are fine.
+- Lines without an item prefix are folded into the preceding item as nested detail.
+- A single line containing an inline dash (e.g. `fix logging - timestamps wrong`)
+  is NOT a list.
+
+If `IS_LIST=true`, skip Steps 1–7 and jump to **Step 9: Inline-List Mode**. Otherwise
+continue with the normal single-task flow.
 
 ### Step 1: Detect Branch Type
 
@@ -359,6 +407,75 @@ if [ -f "$HUD_SCRIPT" ]; then
 fi
 ```
 
+### Step 9: Inline-List Mode (multi-task fan-out)
+
+Triggered when Step 0d sets `IS_LIST=true` (or `--list` is passed explicitly).
+
+**Goal:** turn an inline markdown list of tasks into N parallel background agents,
+each in its own worktree with its own feature branch, then summarize the resulting PRs.
+
+**9.1 — Parse args**
+
+```bash
+MAX_PARALLEL=4
+SEQUENTIAL=false
+for tok in $ARGUMENTS; do
+  case "$tok" in
+    --max=*)      MAX_PARALLEL="${tok#*=}" ;;
+    --sequential) SEQUENTIAL=true ;;
+  esac
+done
+ITEMS_JSON=$(echo "$LIST_JSON" | jq -c '.')
+ITEM_COUNT=$(echo "$LIST_JSON" | jq '.items | length')
+```
+
+**9.2 — Show the plan and ask for confirmation**
+
+Print a table of items + slugs + planned branch names. Confirm with the user before
+spawning agents. Honor `--max` (default 4) and warn if the user requested more than 6
+(per the "Cap 4-6 agents" rule).
+
+**9.3 — Spawn agents (parallel by default)**
+
+For each item, spawn a background `Agent` with `isolation: "worktree"`:
+
+```javascript
+// For i = 0 .. ITEM_COUNT-1, spawn in batches of MAX_PARALLEL
+Task({
+  subagent_type: "Agent",
+  isolation: "worktree",
+  prompt: `Implement the following task in this worktree:
+
+TASK: ${items[i]}
+BRANCH: feature/${slugs[i]}
+
+1. Create branch feature/${slugs[i]} from main.
+2. Infer requirements from the task description.
+3. Assess complexity (Simple/Medium/Complex), explore if needed.
+4. Implement with TodoWrite tracking.
+5. Run /bs:quality --merge to test, PR, and (if --merge flag was passed) merge.
+6. Report back: branch name, PR URL, status (passed/failed/blocked).`,
+});
+```
+
+If `--sequential`, await each agent before spawning the next.
+If parallel, run up to MAX_PARALLEL concurrently, draining as they finish.
+
+**9.4 — Aggregate and report**
+
+After all agents complete, print a summary table:
+
+```markdown
+| Task                      | Branch                       | PR # | Status  |
+| ------------------------- | ---------------------------- | ---- | ------- |
+| add dark mode toggle      | feature/add-dark-mode-…      | #123 | merged  |
+| fix login redirect safari | feature/fix-login-redirect-… | #124 | open    |
+| refactor auth middleware  | feature/refactor-auth-…      | -    | blocked |
+```
+
+Plus a short prose summary: total tasks, merged, open, blocked. Suggest follow-ups
+for any blocked items.
+
 ## Flags
 
 | Flag                 | Description                                                             |
@@ -376,6 +493,41 @@ fi
 | `--teams`            | Use agent teams for parallel work (tmux visibility, conflict detection) |
 | `--no-teams`         | Force Task subagents for parallel work (default)                        |
 | `--merge`            | Auto-merge PRs after quality passes (use with --parallel)               |
+| `--list`             | Force inline-list mode (one worktree per task) — see Step 0d / Step 9   |
+| `--sequential`       | In list mode, fan out one task at a time (for dependent tasks)          |
+| `--max=N`            | In list mode, cap concurrent background agents (default 4)              |
+| `--alt`              | Second-opinion mode — see below                                         |
+
+## --alt: Second Opinion Mode
+
+When `--alt` is passed, after Claude generates its approach (Step 4), run the shared collaboration layer through `scripts/ensemble-runner.js` before any implementation begins.
+
+```bash
+# Resolve runner via the same candidates as the inline-list parser
+for p in \
+  "${KIT_REPO:-}/scripts/ensemble-runner.js" \
+  "$(git rev-parse --show-toplevel 2>/dev/null)/core/core/scripts/ensemble-runner.js" \
+  "$(git rev-parse --show-toplevel 2>/dev/null)/core/scripts/ensemble-runner.js" \
+  "$(git rev-parse --show-toplevel 2>/dev/null)/scripts/ensemble-runner.js" \
+  "$HOME/.claude/scripts/ensemble-runner.js"
+do
+  [[ -f "$p" ]] && { RUNNER="$p"; break; }
+done
+
+if [[ -n "$RUNNER" ]]; then
+  node "$RUNNER" \
+    "What implementation approach should we take for: [task description]?" \
+    --decision "Choose implementation approach before coding" \
+    --providers claude,codex,gemini \
+    --mode parallel \
+    --output scorecard \
+    --rubric "implementation risk,complexity,maintainability,migration cost,speed"
+fi
+```
+
+Present both the local plan and the panel report side-by-side; implement whichever approach the user selects.
+
+If runner is unavailable, continue with Claude's approach and note that the pass was skipped.
 
 ## Parallel Execution Mode
 
