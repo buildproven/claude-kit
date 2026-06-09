@@ -1,5 +1,6 @@
 ---
 name: bs:plan
+standalone: true
 description: "Create a structured spec doc before complex or multi-repo work — prevents wrong-target errors and survives context resets"
 argument-hint: "<feature-name> [--multi-repo] [--edit] [--dry-run]"
 tags: [planning, spec, multi-repo, workflow]

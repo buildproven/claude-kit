@@ -1,5 +1,6 @@
 ---
 name: bs:deps
+invokes: deps
 description: "Dependency health management: outdated packages, security audit, smart upgrades"
 argument-hint: "[repo-path ...] [--audit] [--upgrade] [--analyze]"
 category: maintenance

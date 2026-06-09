@@ -1,6 +1,7 @@
 ---
 description: "Full issue workflow: analyze → branch → fix → test → create PR"
 name: gh:fix-issue
+standalone: true
 category: github
 argument-hint: "/gh:fix-issue 123 → reads issue #123, creates fix branch, implements, tests, opens PR"
 allowed-tools: Write, Read, LS, Glob, Grep, Bash(gh:*), Bash(git:*)

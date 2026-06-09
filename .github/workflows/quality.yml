@@ -32,6 +32,8 @@ jobs:
         run: npm run test:patterns
       - name: Command README sync
         run: bash scripts/check-command-readme.sh
+      - name: CSC-1 command/skill contract (strict)
+        run: python3 scripts/csc_lint.py --strict
 
   test:
     timeout-minutes: 10

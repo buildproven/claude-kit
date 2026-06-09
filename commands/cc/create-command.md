@@ -1,6 +1,7 @@
 ---
 description: "Create new Claude slash command with proper structure and frontmatter"
 name: cc:create-command
+standalone: true
 category: claude-code
 argument-hint: "/cc:create-command deploy 'Deploy to production' → creates commands/deploy.md"
 allowed-tools: Write, Read, LS, Bash(mkdir:*), Bash(ls:*), WebSearch(*)

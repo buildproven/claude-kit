@@ -57,6 +57,7 @@ mcp-servers/*/dist/
 mcp-servers/*/.env
 docs/node_modules/
 __pycache__/
+.pytest_cache/
 .serena/
 
 coverage/

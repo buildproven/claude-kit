@@ -1,5 +1,6 @@
 ---
 name: bs:init-project
+standalone: true
 description: "Bootstrap agent infrastructure in any project: dev_guide, docs/plans/, session handoff, and CLAUDE.md integration"
 argument-hint: "[--dry-run] [--skip-claude-md]"
 tags: [setup, agents, dev-guide, workflow]
