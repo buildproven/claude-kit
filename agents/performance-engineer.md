@@ -1,6 +1,7 @@
 ---
 name: performance-engineer
 description: Performance optimization expert. Use for Lighthouse scores, bundle analysis, image optimization, caching strategies, database query optimization, Core Web Vitals improvement.
+model: opus
 tools: Read, Write, Edit, Bash, Glob, Grep
 ---
 
