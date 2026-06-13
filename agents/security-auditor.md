@@ -1,7 +1,6 @@
 ---
 name: security-auditor
 description: Security vulnerability expert. Deep review beyond basic audit - OWASP top 10, dependency vulnerabilities, auth flows, data exposure, API security, secrets scanning.
-model: opus
 tools: Read, Glob, Grep, Bash, WebSearch
 ---
 
