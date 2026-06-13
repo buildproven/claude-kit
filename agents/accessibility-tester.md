@@ -1,7 +1,6 @@
 ---
 name: accessibility-tester
 description: Accessibility (A11y) compliance expert. WCAG 2.1 AA compliance, screen reader testing, keyboard navigation, color contrast, ARIA implementation. Use before launch or for compliance audits.
-model: opus
 tools: Read, Write, Edit, Glob, Grep, Bash, WebFetch
 ---
 

@@ -569,14 +569,24 @@ Detect API changes, new commands, modified exports. Skip with `--skip-docs`. Spa
 | `high` / `critical` / L95 | + test-generator, pr-test-analyzer (full 6)                                                       |
 | `--level 98`              | full 6 + Phase 2: code-simplifier, accessibility-tester, performance-engineer, architect-reviewer |
 
-| Agent                 | Focus                            | Model  |
-| --------------------- | -------------------------------- | ------ |
-| code-reviewer         | Bugs, logic errors, code smells  | opus   |
-| silent-failure-hunter | Empty catches, swallowed errors  | opus   |
-| type-design-analyzer  | Type safety, generics, null gaps | opus   |
-| security-auditor      | OWASP top 10, secrets, injection | opus   |
-| test-generator        | Generate missing tests           | sonnet |
-| pr-test-analyzer      | Validate test quality            | opus   |
+| Agent                 | Focus                            |
+| --------------------- | -------------------------------- |
+| code-reviewer         | Bugs, logic errors, code smells  |
+| silent-failure-hunter | Empty catches, swallowed errors  |
+| type-design-analyzer  | Type safety, generics, null gaps |
+| security-auditor      | OWASP top 10, secrets, injection |
+| test-generator        | Generate missing tests           |
+| pr-test-analyzer      | Validate test quality            |
+
+**Model:** review agents **inherit the session model** — they do not pin
+`model:` in their frontmatter. A frontmatter pin is unconditional and global:
+it overrides the operator's deliberate session choice, ignores tier, and trips
+the 1M-context Extra Usage billing gate on non-Opus session models (the gate is
+session-wide, not model-bound — Max covers Opus[1m] but not Sonnet/Haiku[1m]).
+Forcing a
+specific model is therefore a per-run decision for this skill to make if/when it
+gains degradable model routing (request-opus-but-fall-back), not a property each
+agent self-asserts. Run on an Opus session for the strongest review.
 
 ```bash
 # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
