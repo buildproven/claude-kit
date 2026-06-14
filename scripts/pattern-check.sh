@@ -533,6 +533,12 @@ check_eslint_disable() {
     fi
 
     while IFS=: read -r line_num line_content; do
+        # Skip string-literal occurrences (test fixtures referencing the token
+        # as data, e.g. it("eslint-disable is not inert") or "+// eslint-disable").
+        # A genuine directive is a bare comment; a fixture has the token quoted.
+        if echo "$line_content" | grep -qE "['\"][^'\"]*eslint-disable"; then
+            continue
+        fi
         add_violation "high" "ESLINT_DISABLE" "$file" "$line_num" "eslint-disable used — fix at root cause instead"
     done < <(grep -n 'eslint-disable' "$file" 2>/dev/null || true)
 }

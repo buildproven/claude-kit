@@ -340,9 +340,18 @@ Read `reference.md` for flag definitions. Key flags: `--level` (auto|95|98), `--
 
 Handle early exits: `--status` shows history, `--preflight` runs quick checks (<10s), `--audit` runs read-only assessment.
 
-### Step 0.5: Tier Classification (when `--level auto`)
+### Step 0.5: Risk scoring → review depth (when `--level auto`)
 
-When `--level auto` (the default), read the consuming repo's risk tier from `harness-config.json` via `scripts/risk-policy-gate.js`. This routes agent count + Codex usage per tier — `low` runs 2 agents and skips Codex, `critical` runs 6 + Codex adversarial.
+Review is machine-only (Claude finds, Codex verifies) on flat-rate subscriptions, so the cost is
+wall-clock, not dollars. When `--level auto` (the default), the skill computes a **0–100 risk
+score** from `git diff` via the kit-native `scripts/risk-score.js` and scales three knobs to it:
+**Claude agent count** (2→10), **Codex effort** (skip→xhigh), **Codex rounds** (0→2). This works
+in every repo with zero per-repo setup. A repo's `harness-config.json:scorePolicy` (if present)
+overrides the built-in defaults. Fallbacks: legacy `risk-policy-gate.js` tier → L95.
+
+Floor invariant: **every change gets ≥2 Claude agents** — nothing merges with zero machine
+review (there is no human backstop). Security-surface changes are pinned to a high score
+regardless of how "mechanical" they look.
 
 ```bash
 # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
@@ -358,51 +367,65 @@ fi
 [ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
 cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
 
-# Default --level auto. Explicit --level 95 or 98 bypasses tier classification.
+# Default --level auto. Explicit --level 95 or 98 bypasses risk scoring.
+#
+# Resolution order for "how deep should this review be?":
+#   1. Kit-native risk score (scripts/risk-score.js) — works in EVERY repo with
+#      no per-repo setup; computes a 0–100 score from `git diff` and emits the
+#      three depth knobs (agents, codex effort, codex rounds). This is the
+#      primary path: review is machine-only, so depth scales with change risk.
+#   2. Per-repo risk-policy-gate.js tier (legacy) — only if the scorer is absent
+#      but a repo gate exists.
+#   3. L95 — last resort if neither is available.
 TIER=""
+RISK_SCORE=""
+AGENT_TARGET=""
+CODEX_DEPTH=""     # skip|medium|high|xhigh
+CODEX_ROUNDS=""
 if [ "$LEVEL" = "auto" ]; then
-  if [ -f "harness-config.json" ] && [ -f "scripts/risk-policy-gate.js" ]; then
+  # Locate the kit scorer the same multi-candidate way as the target resolver.
+  RISK_SCORER=""
+  for candidate in \
+    "${CLAUDE_SETUP_ROOT:-}/scripts/risk-score.js" \
+    "${CLAUDE_PLUGIN_ROOT:-}/scripts/risk-score.js" \
+    "${CLAUDE_PLUGIN_ROOT:-}/../scripts/risk-score.js" \
+    "$HOME/Projects/internal/claude-setup/scripts/risk-score.js" \
+    "$HOME/.claude/scripts/risk-score.js"; do
+    if [ -n "$candidate" ] && [ -f "$candidate" ]; then RISK_SCORER="$candidate"; break; fi
+  done
+
+  if [ -n "$RISK_SCORER" ]; then
+    SCORE_JSON=$(node "$RISK_SCORER" --json 2>/dev/null)
+    RISK_SCORE=$(printf '%s' "$SCORE_JSON" | node -e 'try{const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(r.riskScore))}catch{}' 2>/dev/null)
+    if [ -n "$RISK_SCORE" ]; then
+      AGENT_TARGET=$(printf '%s' "$SCORE_JSON" | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(r.knobs.agents))')
+      CODEX_DEPTH=$(printf '%s' "$SCORE_JSON" | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(r.knobs.codex))')
+      CODEX_ROUNDS=$(printf '%s' "$SCORE_JSON" | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(r.knobs.codexRounds))')
+      NATURE=$(printf '%s' "$SCORE_JSON" | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(r.changeNature))')
+      # Derive a $TIER label from the score for trailers / break-glass only.
+      if [ "$RISK_SCORE" -ge 75 ]; then TIER=critical
+      elif [ "$RISK_SCORE" -ge 50 ]; then TIER=high
+      elif [ "$RISK_SCORE" -ge 20 ]; then TIER=medium
+      else TIER=low; fi
+      echo "🧭 Risk score: ${RISK_SCORE}/100 (${NATURE}) → ${AGENT_TARGET} agents, Codex ${CODEX_DEPTH}×${CODEX_ROUNDS} [label: ${TIER}]"
+    fi
+  fi
+
+  # Fallback 2: legacy per-repo gate tier (only if scorer produced nothing).
+  if [ -z "$RISK_SCORE" ] && [ -f "harness-config.json" ] && [ -f "scripts/risk-policy-gate.js" ]; then
     GH_OUT=$(mktemp)
     GITHUB_OUTPUT="$GH_OUT" node scripts/risk-policy-gate.js >/dev/null 2>&1
-    GATE_EXIT=$?
-    if [ $GATE_EXIT -ne 0 ]; then
-      echo "❌ risk-policy-gate.js failed — refusing to silently route as low tier."
-      echo "   Re-run with explicit --level 95 to bypass tier classification."
-      rm -f "$GH_OUT"
-      exit 1
-    fi
-    # Prefer effectiveTier (path tier after change-nature may downgrade one
-    # notch, never below the security floor). Fall back to highestRisk (path
-    # tier) when the gate is older / naturePolicy is disabled — so tier is always
-    # set. Keeps the skill in lockstep with harness-gate.yml, which routes on the
-    # same effectiveTier||highestRisk value.
-    TIER=$(grep '^effectiveTier=' "$GH_OUT" | cut -d= -f2)
-    [ -z "$TIER" ] && TIER=$(grep '^highestRisk=' "$GH_OUT" | cut -d= -f2)
-    NATURE=$(grep '^changeNature=' "$GH_OUT" | cut -d= -f2)
-    PATH_TIER=$(grep '^highestRisk=' "$GH_OUT" | cut -d= -f2)
-    if [ -n "$NATURE" ] && [ "$TIER" != "$PATH_TIER" ]; then
-      echo "🧭 Change-nature: $NATURE → review tier ${PATH_TIER}→${TIER} (one-notch downgrade; floor preserved)"
+    if [ $? -eq 0 ]; then
+      TIER=$(grep '^effectiveTier=' "$GH_OUT" | cut -d= -f2)
+      [ -z "$TIER" ] && TIER=$(grep '^highestRisk=' "$GH_OUT" | cut -d= -f2)
+      echo "🧭 (fallback) gate tier: ${TIER}"
     fi
     rm -f "$GH_OUT"
-  else
-    # No harness present in this repo — fall back to L95 behavior (existing default).
-    # Loud multi-line warning so the operator notices and can opt into tier
-    # classification rather than silently getting the heaviest review on every PR.
-    echo ""
-    echo "============================================================"
-    echo "  [quality] TIER CLASSIFICATION DISABLED — falling back to L95"
-    echo "============================================================"
-    echo "  Missing: harness-config.json (and/or scripts/risk-policy-gate.js)"
-    echo "  Effect:  every PR gets the full 6-agent + Codex review,"
-    echo "           regardless of risk. Slower + more expensive than needed."
-    echo ""
-    echo "  Recommended: run /bs:init-project to bootstrap tier classification"
-    echo "  (adds harness-config.json with sensible riskTierRules defaults)."
-    echo ""
-    echo "  Continuing at L95 in 2s..."
-    echo "============================================================"
-    echo ""
-    sleep 2
+  fi
+
+  # Fallback 3: nothing resolved → L95 (full review, safe default).
+  if [ -z "$RISK_SCORE" ] && [ -z "$TIER" ]; then
+    echo "[quality] No risk scorer or gate available — falling back to L95 (full review)."
     LEVEL=95
   fi
 fi
@@ -602,22 +625,38 @@ fi
 [ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
 cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
 
-# Build the agent list for this run from $TIER (Step 0.5) or $LEVEL.
-case "${TIER:-$LEVEL}" in
-  low)        AGENTS=(code-reviewer silent-failure-hunter) ;;
-  medium)     AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor) ;;
-  high|95)    AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor \
-                      test-generator pr-test-analyzer) ;;
-  critical)   AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor \
-                      test-generator pr-test-analyzer)
-              # Critical-only break-glass enforcement (see Step 1.8a).
-              REQUIRE_BREAK_GLASS=true ;;
-  98)         AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor \
-                      test-generator pr-test-analyzer code-simplifier accessibility-tester \
-                      performance-engineer architect-reviewer) ;;
-  *)          echo "❌ Unknown tier/level: ${TIER:-$LEVEL}"; exit 1 ;;
-esac
-echo "[quality] Running ${#AGENTS[@]} agents for tier=${TIER:-n/a} level=${LEVEL}"
+# The review panel in PRIORITY ORDER. The risk score selects the first N from
+# this list; the always-on floor (first 2) means no change merges with zero
+# review (machine-only: there is no human backstop).
+PANEL=(code-reviewer silent-failure-hunter security-auditor type-design-analyzer \
+       test-generator pr-test-analyzer code-simplifier accessibility-tester \
+       performance-engineer architect-reviewer)
+
+if [ -n "$AGENT_TARGET" ]; then
+  # Score-driven (primary path). Take the first AGENT_TARGET agents from PANEL.
+  N=$AGENT_TARGET
+  [ "$N" -lt 2 ] && N=2          # floor: always ≥2 (code-reviewer + silent-failure-hunter)
+  [ "$N" -gt ${#PANEL[@]} ] && N=${#PANEL[@]}
+  AGENTS=("${PANEL[@]:0:$N}")
+  [ "$TIER" = critical ] && REQUIRE_BREAK_GLASS=true
+  echo "[quality] Running ${#AGENTS[@]} agents — risk score ${RISK_SCORE}/100 (label ${TIER})"
+else
+  # Fallback: discrete tier/level selection (no scorer available).
+  case "${TIER:-$LEVEL}" in
+    low)        AGENTS=(code-reviewer silent-failure-hunter) ;;
+    medium)     AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor) ;;
+    high|95)    AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor \
+                        test-generator pr-test-analyzer) ;;
+    critical)   AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor \
+                        test-generator pr-test-analyzer)
+                REQUIRE_BREAK_GLASS=true ;;
+    98)         AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor \
+                        test-generator pr-test-analyzer code-simplifier accessibility-tester \
+                        performance-engineer architect-reviewer) ;;
+    *)          echo "❌ Unknown tier/level: ${TIER:-$LEVEL}"; exit 1 ;;
+  esac
+  echo "[quality] Running ${#AGENTS[@]} agents for tier=${TIER:-n/a} level=${LEVEL}"
+fi
 ```
 
 #### Step 1.8a: Break-glass approval (critical tier only)
@@ -737,13 +776,30 @@ if [ -z "$RESOLVED_BASE" ]; then
   exit 1
 fi
 
-# Default --codex-effort high; medium/xhigh override.
-CODEX_EFFORT="${CODEX_EFFORT:-high}"
+# Codex depth is score-driven (primary). The score's CODEX_DEPTH is one of
+# skip|medium|high|xhigh and CODEX_ROUNDS is how many adversarial passes to run.
+# Map those onto the existing judge / judge+adversarial modes. When no score is
+# present (fallback), derive from $TIER/$LEVEL as before.
 COMPANION="${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs"
 
-case "${TIER:-$LEVEL}" in
+if [ -n "$CODEX_DEPTH" ]; then
+  # Score-driven. Explicit --codex-effort still wins if the operator set it.
+  case "$CODEX_DEPTH" in
+    skip)              CODEX_SELECTOR="low" ;;
+    medium)            CODEX_SELECTOR="medium"; CODEX_EFFORT="${CODEX_EFFORT:-medium}" ;;
+    high)              CODEX_SELECTOR="high";   CODEX_EFFORT="${CODEX_EFFORT:-high}" ;;
+    xhigh)             CODEX_SELECTOR="high";   CODEX_EFFORT="${CODEX_EFFORT:-xhigh}" ;;
+    *)                 CODEX_SELECTOR="high";   CODEX_EFFORT="${CODEX_EFFORT:-high}" ;;
+  esac
+else
+  CODEX_EFFORT="${CODEX_EFFORT:-high}"
+  CODEX_SELECTOR="${TIER:-$LEVEL}"
+fi
+CODEX_ROUNDS="${CODEX_ROUNDS:-1}"
+
+case "$CODEX_SELECTOR" in
   low)
-    # No Codex at low.
+    # No Codex at the lowest band.
     CODEX_MODE="skip"
     ;;
   medium|95)
@@ -758,17 +814,28 @@ case "${TIER:-$LEVEL}" in
     ;;
   high|critical|98)
     # Judge + adversarial. Background for adversarial; bounded poll to terminal state.
+    # Score-driven CODEX_ROUNDS: run up to N adversarial passes. Round 2+ is a
+    # re-verification of the code after auto-fixes from round 1; it only runs if
+    # the prior round actually found something (no point re-checking a clean pass).
+    # The total is still bounded by the shared CODEX_DEADLINE so it can't run away.
     CODEX_MODE="judge+adversarial"
     CODEX_VERDICT="not-run"
     CODEX_FINDINGS=0
     if [ "$NO_CODEX" != true ] && [ -z "$CODEX_SKIP_REASON" ]; then
-      LAUNCH_OUT=$(node "$COMPANION" adversarial-review --background --base "$RESOLVED_BASE" --scope branch \
-        "Adversarial review focused on bugs, security, data loss, race conditions, breaking changes. \
-         Effort: $CODEX_EFFORT. Verdict: APPROVE or REQUEST_CHANGES with file:line findings." 2>&1)
-      # Extract job id printed by the launcher (e.g. "[codex] Job <id> queued").
-      CODEX_JOB=$(echo "$LAUNCH_OUT" | grep -oE 'Job [0-9a-f-]+' | head -1 | awk '{print $2}')
+      ROUND=1
+      while [ "$ROUND" -le "${CODEX_ROUNDS:-1}" ]; do
+        [ "$ROUND" -gt 1 ] && echo "[quality] Codex re-verification round $ROUND/${CODEX_ROUNDS}..."
+        LAUNCH_OUT=$(node "$COMPANION" adversarial-review --background --base "$RESOLVED_BASE" --scope branch \
+          "Adversarial review focused on bugs, security, data loss, race conditions, breaking changes. \
+           Effort: $CODEX_EFFORT. Verdict: APPROVE or REQUEST_CHANGES with file:line findings." 2>&1)
+        # Extract job id printed by the launcher (e.g. "[codex] Job <id> queued").
+        CODEX_JOB=$(echo "$LAUNCH_OUT" | grep -oE 'Job [0-9a-f-]+' | head -1 | awk '{print $2}')
 
-      if [ -n "$CODEX_JOB" ]; then
+        if [ -z "$CODEX_JOB" ]; then
+          echo "❌ Failed to obtain Codex job id from launcher output."
+          exit 1
+        fi
+
         # Bounded poll: 25-min cap matches the spec's high/critical time cap.
         DEADLINE=${CODEX_DEADLINE:-1500}
         WAITED=0
@@ -780,28 +847,28 @@ case "${TIER:-$LEVEL}" in
           sleep 15; WAITED=$((WAITED + 15))
         done
 
-        if [ "$STATUS" = "completed" ] || [ "$STATUS" = "succeeded" ]; then
-          CODEX_OUT=$(node "$COMPANION" result "$CODEX_JOB" --json 2>/dev/null)
-          # Parse verdict from companion output. Accept a few common shapes.
-          CODEX_VERDICT=$(echo "$CODEX_OUT" | jq -r '.verdict // .status // "unknown"' 2>/dev/null)
-          CODEX_FINDINGS=$(echo "$CODEX_OUT" | jq -r '(.findings // []) | length' 2>/dev/null || echo 0)
-          # Fail-closed on REQUEST_CHANGES at high/critical — operator must address findings or use --codex-skip.
-          case "$CODEX_VERDICT" in
-            request-changes|REQUEST_CHANGES|needs-attention|fail|failed)
-              echo "❌ Codex adversarial review: $CODEX_VERDICT ($CODEX_FINDINGS findings)"
-              echo "   Address findings, or re-run with --codex-skip \"<reason>\" if accepted."
-              exit 1
-              ;;
-          esac
-        else
+        if [ "$STATUS" != "completed" ] && [ "$STATUS" != "succeeded" ]; then
           echo "❌ Codex review did not complete (status=$STATUS, waited=${WAITED}s)."
           echo "   Re-run, raise CODEX_DEADLINE, or use --codex-skip \"<reason>\"."
           exit 1
         fi
-      else
-        echo "❌ Failed to obtain Codex job id from launcher output."
-        exit 1
-      fi
+
+        CODEX_OUT=$(node "$COMPANION" result "$CODEX_JOB" --json 2>/dev/null)
+        CODEX_VERDICT=$(echo "$CODEX_OUT" | jq -r '.verdict // .status // "unknown"' 2>/dev/null)
+        CODEX_FINDINGS=$(echo "$CODEX_OUT" | jq -r '(.findings // []) | length' 2>/dev/null || echo 0)
+        # Fail-closed on REQUEST_CHANGES — operator must address or --codex-skip.
+        case "$CODEX_VERDICT" in
+          request-changes|REQUEST_CHANGES|needs-attention|fail|failed)
+            echo "❌ Codex adversarial review: $CODEX_VERDICT ($CODEX_FINDINGS findings)"
+            echo "   Address findings, or re-run with --codex-skip \"<reason>\" if accepted."
+            exit 1
+            ;;
+        esac
+
+        # Clean pass → no need for further rounds.
+        if [ "${CODEX_FINDINGS:-0}" -eq 0 ]; then break; fi
+        ROUND=$((ROUND + 1))
+      done
     fi
     ;;
   *)
