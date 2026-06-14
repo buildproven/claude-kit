@@ -124,6 +124,14 @@ If you're a solo founder shipping multiple products, that's the value. Otherwise
 2. Edit `config/settings.json` for permissions, hooks, and model routing.
 3. Add your own commands, skills, or agents in a private overlay repo that submodules this one.
 
+### Optional: status line
+
+`config/settings.json` ships without a `statusLine` so nothing breaks out of the box. For a status line showing model, git, context, cost, and usage timer, install [claude-hud](https://www.npmjs.com/package/claude-hud) — it writes its own `statusLine` config:
+
+```bash
+npx claude-hud@latest
+```
+
 ## License
 
 MIT
