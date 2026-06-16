@@ -300,21 +300,41 @@ fi
 # shell vars set above do NOT survive. Without this, the resolver's target
 # (--target-dir / PR / branch) is silently dropped beyond Step -1, and
 # downstream `$GIT_ROOT` references resolve to empty. Write the resolved
-# root to a session-scoped sentinel file that every downstream block reads
-# with the BS_QUALITY_LOAD_ROOT preamble below.
-BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+# root to a sentinel file that every downstream block reads with the
+# BS_QUALITY_LOAD_ROOT preamble below.
+#
+# The sentinel filename is namespaced by SESSION + a hash of the resolved
+# target root. A session-only name (the old scheme) collided when one session
+# ran /bs:quality against MORE THAN ONE repo/worktree in sequence — e.g. a
+# fix in repo A, then license-core, then eslint-plugin-defensive. Each run
+# overwrote the same file; a later run could read an earlier run's stale root
+# and silently gate/merge the WRONG repo. Hashing the target into the name
+# means concurrent or sequential runs against different targets get different
+# sentinels and cannot clobber each other. Downstream blocks recompute the
+# same hash from their own `git rev-parse --show-toplevel`, so no extra state
+# needs threading.
+bs_quality_root_file() {
+  # $1 = resolved git root (absolute). Echo the per-target sentinel path.
+  local root="$1"
+  local sess="${CLAUDE_CODE_SESSION_ID:-default}"
+  local key
+  # Prefer sha256sum; fall back to shasum (macOS) then cksum (always present).
+  if command -v sha256sum >/dev/null 2>&1; then
+    key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
+  elif command -v shasum >/dev/null 2>&1; then
+    key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
+  else
+    key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12)
+  fi
+  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
+}
+BS_QUALITY_ROOT_FILE=$(bs_quality_root_file "$GIT_ROOT")
 if ! printf '%s\n' "$GIT_ROOT" > "$BS_QUALITY_ROOT_FILE" 2>/dev/null; then
   echo "❌ /bs:quality could not write git-root sentinel to $BS_QUALITY_ROOT_FILE"
   echo "   Check that \$TMPDIR is writable: ${TMPDIR:-/tmp}"
   exit 1
 fi
 echo "BS_QUALITY_ROOT_FILE=$BS_QUALITY_ROOT_FILE"
-
-# NOTE on within-session concurrency: the sentinel filename only varies by
-# CLAUDE_CODE_SESSION_ID, so two /bs:quality invocations sharing the same
-# session (rare — merge-train workers spawn in separate Task subagents with
-# their own session IDs) would race on this file. Last writer wins. If you
-# need parallel quality runs, ensure they're spawned as separate sessions.
 ```
 
 > **MANDATORY for every subsequent bash block in this skill** — start with the
@@ -323,12 +343,27 @@ echo "BS_QUALITY_ROOT_FILE=$BS_QUALITY_ROOT_FILE"
 > silently dropped after Step -1 (regression seen 2026-05-13).
 >
 > ```bash
-> # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
-> BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
-> GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-> if [ -z "$GIT_ROOT" ]; then
->   echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
->   GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+> # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
+> # The sentinel filename is namespaced by session + a hash of the target root
+> # (see Step -1) so a session that runs quality against multiple repos can't
+> # cross-contaminate. We recompute the same name from the fork's own cwd git
+> # root — the harness cd'd the fork into the target, so that root matches the
+> # one written in Step -1.
+> bs_quality_root_file() {
+>   local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
+>   if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
+>   elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
+>   else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
+>   printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
+> }
+> CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+> GIT_ROOT=""
+> if [ -n "$CWD_ROOT" ]; then
+>   GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
+>   # The sentinel stores the canonical target root; if present it wins, but it
+>   # should equal CWD_ROOT. If absent, the cwd root IS the target (the fork is
+>   # already sitting in it) — use it directly rather than guessing.
+>   [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
 > fi
 > [ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
 > cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
@@ -354,12 +389,22 @@ review (there is no human backstop). Security-surface changes are pinned to a hi
 regardless of how "mechanical" they look.
 
 ```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
-BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
-GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-if [ -z "$GIT_ROOT" ]; then
-  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
-  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
+# Sentinel name is namespaced by session + hash of target root (see Step -1),
+# recomputed here from the fork's own cwd git root so multi-repo sessions can't
+# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
+bs_quality_root_file() {
+  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
+  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
+  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
+  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
+  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
+}
+CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+GIT_ROOT=""
+if [ -n "$CWD_ROOT" ]; then
+  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
+  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
 fi
 # Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
 # silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
@@ -458,12 +503,22 @@ Tests must exist and pass. This is a hard blocker, not advisory. Skip with `--sk
 For each changed source file, verify a corresponding test file exists:
 
 ```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
-BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
-GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-if [ -z "$GIT_ROOT" ]; then
-  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
-  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
+# Sentinel name is namespaced by session + hash of target root (see Step -1),
+# recomputed here from the fork's own cwd git root so multi-repo sessions can't
+# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
+bs_quality_root_file() {
+  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
+  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
+  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
+  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
+  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
+}
+CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+GIT_ROOT=""
+if [ -n "$CWD_ROOT" ]; then
+  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
+  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
 fi
 # Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
 # silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
@@ -503,12 +558,22 @@ fi
 #### 1.3b: Run Tests (Hard Gate)
 
 ```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
-BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
-GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-if [ -z "$GIT_ROOT" ]; then
-  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
-  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
+# Sentinel name is namespaced by session + hash of target root (see Step -1),
+# recomputed here from the fork's own cwd git root so multi-repo sessions can't
+# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
+bs_quality_root_file() {
+  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
+  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
+  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
+  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
+  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
+}
+CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+GIT_ROOT=""
+if [ -n "$CWD_ROOT" ]; then
+  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
+  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
 fi
 # Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
 # silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
@@ -545,12 +610,22 @@ echo "✅ All tests passing"
 Pass `$TEST_GAPS` to the `test-generator` agent in Step 1.8 so it generates tests for specifically identified gaps. After test-generator runs, re-run `npm test` to verify generated tests pass:
 
 ```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
-BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
-GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-if [ -z "$GIT_ROOT" ]; then
-  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
-  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
+# Sentinel name is namespaced by session + hash of target root (see Step -1),
+# recomputed here from the fork's own cwd git root so multi-repo sessions can't
+# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
+bs_quality_root_file() {
+  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
+  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
+  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
+  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
+  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
+}
+CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+GIT_ROOT=""
+if [ -n "$CWD_ROOT" ]; then
+  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
+  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
 fi
 # Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
 # silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
@@ -612,12 +687,22 @@ gains degradable model routing (request-opus-but-fall-back), not a property each
 agent self-asserts. Run on an Opus session for the strongest review.
 
 ```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
-BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
-GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-if [ -z "$GIT_ROOT" ]; then
-  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
-  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
+# Sentinel name is namespaced by session + hash of target root (see Step -1),
+# recomputed here from the fork's own cwd git root so multi-repo sessions can't
+# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
+bs_quality_root_file() {
+  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
+  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
+  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
+  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
+  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
+}
+CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+GIT_ROOT=""
+if [ -n "$CWD_ROOT" ]; then
+  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
+  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
 fi
 # Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
 # silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
@@ -664,12 +749,22 @@ fi
 Critical-tier changes (per `harness-config.json:mergePolicy.critical.requiredChecks`) require explicit human approval before review stamping. The skill cannot self-authorize critical merges.
 
 ```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
-BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
-GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-if [ -z "$GIT_ROOT" ]; then
-  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
-  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
+# Sentinel name is namespaced by session + hash of target root (see Step -1),
+# recomputed here from the fork's own cwd git root so multi-repo sessions can't
+# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
+bs_quality_root_file() {
+  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
+  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
+  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
+  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
+  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
+}
+CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+GIT_ROOT=""
+if [ -n "$CWD_ROOT" ]; then
+  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
+  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
 fi
 # Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
 # silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
@@ -697,12 +792,22 @@ fi
 Before spawning agents, capture the diff and file list:
 
 ```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
-BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
-GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-if [ -z "$GIT_ROOT" ]; then
-  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
-  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
+# Sentinel name is namespaced by session + hash of target root (see Step -1),
+# recomputed here from the fork's own cwd git root so multi-repo sessions can't
+# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
+bs_quality_root_file() {
+  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
+  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
+  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
+  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
+  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
+}
+CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+GIT_ROOT=""
+if [ -n "$CWD_ROOT" ]; then
+  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
+  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
 fi
 # Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
 # silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
@@ -751,12 +856,22 @@ claude-kit-pro enables a second-opinion review via Codex — different model, di
 The canonical invocation is the Codex companion CLI documented in `claude-setup/docs/quality-tier-codex-judge-plan.md` line 125-126. The `--base` arg uses the resolved base from `risk-policy-gate.js`, NOT hardcoded `main`.
 
 ```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
-BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
-GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-if [ -z "$GIT_ROOT" ]; then
-  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
-  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
+# Sentinel name is namespaced by session + hash of target root (see Step -1),
+# recomputed here from the fork's own cwd git root so multi-repo sessions can't
+# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
+bs_quality_root_file() {
+  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
+  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
+  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
+  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
+  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
+}
+CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+GIT_ROOT=""
+if [ -n "$CWD_ROOT" ]; then
+  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
+  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
 fi
 # Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
 # silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
@@ -893,12 +1008,22 @@ Merge Codex findings into the judge report. Codex findings overlapping Claude fi
 After all agents pass, add commit trailers to the merge commit message. The trailer is the **authoritative** record of what review actually ran (NOT `.claude/quality-skip-log.json`, which is telemetry only).
 
 ```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
-BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
-GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-if [ -z "$GIT_ROOT" ]; then
-  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
-  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
+# Sentinel name is namespaced by session + hash of target root (see Step -1),
+# recomputed here from the fork's own cwd git root so multi-repo sessions can't
+# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
+bs_quality_root_file() {
+  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
+  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
+  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
+  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
+  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
+}
+CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+GIT_ROOT=""
+if [ -n "$CWD_ROOT" ]; then
+  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
+  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
 fi
 # Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
 # silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
@@ -1004,12 +1129,22 @@ After all agent results are validated, run a single synthesis pass:
 Before calling `gh pr merge`, verify the review pipeline actually ran. At high/critical tier, also verify any `Quality-Skip` trailer is well-formed.
 
 ```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
-BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
-GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-if [ -z "$GIT_ROOT" ]; then
-  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
-  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
+# Sentinel name is namespaced by session + hash of target root (see Step -1),
+# recomputed here from the fork's own cwd git root so multi-repo sessions can't
+# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
+bs_quality_root_file() {
+  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
+  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
+  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
+  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
+  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
+}
+CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+GIT_ROOT=""
+if [ -n "$CWD_ROOT" ]; then
+  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
+  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
 fi
 # Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
 # silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
@@ -1192,12 +1327,22 @@ Requires acpx ≥ 0.5.3. Commands are agent-scoped (`acpx claude …`) in curren
 2. **Create sessions, then fire prompts concurrently**:
 
 ```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
-BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
-GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-if [ -z "$GIT_ROOT" ]; then
-  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
-  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
+# Sentinel name is namespaced by session + hash of target root (see Step -1),
+# recomputed here from the fork's own cwd git root so multi-repo sessions can't
+# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
+bs_quality_root_file() {
+  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
+  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
+  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
+  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
+  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
+}
+CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+GIT_ROOT=""
+if [ -n "$CWD_ROOT" ]; then
+  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
+  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
 fi
 # Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
 # silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
@@ -1221,12 +1366,22 @@ acpx claude prompt --no-wait -s "quality-perf-${TIMESTAMP}" \
 3. **Poll until all sessions complete** (status can stay "running" post-completion, so detect an assistant entry after the latest user entry via history):
 
 ```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
-BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
-GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-if [ -z "$GIT_ROOT" ]; then
-  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
-  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
+# Sentinel name is namespaced by session + hash of target root (see Step -1),
+# recomputed here from the fork's own cwd git root so multi-repo sessions can't
+# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
+bs_quality_root_file() {
+  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
+  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
+  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
+  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
+  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
+}
+CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+GIT_ROOT=""
+if [ -n "$CWD_ROOT" ]; then
+  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
+  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
 fi
 # Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
 # silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
@@ -1251,12 +1406,22 @@ done
 4. **Collect outputs** (read session history):
 
 ```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1
-BS_QUALITY_ROOT_FILE="${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt"
-GIT_ROOT="$(cat "$BS_QUALITY_ROOT_FILE" 2>/dev/null)"
-if [ -z "$GIT_ROOT" ]; then
-  echo "[quality] WARN: sentinel missing ($BS_QUALITY_ROOT_FILE) — falling back to cwd git root" >&2
-  GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
+# Sentinel name is namespaced by session + hash of target root (see Step -1),
+# recomputed here from the fork's own cwd git root so multi-repo sessions can't
+# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
+bs_quality_root_file() {
+  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
+  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
+  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
+  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
+  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
+}
+CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+GIT_ROOT=""
+if [ -n "$CWD_ROOT" ]; then
+  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
+  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
 fi
 # Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
 # silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is

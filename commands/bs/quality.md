@@ -43,11 +43,14 @@ responsibility. The OS will eventually reclaim them on reboot (macOS
 clears `$TMPDIR` periodically; Linux distros clear `/tmp` per their
 `tmpfiles.d` policy), so no user-level cron is needed.
 
-The skill also writes a per-session sentinel file `${TMPDIR:-/tmp}/bs-quality-gitroot-${CLAUDE_CODE_SESSION_ID:-default}.txt`
+The skill also writes a sentinel file `${TMPDIR:-/tmp}/bs-quality-gitroot-<session>-<hash-of-root>.txt`
 containing the resolved git root. This is read at the top of every
 downstream bash block in the skill so the working directory survives
 across separate Bash tool invocations. Without it, `--target-dir` is
-silently dropped beyond Step -1 (regression fixed 2026-05-14).
+silently dropped beyond Step -1 (regression fixed 2026-05-14). The
+filename is namespaced by session **and** a hash of the target root so a
+single session running quality against multiple repos can't read a stale
+sibling run's root and gate the wrong repo (fixed 2026-06-16).
 
 ## Step 2 — Invoke the quality skill
 
