@@ -25,5 +25,12 @@ module.exports = {
     "subject-empty": [2, "never"],
     // Type must not be empty
     "type-empty": [2, "never"],
+    // Body/footer lines may exceed 100 chars: trailers like
+    // `Quality-Skip: ... head=<40-char sha>; base=<40-char sha>`,
+    // `Reviewed-By:`, and `Co-Authored-By:` plus URLs routinely run
+    // past 100. config-conventional defaults this on, which is
+    // incompatible with the quality skill's trailer format.
+    "body-max-line-length": [0, "always", Infinity],
+    "footer-max-line-length": [0, "always", Infinity],
   },
 };
