@@ -187,9 +187,10 @@ npm run build
 **Codebase Health Score**: X/100
 
 **Hotspots Identified**:
+
 | File | Issue | Complexity | Suggested Refactoring |
-|------|-------|------------|----------------------|
-| ... | ... | ... | ... |
+| ---- | ----- | ---------- | --------------------- |
+| ...  | ...   | ...        | ...                   |
 
 **Recommended Sequence**:
 

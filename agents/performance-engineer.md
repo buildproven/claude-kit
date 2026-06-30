@@ -179,19 +179,21 @@ export async function GET() {
 ### Performance Audit: [Project Name]
 
 **Lighthouse Scores:**
-| Metric | Score | Target |
-|--------|-------|--------|
-| Performance | X | 90+ |
-| Accessibility | X | 90+ |
-| Best Practices | X | 90+ |
-| SEO | X | 90+ |
+
+| Metric         | Score | Target |
+| -------------- | ----- | ------ |
+| Performance    | X     | 90+    |
+| Accessibility  | X     | 90+    |
+| Best Practices | X     | 90+    |
+| SEO            | X     | 90+    |
 
 **Core Web Vitals:**
+
 | Metric | Current | Target | Status |
-|--------|---------|--------|--------|
-| LCP | Xs | <2.5s | ✓/✗ |
-| INP | Xms | <200ms | ✓/✗ |
-| CLS | X | <0.1 | ✓/✗ |
+| ------ | ------- | ------ | ------ |
+| LCP    | Xs      | <2.5s  | ✓/✗    |
+| INP    | Xms     | <200ms | ✓/✗    |
+| CLS    | X       | <0.1   | ✓/✗    |
 
 **Critical Issues:**
 

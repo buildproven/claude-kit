@@ -147,14 +147,15 @@ CREATE TABLE orders (
 ```
 
 **Data Types:**
-| Use Case | Best Type | Avoid |
-|----------|-----------|-------|
-| Primary key | SERIAL/BIGSERIAL or UUID | INT without sequence |
-| Money | INT (cents) or NUMERIC | FLOAT |
-| Timestamps | TIMESTAMPTZ | TIMESTAMP |
-| Status flags | ENUM or TEXT | INT codes |
-| JSON data | JSONB | JSON |
-| Text search | tsvector + GIN | LIKE '%term%' |
+
+| Use Case     | Best Type                | Avoid                |
+| ------------ | ------------------------ | -------------------- |
+| Primary key  | SERIAL/BIGSERIAL or UUID | INT without sequence |
+| Money        | INT (cents) or NUMERIC   | FLOAT                |
+| Timestamps   | TIMESTAMPTZ              | TIMESTAMP            |
+| Status flags | ENUM or TEXT             | INT codes            |
+| JSON data    | JSONB                    | JSON                 |
+| Text search  | tsvector + GIN           | LIKE '%term%'        |
 
 ### 4. Prisma-Specific Optimization
 
