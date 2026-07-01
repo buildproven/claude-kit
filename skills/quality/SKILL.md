@@ -162,6 +162,19 @@ if [ -n "$ARGS_FILE" ] && [ -f "$ARGS_FILE" ]; then
   fi
 fi
 
+# --- Recursion guard (2026-06-04 wrapper-recursion incident) -----------------
+# The synchronous review leg (Step 1.8) runs each review agent as a blocking
+# `claude -p` subprocess with BS_QUALITY_HEADLESS=1 exported. If one of those
+# review children — via a hook, an agent, or a stray /goal — ever re-enters
+# /bs:quality, we would recurse (fork → review child → fork …). Hard-refuse
+# when we detect we are already inside a headless review child.
+if [ "${BS_QUALITY_HEADLESS:-}" = "1" ]; then
+  echo "❌ /bs:quality refused: already running inside a headless review child" >&2
+  echo "   (BS_QUALITY_HEADLESS=1). Review subprocesses must not re-enter the" >&2
+  echo "   quality skill — this guard prevents fork→child→fork recursion." >&2
+  exit 1
+fi
+
 # Locate the resolver. It lives in the claude-setup overlay repo (the parent
 # of the kit-pro submodule). $CLAUDE_PLUGIN_ROOT points at kit-pro; the
 # overlay is its parent.
@@ -849,29 +862,68 @@ Do NOT review unchanged code. Focus ONLY on the diff.
 
 This prevents agents from doing generic scans and forces them to review the actual changes.
 
-#### Execution contract — run agents synchronously (CRITICAL)
+#### Execution contract — run agents as BLOCKING subprocesses (CRITICAL)
 
-**Launch every selected review agent in a SINGLE message (one parallel batch of
-Task calls) and treat their results as arriving WITHIN this same invocation.**
-Foreground Task calls block until the agents return, and their results land back
-in this fork's turn — which is exactly what the rest of the pipeline depends on.
+**Do NOT spawn the review agents with the Task tool.** This skill runs in a
+FORKED context, and Task-tool agents are fire-and-forget: their results arrive
+asynchronously as `task-notification`s to the PARENT session, never inside this
+fork's turn. The fork then hands back ("I'll wait for the agents…"), is never
+re-invoked, and the merge gate (synthesis → Review Stamp → `gh pr merge`) never
+runs. This was the #1 way `--merge` silently failed to complete. It is
+structural, not a prompting problem — verified empirically: nested Task agents
+are async too, so this also breaks inside Task-agent callers like
+`/bs:merge-train`.
 
-**Do NOT background the agents and return control to await notifications.** In a
-forked skill context, `task-notification`s for backgrounded agents fire into the
-PARENT session, not this fork. If you hand back with "I'll wait for the review
-agents to finish," this fork is never re-invoked by those notifications, the
-merge gate (Step 1.8 synthesis → Review Stamp → `gh pr merge`) never runs, and a
-fresh `/bs:quality` invocation just restarts from Step -1 into the same dead-end.
-This is the single most common way `--merge` silently fails to complete.
+**The fix: run review as a blocking subprocess**, exactly like the Codex leg
+(Step 2.6). Bash tool calls block synchronously in a fork AND in a Task agent,
+so a subprocess is the only review mechanism synchronous in every context the
+skill runs in. Use the companion script `scripts/claude-review-companion.sh`,
+which runs each selected agent as a blocking `claude -p` with the agent's REAL
+`.md` body as its system prompt (single source of truth — no inlined prompts to
+drift), and writes one findings file per agent.
 
-Concretely, after launching the batch:
+```bash
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1 (see the canonical
+# preamble; GIT_ROOT is read from the session-namespaced sentinel).
+COMPANION="${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/scripts/claude-review-companion.sh"
+[ -f "$COMPANION" ] || COMPANION="$(git rev-parse --show-toplevel)/scripts/claude-review-companion.sh"
 
-1. Block on all agent tool results in this turn (do not emit a "waiting" message).
-2. Proceed directly to synthesis (Step 1.8 below) → Review Stamp (Step 1.8 trailer)
-   → merge gate. Never stop between the agents returning and the merge.
+REVIEW_OUT="$(mktemp -d "${TMPDIR:-/tmp}/bs-quality-review.XXXXXX")"
+git diff "${RESOLVED_BASE:-origin/main}...HEAD"            > "$REVIEW_OUT/diff.txt"
+git diff --name-only "${RESOLVED_BASE:-origin/main}...HEAD" > "$REVIEW_OUT/files.txt"
+git log "${RESOLVED_BASE:-origin/main}..HEAD" --oneline    > "$REVIEW_OUT/log.txt"
 
-This mirrors the Codex `--wait` / bounded-poll contract in Step 2.6: every review
-leg is synchronous to the invocation so the merge can actually be reached.
+# AGENTS is the tier-selected panel from Step 1.8 (comma-join it).
+# Do NOT pass --model: review inherits the session model on purpose (pinning a
+# *[1m] model trips the Extra Usage billing gate on non-Opus sessions; the
+# companion also refuses [1m] defensively). See lines 679-687.
+AGENTS_CSV="$(printf '%s,' "${AGENTS[@]}" | sed 's/,$//')"
+bash "$COMPANION" \
+  --diff-file "$REVIEW_OUT/diff.txt" \
+  --files-file "$REVIEW_OUT/files.txt" \
+  --log-file "$REVIEW_OUT/log.txt" \
+  --out-dir "$REVIEW_OUT" \
+  --agents "$AGENTS_CSV" \
+  --timeout 600
+COMPANION_RC=$?
+
+# exit 2 = the `claude` CLI is unavailable. FAIL LOUD — never skip review and
+# proceed to merge. A missing reviewer is a blocked merge, not a silent pass.
+if [ "$COMPANION_RC" -eq 2 ]; then
+  echo "❌ MERGE BLOCKED: claude CLI unavailable — review could not run." >&2
+  exit 1
+fi
+```
+
+Then read every `"$REVIEW_OUT"/<agent>.findings.txt` and feed them into Step 2.5
+synthesis. A file beginning with `INCONCLUSIVE:` means that agent timed out,
+errored, or its output could not be parsed — treat it as **review inconclusive,
+human required** (do NOT count it as PASS, do NOT silently drop it): surface it
+in the summary and, under `--merge`, block until a human resolves it.
+
+After synthesis, proceed directly to Review Stamp (Step 1.8 trailer) → merge
+gate. Because the companion call BLOCKS, all of this happens in one fork
+execution — the merge is actually reached.
 
 #### Step 2.6: Codex Invocation (tier-aware)
 
