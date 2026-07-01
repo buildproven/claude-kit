@@ -726,8 +726,13 @@ cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
 # The review panel in PRIORITY ORDER. The risk score selects the first N from
 # this list; the always-on floor (first 2) means no change merges with zero
 # review (machine-only: there is no human backstop).
+# Every name here MUST resolve to a real agent .md (kit agents/ or the
+# pr-review-toolkit plugin) — the subprocess review runner marks an
+# unresolvable agent INCONCLUSIVE, which blocks --merge. `test-generator` was
+# removed 2026-07-01: it has no agent file anywhere and would permanently block
+# high/critical merges; pr-test-analyzer covers test quality.
 PANEL=(code-reviewer silent-failure-hunter security-auditor type-design-analyzer \
-       test-generator pr-test-analyzer code-simplifier accessibility-tester \
+       pr-test-analyzer code-simplifier accessibility-tester \
        performance-engineer architect-reviewer)
 
 if [ -n "$AGENT_TARGET" ]; then
@@ -744,17 +749,23 @@ else
     low)        AGENTS=(code-reviewer silent-failure-hunter) ;;
     medium)     AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor) ;;
     high|95)    AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor \
-                        test-generator pr-test-analyzer) ;;
+                        pr-test-analyzer) ;;
     critical)   AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor \
-                        test-generator pr-test-analyzer)
+                        pr-test-analyzer)
                 REQUIRE_BREAK_GLASS=true ;;
     98)         AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor \
-                        test-generator pr-test-analyzer code-simplifier accessibility-tester \
+                        pr-test-analyzer code-simplifier accessibility-tester \
                         performance-engineer architect-reviewer) ;;
     *)          echo "❌ Unknown tier/level: ${TIER:-$LEVEL}"; exit 1 ;;
   esac
   echo "[quality] Running ${#AGENTS[@]} agents for tier=${TIER:-n/a} level=${LEVEL}"
 fi
+
+# Persist the resolved panel to a sentinel so the LATER companion block can
+# read it — bash arrays do NOT survive across separate fenced bash blocks (the
+# same reason GIT_ROOT is round-tripped; see the canonical preamble). Without
+# this, the companion block below sees an empty AGENTS and review is skipped.
+printf '%s\n' "${AGENTS[@]}" > "${TMPDIR:-/tmp}/bs-quality-agents-${CLAUDE_CODE_SESSION_ID:-default}.txt"
 ```
 
 #### Step 1.8a: Break-glass approval (critical tier only)
@@ -883,21 +894,37 @@ which runs each selected agent as a blocking `claude -p` with the agent's REAL
 drift), and writes one findings file per agent.
 
 ```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1 (see the canonical
-# preamble; GIT_ROOT is read from the session-namespaced sentinel).
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1 (GIT_ROOT sentinel).
 COMPANION="${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/scripts/claude-review-companion.sh"
 [ -f "$COMPANION" ] || COMPANION="$(git rev-parse --show-toplevel)/scripts/claude-review-companion.sh"
 
-REVIEW_OUT="$(mktemp -d "${TMPDIR:-/tmp}/bs-quality-review.XXXXXX")"
-git diff "${RESOLVED_BASE:-origin/main}...HEAD"            > "$REVIEW_OUT/diff.txt"
-git diff --name-only "${RESOLVED_BASE:-origin/main}...HEAD" > "$REVIEW_OUT/files.txt"
-git log "${RESOLVED_BASE:-origin/main}..HEAD" --oneline    > "$REVIEW_OUT/log.txt"
+# Resolve the base ref HERE — RESOLVED_BASE is set in a later (Codex) block and
+# is NOT in scope yet. Same resolution order as risk-policy-gate.js.
+REVIEW_BASE=""
+for ref in origin/main origin/master main master; do
+  if git rev-parse --verify --quiet "${ref}^{commit}" >/dev/null 2>&1; then
+    REVIEW_BASE="$ref"; break
+  fi
+done
+[ -n "$REVIEW_BASE" ] || { echo "❌ MERGE BLOCKED: no base ref for review diff" >&2; exit 1; }
 
-# AGENTS is the tier-selected panel from Step 1.8 (comma-join it).
+# Read the tier-selected panel from the sentinel Step 1.8 wrote — bash arrays
+# don't cross fenced blocks. Empty panel = a bug upstream; block, don't skip.
+AGENTS_FILE="${TMPDIR:-/tmp}/bs-quality-agents-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+AGENTS_CSV="$(paste -sd, "$AGENTS_FILE" 2>/dev/null | sed 's/,*$//')"
+if [ -z "$AGENTS_CSV" ]; then
+  echo "❌ MERGE BLOCKED: review panel unresolved (no agents sentinel) — review did not run." >&2
+  exit 1
+fi
+
+REVIEW_OUT="$(mktemp -d "${TMPDIR:-/tmp}/bs-quality-review.XXXXXX")"
+git diff "${REVIEW_BASE}...HEAD"            > "$REVIEW_OUT/diff.txt"
+git diff --name-only "${REVIEW_BASE}...HEAD" > "$REVIEW_OUT/files.txt"
+git log "${REVIEW_BASE}..HEAD" --oneline     > "$REVIEW_OUT/log.txt"
+
 # Do NOT pass --model: review inherits the session model on purpose (pinning a
 # *[1m] model trips the Extra Usage billing gate on non-Opus sessions; the
 # companion also refuses [1m] defensively). See lines 679-687.
-AGENTS_CSV="$(printf '%s,' "${AGENTS[@]}" | sed 's/,$//')"
 bash "$COMPANION" \
   --diff-file "$REVIEW_OUT/diff.txt" \
   --files-file "$REVIEW_OUT/files.txt" \
@@ -907,10 +934,15 @@ bash "$COMPANION" \
   --timeout 600
 COMPANION_RC=$?
 
-# exit 2 = the `claude` CLI is unavailable. FAIL LOUD — never skip review and
-# proceed to merge. A missing reviewer is a blocked merge, not a silent pass.
-if [ "$COMPANION_RC" -eq 2 ]; then
-  echo "❌ MERGE BLOCKED: claude CLI unavailable — review could not run." >&2
+# FAIL LOUD on ANY non-zero: 2 = claude CLI unavailable, 1 = bad args / no
+# agents / unwritable out-dir. Either way review did not run cleanly — a missing
+# reviewer is a BLOCKED merge, never a silent pass (the exact fail-open this
+# whole change exists to prevent).
+if [ "$COMPANION_RC" -ne 0 ]; then
+  case "$COMPANION_RC" in
+    2) echo "❌ MERGE BLOCKED: claude CLI unavailable — review could not run." >&2 ;;
+    *) echo "❌ MERGE BLOCKED: review runner failed (rc=$COMPANION_RC)." >&2 ;;
+  esac
   exit 1
 fi
 ```

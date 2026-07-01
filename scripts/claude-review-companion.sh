@@ -157,13 +157,16 @@ run_agent() {
   fi
 
   # Blocking claude -p. perl alarm enforces the wall-time cap portably.
+  # NOTE: "${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"}" is the bash-3.2-safe expansion
+  # for a possibly-empty array under `set -u` (macOS /bin/bash 3.2 treats a
+  # bare "${arr[@]}" on an empty array as an unbound-variable fatal error).
   raw="$(perl -e 'alarm shift; exec @ARGV' "$TIMEOUT" \
         env BS_QUALITY_HEADLESS=1 \
         claude -p "$(cat "$CTX_FILE")" \
           --append-system-prompt-file "$sysfile" \
           --permission-mode bypassPermissions \
           --allowedTools "Read,Grep,Glob,Bash" \
-          "${MODEL_ARGS[@]}" \
+          ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} \
           --output-format json 2>>"$OUT_DIR/${agent##*:}.stderr" )"
   rc=$?
 
@@ -172,9 +175,12 @@ run_agent() {
     return 3
   fi
 
-  # Extract the CLI envelope's .result (verified schema). If jq/parse fails,
-  # mark inconclusive rather than crash the whole merge.
-  if result="$(printf '%s' "$raw" | jq -r 'if .is_error == true then empty else .result end' 2>/dev/null)" \
+  # Extract the CLI envelope's .result (verified schema). Reject is_error AND a
+  # null .result (an aborted/tool-exhausted turn returns {is_error:false,
+  # result:null}; `jq -r` would print the literal "null" and pass a non-empty
+  # check — a silent empty "review"). If jq/parse fails or result is null/empty,
+  # mark INCONCLUSIVE rather than crash the merge or fake a clean review.
+  if result="$(printf '%s' "$raw" | jq -r 'if (.is_error == true) or (.result == null) then empty else .result end' 2>/dev/null)" \
      && [ -n "$result" ]; then
     printf '%s\n' "$result" > "$out"
     return 0
@@ -201,9 +207,20 @@ if [ "$resolved" -eq 0 ]; then
   exit 1
 fi
 
+# Collect each agent's rc. run_agent returns 3 for INCONCLUSIVE (timeout /
+# error / unparseable / unresolved). If EVERY agent went inconclusive, the whole
+# review is degraded — exit 4 so the caller can block the merge rather than
+# treat "N inconclusive files" as a clean pass.
+inconclusive=0
 for pid in "${pids[@]}"; do
-  wait "$pid"
+  if ! wait "$pid"; then
+    inconclusive=$((inconclusive + 1))
+  fi
 done
 
-echo "claude-review-companion: wrote findings for $resolved agent(s) to $OUT_DIR" >&2
+echo "claude-review-companion: wrote findings for $resolved agent(s) to $OUT_DIR ($inconclusive inconclusive)" >&2
+if [ "$inconclusive" -ge "$resolved" ]; then
+  echo "claude-review-companion: ALL $resolved agent(s) inconclusive — review degraded" >&2
+  exit 4
+fi
 exit 0

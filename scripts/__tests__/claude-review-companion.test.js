@@ -89,7 +89,9 @@ describe("claude-review-companion.sh", () => {
       "--agents",
       "definitely-not-an-agent",
     ]);
-    expect(r.code).toBe(0); // wrote a findings file → overall success
+    // A findings file is still written (no crash) — the run is fully degraded
+    // (the only agent is inconclusive), so exit 4 so the caller blocks.
+    expect(r.code).toBe(4);
     const f = path.join(out, "definitely-not-an-agent.findings.txt");
     expect(fs.readFileSync(f, "utf8")).toMatch(/INCONCLUSIVE/);
   });
@@ -158,6 +160,108 @@ describe("claude-review-companion.sh", () => {
       // The sentinel must be set on the child `claude` invocation so the skill
       // can hard-refuse re-entry (fork→child→fork recursion, 2026-06-04 incident).
       expect(src).toMatch(/BS_QUALITY_HEADLESS=1[\s\S]*claude -p/);
+    });
+  });
+
+  describe("bash 3.2 compatibility (macOS /bin/bash)", () => {
+    // Finding #3: an empty MODEL_ARGS array must not fatal under set -u on
+    // bash 3.2. Run the whole script through /bin/bash if present.
+    const SYS_BASH = "/bin/bash";
+    const hasSysBash = fs.existsSync(SYS_BASH);
+    (hasSysBash ? it : it.skip)(
+      "runs under /bin/bash with no --model (empty array, set -u safe)",
+      () => {
+        const d = tmpdir();
+        fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+        const out = path.join(d, "o");
+        // --dry-run avoids a live claude call but still exercises arg parsing,
+        // guards, and the array-expansion code paths under set -u.
+        const r = execFileSync(
+          SYS_BASH,
+          [
+            SCRIPT,
+            "--dry-run",
+            "--diff-file",
+            path.join(d, "diff.txt"),
+            "--out-dir",
+            out,
+            "--agents",
+            "code-reviewer",
+          ],
+          { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+        );
+        expect(r).toBeDefined();
+        const f = fs.readFileSync(
+          path.join(out, "code-reviewer.findings.txt"),
+          "utf8",
+        );
+        expect(f).toMatch(/DRY-RUN/);
+      },
+    );
+  });
+
+  describe("degraded-run detection", () => {
+    // Finding #7: if EVERY agent is inconclusive, exit 4 so the caller can
+    // block the merge instead of reading N inconclusive files as a clean pass.
+    it("exits 4 when all agents are unresolvable/inconclusive (--dry-run)", () => {
+      const d = tmpdir();
+      fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+      // Two bogus agents → both INCONCLUSIVE (unresolved) → all inconclusive.
+      const r = run([
+        "--dry-run",
+        "--diff-file",
+        path.join(d, "diff.txt"),
+        "--out-dir",
+        path.join(d, "o"),
+        "--agents",
+        "bogus-one,bogus-two",
+      ]);
+      expect(r.code).toBe(4);
+    });
+
+    it("exits 0 when at least one agent resolves (--dry-run)", () => {
+      const d = tmpdir();
+      fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+      const r = run([
+        "--dry-run",
+        "--diff-file",
+        path.join(d, "diff.txt"),
+        "--out-dir",
+        path.join(d, "o"),
+        "--agents",
+        "code-reviewer,bogus",
+      ]);
+      expect(r.code).toBe(0);
+    });
+  });
+
+  describe("SKILL.md wiring (findings #1/#2/#6)", () => {
+    const SKILL = fs.readFileSync(
+      path.resolve(KIT_ROOT, "skills", "quality", "SKILL.md"),
+      "utf8",
+    );
+    it("persists the AGENTS panel to a sentinel (survives across fenced blocks)", () => {
+      expect(SKILL).toMatch(/bs-quality-agents-.*\.txt/);
+    });
+    it("companion block reads the agents sentinel, not an in-scope array", () => {
+      expect(SKILL).toMatch(/AGENTS_FILE=.*bs-quality-agents/);
+      expect(SKILL).toMatch(/AGENTS_CSV=.*paste -sd, "\$AGENTS_FILE"/);
+    });
+    it("blocks the merge on ANY non-zero companion rc (not just rc==2)", () => {
+      expect(SKILL).toMatch(/COMPANION_RC" -ne 0/);
+    });
+    it("no panel/AGENTS line lists the phantom test-generator agent", () => {
+      // test-generator has no agent .md anywhere → would permanently block
+      // high/critical merges as INCONCLUSIVE. It may only appear in prose
+      // explaining its removal, never in a PANEL=(...) or AGENTS=(...) line.
+      const panelLines = SKILL.split("\n").filter(
+        (l) =>
+          /^\s*(PANEL|AGENTS)=\(/.test(l) ||
+          /^\s+(code-reviewer|test-generator|pr-test-analyzer)/.test(l),
+      );
+      for (const l of panelLines) {
+        expect(l).not.toMatch(/test-generator/);
+      }
     });
   });
 });
