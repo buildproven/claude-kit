@@ -849,6 +849,30 @@ Do NOT review unchanged code. Focus ONLY on the diff.
 
 This prevents agents from doing generic scans and forces them to review the actual changes.
 
+#### Execution contract — run agents synchronously (CRITICAL)
+
+**Launch every selected review agent in a SINGLE message (one parallel batch of
+Task calls) and treat their results as arriving WITHIN this same invocation.**
+Foreground Task calls block until the agents return, and their results land back
+in this fork's turn — which is exactly what the rest of the pipeline depends on.
+
+**Do NOT background the agents and return control to await notifications.** In a
+forked skill context, `task-notification`s for backgrounded agents fire into the
+PARENT session, not this fork. If you hand back with "I'll wait for the review
+agents to finish," this fork is never re-invoked by those notifications, the
+merge gate (Step 1.8 synthesis → Review Stamp → `gh pr merge`) never runs, and a
+fresh `/bs:quality` invocation just restarts from Step -1 into the same dead-end.
+This is the single most common way `--merge` silently fails to complete.
+
+Concretely, after launching the batch:
+
+1. Block on all agent tool results in this turn (do not emit a "waiting" message).
+2. Proceed directly to synthesis (Step 1.8 below) → Review Stamp (Step 1.8 trailer)
+   → merge gate. Never stop between the agents returning and the merge.
+
+This mirrors the Codex `--wait` / bounded-poll contract in Step 2.6: every review
+leg is synchronous to the invocation so the merge can actually be reached.
+
 #### Step 2.6: Codex Invocation (tier-aware)
 
 claude-kit-pro enables a second-opinion review via Codex — different model, different blind spots. **Tier-aware**: skipped at `low`, judge mode at `medium`, judge + adversarial at `high`/`critical`. Disable explicitly with `--no-codex` or skip on this run with `--codex-skip "<reason>"`.
