@@ -175,6 +175,14 @@ if [ "${BS_QUALITY_HEADLESS:-}" = "1" ]; then
   exit 1
 fi
 
+# Clear any STALE review-panel sentinel from a prior run in this session before
+# the pipeline starts. The sentinel is session-namespaced, not run-namespaced,
+# so without this a run that SKIPS agent selection (e.g. --scope changed, which
+# skips Step 1.8) could let the companion block read a previous run's panel and
+# review the wrong set — or, worse, mask an "agents never selected" bug. Fresh
+# run ⇒ empty sentinel ⇒ the companion block's empty-check blocks correctly.
+rm -f "${TMPDIR:-/tmp}/bs-quality-agents-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+
 # Locate the resolver. It lives in the claude-setup overlay repo (the parent
 # of the kit-pro submodule). $CLAUDE_PLUGIN_ROOT points at kit-pro; the
 # overlay is its parent.

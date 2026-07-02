@@ -263,5 +263,20 @@ describe("claude-review-companion.sh", () => {
         expect(l).not.toMatch(/test-generator/);
       }
     });
+    it("clears any stale review-panel sentinel before the pipeline runs", () => {
+      // The sentinel is session- (not run-) namespaced. A run that SKIPS agent
+      // selection (--scope changed) must not inherit a prior run's panel, so
+      // the skill removes any stale sentinel up front (right after the recursion
+      // guard, before Step 1.8). Assert that rm precedes the write.
+      const rmIdx = SKILL.search(
+        /rm -f "\$\{TMPDIR:-\/tmp\}\/bs-quality-agents-/,
+      );
+      const writeIdx = SKILL.search(
+        /> "\$\{TMPDIR:-\/tmp\}\/bs-quality-agents-/,
+      );
+      expect(rmIdx).toBeGreaterThan(-1);
+      expect(writeIdx).toBeGreaterThan(-1);
+      expect(rmIdx).toBeLessThan(writeIdx); // clear happens before the write
+    });
   });
 });
