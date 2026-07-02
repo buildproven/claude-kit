@@ -22,41 +22,93 @@ You are a Release Scrub Agent that prepares projects for public release. You han
 skill does not reliably inherit this turn's `$ARGUMENTS`. `commands/bs/scrub.md`
 always writes a tempfile and passes it here via `--args-file` for every
 forked invocation — including plain `/bs:scrub` with no args, where the
-file exists but is empty. So `--args-file` presence alone does NOT mean
-args were supplied; it only means this is a bridged (forked) call. Three
-distinct outcomes, not two:
+file exists but is empty. Because `scrub` performs destructive in-place
+edits, this parsing is deterministic bash (not left to prose
+interpretation), mirroring `skills/quality/SKILL.md` Step -1. **Run this
+exactly as written, before anything else:**
 
-- **File exists and is readable, with non-empty content**: read it and
-  use its contents as the effective argument string (whitespace-separated
-  `path` then `mode`).
-- **File exists and is readable, but empty (0 bytes / whitespace-only)**:
-  this is the normal signal for "operator ran `/bs:scrub` with no args."
-  Treat exactly like the no-`--args-file` case below — fall through to
-  the interactive path/mode prompts. This is NOT a bridge failure.
-- **File is missing or unreadable (cannot open it at all)**: this IS an
-  internal bridge failure — the tempfile `commands/bs/scrub.md` created
-  was lost or is inaccessible, which is different from it legitimately
-  containing nothing. Do NOT fall back to `$ARGUMENTS` or the interactive
-  cwd-confirmation flow, since that would silently mask a lost `path` as
-  "no path was ever given." Instead, stop immediately and report: "scrub
-  args-file bridge failed to read <path> — re-run `/bs:scrub <path>
-<mode>` and retry." Do not proceed to Phase 1 in this state.
-- If `--args-file` is absent entirely: this is a plain interactive
-  invocation (not routed through the bridge at all). Fall back to
-  `$ARGUMENTS` / skill invocation directly.
+```bash
+# --- args-file bridge (mirrors skills/quality/SKILL.md Step -1) ------------
+ARGS_FILE=""
+REMAINING_ARGS=()
+prev_arg=""
+for arg in "$@"; do
+  case "$prev_arg" in
+    --args-file) ARGS_FILE="$arg"; prev_arg=""; continue ;;
+  esac
+  case "$arg" in
+    --args-file) prev_arg="--args-file"; continue ;;
+    --args-file=*) ARGS_FILE="${arg#*=}"; continue ;;
+  esac
+  REMAINING_ARGS+=("$arg")
+  prev_arg=""
+done
+
+BRIDGE_STATE="no-bridge"   # no-bridge | ok | empty | failed
+EFFECTIVE_ARGS=""
+
+if [ "${#REMAINING_ARGS[@]}" -gt 0 ]; then
+  EFFECTIVE_ARGS="${REMAINING_ARGS[*]}"
+  BRIDGE_STATE="ok"
+elif [ -n "$ARGS_FILE" ]; then
+  if [ ! -f "$ARGS_FILE" ] || [ ! -r "$ARGS_FILE" ]; then
+    BRIDGE_STATE="failed"
+  else
+    FILE_STRIPPED="$(tr -d '[:space:]' < "$ARGS_FILE" 2>/dev/null)"
+    if [ -z "$FILE_STRIPPED" ]; then
+      BRIDGE_STATE="empty"
+    else
+      EFFECTIVE_ARGS="$(cat "$ARGS_FILE")"
+      BRIDGE_STATE="ok"
+    fi
+  fi
+fi
+
+# Cleanup: only unlink files inside the expected bs-scrub-args.*/args.txt
+# pattern written by commands/bs/scrub.md — never an arbitrary --args-file path.
+case "$ARGS_FILE" in
+  */bs-scrub-args.*/args.txt)
+    rm -f "$ARGS_FILE"
+    ARGS_PARENT=$(dirname "$ARGS_FILE")
+    case "$ARGS_PARENT" in
+      */bs-scrub-args.*) rmdir "$ARGS_PARENT" 2>/dev/null || true ;;
+    esac
+    ;;
+esac
+
+if [ "$BRIDGE_STATE" = "failed" ]; then
+  echo "❌ scrub args-file bridge failed to read $ARGS_FILE — re-run /bs:scrub <path> <mode> and retry."
+  exit 1
+fi
+
+echo "BRIDGE_STATE=$BRIDGE_STATE"
+echo "EFFECTIVE_ARGS=$EFFECTIVE_ARGS"
+```
+
+Outcome contract:
+
+- `BRIDGE_STATE=failed` → **hard stop.** The script above already exits
+  non-zero with a diagnostic; do not proceed to Phase 1. This means the
+  tempfile `commands/bs/scrub.md` created was lost or unreadable — a real
+  bridge failure, not "no args were given."
+- `BRIDGE_STATE=empty` or `BRIDGE_STATE=no-bridge` → legitimate no-args
+  case (either the args-file was present-but-empty, meaning a plain
+  `/bs:scrub` with no args, or there was no bridge at all — a direct
+  interactive invocation). Fall through to the interactive path/mode
+  prompts below. This is NOT a failure.
+- `BRIDGE_STATE=ok` → parse `path` and `mode` from `$EFFECTIVE_ARGS`
+  (whitespace-separated: `path` then `mode`).
 
 Because `scrub` performs destructive in-place edits, never silently
 default `path` to the current directory. Asking the operator to confirm
 cwd as the target is only appropriate for the two legitimate no-args
-cases above (empty args-file, or no args-file at all) — never as recovery
-from an unreadable/missing args-file.
+states above — never as recovery from `BRIDGE_STATE=failed`.
 
-Resolve args (from the args-file per above, or `$ARGUMENTS` / skill invocation
-as a fallback):
+Resolve args (from `$EFFECTIVE_ARGS` per above):
 
 - `path` — target project (only defaults to current directory if the operator
-  explicitly confirms that's the intended target in the plain-interactive
-  case — see guard above; never as bridge-failure recovery)
+  explicitly confirms that's the intended target in a legitimate no-args
+  state — see guard above; never as bridge-failure recovery)
 - `mode` — `opensource | sell | giveaway`
 
 If `mode` was not provided, ask:

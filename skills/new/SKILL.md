@@ -40,12 +40,54 @@ my-project/
 **Args-file bridge (REQUIRED — this skill runs `context: fork`):** a forked
 skill does not reliably inherit this turn's `$ARGUMENTS`. `commands/bs/new.md`
 writes the operator's args to a tempfile and passes it here via `--args-file`.
-If `--args-file <path>` appears in the invocation args and the file exists
-and is readable, read it and use its contents (whitespace-separated
-`project-name` then `--path <dir>`) to pre-fill Step 1's questions.
-Otherwise — file missing/unreadable/empty, or `--args-file` absent — fall
-back to `$ARGUMENTS`, and if that also yields nothing, ask interactively
-as normal (Step 1 already does this for a bare `/bs:new`).
+Parse it deterministically, mirroring `skills/quality/SKILL.md` Step -1 and
+`skills/scrub/SKILL.md`'s bridge — **run this before Step 1:**
+
+```bash
+# --- args-file bridge (mirrors skills/quality/SKILL.md Step -1) ------------
+ARGS_FILE=""
+REMAINING_ARGS=()
+prev_arg=""
+for arg in "$@"; do
+  case "$prev_arg" in
+    --args-file) ARGS_FILE="$arg"; prev_arg=""; continue ;;
+  esac
+  case "$arg" in
+    --args-file) prev_arg="--args-file"; continue ;;
+    --args-file=*) ARGS_FILE="${arg#*=}"; continue ;;
+  esac
+  REMAINING_ARGS+=("$arg")
+  prev_arg=""
+done
+
+EFFECTIVE_ARGS=""
+if [ "${#REMAINING_ARGS[@]}" -gt 0 ]; then
+  EFFECTIVE_ARGS="${REMAINING_ARGS[*]}"
+elif [ -n "$ARGS_FILE" ] && [ -f "$ARGS_FILE" ] && [ -r "$ARGS_FILE" ]; then
+  FILE_STRIPPED="$(tr -d '[:space:]' < "$ARGS_FILE" 2>/dev/null)"
+  [ -n "$FILE_STRIPPED" ] && EFFECTIVE_ARGS="$(cat "$ARGS_FILE")"
+fi
+
+# Cleanup: only unlink files inside the expected bs-new-args.*/args.txt
+# pattern written by commands/bs/new.md — never an arbitrary --args-file path.
+case "$ARGS_FILE" in
+  */bs-new-args.*/args.txt)
+    rm -f "$ARGS_FILE"
+    ARGS_PARENT=$(dirname "$ARGS_FILE")
+    case "$ARGS_PARENT" in
+      */bs-new-args.*) rmdir "$ARGS_PARENT" 2>/dev/null || true ;;
+    esac
+    ;;
+esac
+
+echo "EFFECTIVE_ARGS=$EFFECTIVE_ARGS"
+```
+
+If `$EFFECTIVE_ARGS` is non-empty, use it (whitespace-separated
+`project-name` then `--path <dir>`) to pre-fill Step 1's questions. If it's
+empty — file missing/unreadable/empty, args-file absent, and no remaining
+args either — that's fine here (unlike `scrub`, see below): ask
+interactively as normal (Step 1 already does this for a bare `/bs:new`).
 
 **Deliberately soft-fail, unlike `scrub`'s hard-fail bridge**: `new` only
 creates a brand-new, non-existent directory (Step 2 refuses to overwrite
