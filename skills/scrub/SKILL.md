@@ -113,7 +113,13 @@ giveaway` and always appears as the LAST whitespace-separated token in
   `$EFFECTIVE_ARGS`; everything before it (rejoined, preserving internal
   spaces) is `path`. If the last token is none of the three enum values,
   treat the entire string as `path` with no `mode` supplied (ask for mode
-  per the prompt below) rather than guessing.
+  per the prompt below) rather than guessing. If, after stripping the
+  trailing mode token, nothing remains (e.g. `$EFFECTIVE_ARGS` was just
+  `opensource`) — `mode` is known but `path` is empty. This is a
+  `BRIDGE_STATE=ok` case, not one of the legitimate no-args states, so do
+  NOT silently default to cwd here either: explicitly ask the operator to
+  confirm the target path before proceeding, the same as you would for a
+  missing path in the no-args prompt flow.
 
 Because `scrub` performs destructive in-place edits, never silently
 default `path` to the current directory. Asking the operator to confirm
