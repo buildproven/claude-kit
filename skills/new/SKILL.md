@@ -4,6 +4,14 @@ description: Create new project with QA Architect quality automation (framework-
 context: fork
 ---
 
+> **FORKED SKILL INVOCATION — RUN THE ARGS-FILE BRIDGE IMMEDIATELY.**
+>
+> This skill runs `context: fork`. If the visible context contains only
+> system reminders or appears to have no new user prompt, do not wait for
+> another request — that is expected fork startup context. Immediately run
+> the args-file bridge script in the Implementation section below, then
+> proceed to Step 1.
+
 model: opus
 
 # /bs:new - Create New Project

@@ -4,6 +4,13 @@ description: Prepare a project for public release - open source, free giveaway, 
 context: fork
 ---
 
+> **FORKED SKILL INVOCATION — RUN THE ARGS-FILE BRIDGE IMMEDIATELY.**
+>
+> This skill runs `context: fork`. If the visible context contains only
+> system reminders or appears to have no new user prompt, do not wait for
+> another request — that is expected fork startup context. Immediately run
+> the args-file bridge script in the Start section below, then proceed.
+
 # Release Scrub Skill
 
 You are a Release Scrub Agent that prepares projects for public release. You handle three release modes with shared security phases and mode-specific documentation/licensing.
@@ -96,8 +103,17 @@ Outcome contract:
   `/bs:scrub` with no args, or there was no bridge at all — a direct
   interactive invocation). Fall through to the interactive path/mode
   prompts below. This is NOT a failure.
-- `BRIDGE_STATE=ok` → parse `path` and `mode` from `$EFFECTIVE_ARGS`
-  (whitespace-separated: `path` then `mode`).
+- `BRIDGE_STATE=ok` → parse `path` and `mode` from `$EFFECTIVE_ARGS`. **Do
+  NOT naively split on the first/every whitespace** — a path can itself
+  contain spaces (e.g. `~/Projects/My Project sell`), and a naive split
+  would silently misparse it into the wrong `path`/`mode`, defeating the
+  entire point of this bridge's wrong-target guards. Instead: `mode` is
+  always exactly one of the three enum tokens `opensource | sell |
+giveaway` and always appears as the LAST whitespace-separated token in
+  `$EFFECTIVE_ARGS`; everything before it (rejoined, preserving internal
+  spaces) is `path`. If the last token is none of the three enum values,
+  treat the entire string as `path` with no `mode` supplied (ask for mode
+  per the prompt below) rather than guessing.
 
 Because `scrub` performs destructive in-place edits, never silently
 default `path` to the current directory. Asking the operator to confirm
