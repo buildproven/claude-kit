@@ -162,6 +162,27 @@ if [ -n "$ARGS_FILE" ] && [ -f "$ARGS_FILE" ]; then
   fi
 fi
 
+# --- Recursion guard (2026-06-04 wrapper-recursion incident) -----------------
+# The synchronous review leg (Step 1.8) runs each review agent as a blocking
+# `claude -p` subprocess with BS_QUALITY_HEADLESS=1 exported. If one of those
+# review children — via a hook, an agent, or a stray /goal — ever re-enters
+# /bs:quality, we would recurse (fork → review child → fork …). Hard-refuse
+# when we detect we are already inside a headless review child.
+if [ "${BS_QUALITY_HEADLESS:-}" = "1" ]; then
+  echo "❌ /bs:quality refused: already running inside a headless review child" >&2
+  echo "   (BS_QUALITY_HEADLESS=1). Review subprocesses must not re-enter the" >&2
+  echo "   quality skill — this guard prevents fork→child→fork recursion." >&2
+  exit 1
+fi
+
+# Clear any STALE review-panel sentinel from a prior run in this session before
+# the pipeline starts. The sentinel is session-namespaced, not run-namespaced,
+# so without this a run that SKIPS agent selection (e.g. --scope changed, which
+# skips Step 1.8) could let the companion block read a previous run's panel and
+# review the wrong set — or, worse, mask an "agents never selected" bug. Fresh
+# run ⇒ empty sentinel ⇒ the companion block's empty-check blocks correctly.
+rm -f "${TMPDIR:-/tmp}/bs-quality-agents-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+
 # Locate the resolver. It lives in the claude-setup overlay repo (the parent
 # of the kit-pro submodule). $CLAUDE_PLUGIN_ROOT points at kit-pro; the
 # overlay is its parent.
@@ -547,8 +568,9 @@ done
 
 if [ -n "$MISSING_TESTS" ]; then
   echo "⚠️ Source files without tests:$MISSING_TESTS"
-  # Not a hard fail — test-generator agent will create them in Step 1.8
-  # But flag it so test-generator knows what to target
+  # Not a hard fail — surfaced as a coverage signal for the reviewers + human
+  # (see §1.3c). There is no test-generator agent; pr-test-analyzer covers
+  # test quality.
   TEST_GAPS="$MISSING_TESTS"
 fi
 ```
@@ -605,9 +627,14 @@ fi
 echo "✅ All tests passing"
 ```
 
-#### 1.3c: Test-Generator Targeting
+#### 1.3c: Test-Gap Reporting
 
-Pass `$TEST_GAPS` to the `test-generator` agent in Step 1.8 so it generates tests for specifically identified gaps. After test-generator runs, re-run `npm test` to verify generated tests pass:
+There is no `test-generator` review agent (it had no agent definition and was
+removed from the panel on 2026-07-01; `pr-test-analyzer` covers test quality).
+`$TEST_GAPS` is therefore surfaced in the review context and the summary as a
+coverage signal for the human, not handed to an auto-generator. If tests are
+generated or edited as part of the auto-fix loop, re-run `npm test` to verify
+they pass:
 
 ```bash
 # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
@@ -664,8 +691,8 @@ Detect API changes, new commands, modified exports. Skip with `--skip-docs`. Spa
 | ------------------------- | ------------------------------------------------------------------------------------------------- |
 | `low`                     | code-reviewer, silent-failure-hunter                                                              |
 | `medium`                  | + type-design-analyzer, security-auditor                                                          |
-| `high` / `critical` / L95 | + test-generator, pr-test-analyzer (full 6)                                                       |
-| `--level 98`              | full 6 + Phase 2: code-simplifier, accessibility-tester, performance-engineer, architect-reviewer |
+| `high` / `critical` / L95 | + pr-test-analyzer (full 5)                                                                       |
+| `--level 98`              | full 5 + Phase 2: code-simplifier, accessibility-tester, performance-engineer, architect-reviewer |
 
 | Agent                 | Focus                            |
 | --------------------- | -------------------------------- |
@@ -673,7 +700,6 @@ Detect API changes, new commands, modified exports. Skip with `--skip-docs`. Spa
 | silent-failure-hunter | Empty catches, swallowed errors  |
 | type-design-analyzer  | Type safety, generics, null gaps |
 | security-auditor      | OWASP top 10, secrets, injection |
-| test-generator        | Generate missing tests           |
 | pr-test-analyzer      | Validate test quality            |
 
 **Model:** review agents **inherit the session model** — they do not pin
@@ -713,8 +739,13 @@ cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
 # The review panel in PRIORITY ORDER. The risk score selects the first N from
 # this list; the always-on floor (first 2) means no change merges with zero
 # review (machine-only: there is no human backstop).
+# Every name here MUST resolve to a real agent .md (kit agents/ or the
+# pr-review-toolkit plugin) — the subprocess review runner marks an
+# unresolvable agent INCONCLUSIVE, which blocks --merge. `test-generator` was
+# removed 2026-07-01: it has no agent file anywhere and would permanently block
+# high/critical merges; pr-test-analyzer covers test quality.
 PANEL=(code-reviewer silent-failure-hunter security-auditor type-design-analyzer \
-       test-generator pr-test-analyzer code-simplifier accessibility-tester \
+       pr-test-analyzer code-simplifier accessibility-tester \
        performance-engineer architect-reviewer)
 
 if [ -n "$AGENT_TARGET" ]; then
@@ -731,17 +762,23 @@ else
     low)        AGENTS=(code-reviewer silent-failure-hunter) ;;
     medium)     AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor) ;;
     high|95)    AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor \
-                        test-generator pr-test-analyzer) ;;
+                        pr-test-analyzer) ;;
     critical)   AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor \
-                        test-generator pr-test-analyzer)
+                        pr-test-analyzer)
                 REQUIRE_BREAK_GLASS=true ;;
     98)         AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor \
-                        test-generator pr-test-analyzer code-simplifier accessibility-tester \
+                        pr-test-analyzer code-simplifier accessibility-tester \
                         performance-engineer architect-reviewer) ;;
     *)          echo "❌ Unknown tier/level: ${TIER:-$LEVEL}"; exit 1 ;;
   esac
   echo "[quality] Running ${#AGENTS[@]} agents for tier=${TIER:-n/a} level=${LEVEL}"
 fi
+
+# Persist the resolved panel to a sentinel so the LATER companion block can
+# read it — bash arrays do NOT survive across separate fenced bash blocks (the
+# same reason GIT_ROOT is round-tripped; see the canonical preamble). Without
+# this, the companion block below sees an empty AGENTS and review is skipped.
+printf '%s\n' "${AGENTS[@]}" > "${TMPDIR:-/tmp}/bs-quality-agents-${CLAUDE_CODE_SESSION_ID:-default}.txt"
 ```
 
 #### Step 1.8a: Break-glass approval (critical tier only)
@@ -849,29 +886,89 @@ Do NOT review unchanged code. Focus ONLY on the diff.
 
 This prevents agents from doing generic scans and forces them to review the actual changes.
 
-#### Execution contract — run agents synchronously (CRITICAL)
+#### Execution contract — run agents as BLOCKING subprocesses (CRITICAL)
 
-**Launch every selected review agent in a SINGLE message (one parallel batch of
-Task calls) and treat their results as arriving WITHIN this same invocation.**
-Foreground Task calls block until the agents return, and their results land back
-in this fork's turn — which is exactly what the rest of the pipeline depends on.
+**Do NOT spawn the review agents with the Task tool.** This skill runs in a
+FORKED context, and Task-tool agents are fire-and-forget: their results arrive
+asynchronously as `task-notification`s to the PARENT session, never inside this
+fork's turn. The fork then hands back ("I'll wait for the agents…"), is never
+re-invoked, and the merge gate (synthesis → Review Stamp → `gh pr merge`) never
+runs. This was the #1 way `--merge` silently failed to complete. It is
+structural, not a prompting problem — verified empirically: nested Task agents
+are async too, so this also breaks inside Task-agent callers like
+`/bs:merge-train`.
 
-**Do NOT background the agents and return control to await notifications.** In a
-forked skill context, `task-notification`s for backgrounded agents fire into the
-PARENT session, not this fork. If you hand back with "I'll wait for the review
-agents to finish," this fork is never re-invoked by those notifications, the
-merge gate (Step 1.8 synthesis → Review Stamp → `gh pr merge`) never runs, and a
-fresh `/bs:quality` invocation just restarts from Step -1 into the same dead-end.
-This is the single most common way `--merge` silently fails to complete.
+**The fix: run review as a blocking subprocess**, exactly like the Codex leg
+(Step 2.6). Bash tool calls block synchronously in a fork AND in a Task agent,
+so a subprocess is the only review mechanism synchronous in every context the
+skill runs in. Use the companion script `scripts/claude-review-companion.sh`,
+which runs each selected agent as a blocking `claude -p` with the agent's REAL
+`.md` body as its system prompt (single source of truth — no inlined prompts to
+drift), and writes one findings file per agent.
 
-Concretely, after launching the batch:
+```bash
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1 (GIT_ROOT sentinel).
+COMPANION="${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/scripts/claude-review-companion.sh"
+[ -f "$COMPANION" ] || COMPANION="$(git rev-parse --show-toplevel)/scripts/claude-review-companion.sh"
 
-1. Block on all agent tool results in this turn (do not emit a "waiting" message).
-2. Proceed directly to synthesis (Step 1.8 below) → Review Stamp (Step 1.8 trailer)
-   → merge gate. Never stop between the agents returning and the merge.
+# Resolve the base ref HERE — RESOLVED_BASE is set in a later (Codex) block and
+# is NOT in scope yet. Same resolution order as risk-policy-gate.js.
+REVIEW_BASE=""
+for ref in origin/main origin/master main master; do
+  if git rev-parse --verify --quiet "${ref}^{commit}" >/dev/null 2>&1; then
+    REVIEW_BASE="$ref"; break
+  fi
+done
+[ -n "$REVIEW_BASE" ] || { echo "❌ MERGE BLOCKED: no base ref for review diff" >&2; exit 1; }
 
-This mirrors the Codex `--wait` / bounded-poll contract in Step 2.6: every review
-leg is synchronous to the invocation so the merge can actually be reached.
+# Read the tier-selected panel from the sentinel Step 1.8 wrote — bash arrays
+# don't cross fenced blocks. Empty panel = a bug upstream; block, don't skip.
+AGENTS_FILE="${TMPDIR:-/tmp}/bs-quality-agents-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+AGENTS_CSV="$(paste -sd, "$AGENTS_FILE" 2>/dev/null | sed 's/,*$//')"
+if [ -z "$AGENTS_CSV" ]; then
+  echo "❌ MERGE BLOCKED: review panel unresolved (no agents sentinel) — review did not run." >&2
+  exit 1
+fi
+
+REVIEW_OUT="$(mktemp -d "${TMPDIR:-/tmp}/bs-quality-review.XXXXXX")"
+git diff "${REVIEW_BASE}...HEAD"            > "$REVIEW_OUT/diff.txt"
+git diff --name-only "${REVIEW_BASE}...HEAD" > "$REVIEW_OUT/files.txt"
+git log "${REVIEW_BASE}..HEAD" --oneline     > "$REVIEW_OUT/log.txt"
+
+# Do NOT pass --model: review inherits the session model on purpose (pinning a
+# *[1m] model trips the Extra Usage billing gate on non-Opus sessions; the
+# companion also refuses [1m] defensively). See lines 679-687.
+bash "$COMPANION" \
+  --diff-file "$REVIEW_OUT/diff.txt" \
+  --files-file "$REVIEW_OUT/files.txt" \
+  --log-file "$REVIEW_OUT/log.txt" \
+  --out-dir "$REVIEW_OUT" \
+  --agents "$AGENTS_CSV" \
+  --timeout 600
+COMPANION_RC=$?
+
+# FAIL LOUD on ANY non-zero: 2 = claude CLI unavailable, 1 = bad args / no
+# agents / unwritable out-dir. Either way review did not run cleanly — a missing
+# reviewer is a BLOCKED merge, never a silent pass (the exact fail-open this
+# whole change exists to prevent).
+if [ "$COMPANION_RC" -ne 0 ]; then
+  case "$COMPANION_RC" in
+    2) echo "❌ MERGE BLOCKED: claude CLI unavailable — review could not run." >&2 ;;
+    *) echo "❌ MERGE BLOCKED: review runner failed (rc=$COMPANION_RC)." >&2 ;;
+  esac
+  exit 1
+fi
+```
+
+Then read every `"$REVIEW_OUT"/<agent>.findings.txt` and feed them into Step 2.5
+synthesis. A file beginning with `INCONCLUSIVE:` means that agent timed out,
+errored, or its output could not be parsed — treat it as **review inconclusive,
+human required** (do NOT count it as PASS, do NOT silently drop it): surface it
+in the summary and, under `--merge`, block until a human resolves it.
+
+After synthesis, proceed directly to Review Stamp (Step 1.8 trailer) → merge
+gate. Because the companion call BLOCKS, all of this happens in one fork
+execution — the merge is actually reached.
 
 #### Step 2.6: Codex Invocation (tier-aware)
 
