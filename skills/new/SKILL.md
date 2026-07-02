@@ -40,11 +40,21 @@ my-project/
 **Args-file bridge (REQUIRED — this skill runs `context: fork`):** a forked
 skill does not reliably inherit this turn's `$ARGUMENTS`. `commands/bs/new.md`
 writes the operator's args to a tempfile and passes it here via `--args-file`.
-If `--args-file <path>` appears in the invocation args and the file exists,
-read it and use its contents (whitespace-separated `project-name` then
-`--path <dir>`) to pre-fill Step 1's questions; otherwise fall back to
-`$ARGUMENTS` directly, and if neither yields a project name, ask interactively
-as normal.
+If `--args-file <path>` appears in the invocation args and the file exists
+and is readable, read it and use its contents (whitespace-separated
+`project-name` then `--path <dir>`) to pre-fill Step 1's questions.
+Otherwise — file missing/unreadable/empty, or `--args-file` absent — fall
+back to `$ARGUMENTS`, and if that also yields nothing, ask interactively
+as normal (Step 1 already does this for a bare `/bs:new`).
+
+**Deliberately soft-fail, unlike `scrub`'s hard-fail bridge**: `new` only
+creates a brand-new, non-existent directory (Step 2 refuses to overwrite
+an existing path) and gathers the rest of its inputs interactively either
+way, so a lost args-file just means the operator re-answers questions it
+would have pre-filled — never a wrong-target or destructive outcome. This
+is why `new` falls back instead of aborting like `scrub`'s bridge does;
+the two skills have different failure costs, not an inconsistent
+implementation of the same contract.
 
 ### Step 1: Gather Info
 

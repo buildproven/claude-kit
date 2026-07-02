@@ -20,31 +20,36 @@ You are a Release Scrub Agent that prepares projects for public release. You han
 
 **Args-file bridge (REQUIRED — this skill runs `context: fork`):** a forked
 skill does not reliably inherit this turn's `$ARGUMENTS`. `commands/bs/scrub.md`
-always writes the operator's args to a tempfile and passes it here via
-`--args-file` for every forked invocation — so if `--args-file <path>`
-appears in the invocation args at all, its presence is itself evidence this
-is a bridged call, not a plain interactive one:
+always writes a tempfile and passes it here via `--args-file` for every
+forked invocation — including plain `/bs:scrub` with no args, where the
+file exists but is empty. So `--args-file` presence alone does NOT mean
+args were supplied; it only means this is a bridged (forked) call. Three
+distinct outcomes, not two:
 
-- If `--args-file <path>` is present AND the file exists AND is readable:
-  read it and use its contents as the effective argument string
-  (whitespace-separated `path` then `mode`).
-- If `--args-file <path>` is present but the file is missing, empty, or
-  unreadable: **this is an internal bridge failure, not "no args were
-  given."** Do NOT fall back to `$ARGUMENTS` or to the normal "ask the
-  operator to confirm cwd" flow — that flow is for genuine no-args
-  invocations and would misleadingly prompt the operator to confirm a
-  path when the real path was actually lost in transit. Instead, stop
-  immediately and report: "scrub args-file bridge failed to read
-  <path> — re-run `/bs:scrub <path> <mode>` and retry." Do not proceed
-  to Phase 1 in this state.
+- **File exists and is readable, with non-empty content**: read it and
+  use its contents as the effective argument string (whitespace-separated
+  `path` then `mode`).
+- **File exists and is readable, but empty (0 bytes / whitespace-only)**:
+  this is the normal signal for "operator ran `/bs:scrub` with no args."
+  Treat exactly like the no-`--args-file` case below — fall through to
+  the interactive path/mode prompts. This is NOT a bridge failure.
+- **File is missing or unreadable (cannot open it at all)**: this IS an
+  internal bridge failure — the tempfile `commands/bs/scrub.md` created
+  was lost or is inaccessible, which is different from it legitimately
+  containing nothing. Do NOT fall back to `$ARGUMENTS` or the interactive
+  cwd-confirmation flow, since that would silently mask a lost `path` as
+  "no path was ever given." Instead, stop immediately and report: "scrub
+  args-file bridge failed to read <path> — re-run `/bs:scrub <path>
+<mode>` and retry." Do not proceed to Phase 1 in this state.
 - If `--args-file` is absent entirely: this is a plain interactive
-  invocation. Fall back to `$ARGUMENTS` / skill invocation directly.
+  invocation (not routed through the bridge at all). Fall back to
+  `$ARGUMENTS` / skill invocation directly.
 
 Because `scrub` performs destructive in-place edits, never silently
-default `path` to the current directory. The ONLY case where asking the
-operator to confirm cwd as the target is appropriate is the plain
-interactive path above (no `--args-file` at all, and `$ARGUMENTS` also
-yields no path) — never as a recovery from a failed bridge read.
+default `path` to the current directory. Asking the operator to confirm
+cwd as the target is only appropriate for the two legitimate no-args
+cases above (empty args-file, or no args-file at all) — never as recovery
+from an unreadable/missing args-file.
 
 Resolve args (from the args-file per above, or `$ARGUMENTS` / skill invocation
 as a fallback):
