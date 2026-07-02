@@ -1,6 +1,7 @@
 ---
 name: scrub
 description: Prepare a project for public release - open source, free giveaway, or commercial sale. Auto-invokes on natural language like "get this ready for open source", "scrub for release", "clean before publishing", "prep for giveaway", or "prepare commercial release". Removes secrets, dev infrastructure, internal references; generates mode-appropriate LICENSE and docs.
+context: fork
 ---
 
 # Release Scrub Skill
