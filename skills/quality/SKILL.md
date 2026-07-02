@@ -568,8 +568,9 @@ done
 
 if [ -n "$MISSING_TESTS" ]; then
   echo "⚠️ Source files without tests:$MISSING_TESTS"
-  # Not a hard fail — test-generator agent will create them in Step 1.8
-  # But flag it so test-generator knows what to target
+  # Not a hard fail — surfaced as a coverage signal for the reviewers + human
+  # (see §1.3c). There is no test-generator agent; pr-test-analyzer covers
+  # test quality.
   TEST_GAPS="$MISSING_TESTS"
 fi
 ```
@@ -626,9 +627,14 @@ fi
 echo "✅ All tests passing"
 ```
 
-#### 1.3c: Test-Generator Targeting
+#### 1.3c: Test-Gap Reporting
 
-Pass `$TEST_GAPS` to the `test-generator` agent in Step 1.8 so it generates tests for specifically identified gaps. After test-generator runs, re-run `npm test` to verify generated tests pass:
+There is no `test-generator` review agent (it had no agent definition and was
+removed from the panel on 2026-07-01; `pr-test-analyzer` covers test quality).
+`$TEST_GAPS` is therefore surfaced in the review context and the summary as a
+coverage signal for the human, not handed to an auto-generator. If tests are
+generated or edited as part of the auto-fix loop, re-run `npm test` to verify
+they pass:
 
 ```bash
 # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
@@ -685,8 +691,8 @@ Detect API changes, new commands, modified exports. Skip with `--skip-docs`. Spa
 | ------------------------- | ------------------------------------------------------------------------------------------------- |
 | `low`                     | code-reviewer, silent-failure-hunter                                                              |
 | `medium`                  | + type-design-analyzer, security-auditor                                                          |
-| `high` / `critical` / L95 | + test-generator, pr-test-analyzer (full 6)                                                       |
-| `--level 98`              | full 6 + Phase 2: code-simplifier, accessibility-tester, performance-engineer, architect-reviewer |
+| `high` / `critical` / L95 | + pr-test-analyzer (full 5)                                                                       |
+| `--level 98`              | full 5 + Phase 2: code-simplifier, accessibility-tester, performance-engineer, architect-reviewer |
 
 | Agent                 | Focus                            |
 | --------------------- | -------------------------------- |
@@ -694,7 +700,6 @@ Detect API changes, new commands, modified exports. Skip with `--skip-docs`. Spa
 | silent-failure-hunter | Empty catches, swallowed errors  |
 | type-design-analyzer  | Type safety, generics, null gaps |
 | security-auditor      | OWASP top 10, secrets, injection |
-| test-generator        | Generate missing tests           |
 | pr-test-analyzer      | Validate test quality            |
 
 **Model:** review agents **inherit the session model** — they do not pin
