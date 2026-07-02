@@ -20,19 +20,38 @@ You are a Release Scrub Agent that prepares projects for public release. You han
 
 **Args-file bridge (REQUIRED — this skill runs `context: fork`):** a forked
 skill does not reliably inherit this turn's `$ARGUMENTS`. `commands/bs/scrub.md`
-writes the operator's args to a tempfile and passes it here via `--args-file`.
-If `--args-file <path>` appears in the invocation args and the file exists,
-read it and use its contents as the effective argument string (it is
-whitespace-separated `path` then `mode`); otherwise fall back to `$ARGUMENTS`
-directly. Because `scrub` performs destructive in-place edits, do NOT silently
-default `path` to the current directory when neither source yields a path —
-ask the operator to confirm the target path before proceeding.
+always writes the operator's args to a tempfile and passes it here via
+`--args-file` for every forked invocation — so if `--args-file <path>`
+appears in the invocation args at all, its presence is itself evidence this
+is a bridged call, not a plain interactive one:
+
+- If `--args-file <path>` is present AND the file exists AND is readable:
+  read it and use its contents as the effective argument string
+  (whitespace-separated `path` then `mode`).
+- If `--args-file <path>` is present but the file is missing, empty, or
+  unreadable: **this is an internal bridge failure, not "no args were
+  given."** Do NOT fall back to `$ARGUMENTS` or to the normal "ask the
+  operator to confirm cwd" flow — that flow is for genuine no-args
+  invocations and would misleadingly prompt the operator to confirm a
+  path when the real path was actually lost in transit. Instead, stop
+  immediately and report: "scrub args-file bridge failed to read
+  <path> — re-run `/bs:scrub <path> <mode>` and retry." Do not proceed
+  to Phase 1 in this state.
+- If `--args-file` is absent entirely: this is a plain interactive
+  invocation. Fall back to `$ARGUMENTS` / skill invocation directly.
+
+Because `scrub` performs destructive in-place edits, never silently
+default `path` to the current directory. The ONLY case where asking the
+operator to confirm cwd as the target is appropriate is the plain
+interactive path above (no `--args-file` at all, and `$ARGUMENTS` also
+yields no path) — never as a recovery from a failed bridge read.
 
 Resolve args (from the args-file per above, or `$ARGUMENTS` / skill invocation
 as a fallback):
 
 - `path` — target project (only defaults to current directory if the operator
-  explicitly confirms that's the intended target — see guard above)
+  explicitly confirms that's the intended target in the plain-interactive
+  case — see guard above; never as bridge-failure recovery)
 - `mode` — `opensource | sell | giveaway`
 
 If `mode` was not provided, ask:
