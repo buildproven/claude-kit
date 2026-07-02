@@ -18,9 +18,21 @@ You are a Release Scrub Agent that prepares projects for public release. You han
 
 ## Start
 
-Resolve args (passed via $ARGUMENTS or skill invocation):
+**Args-file bridge (REQUIRED — this skill runs `context: fork`):** a forked
+skill does not reliably inherit this turn's `$ARGUMENTS`. `commands/bs/scrub.md`
+writes the operator's args to a tempfile and passes it here via `--args-file`.
+If `--args-file <path>` appears in the invocation args and the file exists,
+read it and use its contents as the effective argument string (it is
+whitespace-separated `path` then `mode`); otherwise fall back to `$ARGUMENTS`
+directly. Because `scrub` performs destructive in-place edits, do NOT silently
+default `path` to the current directory when neither source yields a path —
+ask the operator to confirm the target path before proceeding.
 
-- `path` — target project (defaults to current directory)
+Resolve args (from the args-file per above, or `$ARGUMENTS` / skill invocation
+as a fallback):
+
+- `path` — target project (only defaults to current directory if the operator
+  explicitly confirms that's the intended target — see guard above)
 - `mode` — `opensource | sell | giveaway`
 
 If `mode` was not provided, ask:

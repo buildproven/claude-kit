@@ -37,6 +37,15 @@ my-project/
 
 ## Implementation
 
+**Args-file bridge (REQUIRED — this skill runs `context: fork`):** a forked
+skill does not reliably inherit this turn's `$ARGUMENTS`. `commands/bs/new.md`
+writes the operator's args to a tempfile and passes it here via `--args-file`.
+If `--args-file <path>` appears in the invocation args and the file exists,
+read it and use its contents (whitespace-separated `project-name` then
+`--path <dir>`) to pre-fill Step 1's questions; otherwise fall back to
+`$ARGUMENTS` directly, and if neither yields a project name, ask interactively
+as normal.
+
 ### Step 1: Gather Info
 
 ```markdown
