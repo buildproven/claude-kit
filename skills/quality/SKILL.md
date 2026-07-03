@@ -1016,7 +1016,18 @@ fi
 # skip|medium|high|xhigh and CODEX_ROUNDS is how many adversarial passes to run.
 # Map those onto the existing judge / judge+adversarial modes. When no score is
 # present (fallback), derive from $TIER/$LEVEL as before.
-COMPANION="${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs"
+COMPANION=""
+for candidate in \
+  "${CLAUDE_PLUGIN_ROOT:-}/scripts/codex-companion.mjs" \
+  "$HOME/.claude/plugins/marketplaces/openai-codex/plugins/codex/scripts/codex-companion.mjs" \
+  "$HOME/.claude/scripts/codex-companion.mjs"; do
+  if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+    COMPANION="$candidate"; break
+  fi
+done
+if [ -z "$COMPANION" ]; then
+  CODEX_SKIP_REASON="codex-companion.mjs not found at any known path"
+fi
 
 if [ -n "$CODEX_DEPTH" ]; then
   # Score-driven. Explicit --codex-effort still wins if the operator set it.
