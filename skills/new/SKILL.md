@@ -1,9 +1,17 @@
 ---
 name: new
 description: Create new project with QA Architect quality automation (framework-agnostic)
+context: fork
+model: opus
 ---
 
-model: opus
+> **FORKED SKILL INVOCATION — RUN THE ARGS-FILE BRIDGE IMMEDIATELY.**
+>
+> This skill runs `context: fork`. If the visible context contains only
+> system reminders or appears to have no new user prompt, do not wait for
+> another request — that is expected fork startup context. Immediately run
+> the args-file bridge script in the Implementation section below, then
+> proceed to Step 1.
 
 # /bs:new - Create New Project
 
@@ -35,6 +43,67 @@ my-project/
 ```
 
 ## Implementation
+
+**Args-file bridge (REQUIRED — this skill runs `context: fork`):** a forked
+skill does not reliably inherit this turn's `$ARGUMENTS`. `commands/bs/new.md`
+writes the operator's args to a tempfile and passes it here via `--args-file`.
+Parse it deterministically, mirroring `skills/quality/SKILL.md` Step -1 and
+`skills/scrub/SKILL.md`'s bridge — **run this before Step 1:**
+
+```bash
+# --- args-file bridge (mirrors skills/quality/SKILL.md Step -1) ------------
+ARGS_FILE=""
+REMAINING_ARGS=()
+prev_arg=""
+for arg in "$@"; do
+  case "$prev_arg" in
+    --args-file) ARGS_FILE="$arg"; prev_arg=""; continue ;;
+  esac
+  case "$arg" in
+    --args-file) prev_arg="--args-file"; continue ;;
+    --args-file=*) ARGS_FILE="${arg#*=}"; continue ;;
+  esac
+  REMAINING_ARGS+=("$arg")
+  prev_arg=""
+done
+
+EFFECTIVE_ARGS=""
+if [ "${#REMAINING_ARGS[@]}" -gt 0 ]; then
+  EFFECTIVE_ARGS="${REMAINING_ARGS[*]}"
+elif [ -n "$ARGS_FILE" ] && [ -f "$ARGS_FILE" ] && [ -r "$ARGS_FILE" ]; then
+  FILE_STRIPPED="$(tr -d '[:space:]' < "$ARGS_FILE" 2>/dev/null)"
+  [ -n "$FILE_STRIPPED" ] && EFFECTIVE_ARGS="$(cat "$ARGS_FILE")"
+fi
+
+# Cleanup: only unlink files inside the expected bs-new-args.*/args.txt
+# pattern written by commands/bs/new.md — never an arbitrary --args-file path.
+case "$ARGS_FILE" in
+  */bs-new-args.*/args.txt)
+    rm -f "$ARGS_FILE"
+    ARGS_PARENT=$(dirname "$ARGS_FILE")
+    case "$ARGS_PARENT" in
+      */bs-new-args.*) rmdir "$ARGS_PARENT" 2>/dev/null || true ;;
+    esac
+    ;;
+esac
+
+echo "EFFECTIVE_ARGS=$EFFECTIVE_ARGS"
+```
+
+If `$EFFECTIVE_ARGS` is non-empty, use it (whitespace-separated
+`project-name` then `--path <dir>`) to pre-fill Step 1's questions. If it's
+empty — file missing/unreadable/empty, args-file absent, and no remaining
+args either — that's fine here (unlike `scrub`, see below): ask
+interactively as normal (Step 1 already does this for a bare `/bs:new`).
+
+**Deliberately soft-fail, unlike `scrub`'s hard-fail bridge**: `new` only
+creates a brand-new, non-existent directory (Step 2 refuses to overwrite
+an existing path) and gathers the rest of its inputs interactively either
+way, so a lost args-file just means the operator re-answers questions it
+would have pre-filled — never a wrong-target or destructive outcome. This
+is why `new` falls back instead of aborting like `scrub`'s bridge does;
+the two skills have different failure costs, not an inconsistent
+implementation of the same contract.
 
 ### Step 1: Gather Info
 
@@ -318,8 +387,6 @@ _Quality infrastructure from claude-kit. Global rules in `~/.claude/CLAUDE.md`._
 | ID | Feature | Completed |
 |----|---------|-----------|
 | - | Quality infrastructure | 2026-01-08 |
-
-model: opus
 
 **Effort:** S (<4h) | M (4-16h) | L (16-40h) | XL (40h+)
 **Value:** Revenue + Retention + Differentiation (1-5 each)

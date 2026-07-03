@@ -23,7 +23,7 @@ TMPFILE=$(mktemp "${TRACKING_FILE}.XXXXXX")
 jq --argjson tc "$TOOL_COUNT" '.toolCount = $tc' "$TRACKING_FILE" > "$TMPFILE" 2>/dev/null && mv "$TMPFILE" "$TRACKING_FILE" || rm -f "$TMPFILE"
 
 # Check if context is getting large (warn at 100+ tool calls)
-if [ "$TOOL_COUNT" -gt 100 ]; then
+if [ "$TOOL_COUNT" -ge 100 ] && [ $((TOOL_COUNT % 100)) -eq 0 ]; then
   echo "SESSION HEALTH: $TOOL_COUNT tool calls. Consider /compact or /clear if context feels degraded."
 fi
 

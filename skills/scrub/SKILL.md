@@ -1,7 +1,15 @@
 ---
 name: scrub
 description: Prepare a project for public release - open source, free giveaway, or commercial sale. Auto-invokes on natural language like "get this ready for open source", "scrub for release", "clean before publishing", "prep for giveaway", or "prepare commercial release". Removes secrets, dev infrastructure, internal references; generates mode-appropriate LICENSE and docs.
+context: fork
 ---
+
+> **FORKED SKILL INVOCATION — RUN THE ARGS-FILE BRIDGE IMMEDIATELY.**
+>
+> This skill runs `context: fork`. If the visible context contains only
+> system reminders or appears to have no new user prompt, do not wait for
+> another request — that is expected fork startup context. Immediately run
+> the args-file bridge script in the Start section below, then proceed.
 
 # Release Scrub Skill
 
@@ -17,9 +25,171 @@ You are a Release Scrub Agent that prepares projects for public release. You han
 
 ## Start
 
-Resolve args (passed via $ARGUMENTS or skill invocation):
+**Args-file bridge (REQUIRED — this skill runs `context: fork`):** a forked
+skill does not reliably inherit this turn's `$ARGUMENTS`. `commands/bs/scrub.md`
+always writes a tempfile and passes it here via `--args-file` for every
+forked invocation — including plain `/bs:scrub` with no args, where the
+file exists but is empty. Because `scrub` performs destructive in-place
+edits, this parsing is deterministic bash (not left to prose
+interpretation), mirroring `skills/quality/SKILL.md` Step -1. **Run this
+exactly as written, before anything else:**
 
-- `path` — target project (defaults to current directory)
+```bash
+# --- args-file bridge (mirrors skills/quality/SKILL.md Step -1) ------------
+ARGS_FILE=""
+REMAINING_ARGS=()
+prev_arg=""
+for arg in "$@"; do
+  case "$prev_arg" in
+    --args-file) ARGS_FILE="$arg"; prev_arg=""; continue ;;
+  esac
+  case "$arg" in
+    --args-file) prev_arg="--args-file"; continue ;;
+    --args-file=*) ARGS_FILE="${arg#*=}"; continue ;;
+  esac
+  REMAINING_ARGS+=("$arg")
+  prev_arg=""
+done
+
+BRIDGE_STATE="no-bridge"   # no-bridge | ok | empty | failed
+EFFECTIVE_ARGS=""
+
+if [ "${#REMAINING_ARGS[@]}" -gt 0 ]; then
+  EFFECTIVE_ARGS="${REMAINING_ARGS[*]}"
+  BRIDGE_STATE="ok"
+elif [ -n "$ARGS_FILE" ]; then
+  if [ ! -f "$ARGS_FILE" ] || [ ! -r "$ARGS_FILE" ]; then
+    BRIDGE_STATE="failed"
+  else
+    FILE_STRIPPED="$(tr -d '[:space:]' < "$ARGS_FILE" 2>/dev/null)"
+    if [ -z "$FILE_STRIPPED" ]; then
+      BRIDGE_STATE="empty"
+    else
+      EFFECTIVE_ARGS="$(cat "$ARGS_FILE")"
+      BRIDGE_STATE="ok"
+    fi
+  fi
+fi
+
+# Cleanup: only unlink files inside the expected bs-scrub-args.*/args.txt
+# pattern written by commands/bs/scrub.md — never an arbitrary --args-file path.
+case "$ARGS_FILE" in
+  */bs-scrub-args.*/args.txt)
+    rm -f "$ARGS_FILE"
+    ARGS_PARENT=$(dirname "$ARGS_FILE")
+    case "$ARGS_PARENT" in
+      */bs-scrub-args.*) rmdir "$ARGS_PARENT" 2>/dev/null || true ;;
+    esac
+    ;;
+esac
+
+if [ "$BRIDGE_STATE" = "failed" ]; then
+  echo "❌ scrub args-file bridge failed to read $ARGS_FILE — re-run /bs:scrub <path> <mode> and retry."
+  exit 1
+fi
+
+# --- path/mode disambiguation (only meaningful when BRIDGE_STATE=ok) -------
+# A naive "last token is mode" split misparses a real path whose last path
+# component happens to equal an enum word (e.g. "~/Projects/client sell" —
+# is "sell" the mode, or the last directory of a path called ".../client
+# sell"?). Resolve it with a filesystem existence check instead of guessing:
+# a destructive command must never silently pick the wrong interpretation.
+PARSED_PATH=""
+PARSED_MODE=""
+PARSE_STATE=""   # path-only | path-and-mode | mode-only-no-path | ambiguous
+
+if [ "$BRIDGE_STATE" = "ok" ]; then
+  case "$EFFECTIVE_ARGS" in
+    opensource | sell | giveaway)
+      # Bare single-token enum match is always unambiguous mode-only input,
+      # even if a same-named directory ("sell") happens to exist in cwd —
+      # an exact enum match must never be shadowed by a directory check.
+      PARSED_MODE="$EFFECTIVE_ARGS"
+      PARSE_STATE="mode-only-no-path"
+      ;;
+  esac
+
+  if [ -z "$PARSE_STATE" ]; then
+    EXPANDED_ARGS="${EFFECTIVE_ARGS/#\~/$HOME}"
+    if [ -d "$EXPANDED_ARGS" ]; then
+      # The full string is itself a real directory — unambiguously the path,
+      # even if its last component looks like an enum word. No mode supplied.
+      PARSED_PATH="$EFFECTIVE_ARGS"
+      PARSE_STATE="path-only"
+    else
+      LAST_TOKEN="${EFFECTIVE_ARGS##* }"
+      case "$LAST_TOKEN" in
+        opensource | sell | giveaway)
+          CANDIDATE_PATH="${EFFECTIVE_ARGS%$LAST_TOKEN}"
+          CANDIDATE_PATH="${CANDIDATE_PATH% }"
+          if [ -z "$CANDIDATE_PATH" ]; then
+            PARSED_MODE="$LAST_TOKEN"
+            PARSE_STATE="mode-only-no-path"
+          else
+            EXPANDED_CANDIDATE="${CANDIDATE_PATH/#\~/$HOME}"
+            if [ -d "$EXPANDED_CANDIDATE" ]; then
+              PARSED_PATH="$CANDIDATE_PATH"
+              PARSED_MODE="$LAST_TOKEN"
+              PARSE_STATE="path-and-mode"
+            else
+              # Neither the full string nor the trailing-token-stripped prefix
+              # resolves to a real directory. Don't guess — ask the operator.
+              PARSE_STATE="ambiguous"
+            fi
+          fi
+          ;;
+        *)
+          PARSED_PATH="$EFFECTIVE_ARGS"
+          PARSE_STATE="path-only"
+          ;;
+      esac
+    fi
+  fi
+fi
+
+echo "BRIDGE_STATE=$BRIDGE_STATE"
+echo "EFFECTIVE_ARGS=$EFFECTIVE_ARGS"
+echo "PARSE_STATE=$PARSE_STATE PARSED_PATH=$PARSED_PATH PARSED_MODE=$PARSED_MODE"
+```
+
+Outcome contract:
+
+- `BRIDGE_STATE=failed` → **hard stop.** The script above already exits
+  non-zero with a diagnostic; do not proceed to Phase 1. This means the
+  tempfile `commands/bs/scrub.md` created was lost or unreadable — a real
+  bridge failure, not "no args were given."
+- `BRIDGE_STATE=empty` or `BRIDGE_STATE=no-bridge` → legitimate no-args
+  case (either the args-file was present-but-empty, meaning a plain
+  `/bs:scrub` with no args, or there was no bridge at all — a direct
+  interactive invocation). Fall through to the interactive path/mode
+  prompts below. This is NOT a failure.
+- `BRIDGE_STATE=ok` → use `$PARSE_STATE`/`$PARSED_PATH`/`$PARSED_MODE` from
+  the script above (do not re-derive path/mode by eyeballing
+  `$EFFECTIVE_ARGS` yourself — the filesystem-existence check above is the
+  authoritative disambiguation for a destructive command):
+  - `path-and-mode` → both resolved unambiguously (the stripped-prefix
+    candidate exists on disk). Proceed with `$PARSED_PATH` / `$PARSED_MODE`.
+  - `path-only` → `$PARSED_PATH` is a real directory (either the whole
+    string, or the last token wasn't an enum value at all). No `mode` was
+    supplied — ask for mode per the prompt below.
+  - `mode-only-no-path` → `$PARSED_MODE` is known but nothing precedes it.
+    Do NOT silently default `path` to cwd — explicitly ask the operator to
+    confirm the target path before proceeding.
+  - `ambiguous` → neither the full string nor the mode-stripped prefix
+    resolves to a real directory. **Stop and ask the operator to
+    disambiguate** (show them `$EFFECTIVE_ARGS` and ask for the exact path
+    and mode separately) rather than guessing which parse is correct.
+
+Because `scrub` performs destructive in-place edits, never silently
+default `path` to the current directory. Asking the operator to confirm
+cwd as the target is only appropriate for the two legitimate no-args
+states above — never as recovery from `BRIDGE_STATE=failed`.
+
+Resolve args (from `$EFFECTIVE_ARGS` per above):
+
+- `path` — target project (only defaults to current directory if the operator
+  explicitly confirms that's the intended target in a legitimate no-args
+  state — see guard above; never as bridge-failure recovery)
 - `mode` — `opensource | sell | giveaway`
 
 If `mode` was not provided, ask:
