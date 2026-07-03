@@ -2,6 +2,7 @@
 name: new
 description: Create new project with QA Architect quality automation (framework-agnostic)
 context: fork
+model: opus
 ---
 
 > **FORKED SKILL INVOCATION — RUN THE ARGS-FILE BRIDGE IMMEDIATELY.**
@@ -11,8 +12,6 @@ context: fork
 > another request — that is expected fork startup context. Immediately run
 > the args-file bridge script in the Implementation section below, then
 > proceed to Step 1.
-
-model: opus
 
 # /bs:new - Create New Project
 
@@ -388,8 +387,6 @@ _Quality infrastructure from claude-kit. Global rules in `~/.claude/CLAUDE.md`._
 | ID | Feature | Completed |
 |----|---------|-----------|
 | - | Quality infrastructure | 2026-01-08 |
-
-model: opus
 
 **Effort:** S (<4h) | M (4-16h) | L (16-40h) | XL (40h+)
 **Value:** Revenue + Retention + Differentiation (1-5 each)
