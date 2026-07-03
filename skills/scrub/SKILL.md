@@ -99,39 +99,51 @@ PARSED_MODE=""
 PARSE_STATE=""   # path-only | path-and-mode | mode-only-no-path | ambiguous
 
 if [ "$BRIDGE_STATE" = "ok" ]; then
-  EXPANDED_ARGS="${EFFECTIVE_ARGS/#\~/$HOME}"
-  if [ -d "$EXPANDED_ARGS" ]; then
-    # The full string is itself a real directory — unambiguously the path,
-    # even if its last component looks like an enum word. No mode supplied.
-    PARSED_PATH="$EFFECTIVE_ARGS"
-    PARSE_STATE="path-only"
-  else
-    LAST_TOKEN="${EFFECTIVE_ARGS##* }"
-    case "$LAST_TOKEN" in
-      opensource | sell | giveaway)
-        CANDIDATE_PATH="${EFFECTIVE_ARGS%$LAST_TOKEN}"
-        CANDIDATE_PATH="${CANDIDATE_PATH% }"
-        if [ -z "$CANDIDATE_PATH" ]; then
-          PARSED_MODE="$LAST_TOKEN"
-          PARSE_STATE="mode-only-no-path"
-        else
-          EXPANDED_CANDIDATE="${CANDIDATE_PATH/#\~/$HOME}"
-          if [ -d "$EXPANDED_CANDIDATE" ]; then
-            PARSED_PATH="$CANDIDATE_PATH"
+  case "$EFFECTIVE_ARGS" in
+    opensource | sell | giveaway)
+      # Bare single-token enum match is always unambiguous mode-only input,
+      # even if a same-named directory ("sell") happens to exist in cwd —
+      # an exact enum match must never be shadowed by a directory check.
+      PARSED_MODE="$EFFECTIVE_ARGS"
+      PARSE_STATE="mode-only-no-path"
+      ;;
+  esac
+
+  if [ -z "$PARSE_STATE" ]; then
+    EXPANDED_ARGS="${EFFECTIVE_ARGS/#\~/$HOME}"
+    if [ -d "$EXPANDED_ARGS" ]; then
+      # The full string is itself a real directory — unambiguously the path,
+      # even if its last component looks like an enum word. No mode supplied.
+      PARSED_PATH="$EFFECTIVE_ARGS"
+      PARSE_STATE="path-only"
+    else
+      LAST_TOKEN="${EFFECTIVE_ARGS##* }"
+      case "$LAST_TOKEN" in
+        opensource | sell | giveaway)
+          CANDIDATE_PATH="${EFFECTIVE_ARGS%$LAST_TOKEN}"
+          CANDIDATE_PATH="${CANDIDATE_PATH% }"
+          if [ -z "$CANDIDATE_PATH" ]; then
             PARSED_MODE="$LAST_TOKEN"
-            PARSE_STATE="path-and-mode"
+            PARSE_STATE="mode-only-no-path"
           else
-            # Neither the full string nor the trailing-token-stripped prefix
-            # resolves to a real directory. Don't guess — ask the operator.
-            PARSE_STATE="ambiguous"
+            EXPANDED_CANDIDATE="${CANDIDATE_PATH/#\~/$HOME}"
+            if [ -d "$EXPANDED_CANDIDATE" ]; then
+              PARSED_PATH="$CANDIDATE_PATH"
+              PARSED_MODE="$LAST_TOKEN"
+              PARSE_STATE="path-and-mode"
+            else
+              # Neither the full string nor the trailing-token-stripped prefix
+              # resolves to a real directory. Don't guess — ask the operator.
+              PARSE_STATE="ambiguous"
+            fi
           fi
-        fi
-        ;;
-      *)
-        PARSED_PATH="$EFFECTIVE_ARGS"
-        PARSE_STATE="path-only"
-        ;;
-    esac
+          ;;
+        *)
+          PARSED_PATH="$EFFECTIVE_ARGS"
+          PARSE_STATE="path-only"
+          ;;
+      esac
+    fi
   fi
 fi
 
