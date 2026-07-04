@@ -242,7 +242,15 @@ function main() {
       );
       process.exit(1);
     }
-    const currentFindings = JSON.parse(rest[0] || "[]");
+    let currentFindings;
+    try {
+      currentFindings = JSON.parse(rest[0] || "[]");
+    } catch {
+      process.stderr.write(
+        `[quality] record-finding: malformed findings JSON argument — treating as empty this round.\n`,
+      );
+      currentFindings = [];
+    }
     const pattern = detectRepeatedPattern(
       state.findings_seen || [],
       currentFindings,
