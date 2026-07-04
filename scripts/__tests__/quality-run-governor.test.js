@@ -163,4 +163,41 @@ describe("evaluateBudget", () => {
     expect(result.commitsUsed).toBe(4);
     expect(result.commitTripped).toBe(true);
   });
+
+  it("fails CLOSED (trips) when state is null (unreadable sentinel)", () => {
+    const result = evaluateBudget(null, { nowEpoch: 1500, commitCount: 6 });
+    expect(result.ok).toBe(false);
+    expect(result.configInvalid).toBe(true);
+    expect(result.wallTripped).toBe(true);
+    expect(result.commitTripped).toBe(true);
+  });
+
+  it("fails CLOSED when a required numeric field is missing", () => {
+    const { max_wall_seconds, ...incomplete } = baseState;
+    void max_wall_seconds;
+    const result = evaluateBudget(incomplete, {
+      nowEpoch: 1500,
+      commitCount: 6,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.configInvalid).toBe(true);
+  });
+
+  it("fails CLOSED when a required field is non-numeric (NaN/string)", () => {
+    const corrupt = { ...baseState, max_fix_commits: "not-a-number" };
+    const result = evaluateBudget(corrupt, {
+      nowEpoch: 1500,
+      commitCount: 6,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.configInvalid).toBe(true);
+  });
+
+  it("does not flag configInvalid on a fully valid state", () => {
+    const result = evaluateBudget(baseState, {
+      nowEpoch: 1500,
+      commitCount: 6,
+    });
+    expect(result.configInvalid).toBe(false);
+  });
 });

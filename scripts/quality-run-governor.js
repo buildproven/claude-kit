@@ -16,9 +16,11 @@
  *
  *   - fix-commit count (commits made since the run started)
  *   - wall-clock elapsed since the run started
- *   - repeated-finding-shape detection (same file + same root-cause shape
- *     recurring across rounds), so a run doing N narrow variants of the same
- *     fix can be told to batch-fix instead of treating each as a fresh round
+ *   - repeated-finding-shape detection (same root-cause shape recurring
+ *     across rounds, independent of which file it shows up in — see
+ *     findingShapeKey), so a run doing N narrow variants of the same fix at
+ *     different call sites can be told to batch-fix instead of treating
+ *     each as a fresh round
  *
  * Pure functions exported for unit testing — see
  *   scripts/__tests__/quality-run-governor.test.js
@@ -32,10 +34,18 @@ const { execFileSync } = require("child_process");
 /**
  * Derive a coarse "shape" key for a finding so near-duplicate findings
  * across rounds (same gap, different call site) collapse to one key.
- * Intentionally coarse: file path with any trailing digits/line-numbers
- * stripped, plus the first significant words of the summary. This is a
- * heuristic, not semantic diffing — false merges just mean an extra
- * "is this really the same issue?" glance, not a correctness bug.
+ *
+ * Deliberately FILE-INDEPENDENT: the key is the first significant
+ * (digit/punctuation-normalized) words of the summary alone. This is what
+ * makes the incident scenario detectable — "on-disk job differs from loaded
+ * job" recurring at 4 different call sites (4 different files) must collapse
+ * to one shape, or the batch-fix nudge never fires. `file` is used only as a
+ * fallback key on the rare finding with an empty/missing summary, normalized
+ * (trailing ":N"/":N-M" line-range suffix stripped) purely so that fallback
+ * doesn't fragment on line-number churn between rounds.
+ *
+ * This is a heuristic, not semantic diffing — false merges just mean an
+ * extra "is this really the same issue?" glance, not a correctness bug.
  */
 function findingShapeKey(finding) {
   // Strip a trailing ":N" or ":N-M" line/range suffix. Split into two
@@ -117,9 +127,20 @@ function currentCommitCount(cwd) {
   }
 }
 
+/**
+ * Load the governor sentinel. Returns `null` on any read/parse failure
+ * (missing file, truncated write, corrupt JSON) instead of throwing —
+ * callers treat `null` as "state unreadable" and fail CLOSED (the sentinel
+ * existing but being unreadable is itself a signal something is wrong with
+ * the run, so the safe default is to halt, not to silently pass).
+ */
 function loadState(sentinelPath) {
-  const raw = fs.readFileSync(sentinelPath, "utf8");
-  return JSON.parse(raw);
+  try {
+    const raw = fs.readFileSync(sentinelPath, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 function saveState(sentinelPath, state) {
@@ -130,14 +151,44 @@ function saveState(sentinelPath, state) {
  * Evaluate whether the run may continue. Returns a plain object (never
  * throws on a tripped budget — that's a normal, expected outcome, not an
  * error) so the caller can render it and decide whether to exit.
+ *
+ * Fail-closed on malformed state: a circuit breaker's entire job is to stop
+ * a runaway loop, so a sentinel with a missing/non-numeric bound must trip
+ * the budget rather than silently disable it (`x >= undefined` and
+ * `x >= NaN` both evaluate to `false` in JS, which is the wrong default
+ * here). `configInvalid` distinguishes this case from a genuine trip so
+ * callers can surface a distinct diagnostic.
  */
 function evaluateBudget(state, { nowEpoch, commitCount }) {
+  const requiredFields = [
+    "start_epoch",
+    "start_commit_count",
+    "max_fix_commits",
+    "max_wall_seconds",
+  ];
+  const configInvalid = requiredFields.some(
+    (key) => !Number.isFinite(state && state[key]),
+  );
+  if (configInvalid) {
+    return {
+      ok: false,
+      configInvalid: true,
+      elapsedSeconds: null,
+      commitsUsed: null,
+      maxWallSeconds: state ? state.max_wall_seconds : undefined,
+      maxFixCommits: state ? state.max_fix_commits : undefined,
+      wallTripped: true,
+      commitTripped: true,
+    };
+  }
+
   const elapsedSeconds = nowEpoch - state.start_epoch;
   const commitsUsed = commitCount - state.start_commit_count;
   const wallTripped = elapsedSeconds >= state.max_wall_seconds;
   const commitTripped = commitsUsed >= state.max_fix_commits;
   return {
     ok: !wallTripped && !commitTripped,
+    configInvalid: false,
     elapsedSeconds,
     commitsUsed,
     maxWallSeconds: state.max_wall_seconds,
@@ -164,6 +215,11 @@ function main() {
       nowEpoch: Math.floor(Date.now() / 1000),
       commitCount: currentCommitCount(cwd),
     });
+    if (result.configInvalid) {
+      process.stderr.write(
+        `[quality] governor sentinel unreadable or missing required fields at ${sentinelPath} — failing CLOSED (halting), not silently passing.\n`,
+      );
+    }
     process.stdout.write(JSON.stringify(result) + "\n");
     process.exit(result.ok ? 0 : 1);
   }
@@ -172,6 +228,20 @@ function main() {
     // rest = JSON array of {file, summary} for this round's findings, as a
     // single JSON string argument.
     const state = loadState(sentinelPath);
+    if (!state) {
+      process.stderr.write(
+        `[quality] governor sentinel unreadable at ${sentinelPath} — cannot record findings this round (repeated-pattern detection disabled for this round).\n`,
+      );
+      process.stdout.write(
+        JSON.stringify({
+          repeated: false,
+          shape: null,
+          matchCount: 0,
+          total: 0,
+        }) + "\n",
+      );
+      process.exit(1);
+    }
     const currentFindings = JSON.parse(rest[0] || "[]");
     const pattern = detectRepeatedPattern(
       state.findings_seen || [],
@@ -189,6 +259,12 @@ function main() {
       nowEpoch: Math.floor(Date.now() / 1000),
       commitCount: currentCommitCount(cwd),
     });
+    if (result.configInvalid) {
+      process.stdout.write(
+        `[quality] governor sentinel unreadable or missing required fields at ${sentinelPath} — status unavailable.\n`,
+      );
+      process.exit(1);
+    }
     const mins = Math.floor(result.elapsedSeconds / 60);
     const secs = result.elapsedSeconds % 60;
     process.stdout.write(

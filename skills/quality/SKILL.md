@@ -1121,20 +1121,35 @@ case "$CODEX_SELECTOR" in
       while [ "$ROUND" -le "${CODEX_ROUNDS:-1}" ]; do
         [ "$ROUND" -gt 1 ] && echo "[quality] Codex re-verification round $ROUND/${CODEX_ROUNDS}..."
         # --- run-governor check: live status + hard stop on either budget ---
-        if [ -f "$GOVERNOR" ] && [ -f "$BS_QUALITY_GOVERNOR_FILE" ]; then
-          node "$GOVERNOR" status "$BS_QUALITY_GOVERNOR_FILE"
-          if ! node "$GOVERNOR" check "$BS_QUALITY_GOVERNOR_FILE" > /tmp/bs-quality-governor-check.json 2>/dev/null; then
-            echo "❌ RUN HALTED: quality-run-governor budget exceeded before Codex round $ROUND."
-            cat /tmp/bs-quality-governor-check.json
-            echo ""
-            echo "   This is an operator handback, not a merge block on this code's quality —"
-            echo "   the autonomous loop reached round $ROUND without converging (commit/wall-clock"
-            echo "   detail above). Summarize what has been tried and what remains, then STOP."
-            echo "   Do NOT continue rounds, do NOT proceed to --merge. Raise the caps explicitly"
-            echo "   (BS_QUALITY_MAX_FIX_COMMITS / BS_QUALITY_MAX_WALL_SECONDS) only if the operator"
-            echo "   re-invokes with that intent."
-            exit 1
-          fi
+        # FAIL CLOSED when the governor script or sentinel can't be located —
+        # a missing governor is NOT "no budget configured," it is "the
+        # runaway-loop circuit breaker this whole feature exists to add is
+        # unavailable," which is exactly the failure mode the 2026-07-03
+        # incident needs guarded against. Silently skipping the check here
+        # (the old `if [ -f ... ] && [ -f ... ]; then ... fi` with no else)
+        # let the loop run unbounded with zero visible warning.
+        if [ ! -f "$GOVERNOR" ] || [ ! -f "$BS_QUALITY_GOVERNOR_FILE" ]; then
+          echo "❌ RUN HALTED: quality-run-governor unavailable before Codex round $ROUND" >&2
+          echo "   (script=${GOVERNOR:-<not found>}, sentinel=${BS_QUALITY_GOVERNOR_FILE:-<unset>})." >&2
+          echo "   The runaway-loop circuit breaker cannot run, so this loop cannot be bounded." >&2
+          echo "   Fix the governor script path or re-run Step -1 to regenerate the sentinel." >&2
+          exit 1
+        fi
+        GOVERNOR_CHECK_FILE="${BS_QUALITY_GOVERNOR_FILE%.json}-check.json"
+        node "$GOVERNOR" status "$BS_QUALITY_GOVERNOR_FILE"
+        if ! node "$GOVERNOR" check "$BS_QUALITY_GOVERNOR_FILE" > "$GOVERNOR_CHECK_FILE" 2>&1; then
+          echo "❌ RUN HALTED: quality-run-governor budget exceeded (or sentinel unreadable) before Codex round $ROUND."
+          cat "$GOVERNOR_CHECK_FILE"
+          echo ""
+          echo "   This is an operator handback, not a merge block on this code's quality —"
+          echo "   the autonomous loop reached round $ROUND without converging (commit/wall-clock"
+          echo "   detail above), OR the governor sentinel became unreadable mid-run (fails closed"
+          echo "   by design — see quality-run-governor.js loadState/evaluateBudget). Summarize what"
+          echo "   has been tried and what remains, then STOP."
+          echo "   Do NOT continue rounds, do NOT proceed to --merge. Raise the caps explicitly"
+          echo "   (BS_QUALITY_MAX_FIX_COMMITS / BS_QUALITY_MAX_WALL_SECONDS) only if the operator"
+          echo "   re-invokes with that intent."
+          exit 1
         fi
         LAUNCH_OUT=$(node "$COMPANION" adversarial-review --background --base "$RESOLVED_BASE" --scope branch \
           "Adversarial review focused on bugs, security, data loss, race conditions, breaking changes. \
@@ -1148,6 +1163,13 @@ case "$CODEX_SELECTOR" in
         fi
 
         # Bounded poll: 25-min cap matches the spec's high/critical time cap.
+        # ALSO re-check the run-governor's wall-clock budget every iteration —
+        # without this, a run that trips its wall-clock cap 1s after starting
+        # this poll can still wait out the full ~25min DEADLINE before the
+        # next governor check, making the advertised wall-clock cap only a
+        # pre-flight check rather than a hard cap (Codex adversarial finding,
+        # 2026-07-03: default 30min cap + 25min Codex deadline means a run at
+        # 29m59s could continue toward ~55min before being stopped).
         DEADLINE=${CODEX_DEADLINE:-1500}
         WAITED=0
         while [ "$WAITED" -lt "$DEADLINE" ]; do
@@ -1155,6 +1177,15 @@ case "$CODEX_SELECTOR" in
           case "$STATUS" in
             completed|succeeded|failed|cancelled|timed-out) break ;;
           esac
+          if [ -f "$GOVERNOR" ] && [ -f "$BS_QUALITY_GOVERNOR_FILE" ]; then
+            if ! node "$GOVERNOR" check "$BS_QUALITY_GOVERNOR_FILE" > /dev/null 2>&1; then
+              echo "❌ RUN HALTED: quality-run-governor budget tripped while waiting on Codex job $CODEX_JOB." >&2
+              echo "   Cancelling the in-flight job and handing back — this is the same operator" >&2
+              echo "   handback as a pre-round trip, just detected mid-poll instead of before launch." >&2
+              node "$COMPANION" cancel "$CODEX_JOB" >/dev/null 2>&1 || true
+              exit 1
+            fi
+          fi
           sleep 15; WAITED=$((WAITED + 15))
         done
 
@@ -1176,7 +1207,16 @@ case "$CODEX_SELECTOR" in
         # independent round — that's what turned PR #532 into 13 commits.
         if [ -f "$GOVERNOR" ] && [ -f "$BS_QUALITY_GOVERNOR_FILE" ]; then
           FINDINGS_JSON=$(echo "$CODEX_OUT" | jq -c '[(.findings // [])[] | {file: (.file // ""), summary: (.summary // .title // .message // "")}]' 2>/dev/null || echo '[]')
-          PATTERN_OUT=$(node "$GOVERNOR" record-finding "$BS_QUALITY_GOVERNOR_FILE" "$FINDINGS_JSON" 2>/dev/null)
+          # Don't swallow stderr: a corrupt sentinel or write failure here
+          # silently disables repeated-pattern detection for the rest of the
+          # run with zero signal if discarded (silent-failure-hunter finding,
+          # 2026-07-03 review) — record-finding itself is non-fatal (recording
+          # is advisory, not a hard gate), but its failures must be visible.
+          PATTERN_OUT=$(node "$GOVERNOR" record-finding "$BS_QUALITY_GOVERNOR_FILE" "$FINDINGS_JSON" 2>&1)
+          if ! echo "$PATTERN_OUT" | jq -e . >/dev/null 2>&1; then
+            echo "⚠️  [quality] governor record-finding failed (non-fatal, but repeated-pattern detection is degraded this round): $PATTERN_OUT" >&2
+            PATTERN_OUT='{"repeated":false}'
+          fi
           PATTERN_REPEATED=$(echo "$PATTERN_OUT" | jq -r '.repeated // false' 2>/dev/null)
           if [ "$PATTERN_REPEATED" = "true" ]; then
             PATTERN_SHAPE=$(echo "$PATTERN_OUT" | jq -r '.shape // "unknown"' 2>/dev/null)
@@ -1368,13 +1408,23 @@ for candidate in \
   "$HOME/.claude/scripts/quality-run-governor.js"; do
   if [ -n "$candidate" ] && [ -f "$candidate" ]; then GOVERNOR="$candidate"; break; fi
 done
-if [ -f "$GOVERNOR" ] && [ -f "$BS_QUALITY_GOVERNOR_FILE" ]; then
-  node "$GOVERNOR" status "$BS_QUALITY_GOVERNOR_FILE"
-  if ! node "$GOVERNOR" check "$BS_QUALITY_GOVERNOR_FILE" > /tmp/bs-quality-governor-check.json 2>/dev/null; then
-    echo "❌ RUN HALTED before fix attempt: quality-run-governor budget exceeded."
-    cat /tmp/bs-quality-governor-check.json
-    exit 1
-  fi
+# FAIL CLOSED when the governor script or sentinel is missing — see the
+# identical guard + rationale in Step 2.6. A silently-skipped check here is
+# the exact "circuit breaker quietly stopped breaking" failure mode this
+# guardrail exists to prevent, and this is the highest-frequency call site
+# (every fix attempt), so a silent skip here is the most consequential one.
+if [ ! -f "$GOVERNOR" ] || [ ! -f "$BS_QUALITY_GOVERNOR_FILE" ]; then
+  echo "❌ RUN HALTED: quality-run-governor unavailable before fix attempt" >&2
+  echo "   (script=${GOVERNOR:-<not found>}, sentinel=${BS_QUALITY_GOVERNOR_FILE:-<unset>})." >&2
+  echo "   The runaway-loop circuit breaker cannot run, so this loop cannot be bounded." >&2
+  exit 1
+fi
+GOVERNOR_CHECK_FILE="${BS_QUALITY_GOVERNOR_FILE%.json}-check.json"
+node "$GOVERNOR" status "$BS_QUALITY_GOVERNOR_FILE"
+if ! node "$GOVERNOR" check "$BS_QUALITY_GOVERNOR_FILE" > "$GOVERNOR_CHECK_FILE" 2>&1; then
+  echo "❌ RUN HALTED before fix attempt: quality-run-governor budget exceeded (or sentinel unreadable)."
+  cat "$GOVERNOR_CHECK_FILE"
+  exit 1
 fi
 ```
 
