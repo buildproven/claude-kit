@@ -29,10 +29,41 @@
 
 ### Environment Variables
 
-| Variable                | Default | Description                                                                                        |
-| ----------------------- | ------- | -------------------------------------------------------------------------------------------------- |
-| `CODEX_TIMEOUT`         | 120     | Seconds to wait for Codex cross-review (0=skip)                                                    |
-| `BS_QUALITY_TARGET_DIR` | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd. |
+| Variable                      | Default | Description                                                                                        |
+| ----------------------------- | ------- | -------------------------------------------------------------------------------------------------- |
+| `CODEX_TIMEOUT`               | 120     | Seconds to wait for Codex cross-review (0=skip)                                                    |
+| `BS_QUALITY_TARGET_DIR`       | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd. |
+| `BS_QUALITY_MAX_FIX_COMMITS`  | 4       | Run-governor cap: max fix commits across the whole invocation before autonomous halt (see below).  |
+| `BS_QUALITY_MAX_WALL_SECONDS` | 1800    | Run-governor cap: max wall-clock seconds across the whole invocation before autonomous halt.       |
+
+### Run Governor (runaway-loop guardrails)
+
+Two PRs run in one night (#529: 128min/6 commits, #532: 167min/13 commits)
+completed with no circuit breaker — `CODEX_ROUNDS` only bounds the inner Codex
+adversarial loop, not the outer cycle of BLOCKING-finding → auto-fix →
+re-review across the whole invocation. `scripts/quality-run-governor.js`
+tracks a per-invocation sentinel (`$TMPDIR/bs-quality-gitroot-*-governor.json`,
+alongside the Step -1 git-root sentinel) with:
+
+- **Fix-commit cap** (`BS_QUALITY_MAX_FIX_COMMITS`, default 4) — commits made
+  since the run started, checked before every fix attempt and every Codex
+  re-verification round.
+- **Wall-clock cap** (`BS_QUALITY_MAX_WALL_SECONDS`, default 1800 = 30 min) —
+  elapsed time since the run started, checked at the same points.
+- **Repeated-pattern detection** — findings are recorded round-over-round;
+  if a round's findings mostly repeat a shape seen in an earlier round (e.g.
+  the same on-disk-vs-loaded-job gap at 4 different call sites), the skill is
+  told to batch-fix every matching call site in one commit instead of
+  spending a separate round per occurrence.
+- **Live status** — every round prints `[quality] elapsed Xm/Ym, fix-commits
+N/M` so the operator can see the loop's position in real time, not just in
+  the final summary.
+
+**On a tripped cap**, the skill hard-stops autonomous continuation — no
+further rounds, no `--merge` — and hands back a plain-text summary of what
+was tried, why it didn't converge, and the exact re-invocation command to
+raise the cap (e.g. `BS_QUALITY_MAX_FIX_COMMITS=8 /bs:quality --merge`). The
+skill never raises its own cap; that is an explicit operator decision.
 
 **`BS_QUALITY_TARGET_DIR` usage**: when a spawning harness (e.g. a Task agent
 running in an isolated worktree) exports this env var, every forked

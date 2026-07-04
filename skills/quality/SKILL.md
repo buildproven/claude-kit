@@ -356,6 +356,38 @@ if ! printf '%s\n' "$GIT_ROOT" > "$BS_QUALITY_ROOT_FILE" 2>/dev/null; then
   exit 1
 fi
 echo "BS_QUALITY_ROOT_FILE=$BS_QUALITY_ROOT_FILE"
+
+# --- run-governor init (2026-07-03: runaway-loop guardrails) -----------------
+# Incident: two PRs in one night (#529: 128min/6 commits, #532: 167min/13
+# commits) ran to completion with no circuit breaker. CODEX_ROUNDS only bounds
+# the inner Codex adversarial loop; nothing bounded the OUTER cycle of
+# BLOCKING-finding → auto-fix → re-review across the whole invocation.
+#
+# The governor sentinel filename is DERIVED from the same per-target hash as
+# BS_QUALITY_ROOT_FILE (bs_quality_root_file "$GIT_ROOT", suffixed
+# "-governor.json") rather than stored in a variable — bash vars do NOT
+# survive across fenced bash blocks (same reason GIT_ROOT needs the sentinel
+# dance), so every downstream block recomputes this filename itself from its
+# own reloaded GIT_ROOT instead of reading a stale BS_QUALITY_GOVERNOR_FILE.
+#
+# Bounds are commit-count AND wall-clock, tracked independently — either one
+# tripping halts autonomous continuation. Override via env vars for repos that
+# legitimately need more headroom (e.g. `--scope all` on a huge monorepo).
+BS_QUALITY_MAX_FIX_COMMITS="${BS_QUALITY_MAX_FIX_COMMITS:-4}"
+BS_QUALITY_MAX_WALL_SECONDS="${BS_QUALITY_MAX_WALL_SECONDS:-1800}"
+BS_QUALITY_GOVERNOR_FILE="${BS_QUALITY_ROOT_FILE%.txt}-governor.json"
+GOVERNOR_START_EPOCH=$(date +%s)
+GOVERNOR_START_COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo 0)
+cat > "$BS_QUALITY_GOVERNOR_FILE" <<EOF
+{
+  "start_epoch": ${GOVERNOR_START_EPOCH},
+  "start_commit_count": ${GOVERNOR_START_COMMIT_COUNT},
+  "max_fix_commits": ${BS_QUALITY_MAX_FIX_COMMITS},
+  "max_wall_seconds": ${BS_QUALITY_MAX_WALL_SECONDS},
+  "findings_seen": []
+}
+EOF
+echo "[quality] governor: cap=${BS_QUALITY_MAX_FIX_COMMITS} fix-commits, ${BS_QUALITY_MAX_WALL_SECONDS}s wall-clock (override: BS_QUALITY_MAX_FIX_COMMITS / BS_QUALITY_MAX_WALL_SECONDS)"
 ```
 
 > **MANDATORY for every subsequent bash block in this skill** — start with the
@@ -1000,6 +1032,14 @@ fi
 [ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
 cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
 
+# Recompute the governor sentinel filename from GIT_ROOT using the EXACT same
+# transform as Step -1's run-governor init (${BS_QUALITY_ROOT_FILE%.txt}-governor.json)
+# — do NOT rely on the BS_QUALITY_GOVERNOR_FILE variable set in that earlier
+# block; it does not survive across fenced bash blocks, and any transform that
+# doesn't byte-for-byte match Step -1's would silently point at a different file.
+BS_QUALITY_ROOT_FILE="$(bs_quality_root_file "$GIT_ROOT")"
+BS_QUALITY_GOVERNOR_FILE="${BS_QUALITY_ROOT_FILE%.txt}-governor.json"
+
 # Resolve base the same way risk-policy-gate.js does (origin/main → origin/master → main → master).
 RESOLVED_BASE=""
 for ref in origin/main origin/master main master; do
@@ -1070,8 +1110,32 @@ case "$CODEX_SELECTOR" in
     CODEX_FINDINGS=0
     if [ "$NO_CODEX" != true ] && [ -z "$CODEX_SKIP_REASON" ]; then
       ROUND=1
+      GOVERNOR=""
+      for candidate in \
+        "${CLAUDE_SETUP_ROOT:-}/scripts/quality-run-governor.js" \
+        "${CLAUDE_PLUGIN_ROOT:-}/../scripts/quality-run-governor.js" \
+        "$HOME/Projects/internal/claude-setup/scripts/quality-run-governor.js" \
+        "$HOME/.claude/scripts/quality-run-governor.js"; do
+        if [ -n "$candidate" ] && [ -f "$candidate" ]; then GOVERNOR="$candidate"; break; fi
+      done
       while [ "$ROUND" -le "${CODEX_ROUNDS:-1}" ]; do
         [ "$ROUND" -gt 1 ] && echo "[quality] Codex re-verification round $ROUND/${CODEX_ROUNDS}..."
+        # --- run-governor check: live status + hard stop on either budget ---
+        if [ -f "$GOVERNOR" ] && [ -f "$BS_QUALITY_GOVERNOR_FILE" ]; then
+          node "$GOVERNOR" status "$BS_QUALITY_GOVERNOR_FILE"
+          if ! node "$GOVERNOR" check "$BS_QUALITY_GOVERNOR_FILE" > /tmp/bs-quality-governor-check.json 2>/dev/null; then
+            echo "❌ RUN HALTED: quality-run-governor budget exceeded before Codex round $ROUND."
+            cat /tmp/bs-quality-governor-check.json
+            echo ""
+            echo "   This is an operator handback, not a merge block on this code's quality —"
+            echo "   the autonomous loop reached round $ROUND without converging (commit/wall-clock"
+            echo "   detail above). Summarize what has been tried and what remains, then STOP."
+            echo "   Do NOT continue rounds, do NOT proceed to --merge. Raise the caps explicitly"
+            echo "   (BS_QUALITY_MAX_FIX_COMMITS / BS_QUALITY_MAX_WALL_SECONDS) only if the operator"
+            echo "   re-invokes with that intent."
+            exit 1
+          fi
+        fi
         LAUNCH_OUT=$(node "$COMPANION" adversarial-review --background --base "$RESOLVED_BASE" --scope branch \
           "Adversarial review focused on bugs, security, data loss, race conditions, breaking changes. \
            Effort: $CODEX_EFFORT. Verdict: APPROVE or REQUEST_CHANGES with file:line findings." 2>&1)
@@ -1103,6 +1167,26 @@ case "$CODEX_SELECTOR" in
         CODEX_OUT=$(node "$COMPANION" result "$CODEX_JOB" --json 2>/dev/null)
         CODEX_VERDICT=$(echo "$CODEX_OUT" | jq -r '.verdict // .status // "unknown"' 2>/dev/null)
         CODEX_FINDINGS=$(echo "$CODEX_OUT" | jq -r '(.findings // []) | length' 2>/dev/null || echo 0)
+
+        # --- repeated-pattern detection (2026-07-03 guardrail) ---
+        # If this round's findings are mostly narrow variants of a shape
+        # already seen in an earlier round (e.g. the same on-disk-vs-loaded
+        # gap at 4 different call sites), tell the operator/fixer to batch-fix
+        # every occurrence in one commit rather than treating each as a fresh
+        # independent round — that's what turned PR #532 into 13 commits.
+        if [ -f "$GOVERNOR" ] && [ -f "$BS_QUALITY_GOVERNOR_FILE" ]; then
+          FINDINGS_JSON=$(echo "$CODEX_OUT" | jq -c '[(.findings // [])[] | {file: (.file // ""), summary: (.summary // .title // .message // "")}]' 2>/dev/null || echo '[]')
+          PATTERN_OUT=$(node "$GOVERNOR" record-finding "$BS_QUALITY_GOVERNOR_FILE" "$FINDINGS_JSON" 2>/dev/null)
+          PATTERN_REPEATED=$(echo "$PATTERN_OUT" | jq -r '.repeated // false' 2>/dev/null)
+          if [ "$PATTERN_REPEATED" = "true" ]; then
+            PATTERN_SHAPE=$(echo "$PATTERN_OUT" | jq -r '.shape // "unknown"' 2>/dev/null)
+            PATTERN_MATCH=$(echo "$PATTERN_OUT" | jq -r '.matchCount // 0' 2>/dev/null)
+            echo "⚠️  [quality] Repeated-pattern detected: ${PATTERN_MATCH} findings this round share a shape"
+            echo "    already seen in a prior round (\"${PATTERN_SHAPE}\"). Fix ALL matching call sites"
+            echo "    in ONE commit now — do not spend a separate round per occurrence."
+          fi
+        fi
+
         # Fail-closed on REQUEST_CHANGES — operator must address or --codex-skip.
         case "$CODEX_VERDICT" in
           request-changes|REQUEST_CHANGES|needs-attention|fail|failed)
@@ -1246,6 +1330,77 @@ After all agent results are validated, run a single synthesis pass:
 - If any BLOCKING findings → auto-fix loop (up to 3 attempts) → re-run agents on fixed code → if still BLOCKING → FAIL
 - SUPPRESSED findings are never shown to the user
 - An empty report (0 blocking, 0 warnings) is a valid outcome — it means the code is clean. Do NOT fabricate findings.
+
+**Run-governor check (2026-07-03 guardrail) — before EVERY fix attempt**, not just
+Codex rounds: this is the loop that produced 6 and 13 commits across two PRs in
+one night with nothing bounding the outer cycle. Before starting fix attempt N
+(N ≥ 1, including the first), run:
+
+```bash
+# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1 (see canonical preamble).
+bs_quality_root_file() {
+  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
+  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
+  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
+  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
+  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
+}
+CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+GIT_ROOT=""
+if [ -n "$CWD_ROOT" ]; then
+  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
+  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
+fi
+[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
+cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
+
+# Recompute the governor sentinel filename using the EXACT same transform as
+# Step -1's run-governor init — see the note in Step 2.6 for why this must
+# match byte-for-byte rather than being re-derived a different way.
+BS_QUALITY_ROOT_FILE="$(bs_quality_root_file "$GIT_ROOT")"
+BS_QUALITY_GOVERNOR_FILE="${BS_QUALITY_ROOT_FILE%.txt}-governor.json"
+
+GOVERNOR=""
+for candidate in \
+  "${CLAUDE_SETUP_ROOT:-}/scripts/quality-run-governor.js" \
+  "${CLAUDE_PLUGIN_ROOT:-}/../scripts/quality-run-governor.js" \
+  "$HOME/Projects/internal/claude-setup/scripts/quality-run-governor.js" \
+  "$HOME/.claude/scripts/quality-run-governor.js"; do
+  if [ -n "$candidate" ] && [ -f "$candidate" ]; then GOVERNOR="$candidate"; break; fi
+done
+if [ -f "$GOVERNOR" ] && [ -f "$BS_QUALITY_GOVERNOR_FILE" ]; then
+  node "$GOVERNOR" status "$BS_QUALITY_GOVERNOR_FILE"
+  if ! node "$GOVERNOR" check "$BS_QUALITY_GOVERNOR_FILE" > /tmp/bs-quality-governor-check.json 2>/dev/null; then
+    echo "❌ RUN HALTED before fix attempt: quality-run-governor budget exceeded."
+    cat /tmp/bs-quality-governor-check.json
+    exit 1
+  fi
+fi
+```
+
+Additionally, **before committing an individual fix**, run
+`node "$GOVERNOR" record-finding "$BS_QUALITY_GOVERNOR_FILE" '<findings-json>'`
+with this round's BLOCKING findings (`[{file, summary}, ...]`). If the result's
+`repeated` field is `true`, do NOT commit one fix per finding — batch every
+matching call site into a single commit, then re-run the gate once against the
+combined fix.
+
+**On a tripped budget (commit cap or wall-clock), the skill MUST stop
+autonomous continuation immediately** and hand back to the operator instead of
+continuing rounds or proceeding to `--merge`. The handback is a plain-text
+summary appended to the run output (not a PR comment, not a paused/resumable
+state) covering:
+
+1. What was tried (round-by-round: which findings, what fix, what the
+   re-verification said).
+2. Why it didn't converge (repeated-pattern flag if one fired; otherwise "no
+   pattern detected — findings were genuinely distinct across rounds").
+3. The exact re-invocation command to raise the cap, e.g.
+   `BS_QUALITY_MAX_FIX_COMMITS=8 /bs:quality --merge` — this is the operator's
+   explicit bypass; the skill never raises its own cap.
+
+This is a **hard stop**, not a downgrade to a smaller task — do not silently
+truncate to "fix what's left" or continue with reduced review depth instead.
 
 ### Step 3: Verification & Commit
 
