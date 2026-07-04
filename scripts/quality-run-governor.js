@@ -148,6 +148,38 @@ function saveState(sentinelPath, state) {
 }
 
 /**
+ * Parse the `record-finding` CLI arg into an array of {file, summary}
+ * findings, always returning an array — never throwing, never passing a
+ * non-array through to callers that assume array shape (detectRepeatedPattern
+ * and the findings_seen .concat()).
+ *
+ * JSON.parse happily accepts valid-but-non-array JSON ("42", "\"x\"", "{}"),
+ * which would otherwise either throw when iterated as an array or silently
+ * corrupt findings_seen by appending a scalar/object as a single "finding".
+ * Both the malformed-JSON case and the valid-but-wrong-shape case log to
+ * stderr and degrade to an empty array — same fail-safe behavior, one
+ * function, so `main()`'s record-finding branch stays flat.
+ */
+function parseFindingsArg(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw || "[]");
+  } catch {
+    process.stderr.write(
+      `[quality] record-finding: malformed findings JSON argument — treating as empty this round.\n`,
+    );
+    return [];
+  }
+  if (!Array.isArray(parsed)) {
+    process.stderr.write(
+      `[quality] record-finding: findings JSON argument was valid JSON but not an array — treating as empty this round.\n`,
+    );
+    return [];
+  }
+  return parsed;
+}
+
+/**
  * Evaluate whether the run may continue. Returns a plain object (never
  * throws on a tripped budget — that's a normal, expected outcome, not an
  * error) so the caller can render it and decide whether to exit.
@@ -242,15 +274,7 @@ function main() {
       );
       process.exit(1);
     }
-    let currentFindings;
-    try {
-      currentFindings = JSON.parse(rest[0] || "[]");
-    } catch {
-      process.stderr.write(
-        `[quality] record-finding: malformed findings JSON argument — treating as empty this round.\n`,
-      );
-      currentFindings = [];
-    }
+    const currentFindings = parseFindingsArg(rest[0]);
     const pattern = detectRepeatedPattern(
       state.findings_seen || [],
       currentFindings,
@@ -290,6 +314,7 @@ module.exports = {
   findingShapeKey,
   detectRepeatedPattern,
   evaluateBudget,
+  parseFindingsArg,
 };
 
 if (require.main === module) {

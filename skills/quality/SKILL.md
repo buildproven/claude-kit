@@ -1177,14 +1177,28 @@ case "$CODEX_SELECTOR" in
           case "$STATUS" in
             completed|succeeded|failed|cancelled|timed-out) break ;;
           esac
-          if [ -f "$GOVERNOR" ] && [ -f "$BS_QUALITY_GOVERNOR_FILE" ]; then
-            if ! node "$GOVERNOR" check "$BS_QUALITY_GOVERNOR_FILE" > /dev/null 2>&1; then
-              echo "❌ RUN HALTED: quality-run-governor budget tripped while waiting on Codex job $CODEX_JOB." >&2
-              echo "   Cancelling the in-flight job and handing back — this is the same operator" >&2
-              echo "   handback as a pre-round trip, just detected mid-poll instead of before launch." >&2
-              node "$COMPANION" cancel "$CODEX_JOB" >/dev/null 2>&1 || true
-              exit 1
-            fi
+          # Fail CLOSED here too, matching the pre-round guard: a governor or
+          # sentinel that vanishes mid-poll (e.g. $TMPDIR reaped during a
+          # 25-min wait, a concurrent run) must halt, not silently stop
+          # enforcing the wall-clock cap for the rest of this poll — that
+          # silent-skip is exactly the "circuit breaker quietly stopped
+          # breaking" failure mode this whole mid-poll recheck exists to fix
+          # (see the 2026-07-03 Codex adversarial finding above). A bare
+          # `if [ -f ... ] && [ -f ... ]; then ... fi` with no else was flagged
+          # independently by 4 review agents as reintroducing that same hole.
+          if [ ! -f "$GOVERNOR" ] || [ ! -f "$BS_QUALITY_GOVERNOR_FILE" ]; then
+            echo "❌ RUN HALTED: governor became unavailable mid-poll (script=${GOVERNOR:-<not found>}, sentinel=${BS_QUALITY_GOVERNOR_FILE:-<unset>})." >&2
+            echo "   Cannot enforce the wall-clock cap for the remainder of this poll — halting" >&2
+            echo "   rather than silently waiting out the full DEADLINE unbounded." >&2
+            node "$COMPANION" cancel "$CODEX_JOB" >/dev/null 2>&1 || true
+            exit 1
+          fi
+          if ! node "$GOVERNOR" check "$BS_QUALITY_GOVERNOR_FILE" > /dev/null 2>&1; then
+            echo "❌ RUN HALTED: quality-run-governor budget tripped while waiting on Codex job $CODEX_JOB." >&2
+            echo "   Cancelling the in-flight job and handing back — this is the same operator" >&2
+            echo "   handback as a pre-round trip, just detected mid-poll instead of before launch." >&2
+            node "$COMPANION" cancel "$CODEX_JOB" >/dev/null 2>&1 || true
+            exit 1
           fi
           sleep 15; WAITED=$((WAITED + 15))
         done

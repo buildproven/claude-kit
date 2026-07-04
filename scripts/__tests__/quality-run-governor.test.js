@@ -2,6 +2,7 @@ const {
   findingShapeKey,
   detectRepeatedPattern,
   evaluateBudget,
+  parseFindingsArg,
 } = require("../quality-run-governor");
 
 describe("findingShapeKey", () => {
@@ -199,5 +200,32 @@ describe("evaluateBudget", () => {
       commitCount: 6,
     });
     expect(result.configInvalid).toBe(false);
+  });
+});
+
+describe("parseFindingsArg", () => {
+  it("parses a valid findings array", () => {
+    const arr = parseFindingsArg('[{"file":"a.ts","summary":"x"}]');
+    expect(arr).toEqual([{ file: "a.ts", summary: "x" }]);
+  });
+
+  it("defaults to an empty array when the arg is undefined", () => {
+    expect(parseFindingsArg(undefined)).toEqual([]);
+  });
+
+  it("degrades to an empty array on malformed JSON", () => {
+    expect(parseFindingsArg("{not valid json")).toEqual([]);
+  });
+
+  it("degrades to an empty array on valid JSON that is not an array (object)", () => {
+    expect(parseFindingsArg("{}")).toEqual([]);
+  });
+
+  it("degrades to an empty array on valid JSON that is not an array (number)", () => {
+    expect(parseFindingsArg("42")).toEqual([]);
+  });
+
+  it("degrades to an empty array on valid JSON that is not an array (string)", () => {
+    expect(parseFindingsArg('"x"')).toEqual([]);
   });
 });
