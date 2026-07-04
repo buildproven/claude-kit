@@ -3,6 +3,7 @@ const {
   detectRepeatedPattern,
   evaluateBudget,
   parseFindingsArg,
+  priorFindingsFrom,
 } = require("../quality-run-governor");
 
 describe("findingShapeKey", () => {
@@ -201,6 +202,15 @@ describe("evaluateBudget", () => {
     });
     expect(result.configInvalid).toBe(false);
   });
+
+  it("fails CLOSED when commitCount is null (git read failed)", () => {
+    const result = evaluateBudget(baseState, {
+      nowEpoch: 1500,
+      commitCount: null,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.configInvalid).toBe(true);
+  });
 });
 
 describe("parseFindingsArg", () => {
@@ -227,5 +237,42 @@ describe("parseFindingsArg", () => {
 
   it("degrades to an empty array on valid JSON that is not an array (string)", () => {
     expect(parseFindingsArg('"x"')).toEqual([]);
+  });
+});
+
+describe("priorFindingsFrom", () => {
+  it("returns findings_seen when it is a valid array", () => {
+    const state = { findings_seen: [{ file: "a.ts", summary: "x" }] };
+    expect(priorFindingsFrom(state)).toEqual(state.findings_seen);
+  });
+
+  it("returns [] when findings_seen is missing", () => {
+    expect(priorFindingsFrom({})).toEqual([]);
+  });
+
+  it("returns [] when state itself is null/undefined", () => {
+    expect(priorFindingsFrom(null)).toEqual([]);
+    expect(priorFindingsFrom(undefined)).toEqual([]);
+  });
+
+  it("returns [] instead of corrupting on a truthy non-array findings_seen (corrupt/tampered sentinel)", () => {
+    // Regression: `state.findings_seen || []` does NOT catch this — a truthy
+    // string/object survives the `||` and would previously flow into
+    // `.concat()`, coercing findings_seen into a garbage string on save.
+    const state = { findings_seen: "corrupted" };
+    const prior = priorFindingsFrom(state);
+    expect(prior).toEqual([]);
+    // Verify concatenating onto the safe result stays an array (this is the
+    // exact operation main()'s record-finding branch performs).
+    expect(prior.concat([{ file: "b.ts", summary: "y" }])).toEqual([
+      { file: "b.ts", summary: "y" },
+    ]);
+  });
+
+  it("returns [] on other non-array truthy shapes (number, object)", () => {
+    expect(priorFindingsFrom({ findings_seen: 42 })).toEqual([]);
+    expect(priorFindingsFrom({ findings_seen: { not: "an array" } })).toEqual(
+      [],
+    );
   });
 });

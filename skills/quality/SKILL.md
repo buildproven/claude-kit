@@ -1226,9 +1226,24 @@ case "$CODEX_SELECTOR" in
           # run with zero signal if discarded (silent-failure-hunter finding,
           # 2026-07-03 review) — record-finding itself is non-fatal (recording
           # is advisory, not a hard gate), but its failures must be visible.
-          PATTERN_OUT=$(node "$GOVERNOR" record-finding "$BS_QUALITY_GOVERNOR_FILE" "$FINDINGS_JSON" 2>&1)
+          #
+          # Capture stdout and stderr SEPARATELY (2026-07-04 fix — 3 review
+          # agents independently flagged the prior `2>&1` merge): the governor
+          # writes its designed warning to stderr while STILL emitting valid
+          # JSON on stdout for the degraded-but-handled case (`!state`). With
+          # `2>&1`, the stderr line prefixes the JSON, so `jq -e .` on the
+          # combined stream fails even though stdout alone was valid — every
+          # degraded-but-handled call silently loses its own diagnostic and
+          # falls into the generic fallback message below instead.
+          PATTERN_STDERR_FILE=$(mktemp "${TMPDIR:-/tmp}/bs-quality-pattern-stderr.XXXXXX")
+          PATTERN_OUT=$(node "$GOVERNOR" record-finding "$BS_QUALITY_GOVERNOR_FILE" "$FINDINGS_JSON" 2>"$PATTERN_STDERR_FILE")
+          PATTERN_STDERR=$(cat "$PATTERN_STDERR_FILE" 2>/dev/null)
+          rm -f "$PATTERN_STDERR_FILE"
+          if [ -n "$PATTERN_STDERR" ]; then
+            echo "⚠️  [quality] governor record-finding: $PATTERN_STDERR" >&2
+          fi
           if ! echo "$PATTERN_OUT" | jq -e . >/dev/null 2>&1; then
-            echo "⚠️  [quality] governor record-finding failed (non-fatal, but repeated-pattern detection is degraded this round): $PATTERN_OUT" >&2
+            echo "⚠️  [quality] governor record-finding produced no usable JSON (non-fatal, but repeated-pattern detection is degraded this round)" >&2
             PATTERN_OUT='{"repeated":false}'
           fi
           PATTERN_REPEATED=$(echo "$PATTERN_OUT" | jq -r '.repeated // false' 2>/dev/null)

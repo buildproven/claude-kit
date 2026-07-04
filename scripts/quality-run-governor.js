@@ -114,6 +114,18 @@ function detectRepeatedPattern(
   };
 }
 
+/**
+ * Return the current commit count on HEAD, or `null` on any git failure
+ * (detached-HEAD race, transient lock, wrong cwd). MUST NOT return `0` on
+ * failure: `0` is indistinguishable from a genuinely empty repo, and
+ * `evaluateBudget` computes `commitsUsed = commitCount - start_commit_count`
+ * — a failure-as-`0` on a repo already at commit 5 produces a large
+ * *negative* `commitsUsed`, which can never trip the commit-cap circuit
+ * breaker. That silently disables the commit dimension of a fail-closed
+ * guardrail exactly when git is unreliable — the opposite of the intended
+ * behavior. Returning `null` lets `evaluateBudget` fail CLOSED via the same
+ * `Number.isFinite` check it already applies to the sentinel's own fields.
+ */
 function currentCommitCount(cwd) {
   try {
     const out = execFileSync("git", ["rev-list", "--count", "HEAD"], {
@@ -121,9 +133,10 @@ function currentCommitCount(cwd) {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });
-    return parseInt(out.trim(), 10) || 0;
+    const parsed = parseInt(out.trim(), 10);
+    return Number.isFinite(parsed) ? parsed : null;
   } catch {
-    return 0;
+    return null;
   }
 }
 
@@ -180,6 +193,24 @@ function parseFindingsArg(raw) {
 }
 
 /**
+ * Extract a safe findings array from the LOADED sentinel state's
+ * `findings_seen` field. `state.findings_seen || []` only substitutes on
+ * falsy (undefined/null/""), so a truthy-but-non-array value surviving in the
+ * sentinel (a partial/corrupt write, or manual tampering) would flow straight
+ * into `.concat()`. `Array.prototype.concat` called on a non-array `this`
+ * coerces through `String.prototype.concat` and silently corrupts
+ * `findings_seen` into a string, which re-corrupts every subsequent round and
+ * silently disables repeated-pattern detection for the rest of the run with
+ * no warning — verified: `findings_seen: "corrupted"` + one finding becomes a
+ * garbage string with exit code 0. Coerce to `[]` here exactly as
+ * `parseFindingsArg` does for the CLI arg, so the sentinel's own history
+ * can't carry this failure mode.
+ */
+function priorFindingsFrom(state) {
+  return Array.isArray(state && state.findings_seen) ? state.findings_seen : [];
+}
+
+/**
  * Evaluate whether the run may continue. Returns a plain object (never
  * throws on a tripped budget — that's a normal, expected outcome, not an
  * error) so the caller can render it and decide whether to exit.
@@ -190,6 +221,13 @@ function parseFindingsArg(raw) {
  * `x >= NaN` both evaluate to `false` in JS, which is the wrong default
  * here). `configInvalid` distinguishes this case from a genuine trip so
  * callers can surface a distinct diagnostic.
+ *
+ * Also fails closed when `commitCount` itself is non-finite (i.e. git
+ * failed — see `currentCommitCount`'s `null` return). Treating a failed
+ * commit-count read as "0 commits" would make `commitsUsed` go negative
+ * and never trip; treating it as invalid config instead halts the run,
+ * consistent with every other "the breaker's own inputs are untrustworthy"
+ * case here.
  */
 function evaluateBudget(state, { nowEpoch, commitCount }) {
   const requiredFields = [
@@ -198,9 +236,9 @@ function evaluateBudget(state, { nowEpoch, commitCount }) {
     "max_fix_commits",
     "max_wall_seconds",
   ];
-  const configInvalid = requiredFields.some(
-    (key) => !Number.isFinite(state && state[key]),
-  );
+  const configInvalid =
+    requiredFields.some((key) => !Number.isFinite(state && state[key])) ||
+    !Number.isFinite(commitCount);
   if (configInvalid) {
     return {
       ok: false,
@@ -275,11 +313,9 @@ function main() {
       process.exit(1);
     }
     const currentFindings = parseFindingsArg(rest[0]);
-    const pattern = detectRepeatedPattern(
-      state.findings_seen || [],
-      currentFindings,
-    );
-    state.findings_seen = (state.findings_seen || []).concat(currentFindings);
+    const priorFindings = priorFindingsFrom(state);
+    const pattern = detectRepeatedPattern(priorFindings, currentFindings);
+    state.findings_seen = priorFindings.concat(currentFindings);
     saveState(sentinelPath, state);
     process.stdout.write(JSON.stringify(pattern) + "\n");
     process.exit(0);
@@ -292,7 +328,7 @@ function main() {
       commitCount: currentCommitCount(cwd),
     });
     if (result.configInvalid) {
-      process.stdout.write(
+      process.stderr.write(
         `[quality] governor sentinel unreadable or missing required fields at ${sentinelPath} — status unavailable.\n`,
       );
       process.exit(1);
@@ -315,6 +351,7 @@ module.exports = {
   detectRepeatedPattern,
   evaluateBudget,
   parseFindingsArg,
+  priorFindingsFrom,
 };
 
 if (require.main === module) {
