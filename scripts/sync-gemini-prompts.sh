@@ -205,7 +205,7 @@ for i in "${!SRC_FILES[@]}"; do
 
     # Convert and write
     convert_to_toml "$src" > "$dst"
-    ((synced++))
+    synced=$((synced + 1))
 done
 
 echo -e "${GREEN}✓ Synced $synced commands to $GEMINI_COMMANDS${NC}"

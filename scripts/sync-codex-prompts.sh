@@ -171,7 +171,7 @@ for i in "${!SYNC_FILES[@]}"; do
 
     # Copy file
     cp "$src" "$dst"
-    ((synced++))
+    synced=$((synced + 1))
 done
 
 # Also create AGENTS.md with global preferences

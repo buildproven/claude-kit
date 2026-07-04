@@ -154,17 +154,17 @@ verify_credentials() {
 
     if grep -q "TWITTER_API_KEY" "$CREDENTIALS_FILE" 2>/dev/null; then
         log_success "Twitter credentials found"
-        ((platforms++))
+        platforms=$((platforms + 1))
     fi
 
     if grep -q "FACEBOOK_ACCESS_TOKEN" "$CREDENTIALS_FILE" 2>/dev/null; then
         log_success "Facebook credentials found"
-        ((platforms++))
+        platforms=$((platforms + 1))
     fi
 
     if grep -q "LINKEDIN_ACCESS_TOKEN" "$CREDENTIALS_FILE" 2>/dev/null; then
         log_success "LinkedIn credentials found"
-        ((platforms++))
+        platforms=$((platforms + 1))
     fi
 
     echo ""
