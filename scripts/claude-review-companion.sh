@@ -138,9 +138,42 @@ CTX_FILE="$OUT_DIR/review-context.txt"
   echo "wrong, say exactly: NO FINDINGS."
 } > "$CTX_FILE"
 
+# --- hard timeout that actually kills ----------------------------------------
+# Replaces `perl -e 'alarm shift; exec @ARGV'` (2026-07-10). `alarm` schedules
+# SIGALRM for the *perl* process, but `exec` REPLACES that process with claude —
+# so the signal lands on a process that may ignore it, and any grandchildren
+# (claude's own tool subprocesses) are never signalled at all. Result: reviews
+# that hung for the full wall-clock and gated the whole panel on `wait`.
+#
+# This runs the child in its own process group (set -m) and, on expiry, kills
+# the entire group: TERM, grace, then KILL. Nothing survives it.
+run_with_timeout() {
+  local secs="$1"; shift
+  local child_pid watchdog_pid rc
+
+  set -m                       # own process group for the child
+  "$@" &
+  child_pid=$!
+  set +m
+
+  (
+    sleep "$secs"
+    # Negative PID = the whole process group, so claude's children die too.
+    kill -TERM "-${child_pid}" 2>/dev/null || kill -TERM "$child_pid" 2>/dev/null
+    sleep 5
+    kill -KILL "-${child_pid}" 2>/dev/null || kill -KILL "$child_pid" 2>/dev/null
+  ) &
+  watchdog_pid=$!
+
+  wait "$child_pid"; rc=$?
+  kill "$watchdog_pid" 2>/dev/null   # completed in time — retire the watchdog
+  wait "$watchdog_pid" 2>/dev/null || true
+  return $rc
+}
+
 # --- run one agent as a blocking subprocess ----------------------------------
-# perl alarm = portable timeout (macOS has no `timeout`). Writes the agent's
-# .result (final answer) to $OUT_DIR/<agent>.md, or an INCONCLUSIVE marker.
+# Writes the agent's .result (final answer) to $OUT_DIR/<agent>.md, or an
+# INCONCLUSIVE marker.
 run_agent() {
   local agent="$1" sysfile out raw result rc
   out="$OUT_DIR/${agent##*:}.findings.txt"
@@ -156,16 +189,24 @@ run_agent() {
     return 0
   fi
 
-  # Blocking claude -p. perl alarm enforces the wall-time cap portably.
+  # Blocking claude -p under a watchdog that can actually kill it.
+  #
+  # NO Bash IN --allowedTools (2026-07-10). The full diff is already in the
+  # prompt; a reviewer has nothing legitimate to execute. With Bash +
+  # bypassPermissions, reviewers would run `npm test`/builds/repo-wide greps and
+  # burn the entire timeout — that is the "code-reviewer hangs ~10min" symptom,
+  # and since the panel joins on `wait`, ONE such agent held the whole run
+  # hostage. Read/Grep/Glob is everything a diff review needs.
+  #
   # NOTE: "${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"}" is the bash-3.2-safe expansion
   # for a possibly-empty array under `set -u` (macOS /bin/bash 3.2 treats a
   # bare "${arr[@]}" on an empty array as an unbound-variable fatal error).
-  raw="$(perl -e 'alarm shift; exec @ARGV' "$TIMEOUT" \
+  raw="$(run_with_timeout "$TIMEOUT" \
         env BS_QUALITY_HEADLESS=1 \
         claude -p "$(cat "$CTX_FILE")" \
           --append-system-prompt-file "$sysfile" \
           --permission-mode bypassPermissions \
-          --allowedTools "Read,Grep,Glob,Bash" \
+          --allowedTools "Read,Grep,Glob" \
           ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} \
           --output-format json 2>>"$OUT_DIR/${agent##*:}.stderr" )"
   rc=$?

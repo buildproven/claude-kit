@@ -370,11 +370,18 @@ echo "BS_QUALITY_ROOT_FILE=$BS_QUALITY_ROOT_FILE"
 # dance), so every downstream block recomputes this filename itself from its
 # own reloaded GIT_ROOT instead of reading a stale BS_QUALITY_GOVERNOR_FILE.
 #
-# Bounds are commit-count AND wall-clock, tracked independently — either one
-# tripping halts autonomous continuation. Override via env vars for repos that
-# legitimately need more headroom (e.g. `--scope all` on a huge monorepo).
+# Bounds are review-rounds AND commit-count AND wall-clock, tracked
+# independently — any one tripping halts autonomous continuation. Override via
+# env vars for repos that legitimately need more headroom (e.g. `--scope all`
+# on a huge monorepo).
+#
+# max_review_rounds is the one that actually terminates the outer
+# fix -> re-review loop. It is enforced by `bump-round` immediately before the
+# review panel (Step 2.0), NOT by prose. See the 2026-07-10 note in
+# quality-run-governor.js for why prose was not enough.
+BS_QUALITY_MAX_REVIEW_ROUNDS="${BS_QUALITY_MAX_REVIEW_ROUNDS:-2}"
 BS_QUALITY_MAX_FIX_COMMITS="${BS_QUALITY_MAX_FIX_COMMITS:-4}"
-BS_QUALITY_MAX_WALL_SECONDS="${BS_QUALITY_MAX_WALL_SECONDS:-1800}"
+BS_QUALITY_MAX_WALL_SECONDS="${BS_QUALITY_MAX_WALL_SECONDS:-900}"
 BS_QUALITY_GOVERNOR_FILE="${BS_QUALITY_ROOT_FILE%.txt}-governor.json"
 GOVERNOR_START_EPOCH=$(date +%s)
 GOVERNOR_START_COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo 0)
@@ -384,10 +391,12 @@ cat > "$BS_QUALITY_GOVERNOR_FILE" <<EOF
   "start_commit_count": ${GOVERNOR_START_COMMIT_COUNT},
   "max_fix_commits": ${BS_QUALITY_MAX_FIX_COMMITS},
   "max_wall_seconds": ${BS_QUALITY_MAX_WALL_SECONDS},
+  "max_review_rounds": ${BS_QUALITY_MAX_REVIEW_ROUNDS},
+  "rounds_used": 0,
   "findings_seen": []
 }
 EOF
-echo "[quality] governor: cap=${BS_QUALITY_MAX_FIX_COMMITS} fix-commits, ${BS_QUALITY_MAX_WALL_SECONDS}s wall-clock (override: BS_QUALITY_MAX_FIX_COMMITS / BS_QUALITY_MAX_WALL_SECONDS)"
+echo "[quality] governor: cap=${BS_QUALITY_MAX_REVIEW_ROUNDS} review-rounds, ${BS_QUALITY_MAX_FIX_COMMITS} fix-commits, ${BS_QUALITY_MAX_WALL_SECONDS}s wall-clock"
 ```
 
 > **MANDATORY for every subsequent bash block in this skill** — start with the
@@ -420,6 +429,36 @@ echo "[quality] governor: cap=${BS_QUALITY_MAX_FIX_COMMITS} fix-commits, ${BS_QU
 > fi
 > [ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
 > cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
+>
+> # bs_quality_find_script — resolve a kit script across EVERY install layout.
+> #
+> # Why this exists (2026-07-10): the review runner was resolved by checking
+> # exactly two hardcoded paths. On the primary install both missed —
+> # ~/.claude/scripts is a symlink to the private overlay, which never carried
+> # claude-review-companion.sh — so `bash <missing>` returned 127 and the skill
+> # printed "MERGE BLOCKED (rc=127)" after doing all the work. That was the
+> # "runs everything, then never merges" stall. Never resolve a kit script by
+> # guessing two paths again: call this, and fail loudly if it returns nothing.
+> #
+> # Echoes the resolved absolute path and returns 0, or returns 1 (silent) so
+> # the caller owns the error message.
+> bs_quality_find_script() {
+>   local name="$1" c
+>   for c in \
+>     "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$name}" \
+>     "${CLAUDE_KIT_ROOT:+$CLAUDE_KIT_ROOT/scripts/$name}" \
+>     "$HOME/.claude/scripts/$name" \
+>     "$HOME/.claude/plugins/bs/scripts/$name" \
+>     "$GIT_ROOT/scripts/$name" \
+>     "$GIT_ROOT/.claude-setup/scripts/$name" \
+>     "$GIT_ROOT/core/scripts/$name" \
+>     "$GIT_ROOT/core/core/scripts/$name" \
+>     "$HOME/Projects/products/claude-kit/scripts/$name"
+>   do
+>     [ -n "$c" ] && [ -f "$c" ] && { printf '%s' "$c"; return 0; }
+>   done
+>   return 1
+> }
 > ```
 
 ### Step 0: Parse Arguments
@@ -940,8 +979,29 @@ drift), and writes one findings file per agent.
 
 ```bash
 # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1 (GIT_ROOT sentinel).
-COMPANION="${CLAUDE_PLUGIN_ROOT:-$HOME/.claude}/scripts/claude-review-companion.sh"
-[ -f "$COMPANION" ] || COMPANION="$(git rev-parse --show-toplevel)/scripts/claude-review-companion.sh"
+
+# ── ROUND GATE (MANDATORY — do not skip, do not "just one more round") ────────
+# Increments rounds_used and fails CLOSED at the cap. This is what terminates
+# the outer fix -> re-review loop. Before 2026-07-10 the cap was a sentence of
+# prose in this file; since the MODEL orchestrates this loop, that was not a
+# cap at all, and runs reached 128min/167min. A non-zero exit is not negotiable
+# — if this exits 1, report the outstanding findings and STOP.
+GOVERNOR="$(bs_quality_find_script quality-run-governor.js)" || {
+  echo "❌ MERGE BLOCKED: quality-run-governor.js not found — refusing to run an unbounded review loop." >&2
+  exit 1
+}
+node "$GOVERNOR" bump-round "$BS_QUALITY_GOVERNOR_FILE" || exit 1
+
+# Resolve the review runner across every install layout (plugin, ~/.claude
+# symlink, submodule, bare clone). Before 2026-07-10 this checked exactly two
+# paths; on the primary install (~/.claude/scripts -> claude-setup/scripts, which
+# never carried this script) BOTH missed, `bash <missing>` returned 127, and the
+# skill printed "MERGE BLOCKED: review runner failed (rc=127)" and exited —
+# which is the "does all the work then never merges" stall.
+COMPANION="$(bs_quality_find_script claude-review-companion.sh)" || {
+  echo "❌ MERGE BLOCKED: claude-review-companion.sh not found on any candidate path — review could not run." >&2
+  exit 1
+}
 
 # Resolve the base ref HERE — RESOLVED_BASE is set in a later (Codex) block and
 # is NOT in scope yet. Same resolution order as risk-policy-gate.js.
@@ -976,7 +1036,7 @@ bash "$COMPANION" \
   --log-file "$REVIEW_OUT/log.txt" \
   --out-dir "$REVIEW_OUT" \
   --agents "$AGENTS_CSV" \
-  --timeout 600
+  --timeout "${BS_QUALITY_REVIEW_TIMEOUT:-300}"
 COMPANION_RC=$?
 
 # FAIL LOUD on ANY non-zero: 2 = claude CLI unavailable, 1 = bad args / no
@@ -1170,7 +1230,7 @@ case "$CODEX_SELECTOR" in
         # pre-flight check rather than a hard cap (Codex adversarial finding,
         # 2026-07-03: default 30min cap + 25min Codex deadline means a run at
         # 29m59s could continue toward ~55min before being stopped).
-        DEADLINE=${CODEX_DEADLINE:-1500}
+        DEADLINE=${CODEX_DEADLINE:-600}
         WAITED=0
         while [ "$WAITED" -lt "$DEADLINE" ]; do
           STATUS=$(node "$COMPANION" status "$CODEX_JOB" --json 2>/dev/null | jq -r '.status // "unknown"')
@@ -1328,6 +1388,26 @@ echo "Reviewed-By: claude-quality (tier=${TIER_LABEL}, agents=${AGENT_COUNT}, fi
 # Mark that the pipeline ran in this invocation so Step 4 can distinguish
 # "operator just ran quality but trailer didn't land on a commit" (auto-stamp)
 # from "operator passed --merge with no quality work" (hard-block).
+#
+# MUST go through the sentinel, not a bare shell var (2026-07-10). Bash vars do
+# NOT survive between fenced blocks in this skill — Step 4 runs in a different
+# block, so `QUALITY_PIPELINE_RAN=true` here read as the `:-false` default there
+# on EVERY run, making the auto-stamp escape hatch permanently unreachable.
+# TIER had the same bug and was compared against "" in the Codex XOR gate,
+# silently failing OPEN. Same fix, same sentinel.
+BS_QUALITY_RUNSTATE_FILE="${BS_QUALITY_ROOT_FILE%.txt}-runstate.env"
+cat > "$BS_QUALITY_RUNSTATE_FILE" <<EOF
+QUALITY_PIPELINE_RAN=true
+TIER='${TIER:-}'
+TIER_LABEL='${TIER_LABEL:-}'
+LEVEL='${LEVEL:-}'
+AGENT_COUNT='${AGENT_COUNT:-0}'
+BLOCKING_COUNT='${BLOCKING_COUNT:-0}'
+RESOLVED_BASE='${RESOLVED_BASE:-}'
+CODEX_MODE='${CODEX_MODE:-skip}'
+CODEX_VERDICT='${CODEX_VERDICT:-}'
+CODEX_SKIP_REASON='${CODEX_SKIP_REASON:-}'
+EOF
 QUALITY_PIPELINE_RAN=true
 
 # Codex trailer ONLY when Codex actually ran.
@@ -1396,7 +1476,12 @@ After all agent results are validated, run a single synthesis pass:
 **Rules**:
 
 - If 0 BLOCKING findings → PASS
-- If any BLOCKING findings → auto-fix loop (up to 3 attempts) → re-run agents on fixed code → if still BLOCKING → FAIL
+- If any BLOCKING findings → auto-fix → re-run the review panel on the fixed code → if still BLOCKING → FAIL.
+  **The number of re-review rounds is NOT your judgment call.** Step 2.0's
+  `bump-round` gate owns it: it increments `rounds_used` and exits non-zero at
+  `max_review_rounds` (default 2). When it exits non-zero, report the
+  outstanding findings and STOP — do not run another panel, do not "just check
+  one more time". A non-zero exit from the governor is a hard stop.
 - SUPPRESSED findings are never shown to the user
 - An empty report (0 blocking, 0 warnings) is a valid outcome — it means the code is clean. Do NOT fabricate findings.
 
@@ -1518,6 +1603,19 @@ fi
 [ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
 cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
 
+# Load the run-state sentinel Step 2.5 wrote. WITHOUT THIS, every variable below
+# (QUALITY_PIPELINE_RAN, TIER, RESOLVED_BASE, CODEX_MODE, CODEX_VERDICT,
+# BLOCKING_COUNT) reads as empty/default, because bash vars do not cross fenced
+# blocks. Consequences before 2026-07-10: the auto-stamp branch could never fire,
+# and the high/critical Codex XOR gate compared TIER against "" and silently
+# failed OPEN. Absent sentinel = the pipeline genuinely did not run in this
+# invocation, which is exactly what the hard-block below is for.
+BS_QUALITY_RUNSTATE_FILE="${BS_QUALITY_ROOT_FILE%.txt}-runstate.env"
+if [ -f "$BS_QUALITY_RUNSTATE_FILE" ]; then
+  # shellcheck disable=SC1090
+  . "$BS_QUALITY_RUNSTATE_FILE"
+fi
+
 # Use the resolved base from Step 0.5/2.6 — NOT hardcoded main.
 BASE_REF="${RESOLVED_BASE:-origin/main}"
 
@@ -1533,9 +1631,13 @@ BASE_REF="${RESOLVED_BASE:-origin/main}"
 #    would be forging review evidence.
 if ! git log "${BASE_REF}..HEAD" --format=%B | grep -q "Reviewed-By: claude-quality"; then
   if [ "${QUALITY_PIPELINE_RAN:-false}" = true ]; then
-    TIER_LABEL="${TIER:-L${LEVEL}}"
-    AGENT_COUNT=${#AGENTS[@]}
-    FINDING_COUNT=${BLOCKING_COUNT:-0}
+    # All three come from the run-state sentinel loaded above. AGENT_COUNT was
+    # previously `${#AGENTS[@]}` — an array that is ALWAYS unset in this block
+    # (arrays don't cross fenced blocks), so it stamped "agents=0" on every
+    # auto-stamped trailer, understating the review that actually ran.
+    TIER_LABEL="${TIER_LABEL:-${TIER:-L${LEVEL}}}"
+    AGENT_COUNT="${AGENT_COUNT:-0}"
+    FINDING_COUNT="${BLOCKING_COUNT:-0}"
     echo "[quality] No claude-quality trailer on existing commits — auto-stamping (pipeline ran in this invocation)."
     git commit --allow-empty -m "chore(quality): stamp review trailer
 
