@@ -59,7 +59,6 @@ the worktree, and pop the stash there — do not proceed in-place.
 
 ```bash
 /bs:post "message"               # Post to social media
-/bs:image file.md --preset beehiiv  # Generate images
 ```
 
 ## Strategy & Reflection

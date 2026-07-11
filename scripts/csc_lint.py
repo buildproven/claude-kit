@@ -21,7 +21,7 @@ Rules (see plan §5):
                                  command invoking nothing needs standalone: true
 
 This linter is dependency-free (hand-parses YAML frontmatter) so it runs
-identically in claude-setup, claude-kit, and claude-kit-pro without a pip step.
+identically across the kit and any overlay repo without a pip step.
 
 Usage:
     python3 scripts/csc_lint.py [--root <repo>] [--strict] [--json]

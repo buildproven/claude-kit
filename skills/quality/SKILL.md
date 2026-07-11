@@ -78,7 +78,7 @@ the primary checkout. Target resolution now honors, in priority order:
    under `--merge`** — `--merge` mode hard-refuses to fall through to (5).
 
 The parsing + resolution logic lives in
-`<claude-setup-root>/scripts/quality-target-resolver.js` (pure, unit-tested at
+`<kit-root>/scripts/quality-target-resolver.js` (pure, unit-tested at
 `scripts/__tests__/quality-target-resolution.test.js`). The skill calls it as
 a subprocess and acts on the JSON result.
 
@@ -183,14 +183,14 @@ fi
 # run ⇒ empty sentinel ⇒ the companion block's empty-check blocks correctly.
 rm -f "${TMPDIR:-/tmp}/bs-quality-agents-${CLAUDE_CODE_SESSION_ID:-default}.txt"
 
-# Locate the resolver. It lives in the claude-setup overlay repo (the parent
+# Locate the resolver. It ships in the kit (the parent
 # of the kit-pro submodule). $CLAUDE_PLUGIN_ROOT points at kit-pro; the
 # overlay is its parent.
 RESOLVER=""
 for candidate in \
   "${CLAUDE_SETUP_ROOT:-}/scripts/quality-target-resolver.js" \
   "${CLAUDE_PLUGIN_ROOT:-}/../scripts/quality-target-resolver.js" \
-  "$HOME/Projects/internal/claude-setup/scripts/quality-target-resolver.js" \
+  "$HOME/Projects/products/claude-kit/scripts/quality-target-resolver.js" \
   "$HOME/.claude/scripts/quality-target-resolver.js"; do
   if [ -n "$candidate" ] && [ -f "$candidate" ]; then
     RESOLVER="$candidate"; break
@@ -526,7 +526,7 @@ if [ "$LEVEL" = "auto" ]; then
     "${CLAUDE_SETUP_ROOT:-}/scripts/risk-score.js" \
     "${CLAUDE_PLUGIN_ROOT:-}/scripts/risk-score.js" \
     "${CLAUDE_PLUGIN_ROOT:-}/../scripts/risk-score.js" \
-    "$HOME/Projects/internal/claude-setup/scripts/risk-score.js" \
+    "$HOME/Projects/products/claude-kit/scripts/risk-score.js" \
     "$HOME/.claude/scripts/risk-score.js"; do
     if [ -n "$candidate" ] && [ -f "$candidate" ]; then RISK_SCORER="$candidate"; break; fi
   done
@@ -994,7 +994,7 @@ node "$GOVERNOR" bump-round "$BS_QUALITY_GOVERNOR_FILE" || exit 1
 
 # Resolve the review runner across every install layout (plugin, ~/.claude
 # symlink, submodule, bare clone). Before 2026-07-10 this checked exactly two
-# paths; on the primary install (~/.claude/scripts -> claude-setup/scripts, which
+# paths; on the primary install (~/.claude/scripts -> an overlay repo, which
 # never carried this script) BOTH missed, `bash <missing>` returned 127, and the
 # skill printed "MERGE BLOCKED: review runner failed (rc=127)" and exited —
 # which is the "does all the work then never merges" stall.
@@ -1064,9 +1064,9 @@ execution — the merge is actually reached.
 
 #### Step 2.6: Codex Invocation (tier-aware)
 
-claude-kit-pro enables a second-opinion review via Codex — different model, different blind spots. **Tier-aware**: skipped at `low`, judge mode at `medium`, judge + adversarial at `high`/`critical`. Disable explicitly with `--no-codex` or skip on this run with `--codex-skip "<reason>"`.
+The kit runs a second-opinion review via Codex — different model, different blind spots. **Tier-aware**: skipped at `low`, judge mode at `medium`, judge + adversarial at `high`/`critical`. Disable explicitly with `--no-codex` or skip on this run with `--codex-skip "<reason>"`.
 
-The canonical invocation is the Codex companion CLI documented in `claude-setup/docs/quality-tier-codex-judge-plan.md` line 125-126. The `--base` arg uses the resolved base from `risk-policy-gate.js`, NOT hardcoded `main`.
+The canonical invocation is the Codex companion CLI. The `--base` arg uses the resolved base from `risk-policy-gate.js`, NOT hardcoded `main`.
 
 ```bash
 # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
@@ -1174,7 +1174,7 @@ case "$CODEX_SELECTOR" in
       for candidate in \
         "${CLAUDE_SETUP_ROOT:-}/scripts/quality-run-governor.js" \
         "${CLAUDE_PLUGIN_ROOT:-}/../scripts/quality-run-governor.js" \
-        "$HOME/Projects/internal/claude-setup/scripts/quality-run-governor.js" \
+        "$HOME/Projects/products/claude-kit/scripts/quality-run-governor.js" \
         "$HOME/.claude/scripts/quality-run-governor.js"; do
         if [ -n "$candidate" ] && [ -f "$candidate" ]; then GOVERNOR="$candidate"; break; fi
       done
@@ -1518,7 +1518,7 @@ GOVERNOR=""
 for candidate in \
   "${CLAUDE_SETUP_ROOT:-}/scripts/quality-run-governor.js" \
   "${CLAUDE_PLUGIN_ROOT:-}/../scripts/quality-run-governor.js" \
-  "$HOME/Projects/internal/claude-setup/scripts/quality-run-governor.js" \
+  "$HOME/Projects/products/claude-kit/scripts/quality-run-governor.js" \
   "$HOME/.claude/scripts/quality-run-governor.js"; do
   if [ -n "$candidate" ] && [ -f "$candidate" ]; then GOVERNOR="$candidate"; break; fi
 done
