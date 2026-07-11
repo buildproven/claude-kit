@@ -11,11 +11,11 @@ This repo is the public core. It is designed to be extended, not forked.
 | **Price**                     | Free (MIT)                                                                                                                                                | Paid                                                                                                        |
 | **Quality automation**        | ✅ tier-aware, Codex cross-review, break-glass                                                                                                            | (uses kit's)                                                                                                |
 | **Dev workflow**              | ✅ `/bs:dev`, `/bs:plan`, `/bs:test`, `/bs:new`                                                                                                           | (uses kit's)                                                                                                |
-| **Dev hygiene**               | ✅ cost, deps, status, workflow, cleanup                                                                                                                  | (uses kit's)                                                                                                |
+| **Dev hygiene**               | ✅ deps, status, workflow, cleanup                                                                                                                        | (uses kit's)                                                                                                |
 | **Build-quality skills**      | ✅ frontend-design, ui-reviewer, webapp-testing, visualise                                                                                                | (uses kit's)                                                                                                |
 | **SWE specialist agents**     | ✅ code-reviewer, security-auditor, accessibility-tester, architect-reviewer, performance-engineer, postgres-pro, prompt-engineer, refactoring-specialist | (uses kit's)                                                                                                |
 | **Investigate + bootstrap**   | ✅ `/bs:investigate`, `/bs:init-project`                                                                                                                  | (uses kit's)                                                                                                |
-| **GitHub workflow**           | ✅ `/gh:fix-issue`, `/gh:review-pr`                                                                                                                       | (uses kit's)                                                                                                |
+| **GitHub workflow**           | ✅ `/gh:fix-issue`                                                                                                                                        | (uses kit's)                                                                                                |
 | **Autonomous backlog**        | —                                                                                                                                                         | ✅ `/bs:ralph`                                                                                              |
 | **Multi-LLM strategy panels** | —                                                                                                                                                         | ✅ `/bs:strategy` (Claude + Codex + Gemini parallel)                                                        |
 | **Session save/resume**       | —                                                                                                                                                         | ✅ `/bs:session`, `/bs:resume`, `/bs:context`                                                               |
@@ -59,16 +59,23 @@ Then restart Claude Code.
 /bs:help        Full command reference
 /bs:workflow    Daily workflow guide
 /bs:status      Project catch-up summary
-/bs:cost        Cost tracking per feature/branch/command
 /bs:deps        Dependency health (outdated, audit, upgrade)
 /bs:cleanup     Clean AI CLI caches and temp files
 /bs:sync        Verify and repair config symlinks
 /bs:scrub       Prep a project for public release
 /gh:fix-issue   Full issue workflow: analyze → branch → fix → test → PR
-/gh:review-pr   Deep PR code review (multi-agent local analysis)
 /cc:create-command  Scaffold a new slash command
-/cc:optimize    Show Claude Code optimization guide
 ```
+
+### Removed — Claude Code now does these natively
+
+Don't reimplement what the platform ships. As of 2.1.207:
+
+| Was             | Use instead                                                          |
+| --------------- | -------------------------------------------------------------------- |
+| `/bs:cost`      | `/usage` — per-category cost (skills, subagents, plugins, per-MCP)   |
+| `/gh:review-pr` | `/code-review ultra` — cloud multi-agent review, `--comment`/`--fix` |
+| `/cc:optimize`  | `/usage` + `fallbackModel` + `/effort`                               |
 
 ## Skills
 

@@ -47,7 +47,6 @@ mkdir -p .claude/commands/bs .claude/commands/gh
 cp claude-kit/commands/bs/dev.md .claude/commands/bs/
 cp claude-kit/commands/bs/quality.md .claude/commands/bs/
 cp claude-kit/commands/bs/help.md .claude/commands/bs/
-cp claude-kit/commands/gh/review-pr.md .claude/commands/gh/
 ```
 
 ## CLI setup

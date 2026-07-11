@@ -66,8 +66,8 @@ Node 20+ (`engines.node`, pinned via Volta to 20.11.1). Python tooling (ruff/bla
 ```
 commands/         Slash commands — frontmatter + markdown prompts
   bs/             /bs:* workflow commands (dev, quality, test, plan, ...)
-  gh/             /gh:* GitHub (review-pr, fix-issue)
-  cc/             /cc:* Claude Code meta (create-command, optimize)
+  gh/             /gh:* GitHub (fix-issue)
+  cc/             /cc:* Claude Code meta (create-command, update-claudemd)
   *.md            Top-level: debug, refactor, update-claudemd, bs:scrub
 skills/           Auto-invoked capabilities — each has SKILL.md + optional refs
 agents/           Subagent definitions — code-reviewer, security-auditor
