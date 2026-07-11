@@ -26,15 +26,34 @@ Repeatable scorecard that rates your Claude Code setup against state-of-the-art 
 
 ### Step 0: Rubric Refresh + Fetch Latest CC Features
 
-**Rubric version: 2.1 | Last reviewed: 2026-07-02**
+**Rubric version: 3.0 | Last reviewed: 2026-07-10 | Baseline: Claude Code 2.1.207**
 
-**0a) Rubric staleness check** — if `last_reviewed` is >30 days ago:
+> **Why 3.0 is a rewrite, not a bump.** Rubric 2.1 claimed to be fresh (its own
+> staleness check only fires at >30 days) while scoring people against a Q1 2026
+> world. Its 13 categories contained **zero** of: agent teams, automatic memory,
+> the Workflow tool, auto mode, `/loop`, cron/Routines, plugin packaging,
+> `Tool(param:value)` permissions, sandbox hardening, `agent_completed` hooks,
+> `/usage`, `fallbackModel`, `requiredMinimumVersion`, or custom themes.
+>
+> **A stale state-of-the-art scorer is worse than none** — it certifies a
+> superseded setup as excellent. This is the one skill whose entire value is
+> currency, so treat rubric staleness as a P0 bug, not a chore.
 
-1. Search: `"Claude Code best practices 2026"`, `"Claude Code new features changelog site:github.com/anthropics/claude-code"`, `"AI coding assistant setup scoring"`
-2. Check CC release notes for new capabilities (new hook types, new settings, new agent features)
-3. Compare current 13-category rubric against findings — are there new categories that should exist? Are any benchmarks outdated?
-4. Propose rubric changes (new categories, adjusted 10/10 benchmarks, removed obsolete checks)
-5. Update `last_reviewed` date and `rubric_version` after applying changes
+**0a) Rubric staleness check** — if `last_reviewed` is >30 days ago, **STOP and
+refresh the rubric before scoring anything.** Do not score against a stale rubric
+and caveat it; the score would be actively misleading.
+
+1. Fetch the changelog: `https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md`
+   (note: **no dates, only version numbers** — reconstruct dates from
+   `npm view @anthropic-ai/claude-code time` if you need them)
+2. Fetch `https://code.claude.com/docs/en/whats-new`
+3. Fetch the live settings schema — it is the ground truth for which keys exist:
+   `https://json.schemastore.org/claude-code-settings.json`.
+   **Validate the user's settings.json against it.** This is how we found
+   `autoApproveEdits` and top-level `defaultMode` were inert.
+4. For each new capability, ask: does this **obsolete** a category (something we
+   reward that the platform now does for free), or **create** one?
+5. Bump `rubric_version` and `last_reviewed`.
 
 If <30 days, just do 0b.
 
@@ -60,25 +79,35 @@ config/CLAUDE.md     → line count, section coverage
 .husky/              → hook types configured
 ```
 
-### Step 2: Rate 13 Categories
+### Step 2: Rate 15 Categories
 
-Score each category 1-10 against the benchmarks below. Be objective — deduct for missing items.
+Score each 1-10 against the benchmarks below. Be objective — deduct for missing
+items. **Categories 1-5 are the ones that changed most in 2026; check them first.**
 
-| #   | Category                   | What SOTA Looks Like (10/10)                                                                                                                                                                                                                                                                                                                                                                                                                                  | Key Files to Check                                                               |
-| --- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| 1   | **CLAUDE.md**              | <100 lines, covers: action defaults, code style, quality standards, communication, tools, deployment, config mgmt, error handling. No bloat.                                                                                                                                                                                                                                                                                                                  | `config/CLAUDE.md`                                                               |
-| 2   | **Settings & Permissions** | Granular allow/deny/ask. Deny destructive ops. Ask for secrets reads. No blanket `Bash(*)`.                                                                                                                                                                                                                                                                                                                                                                   | `config/settings.json` permissions                                               |
-| 3   | **Hooks**                  | PostToolUse (lint+security on edit), PreToolUse (block push main), PreCompact (backup), TeammateIdle, TaskCompleted. 5+ hook types. No monotonic-threshold hook bugs: any PostToolUse/PreToolUse hook using a numeric threshold check (`-gt N`, `> N`) must reset, use modulo, or otherwise fire once/periodically — never on every call once past the threshold (re-injects duplicate context on every subsequent tool call for the rest of a long session). | `config/settings.json` hooks                                                     |
-| 4   | **Skills**                 | 15+ skills. Mix of auto-invoke + manual. Heavy skills use `context: fork`. Dynamic context injection. Heavy AUTONOMOUS skills use `context: fork`; interactive skills correctly stay unforked regardless of size.                                                                                                                                                                                                                                             | `skills/*/SKILL.md`                                                              |
-| 5   | **Commands**               | 25+ commands. Proper frontmatter (name, description, tags, category). <150KB total. Organized by prefix.                                                                                                                                                                                                                                                                                                                                                      | `commands/**/*.md`                                                               |
-| 6   | **Infrastructure Hygiene** | No unused MCP plugins. No dead scripts (0 unreferenced). Repo <300MB. No orphan root files. No empty/stale ~/Projects dirs. repo-hygiene module returns 0 findings.                                                                                                                                                                                                                                                                                           | `config/settings.json` enabledPlugins, `scripts/steward/modules/repo-hygiene.sh` |
-| 7   | **Quality Gates**          | Autonomous quality loop. Lint + typecheck + test + build + security scan. Pattern analysis. Auto-merge flow.                                                                                                                                                                                                                                                                                                                                                  | `commands/bs/quality.md`, `skills/quality/`                                      |
-| 8   | **Autonomous Dev**         | Ralph with retry loops, CI recovery, learning capture, fresh context per item. Parallel agent teams option.                                                                                                                                                                                                                                                                                                                                                   | `commands/bs/ralph.md`                                                           |
-| 9   | **Security**               | Gitleaks in hooks, semgrep rules, pattern-check.sh, deny list for destructive commands, secrets in env vars only.                                                                                                                                                                                                                                                                                                                                             | `.semgrep/`, `scripts/pattern-check.sh`, hooks                                   |
-| 10  | **Git Workflow**           | Pre-commit (lint-staged), pre-push (typecheck + branch naming), conventional commits, auto-rollback, branch hygiene.                                                                                                                                                                                                                                                                                                                                          | `.husky/`, `commitlint.config.*`                                                 |
-| 11  | **Documentation**          | CLAUDE.md + Linear backlog + command help + skill docs. Auto-doc detection in quality. Cheatsheet. Session learnings.                                                                                                                                                                                                                                                                                                                                         | `docs/`, Linear MCP                                                              |
-| 12  | **Portability**            | Submodule-ready. Install script. Symlink management. Cross-project sync. Setup smoke test.                                                                                                                                                                                                                                                                                                                                                                    | `install.sh`, `scripts/setup-claude-sync.sh`                                     |
-| 13  | **Tool Currency**          | Zero outdated global tools (`npm outdated -g` clean). CC plugins at latest. brew tools current. Vercel CLI, gh all latest.                                                                                                                                                                                                                                                                                                                                    | `npm outdated -g`, `brew outdated`, plugin cache                                 |
+#### The platform-currency categories (new in rubric 3.0)
+
+| #   | Category                | What SOTA Looks Like (10/10)                                                                                                                                                                                                                                                                                                                                                                                                                    | How to Check                                                                                                                         |
+| --- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | **Settings validity**   | `settings.json` **validates against the live schema**. No invented keys. Watch for: top-level `defaultMode` and `autoApproveEdits` (**neither exists** — `defaultMode` only lives under `permissions`); stale tool names in `permissions.allow` (`Task` is now `Agent`; `SlashCommand`/`EnterPlanMode`/`AskUserQuestion`/`BashOutput` are gone). An invented key is not a no-op you can ignore — it is a setting you _believe_ is on and isn't. | Validate against `https://json.schemastore.org/claude-code-settings.json` (e.g. `npx ajv-cli validate -s <schema> -d settings.json`) |
+| 2   | **Permission posture**  | `permissions.defaultMode: "auto"`. Auto mode is the **only** mode that hard-blocks `git reset --hard`, `git clean -fd`, `git stash drop`, and terraform/pulumi/cdk `destroy`. Granular allow/deny. No blanket `Bash` in allow. `Tool(param:value)` rules used where they buy something (e.g. `Agent(model:opus)` as a cost lever). Sandbox hardening: `sandbox.credentials`, `deniedDomains`.                                                   | `permissions` block                                                                                                                  |
+| 3   | **Native-first**        | **Nothing reimplements a built-in.** Deduct hard for a custom cost tracker (`/usage` does it), a local multi-agent PR reviewer (`/code-review ultra`), a bespoke session/checkpoint system (automatic memory + `/rewind`), a hand-rolled cron/poller (`/loop`, cron tools, Routines), a custom agent dashboard (`claude agents` + Monitor + notifications), or hand-rolled worktree isolation (`worktree.bgIsolation` defaults to it).          | Inventory every custom script/skill; for each, ask "did the platform ship this?"                                                     |
+| 4   | **Distribution**        | Shipped as a **plugin** (`.claude-plugin/plugin.json` + a marketplace), so components are namespaced `plugin:skill` and cannot shadow built-ins. Deduct heavily for `curl \| bash` + symlinks into `~/.claude`: it clobbers, it can't version, and **it lands skills unprefixed where they silently override Anthropic's own** `/cost`, `/review`, `/status`, `/resume`, `/context`, `/tasks`.                                                  | `.claude-plugin/`, `claude plugin validate .`                                                                                        |
+| 5   | **Agent orchestration** | Uses native background subagents (auto-commit/push/draft-PR since 2.1.198), agent teams, and the **Workflow tool** for deterministic fan-out. `agent_completed` / `agent_needs_input` Notification hooks wired — without them a background agent can finish or stall **with no signal at all**. Bounded loops (see #7).                                                                                                                         | `hooks` Notification matchers; Workflow usage                                                                                        |
+
+#### The durable categories
+
+| #   | Category             | What SOTA Looks Like (10/10)                                                                                                                                                                                                                                                                                                                            | How to Check                                       |
+| --- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| 6   | **CLAUDE.md**        | <100 lines. Action defaults, code style, quality bar, communication, tools, safety. No bloat — every line is read on every turn, so length is a tax.                                                                                                                                                                                                    | `config/CLAUDE.md`                                 |
+| 7   | **Bounded autonomy** | **Every autonomous loop has a MECHANICALLY ENFORCED cap** — a non-zero exit code, not a sentence of prose. A cap written in English that the model is asked to honour is not a cap; the model orchestrates the loop and will run past it. Round caps, wall-clock caps, budget governors. Human checkpoints on one-way doors.                            | Any fix→re-review or retry loop                    |
+| 8   | **Hooks**            | PreToolUse (block push to main, block destructive paths), PostToolUse (lint), PreCompact, plus the agent lifecycle matchers from #5. No monotonic-threshold bugs (a `-gt N` check with no reset re-fires on every subsequent tool call for the rest of the session).                                                                                    | `hooks` block                                      |
+| 9   | **Skill design**     | Skills are focused and discoverable. Heavy AUTONOMOUS skills use `context: fork`; interactive ones correctly don't. Progressive disclosure — long reference material split into `reference.md`, not inlined into SKILL.md. **No inert frontmatter** (`invokes:` and `auto_invoke:` do not exist — verify against the binary before relying on a field). | `skills/*/SKILL.md`                                |
+| 10  | **Model config**     | `fallbackModel` set to a real chain (not just the default model, which is a no-op). Effort levels used deliberately (`xhigh` for the hardest verification, not everywhere). No retired model IDs anywhere — and a deprecation scanner that would catch them.                                                                                            | `fallbackModel`, `effortLevel`, grep for model IDs |
+| 11  | **Quality gates**    | Autonomous quality loop: lint + typecheck + test + build + security scan. Second-opinion review. Auto-merge flow that actually completes.                                                                                                                                                                                                               | `skills/quality/`                                  |
+| 12  | **Security**         | Secret scanning in hooks, semgrep rules, deny-list for destructive commands, secrets in env vars only. **No private paths or personal data in anything distributed.**                                                                                                                                                                                   | `.semgrep/`, hooks, leak grep                      |
+| 13  | **Git workflow**     | Pre-commit (lint-staged), pre-push, conventional commits, feature branches, never commit to main.                                                                                                                                                                                                                                                       | `.husky/`, `commitlint.config.*`                   |
+| 14  | **Observability**    | `/usage` for per-category cost (skills, subagents, plugins, per-MCP). OpenTelemetry configured if running a fleet. No hand-rolled cost tracking that has never actually run.                                                                                                                                                                            | `/usage`, OTel env                                 |
+| 15  | **Currency**         | `requiredMinimumVersion` pinned so you can _depend_ on new behaviour. CC and plugins at latest. Global tools current. **Rubric itself <30 days old** (see 0a).                                                                                                                                                                                          | `requiredMinimumVersion`, `npm outdated -g`        |
 
 ### Step 3: Output Format
 
@@ -86,23 +115,39 @@ Score each category 1-10 against the benchmarks below. Be objective — deduct f
 🎯 CLAUDE CODE SOTA SCORECARD
 ==============================
 Date: YYYY-MM-DD | Project: [name]
+Rubric 3.0 | Claude Code <version detected>
 
-| # | Category            | Score | Verdict              | Top Gap                    |
-|---|---------------------|-------|----------------------|----------------------------|
-| 1 | CLAUDE.md           | 9/10  | ✅ Excellent         | —                          |
-| 2 | Settings            | 8/10  | ✅ Strong            | No env block for secrets   |
+PLATFORM CURRENCY (the 2026 categories)
+| # | Category            | Score | Verdict              | Top Gap                          |
+|---|---------------------|-------|----------------------|----------------------------------|
+| 1 | Settings validity   | 4/10  | 🔶 Fair              | 2 invented keys; 5 dead tool names|
+| 2 | Permission posture  | 3/10  | ❌ Needs Work        | Not in auto mode — destructive git unblocked |
+| 3 | Native-first        | 5/10  | 🔶 Fair              | Custom cost tracker; /usage does this |
+| 4 | Distribution        | 2/10  | ❌ Needs Work        | curl|bash symlinks; 6 skills shadow built-ins |
+| 5 | Agent orchestration | 6/10  | ⚠️ Good              | No agent_completed hook — silent stalls |
+
+DURABLE
+| # | Category            | Score | Verdict              | Top Gap                          |
+|---|---------------------|-------|----------------------|----------------------------------|
+| 6 | CLAUDE.md           | 9/10  | ✅ Excellent         | —                                |
+| 7 | Bounded autonomy    | 3/10  | ❌ Needs Work        | Review loop cap is PROSE, not code |
 | ...
-| 12| Portability         | 7/10  | ⚠️ Good              | No cross-platform testing  |
+| 15| Currency            | 7/10  | ⚠️ Good              | No requiredMinimumVersion        |
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-OVERALL: 8.2/10 — Strong setup, 3 gaps to close
+OVERALL: 5.4/10 — Setup is stale against the platform
 
 Legend: ✅ 8+ Excellent | ⚠️ 6-7 Good | 🔶 4-5 Fair | ❌ <4 Needs Work
 ```
 
+**Scoring honesty.** A setup that was 9/10 in Q1 can be 5/10 today without a
+single file changing — the platform moved. Say so plainly. Do not grade on a
+curve, and do not soften a low score on categories 1-5 because the setup "used to
+be good." The whole point of this skill is to catch drift the user can't see.
+
 ### Step 4: Save History (always)
 
-Append result to `$SETUP_REPO/data/sota-history.json` (the shared repo history file):
+Append result to `.claude/sota-history.json` in the current project (created on first run):
 
 ```json
 {
@@ -119,11 +164,11 @@ Append result to `$SETUP_REPO/data/sota-history.json` (the shared repo history f
 }
 ```
 
-Read the existing file, append the new entry to `entries[]`, update `lastUpdated` to today's date, and write back. Keep all historical entries (no rolling limit — file is small). Also append to `.claude/sota-history.json` for backward compatibility.
+Read the existing file, append the new entry to `entries[]`, update `lastUpdated` to today's date, and write back. Keep all historical entries (no rolling limit — the file is small).
 
 ### Step 4.5: Write Report File (always)
 
-Write the full rendered scorecard (everything shown to user in Steps 3/5/6) to `$SETUP_REPO/data/sota-report.md`.
+Write the full rendered scorecard (everything shown to the user in Steps 3/5/6) to `.claude/sota-report.md`.
 
 **Rolling file format — keep last 3 assessments:**
 

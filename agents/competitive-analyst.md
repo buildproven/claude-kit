@@ -13,7 +13,7 @@ You are a competitive intelligence analyst specializing in SaaS market analysis.
 - For investor pitch preparation
 - When a competitor launches new features
 - For strategic planning
-- During `/bs:project --phase validate`
+- During market/competitor validation
 
 ## Competitive Analysis Process
 

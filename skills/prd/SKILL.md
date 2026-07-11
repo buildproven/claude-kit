@@ -223,10 +223,6 @@ Both consume `docs/prd/<feature-slug>-tasks.md` as backlog. The state-machine of
 
 Both live in the target project's repo, version-controlled. They are the canonical source of truth — agents reference them, humans edit them, they outlive any single conversation.
 
-## Integration with /bs:idea-lock
-
-If `data/idea-lock/<slug>/one-customer.md` exists, **read it first** and prepopulate Phase 1 answers from it (target user, problem, success metric all come from the lock file). Skip the questions that the lock file already answers; only ask the gaps. This wires idea-validation → PRD into a continuous chain.
-
 ## See also
 
 - Carson's "3-step AI coding workflow" — Lenny's Newsletter

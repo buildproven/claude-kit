@@ -58,7 +58,7 @@ You are a [specific role] that [specific purpose].
 
 ```typescript
 const response = await anthropic.messages.create({
-  model: "claude-sonnet-4-20250514",
+  model: "claude-sonnet-5",
   max_tokens: 1024,
   system: `You extract structured data. Always respond with valid JSON.
 
@@ -95,7 +95,7 @@ const tools = [
 ];
 
 const response = await anthropic.messages.create({
-  model: "claude-sonnet-4-20250514",
+  model: "claude-sonnet-5",
   tools,
   tool_choice: { type: "tool", name: "extract_info" },
   messages: [{ role: "user", content: userInput }],
@@ -135,7 +135,7 @@ const system = `Respond in 1-2 sentences maximum.`;
 ```typescript
 // For repetitive system prompts, use caching
 const response = await anthropic.messages.create({
-  model: "claude-sonnet-4-20250514",
+  model: "claude-sonnet-5",
   system: [
     {
       type: "text",
@@ -240,7 +240,7 @@ Constraints:
 async function classifyWithFallback(text: string) {
   try {
     const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-5",
       max_tokens: 50,
       messages: [{ role: "user", content: text }],
     });
