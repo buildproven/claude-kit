@@ -6,13 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `claude-kit` is the **public, free core layer** of a three-tier Claude Code toolkit. It ships commands, skills, agents, hooks, and setup scripts that get symlinked into `~/.claude/` (globally) or `.claude/` (per-project, typically via git submodule). There is no runtime product — the artifacts here _are_ the product.
 
-Three tiers stack bottom-up, each submoduling the one below:
+Two tiers stack bottom-up:
 
-1. **claude-kit** (this repo) — core dev commands, quality gates, skills, review agents
-2. **claude-kit-pro** (private, paid) — adds autonomous workflow, session mgmt, premium skills
-3. **Private overlay** — per-operator `CLAUDE.md`, private commands, secrets
+1. **claude-kit** (this repo) — everything: dev commands, quality gates, autonomous
+   workflow, strategy, domain skills, 14 agents. Free, MIT.
+2. **Private overlay** — per-operator `CLAUDE.md`, private commands, secrets.
+   Submodules this repo.
 
-See `EXTENSION-ARCHITECTURE.md` for the contract. The key rule: **lower layers never embed references to higher layers**. Don't hardcode `claude-kit-pro` or private-overlay paths in anything under this repo.
+The paid `claude-kit-pro` middle tier was folded into this repo (see README).
+
+See `EXTENSION-ARCHITECTURE.md` for the contract. The key rule: **lower layers never
+embed references to higher layers**. Don't hardcode private-overlay paths in anything
+under this repo — a public repo must never tell a user to run code from a path only
+the author has.
 
 ## Installation model (important mental model)
 
@@ -97,7 +103,7 @@ When changing any of these scripts: the hook invokes them as `$HOME/.claude/scri
 ### Quality / release automation
 
 - `.github/workflows/quality.yml` runs the gate in CI. Stryker mutation testing is scoped narrowly to `scripts/risk-policy-gate.js` only — don't broaden without reason, it's slow.
-- `.github/workflows/cascade-to-pro.yml` auto-opens a submodule-bump PR in `claude-kit-pro` on push to `main`. Anything committed here propagates up within minutes.
+- `.github/workflows/cascade-to-pro.yml` auto-opens a submodule-bump PR in the overlay repo on push to `main`. Anything committed here propagates up within minutes.
 - `.husky/` + `lint-staged` run prettier/eslint/bash-syntax on commit. `commitlint.config.js` enforces conventional commits (`feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert`).
 
 ### ESLint setup

@@ -104,51 +104,40 @@ Don't reimplement what the platform ships. As of 2.1.207:
 
 ## Skills
 
-Auto-invoke skills triggered by natural-language requests:
+Skills auto-invoke from natural language — you don't have to type a command.
 
-- `quality` — autonomous quality loop with tier classification + Codex cross-review
-- `healthcheck` — session-start health (MCP servers, repo sync, gateway)
-- `recover` — crash and state recovery
-- `cleanup` — system resource cleanup
-- `scrub` — prep for open source / giveaway / commercial sale
-- `test-strategy` — test coverage planning
-- `error-handling` — consistent error patterns
-- `api-conventions` — API design standards
-- `cost`, `deps`, `status`, `workflow` — dev hygiene
-- `frontend-design` — distinctive frontend interfaces (Apache 2.0)
-- `ui-reviewer` — UI/UX design review
-- `webapp-testing` — Playwright-based webapp testing (Apache 2.0)
-- `visualise` — inline SVG/HTML/chart visualizations
+**Engineering** — `quality` (tier-aware review + Codex cross-review),
+`test-strategy`, `error-handling`, `api-conventions`, `recover`, `cleanup`,
+`scrub`, `deps`, `status`, `workflow`, `healthcheck`
 
-Just ask: `"Run the quality skill"`, `"Use the visualise skill to diagram this"`, etc.
+**Build quality** — `frontend-design` (Apache 2.0), `ui-reviewer`,
+`webapp-testing` (Apache 2.0), `visualise`
+
+**Autonomous & strategy** — `ralph`, `strategy`, `review`, `prd`, `backlog`,
+`sota`, `steward`, `triage`, `patterns`, `recover-quality`, `verify-claim`,
+`office-hours`
+
+**Domain** — `legal`, `market-validation`, `monetize`, `seo`, `review-content`,
+`agent-browser`
+
+Just ask: `"Run the quality skill"`, `"Use the visualise skill to diagram this"`.
 
 ## Agents
 
-8 specialist SWE agents (invoked via the Task tool or directly):
+14 specialists. Claude picks the right one, or name it directly.
 
-- `code-reviewer` — full PR review for bugs, security, design
-- `security-auditor` — OWASP, vulnerabilities, dependency audit
-- `accessibility-tester` — WCAG 2.1 AA, screen reader, color contrast
-- `architect-reviewer` — system design review
-- `performance-engineer` — Lighthouse, bundle analysis, Core Web Vitals
-- `postgres-pro` — query optimization, index design, Prisma
-- `prompt-engineer` — AI-feature prompt optimization
-- `refactoring-specialist` — safe test-driven refactoring
+**Engineering** — `code-reviewer`, `security-auditor`, `accessibility-tester`,
+`architect-reviewer`, `performance-engineer`, `postgres-pro`, `prompt-engineer`,
+`refactoring-specialist`
+
+**Strategy & domain** — `business-panel-experts` (Christensen, Porter, Drucker,
+Godin, Kim & Mauborgne, Collins, Taleb, Meadows), `competitive-analyst`,
+`critic`, `seo-specialist`, `github-issue-fixer`, `command-creator`
 
 ## Extend
 
-See [EXTENSION-ARCHITECTURE.md](EXTENSION-ARCHITECTURE.md) for how to layer private commands and preferences on top without forking.
-
-[claude-kit-pro](https://github.com/buildproven/claude-kit-pro) submodules this repo — upgrading is a one-line submodule swap, no manual copying.
-
-## When you might want pro
-
-If kit covers your workflow, you don't need pro. But pro adds two distinct categories of value:
-
-1. **Autonomous workflow** — `/bs:ralph` runs your backlog unattended for hours. `/bs:strategy` fans questions across Claude+Codex+Gemini. `/bs:session` saves/resumes work across days. `/bs:sentry` auto-audits all your projects.
-2. **Commercial intelligence** — `legal`, `market-validation`, `seo` (via DataForSEO), `monetize`, `review-content` skills. `business-panel-experts` agent synthesizes Christensen/Porter/Drucker/Hormozi/Kim & Mauborgne/Collins/Taleb/Meadows.
-
-If you're a solo founder shipping multiple products, that's the value. Otherwise stick with kit.
+See [EXTENSION-ARCHITECTURE.md](EXTENSION-ARCHITECTURE.md) for how to layer
+private commands and preferences on top without forking.
 
 ## Customize
 
