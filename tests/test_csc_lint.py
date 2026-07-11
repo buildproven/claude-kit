@@ -44,16 +44,39 @@ def test_clean_pair_has_no_violations(tmp_path: Path) -> None:
     assert rep.violations == [], [v.detail for v in rep.violations]
 
 
-def test_r1_missing_invokes_warns(tmp_path: Path) -> None:
-    # No `invokes:` and no `standalone:` -> R1 (plan §5.1 requires the declaration).
+def test_r1_delegation_prose_is_sufficient(tmp_path: Path) -> None:
+    # R1 used to demand an `invokes:` frontmatter key. Claude Code DOES NOT PARSE
+    # that field (verified against the 2.1.207 binary: `allowed-tools`,
+    # `standalone`, `argument-hint`, `user-invocable` and
+    # `disable-model-invocation` all appear as quoted frontmatter keys; `invokes`
+    # and `auto_invoke` appear zero times). The delegation has always worked
+    # purely because the BODY says "Invoke the `x` skill".
+    #
+    # So the prose alone must be enough. Demanding a field the runtime ignores is
+    # worse than not linting — it manufactures busywork and lends false confidence.
     _mk(
         tmp_path,
         "commands/bs/quality.md",
-        "---\nname: bs:quality\ndescription: x\n---\nInvoke the quality skill.\n",
+        "---\nname: bs:quality\ndescription: x\n---\nInvoke the `quality` skill.\n",
     )
     _mk(tmp_path, "skills/quality/SKILL.md", _skill("quality"))
     rep = csc_lint.lint(tmp_path)
-    assert any(v.rule == "R1" and "invokes" in v.detail for v in rep.violations)
+    assert not any(v.rule in ("R1", "R3") for v in rep.violations), [
+        v.detail for v in rep.violations
+    ]
+
+
+def test_r1_flags_a_command_that_neither_delegates_nor_stands_alone(
+    tmp_path: Path,
+) -> None:
+    # No delegation prose, no same-named skill, not standalone -> genuinely broken.
+    _mk(
+        tmp_path,
+        "commands/bs/orphan.md",
+        "---\nname: bs:orphan\ndescription: x\n---\nsome body with no delegation\n",
+    )
+    rep = csc_lint.lint(tmp_path)
+    assert any(v.rule == "R1" for v in rep.violations)
 
 
 def test_r2_namespace_must_match_parent_dir(tmp_path: Path) -> None:
@@ -239,14 +262,13 @@ def test_r4_bare_commands_heading_still_catches_invocations(tmp_path: Path) -> N
     ]
 
 
-def test_frontmatter_parses_list_form_invokes(tmp_path: Path) -> None:
-    # Plan §5.1 documents the value on the next indented line. The parser must
-    # read it; otherwise the command looks like it's missing `invokes:` and
-    # produces a false R3 (Codex finding 2026-06-05).
+def test_delegation_prose_to_a_differently_named_skill(tmp_path: Path) -> None:
+    # A command may delegate to a skill whose name differs from its own basename.
+    # The prose is the source of truth (there is no `invokes:` field to consult).
     _mk(
         tmp_path,
         "commands/bs/design.md",
-        "---\nname: bs:design\ndescription: x\ninvokes:\n  design-loop\n---\nbody\n",
+        "---\nname: bs:design\ndescription: x\n---\nInvoke the `design-loop` skill.\n",
     )
     _mk(tmp_path, "skills/design-loop/SKILL.md", _skill("design-loop"))
     rep = csc_lint.lint(tmp_path)
@@ -322,12 +344,13 @@ def test_standalone_command_skips_invoke_check(tmp_path: Path) -> None:
     assert not any(v.rule == "R3" for v in rep.violations)
 
 
-def test_explicit_invokes_overrides_basename(tmp_path: Path) -> None:
+def test_r3_flags_delegation_to_a_skill_that_does_not_exist(tmp_path: Path) -> None:
+    # The check that actually matters: a command must not delegate into the void.
     _mk(
         tmp_path,
         "commands/bs/design.md",
-        "---\nname: bs:design\ndescription: x\ninvokes: design-loop\n---\nbody\n",
+        "---\nname: bs:design\ndescription: x\n---\nInvoke the `design-loop` skill.\n",
     )
-    _mk(tmp_path, "skills/design-loop/SKILL.md", _skill("design-loop"))
+    # ...and design-loop is deliberately NOT created.
     rep = csc_lint.lint(tmp_path)
-    assert not any(v.rule == "R3" for v in rep.violations)
+    assert any(v.rule == "R3" for v in rep.violations)
