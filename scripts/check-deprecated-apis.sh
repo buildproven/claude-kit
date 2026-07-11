@@ -46,9 +46,27 @@ done < <(find "$SCAN_DIR" -name '*.py' -not -path '*/node_modules/*' -not -path 
 
 # ---------- 2. Outdated model references (all code + config files) ----------
 
+# Retired/superseded model IDs. Anthropic entries added 2026-07-10: this scanner
+# only knew about IMAGE models, so it could not catch a stale Claude ID — and
+# didn't. Four `claude-sonnet-4-20250514` references sat in a shipped agent, and
+# a cost table priced everything after Opus 4.6 at Sonnet-4.5 rates. Keeping the
+# Claude IDs here makes model drift self-healing instead of a manual audit.
+#
+# Current as of 2026-07: Opus 4.8, Sonnet 5, Haiku 4.5, Fable 5.
+# Prefer the unversioned aliases (claude-opus-4-8, claude-sonnet-5) over dated
+# snapshots — they don't rot.
 OUTDATED_MODELS=(
   '"imagen-3"|Outdated model: imagen-3 (replaced by imagen-4)'
   '"gemini-2.0-flash-exp"|Outdated model: gemini-2.0-flash-exp (deprecated)'
+  'claude-3-haiku|Retired model: claude-3-haiku (use claude-haiku-4-5)'
+  'claude-3-opus|Retired model: claude-3-opus (use claude-opus-4-8)'
+  'claude-3-sonnet|Retired model: claude-3-sonnet (use claude-sonnet-5)'
+  'claude-3-5-sonnet|Retired model: claude-3-5-sonnet (use claude-sonnet-5)'
+  'claude-sonnet-4-2025|Retired model: Sonnet 4 snapshot (use claude-sonnet-5)'
+  'claude-sonnet-4-5|Superseded: Sonnet 4.5 auto-migrated to 4.6 (use claude-sonnet-5)'
+  'claude-opus-4-1|Superseded: Opus 4.1 (use claude-opus-4-8)'
+  'claude-opus-4-5|Superseded: Opus 4.5 (use claude-opus-4-8)'
+  'claude-opus-4-6|Superseded: Opus 4.6 (use claude-opus-4-8)'
 )
 
 while IFS= read -r -d '' codefile; do

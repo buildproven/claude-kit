@@ -113,7 +113,7 @@ markdown task list. If yes, switch to **list mode** (Step 9 below).
 
 ```bash
 # Locate the parser. It ships with claude-kit; resolve via several candidates so
-# this works whether dev/ralph are invoked from claude-kit, claude-kit-pro (vendored
+# this works whether dev/ralph are invoked from claude-kit (vendored
 # at core/), or a downstream consumer.
 resolve_parser() {
   local candidates=(

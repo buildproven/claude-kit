@@ -1,41 +1,62 @@
 # claude-kit
 
-Free, open-source Claude Code toolkit. A complete dev toolkit — quality automation, code review, build-quality skills, dev hygiene. Most devs won't need anything more.
+Free, open-source (MIT) Claude Code toolkit. Quality automation, autonomous
+backlog execution, multi-LLM strategy panels, fleet auditing, commercial
+intelligence, and 14 specialist agents.
 
-This repo is the public core. It is designed to be extended, not forked.
-
-## Tiers
-
-|                               | claude-kit (this repo)                                                                                                                                    | [claude-kit-pro](https://github.com/buildproven/claude-kit-pro)                                             |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| **Price**                     | Free (MIT)                                                                                                                                                | Paid                                                                                                        |
-| **Quality automation**        | ✅ tier-aware, Codex cross-review, break-glass                                                                                                            | (uses kit's)                                                                                                |
-| **Dev workflow**              | ✅ `/bs:dev`, `/bs:plan`, `/bs:test`, `/bs:new`                                                                                                           | (uses kit's)                                                                                                |
-| **Dev hygiene**               | ✅ cost, deps, status, workflow, cleanup                                                                                                                  | (uses kit's)                                                                                                |
-| **Build-quality skills**      | ✅ frontend-design, ui-reviewer, webapp-testing, visualise                                                                                                | (uses kit's)                                                                                                |
-| **SWE specialist agents**     | ✅ code-reviewer, security-auditor, accessibility-tester, architect-reviewer, performance-engineer, postgres-pro, prompt-engineer, refactoring-specialist | (uses kit's)                                                                                                |
-| **Investigate + bootstrap**   | ✅ `/bs:investigate`, `/bs:init-project`                                                                                                                  | (uses kit's)                                                                                                |
-| **GitHub workflow**           | ✅ `/gh:fix-issue`, `/gh:review-pr`                                                                                                                       | (uses kit's)                                                                                                |
-| **Autonomous backlog**        | —                                                                                                                                                         | ✅ `/bs:ralph`                                                                                              |
-| **Multi-LLM strategy panels** | —                                                                                                                                                         | ✅ `/bs:strategy` (Claude + Codex + Gemini parallel)                                                        |
-| **Session save/resume**       | —                                                                                                                                                         | ✅ `/bs:session`, `/bs:resume`, `/bs:context`                                                               |
-| **Fleet-wide auto-audit**     | —                                                                                                                                                         | ✅ `/bs:sentry`, `/bs:steward`, `/bs:sota`                                                                  |
-| **Agent infra**               | —                                                                                                                                                         | ✅ `/bs:agent-new`, `/bs:agent-run`, `/bs:dashboard`, agent-browser skill                                   |
-| **Commercial-intelligence**   | —                                                                                                                                                         | ✅ legal, market-validation, seo, monetize, review-content skills                                           |
-| **Pro-only agents**           | —                                                                                                                                                         | ✅ business-panel-experts, competitive-analyst, critic, github-issue-fixer, command-creator, seo-specialist |
-| **License-enforcement MCP**   | —                                                                                                                                                         | ✅ claude-kit-license (signed-registry validator)                                                           |
+**Everything is free.** There used to be a paid `claude-kit-pro` tier; it has
+been folded into this repo. See [Why it's all free now](#why-its-all-free-now).
 
 ## What's inside
 
-| Dir         | Contents                                                       |
-| ----------- | -------------------------------------------------------------- |
-| `commands/` | `/bs:*`, `/gh:*`, `/cc:*` core commands                        |
-| `skills/`   | Quality, testing, dev hygiene, build-quality, recovery, scrub  |
-| `agents/`   | 8 SWE specialist agents (see table above)                      |
-| `scripts/`  | Hooks, lint, branch-protection, quality-target-resolver, setup |
-| `config/`   | Generic `CLAUDE.md` and `settings.json` templates              |
+| Dir         | Contents                                                           |
+| ----------- | ------------------------------------------------------------------ |
+| `commands/` | 30 `/bs:*` + `/gh:*` + `/cc:*` commands                            |
+| `skills/`   | 36 skills — quality, autonomous workflow, strategy, domain         |
+| `agents/`   | 14 specialist agents                                               |
+| `scripts/`  | Hooks, lint, branch-protection, quality governor, review companion |
+| `config/`   | Generic `CLAUDE.md` and `settings.json` templates                  |
+
+## Why it's all free now
+
+Between January and July 2026 Anthropic shipped, natively and for free, most of
+what the paid tier was selling: background subagents that auto-commit, push and
+open a draft PR (2.1.198); agent teams; the Workflow tool; worktree isolation;
+automatic memory; `/loop` + cron + Routines; `/code-review ultra`; and `/usage`.
+
+Charging for a thinner version of what the platform now includes is not a
+business. So the orchestration layer is free, the redundant parts are deleted
+(see the table below), and what remains is the part Anthropic doesn't ship:
+opinionated workflow, and domain judgment (`legal`, `market-validation`,
+`monetize`, `seo`, `review-content`, and the strategy panels).
 
 ## Quick start
+
+Install as a Claude Code plugin:
+
+```
+/plugin marketplace add buildproven/claude-kit
+/plugin install bs@buildproven
+```
+
+That's it. No symlinks, no `curl | bash`, no clobbering your `~/.claude`.
+
+### Everything is namespaced `/bs:*`
+
+Because the plugin is named `bs`, every skill it ships is addressed with a `bs:`
+prefix — `/bs:quality`, `/bs:ralph`, `/bs:strategy`. This is real namespacing
+enforced by Claude Code, not a naming convention:
+
+- **Nothing collides with a built-in.** Before this, the kit shipped bare skills
+  called `cost`, `review`, `status`, `resume`, `context` and `tasks` — all of
+  which _shadowed_ Anthropic's own `/cost`, `/review`, `/status`, `/resume`,
+  `/context` and `/tasks`. Personal skills beat bundled ones, so typing `/cost`
+  silently ran the kit's version instead of Claude Code's.
+- **You can always tell what's yours.** If it has a `bs:` prefix, it came from
+  this kit.
+
+<details>
+<summary>Legacy install (symlinks) — still works, not recommended</summary>
 
 ```bash
 git clone https://github.com/buildproven/claude-kit.git ~/Projects/claude-kit
@@ -43,7 +64,11 @@ cd ~/Projects/claude-kit
 ./install.sh
 ```
 
-Then restart Claude Code.
+This symlinks `commands/`, `skills/` and `agents/` into `~/.claude/`. It works,
+but skills land unprefixed, so they can shadow Claude Code built-ins. Prefer the
+plugin.
+
+</details>
 
 ## Core commands
 
@@ -59,64 +84,90 @@ Then restart Claude Code.
 /bs:help        Full command reference
 /bs:workflow    Daily workflow guide
 /bs:status      Project catch-up summary
-/bs:cost        Cost tracking per feature/branch/command
 /bs:deps        Dependency health (outdated, audit, upgrade)
 /bs:cleanup     Clean AI CLI caches and temp files
 /bs:sync        Verify and repair config symlinks
 /bs:scrub       Prep a project for public release
 /gh:fix-issue   Full issue workflow: analyze → branch → fix → test → PR
-/gh:review-pr   Deep PR code review (multi-agent local analysis)
 /cc:create-command  Scaffold a new slash command
-/cc:optimize    Show Claude Code optimization guide
 ```
+
+### Autonomous workflow & strategy (was paid, now free)
+
+```text
+/bs:ralph       Autonomous backlog execution — pick, implement, test, reflect, repeat
+/bs:strategy    Multi-LLM strategy panel (Claude + Codex + Gemini, via API keys)
+/bs:review      Collaborative artifact review (PDFs, landing pages, emails, docs)
+/bs:prd         PRD discipline — clarifying questions, task list, pause gates
+/bs:backlog     Value-prioritized backlog
+/bs:sota        Score your setup against the state-of-the-art rubric, self-heal
+/bs:steward     Fleet-wide hygiene, currency and quality across all repos
+/bs:sentry      Fleet quality audit — 8 gates across every project
+/bs:triage      Sentry errors → cluster → Linear tickets → fix PR
+/bs:patterns    Search CLAUDE.md conventions across projects
+/bs:office-hours YC-style forcing questions
+/bs:recover-quality  Audit + fix quality regression, integrate learnings
+/bs:verify-claim Extract claims, verify against primary sources
+/bs:legal       Legal review for software founders
+```
+
+### Domain intelligence
+
+Skills, invoked in conversation: `market-validation`, `monetize`, `seo`,
+`review-content`, `agent-browser`.
+
+Agents: `business-panel-experts`, `competitive-analyst`, `critic`,
+`github-issue-fixer`, `command-creator`, `seo-specialist`.
+
+### Removed — Claude Code now does these natively
+
+Don't reimplement what the platform ships. As of 2.1.207:
+
+| Was                                        | Use instead                                                            |
+| ------------------------------------------ | ---------------------------------------------------------------------- |
+| `/bs:cost`                                 | `/usage` — per-category cost (skills, subagents, plugins, per-MCP)     |
+| `/gh:review-pr`                            | `/code-review ultra` — cloud multi-agent review, `--comment`/`--fix`   |
+| `/cc:optimize`                             | `/usage` + `fallbackModel` + `/effort`                                 |
+| `/bs:session`, `/bs:resume`, `/bs:context` | Automatic memory + `/rewind` (resumes from before `/clear`) + `/recap` |
+| `/bs:agent-new`, `/bs:agent-run`           | Edit `.claude/agents/` directly; `claude agents` to view               |
+| `/bs:dashboard`                            | `claude agents` + Monitor + `agent_completed` hooks + mobile push      |
 
 ## Skills
 
-Auto-invoke skills triggered by natural-language requests:
+Skills auto-invoke from natural language — you don't have to type a command.
 
-- `quality` — autonomous quality loop with tier classification + Codex cross-review
-- `healthcheck` — session-start health (MCP servers, repo sync, gateway)
-- `recover` — crash and state recovery
-- `cleanup` — system resource cleanup
-- `scrub` — prep for open source / giveaway / commercial sale
-- `test-strategy` — test coverage planning
-- `error-handling` — consistent error patterns
-- `api-conventions` — API design standards
-- `cost`, `deps`, `status`, `workflow` — dev hygiene
-- `frontend-design` — distinctive frontend interfaces (Apache 2.0)
-- `ui-reviewer` — UI/UX design review
-- `webapp-testing` — Playwright-based webapp testing (Apache 2.0)
-- `visualise` — inline SVG/HTML/chart visualizations
+**Engineering** — `quality` (tier-aware review + Codex cross-review),
+`test-strategy`, `error-handling`, `api-conventions`, `recover`, `cleanup`,
+`scrub`, `deps`, `status`, `workflow`, `healthcheck`
 
-Just ask: `"Run the quality skill"`, `"Use the visualise skill to diagram this"`, etc.
+**Build quality** — `frontend-design` (Apache 2.0), `ui-reviewer`,
+`webapp-testing` (Apache 2.0), `visualise`
+
+**Autonomous & strategy** — `ralph`, `strategy`, `review`, `prd`, `backlog`,
+`sota`, `steward`, `triage`, `patterns`, `recover-quality`, `verify-claim`,
+`office-hours`
+
+**Domain** — `legal`, `market-validation`, `monetize`, `seo`, `review-content`,
+`agent-browser`
+
+Just ask: `"Run the quality skill"`, `"Use the visualise skill to diagram this"`.
 
 ## Agents
 
-8 specialist SWE agents (invoked via the Task tool or directly):
+14 specialists. Claude picks the right one, or name it directly.
 
-- `code-reviewer` — full PR review for bugs, security, design
-- `security-auditor` — OWASP, vulnerabilities, dependency audit
-- `accessibility-tester` — WCAG 2.1 AA, screen reader, color contrast
-- `architect-reviewer` — system design review
-- `performance-engineer` — Lighthouse, bundle analysis, Core Web Vitals
-- `postgres-pro` — query optimization, index design, Prisma
-- `prompt-engineer` — AI-feature prompt optimization
-- `refactoring-specialist` — safe test-driven refactoring
+**Engineering** — `code-reviewer`, `security-auditor`, `accessibility-tester`,
+`architect-reviewer`, `performance-engineer`, `postgres-pro`, `prompt-engineer`,
+`refactoring-specialist`
+
+**Strategy & domain** — `business-panel-experts` (Christensen, Porter, Drucker,
+Godin, Kim & Mauborgne, Collins, Taleb, Meadows), `competitive-analyst`,
+`critic`, `seo-specialist`, `github-issue-fixer`, `command-creator`
 
 ## Extend
 
-See [EXTENSION-ARCHITECTURE.md](EXTENSION-ARCHITECTURE.md) for how to layer private commands and preferences on top without forking.
-
-[claude-kit-pro](https://github.com/buildproven/claude-kit-pro) submodules this repo — upgrading is a one-line submodule swap, no manual copying.
-
-## When you might want pro
-
-If kit covers your workflow, you don't need pro. But pro adds two distinct categories of value:
-
-1. **Autonomous workflow** — `/bs:ralph` runs your backlog unattended for hours. `/bs:strategy` fans questions across Claude+Codex+Gemini. `/bs:session` saves/resumes work across days. `/bs:sentry` auto-audits all your projects.
-2. **Commercial intelligence** — `legal`, `market-validation`, `seo` (via DataForSEO), `monetize`, `review-content` skills. `business-panel-experts` agent synthesizes Christensen/Porter/Drucker/Hormozi/Kim & Mauborgne/Collins/Taleb/Meadows.
-
-If you're a solo founder shipping multiple products, that's the value. Otherwise stick with kit.
+See [EXTENSION-ARCHITECTURE.md](EXTENSION-ARCHITECTURE.md) for how to layer
+private commands and preferences on top without forking.
 
 ## Customize
 

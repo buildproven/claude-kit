@@ -115,6 +115,8 @@ describe("evaluateBudget", () => {
     start_commit_count: 5,
     max_fix_commits: 4,
     max_wall_seconds: 1800,
+    max_review_rounds: 2,
+    rounds_used: 0,
   };
 
   it("passes when under both budgets", () => {
@@ -172,6 +174,72 @@ describe("evaluateBudget", () => {
     expect(result.configInvalid).toBe(true);
     expect(result.wallTripped).toBe(true);
     expect(result.commitTripped).toBe(true);
+    expect(result.roundTripped).toBe(true);
+  });
+
+  // --- review-round budget --------------------------------------------------
+  // The round cap is what terminates the outer fix -> re-review loop. Before
+  // 2026-07-10 there was no round dimension at all and the cap lived only as
+  // prose in SKILL.md, which the model could (and did) run past — 128min and
+  // 167min runs. These tests pin the semantics.
+
+  it("permits exactly max_review_rounds rounds, then trips", () => {
+    // rounds_used is incremented BEFORE evaluation, so it is the 1-based index
+    // of the round about to run. A cap of 2 must allow rounds 1 and 2 and
+    // refuse round 3. A `>=` comparison here would allow only ONE round —
+    // that off-by-one shipped briefly and is exactly what this pins.
+    const round1 = evaluateBudget(
+      { ...baseState, rounds_used: 1 },
+      { nowEpoch: 1100, commitCount: 5 },
+    );
+    expect(round1.ok).toBe(true);
+    expect(round1.roundTripped).toBe(false);
+
+    const round2 = evaluateBudget(
+      { ...baseState, rounds_used: 2 },
+      { nowEpoch: 1100, commitCount: 5 },
+    );
+    expect(round2.ok).toBe(true);
+    expect(round2.roundTripped).toBe(false);
+
+    const round3 = evaluateBudget(
+      { ...baseState, rounds_used: 3 },
+      { nowEpoch: 1100, commitCount: 5 },
+    );
+    expect(round3.ok).toBe(false);
+    expect(round3.roundTripped).toBe(true);
+    // The round budget must trip INDEPENDENTLY — neither other budget is spent.
+    expect(round3.wallTripped).toBe(false);
+    expect(round3.commitTripped).toBe(false);
+  });
+
+  it("treats a sentinel with no rounds_used as zero rounds consumed", () => {
+    // An in-flight run that straddles an upgrade has a sentinel predating the
+    // field. Degrade to "no rounds used" rather than failing the whole run.
+    const { rounds_used, ...legacy } = baseState;
+    void rounds_used;
+    const result = evaluateBudget(legacy, { nowEpoch: 1100, commitCount: 5 });
+    expect(result.configInvalid).toBe(false);
+    expect(result.roundsUsed).toBe(0);
+    expect(result.ok).toBe(true);
+  });
+
+  it("fails CLOSED when max_review_rounds is missing (cap must never be optional)", () => {
+    const { max_review_rounds, ...noCap } = baseState;
+    void max_review_rounds;
+    const result = evaluateBudget(noCap, { nowEpoch: 1100, commitCount: 5 });
+    expect(result.ok).toBe(false);
+    expect(result.configInvalid).toBe(true);
+  });
+
+  it("trips on rounds even when wall-clock and commits are untouched", () => {
+    // The 20min/0-commit case that previously returned ok:true, plus rounds.
+    const result = evaluateBudget(
+      { ...baseState, rounds_used: 9 },
+      { nowEpoch: 1001, commitCount: 5 },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.roundTripped).toBe(true);
   });
 
   it("fails CLOSED when a required numeric field is missing", () => {

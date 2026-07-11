@@ -11,17 +11,28 @@ migration happens. Flip to fail-mode by passing --strict (or setting
 CSC_LINT_STRICT=1) once a repo is clean.
 
 Rules (see plan §5):
-  R1 frontmatter completeness  — command: name+description, skill: name+description
+  R1 delegation declared       — a non-standalone command must carry the prose
+                                 "Invoke the `<skill>` skill", or share a name
+                                 with a skill. (It used to require an `invokes:`
+                                 frontmatter key — REMOVED 2026-07-10: Claude Code
+                                 does not parse that field. Verified against the
+                                 2.1.207 binary, where `allowed-tools`,
+                                 `standalone`, `argument-hint`, `user-invocable`
+                                 and `disable-model-invocation` all appear as
+                                 quoted frontmatter keys and `invokes`/
+                                 `auto_invoke` appear ZERO times. Linting for a
+                                 field the runtime ignores is worse than not
+                                 linting: it manufactures busywork and lends false
+                                 confidence.)
   R2 name identity             — command name == "{ns}:{stem}" (ns in bs/cc/gh);
                                  skill name == dir name (lowercase-kebab)
-  R3 invoke resolves           — command's invoked skill exists in the skill set
+  R3 invoke resolves           — the skill a command delegates to must exist
   R4 no reverse edges          — a SKILL.md must not invoke another /command
   R5 no cross-dir duplicates   — same base name defined in >1 command (or skill) dir
-  R6 orphan policy             — skill w/ no command needs auto_invoke: true;
-                                 command invoking nothing needs standalone: true
+  R6 orphan policy             — a command that invokes nothing needs standalone: true
 
 This linter is dependency-free (hand-parses YAML frontmatter) so it runs
-identically in claude-setup, claude-kit, and claude-kit-pro without a pip step.
+identically across the kit and any overlay repo without a pip step.
 
 Usage:
     python3 scripts/csc_lint.py [--root <repo>] [--strict] [--json]
@@ -49,7 +60,8 @@ KEBAB = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 # inline links, declared cross-references) are removed by _strip_for_edge_scan
 # BEFORE this runs, so a bare token match here is a genuine invocation.
 REVERSE_EDGE = re.compile(r"/((?:bs|cc|gh):[a-z0-9-]+)")
-# How a command declares the skill it runs, when `invokes:` frontmatter is absent.
+# How a command declares the skill it runs. This is the ONLY mechanism — Claude
+# Code does not parse an `invokes:` frontmatter field (verified against 2.1.207).
 INVOKE_PROSE = re.compile(r"[Ii]nvoke the `?([a-z0-9-]+)`? skill")
 # Fenced code blocks (``` ... ``` or ~~~ ... ~~~) — stripped before reverse-edge
 # scan so usage examples inside fences aren't counted as real invocations.
@@ -146,10 +158,10 @@ def _parse_frontmatter(text: str) -> dict[str, str]:
     """Minimal YAML-frontmatter parser for CSC-1 keys.
 
     Handles top-level `key: value` scalars AND the single-item list/blank-scalar
-    form documented in plan §5.1, where the value sits on the next indented line:
+    form, where the value sits on the next indented line:
 
-        invokes:
-          design-loop
+        allowed-tools:
+          Read
 
     For that form the value (with a leading `-` list marker stripped, if present)
     is folded onto the key. Multi-item lists are out of scope — CSC-1 keys are
@@ -339,38 +351,51 @@ def lint(root: Path) -> Report:
                         f"namespace '{ns}:' but file is under commands/{parent}/ "
                         f"(move to commands/{ns}/ or fix the name)",
                     )
-        # Determine invoked skill: explicit `invokes:` wins, else prose, else basename.
+        # Determine the invoked skill from the delegation prose, else the basename.
+        #
+        # R1 USED TO REQUIRE an `invokes:` frontmatter field. It was removed
+        # 2026-07-10 because CLAUDE CODE DOES NOT PARSE THAT FIELD. Verified
+        # against the 2.1.207 binary: as quoted frontmatter keys, `allowed-tools`
+        # (11), `standalone` (9), `argument-hint` (8), `user-invocable` (5) and
+        # `disable-model-invocation` (4) all appear — `invokes` and `auto_invoke`
+        # appear ZERO times. The delegation has always worked purely because the
+        # BODY says "Invoke the `x` skill"; `invokes:` was decoration a linter
+        # demanded and the runtime ignored.
+        #
+        # Enforcing a field the runtime doesn't read is worse than not linting:
+        # it manufactures busywork and lends false confidence. So R1 now checks
+        # the thing that actually matters — that a delegating command resolves to
+        # a skill that EXISTS.
         body = cf.read_text(errors="replace")
         standalone = _truthy(fm.get("standalone"))
-        declared = fm.get("invokes")
         if standalone:
             continue
-        # R1: plan §5.1 requires `invokes:` unless `standalone: true`. We still
-        # fall back to prose/basename so R3 can resolve, but flag the missing
-        # declaration so --strict can enforce the contract.
-        if not declared:
-            m = INVOKE_PROSE.search(body)
-            inferred = m.group(1) if m else stem
+
+        m = INVOKE_PROSE.search(body)
+        target = m.group(1) if m else stem
+
+        if not m and target not in skill_dirs:
+            # No delegation prose AND no same-named skill: the command neither
+            # delegates nor stands alone. That is a real contract break.
             rep.add(
                 "R1",
                 "medium",
                 nm or stem,
-                f"command missing 'invokes:' (inferred '{inferred}'; add 'invokes:' "
-                f"or 'standalone: true')",
+                "command has no 'Invoke the `<skill>` skill' delegation and no "
+                f"skill named '{stem}' exists — add the delegation line, add the "
+                "skill, or mark the command 'standalone: true'",
             )
-            target = inferred
-        else:
-            target = declared
+
         if target:
             invoked_skills.add(target)
-            # R3 invoke resolves
+            # R3: the skill it delegates to must exist.
             if target not in skill_dirs:
                 rep.add(
                     "R3",
                     "high",
                     nm or stem,
-                    f"invokes skill '{target}' which does not exist "
-                    "(declare 'invokes:' or add skill)",
+                    f"delegates to skill '{target}' which does not exist "
+                    "(add the skill, or mark the command 'standalone: true')",
                 )
 
     # R5 command cross-dir duplicates

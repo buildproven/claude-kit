@@ -463,7 +463,7 @@ git commit -m "chore: initial project setup with quality infrastructure
 - Secret scanning config
 - Basic project structure
 
-Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude <noreply@anthropic.com>"
 
 echo "✅ Initial commit created"
 ```

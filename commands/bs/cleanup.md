@@ -1,6 +1,5 @@
 ---
 name: bs:cleanup
-invokes: cleanup
 description: "Clean up AI CLI caches, temp files, and zombie processes"
 argument-hint: "/bs:cleanup → preview | --all --force → full cleanup | --zombies → kill processes"
 category: maintenance

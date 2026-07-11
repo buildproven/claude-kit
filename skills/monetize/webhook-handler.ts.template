@@ -1,0 +1,285 @@
+/**
+ * Polar.sh Webhook Handler Template
+ *
+ * Framework: {{FRAMEWORK}} (Next.js App Router | Express | Fastify)
+ * Product: {{PRODUCT_NAME}}
+ *
+ * Handles:
+ * - subscription.created:  Generate and send license
+ * - subscription.active:   Idempotent re-issue (renewals, late activations)
+ * - subscription.updated:  Re-provision on plan change
+ * - subscription.canceled: Mark pending_cancel — keep access alive until period end
+ * - subscription.revoked:  Revoke access (fires at period end after cancel, or on dunning fail)
+ *
+ * Setup:
+ * 1. Add POLAR_WEBHOOK_SECRET, POLAR_PRODUCT_ID, POLAR_ACCESS_TOKEN to .env
+ * 2. npm install standardwebhooks
+ * 3. Deploy this route
+ * 4. Configure webhook in Polar Dashboard pointing at /api/webhooks/polar
+ */
+
+// ============================================================================
+// NEXT.JS APP ROUTER VERSION
+// File: /app/api/webhooks/polar/route.ts
+// ============================================================================
+
+import { headers } from 'next/headers';
+import { NextResponse } from 'next/server';
+import { Webhook } from 'standardwebhooks';
+import crypto from 'crypto';
+
+const webhookSecret = process.env.POLAR_WEBHOOK_SECRET!;
+const polarProductId = process.env.POLAR_PRODUCT_ID!;
+const polarWebhook = new Webhook(webhookSecret);
+
+// License key generation — deterministic from Polar customer id so repeat
+// events for the same customer produce the same key (idempotent).
+function generateLicenseKey(
+  customerId: string,
+  productPrefix: string = '{{PRODUCT_PREFIX}}'
+): string {
+  const hash = crypto
+    .createHash('sha256')
+    .update(`${customerId}:${productPrefix}:v1`)
+    .digest('hex');
+  const keyParts = hash.slice(0, 16).match(/.{4}/g)!;
+  return `${productPrefix}-${keyParts.join('-').toUpperCase()}`;
+}
+
+// Send license email (implement with your email provider)
+async function sendLicenseEmail(
+  email: string,
+  licenseKey: string,
+  productName: string
+): Promise<void> {
+  // TODO: Implement with your email provider (Resend, SendGrid, etc.)
+  // Example with Resend:
+  // await resend.emails.send({
+  //   from: 'noreply@yourdomain.com',
+  //   to: email,
+  //   subject: `Your ${productName} License Key`,
+  //   html: generateLicenseEmailHtml(licenseKey, productName),
+  // });
+  console.log(`[License] Sending key ${licenseKey} to ${email}`);
+}
+
+// Save license to database (implement with your database)
+async function saveLicense(data: {
+  licenseKey: string;
+  email: string;
+  polarCustomerId: string;
+  polarSubscriptionId: string;
+  polarProductId: string;
+  status: 'active' | 'pending_cancel' | 'revoked';
+  currentPeriodEnd?: Date;
+}): Promise<void> {
+  // TODO: Implement with your database (Prisma, Drizzle, etc.)
+  // Example with Prisma:
+  // await prisma.license.upsert({
+  //   where: { licenseKey: data.licenseKey },
+  //   create: data,
+  //   update: { status: data.status, currentPeriodEnd: data.currentPeriodEnd },
+  // });
+  console.log(`[License] Saved license:`, data);
+}
+
+// Mark license as pending cancellation (customer will keep access until period end)
+async function markPendingCancel(
+  polarSubscriptionId: string,
+  cancelAt: Date
+): Promise<void> {
+  // TODO: Implement with your database
+  // await prisma.license.update({
+  //   where: { polarSubscriptionId },
+  //   data: { status: 'pending_cancel', cancelAt },
+  // });
+  console.log(
+    `[License] Marked pending_cancel until ${cancelAt}: ${polarSubscriptionId}`
+  );
+}
+
+// Revoke license (subscription has actually ended)
+async function revokeLicense(polarSubscriptionId: string): Promise<void> {
+  // TODO: Implement with your database
+  // await prisma.license.update({
+  //   where: { polarSubscriptionId },
+  //   data: { status: 'revoked', revokedAt: new Date() },
+  // });
+  console.log(`[License] Revoked: ${polarSubscriptionId}`);
+}
+
+// Extract the bits we need from a Polar subscription payload.
+// Polar's payload shapes vary slightly across event types, so be defensive.
+function extractSubscription(event: any) {
+  const sub = event.data;
+  const customer = sub.customer || {};
+  return {
+    subscriptionId: sub.id as string,
+    customerId: (customer.id || sub.customer_id) as string,
+    email: (customer.email || sub.customer_email) as string,
+    productId: (sub.product?.id || sub.product_id) as string,
+    status: sub.status as string,
+    currentPeriodEnd: sub.current_period_end || sub.ends_at,
+  };
+}
+
+export async function POST(request: Request) {
+  const body = await request.text();
+  const headersList = await headers();
+
+  // standard-webhooks signature verification
+  const webhookHeaders = {
+    'webhook-id': headersList.get('webhook-id') || '',
+    'webhook-timestamp': headersList.get('webhook-timestamp') || '',
+    'webhook-signature': headersList.get('webhook-signature') || '',
+  };
+
+  let event: any;
+  try {
+    const verified = polarWebhook.verify(body, webhookHeaders);
+    event = typeof verified === 'string' ? JSON.parse(verified) : verified;
+  } catch (err) {
+    console.error('[Webhook] Signature verification failed:', err);
+    return NextResponse.json({ error: 'Invalid signature' }, { status: 400 });
+  }
+
+  try {
+    switch (event.type) {
+      case 'subscription.created':
+      case 'subscription.active': {
+        const s = extractSubscription(event);
+
+        if (s.productId !== polarProductId) {
+          console.warn(`[Webhook] Unknown product: ${s.productId} — skipping`);
+          break;
+        }
+
+        // Deterministic key generation — repeat events for same customer
+        // produce the same key (idempotent re-issue on renewal)
+        const licenseKey = generateLicenseKey(s.customerId);
+
+        await saveLicense({
+          licenseKey,
+          email: s.email,
+          polarCustomerId: s.customerId,
+          polarSubscriptionId: s.subscriptionId,
+          polarProductId: s.productId,
+          status: 'active',
+          currentPeriodEnd: s.currentPeriodEnd
+            ? new Date(s.currentPeriodEnd)
+            : undefined,
+        });
+
+        // Only email on subscription.created (avoid spamming on renewals)
+        if (event.type === 'subscription.created') {
+          await sendLicenseEmail(s.email, licenseKey, '{{PRODUCT_NAME}}');
+        }
+
+        console.log(
+          `[Webhook] License issued/refreshed: ${licenseKey} → ${s.email}`
+        );
+        break;
+      }
+
+      case 'subscription.updated': {
+        // Plan change — re-provision in case the product/tier shifted.
+        // For single-product setups this is mostly a no-op; for multi-tier
+        // products you'd update the tier in the DB here.
+        const s = extractSubscription(event);
+        if (s.status === 'active' && s.productId === polarProductId) {
+          const licenseKey = generateLicenseKey(s.customerId);
+          await saveLicense({
+            licenseKey,
+            email: s.email,
+            polarCustomerId: s.customerId,
+            polarSubscriptionId: s.subscriptionId,
+            polarProductId: s.productId,
+            status: 'active',
+            currentPeriodEnd: s.currentPeriodEnd
+              ? new Date(s.currentPeriodEnd)
+              : undefined,
+          });
+        }
+        console.log(`[Webhook] Subscription updated: ${s.subscriptionId}`);
+        break;
+      }
+
+      case 'subscription.canceled': {
+        // Customer hit "cancel" — they keep access until current_period_end.
+        // DO NOT revoke yet. Polar fires subscription.revoked when access
+        // actually ends.
+        const s = extractSubscription(event);
+        const cancelAt = s.currentPeriodEnd
+          ? new Date(s.currentPeriodEnd)
+          : new Date();
+        await markPendingCancel(s.subscriptionId, cancelAt);
+        console.log(
+          `[Webhook] Pending cancel (active until ${cancelAt}): ${s.subscriptionId}`
+        );
+        break;
+      }
+
+      case 'subscription.revoked': {
+        // Subscription has actually ended. Revoke now.
+        const s = extractSubscription(event);
+        await revokeLicense(s.subscriptionId);
+        console.log(`[Webhook] Revoked: ${s.subscriptionId}`);
+        break;
+      }
+
+      default:
+        console.log(`[Webhook] Unhandled event type: ${event.type}`);
+    }
+
+    return NextResponse.json({ received: true });
+  } catch (err) {
+    console.error('[Webhook] Error processing event:', err);
+    return NextResponse.json(
+      { error: 'Webhook handler failed' },
+      { status: 500 }
+    );
+  }
+}
+
+// Note: in Next.js App Router, request.text() gives us the raw body which
+// is what standard-webhooks needs for signature verification. No special
+// bodyParser config needed (unlike Pages Router with Stripe).
+
+// ============================================================================
+// EXPRESS VERSION (Alternative)
+// File: /routes/webhooks/polar.ts
+// ============================================================================
+
+/*
+import express from 'express';
+import { Webhook } from 'standardwebhooks';
+
+const router = express.Router();
+const polarWebhook = new Webhook(process.env.POLAR_WEBHOOK_SECRET!);
+
+router.post(
+  '/polar',
+  express.raw({ type: 'application/json' }),
+  async (req, res) => {
+    const headers = {
+      'webhook-id': req.headers['webhook-id'] as string,
+      'webhook-timestamp': req.headers['webhook-timestamp'] as string,
+      'webhook-signature': req.headers['webhook-signature'] as string,
+    };
+
+    let event: any;
+    try {
+      const verified = polarWebhook.verify(req.body.toString('utf8'), headers);
+      event = typeof verified === 'string' ? JSON.parse(verified) : verified;
+    } catch (err) {
+      return res.status(400).send(`Webhook Error: ${err}`);
+    }
+
+    // Handle events same as above...
+
+    res.json({ received: true });
+  }
+);
+
+export default router;
+*/

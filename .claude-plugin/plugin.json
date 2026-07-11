@@ -1,0 +1,22 @@
+{
+  "name": "bs",
+  "displayName": "claude-kit",
+  "version": "3.0.0",
+  "description": "Quality automation, autonomous backlog execution, multi-LLM strategy panels, fleet auditing, and founder domain intelligence. Free and MIT.",
+  "author": {
+    "name": "buildproven",
+    "url": "https://github.com/buildproven"
+  },
+  "homepage": "https://github.com/buildproven/claude-kit",
+  "repository": "https://github.com/buildproven/claude-kit",
+  "license": "MIT",
+  "keywords": [
+    "quality",
+    "code-review",
+    "autonomous",
+    "workflow",
+    "strategy",
+    "agents"
+  ],
+  "hooks": "./hooks/hooks.json"
+}

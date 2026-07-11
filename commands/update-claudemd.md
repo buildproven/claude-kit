@@ -9,6 +9,6 @@ category: utility
 
 # Deprecated: `/update-claudemd` → `/cc:update-claudemd`
 
-This command was renamed to **`/cc:update-claudemd`** (CSC-1 namespace policy — it's a Claude-Code meta command, like `/cc:create-command` and `/cc:optimize`).
+This command was renamed to **`/cc:update-claudemd`** (CSC-1 namespace policy — it's a Claude-Code meta command, like `/cc:create-command`).
 
 Please run `/cc:update-claudemd` instead. This alias will be removed after **2026-07-08**.

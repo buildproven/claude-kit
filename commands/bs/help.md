@@ -28,12 +28,8 @@ for f in ~/.claude/commands/bs/*.md ~/.claude/commands/cc/*.md ~/.claude/command
   desc=$(echo "$fm" | awk -F': ' '/^description:/{$1=""; sub(/^ /,""); print}' | tr -d "'\"")
   cat=$(echo "$fm" | awk -F': ' '/^category:/{print $2}' | tr -d "'\"")
   hint=$(echo "$fm" | awk -F': ' '/^argument-hint:/{$1=""; sub(/^ /,""); print}' | tr -d "'\"")
-  # Determine tier from symlink target (graceful fallback: assume kit)
-  target=$(readlink "$f" 2>/dev/null || echo "$f")
-  if echo "$target" | grep -qE "claude-kit-pro|/core/commands"; then tier="pro"
-  else tier="kit"; fi
   if [ -n "$name" ] && [ -n "$desc" ]; then
-    echo "CMD|${cat:-uncategorized}|${name}|${desc}|${hint}|${tier}"
+    echo "CMD|${cat:-uncategorized}|${name}|${desc}|${hint}"
   fi
 done
 ```
@@ -46,14 +42,13 @@ ls ~/.claude/skills/*/SKILL.md 2>/dev/null | wc -l
 
 ### Step 3: Render output
 
-Use the extracted data to generate the help output. Split commands into two groups based on the `tier` field:
+Use the extracted data to generate the help output. Everything in the kit is free
+and MIT — there is no paid tier and no upgrade section.
 
-- **tier=kit** → show in the main command tables
-- **tier=pro** → collect separately, show in a "claude-kit-pro" upgrade section at the end
+Group commands by `category` field using the display order and titles below. Omit
+commands with `category: deprecated`.
 
-Group kit commands by `category` field using the display order and titles below. Omit commands with `category: deprecated`.
-
-**Category display order and titles (kit tier):**
+**Category display order and titles:**
 
 | category    | Display Title              |
 | ----------- | -------------------------- |
@@ -80,7 +75,7 @@ Also include this utility command (no frontmatter — hardcode this only):
 
 ## If arguments contain "--full"
 
-For each kit command, render a detailed section:
+For each command, render a detailed section:
 
 ```
 ### /<name>
@@ -90,11 +85,11 @@ For each kit command, render a detailed section:
 Usage: `/<name> <argument-hint>`
 ```
 
-After all kit commands, render the pro upgrade section (see below), then the Archived/Removed section.
+After all commands, render the Archived/Removed section.
 
 ## Else (no --full flag)
 
-For each kit category, render a table:
+For each category, render a table:
 
 ```
 ## <Category Title>
@@ -104,28 +99,11 @@ For each kit category, render a table:
 | `/<name>` | <description> |
 ```
 
-After all kit tables, render the pro upgrade section (see below).
+After all tables, render the Skills section.
 
 ---
 
-## Pro upgrade section (always render, after kit commands)
-
-```
-## claude-kit-pro
-
-Upgrade for autonomous workflow, strategy tools, fleet management, and commercial intelligence.
-
-| Command | Purpose |
-| ------- | ------- |
-| `/<name>` | <description> |   ← one row per pro-tier command found in Step 1
-
-More: `/bs:strategy`, `/bs:sota`, `/bs:sentry`, `/bs:steward`, agent-browser, seo, legal, monetize skills, and more.
-Details: https://github.com/buildproven/claude-kit-pro
-```
-
----
-
-## Skills section (always render, after pro section)
+## Skills section (always render, after commands)
 
 ```
 ## Skills (<count> total)
