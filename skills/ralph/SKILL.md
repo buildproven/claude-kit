@@ -2,6 +2,10 @@
 name: ralph
 description: "Autonomous backlog execution with reflection, evidence, worktree isolation, and /bs:quality --merge"
 context: fork
+# Runs unattended (forked, no user in the loop). AskUserQuestion here would
+# block forever with nobody to answer it — remove the tool, don't just ask it
+# nicely not to. https://code.claude.com/docs/en/skills
+disallowed-tools: AskUserQuestion
 tags: [workflow, autonomous, backlog, graph, evaluation]
 category: development
 ---

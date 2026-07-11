@@ -2,6 +2,10 @@
 name: triage
 description: Runtime agent observability — pull recent Sentry errors, cluster by signature, file Linear tickets with stack traces, optionally open worktree + PR with proposed fix. Plus synthetic user-journey cron orchestration.
 context: fork
+# Runs unattended (forked, no user in the loop). AskUserQuestion here would
+# block forever with nobody to answer it — remove the tool, don't just ask it
+# nicely not to. https://code.claude.com/docs/en/skills
+disallowed-tools: AskUserQuestion
 tags: [observability, sentry, triage, synthetic, monitoring]
 category: operations
 ---

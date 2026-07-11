@@ -3,6 +3,10 @@ name: recover-quality
 title: "Recover Quality"
 description: Comprehensive audit + fix for quality regression across all repos; integrates learnings into CLAUDE.md
 context: fork
+# Runs unattended (forked, no user in the loop). AskUserQuestion here would
+# block forever with nobody to answer it — remove the tool, don't just ask it
+# nicely not to. https://code.claude.com/docs/en/skills
+disallowed-tools: AskUserQuestion
 ---
 
 # /bs:recover-quality — Quality System Recovery & Learnings Integration
