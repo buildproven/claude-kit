@@ -32,13 +32,43 @@ opinionated workflow, and domain judgment (`legal`, `market-validation`,
 
 ## Quick start
 
+Install as a Claude Code plugin:
+
+```
+/plugin marketplace add buildproven/claude-kit
+/plugin install bs@buildproven
+```
+
+That's it. No symlinks, no `curl | bash`, no clobbering your `~/.claude`.
+
+### Everything is namespaced `/bs:*`
+
+Because the plugin is named `bs`, every skill it ships is addressed with a `bs:`
+prefix — `/bs:quality`, `/bs:ralph`, `/bs:strategy`. This is real namespacing
+enforced by Claude Code, not a naming convention:
+
+- **Nothing collides with a built-in.** Before this, the kit shipped bare skills
+  called `cost`, `review`, `status`, `resume`, `context` and `tasks` — all of
+  which _shadowed_ Anthropic's own `/cost`, `/review`, `/status`, `/resume`,
+  `/context` and `/tasks`. Personal skills beat bundled ones, so typing `/cost`
+  silently ran the kit's version instead of Claude Code's.
+- **You can always tell what's yours.** If it has a `bs:` prefix, it came from
+  this kit.
+
+<details>
+<summary>Legacy install (symlinks) — still works, not recommended</summary>
+
 ```bash
 git clone https://github.com/buildproven/claude-kit.git ~/Projects/claude-kit
 cd ~/Projects/claude-kit
 ./install.sh
 ```
 
-Then restart Claude Code.
+This symlinks `commands/`, `skills/` and `agents/` into `~/.claude/`. It works,
+but skills land unprefixed, so they can shadow Claude Code built-ins. Prefer the
+plugin.
+
+</details>
 
 ## Core commands
 
