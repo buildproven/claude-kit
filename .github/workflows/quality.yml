@@ -35,6 +35,13 @@ jobs:
       - name: CSC-1 command/skill contract (strict)
         run: python3 scripts/csc_lint.py --strict
 
+      # Skills over ~5k tokens are SILENTLY TRUNCATED after compaction (only the
+      # first 5,000 tokens of each are re-attached). Warn-only until #70 splits
+      # skills/quality; flip to a hard fail once it's under budget.
+      - name: Skill size (compaction re-attach budget)
+        continue-on-error: true
+        run: bash scripts/check-skill-size.sh
+
   test:
     timeout-minutes: 10
     runs-on: ubuntu-latest
