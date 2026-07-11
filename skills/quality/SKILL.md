@@ -2,6 +2,10 @@
 name: quality
 description: Autonomous quality loop with configurable thoroughness (95% or 98%). Runs lint, tests, build, security scans, and specialized quality agents. Auto-fixes issues and creates PRs.
 context: fork
+# Runs unattended (forked, no user in the loop). AskUserQuestion here would
+# block forever with nobody to answer it — remove the tool, don't just ask it
+# nicely not to. https://code.claude.com/docs/en/skills
+disallowed-tools: AskUserQuestion
 ---
 
 > **FORKED SKILL INVOCATION — EXECUTE STEP -1 IMMEDIATELY.**
