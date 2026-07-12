@@ -4,27 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-`claude-kit` is the **public, free core layer** of a three-tier Claude Code toolkit. It ships commands, skills, agents, hooks, and setup scripts that get symlinked into `~/.claude/` (globally) or `.claude/` (per-project, typically via git submodule). There is no runtime product — the artifacts here _are_ the product.
+`claude-kit` is a **complete, standalone, free (MIT) Claude Code toolkit**. It ships commands, skills, agents, hooks, and setup scripts that get symlinked into `~/.claude/` (globally) or `.claude/` (per-project, typically via git submodule) — or installed as a Claude Code plugin. There is no runtime product — the artifacts here _are_ the product. Nothing is held back and there is no paid tier.
 
-Two tiers stack bottom-up:
+This repo is designed to be **extended, not forked**. An operator who wants private
+commands, personal preferences, or service integrations puts them in their own
+private overlay repo that submodules this one.
 
-1. **claude-kit** (this repo) — everything: dev commands, quality gates, autonomous
-   workflow, strategy, domain skills, 14 agents. Free, MIT.
-2. **Private overlay** — per-operator `CLAUDE.md`, private commands, secrets.
-   Submodules this repo.
-
-The paid `claude-kit-pro` middle tier was folded into this repo (see README).
-
-See `EXTENSION-ARCHITECTURE.md` for the contract. The key rule: **lower layers never
-embed references to higher layers**. Don't hardcode private-overlay paths in anything
-under this repo — a public repo must never tell a user to run code from a path only
-the author has.
+See `EXTENSION-ARCHITECTURE.md` for the contract. The key rule: **this repo never
+embeds references to anything that overlays it**. Don't hardcode private-overlay paths
+in anything under this repo — a public repo must never tell a user to run code from a
+path only the author has.
 
 ## Installation model (important mental model)
 
 There are two install surfaces, both work via symlinks so edits propagate without copy:
 
-- **Global** — `./install.sh` → `scripts/setup-claude-sync.sh` symlinks this repo's `commands/`, `skills/`, `agents/`, `scripts/` into `~/.claude/`. Hook commands in `config/settings.json` resolve via `$HOME/.claude/scripts/...`.
+- **Global** — `./install.sh` symlinks this repo's `commands/`, `skills/`, `agents/`, `scripts/` into `~/.claude/`. Hook commands in `config/settings.json` resolve via `$HOME/.claude/scripts/...`. `scripts/setup-claude-sync.sh` is the separate verify/repair tool (`--check` / `--repair`) that `/bs:sync` drives; it links the same set.
 - **Per-repo** — `scripts/install-commands-to-repo.sh` or the submodule flow in `QUICK_START.md` / `SUBMODULE_SETUP.md`. Target repo gets `.claude-setup/` (submodule) and `.claude/` with symlinks into it.
 
 When editing, you are editing the source that both surfaces read. There is no build step — changes to a command or skill `.md` are live immediately.
@@ -60,7 +55,7 @@ npm run security:scan       # semgrep via scripts/run-semgrep.sh
 npm run dead-code           # knip (non-blocking)
 npm run dead-code:strict    # knip (blocking)
 npm run license:check       # MIT/ISC/BSD/Apache/MPL only
-npm run test:mutants        # Stryker — only mutates scripts/risk-policy-gate.js
+npm run check:commands      # scripts/check-command-readme.sh
 ```
 
 Node 20+ (`engines.node`, pinned via Volta to 20.11.1). Python tooling (ruff/black/mypy) is configured in `pyproject.toml` for the handful of Python scripts in `scripts/` — but there is no `pytest` suite wired up despite `tests/` existing.
@@ -83,7 +78,7 @@ config/           Template CLAUDE.md + settings.json for distribution
 eslint-plugin-defensive/   Local ESLint plugin published via path import
 mcp-servers/      Vendored MCP server subtrees (dataforseo, facebook, twitter)
 templates/        Starter files copied by /bs:new and related commands
-.github/workflows/  quality, auto-release, cascade-to-pro, stale-*, harness-gate
+.github/workflows/  quality, auto-release, stale-branches, stale-prs
 ```
 
 `scripts/` is the only code surface with runtime logic worth testing. Commands, skills, and agents are prompt documents — they're "code" only in that Claude executes them, so keep them terse and concrete rather than trying to unit-test them.
@@ -102,8 +97,8 @@ When changing any of these scripts: the hook invokes them as `$HOME/.claude/scri
 
 ### Quality / release automation
 
-- `.github/workflows/quality.yml` runs the gate in CI. Stryker mutation testing is scoped narrowly to `scripts/risk-policy-gate.js` only — don't broaden without reason, it's slow.
-- `.github/workflows/cascade-to-pro.yml` auto-opens a submodule-bump PR in the overlay repo on push to `main`. Anything committed here propagates up within minutes.
+- `.github/workflows/quality.yml` runs the gate in CI — lint, format, tests, security scan, license check.
+- `.github/workflows/auto-release.yml` handles releases; `stale-branches.yml` / `stale-prs.yml` do housekeeping.
 - `.husky/` + `lint-staged` run prettier/eslint/bash-syntax on commit. `commitlint.config.js` enforces conventional commits (`feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert`).
 
 ### ESLint setup
@@ -120,4 +115,4 @@ Scripts directory gets looser security rules (`scripts/**/*.js` allows object in
 - **No TypeScript sources.** Despite TS plugin config in ESLint, there is no `tsconfig.json` or TS code. The TS branch is there for downstream projects. Don't add TypeScript here without widening scope deliberately.
 - **`tests/` vs `scripts/__tests__/`**. Only the latter runs. `tests/__init__.py` is a vestigial Python stub — `pyproject.toml` references it but there's no runner configured.
 - **Knip is non-blocking by default** (`dead-code` script swallows exit code). Use `dead-code:strict` before shipping structural refactors.
-- **The `install.sh` at repo root is a thin wrapper**. Real work happens in `scripts/setup-claude-sync.sh`.
+- **`install.sh` and `scripts/setup-claude-sync.sh` are two independent installers.** `install.sh` does its own symlinking (first-run install); `setup-claude-sync.sh` verifies/repairs (`/bs:sync`). They duplicate the link list — a change to one must be mirrored in the other, or they drift.

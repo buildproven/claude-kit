@@ -4,31 +4,31 @@ Free, open-source (MIT) Claude Code toolkit. Quality automation, autonomous
 backlog execution, multi-LLM strategy panels, fleet auditing, commercial
 intelligence, and 14 specialist agents.
 
-**Everything is free.** There used to be a paid `claude-kit-pro` tier; it has
-been folded into this repo. See [Why it's all free now](#why-its-all-free-now).
+**Everything is here.** One repo, MIT, no paid tier, nothing held back.
 
 ## What's inside
 
 | Dir         | Contents                                                           |
 | ----------- | ------------------------------------------------------------------ |
-| `commands/` | 30 `/bs:*` + `/gh:*` + `/cc:*` commands                            |
+| `commands/` | 33 `/bs:*` + `/gh:*` + `/cc:*` commands                            |
 | `skills/`   | 36 skills — quality, autonomous workflow, strategy, domain         |
 | `agents/`   | 14 specialist agents                                               |
 | `scripts/`  | Hooks, lint, branch-protection, quality governor, review companion |
 | `config/`   | Generic `CLAUDE.md` and `settings.json` templates                  |
 
-## Why it's all free now
+## What this is (and isn't)
 
-Between January and July 2026 Anthropic shipped, natively and for free, most of
-what the paid tier was selling: background subagents that auto-commit, push and
-open a draft PR (2.1.198); agent teams; the Workflow tool; worktree isolation;
-automatic memory; `/loop` + cron + Routines; `/code-review ultra`; and `/usage`.
+Between January and July 2026 Anthropic shipped, natively and for free, a large
+chunk of the orchestration layer toolkits like this used to hand-roll: background
+subagents that auto-commit, push and open a draft PR (2.1.198); agent teams; the
+Workflow tool; worktree isolation; automatic memory; `/loop` + cron + Routines;
+`/code-review ultra`; and `/usage`.
 
-Charging for a thinner version of what the platform now includes is not a
-business. So the orchestration layer is free, the redundant parts are deleted
-(see the table below), and what remains is the part Anthropic doesn't ship:
-opinionated workflow, and domain judgment (`legal`, `market-validation`,
-`monetize`, `seo`, `review-content`, and the strategy panels).
+So this kit doesn't reimplement any of it — the redundant parts were deleted (see
+[the table below](#removed--claude-code-now-does-these-natively)). What remains is
+the part the platform doesn't ship: opinionated workflow, and domain judgment
+(`legal`, `market-validation`, `monetize`, `seo`, `review-content`, and the
+strategy panels).
 
 ## Quick start
 
@@ -64,7 +64,9 @@ cd ~/Projects/claude-kit
 ./install.sh
 ```
 
-This symlinks `commands/`, `skills/` and `agents/` into `~/.claude/`. It works,
+This symlinks `commands/`, `skills/`, `agents/` and `scripts/` into `~/.claude/`.
+`scripts/` is load-bearing — `config/settings.json` wires 14 hooks to
+`$HOME/.claude/scripts/*.sh`, so without it every hook silently no-ops. It works,
 but skills land unprefixed, so they can shadow Claude Code built-ins. Prefer the
 plugin.
 
@@ -92,7 +94,7 @@ plugin.
 /cc:create-command  Scaffold a new slash command
 ```
 
-### Autonomous workflow & strategy (was paid, now free)
+### Autonomous workflow & strategy
 
 ```text
 /bs:ralph       Autonomous backlog execution — pick, implement, test, reflect, repeat

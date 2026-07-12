@@ -2,21 +2,36 @@
 name: bs:sync
 standalone: true
 description: "Check/repair Claude config symlinks (claude-kit → ~/.claude)"
-argument-hint: "/bs:sync --mode check → verify symlinks | repair → fix broken | all → full resync"
+argument-hint: "/bs:sync --mode check → verify symlinks | repair → fix broken"
 category: maintenance
 model: haiku
 ---
 
 # /sync: Claude Setup Synchronization
 
-**Usage**: `/bs:sync [--mode check|repair|all]`
+**Usage**: `/bs:sync [--mode check|repair]`
 
-Manages Claude Code configuration symlinks and setup consistency.
+Verifies and repairs the symlinks that connect this repo to `~/.claude/`.
 
-## Paths
+This matters more than it looks: `config/settings.json` wires 14 hooks to
+`$HOME/.claude/scripts/*.sh`. If `scripts/` is not linked, **every hook silently
+no-ops** — no error, no output, just no safety rails. `--check` catches exactly that.
 
-```
-SETUP_REPO=$SETUP_REPO
+## Resolve the sync script
+
+The kit may be installed via `install.sh`, as a plugin, or cloned anywhere. Resolve
+rather than assume:
+
+```bash
+SYNC=""
+for c in \
+  "${CLAUDE_KIT_ROOT:-}/scripts/setup-claude-sync.sh" \
+  "${CLAUDE_PLUGIN_ROOT:-}/scripts/setup-claude-sync.sh" \
+  "$HOME/.claude/scripts/setup-claude-sync.sh" \
+  "$(git rev-parse --show-toplevel 2>/dev/null)/scripts/setup-claude-sync.sh"; do
+  if [ -n "$c" ] && [ -f "$c" ]; then SYNC="$c"; break; fi
+done
+[ -n "$SYNC" ] || { echo "bs:sync: cannot locate setup-claude-sync.sh" >&2; exit 1; }
 ```
 
 ## Modes
@@ -24,46 +39,39 @@ SETUP_REPO=$SETUP_REPO
 ### Check (default)
 
 ```bash
-$SETUP_REPO/scripts/setup-claude-sync.sh --check
+"$SYNC" --check
 ```
 
-Validates all symlinks and configuration:
+Verifies, and exits non-zero if anything is wrong:
 
-- `~/.claude/settings.json` → `claude-kit/config/settings.json`
-- `~/.claude/commands/` → `claude-kit/commands/`
-- CLAUDE.md files in expected locations
+- `~/.claude/{commands,skills,agents,scripts}/` → repo directories
+- `~/.claude/settings.json` → `config/settings.json`
+- `~/.claude/CLAUDE.md` → `config/CLAUDE.md`
+- every hook script named in `settings.json` actually resolves
 
 ### Repair
 
 ```bash
-$SETUP_REPO/scripts/setup-claude-sync.sh --repair
+"$SYNC" --repair
 ```
 
-Fixes broken symlinks and missing configs.
-
-### All
-
-Complete sync: backup → git commit → push → test everything.
+Creates or replaces broken links, then re-verifies. Never clobbers a real file or
+directory you own — if `~/.claude/<x>` exists and is not one of our symlinks, it warns
+and skips rather than deleting your work.
 
 ---
 
 ## Quick Reference
 
 ```bash
-# Health check
-/bs:sync --mode check
-
-# Fix issues
-/bs:sync --mode repair
-
-# Full sync
-/bs:sync --mode all
+/bs:sync --mode check    # health check (exit 1 if broken)
+/bs:sync --mode repair   # fix broken links
 ```
 
 ## New Computer Setup
 
 ```bash
-git clone [repo] $SETUP_REPO
-cd $SETUP_REPO
-./scripts/setup-claude-sync.sh
+git clone https://github.com/buildproven/claude-kit.git ~/Projects/claude-kit
+cd ~/Projects/claude-kit
+./install.sh
 ```

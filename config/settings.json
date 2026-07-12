@@ -9,7 +9,6 @@
   "permissions": {
     "defaultMode": "default",
     "allow": [
-      "Bash",
       "Bash(**/grep *)",
       "Bash(**/head *)",
       "Bash(**/tail *)",

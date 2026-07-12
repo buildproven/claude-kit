@@ -55,12 +55,6 @@ the worktree, and pop the stash there — do not proceed in-place.
 /bs:ralph --parallel             # Parallel with agent teams
 ```
 
-## Content & Marketing
-
-```bash
-/bs:post "message"               # Post to social media
-```
-
 ## Strategy & Reflection
 
 ```bash
@@ -74,7 +68,8 @@ the worktree, and pop the stash there — do not proceed in-place.
 ```bash
 /bs:status                       # Catch up after time away
 /bs:deps --audit                 # Check dependency health
-/bs:maintain                     # Health check, auto-fixes
+/bs:sync --mode check            # Verify ~/.claude symlinks + hooks resolve
+/bs:sota                         # Score the setup, self-heal
 ```
 
 ## Context Management
@@ -89,8 +84,8 @@ the worktree, and pop the stash there — do not proceed in-place.
 
 - `/compact` at milestones (after commits, before quality)
 - `/clear` between features
-- `/bs:resume` to continue sessions
-- `/bs:context` to recover from crashes
+- `claude --resume` to pick a previous session back up
+- `/bs:recover-quality` to audit and repair after a crash or a bad run
 
 **Why short sessions matter:** After ~50 turns, context compression kicks in repeatedly, losing detail and wasting tokens. A 545-turn session generates 380MB of transcript. Should be 5-10 focused chunks instead.
 

@@ -21,9 +21,19 @@ jobs:
           days-before-issue-stale: -1
           days-before-issue-close: -1
 
-          # Warn at 24h, close at 48h
+          # Warn at 24h, close at 48h.
+          #
+          # This is a SOLO-MAINTAINER discipline hack: it exists to stop the
+          # maintainer's own branches rotting. It must never fire on an outside
+          # contributor — a first-time PR opened on Friday would be auto-closed
+          # by Sunday, which is the fastest possible way to lose a contributor.
+          # `only-pr-labels` below scopes it to PRs the maintainer self-labels.
           days-before-pr-stale: 1
           days-before-pr-close: 1
+
+          # HARD SCOPE: only ever touch PRs explicitly labelled `maintainer`.
+          # An unlabelled PR (i.e. every community PR) is invisible to this job.
+          only-pr-labels: "maintainer"
 
           stale-pr-label: stale
           stale-pr-message: >

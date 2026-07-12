@@ -1,34 +1,34 @@
 # Extension Architecture
 
-claude-kit is the public core. It is designed to be extended, not forked.
+claude-kit is the complete toolkit. It is designed to be extended, not forked.
 
-## Two Layers
+## The contract
 
 ```
 ┌─────────────────────────────────────────┐
-│  Private overlay (per-operator)         │  your private config repo
+│  Your private overlay (optional)        │  your private config repo
 │  Your CLAUDE.md, private commands,      │  submodules claude-kit
 │  service integrations, secrets          │
 ├─────────────────────────────────────────┤
-│  claude-kit (this repo, free/MIT)       │  public core
+│  claude-kit (this repo, free/MIT)       │  the whole toolkit
 │  Everything: quality, autonomous        │
 │  workflow, strategy, domain skills      │
 └─────────────────────────────────────────┘
 ```
 
-There used to be a paid `claude-kit-pro` middle layer. It has been folded into
-this repo — see the README for why. If you have an overlay that submodules
-`claude-kit-pro`, repoint it at `claude-kit`; every command it provided is here.
+claude-kit stands alone — you never need an overlay. An overlay is what you add
+when you have private or personal behaviour that doesn't belong in a public repo.
 
-Each layer adds to the one below. You never modify a lower layer to add personal
-or project-specific behaviour.
+The overlay adds to claude-kit. You never modify claude-kit to add personal or
+project-specific behaviour, and **claude-kit never references anything above it** —
+a public repo must not tell a user to run code from a path only you have.
 
-Updates propagate automatically: a push to claude-kit triggers a submodule bump
+Updates propagate automatically: a push to claude-kit can trigger a submodule bump
 PR in your private overlay. No manual syncing.
 
 ---
 
-## Layer 1: claude-kit (this repo, free/MIT)
+## claude-kit (this repo, free/MIT)
 
 Everything. Core dev commands (`/bs:dev`, `/bs:quality`, `/bs:test`), autonomous
 workflow (`/bs:ralph`), strategy (`/bs:strategy`), fleet management (`/bs:sota`,
@@ -40,12 +40,12 @@ everyone.
 
 ---
 
-## Layer 2: Private Overlay
+## Your private overlay (optional)
 
-Your private config repo that sits on top of claude-kit. Contains:
+A private config repo that sits on top of claude-kit. Contains:
 
 - Your `CLAUDE.md` (preferences, team conventions, known mistakes)
-- Private commands not appropriate for the public tiers
+- Private commands that don't belong in a public repo
 - Service integrations (social posting, internal tools, etc.)
 - Secrets and environment config
 
@@ -81,8 +81,8 @@ your-project/
 
 | You want to...                   | Do this                          |
 | -------------------------------- | -------------------------------- |
-| Use the core toolkit             | Install claude-kit               |
-| Get autonomous workflow commands | Already in claude-kit (free)     |
+| Use the toolkit                  | Install claude-kit               |
+| Get autonomous workflow commands | Already in claude-kit            |
 | Add personal preferences         | Private overlay (`CLAUDE.md`)    |
 | Add a private workflow command   | Private overlay (`commands/`)    |
 | Add a project-specific command   | `.claude/commands/` in that repo |

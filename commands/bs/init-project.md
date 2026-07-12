@@ -227,18 +227,10 @@ Before implementing anything with 6+ files or multiple valid approaches:
 Plan docs live in `docs/plans/`. They survive context resets — reference them in new sessions.
 
 ### Session Handoff
-Before ending a session or running /compact:
-```
+Plan docs in `docs/plans/` are the handoff artifact — they survive context resets and
+`/compact`. Write decisions there as you go, not at the end.
 
-/bs:context --save
-
-```
-Resume in a new session with:
-```
-
-/bs:context --resume
-
-```
+Resume a previous session with `claude --resume`, then point it at the plan doc.
 EOF
       echo "✅ Updated CLAUDE.md with agent workflow section"
     fi
@@ -264,7 +256,7 @@ echo "Next steps:"
 echo "  1. Review docs/dev_guide/CONVENTIONS.md — add project-specific gotchas"
 echo "  2. Commit: git add docs/ .claude/ CLAUDE.md && git commit -m 'chore: init agent infrastructure'"
 echo "  3. Start sessions with: Read docs/dev_guide/CONVENTIONS.md"
-echo "  4. Use /bs:plan before complex work, /bs:context --save before ending sessions"
+echo "  4. Use /bs:plan before complex work; write decisions to docs/plans/ as you go"
 ```
 
 ## Examples

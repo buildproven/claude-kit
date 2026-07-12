@@ -187,14 +187,13 @@ fi
 # run ⇒ empty sentinel ⇒ the companion block's empty-check blocks correctly.
 rm -f "${TMPDIR:-/tmp}/bs-quality-agents-${CLAUDE_CODE_SESSION_ID:-default}.txt"
 
-# Locate the resolver. It ships in the kit (the parent
-# of the kit-pro submodule). $CLAUDE_PLUGIN_ROOT points at kit-pro; the
-# overlay is its parent.
+# Locate the resolver. It ships in the kit's scripts/. Probe the candidates in
+# order: an explicit root env var, the parent of the plugin root (covers installs
+# where the kit is nested one level under the plugin dir), then ~/.claude/scripts.
 RESOLVER=""
 for candidate in \
   "${CLAUDE_SETUP_ROOT:-}/scripts/quality-target-resolver.js" \
   "${CLAUDE_PLUGIN_ROOT:-}/../scripts/quality-target-resolver.js" \
-  "$HOME/Projects/products/claude-kit/scripts/quality-target-resolver.js" \
   "$HOME/.claude/scripts/quality-target-resolver.js"; do
   if [ -n "$candidate" ] && [ -f "$candidate" ]; then
     RESOLVER="$candidate"; break
@@ -436,13 +435,13 @@ echo "[quality] governor: cap=${BS_QUALITY_MAX_REVIEW_ROUNDS} review-rounds, ${B
 >
 > # bs_quality_find_script — resolve a kit script across EVERY install layout.
 > #
-> # Why this exists (2026-07-10): the review runner was resolved by checking
-> # exactly two hardcoded paths. On the primary install both missed —
-> # ~/.claude/scripts is a symlink to the private overlay, which never carried
-> # claude-review-companion.sh — so `bash <missing>` returned 127 and the skill
-> # printed "MERGE BLOCKED (rc=127)" after doing all the work. That was the
-> # "runs everything, then never merges" stall. Never resolve a kit script by
-> # guessing two paths again: call this, and fail loudly if it returns nothing.
+> # Why this exists: kit scripts live in a different place depending on how the
+> # kit was installed (plugin, ~/.claude symlink, submodule, bare clone), and
+> # ~/.claude/scripts may be symlinked somewhere that doesn't carry the script at
+> # all. Resolving by guessing one or two hardcoded paths silently misses, and
+> # `bash <missing>` then returns 127 *after* the review has done all its work —
+> # the "runs everything, then never merges" stall. Always resolve through this
+> # helper, and fail loudly if it returns nothing.
 > #
 > # Echoes the resolved absolute path and returns 0, or returns 1 (silent) so
 > # the caller owns the error message.
@@ -454,10 +453,7 @@ echo "[quality] governor: cap=${BS_QUALITY_MAX_REVIEW_ROUNDS} review-rounds, ${B
 >     "$HOME/.claude/scripts/$name" \
 >     "$HOME/.claude/plugins/bs/scripts/$name" \
 >     "$GIT_ROOT/scripts/$name" \
->     "$GIT_ROOT/.claude-setup/scripts/$name" \
->     "$GIT_ROOT/core/scripts/$name" \
->     "$GIT_ROOT/core/core/scripts/$name" \
->     "$HOME/Projects/products/claude-kit/scripts/$name"
+>     "$GIT_ROOT/core/scripts/$name"
 >   do
 >     [ -n "$c" ] && [ -f "$c" ] && { printf '%s' "$c"; return 0; }
 >   done
@@ -530,7 +526,6 @@ if [ "$LEVEL" = "auto" ]; then
     "${CLAUDE_SETUP_ROOT:-}/scripts/risk-score.js" \
     "${CLAUDE_PLUGIN_ROOT:-}/scripts/risk-score.js" \
     "${CLAUDE_PLUGIN_ROOT:-}/../scripts/risk-score.js" \
-    "$HOME/Projects/products/claude-kit/scripts/risk-score.js" \
     "$HOME/.claude/scripts/risk-score.js"; do
     if [ -n "$candidate" ] && [ -f "$candidate" ]; then RISK_SCORER="$candidate"; break; fi
   done
@@ -997,11 +992,11 @@ GOVERNOR="$(bs_quality_find_script quality-run-governor.js)" || {
 node "$GOVERNOR" bump-round "$BS_QUALITY_GOVERNOR_FILE" || exit 1
 
 # Resolve the review runner across every install layout (plugin, ~/.claude
-# symlink, submodule, bare clone). Before 2026-07-10 this checked exactly two
-# paths; on the primary install (~/.claude/scripts -> an overlay repo, which
-# never carried this script) BOTH missed, `bash <missing>` returned 127, and the
-# skill printed "MERGE BLOCKED: review runner failed (rc=127)" and exited —
-# which is the "does all the work then never merges" stall.
+# symlink, submodule, bare clone). Do NOT hardcode a path: if ~/.claude/scripts
+# is symlinked somewhere that doesn't carry this script, a guessed path misses,
+# `bash <missing>` returns 127, and the skill prints "MERGE BLOCKED: review
+# runner failed (rc=127)" after doing all the work — the "does all the work then
+# never merges" stall.
 COMPANION="$(bs_quality_find_script claude-review-companion.sh)" || {
   echo "❌ MERGE BLOCKED: claude-review-companion.sh not found on any candidate path — review could not run." >&2
   exit 1
@@ -1178,7 +1173,6 @@ case "$CODEX_SELECTOR" in
       for candidate in \
         "${CLAUDE_SETUP_ROOT:-}/scripts/quality-run-governor.js" \
         "${CLAUDE_PLUGIN_ROOT:-}/../scripts/quality-run-governor.js" \
-        "$HOME/Projects/products/claude-kit/scripts/quality-run-governor.js" \
         "$HOME/.claude/scripts/quality-run-governor.js"; do
         if [ -n "$candidate" ] && [ -f "$candidate" ]; then GOVERNOR="$candidate"; break; fi
       done
@@ -1522,7 +1516,6 @@ GOVERNOR=""
 for candidate in \
   "${CLAUDE_SETUP_ROOT:-}/scripts/quality-run-governor.js" \
   "${CLAUDE_PLUGIN_ROOT:-}/../scripts/quality-run-governor.js" \
-  "$HOME/Projects/products/claude-kit/scripts/quality-run-governor.js" \
   "$HOME/.claude/scripts/quality-run-governor.js"; do
   if [ -n "$candidate" ] && [ -f "$candidate" ]; then GOVERNOR="$candidate"; break; fi
 done
