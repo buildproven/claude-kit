@@ -256,7 +256,7 @@ echo "Next steps:"
 echo "  1. Review docs/dev_guide/CONVENTIONS.md — add project-specific gotchas"
 echo "  2. Commit: git add docs/ .claude/ CLAUDE.md && git commit -m 'chore: init agent infrastructure'"
 echo "  3. Start sessions with: Read docs/dev_guide/CONVENTIONS.md"
-echo "  4. Use /bs:plan before complex work, /bs:context --save before ending sessions"
+echo "  4. Use /bs:plan before complex work; write decisions to docs/plans/ as you go"
 ```
 
 ## Examples

@@ -19,7 +19,7 @@ path only the author has.
 
 There are two install surfaces, both work via symlinks so edits propagate without copy:
 
-- **Global** — `./install.sh` → `scripts/setup-claude-sync.sh` symlinks this repo's `commands/`, `skills/`, `agents/`, `scripts/` into `~/.claude/`. Hook commands in `config/settings.json` resolve via `$HOME/.claude/scripts/...`.
+- **Global** — `./install.sh` symlinks this repo's `commands/`, `skills/`, `agents/`, `scripts/` into `~/.claude/`. Hook commands in `config/settings.json` resolve via `$HOME/.claude/scripts/...`. `scripts/setup-claude-sync.sh` is the separate verify/repair tool (`--check` / `--repair`) that `/bs:sync` drives; it links the same set.
 - **Per-repo** — `scripts/install-commands-to-repo.sh` or the submodule flow in `QUICK_START.md` / `SUBMODULE_SETUP.md`. Target repo gets `.claude-setup/` (submodule) and `.claude/` with symlinks into it.
 
 When editing, you are editing the source that both surfaces read. There is no build step — changes to a command or skill `.md` are live immediately.
@@ -115,4 +115,4 @@ Scripts directory gets looser security rules (`scripts/**/*.js` allows object in
 - **No TypeScript sources.** Despite TS plugin config in ESLint, there is no `tsconfig.json` or TS code. The TS branch is there for downstream projects. Don't add TypeScript here without widening scope deliberately.
 - **`tests/` vs `scripts/__tests__/`**. Only the latter runs. `tests/__init__.py` is a vestigial Python stub — `pyproject.toml` references it but there's no runner configured.
 - **Knip is non-blocking by default** (`dead-code` script swallows exit code). Use `dead-code:strict` before shipping structural refactors.
-- **The `install.sh` at repo root is a thin wrapper**. Real work happens in `scripts/setup-claude-sync.sh`.
+- **`install.sh` and `scripts/setup-claude-sync.sh` are two independent installers.** `install.sh` does its own symlinking (first-run install); `setup-claude-sync.sh` verifies/repairs (`/bs:sync`). They duplicate the link list — a change to one must be mirrored in the other, or they drift.

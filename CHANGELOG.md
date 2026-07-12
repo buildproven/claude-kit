@@ -42,6 +42,16 @@ clean clone. One missing word in a `for` loop.
 Removed; the chain now ends at `$HOME/.claude/scripts/`, which the installer creates.
 This is the rule CONTRIBUTING.md already stated and the repo was violating.
 
+### Changed — tightened default Bash permissions (BREAKING)
+
+`config/settings.json` listed a bare `"Bash"` in `permissions.allow`, which
+auto-approved **every** shell command and effectively neutered the `deny` and `ask`
+rules below it. Removed. The allow-list now only covers the specific read-only
+patterns (`Bash(**/grep *)`, `Bash(**/cat *)`, …).
+
+Expect prompts for Bash commands that previously ran unprompted. That is the point —
+widen the allow-list in your own `~/.claude/settings.json` if you want it back.
+
 ### Fixed — CI hostile to contributors
 
 - `.github/workflows/cascade-to-pro.yml`: **removed**. It fired on every push to
