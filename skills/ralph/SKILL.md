@@ -33,8 +33,16 @@ State machine: `PICK -> IMPLEMENT -> QUALITY -> REFLECT -> DECIDE`
 **YOU are the orchestrator.** The shell script provides utilities for quality checks, state tracking, and backlog updates. YOU drive the PICK→IMPLEMENT→QUALITY→REFLECT→DECIDE loop.
 
 ```bash
-KIT_REPO="${KIT_REPO:-$HOME/Projects/products/claude-kit}"
-SCRIPT="$SETUP_REPO/scripts/ralph-next-run.sh"
+# Resolve the kit root rather than assuming a checkout location. The last
+# candidate is the installed symlink (install.sh links scripts/ into ~/.claude),
+# so this works for a plain `./install.sh` user with no env vars set.
+for c in \
+  "${CLAUDE_KIT_ROOT:-}/scripts/ralph-next-run.sh" \
+  "${CLAUDE_PLUGIN_ROOT:-}/scripts/ralph-next-run.sh" \
+  "$HOME/.claude/scripts/ralph-next-run.sh"; do
+  if [ -n "$c" ] && [ -f "$c" ]; then SCRIPT="$c"; break; fi
+done
+[ -n "${SCRIPT:-}" ] || { echo "ralph: cannot locate ralph-next-run.sh" >&2; exit 1; }
 EVIDENCE_DIR=".claude/ralph-next"
 ```
 
@@ -220,8 +228,7 @@ score = (quality_coverage * 0.4) + (first_attempt * 0.2) + (duration_ratio * 0.2
 # whose own cwd is a harness scratch dir, not the target repo. Without this
 # the subsequent `git checkout main && git pull` runs against whatever happens
 # to be the agent's cwd — silently mutating the wrong tree (or failing because
-# there's no git repo there at all). Mirrors the pattern from skills/quality
-# (kit-pro PR #19, env var fallback PR #22).
+# there's no git repo there at all). Mirrors the pattern from skills/quality.
 TARGET_DIR=""
 prev_arg=""
 for arg in "$@"; do

@@ -31,8 +31,7 @@ npm install
 - New commands or skills that are useful to more than one person
 - Documentation improvements
 
-There is no paid tier and nothing is out of scope for being "too advanced" — the
-former `claude-kit-pro` was folded into this repo.
+Nothing is out of scope for being "too advanced". This repo is the whole toolkit.
 
 ## What does NOT belong here
 

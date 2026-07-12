@@ -102,7 +102,7 @@ git branch -v
 ls -la .claude/session-*.json 2>/dev/null
 
 # Resume previous session
-# Use /bs:resume to restore context
+# Use `claude --resume` and pick the session from the list
 ```
 
 ## Context Restoration Checklist

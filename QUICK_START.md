@@ -1,20 +1,16 @@
 # Quick Start: Add Commands to Any Repo
 
-Use this guide to add your `/bs:*` commands to any repository.
+Use this guide to add the `/bs:*` commands to any repository.
 
-## Prerequisites (One-Time Setup)
+> **Prefer the plugin.** For most people, `/plugin marketplace add buildproven/claude-kit`
+> then `/plugin install bs@buildproven` is simpler than the submodule flow below.
+> Use this guide when you want the commands vendored into a specific repo (so
+> teammates and the Web UI pick them up automatically).
 
-**Add SSH key to GitHub** (if you haven't already):
+## Prerequisites
 
-```bash
-# Generate SSH key (in Codespaces or local machine)
-ssh-keygen -t ed25519 -C "your-email@example.com"
-
-# Display public key
-cat ~/.ssh/id_ed25519.pub
-
-# Copy the output and add to: https://github.com/settings/keys
-```
+Git, and a repo you can push to. claude-kit is a public MIT repo, so cloning it
+needs no credentials.
 
 ## Add Commands to a New Repo
 
@@ -24,7 +20,7 @@ cat ~/.ssh/id_ed25519.pub
 # 1. Navigate to your repo
 cd /path/to/your-repo
 
-# 2. Add claude-kit as submodule (SSH URL for private repos)
+# 2. Add claude-kit as a submodule
 git submodule add https://github.com/buildproven/claude-kit.git .claude-kit
 
 # 3. Create symlinks
@@ -53,7 +49,7 @@ git push
 - `/bs:dev` - Start development work
 - `/bs:quality` - Autonomous quality loop (95% or 98%)
 - `/bs:help` - See all commands
-- And 10+ more!
+- And 30+ more!
 
 **Test it:**
 Open the repo in Claude Code Web UI and try `/bs:help`
@@ -121,10 +117,10 @@ your-repo/
 
 ## Benefits
 
-✅ Private repo stays private (SSH authentication)
 ✅ Single source of truth (update once, applies everywhere)
 ✅ Works in Web UI, CLI, and for teammates
 ✅ Easy updates via `git pull` in submodule
+✅ Public HTTPS clone — no credentials needed for the submodule
 
 ---
 

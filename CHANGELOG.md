@@ -2,6 +2,68 @@
 
 All notable changes to claude-kit are documented here.
 
+## [3.0.0] - 2026-07-12
+
+The paid tier is gone. claude-kit is now the whole thing, free and MIT.
+
+### Changed — claude-kit-pro folded in and archived
+
+Anthropic shipped the orchestration layer natively (workflows, background agents,
+agent teams), which is most of what the paid tier sold. Keeping a middle tier that
+duplicated the platform stopped making sense, so `claude-kit-pro` was folded into
+this repo and archived on 2026-07-11. Everything it had — quality, ralph, strategy,
+sota, steward, review, backlog, the domain skills, all 14 agents — is here, MIT.
+
+The old three-tier chain (setup → kit-pro → kit) is collapsed. There is no "core
+layer" and no "pro"; there is just the kit.
+
+### Fixed — the installer was silently broken
+
+`install.sh` symlinked `commands/`, `skills/` and `agents/` into `~/.claude/` but
+**not `scripts/`** — while `config/settings.json` wires 14 hooks to
+`$HOME/.claude/scripts/*.sh`. Every hook (including the `block-push-main` and
+`block-commit-main` safety rails) silently no-opped for anyone who installed from a
+clean clone. One missing word in a `for` loop.
+
+- `install.sh`: link `scripts/` as well (#—)
+- `scripts/setup-claude-sync.sh`: **added**. Six files referenced this script and it
+  did not exist; `/bs:sync`, whose entire job is repairing symlinks, invoked it. It
+  now exists, links all four directories, and verifies every hook named in
+  `settings.json` actually resolves. `--check` exits non-zero when they don't.
+- `skills/ralph/SKILL.md`: `SCRIPT` was built from `$SETUP_REPO`, a variable that is
+  never set — so ralph's runner path resolved to `/scripts/ralph-next-run.sh` and
+  failed for everyone. Now resolved through the standard candidate chain.
+- `commands/bs/sync.md`: same `$SETUP_REPO` bug.
+
+### Fixed — hardcoded maintainer-only paths
+
+`skills/quality/SKILL.md` and `skills/ralph/SKILL.md` fell back to
+`$HOME/Projects/products/claude-kit/...`, a path that exists on exactly one machine.
+Removed; the chain now ends at `$HOME/.claude/scripts/`, which the installer creates.
+This is the rule CONTRIBUTING.md already stated and the repo was violating.
+
+### Fixed — CI hostile to contributors
+
+- `.github/workflows/cascade-to-pro.yml`: **removed**. It fired on every push to
+  main, dispatching to `claude-kit-pro` — now archived and private. It failed every
+  time, leaving a permanent red ✗ on the repo homepage, and advertised a private repo.
+- `.github/workflows/stale-prs.yml`: this auto-closed **any** PR after 48 hours. It is
+  a solo-maintainer discipline hack and it was pointed at the public: a first-time
+  contributor opening a PR on Friday would have it closed by Sunday. Now scoped to
+  PRs explicitly labelled `maintainer`; community PRs are invisible to it.
+
+### Fixed — dangling command references
+
+`/bs:post`, `/bs:maintain`, `/bs:resume` and `/bs:context` were referenced in shipped
+docs but ship in no version of the kit (the first two are private; the latter two were
+removed). `/bs:workflow` — the guide the README points newcomers at — told them to run
+commands that do not exist. All 44 referenced `/bs:*` commands now resolve.
+
+### Fixed — version skew
+
+`plugin.json` said 3.0.0, `package.json` said 1.2.1, the latest tag said v2.2.0.
+Now uniformly 3.0.0.
+
 ## [1.2.1] - 2026-05-17
 
 ### Fixed
