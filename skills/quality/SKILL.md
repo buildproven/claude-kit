@@ -8,1377 +8,276 @@ context: fork
 disallowed-tools: AskUserQuestion
 ---
 
-> **FORKED SKILL INVOCATION — EXECUTE STEP -1 IMMEDIATELY.**
->
-> This skill was already invoked by `/bs:quality`. In this forked context, the
-> active task is the quality workflow defined below; task arguments arrive via
-> the `--args-file` channel described in Step -1, not necessarily as a fresh
-> user message.
->
-> If the visible context contains only system reminders or appears to have no
-> new user prompt, do not wait for another request and do not report "no user
-> task." Treat that state as expected fork startup context and immediately run
-> the Step -1 args-file extraction block.
+> **FORKED SKILL INVOCATION — EXECUTE STEP -1 IMMEDIATELY.** This skill was
+> already invoked by `/bs:quality`; args arrive via the `--args-file` channel
+> (Step -1), not necessarily as a fresh user message. If the visible context
+> has no new user prompt, treat that as expected fork startup and run Step -1
+> now — do not wait or report "no user task."
 
 # Quality Skill — Autonomous Quality Loop
 
-Makes your project ship-ready in one autonomous command. Replaces manual review cycles with parallel quality agents.
+Makes your project ship-ready in one autonomous command. **This is
+AUTONOMOUS — do NOT stop and ask the user between loops.**
 
-**CRITICAL: This is AUTONOMOUS. Do NOT stop and ask the user between loops.**
-
-> **Completion condition (for `/goal`-driven runs):**
-> `/goal all tests pass, lint is clean, and type errors are zero — verified by running the full quality suite`
->
-> When invoked via `claude -p "/goal ..."` or in a loop context, the Haiku evaluator
-> checks after each turn whether the condition is met. On failure it provides a reason
-> that guides the next turn automatically. This makes CI-mode runs self-terminating
-> without manual polling.
-
-> **NEVER divert to "investigate uncommitted state" mode.** Once Step -1 resolves
-> a target (PR, branch, worktree path, or cwd-worktree), execute the quality
-> pipeline (Step 0 → Step 1 → Step 2 → … → merge). Uncommitted files in the
-> resolved worktree are EXPECTED — they are the working changes being audited.
-> Do NOT respond with a "status report" or "let me check first" or "here's what
-> I found, what do you want me to do" — that's the failure mode this guard
-> exists to prevent (regression 2026-05-21: skill bailed to investigation mode
-> after Step -1 succeeded because the worktree had uncommitted artifacts from
-> a parallel session).
->
-> Specifically forbidden after a successful Step -1 resolution:
->
-> - Reporting "On main / no feature branch / no PR specified".
-> - Listing uncommitted files and asking which to commit.
-> - Bailing because of "ambiguous" state. Step -1's resolution IS the disambiguator.
-> - Refusing `--merge` after the resolver returned a non-`primary-fallback`
->   resolution (the resolver itself owns the merge-refuse contract).
->
-> The ONLY post-Step-1 reasons to stop early:
->
-> - Tests/lint/build hard-fail and cannot be auto-fixed within the retry budget.
-> - High/critical tier review surfaces a finding requiring human input.
-> - CI shows a failing required check on the target PR.
->   All other states proceed.
+> **NEVER divert to "investigate uncommitted state" mode.** Once Step -1
+> resolves a target, execute the pipeline end to end. Uncommitted files in
+> the resolved worktree are EXPECTED (they're the changes being audited).
+> Forbidden after a successful Step -1: reporting "no PR/branch," listing
+> uncommitted files and asking what to do, bailing on "ambiguous" state, or
+> refusing `--merge` after a non-`primary-fallback` resolution. See
+> `reference.md` "Regression History" for the incidents these guards exist
+> to prevent. Only stop early for: hard-failing tests/lint/build that can't
+> auto-fix, a high/critical finding needing human input, or failing required
+> CI on the target PR.
 
 ## Execution Flow
 
-### Step -1: Resolve Audit Target (Git Root + Worktree Discipline)
+### Step -1: Resolve Audit Target + Init Governor
 
-**Bug fixed 2026-05-11**: when invoked as `/bs:quality --merge` with PR context
-in the natural-language args (e.g. `#410`, `codex/foo`, or a worktree path),
-prior versions ignored those references and audited whatever happened to be in
-the operator's cwd — producing irrelevant reports about uncommitted changes in
-the primary checkout. Target resolution now honors, in priority order:
-
-1. **Explicit PR number** in args (`#NNN`, `PR NNN`, `pr#NNN`, `pull/NNN`, or
-   `--pr NNN`) — `gh pr view <N> --json headRefName` resolves the head branch,
-   then we look up the local worktree.
-2. **Branch name** in args (e.g. `codex/foo`, `feat/bar`) or via `--branch`
-   flag — find the local worktree for that branch.
-3. **Worktree path** via `--target-dir <path>` / `--target <path>` /
-   `--worktree <path>` or any bare absolute-path arg that exists.
-4. **cwd is a non-primary worktree** — audit cwd's diff vs base. This is the
-   "I'm working in my feature branch worktree" case.
-5. **Fallback: primary checkout** — only with a LOUD warning. **Forbidden
-   under `--merge`** — `--merge` mode hard-refuses to fall through to (5).
-
-The parsing + resolution logic lives in
-`<kit-root>/scripts/quality-target-resolver.js` (pure, unit-tested at
-`scripts/__tests__/quality-target-resolution.test.js`). The skill calls it as
-a subprocess and acts on the JSON result.
+Target resolution (PR number, branch name, `--target-dir`, or cwd-worktree,
+in that priority order — full detail in `reference.md` "Target Resolution")
+and run-governor init both live in `scripts/quality-bootstrap.sh`. Run it
+first, in every invocation:
 
 ```bash
-# --- args-file bridge (REQUIRED — bug fixed 2026-05-12) ---------------------
-# The /bs:quality slash command writes the user's $ARGUMENTS to a tempfile
-# and passes the path here as --args-file <path>. This is the reliable
-# channel for getting args into a forked Skill execution; the runtime does
-# not propagate `Skill(args=...)` to the fork's $@ on its own.
-#
-# We extract --args-file from $@ and, if found, REPLACE $@ with the file
-# contents (preserving any other args that were passed alongside).
-# The file is removed once read, so concurrent /bs:merge-train invocations
-# don't pile up stale state.
-ARGS_FILE=""
-REMAINING_ARGS=()
-prev_arg=""
-for arg in "$@"; do
-  case "$prev_arg" in
-    --args-file)
-      ARGS_FILE="$arg"
-      prev_arg=""
-      continue
-      ;;
-  esac
-  case "$arg" in
-    --args-file)
-      prev_arg="--args-file"
-      continue
-      ;;
-    --args-file=*)
-      ARGS_FILE="${arg#*=}"
-      continue
-      ;;
-  esac
-  REMAINING_ARGS+=("$arg")
-  prev_arg=""
-done
-
-if [ -n "$ARGS_FILE" ] && [ -f "$ARGS_FILE" ]; then
-  # Read the file, strip trailing newline, split on whitespace into args.
-  # Use a subshell + xargs to safely tokenize without eval.
-  FILE_ARGS=()
-  while IFS= read -r tok; do
-    [ -n "$tok" ] && FILE_ARGS+=("$tok")
-  done < <(xargs -n1 < "$ARGS_FILE" 2>/dev/null)
-  # Defensive: only unlink files inside the expected mktemp -d directory.
-  # The slash command writes to `<tmpdir>/bs-quality-args.XXXXXX/args.txt`.
-  # If a caller passes an unexpected path (e.g. a config file by mistake),
-  # leave it alone rather than deleting it.
-  case "$ARGS_FILE" in
-    */bs-quality-args.*/args.txt|*/bs-quality-args-*.txt)
-      rm -f "$ARGS_FILE"
-      # Also try to rmdir the parent (only succeeds if empty — which it
-      # will be, since args.txt was the only file inside).
-      ARGS_PARENT=$(dirname "$ARGS_FILE")
-      case "$ARGS_PARENT" in
-        */bs-quality-args.*)
-          rmdir "$ARGS_PARENT" 2>/dev/null || true
-          ;;
-      esac
-      ;;
-    *)
-      echo "[quality] WARNING: --args-file path does not match the expected" >&2
-      echo "  bs-quality-args.*/args.txt pattern; leaving it in place: $ARGS_FILE" >&2
-      ;;
-  esac
-  # Use file args ONLY if the caller didn't already pass concrete args
-  # alongside --args-file (belt-and-suspenders mode). The file is the
-  # fallback; explicit args win.
-  # Replace $@ with REMAINING_ARGS (explicit args minus --args-file token),
-  # unioned with FILE_ARGS when REMAINING is empty. The --args-file token
-  # itself never propagates beyond this block — downstream code must never
-  # see it in $@.
-  if [ "${#REMAINING_ARGS[@]}" -gt 0 ]; then
-    set -- "${REMAINING_ARGS[@]}"
-  elif [ "${#FILE_ARGS[@]}" -gt 0 ]; then
-    set -- "${FILE_ARGS[@]}"
-  else
-    set --
-  fi
-fi
-
-# --- Recursion guard (2026-06-04 wrapper-recursion incident) -----------------
-# The synchronous review leg (Step 1.8) runs each review agent as a blocking
-# `claude -p` subprocess with BS_QUALITY_HEADLESS=1 exported. If one of those
-# review children — via a hook, an agent, or a stray /goal — ever re-enters
-# /bs:quality, we would recurse (fork → review child → fork …). Hard-refuse
-# when we detect we are already inside a headless review child.
-if [ "${BS_QUALITY_HEADLESS:-}" = "1" ]; then
-  echo "❌ /bs:quality refused: already running inside a headless review child" >&2
-  echo "   (BS_QUALITY_HEADLESS=1). Review subprocesses must not re-enter the" >&2
-  echo "   quality skill — this guard prevents fork→child→fork recursion." >&2
-  exit 1
-fi
-
-# Clear any STALE review-panel sentinel from a prior run in this session before
-# the pipeline starts. The sentinel is session-namespaced, not run-namespaced,
-# so without this a run that SKIPS agent selection (e.g. --scope changed, which
-# skips Step 1.8) could let the companion block read a previous run's panel and
-# review the wrong set — or, worse, mask an "agents never selected" bug. Fresh
-# run ⇒ empty sentinel ⇒ the companion block's empty-check blocks correctly.
-rm -f "${TMPDIR:-/tmp}/bs-quality-agents-${CLAUDE_CODE_SESSION_ID:-default}.txt"
-
-# Locate the resolver. It ships in the kit (the parent
-# of the kit-pro submodule). $CLAUDE_PLUGIN_ROOT points at kit-pro; the
-# overlay is its parent.
-RESOLVER=""
+BOOTSTRAP=""
 for candidate in \
-  "${CLAUDE_SETUP_ROOT:-}/scripts/quality-target-resolver.js" \
-  "${CLAUDE_PLUGIN_ROOT:-}/../scripts/quality-target-resolver.js" \
-  "$HOME/Projects/products/claude-kit/scripts/quality-target-resolver.js" \
-  "$HOME/.claude/scripts/quality-target-resolver.js"; do
-  if [ -n "$candidate" ] && [ -f "$candidate" ]; then
-    RESOLVER="$candidate"; break
-  fi
+  "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-bootstrap.sh" \
+  "${CLAUDE_KIT_ROOT:-}/scripts/quality-bootstrap.sh" \
+  "$HOME/.claude/scripts/quality-bootstrap.sh" \
+  "./scripts/quality-bootstrap.sh" \
+  "$HOME/Projects/products/claude-kit/scripts/quality-bootstrap.sh"; do
+  [ -n "$candidate" ] && [ -f "$candidate" ] && { BOOTSTRAP="$candidate"; break; }
 done
-
-if [ -z "$RESOLVER" ]; then
-  # Resolver missing — fall back to the legacy --target-dir-only behavior.
-  # This preserves backwards compatibility in environments where the overlay
-  # repo isn't checked out, at the cost of losing PR/branch resolution.
-  echo "[quality] WARNING: quality-target-resolver.js not found — falling back to legacy --target-dir parsing." >&2
-  TARGET_DIR=""
-  prev_arg=""
-  for arg in "$@"; do
-    case "$prev_arg" in
-      --target-dir|--target) TARGET_DIR="$arg" ;;
-    esac
-    case "$arg" in
-      --target-dir=*|--target=*) TARGET_DIR="${arg#*=}" ;;
-    esac
-    prev_arg="$arg"
-  done
-  if [ -z "$TARGET_DIR" ] && [ -n "${BS_QUALITY_TARGET_DIR:-}" ]; then
-    TARGET_DIR="$BS_QUALITY_TARGET_DIR"
-  fi
-  if [ -n "$TARGET_DIR" ]; then
-    TARGET_DIR="${TARGET_DIR/#\~/$HOME}"
-    [ -d "$TARGET_DIR" ] || { echo "❌ target dir does not exist: $TARGET_DIR"; exit 1; }
-    cd "$TARGET_DIR" || exit 1
-  fi
-else
-  # Use the resolver. It returns a JSON plan we act on.
-  # Pre-build helper inputs the resolver needs.
-  PRIMARY_CHECKOUT=$(git worktree list --porcelain 2>/dev/null \
-    | awk '/^worktree / {p=$2} /^branch refs\/heads\/main$/ {print p; exit}')
-  CWD_INPUT=$(pwd)
-
-  # Invoke the resolver. It expects ARGS (positional) and reads context from
-  # env vars: QUALITY_CWD, QUALITY_PRIMARY_CHECKOUT.
-  RESOLUTION_JSON=$(QUALITY_CWD="$CWD_INPUT" \
-                    QUALITY_PRIMARY_CHECKOUT="$PRIMARY_CHECKOUT" \
-                    node "$RESOLVER" --cli "$@" 2>/dev/null) || RESOLUTION_JSON=""
-
-  if [ -n "$RESOLUTION_JSON" ]; then
-    RES_OK=$(echo "$RESOLUTION_JSON" | jq -r '.ok // false' 2>/dev/null)
-    RES_KIND=$(echo "$RESOLUTION_JSON" | jq -r '.resolution // ""' 2>/dev/null)
-    RES_PATH=$(echo "$RESOLUTION_JSON" | jq -r '.targetPath // ""' 2>/dev/null)
-    RES_BRANCH=$(echo "$RESOLUTION_JSON" | jq -r '.targetBranch // ""' 2>/dev/null)
-    RES_REASON=$(echo "$RESOLUTION_JSON" | jq -r '.reason // ""' 2>/dev/null)
-    RES_WARNINGS=$(echo "$RESOLUTION_JSON" | jq -r '.warnings[]?' 2>/dev/null)
-
-    # Always print warnings (loudly, so a primary-fallback is unmissable).
-    if [ -n "$RES_WARNINGS" ]; then
-      echo ""
-      echo "============================================================"
-      echo "  [quality] TARGET RESOLUTION WARNINGS"
-      echo "============================================================"
-      echo "$RES_WARNINGS" | sed 's/^/  /'
-      echo "============================================================"
-      echo ""
-    fi
-
-    if [ "$RES_OK" != "true" ]; then
-      echo "❌ /bs:quality could not resolve an audit target."
-      echo "   Reason: $RES_REASON"
-      echo "   Resolution: $RES_KIND"
-      exit 1
-    fi
-
-    if [ "$RES_KIND" = "pr" ] || [ "$RES_KIND" = "branch" ]; then
-      if [ -z "$RES_PATH" ] && [ -n "$RES_BRANCH" ]; then
-        # No local worktree for the branch — materialize one in a sibling dir.
-        # We use a deterministic path so repeat invocations reuse the worktree.
-        REPO_ROOT_FOR_WT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-        REPO_NAME=$(basename "$REPO_ROOT_FOR_WT")
-        SLUG=$(echo "$RES_BRANCH" | tr '/' '-' )
-        RES_PATH="${REPO_ROOT_FOR_WT%/*}/${REPO_NAME}-${SLUG}"
-        if [ ! -d "$RES_PATH" ]; then
-          git fetch origin "$RES_BRANCH" 2>/dev/null || true
-          git worktree add "$RES_PATH" "$RES_BRANCH" 2>/dev/null \
-            || git worktree add -B "$RES_BRANCH" "$RES_PATH" "origin/$RES_BRANCH" \
-            || { echo "❌ Could not materialize worktree for $RES_BRANCH at $RES_PATH"; exit 1; }
-        fi
-      fi
-    fi
-
-    if [ -n "$RES_PATH" ]; then
-      echo "[quality] audit target: $RES_PATH (resolution=$RES_KIND${RES_BRANCH:+, branch=$RES_BRANCH})"
-      cd "$RES_PATH" || { echo "❌ failed to cd to $RES_PATH"; exit 1; }
-    fi
-  fi
-fi
-
-GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-if [ -z "$GIT_ROOT" ]; then
-  echo "❌ /bs:quality could not resolve a git root from $(pwd)."
-  echo "   Pass --target-dir <path>, a PR number (#NNN), or a branch name,"
-  echo "   or export BS_QUALITY_TARGET_DIR=<path> in the spawning agent harness."
-  exit 1
-fi
-cd "$GIT_ROOT" || exit 1
-
-# Worktree discipline: when --merge is requested, refuse to run from the
-# primary checkout's main branch. The resolver already hard-refuses the
-# "no target specified + --merge" case; this is the belt-and-suspenders check
-# for the "I cd'd into the primary checkout and asked for --merge" case.
-ARGS_MERGE=false
-for arg in "$@"; do
-  case "$arg" in
-    --merge|--merge=*) ARGS_MERGE=true; break ;;
-  esac
-done
-
-if [ "$ARGS_MERGE" = true ]; then
-  CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-  PRIMARY=$(git worktree list --porcelain | awk '/^worktree / {p=$2} /^branch refs\/heads\/main$/ {print p; exit}')
-  if [ "$CURRENT_BRANCH" = "main" ] && [ -n "$PRIMARY" ] && [ "$GIT_ROOT" = "$PRIMARY" ]; then
-    echo "❌ /bs:quality --merge cannot run from the primary checkout on main."
-    echo "   Create a worktree first:"
-    echo "     git worktree add ../$(basename "$GIT_ROOT")-worktrees/<slug> -b <type>/<slug> main"
-    echo "   Move uncommitted changes there with: git stash; cd <worktree>; git stash pop"
-    exit 1
-  fi
-fi
-
-# --- persist resolved git root for downstream bash blocks --------------------
-# Each Bash tool invocation in later steps starts a fresh shell — cwd and
-# shell vars set above do NOT survive. Without this, the resolver's target
-# (--target-dir / PR / branch) is silently dropped beyond Step -1, and
-# downstream `$GIT_ROOT` references resolve to empty. Write the resolved
-# root to a sentinel file that every downstream block reads with the
-# BS_QUALITY_LOAD_ROOT preamble below.
-#
-# The sentinel filename is namespaced by SESSION + a hash of the resolved
-# target root. A session-only name (the old scheme) collided when one session
-# ran /bs:quality against MORE THAN ONE repo/worktree in sequence — e.g. a
-# fix in repo A, then license-core, then eslint-plugin-defensive. Each run
-# overwrote the same file; a later run could read an earlier run's stale root
-# and silently gate/merge the WRONG repo. Hashing the target into the name
-# means concurrent or sequential runs against different targets get different
-# sentinels and cannot clobber each other. Downstream blocks recompute the
-# same hash from their own `git rev-parse --show-toplevel`, so no extra state
-# needs threading.
-bs_quality_root_file() {
-  # $1 = resolved git root (absolute). Echo the per-target sentinel path.
-  local root="$1"
-  local sess="${CLAUDE_CODE_SESSION_ID:-default}"
-  local key
-  # Prefer sha256sum; fall back to shasum (macOS) then cksum (always present).
-  if command -v sha256sum >/dev/null 2>&1; then
-    key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
-  elif command -v shasum >/dev/null 2>&1; then
-    key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
-  else
-    key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12)
-  fi
-  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
-}
-BS_QUALITY_ROOT_FILE=$(bs_quality_root_file "$GIT_ROOT")
-if ! printf '%s\n' "$GIT_ROOT" > "$BS_QUALITY_ROOT_FILE" 2>/dev/null; then
-  echo "❌ /bs:quality could not write git-root sentinel to $BS_QUALITY_ROOT_FILE"
-  echo "   Check that \$TMPDIR is writable: ${TMPDIR:-/tmp}"
-  exit 1
-fi
-echo "BS_QUALITY_ROOT_FILE=$BS_QUALITY_ROOT_FILE"
-
-# --- run-governor init (2026-07-03: runaway-loop guardrails) -----------------
-# Incident: two PRs in one night (#529: 128min/6 commits, #532: 167min/13
-# commits) ran to completion with no circuit breaker. CODEX_ROUNDS only bounds
-# the inner Codex adversarial loop; nothing bounded the OUTER cycle of
-# BLOCKING-finding → auto-fix → re-review across the whole invocation.
-#
-# The governor sentinel filename is DERIVED from the same per-target hash as
-# BS_QUALITY_ROOT_FILE (bs_quality_root_file "$GIT_ROOT", suffixed
-# "-governor.json") rather than stored in a variable — bash vars do NOT
-# survive across fenced bash blocks (same reason GIT_ROOT needs the sentinel
-# dance), so every downstream block recomputes this filename itself from its
-# own reloaded GIT_ROOT instead of reading a stale BS_QUALITY_GOVERNOR_FILE.
-#
-# Bounds are review-rounds AND commit-count AND wall-clock, tracked
-# independently — any one tripping halts autonomous continuation. Override via
-# env vars for repos that legitimately need more headroom (e.g. `--scope all`
-# on a huge monorepo).
-#
-# max_review_rounds is the one that actually terminates the outer
-# fix -> re-review loop. It is enforced by `bump-round` immediately before the
-# review panel (Step 2.0), NOT by prose. See the 2026-07-10 note in
-# quality-run-governor.js for why prose was not enough.
-BS_QUALITY_MAX_REVIEW_ROUNDS="${BS_QUALITY_MAX_REVIEW_ROUNDS:-2}"
-BS_QUALITY_MAX_FIX_COMMITS="${BS_QUALITY_MAX_FIX_COMMITS:-4}"
-BS_QUALITY_MAX_WALL_SECONDS="${BS_QUALITY_MAX_WALL_SECONDS:-900}"
-BS_QUALITY_GOVERNOR_FILE="${BS_QUALITY_ROOT_FILE%.txt}-governor.json"
-GOVERNOR_START_EPOCH=$(date +%s)
-GOVERNOR_START_COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo 0)
-cat > "$BS_QUALITY_GOVERNOR_FILE" <<EOF
-{
-  "start_epoch": ${GOVERNOR_START_EPOCH},
-  "start_commit_count": ${GOVERNOR_START_COMMIT_COUNT},
-  "max_fix_commits": ${BS_QUALITY_MAX_FIX_COMMITS},
-  "max_wall_seconds": ${BS_QUALITY_MAX_WALL_SECONDS},
-  "max_review_rounds": ${BS_QUALITY_MAX_REVIEW_ROUNDS},
-  "rounds_used": 0,
-  "findings_seen": []
-}
-EOF
-echo "[quality] governor: cap=${BS_QUALITY_MAX_REVIEW_ROUNDS} review-rounds, ${BS_QUALITY_MAX_FIX_COMMITS} fix-commits, ${BS_QUALITY_MAX_WALL_SECONDS}s wall-clock"
+[ -n "$BOOTSTRAP" ] || { echo "❌ quality-bootstrap.sh not found on any candidate path" >&2; exit 1; }
+bash "$BOOTSTRAP" "$@"
 ```
 
-> **MANDATORY for every subsequent bash block in this skill** — start with the
-> following preamble so the working directory matches the root resolved in
-> Step -1, not the fork's harness cwd. Without it, target resolution is
-> silently dropped after Step -1 (regression seen 2026-05-13).
->
-> ```bash
-> # BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
-> # The sentinel filename is namespaced by session + a hash of the target root
-> # (see Step -1) so a session that runs quality against multiple repos can't
-> # cross-contaminate. We recompute the same name from the fork's own cwd git
-> # root — the harness cd'd the fork into the target, so that root matches the
-> # one written in Step -1.
-> bs_quality_root_file() {
->   local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
->   if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
->   elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
->   else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
->   printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
-> }
-> CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
-> GIT_ROOT=""
-> if [ -n "$CWD_ROOT" ]; then
->   GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
->   # The sentinel stores the canonical target root; if present it wins, but it
->   # should equal CWD_ROOT. If absent, the cwd root IS the target (the fork is
->   # already sitting in it) — use it directly rather than guessing.
->   [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
-> fi
-> [ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
-> cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
->
-> # bs_quality_find_script — resolve a kit script across EVERY install layout.
-> #
-> # Why this exists (2026-07-10): the review runner was resolved by checking
-> # exactly two hardcoded paths. On the primary install both missed —
-> # ~/.claude/scripts is a symlink to the private overlay, which never carried
-> # claude-review-companion.sh — so `bash <missing>` returned 127 and the skill
-> # printed "MERGE BLOCKED (rc=127)" after doing all the work. That was the
-> # "runs everything, then never merges" stall. Never resolve a kit script by
-> # guessing two paths again: call this, and fail loudly if it returns nothing.
-> #
-> # Echoes the resolved absolute path and returns 0, or returns 1 (silent) so
-> # the caller owns the error message.
-> bs_quality_find_script() {
->   local name="$1" c
->   for c in \
->     "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$name}" \
->     "${CLAUDE_KIT_ROOT:+$CLAUDE_KIT_ROOT/scripts/$name}" \
->     "$HOME/.claude/scripts/$name" \
->     "$HOME/.claude/plugins/bs/scripts/$name" \
->     "$GIT_ROOT/scripts/$name" \
->     "$GIT_ROOT/.claude-setup/scripts/$name" \
->     "$GIT_ROOT/core/scripts/$name" \
->     "$GIT_ROOT/core/core/scripts/$name" \
->     "$HOME/Projects/products/claude-kit/scripts/$name"
->   do
->     [ -n "$c" ] && [ -f "$c" ] && { printf '%s' "$c"; return 0; }
->   done
->   return 1
-> }
-> ```
+This prints `BS_QUALITY_ROOT_FILE=`, `BS_QUALITY_GOVERNOR_FILE=`, and
+`GIT_ROOT=` — the pipeline's persistent state, since each Bash tool call is a
+fresh shell and none of these survive as plain variables. A non-zero exit
+means target resolution failed (no target, ambiguous state, or `--merge`
+attempted from primary/main) — stop and report the printed reason; do not
+retry with a guessed target.
+
+**MANDATORY for every subsequent bash block**: start it by finding and
+sourcing `quality-load-root.sh` (it lives in the KIT, not necessarily the
+audited repo, so `cd`-relative `scripts/quality-load-root.sh` is not
+reliable once Step -1 has `cd`'d into the target — use the same
+candidate-path search as above):
+
+```bash
+for c in "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-load-root.sh" \
+         "${CLAUDE_KIT_ROOT:-}/scripts/quality-load-root.sh" \
+         "$HOME/.claude/scripts/quality-load-root.sh" \
+         "./scripts/quality-load-root.sh" \
+         "$HOME/Projects/products/claude-kit/scripts/quality-load-root.sh"; do
+  [ -n "$c" ] && [ -f "$c" ] && { source "$c"; break; }
+done
+```
+
+This restores `$GIT_ROOT` and cwd from the Step -1 sentinel, and defines
+`bs_quality_root_file` + `bs_quality_find_script` (resolves any OTHER kit
+script — plugin, `~/.claude` symlink, submodule, or bare clone — across
+every install layout; see the script header for why this must never be
+hardcoded to two paths again). Skipping this preamble silently drops target
+resolution beyond Step -1.
 
 ### Step 0: Parse Arguments
 
-Read `reference.md` for flag definitions. Key flags: `--level` (auto|95|98), `--scope` (changed|branch|all), `--merge`, `--deploy`, `--preflight`, `--audit`, `--teams`, `--codex-effort` (medium|high|xhigh), `--codex-skip "<reason>"`.
+Read `reference.md` for flag definitions. Key flags: `--level` (auto|95|98),
+`--scope` (changed|branch|all), `--merge`, `--deploy`, `--preflight`,
+`--audit`, `--teams`, `--codex-effort` (medium|high|xhigh), `--codex-skip
+"<reason>"`. Handle early exits: `--status`, `--preflight` (<10s), `--audit`
+(read-only).
 
-Handle early exits: `--status` shows history, `--preflight` runs quick checks (<10s), `--audit` runs read-only assessment.
+### Step 0.5: Risk Scoring → Review Depth (`--level auto`)
 
-### Step 0.5: Risk scoring → review depth (when `--level auto`)
+Review is machine-only (Claude finds, Codex verifies) on flat-rate
+subscriptions, so cost is wall-clock, not dollars. `--level auto` (default)
+computes a 0–100 risk score from `git diff` and scales agent count (2→10),
+Codex effort (skip→xhigh), and Codex rounds (0→2) to it. Logic lives in
+`scripts/quality-risk-resolve.sh` — `source` it after the Step -1 preamble.
+**Floor invariant: every change gets ≥2 Claude agents** — nothing merges
+with zero machine review.
 
-Review is machine-only (Claude finds, Codex verifies) on flat-rate subscriptions, so the cost is
-wall-clock, not dollars. When `--level auto` (the default), the skill computes a **0–100 risk
-score** from `git diff` via the kit-native `scripts/risk-score.js` and scales three knobs to it:
-**Claude agent count** (2→10), **Codex effort** (skip→xhigh), **Codex rounds** (0→2). This works
-in every repo with zero per-repo setup. A repo's `harness-config.json:scorePolicy` (if present)
-overrides the built-in defaults. Fallbacks: legacy `risk-policy-gate.js` tier → L95.
+**Tier → agent + Codex map** (read tier names from
+`harness-config.json:riskTierRules` at runtime — never hand-render path
+globs in this skill):
 
-Floor invariant: **every change gets ≥2 Claude agents** — nothing merges with zero machine
-review (there is no human backstop). Security-surface changes are pinned to a high score
-regardless of how "mechanical" they look.
+| Tier       | Claude agents                                 | Codex role          | Time cap |
+| ---------- | --------------------------------------------- | ------------------- | -------- |
+| `low`      | 2 (code-reviewer + silent-failure-hunter)     | skip                | ≤2 min   |
+| `medium`   | 4 (+ type-design-analyzer + security-auditor) | judge findings      | ≤8 min   |
+| `high`     | 6 (full L95)                                  | judge + adversarial | ≤25 min  |
+| `critical` | 6 + `break-glass-approval`                    | judge + adversarial | ≤25 min  |
 
-```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
-# Sentinel name is namespaced by session + hash of target root (see Step -1),
-# recomputed here from the fork's own cwd git root so multi-repo sessions can't
-# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
-bs_quality_root_file() {
-  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
-  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
-  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
-  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
-  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
-}
-CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
-GIT_ROOT=""
-if [ -n "$CWD_ROOT" ]; then
-  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
-  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
-fi
-# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
-# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
-# non-empty before attempting cd.
-[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
-cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
-
-# Default --level auto. Explicit --level 95 or 98 bypasses risk scoring.
-#
-# Resolution order for "how deep should this review be?":
-#   1. Kit-native risk score (scripts/risk-score.js) — works in EVERY repo with
-#      no per-repo setup; computes a 0–100 score from `git diff` and emits the
-#      three depth knobs (agents, codex effort, codex rounds). This is the
-#      primary path: review is machine-only, so depth scales with change risk.
-#   2. Per-repo risk-policy-gate.js tier (legacy) — only if the scorer is absent
-#      but a repo gate exists.
-#   3. L95 — last resort if neither is available.
-TIER=""
-RISK_SCORE=""
-AGENT_TARGET=""
-CODEX_DEPTH=""     # skip|medium|high|xhigh
-CODEX_ROUNDS=""
-if [ "$LEVEL" = "auto" ]; then
-  # Locate the kit scorer the same multi-candidate way as the target resolver.
-  RISK_SCORER=""
-  for candidate in \
-    "${CLAUDE_SETUP_ROOT:-}/scripts/risk-score.js" \
-    "${CLAUDE_PLUGIN_ROOT:-}/scripts/risk-score.js" \
-    "${CLAUDE_PLUGIN_ROOT:-}/../scripts/risk-score.js" \
-    "$HOME/Projects/products/claude-kit/scripts/risk-score.js" \
-    "$HOME/.claude/scripts/risk-score.js"; do
-    if [ -n "$candidate" ] && [ -f "$candidate" ]; then RISK_SCORER="$candidate"; break; fi
-  done
-
-  if [ -n "$RISK_SCORER" ]; then
-    SCORE_JSON=$(node "$RISK_SCORER" --json 2>/dev/null)
-    RISK_SCORE=$(printf '%s' "$SCORE_JSON" | node -e 'try{const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(r.riskScore))}catch{}' 2>/dev/null)
-    if [ -n "$RISK_SCORE" ]; then
-      AGENT_TARGET=$(printf '%s' "$SCORE_JSON" | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(r.knobs.agents))')
-      CODEX_DEPTH=$(printf '%s' "$SCORE_JSON" | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(r.knobs.codex))')
-      CODEX_ROUNDS=$(printf '%s' "$SCORE_JSON" | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(r.knobs.codexRounds))')
-      NATURE=$(printf '%s' "$SCORE_JSON" | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(r.changeNature))')
-      # Derive a $TIER label from the score for trailers / break-glass only.
-      if [ "$RISK_SCORE" -ge 75 ]; then TIER=critical
-      elif [ "$RISK_SCORE" -ge 50 ]; then TIER=high
-      elif [ "$RISK_SCORE" -ge 20 ]; then TIER=medium
-      else TIER=low; fi
-      echo "🧭 Risk score: ${RISK_SCORE}/100 (${NATURE}) → ${AGENT_TARGET} agents, Codex ${CODEX_DEPTH}×${CODEX_ROUNDS} [label: ${TIER}]"
-    fi
-  fi
-
-  # Fallback 2: legacy per-repo gate tier (only if scorer produced nothing).
-  if [ -z "$RISK_SCORE" ] && [ -f "harness-config.json" ] && [ -f "scripts/risk-policy-gate.js" ]; then
-    GH_OUT=$(mktemp)
-    GITHUB_OUTPUT="$GH_OUT" node scripts/risk-policy-gate.js >/dev/null 2>&1
-    if [ $? -eq 0 ]; then
-      TIER=$(grep '^effectiveTier=' "$GH_OUT" | cut -d= -f2)
-      [ -z "$TIER" ] && TIER=$(grep '^highestRisk=' "$GH_OUT" | cut -d= -f2)
-      echo "🧭 (fallback) gate tier: ${TIER}"
-    fi
-    rm -f "$GH_OUT"
-  fi
-
-  # Fallback 3: nothing resolved → L95 (full review, safe default).
-  if [ -z "$RISK_SCORE" ] && [ -z "$TIER" ]; then
-    echo "[quality] No risk scorer or gate available — falling back to L95 (full review)."
-    LEVEL=95
-  fi
-fi
-```
-
-**Tier → agent + Codex map** (read tier name from `harness-config.json:riskTierRules` at runtime — do NOT hand-render path globs anywhere in the skill):
-
-| Resolved tier | Claude agents                                 | Codex role          | Time cap |
-| ------------- | --------------------------------------------- | ------------------- | -------- |
-| `low`         | 2 (code-reviewer + silent-failure-hunter)     | skip                | ≤2 min   |
-| `medium`      | 4 (+ type-design-analyzer + security-auditor) | judge findings      | ≤8 min   |
-| `high`        | 6 (full L95)                                  | judge + adversarial | ≤25 min  |
-| `critical`    | 6 + existing `break-glass-approval` check     | judge + adversarial | ≤25 min  |
-
-**Drift guard**: a `riskTierRules drift guard` test in `risk-policy-gate.test.js` asserts the keys are exactly `{critical, high, medium, low}` — adding a fifth tier without updating this map is a contract break.
+Full tier table + agent focus descriptions: `reference.md` "Quality Levels".
 
 ### Step 1: Automated Checks
 
-1. **Determine files** based on scope (changed/branch/all)
-2. **Run checks**: TypeScript (`tsc --noEmit`), ESLint, build
-3. **Optional tools**: Trivy (vulns), Semgrep (security), Lighthouse (web perf)
-4. **Calculate quality score** from passed/total checks
+Determine files by scope, run TypeScript/ESLint/build, optional
+Trivy/Semgrep/Lighthouse, compute a quality score.
 
 ### Step 1.3: Hard Test Gate (BLOCKING)
 
-Tests must exist and pass. This is a hard blocker, not advisory. Skip with `--skip-tests` for config-only repos.
+Tests must exist and pass — a hard blocker, not advisory (`--skip-tests` for
+config-only repos). Implementation (existence check, run+auto-fix loop,
+gap reporting) is in `reference.md` "Step 1.3" — the mechanics are
+mechanical plumbing, not one of this skill's must-survive gates.
 
-#### 1.3a: Test Existence Check
+### Step 1.5–1.7: Pattern Analysis, Coverage, Docs Sync
 
-For each changed source file, verify a corresponding test file exists:
+Defensive pattern analysis (`checklist.md`), test-quality scan
+(`checklist.md` "Test Quality"), doc-sync check (skip with `--skip-docs`).
+
+### Step 1.8: Select + Run Quality Agents
+
+**Scope `changed`**: skip agents, automated checks suffice. Otherwise, first
+build the tier-aware panel (persists to a sentinel — bash arrays don't cross
+fenced blocks — and enforces break-glass approval at `critical` tier):
 
 ```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
-# Sentinel name is namespaced by session + hash of target root (see Step -1),
-# recomputed here from the fork's own cwd git root so multi-repo sessions can't
-# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
-bs_quality_root_file() {
-  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
-  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
-  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
-  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
-  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
+for c in "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-load-root.sh" \
+         "${CLAUDE_KIT_ROOT:-}/scripts/quality-load-root.sh" \
+         "$HOME/.claude/scripts/quality-load-root.sh" \
+         "./scripts/quality-load-root.sh" \
+         "$HOME/Projects/products/claude-kit/scripts/quality-load-root.sh"; do
+  [ -n "$c" ] && [ -f "$c" ] && { source "$c"; break; }
+done
+SELECT_AGENTS="$(bs_quality_find_script quality-select-agents.sh)" || {
+  echo "❌ MERGE BLOCKED: quality-select-agents.sh not found." >&2; exit 1;
 }
-CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
-GIT_ROOT=""
-if [ -n "$CWD_ROOT" ]; then
-  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
-  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
-fi
-# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
-# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
-# non-empty before attempting cd.
-[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
-cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
+source "$SELECT_AGENTS"   # sets AGENTS[], writes the agents sentinel
+```
 
-CHANGED_SRC=$(git diff --name-only main...HEAD | grep -E '\.(ts|tsx|js|jsx)$' | grep -v -E '\.(test|spec|d)\.' | grep -v -E '(config|setup|types|index\.d)\.')
-MISSING_TESTS=""
+Then: capture diff context (`git diff main...HEAD`, changed files, commit
+log) — every agent prompt gets the actual diff, never "run git diff
+yourself." Template in `reference.md` "Diff Context Injection".
 
-for src in $CHANGED_SRC; do
-  # Derive expected test path: src/foo.ts → src/foo.test.ts OR tests/foo.test.ts
-  base=$(echo "$src" | sed 's/\.\(ts\|tsx\|js\|jsx\)$//')
-  ext=$(echo "$src" | grep -oE '\.(ts|tsx|js|jsx)$')
+**Do NOT use the Task tool for review agents.** This skill runs forked; Task
+agents are fire-and-forget and their results never arrive inside this
+fork's turn, so the merge gate downstream never runs — the #1 way `--merge`
+silently failed to complete (confirmed structural, not a prompting issue:
+nested Task agents are async too). Review MUST run as a **blocking
+subprocess** instead.
 
-  # Check multiple patterns
-  found=false
-  for pattern in "${base}.test${ext}" "${base}.spec${ext}" "tests/$(basename ${base}).test${ext}" "__tests__/$(basename ${base}).test${ext}"; do
-    if [ -f "$pattern" ]; then found=true; break; fi
-  done
+**Model:** review agents inherit the session model — never pass `--model`.
+Pinning a `*[1m]` model is unconditional and global: it overrides the
+operator's session choice and trips the 1M-context Extra Usage billing gate
+on non-Opus sessions (session-wide, not model-bound). Run on an Opus session
+for the strongest review.
 
-  if [ "$found" = false ]; then
-    MISSING_TESTS="$MISSING_TESTS\n  - $src"
-  fi
+```bash
+for c in "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-load-root.sh" \
+         "${CLAUDE_KIT_ROOT:-}/scripts/quality-load-root.sh" \
+         "$HOME/.claude/scripts/quality-load-root.sh" \
+         "./scripts/quality-load-root.sh" \
+         "$HOME/Projects/products/claude-kit/scripts/quality-load-root.sh"; do
+  [ -n "$c" ] && [ -f "$c" ] && { source "$c"; break; }
 done
 
-if [ -n "$MISSING_TESTS" ]; then
-  echo "⚠️ Source files without tests:$MISSING_TESTS"
-  # Not a hard fail — surfaced as a coverage signal for the reviewers + human
-  # (see §1.3c). There is no test-generator agent; pr-test-analyzer covers
-  # test quality.
-  TEST_GAPS="$MISSING_TESTS"
-fi
-```
-
-**Exempt file patterns** (no test required): `*.config.*`, `*.d.ts`, `types.ts`, `index.ts` (re-exports only), migration files, seed files.
-
-#### 1.3b: Run Tests (Hard Gate)
-
-```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
-# Sentinel name is namespaced by session + hash of target root (see Step -1),
-# recomputed here from the fork's own cwd git root so multi-repo sessions can't
-# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
-bs_quality_root_file() {
-  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
-  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
-  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
-  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
-  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
-}
-CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
-GIT_ROOT=""
-if [ -n "$CWD_ROOT" ]; then
-  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
-  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
-fi
-# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
-# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
-# non-empty before attempting cd.
-[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
-cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
-
-# Run test suite — this MUST pass
-npm test 2>&1
-TEST_EXIT=$?
-
-if [ $TEST_EXIT -ne 0 ]; then
-  echo "❌ Tests failed — attempting auto-fix (up to 3 attempts)"
-
-  for attempt in 1 2 3; do
-    echo "Fix attempt $attempt/3..."
-    # Read test output, identify failures, fix them
-    npm test 2>&1
-    TEST_EXIT=$?
-    if [ $TEST_EXIT -eq 0 ]; then break; fi
-  done
-
-  if [ $TEST_EXIT -ne 0 ]; then
-    echo "❌ HARD FAIL: Tests still failing after 3 fix attempts"
-    echo "Cannot proceed to review agents with broken tests."
-    exit 1
-  fi
-fi
-echo "✅ All tests passing"
-```
-
-#### 1.3c: Test-Gap Reporting
-
-There is no `test-generator` review agent (it had no agent definition and was
-removed from the panel on 2026-07-01; `pr-test-analyzer` covers test quality).
-`$TEST_GAPS` is therefore surfaced in the review context and the summary as a
-coverage signal for the human, not handed to an auto-generator. If tests are
-generated or edited as part of the auto-fix loop, re-run `npm test` to verify
-they pass:
-
-```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
-# Sentinel name is namespaced by session + hash of target root (see Step -1),
-# recomputed here from the fork's own cwd git root so multi-repo sessions can't
-# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
-bs_quality_root_file() {
-  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
-  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
-  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
-  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
-  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
-}
-CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
-GIT_ROOT=""
-if [ -n "$CWD_ROOT" ]; then
-  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
-  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
-fi
-# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
-# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
-# non-empty before attempting cd.
-[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
-cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
-
-npm test 2>&1
-if [ $? -ne 0 ]; then
-  echo "❌ Generated tests are failing — fix before continuing"
-  # Auto-fix loop (same 3 attempts)
-fi
-```
-
-### Step 1.5: Semantic Pattern Analysis
-
-Run defensive pattern analysis on changed files. See `checklist.md` for pattern categories.
-
-### Step 1.6: Test Coverage Validation
-
-Scan test files for quality issues. Read `checklist.md` "Test Quality" section for validation criteria.
-
-### Step 1.7: Documentation Sync Check
-
-Detect API changes, new commands, modified exports. Skip with `--skip-docs`. Spawn doc-writer agent if changes detected.
-
-### Step 1.8: Quality Agents
-
-**Scope `changed`**: Skip agents — automated checks are sufficient.
-
-**Agent count is tier-aware when `--level auto`** (Step 0.5). Explicit `--level 95` runs all 6 agents regardless of tier; `--level 98` adds 4 more.
-
-**Tier → agent panel** (resolved from Step 0.5):
-
-| Tier (auto)               | Agents (in panel order)                                                                           |
-| ------------------------- | ------------------------------------------------------------------------------------------------- |
-| `low`                     | code-reviewer, silent-failure-hunter                                                              |
-| `medium`                  | + type-design-analyzer, security-auditor                                                          |
-| `high` / `critical` / L95 | + pr-test-analyzer (full 5)                                                                       |
-| `--level 98`              | full 5 + Phase 2: code-simplifier, accessibility-tester, performance-engineer, architect-reviewer |
-
-| Agent                 | Focus                            |
-| --------------------- | -------------------------------- |
-| code-reviewer         | Bugs, logic errors, code smells  |
-| silent-failure-hunter | Empty catches, swallowed errors  |
-| type-design-analyzer  | Type safety, generics, null gaps |
-| security-auditor      | OWASP top 10, secrets, injection |
-| pr-test-analyzer      | Validate test quality            |
-
-**Model:** review agents **inherit the session model** — they do not pin
-`model:` in their frontmatter. A frontmatter pin is unconditional and global:
-it overrides the operator's deliberate session choice, ignores tier, and trips
-the 1M-context Extra Usage billing gate on non-Opus session models (the gate is
-session-wide, not model-bound — Max covers Opus[1m] but not Sonnet/Haiku[1m]).
-Forcing a
-specific model is therefore a per-run decision for this skill to make if/when it
-gains degradable model routing (request-opus-but-fall-back), not a property each
-agent self-asserts. Run on an Opus session for the strongest review.
-
-```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
-# Sentinel name is namespaced by session + hash of target root (see Step -1),
-# recomputed here from the fork's own cwd git root so multi-repo sessions can't
-# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
-bs_quality_root_file() {
-  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
-  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
-  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
-  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
-  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
-}
-CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
-GIT_ROOT=""
-if [ -n "$CWD_ROOT" ]; then
-  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
-  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
-fi
-# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
-# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
-# non-empty before attempting cd.
-[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
-cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
-
-# The review panel in PRIORITY ORDER. The risk score selects the first N from
-# this list; the always-on floor (first 2) means no change merges with zero
-# review (machine-only: there is no human backstop).
-# Every name here MUST resolve to a real agent .md (kit agents/ or the
-# pr-review-toolkit plugin) — the subprocess review runner marks an
-# unresolvable agent INCONCLUSIVE, which blocks --merge. `test-generator` was
-# removed 2026-07-01: it has no agent file anywhere and would permanently block
-# high/critical merges; pr-test-analyzer covers test quality.
-PANEL=(code-reviewer silent-failure-hunter security-auditor type-design-analyzer \
-       pr-test-analyzer code-simplifier accessibility-tester \
-       performance-engineer architect-reviewer)
-
-if [ -n "$AGENT_TARGET" ]; then
-  # Score-driven (primary path). Take the first AGENT_TARGET agents from PANEL.
-  N=$AGENT_TARGET
-  [ "$N" -lt 2 ] && N=2          # floor: always ≥2 (code-reviewer + silent-failure-hunter)
-  [ "$N" -gt ${#PANEL[@]} ] && N=${#PANEL[@]}
-  AGENTS=("${PANEL[@]:0:$N}")
-  [ "$TIER" = critical ] && REQUIRE_BREAK_GLASS=true
-  echo "[quality] Running ${#AGENTS[@]} agents — risk score ${RISK_SCORE}/100 (label ${TIER})"
-else
-  # Fallback: discrete tier/level selection (no scorer available).
-  case "${TIER:-$LEVEL}" in
-    low)        AGENTS=(code-reviewer silent-failure-hunter) ;;
-    medium)     AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor) ;;
-    high|95)    AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor \
-                        pr-test-analyzer) ;;
-    critical)   AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor \
-                        pr-test-analyzer)
-                REQUIRE_BREAK_GLASS=true ;;
-    98)         AGENTS=(code-reviewer silent-failure-hunter type-design-analyzer security-auditor \
-                        pr-test-analyzer code-simplifier accessibility-tester \
-                        performance-engineer architect-reviewer) ;;
-    *)          echo "❌ Unknown tier/level: ${TIER:-$LEVEL}"; exit 1 ;;
-  esac
-  echo "[quality] Running ${#AGENTS[@]} agents for tier=${TIER:-n/a} level=${LEVEL}"
-fi
-
-# Persist the resolved panel to a sentinel so the LATER companion block can
-# read it — bash arrays do NOT survive across separate fenced bash blocks (the
-# same reason GIT_ROOT is round-tripped; see the canonical preamble). Without
-# this, the companion block below sees an empty AGENTS and review is skipped.
-printf '%s\n' "${AGENTS[@]}" > "${TMPDIR:-/tmp}/bs-quality-agents-${CLAUDE_CODE_SESSION_ID:-default}.txt"
-```
-
-#### Step 1.8a: Break-glass approval (critical tier only)
-
-Critical-tier changes (per `harness-config.json:mergePolicy.critical.requiredChecks`) require explicit human approval before review stamping. The skill cannot self-authorize critical merges.
-
-```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
-# Sentinel name is namespaced by session + hash of target root (see Step -1),
-# recomputed here from the fork's own cwd git root so multi-repo sessions can't
-# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
-bs_quality_root_file() {
-  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
-  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
-  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
-  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
-  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
-}
-CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
-GIT_ROOT=""
-if [ -n "$CWD_ROOT" ]; then
-  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
-  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
-fi
-# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
-# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
-# non-empty before attempting cd.
-[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
-cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
-
-if [ "${REQUIRE_BREAK_GLASS:-false}" = true ]; then
-  # Look for a break-glass approval trailer or env var on this run.
-  # Operator must explicitly opt in — there is no auto-pass at critical.
-  if [ "$BREAK_GLASS_APPROVED" != true ] && \
-     ! git log "${RESOLVED_BASE:-origin/main}..HEAD" --format=%B | grep -q "^Break-Glass-Approval: "; then
-    echo "❌ MERGE BLOCKED: critical tier requires explicit break-glass approval."
-    echo "   Either set BREAK_GLASS_APPROVED=true in the environment for this run,"
-    echo "   or add a 'Break-Glass-Approval: <approver-handle>' trailer to a commit on this branch."
-    echo "   See harness-config.json:mergePolicy.critical.requiredChecks."
-    exit 1
-  fi
-  echo "[quality] Break-glass approval verified for critical tier"
-fi
-```
-
-#### Diff Context Injection (CRITICAL)
-
-Before spawning agents, capture the diff and file list:
-
-```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
-# Sentinel name is namespaced by session + hash of target root (see Step -1),
-# recomputed here from the fork's own cwd git root so multi-repo sessions can't
-# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
-bs_quality_root_file() {
-  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
-  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
-  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
-  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
-  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
-}
-CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
-GIT_ROOT=""
-if [ -n "$CWD_ROOT" ]; then
-  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
-  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
-fi
-# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
-# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
-# non-empty before attempting cd.
-[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
-cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
-
-DIFF=$(git diff main...HEAD)
-CHANGED_FILES=$(git diff --name-only main...HEAD)
-```
-
-Each agent prompt MUST include:
-
-1. The actual diff content (not "run git diff" — the agent should NOT re-fetch)
-2. The list of changed files
-3. The branch name and commit messages (`git log main..HEAD --oneline`)
-4. Relevant project conventions from CLAUDE.md
-
-Template for agent prompt:
-
-```
-Review the following code changes for [AGENT_FOCUS].
-
-## Changed Files
-$CHANGED_FILES
-
-## Diff
-$DIFF
-
-## Commit History
-$COMMIT_LOG
-
-## Project Conventions
-[Extract relevant rules from CLAUDE.md]
-
-Return findings as structured output with file:line references.
-Do NOT review unchanged code. Focus ONLY on the diff.
-```
-
-This prevents agents from doing generic scans and forces them to review the actual changes.
-
-#### Execution contract — run agents as BLOCKING subprocesses (CRITICAL)
-
-**Do NOT spawn the review agents with the Task tool.** This skill runs in a
-FORKED context, and Task-tool agents are fire-and-forget: their results arrive
-asynchronously as `task-notification`s to the PARENT session, never inside this
-fork's turn. The fork then hands back ("I'll wait for the agents…"), is never
-re-invoked, and the merge gate (synthesis → Review Stamp → `gh pr merge`) never
-runs. This was the #1 way `--merge` silently failed to complete. It is
-structural, not a prompting problem — verified empirically: nested Task agents
-are async too, so this also breaks inside Task-agent callers like
-`/bs:merge-train`.
-
-**The fix: run review as a blocking subprocess**, exactly like the Codex leg
-(Step 2.6). Bash tool calls block synchronously in a fork AND in a Task agent,
-so a subprocess is the only review mechanism synchronous in every context the
-skill runs in. Use the companion script `scripts/claude-review-companion.sh`,
-which runs each selected agent as a blocking `claude -p` with the agent's REAL
-`.md` body as its system prompt (single source of truth — no inlined prompts to
-drift), and writes one findings file per agent.
-
-```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1 (GIT_ROOT sentinel).
-
-# ── ROUND GATE (MANDATORY — do not skip, do not "just one more round") ────────
-# Increments rounds_used and fails CLOSED at the cap. This is what terminates
-# the outer fix -> re-review loop. Before 2026-07-10 the cap was a sentence of
-# prose in this file; since the MODEL orchestrates this loop, that was not a
-# cap at all, and runs reached 128min/167min. A non-zero exit is not negotiable
-# — if this exits 1, report the outstanding findings and STOP.
+# ROUND GATE — MANDATORY, do not skip, do not "just one more round."
+# This is what terminates the outer fix -> re-review loop. Since the MODEL
+# orchestrates this loop, a prose cap is not a cap — only a non-zero exit
+# here is. If this exits 1, report outstanding findings and STOP.
 GOVERNOR="$(bs_quality_find_script quality-run-governor.js)" || {
   echo "❌ MERGE BLOCKED: quality-run-governor.js not found — refusing to run an unbounded review loop." >&2
   exit 1
 }
 node "$GOVERNOR" bump-round "$BS_QUALITY_GOVERNOR_FILE" || exit 1
 
-# Resolve the review runner across every install layout (plugin, ~/.claude
-# symlink, submodule, bare clone). Before 2026-07-10 this checked exactly two
-# paths; on the primary install (~/.claude/scripts -> an overlay repo, which
-# never carried this script) BOTH missed, `bash <missing>` returned 127, and the
-# skill printed "MERGE BLOCKED: review runner failed (rc=127)" and exited —
-# which is the "does all the work then never merges" stall.
-COMPANION="$(bs_quality_find_script claude-review-companion.sh)" || {
-  echo "❌ MERGE BLOCKED: claude-review-companion.sh not found on any candidate path — review could not run." >&2
-  exit 1
+# Blocking review subprocess (mechanics in scripts/quality-run-review.sh).
+RUNNER="$(bs_quality_find_script quality-run-review.sh)" || {
+  echo "❌ MERGE BLOCKED: quality-run-review.sh not found." >&2; exit 1;
 }
-
-# Resolve the base ref HERE — RESOLVED_BASE is set in a later (Codex) block and
-# is NOT in scope yet. Same resolution order as risk-policy-gate.js.
-REVIEW_BASE=""
-for ref in origin/main origin/master main master; do
-  if git rev-parse --verify --quiet "${ref}^{commit}" >/dev/null 2>&1; then
-    REVIEW_BASE="$ref"; break
-  fi
-done
-[ -n "$REVIEW_BASE" ] || { echo "❌ MERGE BLOCKED: no base ref for review diff" >&2; exit 1; }
-
-# Read the tier-selected panel from the sentinel Step 1.8 wrote — bash arrays
-# don't cross fenced blocks. Empty panel = a bug upstream; block, don't skip.
-AGENTS_FILE="${TMPDIR:-/tmp}/bs-quality-agents-${CLAUDE_CODE_SESSION_ID:-default}.txt"
-AGENTS_CSV="$(paste -sd, "$AGENTS_FILE" 2>/dev/null | sed 's/,*$//')"
-if [ -z "$AGENTS_CSV" ]; then
-  echo "❌ MERGE BLOCKED: review panel unresolved (no agents sentinel) — review did not run." >&2
-  exit 1
-fi
-
-REVIEW_OUT="$(mktemp -d "${TMPDIR:-/tmp}/bs-quality-review.XXXXXX")"
-git diff "${REVIEW_BASE}...HEAD"            > "$REVIEW_OUT/diff.txt"
-git diff --name-only "${REVIEW_BASE}...HEAD" > "$REVIEW_OUT/files.txt"
-git log "${REVIEW_BASE}..HEAD" --oneline     > "$REVIEW_OUT/log.txt"
-
-# Do NOT pass --model: review inherits the session model on purpose (pinning a
-# *[1m] model trips the Extra Usage billing gate on non-Opus sessions; the
-# companion also refuses [1m] defensively). See lines 679-687.
-bash "$COMPANION" \
-  --diff-file "$REVIEW_OUT/diff.txt" \
-  --files-file "$REVIEW_OUT/files.txt" \
-  --log-file "$REVIEW_OUT/log.txt" \
-  --out-dir "$REVIEW_OUT" \
-  --agents "$AGENTS_CSV" \
-  --timeout "${BS_QUALITY_REVIEW_TIMEOUT:-300}"
-COMPANION_RC=$?
-
-# FAIL LOUD on ANY non-zero: 2 = claude CLI unavailable, 1 = bad args / no
-# agents / unwritable out-dir. Either way review did not run cleanly — a missing
-# reviewer is a BLOCKED merge, never a silent pass (the exact fail-open this
-# whole change exists to prevent).
-if [ "$COMPANION_RC" -ne 0 ]; then
-  case "$COMPANION_RC" in
-    2) echo "❌ MERGE BLOCKED: claude CLI unavailable — review could not run." >&2 ;;
-    *) echo "❌ MERGE BLOCKED: review runner failed (rc=$COMPANION_RC)." >&2 ;;
-  esac
-  exit 1
-fi
+source "$RUNNER"   # sets REVIEW_OUT, REVIEW_BASE; exits non-zero on any review failure
 ```
 
-Then read every `"$REVIEW_OUT"/<agent>.findings.txt` and feed them into Step 2.5
-synthesis. A file beginning with `INCONCLUSIVE:` means that agent timed out,
-errored, or its output could not be parsed — treat it as **review inconclusive,
-human required** (do NOT count it as PASS, do NOT silently drop it): surface it
-in the summary and, under `--merge`, block until a human resolves it.
+Read every `"$REVIEW_OUT"/<agent>.findings.txt` and feed into Step 2.5
+synthesis. A file beginning `INCONCLUSIVE:` means that agent timed out,
+errored, or didn't parse — treat as **review inconclusive, human required**
+(never PASS, never silently dropped); under `--merge`, block until resolved.
 
-After synthesis, proceed directly to Review Stamp (Step 1.8 trailer) → merge
-gate. Because the companion call BLOCKS, all of this happens in one fork
-execution — the merge is actually reached.
+### Step 2: Agent Result Validation
 
-#### Step 2.6: Codex Invocation (tier-aware)
+Validate outputs per `checklist.md` "Agent Validation" — expected sections,
+minimum content length, reject generic responses.
 
-The kit runs a second-opinion review via Codex — different model, different blind spots. **Tier-aware**: skipped at `low`, judge mode at `medium`, judge + adversarial at `high`/`critical`. Disable explicitly with `--no-codex` or skip on this run with `--codex-skip "<reason>"`.
+### Step 2.5: Judge — Finding Synthesis (CRITICAL)
 
-The canonical invocation is the Codex companion CLI. The `--base` arg uses the resolved base from `risk-policy-gate.js`, NOT hardcoded `main`.
+Collect all findings (Claude agents + Codex), deduplicate by file:line
+(multiple agents flagging the same line = higher confidence), and classify
+every finding into exactly one category:
+
+- **BLOCKING** — bugs, security vulns, data loss, breaking changes. Must fix.
+- **WARNING** — missing edge cases, perf concerns, weak error handling.
+- **SUPPRESSED** — style nits, naming, unchanged-code suggestions. Never shown.
+
+Findings flagged by 2+ independent agents (e.g. Claude + Codex) promote one
+severity level. Output a consolidated report (format + rules in
+`checklist.md` "Judge Agent Validation"): 0 BLOCKING → PASS; any BLOCKING →
+auto-fix → re-run the panel → still BLOCKING → FAIL. **The number of
+re-review rounds is not your judgment call** — the round gate above owns it
+(default cap 2); a non-zero exit from it is a hard stop, not "just check
+once more." An empty report (0/0) is a valid, real outcome — never fabricate
+findings.
+
+**Before every fix attempt** (not just Codex rounds — this is the loop that
+produced 6 and 13 commits across two PRs in one night with nothing bounding
+the outer cycle), re-check the governor:
 
 ```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
-# Sentinel name is namespaced by session + hash of target root (see Step -1),
-# recomputed here from the fork's own cwd git root so multi-repo sessions can't
-# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
-bs_quality_root_file() {
-  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
-  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
-  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
-  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
-  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
+for c in "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-load-root.sh" \
+         "${CLAUDE_KIT_ROOT:-}/scripts/quality-load-root.sh" \
+         "$HOME/.claude/scripts/quality-load-root.sh" \
+         "./scripts/quality-load-root.sh" \
+         "$HOME/Projects/products/claude-kit/scripts/quality-load-root.sh"; do
+  [ -n "$c" ] && [ -f "$c" ] && { source "$c"; break; }
+done
+GOVERNOR="$(bs_quality_find_script quality-run-governor.js)" || {
+  echo "❌ RUN HALTED: quality-run-governor unavailable before fix attempt" >&2; exit 1;
 }
-CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
-GIT_ROOT=""
-if [ -n "$CWD_ROOT" ]; then
-  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
-  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
-fi
-# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
-# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
-# non-empty before attempting cd.
-[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
-cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
-
-# Recompute the governor sentinel filename from GIT_ROOT using the EXACT same
-# transform as Step -1's run-governor init (${BS_QUALITY_ROOT_FILE%.txt}-governor.json)
-# — do NOT rely on the BS_QUALITY_GOVERNOR_FILE variable set in that earlier
-# block; it does not survive across fenced bash blocks, and any transform that
-# doesn't byte-for-byte match Step -1's would silently point at a different file.
-BS_QUALITY_ROOT_FILE="$(bs_quality_root_file "$GIT_ROOT")"
-BS_QUALITY_GOVERNOR_FILE="${BS_QUALITY_ROOT_FILE%.txt}-governor.json"
-
-# Resolve base the same way risk-policy-gate.js does (origin/main → origin/master → main → master).
-RESOLVED_BASE=""
-for ref in origin/main origin/master main master; do
-  if git rev-parse --verify --quiet "${ref}^{commit}" >/dev/null 2>&1; then
-    RESOLVED_BASE="$ref"; break
-  fi
-done
-if [ -z "$RESOLVED_BASE" ]; then
-  echo "❌ No resolvable base ref for Codex; pass --no-codex or set --base manually"
+node "$GOVERNOR" check "$BS_QUALITY_GOVERNOR_FILE" || {
+  echo "❌ RUN HALTED: budget exceeded before fix attempt — see reference.md \"Run Governor\"." >&2
+  echo "   Summarize what was tried, why it didn't converge, and the exact re-invocation" >&2
+  echo "   command to raise the cap. Do NOT continue rounds or proceed to --merge." >&2
   exit 1
-fi
-
-# Codex depth is score-driven (primary). The score's CODEX_DEPTH is one of
-# skip|medium|high|xhigh and CODEX_ROUNDS is how many adversarial passes to run.
-# Map those onto the existing judge / judge+adversarial modes. When no score is
-# present (fallback), derive from $TIER/$LEVEL as before.
-COMPANION=""
-for candidate in \
-  "${CLAUDE_PLUGIN_ROOT:-}/scripts/codex-companion.mjs" \
-  "$HOME/.claude/plugins/marketplaces/openai-codex/plugins/codex/scripts/codex-companion.mjs" \
-  "$HOME/.claude/scripts/codex-companion.mjs"; do
-  if [ -n "$candidate" ] && [ -f "$candidate" ]; then
-    COMPANION="$candidate"; break
-  fi
-done
-if [ -z "$COMPANION" ]; then
-  CODEX_SKIP_REASON="codex-companion.mjs not found at any known path"
-fi
-
-if [ -n "$CODEX_DEPTH" ]; then
-  # Score-driven. Explicit --codex-effort still wins if the operator set it.
-  case "$CODEX_DEPTH" in
-    skip)              CODEX_SELECTOR="low" ;;
-    medium)            CODEX_SELECTOR="medium"; CODEX_EFFORT="${CODEX_EFFORT:-medium}" ;;
-    high)              CODEX_SELECTOR="high";   CODEX_EFFORT="${CODEX_EFFORT:-high}" ;;
-    xhigh)             CODEX_SELECTOR="high";   CODEX_EFFORT="${CODEX_EFFORT:-xhigh}" ;;
-    *)                 CODEX_SELECTOR="high";   CODEX_EFFORT="${CODEX_EFFORT:-high}" ;;
-  esac
-else
-  CODEX_EFFORT="${CODEX_EFFORT:-high}"
-  CODEX_SELECTOR="${TIER:-$LEVEL}"
-fi
-CODEX_ROUNDS="${CODEX_ROUNDS:-1}"
-
-case "$CODEX_SELECTOR" in
-  low)
-    # No Codex at the lowest band.
-    CODEX_MODE="skip"
-    ;;
-  medium|95)
-    # Judge mode — pass Claude findings as focus text to adversarial-review.
-    # Foreground (--wait), bounded by companion's wall-time cap.
-    CODEX_MODE="judge"
-    if [ "$NO_CODEX" != true ] && [ -z "$CODEX_SKIP_REASON" ]; then
-      node "$COMPANION" adversarial-review --wait --base "$RESOLVED_BASE" --scope branch \
-        "Judge the following Claude findings for accuracy, actionability, and false-positive risk. \
-         Approve, request-changes, or flag specific findings as low-confidence. Findings: $CLAUDE_FINDINGS"
-    fi
-    ;;
-  high|critical|98)
-    # Judge + adversarial. Background for adversarial; bounded poll to terminal state.
-    # Score-driven CODEX_ROUNDS: run up to N adversarial passes. Round 2+ is a
-    # re-verification of the code after auto-fixes from round 1; it only runs if
-    # the prior round actually found something (no point re-checking a clean pass).
-    # The total is still bounded by the shared CODEX_DEADLINE so it can't run away.
-    CODEX_MODE="judge+adversarial"
-    CODEX_VERDICT="not-run"
-    CODEX_FINDINGS=0
-    if [ "$NO_CODEX" != true ] && [ -z "$CODEX_SKIP_REASON" ]; then
-      ROUND=1
-      GOVERNOR=""
-      for candidate in \
-        "${CLAUDE_SETUP_ROOT:-}/scripts/quality-run-governor.js" \
-        "${CLAUDE_PLUGIN_ROOT:-}/../scripts/quality-run-governor.js" \
-        "$HOME/Projects/products/claude-kit/scripts/quality-run-governor.js" \
-        "$HOME/.claude/scripts/quality-run-governor.js"; do
-        if [ -n "$candidate" ] && [ -f "$candidate" ]; then GOVERNOR="$candidate"; break; fi
-      done
-      while [ "$ROUND" -le "${CODEX_ROUNDS:-1}" ]; do
-        [ "$ROUND" -gt 1 ] && echo "[quality] Codex re-verification round $ROUND/${CODEX_ROUNDS}..."
-        # --- run-governor check: live status + hard stop on either budget ---
-        # FAIL CLOSED when the governor script or sentinel can't be located —
-        # a missing governor is NOT "no budget configured," it is "the
-        # runaway-loop circuit breaker this whole feature exists to add is
-        # unavailable," which is exactly the failure mode the 2026-07-03
-        # incident needs guarded against. Silently skipping the check here
-        # (the old `if [ -f ... ] && [ -f ... ]; then ... fi` with no else)
-        # let the loop run unbounded with zero visible warning.
-        if [ ! -f "$GOVERNOR" ] || [ ! -f "$BS_QUALITY_GOVERNOR_FILE" ]; then
-          echo "❌ RUN HALTED: quality-run-governor unavailable before Codex round $ROUND" >&2
-          echo "   (script=${GOVERNOR:-<not found>}, sentinel=${BS_QUALITY_GOVERNOR_FILE:-<unset>})." >&2
-          echo "   The runaway-loop circuit breaker cannot run, so this loop cannot be bounded." >&2
-          echo "   Fix the governor script path or re-run Step -1 to regenerate the sentinel." >&2
-          exit 1
-        fi
-        GOVERNOR_CHECK_FILE="${BS_QUALITY_GOVERNOR_FILE%.json}-check.json"
-        node "$GOVERNOR" status "$BS_QUALITY_GOVERNOR_FILE"
-        if ! node "$GOVERNOR" check "$BS_QUALITY_GOVERNOR_FILE" > "$GOVERNOR_CHECK_FILE" 2>&1; then
-          echo "❌ RUN HALTED: quality-run-governor budget exceeded (or sentinel unreadable) before Codex round $ROUND."
-          cat "$GOVERNOR_CHECK_FILE"
-          echo ""
-          echo "   This is an operator handback, not a merge block on this code's quality —"
-          echo "   the autonomous loop reached round $ROUND without converging (commit/wall-clock"
-          echo "   detail above), OR the governor sentinel became unreadable mid-run (fails closed"
-          echo "   by design — see quality-run-governor.js loadState/evaluateBudget). Summarize what"
-          echo "   has been tried and what remains, then STOP."
-          echo "   Do NOT continue rounds, do NOT proceed to --merge. Raise the caps explicitly"
-          echo "   (BS_QUALITY_MAX_FIX_COMMITS / BS_QUALITY_MAX_WALL_SECONDS) only if the operator"
-          echo "   re-invokes with that intent."
-          exit 1
-        fi
-        LAUNCH_OUT=$(node "$COMPANION" adversarial-review --background --base "$RESOLVED_BASE" --scope branch \
-          "Adversarial review focused on bugs, security, data loss, race conditions, breaking changes. \
-           Effort: $CODEX_EFFORT. Verdict: APPROVE or REQUEST_CHANGES with file:line findings." 2>&1)
-        # Extract job id printed by the launcher (e.g. "[codex] Job <id> queued").
-        CODEX_JOB=$(echo "$LAUNCH_OUT" | grep -oE 'Job [0-9a-f-]+' | head -1 | awk '{print $2}')
-
-        if [ -z "$CODEX_JOB" ]; then
-          echo "❌ Failed to obtain Codex job id from launcher output."
-          exit 1
-        fi
-
-        # Bounded poll: 25-min cap matches the spec's high/critical time cap.
-        # ALSO re-check the run-governor's wall-clock budget every iteration —
-        # without this, a run that trips its wall-clock cap 1s after starting
-        # this poll can still wait out the full ~25min DEADLINE before the
-        # next governor check, making the advertised wall-clock cap only a
-        # pre-flight check rather than a hard cap (Codex adversarial finding,
-        # 2026-07-03: default 30min cap + 25min Codex deadline means a run at
-        # 29m59s could continue toward ~55min before being stopped).
-        DEADLINE=${CODEX_DEADLINE:-600}
-        WAITED=0
-        while [ "$WAITED" -lt "$DEADLINE" ]; do
-          STATUS=$(node "$COMPANION" status "$CODEX_JOB" --json 2>/dev/null | jq -r '.status // "unknown"')
-          case "$STATUS" in
-            completed|succeeded|failed|cancelled|timed-out) break ;;
-          esac
-          # Fail CLOSED here too, matching the pre-round guard: a governor or
-          # sentinel that vanishes mid-poll (e.g. $TMPDIR reaped during a
-          # 25-min wait, a concurrent run) must halt, not silently stop
-          # enforcing the wall-clock cap for the rest of this poll — that
-          # silent-skip is exactly the "circuit breaker quietly stopped
-          # breaking" failure mode this whole mid-poll recheck exists to fix
-          # (see the 2026-07-03 Codex adversarial finding above). A bare
-          # `if [ -f ... ] && [ -f ... ]; then ... fi` with no else was flagged
-          # independently by 4 review agents as reintroducing that same hole.
-          if [ ! -f "$GOVERNOR" ] || [ ! -f "$BS_QUALITY_GOVERNOR_FILE" ]; then
-            echo "❌ RUN HALTED: governor became unavailable mid-poll (script=${GOVERNOR:-<not found>}, sentinel=${BS_QUALITY_GOVERNOR_FILE:-<unset>})." >&2
-            echo "   Cannot enforce the wall-clock cap for the remainder of this poll — halting" >&2
-            echo "   rather than silently waiting out the full DEADLINE unbounded." >&2
-            node "$COMPANION" cancel "$CODEX_JOB" >/dev/null 2>&1 || true
-            exit 1
-          fi
-          if ! node "$GOVERNOR" check "$BS_QUALITY_GOVERNOR_FILE" > /dev/null 2>&1; then
-            echo "❌ RUN HALTED: quality-run-governor budget tripped while waiting on Codex job $CODEX_JOB." >&2
-            echo "   Cancelling the in-flight job and handing back — this is the same operator" >&2
-            echo "   handback as a pre-round trip, just detected mid-poll instead of before launch." >&2
-            node "$COMPANION" cancel "$CODEX_JOB" >/dev/null 2>&1 || true
-            exit 1
-          fi
-          sleep 15; WAITED=$((WAITED + 15))
-        done
-
-        if [ "$STATUS" != "completed" ] && [ "$STATUS" != "succeeded" ]; then
-          echo "❌ Codex review did not complete (status=$STATUS, waited=${WAITED}s)."
-          echo "   Re-run, raise CODEX_DEADLINE, or use --codex-skip \"<reason>\"."
-          exit 1
-        fi
-
-        CODEX_OUT=$(node "$COMPANION" result "$CODEX_JOB" --json 2>/dev/null)
-        CODEX_VERDICT=$(echo "$CODEX_OUT" | jq -r '.verdict // .status // "unknown"' 2>/dev/null)
-        CODEX_FINDINGS=$(echo "$CODEX_OUT" | jq -r '(.findings // []) | length' 2>/dev/null || echo 0)
-
-        # --- repeated-pattern detection (2026-07-03 guardrail) ---
-        # If this round's findings are mostly narrow variants of a shape
-        # already seen in an earlier round (e.g. the same on-disk-vs-loaded
-        # gap at 4 different call sites), tell the operator/fixer to batch-fix
-        # every occurrence in one commit rather than treating each as a fresh
-        # independent round — that's what turned PR #532 into 13 commits.
-        if [ -f "$GOVERNOR" ] && [ -f "$BS_QUALITY_GOVERNOR_FILE" ]; then
-          FINDINGS_JSON=$(echo "$CODEX_OUT" | jq -c '[(.findings // [])[] | {file: (.file // ""), summary: (.summary // .title // .message // "")}]' 2>/dev/null || echo '[]')
-          # Don't swallow stderr: a corrupt sentinel or write failure here
-          # silently disables repeated-pattern detection for the rest of the
-          # run with zero signal if discarded (silent-failure-hunter finding,
-          # 2026-07-03 review) — record-finding itself is non-fatal (recording
-          # is advisory, not a hard gate), but its failures must be visible.
-          #
-          # Capture stdout and stderr SEPARATELY (2026-07-04 fix — 3 review
-          # agents independently flagged the prior `2>&1` merge): the governor
-          # writes its designed warning to stderr while STILL emitting valid
-          # JSON on stdout for the degraded-but-handled case (`!state`). With
-          # `2>&1`, the stderr line prefixes the JSON, so `jq -e .` on the
-          # combined stream fails even though stdout alone was valid — every
-          # degraded-but-handled call silently loses its own diagnostic and
-          # falls into the generic fallback message below instead.
-          PATTERN_STDERR_FILE=$(mktemp "${TMPDIR:-/tmp}/bs-quality-pattern-stderr.XXXXXX")
-          PATTERN_OUT=$(node "$GOVERNOR" record-finding "$BS_QUALITY_GOVERNOR_FILE" "$FINDINGS_JSON" 2>"$PATTERN_STDERR_FILE")
-          PATTERN_STDERR=$(cat "$PATTERN_STDERR_FILE" 2>/dev/null)
-          rm -f "$PATTERN_STDERR_FILE"
-          if [ -n "$PATTERN_STDERR" ]; then
-            echo "⚠️  [quality] governor record-finding: $PATTERN_STDERR" >&2
-          fi
-          if ! echo "$PATTERN_OUT" | jq -e . >/dev/null 2>&1; then
-            echo "⚠️  [quality] governor record-finding produced no usable JSON (non-fatal, but repeated-pattern detection is degraded this round)" >&2
-            PATTERN_OUT='{"repeated":false}'
-          fi
-          PATTERN_REPEATED=$(echo "$PATTERN_OUT" | jq -r '.repeated // false' 2>/dev/null)
-          if [ "$PATTERN_REPEATED" = "true" ]; then
-            PATTERN_SHAPE=$(echo "$PATTERN_OUT" | jq -r '.shape // "unknown"' 2>/dev/null)
-            PATTERN_MATCH=$(echo "$PATTERN_OUT" | jq -r '.matchCount // 0' 2>/dev/null)
-            echo "⚠️  [quality] Repeated-pattern detected: ${PATTERN_MATCH} findings this round share a shape"
-            echo "    already seen in a prior round (\"${PATTERN_SHAPE}\"). Fix ALL matching call sites"
-            echo "    in ONE commit now — do not spend a separate round per occurrence."
-          fi
-        fi
-
-        # Fail-closed on REQUEST_CHANGES — operator must address or --codex-skip.
-        case "$CODEX_VERDICT" in
-          request-changes|REQUEST_CHANGES|needs-attention|fail|failed)
-            echo "❌ Codex adversarial review: $CODEX_VERDICT ($CODEX_FINDINGS findings)"
-            echo "   Address findings, or re-run with --codex-skip \"<reason>\" if accepted."
-            exit 1
-            ;;
-        esac
-
-        # Clean pass → no need for further rounds.
-        if [ "${CODEX_FINDINGS:-0}" -eq 0 ]; then break; fi
-        ROUND=$((ROUND + 1))
-      done
-    fi
-    ;;
-  *)
-    CODEX_MODE="skip"
-    ;;
-esac
+}
 ```
 
-**Failure modes (asymmetric per spec)**:
+Also run `node "$GOVERNOR" record-finding "$BS_QUALITY_GOVERNOR_FILE"
+'<findings-json>'` before committing a fix; if `repeated=true`, batch every
+matching call site into one commit instead of one round per occurrence.
 
-| Condition                        | low/medium      | high/critical                                              |
-| -------------------------------- | --------------- | ---------------------------------------------------------- |
-| Codex unavailable                | Skip + warn     | Block local-merge until `--codex-skip "<reason>"` provided |
-| Codex finds BLOCKING after judge | Block merge     | Block merge                                                |
-| Wall-time cap exceeded           | Post partial    | Post partial; require manual rerun (no silent downgrade)   |
-| `--codex-skip <reason>`          | Allowed, logged | Allowed only with non-empty reason; logged                 |
+### Step 2.6: Codex Cross-Review (tier-aware)
 
-Merge Codex findings into the judge report. Codex findings overlapping Claude findings boost confidence. New Codex findings get added to WARNINGS.
+Second-opinion review via a different model. Skipped at `low`, judge mode at
+`medium`, judge+adversarial at `high`/`critical`. Disable with `--no-codex`
+or skip this run with `--codex-skip "<reason>"`. Full polling/backoff
+mechanics (background job, bounded poll, repeated-pattern detection) are in
+`scripts/quality-codex-review.sh` — `source` it after the Step -1 preamble;
+it sets `CODEX_MODE`, `CODEX_VERDICT`, `CODEX_FINDINGS`, `RESOLVED_BASE`.
 
-#### Review Stamp + Quality-Skip Trailer
+**Failure modes** (asymmetric by tier — full table in `reference.md`):
+Codex unavailable → skip+warn at low/medium, **block** at high/critical
+until `--codex-skip "<reason>"`. BLOCKING findings after judge → always
+block. `--codex-skip` → allowed at low/medium; at high/critical requires a
+non-empty reason and is logged.
 
-After all agents pass, add commit trailers to the merge commit message. The trailer is the **authoritative** record of what review actually ran (NOT `.claude/quality-skip-log.json`, which is telemetry only).
+### Review Stamp + Quality-Skip Trailer
+
+After all agents pass, stamp commit trailers — the **authoritative** record
+of what review ran (`.claude/quality-skip-log.json` is telemetry only):
 
 ```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
-# Sentinel name is namespaced by session + hash of target root (see Step -1),
-# recomputed here from the fork's own cwd git root so multi-repo sessions can't
-# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
-bs_quality_root_file() {
-  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
-  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
-  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
-  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
-  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
-}
-CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
-GIT_ROOT=""
-if [ -n "$CWD_ROOT" ]; then
-  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
-  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
-fi
-# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
-# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
-# non-empty before attempting cd.
-[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
-cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
+for c in "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-load-root.sh" \
+         "${CLAUDE_KIT_ROOT:-}/scripts/quality-load-root.sh" \
+         "$HOME/.claude/scripts/quality-load-root.sh" \
+         "./scripts/quality-load-root.sh" \
+         "$HOME/Projects/products/claude-kit/scripts/quality-load-root.sh"; do
+  [ -n "$c" ] && [ -f "$c" ] && { source "$c"; break; }
+done
 
 HEAD_SHA=$(git rev-parse HEAD)
 BASE_SHA=$(git merge-base HEAD "$RESOLVED_BASE")
@@ -1386,19 +285,11 @@ TIER_LABEL="${TIER:-L${LEVEL}}"
 AGENT_COUNT=${#AGENTS[@]}
 FINDING_COUNT=${BLOCKING_COUNT:-0}
 
-# Always write claude-quality (preserves existing CI grep in harness-gate.yml).
 echo "Reviewed-By: claude-quality (tier=${TIER_LABEL}, agents=${AGENT_COUNT}, findings=${FINDING_COUNT})"
 
-# Mark that the pipeline ran in this invocation so Step 4 can distinguish
-# "operator just ran quality but trailer didn't land on a commit" (auto-stamp)
-# from "operator passed --merge with no quality work" (hard-block).
-#
-# MUST go through the sentinel, not a bare shell var (2026-07-10). Bash vars do
-# NOT survive between fenced blocks in this skill — Step 4 runs in a different
-# block, so `QUALITY_PIPELINE_RAN=true` here read as the `:-false` default there
-# on EVERY run, making the auto-stamp escape hatch permanently unreachable.
-# TIER had the same bug and was compared against "" in the Codex XOR gate,
-# silently failing OPEN. Same fix, same sentinel.
+# MUST go through the sentinel below, not a bare shell var — bash vars do NOT
+# survive between fenced blocks, so Step 4 (a different block) needs this to
+# read anything other than defaults. See reference.md "Regression History".
 BS_QUALITY_RUNSTATE_FILE="${BS_QUALITY_ROOT_FILE%.txt}-runstate.env"
 cat > "$BS_QUALITY_RUNSTATE_FILE" <<EOF
 QUALITY_PIPELINE_RAN=true
@@ -1412,517 +303,138 @@ CODEX_MODE='${CODEX_MODE:-skip}'
 CODEX_VERDICT='${CODEX_VERDICT:-}'
 CODEX_SKIP_REASON='${CODEX_SKIP_REASON:-}'
 EOF
-QUALITY_PIPELINE_RAN=true
 
-# Codex trailer ONLY when Codex actually ran.
 if [ "$CODEX_MODE" != "skip" ] && [ -z "$CODEX_SKIP_REASON" ] && [ "$NO_CODEX" != true ]; then
   echo "Reviewed-By: codex (tier=${TIER_LABEL}, mode=${CODEX_MODE}, status=${CODEX_VERDICT:-unknown}, findings=${CODEX_FINDINGS:-0})"
 fi
 
-# Quality-Skip trailer — required when --codex-skip was used at high/critical.
-# Carries full SHAs so reusing a stale trailer on a new commit fails verification.
-if [ -n "$CODEX_SKIP_REASON" ]; then
-  case "$TIER" in
-    high|critical)
-      echo "Quality-Skip: codex-judge (reason=\"${CODEX_SKIP_REASON}\"; head=${HEAD_SHA}; base=${BASE_SHA})"
-      # Append to telemetry log (non-authoritative).
-      mkdir -p .claude
-      jq --arg ts "$(date -u +%FT%TZ)" --arg tier "$TIER" --arg reason "$CODEX_SKIP_REASON" \
-         --arg branch "$(git rev-parse --abbrev-ref HEAD)" --arg head "$HEAD_SHA" --arg base "$BASE_SHA" \
-         --arg op "$(git config user.email)" \
-         '.skips += [{timestamp:$ts, tier:$tier, reason:$reason, branch:$branch,
-                      head_sha:$head, base_sha:$base, operator:$op}]' \
-         .claude/quality-skip-log.json 2>/dev/null > .claude/quality-skip-log.json.tmp \
-         && mv .claude/quality-skip-log.json.tmp .claude/quality-skip-log.json \
-         || echo '{"skips":[]}' > .claude/quality-skip-log.json
-      ;;
-  esac
+if [ -n "$CODEX_SKIP_REASON" ] && { [ "$TIER" = high ] || [ "$TIER" = critical ]; }; then
+  echo "Quality-Skip: codex-judge (reason=\"${CODEX_SKIP_REASON}\"; head=${HEAD_SHA}; base=${BASE_SHA})"
 fi
 ```
 
-CI checks the `Reviewed-By: claude-quality` trailer to verify local review ran. See `harness-gate.yml`.
-
-### Step 2: Agent Result Validation
-
-Validate agent outputs per `checklist.md` "Agent Validation" section. Check expected sections, minimum content length, and reject generic responses.
-
-### Step 2.5: Judge Agent — Finding Synthesis (CRITICAL)
-
-**Purpose**: Filter noise, deduplicate, severity-classify. This is the most impactful step for review quality (per HubSpot: "most impactful change" in their AI review system — fewer, better, more actionable comments).
-
-After all agent results are validated, run a single synthesis pass:
-
-1. **Collect** all findings from: Claude review agents + Codex cross-review (when available)
-2. **Deduplicate**: Same file:line from multiple agents → merge into one finding, note which agents flagged it (higher confidence)
-3. **Severity classify** every finding into exactly one category:
-   - **BLOCKING** — Bugs, security vulns, data loss, breaking changes. Must fix before merge.
-   - **WARNING** — Missing edge cases, performance concerns, weak error handling. Should fix.
-   - **SUPPRESSED** — Style nits, import ordering, naming preferences, suggestions for unchanged code. Do NOT report.
-4. **Confidence boost**: Findings flagged by 2+ independent agents (e.g., Claude code-reviewer AND Codex) are promoted one severity level
-5. **Output**: Consolidated report with only BLOCKING and WARNING findings. Include finding count and agent attribution.
-
-```
-## Quality Review Summary
-
-**Reviewed by**: 6 Claude agents (Opus) + Codex cross-review
-**Files**: N files, M lines changed
-**Findings**: X blocking, Y warnings (Z suppressed)
-
-### BLOCKING
-[findings with file:line, why it matters, specific fix]
-
-### WARNINGS
-[findings with file:line, impact, fix suggestion]
-
-### VERDICT: PASS | FAIL
-```
-
-**Rules**:
-
-- If 0 BLOCKING findings → PASS
-- If any BLOCKING findings → auto-fix → re-run the review panel on the fixed code → if still BLOCKING → FAIL.
-  **The number of re-review rounds is NOT your judgment call.** Step 2.0's
-  `bump-round` gate owns it: it increments `rounds_used` and exits non-zero at
-  `max_review_rounds` (default 2). When it exits non-zero, report the
-  outstanding findings and STOP — do not run another panel, do not "just check
-  one more time". A non-zero exit from the governor is a hard stop.
-- SUPPRESSED findings are never shown to the user
-- An empty report (0 blocking, 0 warnings) is a valid outcome — it means the code is clean. Do NOT fabricate findings.
-
-**Run-governor check (2026-07-03 guardrail) — before EVERY fix attempt**, not just
-Codex rounds: this is the loop that produced 6 and 13 commits across two PRs in
-one night with nothing bounding the outer cycle. Before starting fix attempt N
-(N ≥ 1, including the first), run:
-
-```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1 (see canonical preamble).
-bs_quality_root_file() {
-  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
-  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
-  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
-  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
-  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
-}
-CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
-GIT_ROOT=""
-if [ -n "$CWD_ROOT" ]; then
-  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
-  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
-fi
-[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
-cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
-
-# Recompute the governor sentinel filename using the EXACT same transform as
-# Step -1's run-governor init — see the note in Step 2.6 for why this must
-# match byte-for-byte rather than being re-derived a different way.
-BS_QUALITY_ROOT_FILE="$(bs_quality_root_file "$GIT_ROOT")"
-BS_QUALITY_GOVERNOR_FILE="${BS_QUALITY_ROOT_FILE%.txt}-governor.json"
-
-GOVERNOR=""
-for candidate in \
-  "${CLAUDE_SETUP_ROOT:-}/scripts/quality-run-governor.js" \
-  "${CLAUDE_PLUGIN_ROOT:-}/../scripts/quality-run-governor.js" \
-  "$HOME/Projects/products/claude-kit/scripts/quality-run-governor.js" \
-  "$HOME/.claude/scripts/quality-run-governor.js"; do
-  if [ -n "$candidate" ] && [ -f "$candidate" ]; then GOVERNOR="$candidate"; break; fi
-done
-# FAIL CLOSED when the governor script or sentinel is missing — see the
-# identical guard + rationale in Step 2.6. A silently-skipped check here is
-# the exact "circuit breaker quietly stopped breaking" failure mode this
-# guardrail exists to prevent, and this is the highest-frequency call site
-# (every fix attempt), so a silent skip here is the most consequential one.
-if [ ! -f "$GOVERNOR" ] || [ ! -f "$BS_QUALITY_GOVERNOR_FILE" ]; then
-  echo "❌ RUN HALTED: quality-run-governor unavailable before fix attempt" >&2
-  echo "   (script=${GOVERNOR:-<not found>}, sentinel=${BS_QUALITY_GOVERNOR_FILE:-<unset>})." >&2
-  echo "   The runaway-loop circuit breaker cannot run, so this loop cannot be bounded." >&2
-  exit 1
-fi
-GOVERNOR_CHECK_FILE="${BS_QUALITY_GOVERNOR_FILE%.json}-check.json"
-node "$GOVERNOR" status "$BS_QUALITY_GOVERNOR_FILE"
-if ! node "$GOVERNOR" check "$BS_QUALITY_GOVERNOR_FILE" > "$GOVERNOR_CHECK_FILE" 2>&1; then
-  echo "❌ RUN HALTED before fix attempt: quality-run-governor budget exceeded (or sentinel unreadable)."
-  cat "$GOVERNOR_CHECK_FILE"
-  exit 1
-fi
-```
-
-Additionally, **before committing an individual fix**, run
-`node "$GOVERNOR" record-finding "$BS_QUALITY_GOVERNOR_FILE" '<findings-json>'`
-with this round's BLOCKING findings (`[{file, summary}, ...]`). If the result's
-`repeated` field is `true`, do NOT commit one fix per finding — batch every
-matching call site into a single commit, then re-run the gate once against the
-combined fix.
-
-**On a tripped budget (commit cap or wall-clock), the skill MUST stop
-autonomous continuation immediately** and hand back to the operator instead of
-continuing rounds or proceeding to `--merge`. The handback is a plain-text
-summary appended to the run output (not a PR comment, not a paused/resumable
-state) covering:
-
-1. What was tried (round-by-round: which findings, what fix, what the
-   re-verification said).
-2. Why it didn't converge (repeated-pattern flag if one fired; otherwise "no
-   pattern detected — findings were genuinely distinct across rounds").
-3. The exact re-invocation command to raise the cap, e.g.
-   `BS_QUALITY_MAX_FIX_COMMITS=8 /bs:quality --merge` — this is the operator's
-   explicit bypass; the skill never raises its own cap.
-
-This is a **hard stop**, not a downgrade to a smaller task — do not silently
-truncate to "fix what's left" or continue with reduced review depth instead.
+Full telemetry-log append + trailer grammar: `reference.md` "Trailer
+Convention". CI checks the `Reviewed-By: claude-quality` trailer — see
+`harness-gate.yml`.
 
 ### Step 3: Verification & Commit
 
-1. Re-run automated checks to confirm fixes
-2. Generate smart commit message from branch name + changes
-3. For `--scope changed`: auto-commit and exit
-4. For `--scope branch`/`all`: create PR
+Re-run automated checks to confirm fixes, generate a smart commit message.
+`--scope changed`: auto-commit and exit. `--scope branch`/`all`: create PR.
 
-### Step 4: Merge & Deploy (if `--merge`)
+### Step 4: Merge & Deploy (`--merge`)
 
-**HARD GATE — Review Trailer Required (NON-NEGOTIABLE)**
-
-Before calling `gh pr merge`, verify the review pipeline actually ran. At high/critical tier, also verify any `Quality-Skip` trailer is well-formed.
+**HARD GATE — Review Trailer Required (NON-NEGOTIABLE).** Before `gh pr
+merge`, verify the pipeline actually ran this invocation, and at
+high/critical verify the Codex XOR evidence:
 
 ```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
-# Sentinel name is namespaced by session + hash of target root (see Step -1),
-# recomputed here from the fork's own cwd git root so multi-repo sessions can't
-# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
-bs_quality_root_file() {
-  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
-  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
-  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
-  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
-  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
-}
-CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
-GIT_ROOT=""
-if [ -n "$CWD_ROOT" ]; then
-  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
-  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
-fi
-# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
-# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
-# non-empty before attempting cd.
-[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
-cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
+for c in "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-load-root.sh" \
+         "${CLAUDE_KIT_ROOT:-}/scripts/quality-load-root.sh" \
+         "$HOME/.claude/scripts/quality-load-root.sh" \
+         "./scripts/quality-load-root.sh" \
+         "$HOME/Projects/products/claude-kit/scripts/quality-load-root.sh"; do
+  [ -n "$c" ] && [ -f "$c" ] && { source "$c"; break; }
+done
 
-# Load the run-state sentinel Step 2.5 wrote. WITHOUT THIS, every variable below
-# (QUALITY_PIPELINE_RAN, TIER, RESOLVED_BASE, CODEX_MODE, CODEX_VERDICT,
-# BLOCKING_COUNT) reads as empty/default, because bash vars do not cross fenced
-# blocks. Consequences before 2026-07-10: the auto-stamp branch could never fire,
-# and the high/critical Codex XOR gate compared TIER against "" and silently
-# failed OPEN. Absent sentinel = the pipeline genuinely did not run in this
-# invocation, which is exactly what the hard-block below is for.
+# Load Step 2.5's run-state sentinel. Without this, every variable below
+# reads empty/default (bash vars don't cross fenced blocks) — the auto-stamp
+# branch could never fire and the high/critical XOR gate would silently
+# fail OPEN comparing TIER against "". See reference.md "Regression History".
 BS_QUALITY_RUNSTATE_FILE="${BS_QUALITY_ROOT_FILE%.txt}-runstate.env"
-if [ -f "$BS_QUALITY_RUNSTATE_FILE" ]; then
-  # shellcheck disable=SC1090
-  . "$BS_QUALITY_RUNSTATE_FILE"
-fi
-
-# Use the resolved base from Step 0.5/2.6 — NOT hardcoded main.
+[ -f "$BS_QUALITY_RUNSTATE_FILE" ] && . "$BS_QUALITY_RUNSTATE_FILE"
 BASE_REF="${RESOLVED_BASE:-origin/main}"
 
-# 1. Reviewed-By: claude-quality is required at every tier.
-#    If the trailer is missing but the quality pipeline just completed in THIS
-#    run (Step 1.8 set $QUALITY_PIPELINE_RAN=true), auto-stamp the trailer via
-#    an empty commit so the merge gate is consistent regardless of how the
-#    fix commits were authored. This avoids "quality passed but the last commit
-#    didn't include the trailer → operator must manually amend" footgun.
-#
-#    If the pipeline did NOT run in this invocation (e.g. operator passed
-#    --merge alone with no quality work), we hard-block — auto-stamping then
-#    would be forging review evidence.
+# 1. Reviewed-By: claude-quality required at EVERY tier. If missing but the
+#    pipeline ran THIS invocation, auto-stamp via an empty commit (avoids the
+#    "quality passed but the last commit lacked the trailer" footgun). If the
+#    pipeline did NOT run this invocation, hard-block — auto-stamping then
+#    would forge review evidence.
 if ! git log "${BASE_REF}..HEAD" --format=%B | grep -q "Reviewed-By: claude-quality"; then
   if [ "${QUALITY_PIPELINE_RAN:-false}" = true ]; then
-    # All three come from the run-state sentinel loaded above. AGENT_COUNT was
-    # previously `${#AGENTS[@]}` — an array that is ALWAYS unset in this block
-    # (arrays don't cross fenced blocks), so it stamped "agents=0" on every
-    # auto-stamped trailer, understating the review that actually ran.
-    TIER_LABEL="${TIER_LABEL:-${TIER:-L${LEVEL}}}"
-    AGENT_COUNT="${AGENT_COUNT:-0}"
-    FINDING_COUNT="${BLOCKING_COUNT:-0}"
-    echo "[quality] No claude-quality trailer on existing commits — auto-stamping (pipeline ran in this invocation)."
     git commit --allow-empty -m "chore(quality): stamp review trailer
 
-Reviewed-By: claude-quality (tier=${TIER_LABEL}, agents=${AGENT_COUNT}, findings=${FINDING_COUNT})" \
+Reviewed-By: claude-quality (tier=${TIER_LABEL:-${TIER:-L${LEVEL}}}, agents=${AGENT_COUNT:-0}, findings=${BLOCKING_COUNT:-0})" \
       || { echo "❌ Failed to create auto-stamp commit — aborting merge"; exit 1; }
     git push || { echo "❌ Failed to push auto-stamp commit — aborting merge"; exit 1; }
   else
-    echo "❌ MERGE BLOCKED: No 'Reviewed-By: claude-quality' trailer found."
-    echo "   The review pipeline (Step 1.8) did not run or did not complete in this invocation."
-    echo "   You MUST run the full quality loop including review agents before --merge."
-    echo "   Do NOT manually add this trailer — it is only valid when produced by Step 1.8."
+    echo "❌ MERGE BLOCKED: No 'Reviewed-By: claude-quality' trailer found, and the"
+    echo "   review pipeline did not run in this invocation. Run the full quality loop"
+    echo "   (including review agents) before --merge. Do NOT manually add this trailer."
     exit 1
   fi
 fi
 
-# 2. High/critical tiers: require EITHER a real Reviewed-By: codex trailer
-#    OR a verified Quality-Skip trailer with non-empty reason.
+# 2. High/critical: require EITHER a real Codex trailer OR a verified
+#    Quality-Skip trailer (non-empty reason, SHAs matching HEAD/HEAD~1 + merge-base
+#    — a stale trailer from an older commit cannot authorize a new merge).
+#    XOR, not OR: both present is ambiguous (which is authoritative?), neither
+#    is unauthorized. Full SHA-verification logic: reference.md "Trailer
+#    Convention" (mirrors harness-gate.yml's check).
 if [ "$TIER" = "high" ] || [ "$TIER" = "critical" ]; then
-  HAS_CODEX_TRAILER=false
-  if git log "${BASE_REF}..HEAD" --format=%B | grep -q "^Reviewed-By: codex"; then
-    HAS_CODEX_TRAILER=true
-  fi
-
+  HAS_CODEX=false
+  git log "${BASE_REF}..HEAD" --format=%B | grep -q "^Reviewed-By: codex" && HAS_CODEX=true
+  HAS_SKIP=false
   SKIP_TRAILER=$(git log "${BASE_REF}..HEAD" --format=%B | grep "^Quality-Skip:" | tail -1)
-  HAS_VALID_SKIP=false
   if [ -n "$SKIP_TRAILER" ]; then
-    # Parse trailer: head=<sha>, base=<sha>, reason=<text>
     SKIP_HEAD=$(echo "$SKIP_TRAILER" | grep -oE 'head=[a-f0-9]+' | cut -d= -f2)
     SKIP_BASE=$(echo "$SKIP_TRAILER" | grep -oE 'base=[a-f0-9]+' | cut -d= -f2)
     SKIP_REASON=$(echo "$SKIP_TRAILER" | grep -oE 'reason="[^"]*"' | sed 's/reason="//;s/"$//')
     CURRENT_HEAD=$(git rev-parse HEAD)
     CURRENT_HEAD_PARENT=$(git rev-parse HEAD~1 2>/dev/null || true)
     CURRENT_BASE=$(git merge-base HEAD "$BASE_REF")
-
-    # SKIP_HEAD may match HEAD (trailer baked into the reviewed commit) OR
-    # HEAD~1 (canonical stamp-pattern: empty trailer commit on top of the
-    # reviewed change). The HEAD~1 path closes a chicken-and-egg defect —
-    # a self-referential head= is unsatisfiable since adding the trailer
-    # changes the commit's own SHA. Mirrors harness-gate.yml check.
-    if [ "$SKIP_HEAD" != "$CURRENT_HEAD" ] && [ "$SKIP_HEAD" != "$CURRENT_HEAD_PARENT" ]; then
-      echo "❌ MERGE BLOCKED: Quality-Skip trailer head=$SKIP_HEAD does not match HEAD=$CURRENT_HEAD or HEAD~1=$CURRENT_HEAD_PARENT."
-      echo "   Stale skip trailer cannot authorize this merge — re-run quality."
-      exit 1
-    elif [ "$SKIP_BASE" != "$CURRENT_BASE" ]; then
-      echo "❌ MERGE BLOCKED: Quality-Skip trailer base=$SKIP_BASE does not match merge-base=$CURRENT_BASE."
-      exit 1
-    elif [ -z "$(echo "$SKIP_REASON" | tr -d '[:space:]')" ]; then
-      echo "❌ MERGE BLOCKED: Quality-Skip reason= is empty after stripping whitespace."
-      exit 1
-    else
-      HAS_VALID_SKIP=true
-      echo "[quality] Quality-Skip trailer verified (reason=\"$SKIP_REASON\")"
+    if { [ "$SKIP_HEAD" = "$CURRENT_HEAD" ] || [ "$SKIP_HEAD" = "$CURRENT_HEAD_PARENT" ]; } \
+       && [ "$SKIP_BASE" = "$CURRENT_BASE" ] \
+       && [ -n "$(echo "$SKIP_REASON" | tr -d '[:space:]')" ]; then
+      HAS_SKIP=true
     fi
   fi
-
-  # The XOR rule: at high/critical, exactly ONE form of evidence — both is
-  # ambiguous (which is authoritative?), neither is unauthorized.
-  if [ "$HAS_CODEX_TRAILER" = false ] && [ "$HAS_VALID_SKIP" = false ]; then
-    echo "❌ MERGE BLOCKED: tier=$TIER requires either:"
-    echo "     (a) a 'Reviewed-By: codex' trailer from a completed Codex review, or"
-    echo "     (b) a verified 'Quality-Skip: codex-judge' trailer with a non-empty reason."
-    echo "   Neither was found. --no-codex at $TIER must be converted to --codex-skip \"<reason>\"."
+  if [ "$HAS_CODEX" = false ] && [ "$HAS_SKIP" = false ]; then
+    echo "❌ MERGE BLOCKED: tier=$TIER requires a 'Reviewed-By: codex' trailer OR a"
+    echo "   verified 'Quality-Skip: codex-judge' trailer with a non-empty reason. Neither found."
     exit 1
   fi
-  if [ "$HAS_CODEX_TRAILER" = true ] && [ "$HAS_VALID_SKIP" = true ]; then
-    echo "❌ MERGE BLOCKED: tier=$TIER has BOTH a 'Reviewed-By: codex' trailer AND a"
-    echo "   'Quality-Skip' trailer. Exactly one is authoritative — drop the stale one."
-    echo "   If Codex actually ran on this commit, remove the Quality-Skip trailer."
-    echo "   If Codex was skipped, drop the stale Reviewed-By: codex (likely from a prior commit)."
+  if [ "$HAS_CODEX" = true ] && [ "$HAS_SKIP" = true ]; then
+    echo "❌ MERGE BLOCKED: tier=$TIER has BOTH trailers — exactly one is authoritative. Drop the stale one."
     exit 1
   fi
 fi
 ```
 
-This gate prevents merging when review agents were skipped — whether by shortcutting, by error, or by running only automated checks. The trailer is written in Step 1.8 (Review Stamp) ONLY after all review agents + judge synthesis complete. No trailer = no merge. No exceptions. At high/critical, a `Quality-Skip` trailer is the ONLY authoritative bypass — `.claude/quality-skip-log.json` is telemetry only.
+This gate prevents merging when review agents were skipped — by
+shortcutting, by error, or by automated-checks-only. No trailer = no merge,
+no exceptions.
 
-1. Push branch, create PR via `gh pr create`
-2. Wait for CI (unless `--skip-ci`)
-3. Auto-merge via `gh pr merge --squash`
-4. **Worktree-aware cleanup** — leave the operator on the primary checkout's
-   `main`, merged worktree removed, local branch deleted, stale refs pruned.
-   Failures here MUST surface (CLAUDE.md "zero silent failures") — a partial
-   cleanup is worse than a noisy one because it leaks state into the next
-   session.
-
-   ```bash
-   # Capture the worktree path + branch BEFORE checking out main, so we know
-   # what to remove after returning to the primary checkout.
-   WORKTREE_PATH=$(git rev-parse --show-toplevel)
-   FEATURE_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-   PRIMARY_CHECKOUT=$(git worktree list --porcelain | awk '/^worktree / {p=$2} /^branch refs\/heads\/main$/ {print p; exit}')
-
-   if [ -z "$PRIMARY_CHECKOUT" ]; then
-     echo "[quality] Could not locate primary checkout (no worktree has main checked out)."
-     echo "         Skipping cleanup — operator must remove worktree + branch manually:"
-     echo "           git worktree remove $WORKTREE_PATH"
-     echo "           git branch -D $FEATURE_BRANCH"
-     exit 0
-   fi
-
-   if [ "$PRIMARY_CHECKOUT" = "$WORKTREE_PATH" ]; then
-     # Running directly in the primary checkout (against project policy, but
-     # supported for backwards compatibility — Step -1 only blocks this for
-     # `--merge`-from-main).
-     git checkout main || { echo "❌ Could not checkout main in primary — aborting cleanup"; exit 1; }
-     git pull --ff-only || { echo "❌ git pull --ff-only failed — investigate before retrying"; exit 1; }
-     git branch -D "$FEATURE_BRANCH" || \
-       echo "[quality] Could not delete branch $FEATURE_BRANCH — remove manually."
-     exit 0
-   fi
-
-   # We ran in a linked worktree. Tear it down in the right order:
-   # checkout main FIRST (so the branch is no longer "in use" by the worktree
-   # we are about to remove), then remove the worktree, then delete the branch.
-   cd "$PRIMARY_CHECKOUT" || { echo "❌ Could not cd to $PRIMARY_CHECKOUT — aborting cleanup"; exit 1; }
-   git checkout main || { echo "❌ Could not checkout main in $PRIMARY_CHECKOUT (likely uncommitted changes there) — aborting cleanup"; exit 1; }
-   git pull --ff-only || { echo "❌ git pull --ff-only failed — investigate before retrying"; exit 1; }
-
-   if ! git worktree remove "$WORKTREE_PATH"; then
-     echo "❌ Could not remove worktree $WORKTREE_PATH (likely uncommitted changes inside)."
-     echo "   Resolve manually, then run: git worktree remove $WORKTREE_PATH && git branch -D $FEATURE_BRANCH"
-     exit 1
-   fi
-   if ! git branch -D "$FEATURE_BRANCH"; then
-     echo "❌ Could not delete branch $FEATURE_BRANCH — remove manually with: git branch -D $FEATURE_BRANCH"
-     exit 1
-   fi
-   git worktree prune -v
-   ```
-
-   Without this tail, every merge leaves an orphaned worktree and a stale local
-   branch — within a few PRs the repo accumulates a graveyard.
-
-5. Remind the user to verify deployment health with their normal deployment tooling
+1. Push branch, create PR (`gh pr create`), wait for CI (unless
+   `--skip-ci`), auto-merge (`gh pr merge --squash`).
+2. **Worktree-aware cleanup** — run `scripts/quality-merge-cleanup.sh` after
+   a successful merge. Leaves the operator on primary `main`, worktree
+   removed, branch deleted, refs pruned. Failures here MUST surface (zero
+   silent failures) — a partial cleanup leaks state into the next session.
+   Without this every merge leaves an orphaned worktree + stale branch.
+3. Remind the user to verify deployment health with their normal tooling.
 
 ### Step 5: Record Quality History
 
-Update `.qualityrc.json` with run results (score, coverage, duration, cost). Display next-step suggestions.
+Update `.qualityrc.json` (score, coverage, duration, cost). Show next-step
+suggestions (`reference.md` "Next-Step Suggestions").
 
-## Parallel Sub-Review Mode (acpx)
+## Parallel Sub-Review Mode
 
-When invoked with `--parallel`, fire security, coverage, and perf sub-reviews as concurrent acpx sessions instead of running them sequentially inside the main loop.
-
-### Usage
-
-```
-/bs:quality --parallel [other flags]
-```
-
-### How It Works
-
-Requires acpx ≥ 0.5.3. Commands are agent-scoped (`acpx claude …`) in current versions.
-
-1. **Check acpx availability**: `command -v acpx`. If unavailable, fall back to sequential (log a warning).
-2. **Create sessions, then fire prompts concurrently**:
-
-```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
-# Sentinel name is namespaced by session + hash of target root (see Step -1),
-# recomputed here from the fork's own cwd git root so multi-repo sessions can't
-# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
-bs_quality_root_file() {
-  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
-  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
-  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
-  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
-  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
-}
-CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
-GIT_ROOT=""
-if [ -n "$CWD_ROOT" ]; then
-  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
-  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
-fi
-# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
-# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
-# non-empty before attempting cd.
-[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
-cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
-
-TIMESTAMP=$(date +%s)
-for kind in security coverage perf; do
-  acpx claude sessions new --name "quality-${kind}-${TIMESTAMP}" >/dev/null
-done
-
-acpx claude prompt --no-wait -s "quality-security-${TIMESTAMP}" \
-  "Security review: examine [diff/files] for OWASP top 10, secrets, injection flaws. Output structured findings."
-acpx claude prompt --no-wait -s "quality-coverage-${TIMESTAMP}" \
-  "Coverage review: examine [diff/files] for missing tests, uncovered branches, weak assertions. Output structured findings."
-acpx claude prompt --no-wait -s "quality-perf-${TIMESTAMP}" \
-  "Performance review: examine [diff/files] for N+1 queries, unguarded loops, missing memoization. Output structured findings."
-```
-
-3. **Poll until all sessions complete** (status can stay "running" post-completion, so detect an assistant entry after the latest user entry via history):
-
-```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
-# Sentinel name is namespaced by session + hash of target root (see Step -1),
-# recomputed here from the fork's own cwd git root so multi-repo sessions can't
-# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
-bs_quality_root_file() {
-  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
-  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
-  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
-  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
-  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
-}
-CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
-GIT_ROOT=""
-if [ -n "$CWD_ROOT" ]; then
-  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
-  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
-fi
-# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
-# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
-# non-empty before attempting cd.
-[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
-cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
-
-session_done() {
-  local session="$1"
-  acpx claude sessions read "$session" --tail 4 2>/dev/null \
-    | awk '/^user/{u=NR} /^assistant/{a=NR} END{exit !(a>u)}'
-}
-
-for session in quality-security-${TIMESTAMP} quality-coverage-${TIMESTAMP} quality-perf-${TIMESTAMP}; do
-  for _ in $(seq 1 80); do
-    session_done "$session" && break
-    sleep 3
-  done
-done
-```
-
-4. **Collect outputs** (read session history):
-
-```bash
-# BS_QUALITY_LOAD_ROOT — restore cwd resolved in Step -1.
-# Sentinel name is namespaced by session + hash of target root (see Step -1),
-# recomputed here from the fork's own cwd git root so multi-repo sessions can't
-# cross-contaminate. See the canonical preamble after Step -1 for the rationale.
-bs_quality_root_file() {
-  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
-  if command -v sha256sum >/dev/null 2>&1; then key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
-  elif command -v shasum >/dev/null 2>&1; then key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
-  else key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12); fi
-  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
-}
-CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
-GIT_ROOT=""
-if [ -n "$CWD_ROOT" ]; then
-  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
-  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
-fi
-# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
-# silent no-op, defeating the `cd ... || exit` check. Verify GIT_ROOT is
-# non-empty before attempting cd.
-[ -n "$GIT_ROOT" ] || { echo "❌ git root unresolved (no sentinel, not in a git repo)"; exit 1; }
-cd "$GIT_ROOT" || { echo "❌ cannot enter git root: $GIT_ROOT"; exit 1; }
-
-SECURITY_OUT=$(acpx claude sessions read "quality-security-${TIMESTAMP}" --tail 1)
-COVERAGE_OUT=$(acpx claude sessions read "quality-coverage-${TIMESTAMP}" --tail 1)
-PERF_OUT=$(acpx claude sessions read "quality-perf-${TIMESTAMP}" --tail 1)
-
-for kind in security coverage perf; do
-  acpx claude sessions close "quality-${kind}-${TIMESTAMP}" >/dev/null 2>&1 || true
-done
-```
-
-5. **Synthesize**: combine all three outputs into the unified quality report (same format as sequential mode). Continue to Step 2 (Agent Result Validation) as normal.
-
-### Fallback
-
-If `acpx` is not installed or any session fails to launch, log:
-
-```
-[quality] acpx unavailable or launch failed — falling back to sequential sub-reviews
-```
-
-Then run security → coverage → perf in order using the standard sequential flow.
+`--parallel` fires security/coverage/perf sub-reviews as concurrent acpx
+sessions instead of running them sequentially. See `reference.md` "Parallel
+Sub-Review Mode" for the full acpx invocation, polling, and fallback.
 
 ## Supporting Files
 
-- `reference.md` — Flag definitions, scope options, quality levels, audit mode, teams mode
-- `checklist.md` — Exit criteria, agent validation rules, scoring, pattern categories
+- `reference.md` — flags, scopes, levels, target resolution detail, trailer
+  grammar, regression history, acpx parallel mode, run-governor incidents
+- `checklist.md` — exit criteria, agent validation rules, scoring, pattern
+  categories
+- `scripts/quality-bootstrap.sh` — Step -1 target resolution + governor init
+- `scripts/quality-load-root.sh` — per-block cwd/root restore (source this)
+- `scripts/quality-risk-resolve.sh` — Step 0.5 risk scoring
+- `scripts/quality-select-agents.sh` — Step 1.8 panel construction
+- `scripts/quality-run-review.sh` — Step 1.8 blocking review subprocess
+- `scripts/quality-codex-review.sh` — Step 2.6 Codex polling loop
+- `scripts/quality-merge-cleanup.sh` — Step 4 post-merge worktree teardown

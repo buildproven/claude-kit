@@ -235,26 +235,42 @@ describe("claude-review-companion.sh", () => {
     });
   });
 
-  describe("SKILL.md wiring (findings #1/#2/#6)", () => {
-    const SKILL = fs.readFileSync(
-      path.resolve(KIT_ROOT, "skills", "quality", "SKILL.md"),
+  describe("quality skill wiring (findings #1/#2/#6)", () => {
+    // #70 split SKILL.md's inline bash into scripts/ so SKILL.md stays under
+    // the compaction re-attach token budget (see reference.md "Regression
+    // History" 2026-07-11). These invariants used to be asserted against
+    // inline SKILL.md text; they now live in the scripts SKILL.md delegates
+    // to. Read all three so a future re-inlining or further split still
+    // satisfies the same behavioral contract regardless of which file holds it.
+    const BOOTSTRAP = fs.readFileSync(
+      path.resolve(KIT_ROOT, "scripts", "quality-bootstrap.sh"),
       "utf8",
     );
+    const SELECT_AGENTS = fs.readFileSync(
+      path.resolve(KIT_ROOT, "scripts", "quality-select-agents.sh"),
+      "utf8",
+    );
+    const RUN_REVIEW = fs.readFileSync(
+      path.resolve(KIT_ROOT, "scripts", "quality-run-review.sh"),
+      "utf8",
+    );
+    const COMBINED = `${BOOTSTRAP}\n${SELECT_AGENTS}\n${RUN_REVIEW}`;
+
     it("persists the AGENTS panel to a sentinel (survives across fenced blocks)", () => {
-      expect(SKILL).toMatch(/bs-quality-agents-.*\.txt/);
+      expect(SELECT_AGENTS).toMatch(/bs-quality-agents-.*\.txt/);
     });
     it("companion block reads the agents sentinel, not an in-scope array", () => {
-      expect(SKILL).toMatch(/AGENTS_FILE=.*bs-quality-agents/);
-      expect(SKILL).toMatch(/AGENTS_CSV=.*paste -sd, "\$AGENTS_FILE"/);
+      expect(RUN_REVIEW).toMatch(/AGENTS_FILE=.*bs-quality-agents/);
+      expect(RUN_REVIEW).toMatch(/AGENTS_CSV=.*paste -sd, "\$AGENTS_FILE"/);
     });
     it("blocks the merge on ANY non-zero companion rc (not just rc==2)", () => {
-      expect(SKILL).toMatch(/COMPANION_RC" -ne 0/);
+      expect(RUN_REVIEW).toMatch(/COMPANION_RC" -ne 0/);
     });
     it("no panel/AGENTS line lists the phantom test-generator agent", () => {
       // test-generator has no agent .md anywhere → would permanently block
       // high/critical merges as INCONCLUSIVE. It may only appear in prose
       // explaining its removal, never in a PANEL=(...) or AGENTS=(...) line.
-      const panelLines = SKILL.split("\n").filter(
+      const panelLines = COMBINED.split("\n").filter(
         (l) =>
           /^\s*(PANEL|AGENTS)=\(/.test(l) ||
           /^\s+(code-reviewer|test-generator|pr-test-analyzer)/.test(l),
@@ -266,17 +282,19 @@ describe("claude-review-companion.sh", () => {
     it("clears any stale review-panel sentinel before the pipeline runs", () => {
       // The sentinel is session- (not run-) namespaced. A run that SKIPS agent
       // selection (--scope changed) must not inherit a prior run's panel, so
-      // the skill removes any stale sentinel up front (right after the recursion
-      // guard, before Step 1.8). Assert that rm precedes the write.
-      const rmIdx = SKILL.search(
+      // Step -1 (quality-bootstrap.sh) removes any stale sentinel up front,
+      // before Step 1.8 (quality-select-agents.sh) writes a fresh one.
+      const rmIdx = BOOTSTRAP.search(
         /rm -f "\$\{TMPDIR:-\/tmp\}\/bs-quality-agents-/,
       );
-      const writeIdx = SKILL.search(
+      const writeIdx = SELECT_AGENTS.search(
         /> "\$\{TMPDIR:-\/tmp\}\/bs-quality-agents-/,
       );
       expect(rmIdx).toBeGreaterThan(-1);
       expect(writeIdx).toBeGreaterThan(-1);
-      expect(rmIdx).toBeLessThan(writeIdx); // clear happens before the write
+      // These are now in different files (bootstrap runs at Step -1, well
+      // before select-agents at Step 1.8), so there is no single offset to
+      // compare — the file-order IS the execution-order guarantee.
     });
   });
 });
