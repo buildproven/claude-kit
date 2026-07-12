@@ -26,11 +26,34 @@ err()     { echo -e "${RED}✗${NC} $1"; }
 # so it is unambiguously a message string and never mistaken for a path to expand.
 D="$(printf '~')/.claude"
 
-# Repo root = parent of this script's directory. Resolved from $0 so the script
-# works whether invoked directly, via symlink, or from another cwd.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Repo root = parent of this script's directory.
+#
+# This MUST physically resolve symlinks, and the previous version did not.
+# install.sh links <config>/scripts -> <repo>/scripts, so /bs:sync finds this
+# script *through that link*. A naive `cd "$(dirname "$BASH_SOURCE")" && pwd`
+# returns the LOGICAL path, collapsing REPO_ROOT to the config dir itself —
+# whereupon --repair unlinked the working symlink and recreated it pointing at
+# itself (<config>/scripts -> <config>/scripts). ELOOP: all 14 hooks dead, and
+# the next --check reported "OK" because readlink == src. Walk the chain instead.
+src_path="${BASH_SOURCE[0]}"
+while [[ -L "$src_path" ]]; do
+  link_target="$(readlink "$src_path")"
+  if [[ "$link_target" == /* ]]; then
+    src_path="$link_target"
+  else
+    src_path="$(cd "$(dirname "$src_path")" && pwd -P)/$link_target"
+  fi
+done
+SCRIPT_DIR="$(cd "$(dirname "$src_path")" && pwd -P)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+
+# If we did not land in a real checkout, refuse — better than symlinking things
+# relative to a misresolved root.
+if [[ ! -f "$REPO_ROOT/config/settings.json" ]]; then
+  err "cannot locate the claude-kit checkout (resolved REPO_ROOT=$REPO_ROOT)"
+  exit 1
+fi
 
 # Directories symlinked wholesale into ~/.claude/
 LINK_DIRS=(commands skills agents scripts)
@@ -39,7 +62,10 @@ MODE="repair"
 case "${1:-}" in
   --check)  MODE="check" ;;
   --repair) MODE="repair" ;;
-  --all)    MODE="repair" ;;
+  # NOT silently aliased to --repair: the old --all advertised backup + commit +
+  # push. Quietly doing something narrower is the silent-downgrade class of bug
+  # this script exists to prevent.
+  --all)    echo "--all was removed: it never did the backup/commit/push it advertised. Use --repair." >&2; exit 2 ;;
   "")       MODE="repair" ;;
   *) echo "usage: $(basename "$0") [--check|--repair]" >&2; exit 2 ;;
 esac
@@ -51,8 +77,19 @@ FAILURES=0
 want_link() {
   local src="$1" dest="$2" label="$3"
 
+  # Belt and braces against the ELOOP failure described above: never link a path
+  # to itself, even if REPO_ROOT resolution regresses again.
+  if [[ "$src" == "$dest" ]]; then
+    err "$label: refusing to link $dest to itself (REPO_ROOT misresolved to $REPO_ROOT)"
+    FAILURES=$((FAILURES + 1))
+    return 0
+  fi
+
+  # All four LINK_DIRS are mandatory. A missing source means a broken or partial
+  # checkout — count it, so --check cannot exit 0 on an install that cannot work.
   if [[ ! -e "$src" ]]; then
-    warn "$label: source missing in repo ($src) — skipping"
+    err "$label: source missing from the checkout ($src)"
+    FAILURES=$((FAILURES + 1))
     return 0
   fi
 
@@ -115,22 +152,47 @@ for f in "settings.json:config/settings.json" "CLAUDE.md:config/CLAUDE.md"; do
   fi
 done
 
-# Hooks are the reason `scripts` must be linked. Verify they can actually resolve.
+# Hooks are the reason `scripts` must be linked. Verify they actually resolve.
+#
+# The `|| true` is deliberate, and on its own would be a bug. grep exits 1 on
+# no-match, which under `set -euo pipefail` killed the script mid-line — before
+# the summary, with no diagnosis. But silently swallowing that is worse: an empty
+# hook list would sail through the loop and report "all hooks resolve" having
+# verified nothing. So: tolerate the status, then treat "no hooks found" as its
+# own hard failure.
 if [[ -d "$CLAUDE_DIR/scripts" ]]; then
-  missing_hooks=0
-  # SC2016: the single quotes are deliberate — we grep for the *literal* text
-  # "$HOME/.claude/scripts/..." as it appears in settings.json, not its expansion.
-  # shellcheck disable=SC2016
-  hook_names="$(grep -o '\$HOME/\.claude/scripts/[a-zA-Z0-9._-]*\.sh' "$REPO_ROOT/config/settings.json" 2>/dev/null | sed 's|.*/||' | sort -u)"
-  while IFS= read -r hook; do
-    [[ -n "$hook" ]] || continue
-    [[ -f "$CLAUDE_DIR/scripts/$hook" ]] || { err "hook script unresolvable: $D/scripts/$hook"; missing_hooks=$((missing_hooks + 1)); }
-  done <<< "$hook_names"
-
-  if [[ $missing_hooks -eq 0 ]]; then
-    success "all hook scripts resolve under $D/scripts/"
+  if [[ ! -f "$REPO_ROOT/config/settings.json" ]]; then
+    err "config/settings.json missing from the checkout — cannot verify hooks"
+    FAILURES=$((FAILURES + 1))
   else
-    FAILURES=$((FAILURES + missing_hooks))
+    # SC2016: single quotes deliberate — match the *literal* text as written in
+    # settings.json, not its expansion.
+    # shellcheck disable=SC2016
+    hook_names="$(grep -o '\$HOME/\.claude/scripts/[a-zA-Z0-9._-]*\.sh' \
+                    "$REPO_ROOT/config/settings.json" | sed 's|.*/||' | sort -u || true)"
+
+    if [[ -z "$hook_names" ]]; then
+      err "no hook scripts found in config/settings.json — the hook path format changed, so this check is now verifying nothing"
+      FAILURES=$((FAILURES + 1))
+    else
+      missing_hooks=0
+      hook_count=0
+      while IFS= read -r hook; do
+        [[ -n "$hook" ]] || continue
+        hook_count=$((hook_count + 1))
+        [[ -f "$CLAUDE_DIR/scripts/$hook" ]] || {
+          err "hook script unresolvable: $D/scripts/$hook"
+          missing_hooks=$((missing_hooks + 1))
+        }
+      done <<< "$hook_names"
+
+      if [[ $missing_hooks -eq 0 ]]; then
+        # Report the count, so a silent drop to zero hooks is visible, not green.
+        success "all $hook_count hook scripts resolve under $D/scripts/"
+      else
+        FAILURES=$((FAILURES + missing_hooks))
+      fi
+    fi
   fi
 else
   err "$D/scripts is not linked — every hook in settings.json will silently no-op"
