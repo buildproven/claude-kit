@@ -86,8 +86,8 @@ resolution beyond Step -1.
 Read `reference.md` for flag definitions. Key flags: `--level` (auto|95|98),
 `--scope` (changed|branch|all), `--merge`, `--deploy`, `--preflight`,
 `--audit`, `--teams`, `--codex-effort` (medium|high|xhigh), `--codex-skip
-"<reason>"`. Handle early exits: `--status`, `--preflight` (<10s), `--audit`
-(read-only).
+"<reason>"`, `--verify [N]` (adversarial verification, see Step 2.6). Handle
+early exits: `--status`, `--preflight` (<10s), `--audit` (read-only).
 
 ### Step 0.5: Risk Scoring → Review Depth (`--level auto`)
 
@@ -218,6 +218,38 @@ re-review rounds is not your judgment call** — the round gate above owns it
 (default cap 2); a non-zero exit from it is a hard stop, not "just check
 once more." An empty report (0/0) is a valid, real outcome — never fabricate
 findings.
+
+### Step 2.6: Adversarial Verification (`--verify`, opt-in)
+
+The judge promotes a finding when 2+ agents flag it. But agents reading the same
+diff make **correlated** errors — same model, same prompt shape, same blind
+spots. "Three agents agreed" can just be the same mistake three times.
+
+`--verify [N]` (default 3) hands every BLOCKING finding to N skeptics whose only
+job is to **refute** it. Nobody is asked "is this a bug?" — a question that
+invites agreement. They are asked to prove the code is fine. A finding survives
+only if they cannot kill it.
+
+```bash
+VERIFY="$(bs_quality_find_script quality-adversarial-verify.sh)" || {
+  echo "❌ MERGE BLOCKED: quality-adversarial-verify.sh not found — --verify was requested but cannot run." >&2
+  exit 1
+}
+bash "$VERIFY" \
+  --findings "$REVIEW_OUT/findings.json" \
+  --diff "$DIFF_FILE" \
+  --out "$REVIEW_OUT/verify" \
+  --voters "${VERIFY_VOTERS:-3}"
+```
+
+Then recompute `BLOCKING_COUNT` from the survivors in
+`"$REVIEW_OUT/verify/verdicts.json"` (`.verified.survives == true`).
+
+**Asymmetric by design.** A false PASS ships the bug; a false BLOCK costs one fix
+round. So every uncertain path lets the finding survive: a tie survives, a
+timed-out skeptic survives, malformed input survives (loudly). Silence is not a
+refutation. `--verify` can only ever _remove_ findings the skeptics actively
+killed — it can never add a pass.
 
 **Before every fix attempt** (not just Codex rounds — this is the loop that
 produced 6 and 13 commits across two PRs in one night with nothing bounding
