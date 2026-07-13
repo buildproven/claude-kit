@@ -28,19 +28,19 @@ DataForSEO uses HTTP Basic Auth. Base URL: `https://api.dataforseo.com/v3`
 curl -X POST "https://api.dataforseo.com/v3/keywords_data/google_ads/search_volume/live" \
   -H "Content-Type: application/json" \
   -u "$DATAFORSEO_LOGIN:$DATAFORSEO_PASSWORD" \
-  -d '[{"keywords": ["vibe coding", "ai product builder"], "location_code": 2840, "language_code": "en"}]'
+  -d '[{"keywords": ["YOUR_KEYWORD", "YOUR_OTHER_KEYWORD"], "location_code": 2840, "language_code": "en"}]'
 
 # SERP results
 curl -X POST "https://api.dataforseo.com/v3/serp/google/organic/live/regular" \
   -H "Content-Type: application/json" \
   -u "$DATAFORSEO_LOGIN:$DATAFORSEO_PASSWORD" \
-  -d '[{"keyword": "ai product builder for non developers", "location_code": 2840, "language_code": "en"}]'
+  -d '[{"keyword": "YOUR_KEYWORD", "location_code": 2840, "language_code": "en"}]'
 
 # Keyword suggestions
 curl -X POST "https://api.dataforseo.com/v3/keywords_data/google_ads/keywords_for_keywords/live" \
   -H "Content-Type: application/json" \
   -u "$DATAFORSEO_LOGIN:$DATAFORSEO_PASSWORD" \
-  -d '[{"keywords": ["vibe coding"], "location_code": 2840, "language_code": "en"}]'
+  -d '[{"keywords": ["YOUR_KEYWORD"], "location_code": 2840, "language_code": "en"}]'
 
 # Competitor domain analysis
 curl -X POST "https://api.dataforseo.com/v3/dataforseo_labs/google/competitors_domain/live" \
