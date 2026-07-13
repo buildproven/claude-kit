@@ -1,8 +1,8 @@
 # claude-kit
 
 Free, open-source (MIT) Claude Code toolkit. Quality automation, autonomous
-backlog execution, multi-LLM strategy panels, fleet auditing, commercial
-intelligence, and 14 specialist agents.
+backlog execution, multi-LLM strategy panels, fleet auditing, and 14 specialist
+agents.
 
 **Everything is here.** One repo, MIT, no paid tier, nothing held back.
 

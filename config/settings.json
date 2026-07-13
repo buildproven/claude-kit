@@ -38,8 +38,7 @@
       "Monitor",
       "ToolSearch",
       "ExitPlanMode",
-      "KillShell",
-      "mcp__*"
+      "KillShell"
     ],
     "deny": [
       "Bash(sudo rm:*)",

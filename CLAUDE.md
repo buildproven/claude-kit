@@ -69,7 +69,6 @@ commands/         Slash commands — frontmatter + markdown prompts
   bs/             /bs:* workflow commands (dev, quality, test, plan, ...)
   gh/             /gh:* GitHub (fix-issue)
   cc/             /cc:* Claude Code meta (create-command, update-claudemd)
-  *.md            Top-level: debug, refactor, update-claudemd, bs:scrub
 skills/           Auto-invoked capabilities — each has SKILL.md + optional refs
 agents/           Subagent definitions — code-reviewer, security-auditor
 scripts/          Hooks, CI gates, utilities (bash + node + python)
