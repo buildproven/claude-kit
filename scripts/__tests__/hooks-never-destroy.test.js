@@ -6,18 +6,30 @@ import { describe, expect, it } from "vitest";
 
 const SCRIPTS = path.resolve(import.meta.dirname, "..");
 
+// A CI runner has no git identity configured, so `git commit` exits 128 there
+// while passing locally. Supply one explicitly rather than depending on the host.
+const GIT_ENV = {
+  ...process.env,
+  GIT_AUTHOR_NAME: "kit-test",
+  GIT_AUTHOR_EMAIL: "kit-test@example.com",
+  GIT_COMMITTER_NAME: "kit-test",
+  GIT_COMMITTER_EMAIL: "kit-test@example.com",
+};
+
 const git = (cwd, ...args) =>
   execFileSync("git", args, {
     cwd,
+    env: GIT_ENV,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   });
 
-const sh = (cwd, script, input = "") => {
+const sh = (cwd, script, input = "", env = {}) => {
   try {
     const stdout = execFileSync("bash", [path.join(SCRIPTS, script)], {
       cwd,
       input,
+      env: { ...GIT_ENV, ...env },
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -80,12 +92,7 @@ describe("hooks never destroy user work", () => {
 
   it("auto-prune stays opt-in (deletes only when explicitly enabled)", () => {
     const work = repoWithGoneBranch();
-    execFileSync("bash", [path.join(SCRIPTS, "session-start-context.sh")], {
-      cwd: work,
-      env: { ...process.env, CLAUDE_KIT_AUTO_PRUNE: "1" },
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    sh(work, "session-start-context.sh", "", { CLAUDE_KIT_AUTO_PRUNE: "1" });
     expect(branches(work)).not.toContain("feature");
   });
 
