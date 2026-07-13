@@ -21,7 +21,7 @@ specialist agents.
 
 | Dir         | Contents                                                           |
 | ----------- | ------------------------------------------------------------------ |
-| `commands/` | 33 `/bs:*` + `/gh:*` + `/cc:*` commands                            |
+| `commands/` | 32 `/bs:*` + `/gh:*` + `/cc:*` commands                            |
 | `skills/`   | 34 skills — quality, autonomous workflow, strategy, domain         |
 | `agents/`   | 14 specialist agents                                               |
 | `scripts/`  | Hooks, lint, branch-protection, quality governor, review companion |
