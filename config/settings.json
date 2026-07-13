@@ -196,7 +196,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "osascript -e 'display notification \"Claude needs your attention\" with title \"Claude Code\"'",
+            "command": "$HOME/.claude/scripts/notify.sh \"Claude needs your attention\"",
             "timeout": 3000
           }
         ]
@@ -206,7 +206,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "osascript -e 'display notification \"A background agent is blocked and needs input\" with title \"Claude Code\"'",
+            "command": "$HOME/.claude/scripts/notify.sh \"A background agent is blocked and needs input\"",
             "timeout": 3000
           }
         ]
@@ -216,7 +216,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "osascript -e 'display notification \"A background agent finished\" with title \"Claude Code\"'",
+            "command": "$HOME/.claude/scripts/notify.sh \"A background agent finished\"",
             "timeout": 3000
           }
         ]

@@ -86,7 +86,15 @@ echo "✅ Branch hygiene complete"
 
 ### Step 0c: Auto-Pick from Backlog (--next flag)
 
-If `--next` flag is provided, automatically select the highest-priority item from Linear:
+If `--next` flag is provided, automatically select the highest-priority item from Linear.
+
+**`--next` requires the Linear MCP server.** If the `mcp__linear__*` tools are not
+available in this session, say so and stop — do not guess at a task:
+
+> `--next` needs the Linear MCP server, which isn't configured. Either set it up
+> (https://linear.app/docs/mcp), or name the task directly: `/bs:dev "<what to build>"`.
+
+Otherwise, select the highest-priority item:
 
 ```bash
 # Primary: use Linear MCP

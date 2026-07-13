@@ -8,9 +8,25 @@ model: haiku
 
 # /bs:backlog — $ARGUMENTS
 
+## Requires the Linear MCP server — check first
+
+**Before anything else**, confirm the Linear MCP tools (`mcp__linear__*`) are actually
+available to you in this session.
+
+**If they are not, stop and say exactly this, then end the turn:**
+
+> `/bs:backlog` needs the Linear MCP server, which isn't configured in this session.
+> Set it up with `claude mcp add` (see https://linear.app/docs/mcp), or track your
+> backlog in a plain `BACKLOG.md` and use `/bs:ralph --inline` to work through it.
+
+Do not guess, do not invent issues, and do not silently do nothing. A missing
+dependency is a message, not a no-op.
+
+---
+
 Score = (Revenue + Retention + Differentiation) ÷ Effort (S=÷1, M=÷2, L=÷3, XL=÷4)
 
-Backlog is managed in **Linear** (https://linear.app/<your-workspace>). Use the Linear MCP tools:
+Backlog is managed in **Linear** (https://linear.app/<your-workspace>).
 
 ## Linear MCP Tools
 
