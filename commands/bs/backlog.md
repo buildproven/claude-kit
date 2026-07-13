@@ -8,9 +8,25 @@ model: haiku
 
 # /bs:backlog — $ARGUMENTS
 
+## Requires the Linear MCP server — check first
+
+**Before anything else**, confirm the Linear MCP tools (`mcp__linear__*`) are actually
+available to you in this session.
+
+**If they are not, stop and say exactly this, then end the turn:**
+
+> `/bs:backlog` needs the Linear MCP server, which isn't configured in this session.
+> Set it up with `claude mcp add` (see https://linear.app/docs/mcp), or track your
+> backlog in a plain `BACKLOG.md` and use `/bs:ralph --inline` to work through it.
+
+Do not guess, do not invent issues, and do not silently do nothing. A missing
+dependency is a message, not a no-op.
+
+---
+
 Score = (Revenue + Retention + Differentiation) ÷ Effort (S=÷1, M=÷2, L=÷3, XL=÷4)
 
-Backlog is managed in **Linear** (https://linear.app/YOUR_WORKSPACE). Use the Linear MCP tools:
+Backlog is managed in **Linear** (https://linear.app/<your-workspace>).
 
 ## Linear MCP Tools
 
@@ -18,7 +34,7 @@ Backlog is managed in **Linear** (https://linear.app/YOUR_WORKSPACE). Use the Li
 - **Next:** `mcp__linear__list_issues(filter: { state: { name: { eq: "Backlog" } } }, first: 1)` — returns highest-priority
 - **Add:** `mcp__linear__create_issue(title, description, teamId, priority, estimate, labelIds)`
 - **Complete:** `mcp__linear__update_issue(id, stateId)` — set state to "Done"
-- **Get:** `mcp__linear__get_issue(id)` — by Linear ID (e.g. BUI-5)
+- **Get:** `mcp__linear__get_issue(id)` — by Linear ID (e.g. PROJ-123)
 - **Search:** `mcp__linear__search_issues(query)`
 
 Priority: ≥6→Urgent(1), ≥3→High(2), ≥1.5→Medium(3), else Low(4). Effort→points: XS=1, S=2, M=3, L=5, XL=8.
@@ -35,7 +51,7 @@ Labels: `type:feature`, `type:bug`, `type:tech-debt`, `effort:XS`…`effort:XL`
 
 🔴 URGENT — X items
 ━━━━━━━━━━━━━━━━━━━
-BUI-N  [effort:M]  Title truncated to 70 chars
+PROJ-N  [effort:M]  Title truncated to 70 chars
 
 🟠 HIGH — X items
 ...

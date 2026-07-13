@@ -2,7 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { execFile } = require("child_process");
+const { execFile, spawnSync } = require("child_process");
 
 const DEFAULT_PROVIDERS = ["claude", "codex", "gemini"];
 const DEFAULT_MODE = "parallel";
@@ -617,9 +617,31 @@ function persistReport(report, persistPath, cwd) {
   return resolvedPath;
 }
 
+/**
+ * Every provider is invoked through `acpx`. If it isn't installed, execAcpx
+ * catches the ENOENT and resolves {ok:false} — so the run used to print a
+ * well-formatted report whose only content was "spawn acpx ENOENT" for each
+ * provider, and then exit 0. A "successful" run with nothing in it.
+ *
+ * Fail before doing the work, and say what to install.
+ */
+function preflightAcpx() {
+  const probe = spawnSync("acpx", ["--version"], { stdio: "ignore" });
+  if (probe.error && probe.error.code === "ENOENT") {
+    process.stderr.write(
+      "ensemble-runner: `acpx` is not installed or not on PATH.\n" +
+        "It is required — every provider (claude/codex/gemini) is invoked through it.\n" +
+        "Install it, then re-run. See the Prerequisites section of the README.\n",
+    );
+    process.exit(1);
+  }
+}
+
 async function main() {
   try {
     const options = parseArgs(process.argv.slice(2));
+    preflightAcpx();
+
     const { results } = await runEnsemble(options);
     const report = synthesizeResponses(results, options);
     const persistedPath = persistReport(report, options.persist, options.cwd);
@@ -627,6 +649,16 @@ async function main() {
     process.stdout.write(report);
     if (persistedPath) {
       process.stderr.write(`Saved report to ${persistedPath}\n`);
+    }
+
+    // A report in which every provider failed is not a success. Exiting 0 here
+    // is what let "/bs:strategy produced an empty report" look like it worked.
+    const succeeded = results.filter((r) => r.ok).length;
+    if (succeeded === 0) {
+      process.stderr.write(
+        `ensemble-runner: all ${results.length} provider(s) failed — see "Provider Failures" above.\n`,
+      );
+      process.exit(1);
     }
   } catch (error) {
     process.stderr.write(`${error.message}\n`);

@@ -9,25 +9,43 @@ HYGIENE_WARNINGS=""
 
 # Only run if inside a git repo
 if git rev-parse --git-dir &>/dev/null 2>&1; then
-  # Sync remote state
+
+  # REPORT, NEVER DELETE.
+  #
+  # This hook fires on EVERY session start, in WHATEVER repo you happen to open.
+  # It used to run `git branch -D` on branches whose upstream was gone, and
+  # `git branch -d` on merged ones — silently, with no prompt and no opt-out.
+  #
+  # `-D` is a FORCE delete. If a remote branch was deleted while you still had
+  # unpushed local commits, those commits went with it. A toolkit must never
+  # destroy a user's work as a side effect of opening a session in their repo.
+  #
+  # So: surface the same signal, delete nothing. Anyone who genuinely wants the
+  # old behavior can opt in explicitly — it stays off by default.
+  CLAUDE_KIT_AUTO_PRUNE="${CLAUDE_KIT_AUTO_PRUNE:-0}"
+
+  # Read-only: update remote-tracking refs. Does not touch local branches.
   git fetch --prune --quiet 2>/dev/null || true
 
-  # Delete local branches whose remote tracking branch is gone
   GONE_BRANCHES=$(git branch -vv 2>/dev/null | grep ': gone]' | awk '{print $1}' | tr '\n' ' ')
   if [ -n "$GONE_BRANCHES" ]; then
-    echo "$GONE_BRANCHES" | xargs git branch -D 2>/dev/null || true
-    HYGIENE_WARNINGS="${HYGIENE_WARNINGS}🧹 Pruned local branches (remote deleted): ${GONE_BRANCHES}. "
+    if [ "$CLAUDE_KIT_AUTO_PRUNE" = "1" ]; then
+      echo "$GONE_BRANCHES" | xargs git branch -D 2>/dev/null || true
+      HYGIENE_WARNINGS="${HYGIENE_WARNINGS}🧹 Pruned (CLAUDE_KIT_AUTO_PRUNE=1): ${GONE_BRANCHES}. "
+    else
+      HYGIENE_WARNINGS="${HYGIENE_WARNINGS}🌿 Branches whose remote is gone: ${GONE_BRANCHES}— review, then \`git branch -D\` if you're sure (they may hold unpushed commits). "
+    fi
   fi
 
-  # Delete local branches already merged into main
   MERGED_BRANCHES=$(git branch --merged main 2>/dev/null | grep -v '^\*\|main\|master' | tr '\n' ' ')
   if [ -n "$MERGED_BRANCHES" ]; then
-    echo "$MERGED_BRANCHES" | xargs git branch -d 2>/dev/null || true
-    HYGIENE_WARNINGS="${HYGIENE_WARNINGS}🧹 Deleted merged branches: ${MERGED_BRANCHES}. "
+    if [ "$CLAUDE_KIT_AUTO_PRUNE" = "1" ]; then
+      echo "$MERGED_BRANCHES" | xargs git branch -d 2>/dev/null || true
+      HYGIENE_WARNINGS="${HYGIENE_WARNINGS}🧹 Deleted merged (CLAUDE_KIT_AUTO_PRUNE=1): ${MERGED_BRANCHES}. "
+    else
+      HYGIENE_WARNINGS="${HYGIENE_WARNINGS}🌿 Merged into main: ${MERGED_BRANCHES}— safe to \`git branch -d\`. "
+    fi
   fi
-
-  # Prune stale worktrees
-  git worktree prune 2>/dev/null || true
 
   # Warn if too many local branches (>3 = main + 2 features max)
   BRANCH_COUNT=$(git branch 2>/dev/null | grep -c '.' || echo 0)

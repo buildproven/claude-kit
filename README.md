@@ -1,8 +1,8 @@
 # claude-kit
 
 Free, open-source (MIT) Claude Code toolkit. Quality automation, autonomous
-backlog execution, multi-LLM strategy panels, fleet auditing, commercial
-intelligence, and 14 specialist agents.
+backlog execution, multi-LLM strategy panels, fleet auditing, and 14 specialist
+agents.
 
 **Everything is here.** One repo, MIT, no paid tier, nothing held back.
 
@@ -29,6 +29,24 @@ So this kit doesn't reimplement any of it — the redundant parts were deleted (
 the part the platform doesn't ship: opinionated workflow, and domain judgment
 (`legal`, `market-validation`, `monetize`, `seo`, `review-content`, and the
 strategy panels).
+
+## Prerequisites
+
+|                        | Needed for                                                  |
+| ---------------------- | ----------------------------------------------------------- |
+| **git**                | everything                                                  |
+| **Node ≥ 20**          | the quality gate's scoring scripts (`package.json` engines) |
+| **python3**            | `csc_lint.py` (the command/skill linter)                    |
+| **jq** _(recommended)_ | the hooks; they degrade to `grep` without it, less reliably |
+| **gh** _(optional)_    | PR-aware features in `/bs:quality`, `/bs:status`            |
+| **acpx** _(optional)_  | `/bs:strategy` only — every provider is invoked through it  |
+
+Some skills also need an MCP server and will tell you so rather than failing
+quietly: `/bs:backlog` and `/bs:dev --next` need **Linear**; `/bs:triage` needs
+**Sentry**.
+
+**macOS-only:** the desktop-notification hooks use `osascript`. On Linux/WSL they
+are skipped — everything else works.
 
 ## Quick start
 

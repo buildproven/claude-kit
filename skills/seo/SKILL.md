@@ -51,13 +51,9 @@ curl -X POST "https://api.dataforseo.com/v3/dataforseo_labs/google/competitors_d
 
 ### MCP Server (for complex multi-step analysis)
 
-Full MCP server at: `mcp-servers/dataforseo-mcp-server/`
-
-```bash
-# Run via node
-cd mcp-servers/dataforseo-mcp-server
-DATAFORSEO_LOGIN=<login> DATAFORSEO_PASSWORD=<pass> node dist/index.js
-```
+The kit does not vendor a DataForSEO MCP server. If you want one, install the
+upstream server yourself and point it at your own credentials — the REST calls
+above cover most of what this skill needs without it.
 
 ## Common Tasks
 

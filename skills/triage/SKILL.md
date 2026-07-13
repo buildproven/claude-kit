@@ -16,6 +16,15 @@ Production monitoring (Sentry/Datadog) feeds into agents that triage and propose
 
 ## Prerequisites (one-time setup)
 
+**Check these are actually available before doing anything.** This skill needs the
+Sentry MCP server (for errors) and, to file tickets, the Linear MCP server. If the
+`mcp__sentry__*` tools are missing, say so and stop:
+
+> `/bs:triage` needs the Sentry MCP server, which isn't configured in this session.
+> Set it up per the instructions below, then re-run.
+
+Do not fabricate errors or file tickets against a service you cannot reach.
+
 ### 1. Sentry MCP server
 
 ```bash
@@ -100,7 +109,7 @@ For a specific Sentry issue ID:
 
 1. Pull full issue from Sentry MCP: stack trace, breadcrumbs, user context, release version
 2. Find the repo + commit that shipped the regression (via release tag in Sentry)
-3. `bin/new-worktree fix-sentry-<issue-id>` in the relevant repo
+3. `git worktree add ../fix-sentry-<issue-id> -b fix-sentry-<issue-id>` in the relevant repo
 4. **HUMAN PAUSE GATE**: present a one-paragraph hypothesis of root cause. Ask user to confirm before writing code.
 5. After confirmation, implement minimal fix in worktree
 6. Add regression test that reproduces the error

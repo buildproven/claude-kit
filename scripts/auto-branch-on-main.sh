@@ -1,15 +1,27 @@
 #!/usr/bin/env bash
-# PreToolUse hook for Edit/Write — auto-creates a feature branch if on main/master
-# Exit codes: 0 = allow (after branching), 2 = deny with message
+# PreToolUse hook for Edit/Write — refuse to edit on main/master, suggest a branch.
+# Exit codes: 0 = allow, 2 = deny with message
 #
-# When Claude tries to edit/write files while on main, this hook:
-# 1. Detects the current branch is main/master
-# 2. Auto-creates a feature branch named from the file being edited
-# 3. Allows the edit to proceed on the new branch
+# This hook USED TO run `git checkout -b` itself, silently switching the user's
+# branch mid-edit in whatever repo they happened to be in. Two problems:
+#   1. A toolkit must not mutate a user's working tree as a side effect. If the
+#      branch already existed, `git checkout` would carry uncommitted changes
+#      across it — or fail silently, since every git call was `2>/dev/null`.
+#   2. It surprised people. The fix for "you're about to edit main" is to SAY SO,
+#      not to reach in and move them.
+#
+# So it now denies with a clear message and lets the human (or Claude, with the
+# user watching) create the branch. Same protection, no hidden mutation. This
+# mirrors block-commit-main.sh, which already denies rather than acting.
 
 set -euo pipefail
 
 INPUT=$(cat)
+
+# Explicit opt-out.
+if [ "${CLAUDE_KIT_ALLOW_MAIN_EDITS:-0}" = "1" ]; then
+  exit 0
+fi
 
 # Only act in git repos
 CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
@@ -44,23 +56,18 @@ BASENAME=$(basename "$BASENAME" .json)
 SLUG=$(echo "$BASENAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | sed 's/--*/-/g' | cut -c1-30)
 BRANCH_NAME="feat/${SLUG}"
 
-# Check if branch already exists (maybe from a previous auto-branch in this session)
-if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME" 2>/dev/null; then
-  # Branch exists, switch to it
-  git checkout "$BRANCH_NAME" 2>/dev/null
-else
-  # Create and switch
-  git checkout -b "$BRANCH_NAME" 2>/dev/null
-fi
+# Deny the edit and tell the caller exactly what to run. We do NOT create or
+# switch the branch ourselves — see the header. Exit 2 blocks the tool call and
+# feeds this message back to Claude, which can then create the branch in the
+# open, where the user can see it.
+cat >&2 <<MSG
+Refusing to edit on '$CURRENT_BRANCH'.
 
-# Output context so Claude knows what happened
-cat <<JSON
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "additionalContext": "Auto-branched from $CURRENT_BRANCH to $BRANCH_NAME before editing. All edits will land on $BRANCH_NAME."
-  }
-}
-JSON
+Create a branch first, then retry the edit:
 
-exit 0
+    git checkout -b $BRANCH_NAME
+
+(Set CLAUDE_KIT_ALLOW_MAIN_EDITS=1 to disable this hook.)
+MSG
+
+exit 2

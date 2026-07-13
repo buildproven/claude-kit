@@ -69,14 +69,12 @@ commands/         Slash commands — frontmatter + markdown prompts
   bs/             /bs:* workflow commands (dev, quality, test, plan, ...)
   gh/             /gh:* GitHub (fix-issue)
   cc/             /cc:* Claude Code meta (create-command, update-claudemd)
-  *.md            Top-level: debug, refactor, update-claudemd, bs:scrub
 skills/           Auto-invoked capabilities — each has SKILL.md + optional refs
 agents/           Subagent definitions — code-reviewer, security-auditor
 scripts/          Hooks, CI gates, utilities (bash + node + python)
   __tests__/      Vitest tests (node only) — the ONLY test surface
 config/           Template CLAUDE.md + settings.json for distribution
 eslint-plugin-defensive/   Local ESLint plugin published via path import
-mcp-servers/      Vendored MCP server subtrees (dataforseo, facebook, twitter)
 templates/        Starter files copied by /bs:new and related commands
 .github/workflows/  quality, auto-release, stale-branches, stale-prs
 ```
