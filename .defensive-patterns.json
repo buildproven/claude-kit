@@ -1,6 +1,16 @@
 {
+  "_comment": [
+    "Paths the defensive-pattern checks do not apply to.",
+    "eslint-plugin-defensive: its rule definitions CONTAIN the patterns they describe.",
+    "scripts/__tests__: a test harness catches on purpose — it spawns the script under",
+    "test and asserts on the exit code and stderr, which requires catching the non-zero",
+    "exit. That is the harness doing its job, not production code swallowing an error.",
+    "The catches here do handle the error (they read e.status / e.stdout); EMPTY_CATCH's",
+    "awk line-tracking mis-attributes them to nearby assertion lines."
+  ],
   "excludePaths": [
     "eslint-plugin-defensive/**",
+    "scripts/__tests__/**",
     "node_modules/**",
     "coverage/**",
     "reports/**"
