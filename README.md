@@ -1,8 +1,19 @@
 # claude-kit
 
-Free, open-source (MIT) Claude Code toolkit. Quality automation, autonomous
-backlog execution, multi-LLM strategy panels, fleet auditing, and 14 specialist
-agents.
+**A Claude Code toolkit whose quality gate reads your diff, scores its risk, and
+scales its own review depth to match.**
+
+A doc typo gets a light pass. A change to `.github/workflows/` pins a security floor
+and escalates review to maximum effort — however innocuous the diff looks. One logic
+file taints a mixed changeset.
+
+That is not a prompt saying "please be thorough". It is
+[`risk-score.js`](scripts/risk-score.js) (537 lines), a
+[run governor](scripts/quality-run-governor.js) that caps runaway review loops and
+fails _closed_, and a target resolver — **312 tests, 88% coverage**.
+
+Plus autonomous backlog execution, multi-LLM strategy panels, fleet auditing, and 14
+specialist agents.
 
 **Everything is here.** One repo, MIT, no paid tier, nothing held back.
 

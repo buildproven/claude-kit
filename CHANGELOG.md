@@ -2,6 +2,101 @@
 
 All notable changes to claude-kit are documented here.
 
+## [3.1.0] - 2026-07-13
+
+The kit stops doing things to your repo that you didn't ask for.
+
+### BREAKING — the hooks no longer mutate your working tree
+
+**`session-start-context.sh` was force-deleting your branches.** On every session
+start, in whatever repo you had open, it ran `git branch -D` on every branch whose
+upstream was gone, and `git branch -d` on merged ones. No prompt, no opt-out — and
+it was wired into the _recommended_ plugin install.
+
+`-D` is a force delete. If a remote branch was deleted while you still had unpushed
+local commits, those commits went with it. Install the plugin, open Claude in an
+unrelated repo, lose work.
+
+It now **reports** and deletes nothing:
+
+> 🌿 Branches whose remote is gone: `feature` — review, then `git branch -D` if
+> you're sure (they may hold unpushed commits).
+
+Set `CLAUDE_KIT_AUTO_PRUNE=1` to restore the old behavior. Off by default.
+
+**`auto-branch-on-main.sh` was switching your branch mid-edit.** On any Edit/Write
+while on `main` it ran `git checkout -b feat/<filename>` in your tree — and if the
+branch already existed, a bare `git checkout`, which carries uncommitted changes
+across it. Every git call was `2>/dev/null`, so failures were invisible.
+
+It now **denies with a message** telling you what to run (exit 2) — which is what
+its own header always claimed it did, and what `block-commit-main.sh` already does.
+Set `CLAUDE_KIT_ALLOW_MAIN_EDITS=1` to disable the hook.
+
+### BREAKING — the quality gate now blocks on failing reviews
+
+`BLOCKING_COUNT` was only ever interpolated into the `Reviewed-By` trailer text
+(`findings=2`); it was never compared to zero. Every `MERGE BLOCKED` guard verified
+the review _ran_ — none verified it _passed_. An attendance register, not an exam.
+
+Unresolved BLOCKING findings now abort the merge.
+
+Compounding it: `skills/quality/SKILL.md` was **17,394 tokens against a 5,000-token
+compaction re-attach cap**, so the merge gates — which live late in the file —
+silently ceased to exist after any compaction, i.e. in exactly the long sessions
+where they matter most. The CI check for this was `continue-on-error: true`.
+
+SKILL.md is now split (under 5,000 tokens) and `check-skill-size.sh` is a hard gate.
+
+### BREAKING — defaults that surprised you
+
+- **`fallbackModel` was Opus-first.** A stranger on a metered plan installed this and
+  was billed at Opus rates by default. Now `claude-sonnet-5` → `claude-haiku-4-5`.
+- **`alwaysThinkingEnabled: true`** forced extended thinking on for everyone.
+  Thinking tokens are output tokens. Removed — that's your call, not the toolkit's.
+- **`permissions.allow` blanket-allowed `mcp__*`**, i.e. every tool from every MCP
+  server you might install. Removed.
+
+### Fixed
+
+- **`Bash(chown -R:*)` never fired.** Per the permissions docs, `:*` is only
+  recognized at the _end_ of a pattern; a mid-pattern colon is a literal. So this
+  prefix-matched the string `chown -R:` and matched nothing. A user read a deny rule
+  that appeared to block recursive chown; it didn't.
+- **The flaky detector counted a skipped test as a failure.** Any conditionally
+  skipped test (env var, platform, missing binary) flipped pass↔fail between runs,
+  got flagged flaky, and failed the run with exit 1 — a false-positive generator
+  inside the false-positive detector. Also, its `flips` field reported the number of
+  _runs_, not transitions.
+- **`/bs:strategy` exited 0 with an empty report** when `acpx` (a binary named in no
+  README, installed by nothing) was absent. It now fails loudly with an install
+  pointer, and exits non-zero when every provider fails.
+- **`/bs:backlog`, `/bs:dev --next` and `/bs:triage`** hard-required Linear/Sentry MCP
+  servers with no detection and no message. They now say what's missing and stop.
+- **Notification hooks ran raw `osascript`**, which does not exist on Linux/WSL — so
+  the hook exited 127 on every permission prompt, every idle prompt and every agent
+  completion. Replaced with `scripts/notify.sh` (osascript / notify-send / silent).
+- Removed a vendored third-party **facebook-mcp-server** and a `.env.template` of 20
+  social-media credentials, neither read by any shipped command.
+- Removed maintainer-only references — `keyflash`, `BUI-*` ticket IDs, private doc
+  paths, and one instruction to obtain "written permission from Brett" — that
+  `CONTRIBUTING.md` itself forbids.
+
+### Added
+
+- **Coverage 64.76% → 87.94%** (312 tests, up from 237). The gap was worst in the
+  differentiated part: `risk-score.js` (62% → 84%) and the run governor's `bumpRound`
+  — the round cap that terminates the fix→re-review loop — which had **no tests at
+  all** despite its whole safety property being that it fails closed.
+- Regression tests that pin the three failures above: a real `: gone]` branch holding
+  an unpushed commit must survive; `BLOCKING_COUNT` must be _compared_, not merely
+  interpolated; SKILL.md must stay inside the compaction budget.
+- A **Prerequisites** section in the README. There wasn't one.
+
+### Changed
+
+- `requiredMinimumVersion` 2.1.198 → 2.1.207.
+
 ## [3.0.0] - 2026-07-12
 
 The paid tier is gone. claude-kit is now the whole thing, free and MIT.

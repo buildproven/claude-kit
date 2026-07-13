@@ -4,7 +4,7 @@
     "name": "buildproven",
     "url": "https://github.com/buildproven"
   },
-  "description": "Free MIT Claude Code toolkit — quality automation, autonomous workflow, strategy panels, fleet auditing, founder domain intelligence.",
+  "description": "Free MIT Claude Code toolkit \u2014 quality automation, autonomous workflow, strategy panels, fleet auditing, founder domain intelligence.",
   "plugins": [
     {
       "name": "bs",
@@ -12,8 +12,8 @@
         "source": "github",
         "repo": "buildproven/claude-kit"
       },
-      "description": "claude-kit — quality automation, autonomous backlog execution, multi-LLM strategy panels, fleet auditing, and founder domain intelligence. Free and MIT.",
-      "version": "3.0.0",
+      "description": "claude-kit \u2014 quality automation, autonomous backlog execution, multi-LLM strategy panels, fleet auditing, and founder domain intelligence. Free and MIT.",
+      "version": "3.1.0",
       "author": {
         "name": "buildproven"
       }
