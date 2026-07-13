@@ -150,9 +150,10 @@ describe("extractTestOutcomes", () => {
     ).toEqual({});
   });
 
-  it("maps any non-'passed' status to fail, including skipped", () => {
-    // Notable: skipped/todo tests are recorded as failures, which is what makes
-    // a conditionally-skipped test look flaky.
+  it("records a skipped or todo test as neither pass nor fail", () => {
+    // A skip is not a failure. Recording it as one made any conditionally-skipped
+    // test (gated on an env var, a platform, a missing binary) flip pass<->fail
+    // between runs — so detectFlaky flagged it and failed the run with exit 1.
     const outcomes = extractTestOutcomes({
       testResults: [
         {
@@ -160,13 +161,15 @@ describe("extractTestOutcomes", () => {
           assertionResults: [
             { fullName: "skipped one", status: "skipped" },
             { fullName: "todo one", status: "todo" },
+            { fullName: "real pass", status: "passed" },
+            { fullName: "real fail", status: "failed" },
           ],
         },
       ],
     });
     expect(outcomes).toEqual({
-      "a.test.js::skipped one": "fail",
-      "a.test.js::todo one": "fail",
+      "a.test.js::real pass": "pass",
+      "a.test.js::real fail": "fail",
     });
   });
 });
@@ -227,16 +230,17 @@ describe("detectFlaky", () => {
     expect(detectFlaky(runs)).toEqual([]);
   });
 
-  it("counts flips as the number of recorded statuses, not transitions", () => {
-    // Named `flips`, but the source assigns statuses.length. A test seen 3 times
-    // with a single pass→fail transition still reports flips: 3.
+  it("counts actual pass<->fail transitions, not the number of runs", () => {
+    // Seen 3 times, changed its mind once. `flips` used to report statuses.length
+    // (3), which is what anyone reading test-history.json would take as 3 flips.
     const runs = [
       { outcomes: { "a::t": "pass" } },
       { outcomes: { "a::t": "pass" } },
       { outcomes: { "a::t": "fail" } },
     ];
     const [flaky] = detectFlaky(runs);
-    expect(flaky.flips).toBe(3);
+    expect(flaky.flips).toBe(1);
+    expect(flaky.runs).toBe(3);
   });
 
   it("skips a test present in only one run of the window", () => {
@@ -376,7 +380,8 @@ describe("main", () => {
 
     const saved = writtenHistory(write);
     expect(saved.flaky).toEqual([
-      { test: "a.test.js::works", flips: 2, lastStatus: "fail" },
+      // pass -> fail across 2 runs is ONE flip, not two.
+      { test: "a.test.js::works", flips: 1, runs: 2, lastStatus: "fail" },
     ]);
   });
 
