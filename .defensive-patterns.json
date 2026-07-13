@@ -1,7 +1,6 @@
 {
   "excludePaths": [
     "eslint-plugin-defensive/**",
-    "mcp-servers/**/dist/**",
     "node_modules/**",
     "coverage/**",
     "reports/**"

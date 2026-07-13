@@ -55,7 +55,7 @@ done < <(find ~/Projects -maxdepth 2 -mindepth 2 -type d 2>/dev/null)
 
 **Category C: Testing Gaps**
 
-- Regression tests missing for fixes marked `fix: BUI-XXX`
+- Regression tests missing for fixes marked `fix: PROJ-123`
 - Root cause: test generation not automatic, no checklist
 - Fix level: system refactor
 
@@ -206,7 +206,7 @@ Every fix (bug, lint error, test failure, CI error) must answer these:
 
 **Why not amend?**: Amended commits hide the review history. Future readers can't see what issues were found and how they were fixed.
 
-**Exception**: Config-only changes (README, docs, non-code) in low-risk repos may use `gh pr merge` directly — but only if you have written permission from Brett.
+**Exception**: Config-only changes (README, docs, non-code) in low-risk repos may use `gh pr merge` directly, if your project's policy allows it.
 
 ````
 

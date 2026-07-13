@@ -285,11 +285,11 @@ run_test_linear_complete_item_noop() {
     repo="$(make_linear_only_repo linear-complete)"
     local rel=".claude/evidence"
 
-    (cd "$repo" && bash "$RUNNER" init --evidence-dir "$rel" --until "item:BUI-99") \
+    (cd "$repo" && bash "$RUNNER" init --evidence-dir "$rel" --until "item:PROJ-99") \
         > "$TEST_FIXTURE_ROOT/linear-complete-init.log" 2>&1
 
     local output exit_code=0
-    output="$(cd "$repo" && bash "$RUNNER" complete-item BUI-99 --evidence-dir "$rel" 2>&1)" || exit_code=$?
+    output="$(cd "$repo" && bash "$RUNNER" complete-item PROJ-99 --evidence-dir "$rel" 2>&1)" || exit_code=$?
 
     if [[ "$exit_code" -eq 0 ]] \
         && grep -q "Linear-only mode" <<< "$output" \
@@ -306,11 +306,11 @@ run_test_linear_block_item_noop() {
     repo="$(make_linear_only_repo linear-block)"
     local rel=".claude/evidence"
 
-    (cd "$repo" && bash "$RUNNER" init --evidence-dir "$rel" --until "item:BUI-99") \
+    (cd "$repo" && bash "$RUNNER" init --evidence-dir "$rel" --until "item:PROJ-99") \
         > "$TEST_FIXTURE_ROOT/linear-block-init.log" 2>&1
 
     local output exit_code=0
-    output="$(cd "$repo" && bash "$RUNNER" block-item BUI-99 --evidence-dir "$rel" 2>&1)" || exit_code=$?
+    output="$(cd "$repo" && bash "$RUNNER" block-item PROJ-99 --evidence-dir "$rel" 2>&1)" || exit_code=$?
 
     if [[ "$exit_code" -eq 0 ]] \
         && grep -q "Linear-only mode" <<< "$output" \

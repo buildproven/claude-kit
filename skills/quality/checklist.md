@@ -39,7 +39,7 @@ Number of review agents and Codex usage scale with the resolved risk tier (see `
 - [ ] Performance: Lighthouse > 90, Core Web Vitals green
 - [ ] Architecture: No tech debt, scalable patterns
 - [ ] Code simplification: No unnecessary complexity
-- [ ] Linear: Mark issue Done via mcp**linear**update_issue (if branch references BUI-NNN)
+- [ ] Linear: Mark issue Done via mcp**linear**update_issue (if branch references PROJ-123)
 
 ## Agent Validation (CS-079)
 

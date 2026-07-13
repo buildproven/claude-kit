@@ -40,7 +40,7 @@ describe("parseArgs", () => {
 
     it("extracts pull/410 pattern", () => {
       const r = parseArgs(
-        "--merge https://github.com/buildproven/claude-setup pull/410",
+        "--merge https://github.com/example-org/example-repo pull/410",
       );
       expect(r.pr).toBe(410);
     });

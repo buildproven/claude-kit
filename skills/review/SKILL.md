@@ -128,8 +128,8 @@ Do not silently rewrite the artifact during the review-only command unless the u
 ## Examples
 
 ```bash
-/bs:review content/guides/qa-architect-playbook.md --type product --goal sota
-/bs:review content/guides/BuildProven-Expertise-to-Product-Guide.pdf --type pdf --goal competitive --visual
+/bs:review docs/my-guide.md --type product --goal sota
+/bs:review docs/my-guide.pdf --type pdf --goal competitive --visual
 /bs:review landing-pages/e2p.html --type landing --goal conversion
 /bs:review docs/WELCOME-SEQUENCE.md --type email --goal clarity
 /bs:review docs/offer-memo.md --type doc --goal sota --persist docs/reviews/offer-memo-review.md

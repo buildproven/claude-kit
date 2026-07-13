@@ -95,7 +95,7 @@ If `--next` flag is provided, automatically select the highest-priority item fro
 #   orderBy: "priority",
 #   first: 1
 # )
-# → extract identifier (e.g. BUI-5), title, description
+# → extract identifier (e.g. PROJ-123), title, description
 # → set NAME = identifier, ITEM_DESC = title
 ```
 

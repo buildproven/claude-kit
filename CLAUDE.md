@@ -76,7 +76,6 @@ scripts/          Hooks, CI gates, utilities (bash + node + python)
   __tests__/      Vitest tests (node only) — the ONLY test surface
 config/           Template CLAUDE.md + settings.json for distribution
 eslint-plugin-defensive/   Local ESLint plugin published via path import
-mcp-servers/      Vendored MCP server subtrees (dataforseo, facebook, twitter)
 templates/        Starter files copied by /bs:new and related commands
 .github/workflows/  quality, auto-release, stale-branches, stale-prs
 ```
