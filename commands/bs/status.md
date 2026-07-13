@@ -23,13 +23,13 @@ model: haiku
 ## Recent Activity (Last 7 Days)
 
 ### Commits
-  ✅ 7b00891 feat: enhanced /bs:resume (2 days ago) - you
+  ✅ 7b00891 feat: add retry backoff (2 days ago) - you
   ✅ 4354342 feat: cost tracking (2 days ago) - you
   ✅ f1e7a1a docs: sync improvements (3 days ago) - you
 
 ### Pull Requests
   🟢 #33 OPEN: Search CLAUDE.md patterns (ready to merge)
-  ✅ #32 MERGED: Enhanced /bs:resume
+  ✅ #32 MERGED: Add retry backoff
   ✅ #31 MERGED: Cost tracking
 
 ## Health Status

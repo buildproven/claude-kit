@@ -28,7 +28,7 @@ set -u
 #
 # We extract --args-file from $@ and, if found, REPLACE $@ with the file
 # contents (preserving any other args that were passed alongside).
-# The file is removed once read, so concurrent /bs:merge-train invocations
+# The file is removed once read, so concurrent quality invocations
 # don't pile up stale state.
 ARGS_FILE=""
 REMAINING_ARGS=()

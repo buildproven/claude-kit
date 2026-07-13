@@ -19,7 +19,7 @@ file when `$@` is empty.
 Run this `Bash` call first, exactly as written. The portable
 `mktemp -d` pattern works on both BSD (macOS) and GNU mktemp — a flat
 `mktemp` with a `.txt` template suffix silently fails to expand on BSD,
-producing collisions under concurrent `/bs:merge-train` invocations.
+producing collisions under concurrent quality invocations.
 
 ```bash
 # Portable mktemp: create a unique dir, write args.txt inside.

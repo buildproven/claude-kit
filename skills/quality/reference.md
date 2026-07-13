@@ -50,7 +50,7 @@ exists for a resolved PR/branch, one is materialized in a sibling directory
   notifications to the PARENT session, never inside the fork's turn — so the
   merge gate downstream of review never ran. This was the #1 way `--merge`
   silently failed to complete; confirmed structural (nested Task agents are
-  async too — also breaks inside Task-agent callers like `/bs:merge-train`).
+  async too — also breaks inside Task-agent callers).
   Fixed by running review as a blocking subprocess
   (`scripts/claude-review-companion.sh`, invoked from
   `scripts/quality-run-review.sh`).

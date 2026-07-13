@@ -121,7 +121,7 @@ for cmd_dir in "$CLAUDE_COMMANDS"/*/; do
         for cmd_file in "$cmd_dir"*.md; do
             if [[ -f "$cmd_file" ]]; then
                 cmd_name=$(basename "$cmd_file" .md)
-                # Gemini supports subdirs: bs/execute.toml -> /bs:execute
+                # Gemini supports subdirs: bs/quality.toml -> /bs:quality
                 dst_file="$GEMINI_COMMANDS/$prefix/$cmd_name.toml"
                 SRC_FILES+=("$cmd_file")
                 DST_FILES+=("$dst_file")
@@ -231,4 +231,4 @@ done
 
 echo ""
 echo -e "${GREEN}Gemini CLI can now use these via /<prefix>:<name>${NC}"
-echo -e "Example: ${BLUE}/bs:execute${NC}"
+echo -e "Example: ${BLUE}/bs:quality${NC}"
