@@ -1,5 +1,169 @@
 # Quality Reference — Flags, Scopes, Levels, and Modes
 
+## Target Resolution (Step -1)
+
+**Bug fixed 2026-05-11**: when invoked as `/bs:quality --merge` with PR
+context in the natural-language args (e.g. `#410`, `codex/foo`, or a
+worktree path), prior versions ignored those references and audited
+whatever happened to be in the operator's cwd — producing irrelevant
+reports about uncommitted changes in the primary checkout. Target
+resolution (in `scripts/quality-bootstrap.sh`, calling
+`scripts/quality-target-resolver.js`) honors, in priority order:
+
+1. **Explicit PR number** in args (`#NNN`, `PR NNN`, `pr#NNN`, `pull/NNN`, or
+   `--pr NNN`) — `gh pr view <N> --json headRefName` resolves the head
+   branch, then we look up the local worktree.
+2. **Branch name** in args (e.g. `codex/foo`, `feat/bar`) or via `--branch`
+   — find the local worktree for that branch.
+3. **Worktree path** via `--target-dir <path>` / `--target <path>` /
+   `--worktree <path>` or any bare absolute-path arg that exists.
+4. **cwd is a non-primary worktree** — audit cwd's diff vs base ("I'm
+   working in my feature branch worktree" case).
+5. **Fallback: primary checkout** — only with a LOUD warning. **Forbidden
+   under `--merge`** — `--merge` hard-refuses to fall through to (5).
+
+The parsing + resolution logic is pure and unit-tested at
+`scripts/__tests__/quality-target-resolution.test.js`; the bootstrap script
+calls it as a subprocess and acts on the JSON result. If no local worktree
+exists for a resolved PR/branch, one is materialized in a sibling directory
+(`git worktree add`), so repeat invocations reuse it deterministically.
+
+## Regression History
+
+- **2026-05-11**: target resolution ignored PR/branch args in favor of
+  operator cwd (see above) — fixed by the resolver + priority order.
+- **2026-05-12**: `Skill(args=...)` did not propagate into a forked skill's
+  `$@` — fixed by the `--args-file` bridge in `quality-bootstrap.sh`.
+- **2026-05-13**: cwd and shell vars set in one fenced bash block do not
+  survive into the next — every step must restore `$GIT_ROOT` via the
+  sentinel dance in `quality-load-root.sh`, or silently operate on the
+  fork's raw harness cwd instead of the resolved target.
+- **2026-05-21**: the skill bailed to "investigation mode" after a
+  successful Step -1 resolution because the worktree had uncommitted
+  artifacts from a parallel session — fixed by the explicit "never divert"
+  guard at the top of SKILL.md.
+- **2026-06-04**: a review child could re-enter `/bs:quality` via a hook,
+  agent, or stray `/goal`, causing fork → review child → fork recursion —
+  fixed by the `BS_QUALITY_HEADLESS=1` guard in `quality-bootstrap.sh`.
+- **2026-07-01**: review agents were spawned via the Task tool. Task-tool
+  agents are fire-and-forget — results arrive asynchronously as
+  notifications to the PARENT session, never inside the fork's turn — so the
+  merge gate downstream of review never ran. This was the #1 way `--merge`
+  silently failed to complete; confirmed structural (nested Task agents are
+  async too — also breaks inside Task-agent callers like `/bs:merge-train`).
+  Fixed by running review as a blocking subprocess
+  (`scripts/claude-review-companion.sh`, invoked from
+  `scripts/quality-run-review.sh`).
+- **2026-07-01**: `test-generator` was removed from the agent panel — it had
+  no agent `.md` file anywhere, and an unresolvable agent is marked
+  INCONCLUSIVE by the review runner, which permanently blocks high/critical
+  merges. `pr-test-analyzer` covers test quality instead.
+- **2026-07-03**: two PRs in one night ran 128min/6 commits and 167min/13
+  commits with no circuit breaker on the outer fix→re-review cycle — see
+  "Run Governor — Incident History" below for the full writeup and the
+  mid-poll wall-clock recheck this produced.
+- **2026-07-10**: the review runner (`claude-review-companion.sh`) and the
+  governor script were each resolved by checking exactly two hardcoded
+  paths. On the primary install (`~/.claude/scripts` → an overlay repo that
+  never carried either script) both missed, `bash <missing>` returned 127,
+  and the skill printed "MERGE BLOCKED (rc=127)" after doing all the other
+  work — the "runs everything, then never merges" stall. Fixed by
+  `bs_quality_find_script()` (in `quality-load-root.sh`), which checks every
+  known install layout and fails loud if none match.
+- **2026-07-10**: `TIER`, `AGENT_COUNT`, and `QUALITY_PIPELINE_RAN` were bash
+  variables set in one fenced block (Step 1.8 / Step 2.5) and read in a
+  later block (Step 4) — which always saw the `:-false`/empty default
+  because bash vars don't cross fenced blocks. Consequences: the auto-stamp
+  trailer branch could never fire, and the high/critical Codex XOR gate
+  compared `TIER` against `""` and silently failed OPEN. Fixed by the
+  `BS_QUALITY_RUNSTATE_FILE` sentinel (same pattern as the git-root and
+  governor sentinels) written at the end of Step 2.5's Review Stamp and
+  loaded at the top of Step 4.
+- **2026-07-11 (#70)**: SKILL.md itself was ~17,300 tokens — the auto-
+  compaction re-attach budget is the first 5,000 tokens of each skill (see
+  https://code.claude.com/docs/en/skills#skill-content-lifecycle), so
+  everything from original Step 1 onward (including the round-cap gate,
+  judge synthesis, and all of Step 4's merge gates) was silently dropped
+  after any mid-run compaction — exactly the failure mode most likely in the
+  long sessions `--merge` runs produce. Fixed by this progressive-disclosure
+  split: SKILL.md keeps only the execution flow, the three must-survive
+  gates (round cap, companion/model resolution, Step 4 merge gates), and
+  navigation pointers; everything else moved to `reference.md`,
+  `checklist.md`, or `scripts/`. A CI check (`scripts/check-skill-size.sh`,
+  wired as a hard gate in `.github/workflows/quality.yml`) now fails the
+  build if any `SKILL.md` in the repo exceeds the budget again.
+
+## Step 1.3: Hard Test Gate — Implementation
+
+Tests must exist and pass. This is a hard blocker, not advisory (skip with
+`--skip-tests` for config-only repos). SKILL.md Step 1.3 states the rule;
+the mechanics are here.
+
+**1.3a — Test existence check.** For each changed source file, verify a
+corresponding test file exists at one of `${base}.test${ext}`,
+`${base}.spec${ext}`, `tests/$(basename ${base}).test${ext}`, or
+`__tests__/$(basename ${base}).test${ext}`. Exempt patterns (no test
+required): `*.config.*`, `*.d.ts`, `types.ts`, `index.ts` (re-exports only),
+migration files, seed files.
+
+```bash
+source scripts/quality-load-root.sh
+
+CHANGED_SRC=$(git diff --name-only main...HEAD | grep -E '\.(ts|tsx|js|jsx)$' | grep -v -E '\.(test|spec|d)\.' | grep -v -E '(config|setup|types|index\.d)\.')
+MISSING_TESTS=""
+
+for src in $CHANGED_SRC; do
+  base=$(echo "$src" | sed 's/\.\(ts\|tsx\|js\|jsx\)$//')
+  ext=$(echo "$src" | grep -oE '\.(ts|tsx|js|jsx)$')
+  found=false
+  for pattern in "${base}.test${ext}" "${base}.spec${ext}" "tests/$(basename ${base}).test${ext}" "__tests__/$(basename ${base}).test${ext}"; do
+    if [ -f "$pattern" ]; then found=true; break; fi
+  done
+  if [ "$found" = false ]; then
+    MISSING_TESTS="$MISSING_TESTS\n  - $src"
+  fi
+done
+
+if [ -n "$MISSING_TESTS" ]; then
+  echo "⚠️ Source files without tests:$MISSING_TESTS"
+  # Not a hard fail — surfaced as a coverage signal for the reviewers + human
+  # (there is no test-generator agent; pr-test-analyzer covers test quality).
+  TEST_GAPS="$MISSING_TESTS"
+fi
+```
+
+**1.3b — Run tests (hard gate).**
+
+```bash
+source scripts/quality-load-root.sh
+
+npm test 2>&1
+TEST_EXIT=$?
+
+if [ $TEST_EXIT -ne 0 ]; then
+  echo "❌ Tests failed — attempting auto-fix (up to 3 attempts)"
+  for attempt in 1 2 3; do
+    echo "Fix attempt $attempt/3..."
+    npm test 2>&1
+    TEST_EXIT=$?
+    if [ $TEST_EXIT -eq 0 ]; then break; fi
+  done
+  if [ $TEST_EXIT -ne 0 ]; then
+    echo "❌ HARD FAIL: Tests still failing after 3 fix attempts"
+    echo "Cannot proceed to review agents with broken tests."
+    exit 1
+  fi
+fi
+echo "✅ All tests passing"
+```
+
+**1.3c — Test-gap reporting.** There is no `test-generator` review agent (it
+had no agent definition and was removed from the panel on 2026-07-01;
+`pr-test-analyzer` covers test quality). `$TEST_GAPS` is surfaced in the
+review context and the summary as a coverage signal for the human, not
+handed to an auto-generator. If tests are generated or edited as part of the
+auto-fix loop, re-run `npm test` to verify they pass before continuing.
+
 ## Flags
 
 | Flag                      | Default | Description                                                                                              |
@@ -212,3 +376,113 @@ After quality completes:
 - `--merge`: "Run `/clear` then `/bs:dev` for next feature"
 - Failed: "Run `/debug` to investigate"
 - `--audit`: "Run `/bs:quality` to fix issues found"
+
+## Parallel Sub-Review Mode (`--parallel`, acpx)
+
+When invoked with `--parallel`, fire security, coverage, and perf sub-reviews
+as concurrent acpx sessions instead of running them sequentially inside the
+main loop. Requires acpx >= 0.5.3 (commands are agent-scoped, `acpx claude
+…`, in current versions).
+
+1. **Check acpx availability**: `command -v acpx`. If unavailable, fall back
+   to sequential (log a warning) — see Fallback below.
+2. **Create sessions, then fire prompts concurrently**:
+
+```bash
+source scripts/quality-load-root.sh   # GIT_ROOT resolved, cwd restored
+
+TIMESTAMP=$(date +%s)
+for kind in security coverage perf; do
+  acpx claude sessions new --name "quality-${kind}-${TIMESTAMP}" >/dev/null
+done
+
+acpx claude prompt --no-wait -s "quality-security-${TIMESTAMP}" \
+  "Security review: examine [diff/files] for OWASP top 10, secrets, injection flaws. Output structured findings."
+acpx claude prompt --no-wait -s "quality-coverage-${TIMESTAMP}" \
+  "Coverage review: examine [diff/files] for missing tests, uncovered branches, weak assertions. Output structured findings."
+acpx claude prompt --no-wait -s "quality-perf-${TIMESTAMP}" \
+  "Performance review: examine [diff/files] for N+1 queries, unguarded loops, missing memoization. Output structured findings."
+```
+
+3. **Poll until all sessions complete** (status can stay "running"
+   post-completion, so detect an assistant entry after the latest user entry
+   via history):
+
+```bash
+session_done() {
+  local session="$1"
+  acpx claude sessions read "$session" --tail 4 2>/dev/null \
+    | awk '/^user/{u=NR} /^assistant/{a=NR} END{exit !(a>u)}'
+}
+
+for session in quality-security-${TIMESTAMP} quality-coverage-${TIMESTAMP} quality-perf-${TIMESTAMP}; do
+  for _ in $(seq 1 80); do
+    session_done "$session" && break
+    sleep 3
+  done
+done
+```
+
+4. **Collect outputs** (read session history):
+
+```bash
+SECURITY_OUT=$(acpx claude sessions read "quality-security-${TIMESTAMP}" --tail 1)
+COVERAGE_OUT=$(acpx claude sessions read "quality-coverage-${TIMESTAMP}" --tail 1)
+PERF_OUT=$(acpx claude sessions read "quality-perf-${TIMESTAMP}" --tail 1)
+
+for kind in security coverage perf; do
+  acpx claude sessions close "quality-${kind}-${TIMESTAMP}" >/dev/null 2>&1 || true
+done
+```
+
+5. **Synthesize**: combine all three outputs into the unified quality report
+   (same format as sequential mode). Continue to Step 2 (Agent Result
+   Validation) as normal.
+
+### Fallback
+
+If `acpx` is not installed or any session fails to launch, log:
+
+```
+[quality] acpx unavailable or launch failed — falling back to sequential sub-reviews
+```
+
+Then run security → coverage → perf in order using the standard sequential
+flow.
+
+## Run Governor — Incident History
+
+Two PRs in one night (#529: 128min/6 commits, #532: 167min/13 commits)
+completed with no circuit breaker on 2026-07-03 — `CODEX_ROUNDS` only bounds
+the inner Codex adversarial loop, not the outer cycle of BLOCKING-finding ->
+auto-fix -> re-review across the whole invocation. This led to
+`scripts/quality-run-governor.js`, which tracks a per-invocation JSON
+sentinel (alongside the Step -1 git-root sentinel) with a fix-commit cap, a
+wall-clock cap, and repeated-finding-shape detection (see the script's own
+header comment for the full mechanism).
+
+A follow-up 2026-07-10 finding: the original governor had no _round_
+dimension and was never called on the review leg itself — its three call
+sites were all downstream of the panel. `bump-round` (called immediately
+before every review panel, see SKILL.md Step 2.0) closes that gap: it is the
+governor call that actually terminates the outer fix -> re-review loop, by
+incrementing `rounds_used` and exiting non-zero at `max_review_rounds`
+(default 2). Before that fix, the round cap was a sentence of prose — and
+since the MODEL orchestrates this loop, prose is not a cap.
+
+A further 2026-07-03 finding refined the Codex poll loop specifically: the
+wall-clock governor check only ran _before_ launching a Codex round, not
+_during_ the up-to-25-minute poll for that round to finish. A run that
+tripped its wall-clock cap 1 second into a poll could still wait out the
+full poll deadline (~25 min) before the next check — meaning the advertised
+30-minute wall-clock cap was only a pre-flight check, not a hard cap, and a
+run could reach ~55 minutes total. The mid-poll recheck in
+`quality-codex-review.sh` (checked every 15s inside the poll loop, not just
+before it starts) closes that gap.
+
+**Never make the governor check silently optional.** Every call site fails
+CLOSED when the governor script or its sentinel file is missing or
+unreadable — a bare `if [ -f ... ] && [ -f ... ]; then ... fi` with no `else`
+was independently flagged by 4 review agents across two rounds as
+reintroducing exactly the "circuit breaker quietly stopped breaking" failure
+mode this whole feature exists to prevent.
