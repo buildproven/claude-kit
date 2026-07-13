@@ -10,7 +10,7 @@
 # review never runs. This was the #1 way `--merge` silently failed to
 # complete. It is structural, not a prompting problem — verified empirically:
 # nested Task agents are async too, so this also breaks inside Task-agent
-# callers like /bs:merge-train.
+# callers that invoke quality concurrently.
 #
 # The round-cap gate (bump-round) is NOT in this script — it is called
 # directly from SKILL.md immediately before this script, since it is one of

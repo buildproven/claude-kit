@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ralph-next-run.sh - Phase 2 executable runner for /bs:ralph-next
+# ralph-next-run.sh - Phase 2 executable runner for /bs:ralph
 # Implements graph-state orchestration with local quality checks and evidence logging.
 
 set -euo pipefail
@@ -42,7 +42,7 @@ Notes:
   - Item IDs may use any prefix (CS-, SN-, BP-, etc.).
   - This script performs local quality gates (lint/pattern checks and optional build/security).
   - Repos with no quality scripts (docs, markdown-only) treat quality as passing.
-  - Slash-command execution (/bs:quality or /bs:ralph-dev) is not invoked from shell.
+  - Slash-command execution (/bs:quality or /bs:ralph) is not invoked from shell.
 USAGE_EOF
 }
 
@@ -872,7 +872,7 @@ PACKAGE_JSON="$GIT_ROOT/package.json"
 JS_RUNNER="$(select_js_runner)"
 
 if [[ "$MODE" == "classic" ]]; then
-    log_warn "Classic mode selected. Execute /bs:ralph-dev directly in Claude Code."
+    log_warn "Classic mode selected. Execute /bs:ralph --classic directly in Claude Code."
     exit 0
 fi
 
