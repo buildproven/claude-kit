@@ -118,5 +118,5 @@ If the runner script fails, surface the exact command and error so the shared la
 /bs:strategy "Should we add a free tier?" --context ./docs/strategy/my-strategy.md --providers claude,codex,gemini
 /bs:strategy "React vs Vue for dashboard app" --artifact ./docs/architecture/frontend-options.md --output scorecard --rubric "team fit,complexity,performance,migration risk"
 /bs:strategy "Should we use microservices or monolith?" --mode debate --rounds 2 --output memo
-/bs:strategy "What should BuildProven sell first?" --artifact docs/POSITIONING-MEMO-2026-03-31.md,docs/NICHE-ASSESSMENT-2026-03-31.md --output scorecard --rubric "pain clarity,authority fit,speed to first sale,market size,moat" --persist docs/strategic-notes/offer-decision.md
+/bs:strategy "Which offer should we sell first?" --artifact docs/positioning-memo.md,docs/niche-assessment.md --output scorecard --rubric "pain clarity,authority fit,speed to first sale,market size,moat" --persist docs/strategic-notes/offer-decision.md
 ```

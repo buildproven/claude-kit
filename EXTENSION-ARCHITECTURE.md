@@ -32,8 +32,8 @@ PR in your private overlay. No manual syncing.
 
 Everything. Core dev commands (`/bs:dev`, `/bs:quality`, `/bs:test`), autonomous
 workflow (`/bs:ralph`), strategy (`/bs:strategy`), fleet management (`/bs:sota`,
-`/bs:sentry`, `/bs:steward`), domain skills (`legal`, `market-validation`,
-`monetize`, `seo`), 14 agents, hooks and CI gates.
+`/bs:sentry`, `/bs:steward`), domain skills (`legal`, `monetize`, `seo`),
+14 agents, hooks and CI gates.
 
 **Install and use as-is.** Contribute back if you build something useful to
 everyone.

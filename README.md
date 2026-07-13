@@ -22,7 +22,7 @@ specialist agents.
 | Dir         | Contents                                                           |
 | ----------- | ------------------------------------------------------------------ |
 | `commands/` | 33 `/bs:*` + `/gh:*` + `/cc:*` commands                            |
-| `skills/`   | 36 skills — quality, autonomous workflow, strategy, domain         |
+| `skills/`   | 34 skills — quality, autonomous workflow, strategy, domain         |
 | `agents/`   | 14 specialist agents                                               |
 | `scripts/`  | Hooks, lint, branch-protection, quality governor, review companion |
 | `config/`   | Generic `CLAUDE.md` and `settings.json` templates                  |
@@ -38,8 +38,7 @@ Workflow tool; worktree isolation; automatic memory; `/loop` + cron + Routines;
 So this kit doesn't reimplement any of it — the redundant parts were deleted (see
 [the table below](#removed--claude-code-now-does-these-natively)). What remains is
 the part the platform doesn't ship: opinionated workflow, and domain judgment
-(`legal`, `market-validation`, `monetize`, `seo`, `review-content`, and the
-strategy panels).
+(`legal`, `monetize`, `seo`, `review-content`, and the strategy panels).
 
 ## Prerequisites
 
@@ -136,7 +135,6 @@ plugin.
 /bs:sentry      Fleet quality audit — 8 gates across every project
 /bs:triage      Sentry errors → cluster → Linear tickets → fix PR
 /bs:patterns    Search CLAUDE.md conventions across projects
-/bs:office-hours YC-style forcing questions
 /bs:recover-quality  Audit + fix quality regression, integrate learnings
 /bs:verify-claim Extract claims, verify against primary sources
 /bs:legal       Legal review for software founders
@@ -144,8 +142,8 @@ plugin.
 
 ### Domain intelligence
 
-Skills, invoked in conversation: `market-validation`, `monetize`, `seo`,
-`review-content`, `agent-browser`.
+Skills, invoked in conversation: `monetize`, `seo`, `review-content`,
+`agent-browser`.
 
 Agents: `business-panel-experts`, `competitive-analyst`, `critic`,
 `github-issue-fixer`, `command-creator`, `seo-specialist`.
@@ -175,11 +173,9 @@ Skills auto-invoke from natural language — you don't have to type a command.
 `webapp-testing` (Apache 2.0), `visualise`
 
 **Autonomous & strategy** — `ralph`, `strategy`, `review`, `prd`, `backlog`,
-`sota`, `steward`, `triage`, `patterns`, `recover-quality`, `verify-claim`,
-`office-hours`
+`sota`, `steward`, `triage`, `patterns`, `recover-quality`, `verify-claim`
 
-**Domain** — `legal`, `market-validation`, `monetize`, `seo`, `review-content`,
-`agent-browser`
+**Domain** — `legal`, `monetize`, `seo`, `review-content`, `agent-browser`
 
 Just ask: `"Run the quality skill"`, `"Use the visualise skill to diagram this"`.
 

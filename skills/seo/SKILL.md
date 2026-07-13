@@ -57,11 +57,11 @@ above cover most of what this skill needs without it.
 
 ## Common Tasks
 
-### Keyword Research for BuildProven
+### Keyword Research
 
-- Target keywords around: "vibe coding", "ai product builder", "non-developer ai tools", "domain expertise ai"
-- Location code 2840 = United States
-- Check search volume, competition, CPC
+- Start from the terms your buyers actually type, not your internal product vocabulary
+- Check search volume, competition, and CPC for each candidate
+- Location codes are DataForSEO-specific (e.g. `2840` = United States)
 
 ### Competitor Analysis
 

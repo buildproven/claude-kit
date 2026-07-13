@@ -58,7 +58,6 @@ the worktree, and pop the stash there — do not proceed in-place.
 ## Strategy & Reflection
 
 ```bash
-/bs:office-hours "idea"          # YC forcing questions for product evaluation
 /bs:strategy "question"          # Multi-model advisory panel
 /bs:status                       # Catch up after time away
 ```
