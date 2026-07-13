@@ -46,7 +46,18 @@ function extractTestOutcomes(results) {
     const file = suite.name || suite.file || "unknown";
     for (const test of suite.assertionResults || []) {
       const key = `${file}::${test.fullName || test.title}`;
-      outcomes[key] = test.status === "passed" ? "pass" : "fail";
+
+      // A skipped test is NOT a failure. Treating every non-"passed" status as
+      // "fail" made any conditionally-skipped test (gated on an env var, a
+      // platform, a missing binary) flip pass<->fail between runs — so the flaky
+      // detector flagged it and failed the run with exit 1. Skips are simply not
+      // evidence either way, so they are recorded as neither.
+      if (test.status === "passed") {
+        outcomes[key] = "pass";
+      } else if (test.status === "failed") {
+        outcomes[key] = "fail";
+      }
+      // pending / skipped / todo: no signal, no entry.
     }
   }
   return outcomes;
@@ -87,9 +98,19 @@ function detectFlaky(runs) {
     const hasPass = statuses.includes("pass");
     const hasFail = statuses.includes("fail");
     if (hasPass && hasFail) {
+      // Count actual pass<->fail transitions. This used to be statuses.length —
+      // the number of runs the test appeared in, not the number of times it
+      // changed its mind. A test seen 3 times with one transition reported
+      // "flips: 3", which is what anyone reading test-history.json would take
+      // as three flips.
+      let flips = 0;
+      for (let i = 1; i < statuses.length; i++) {
+        if (statuses[i] !== statuses[i - 1]) flips++;
+      }
       flaky.push({
         test: name,
-        flips: statuses.length,
+        flips,
+        runs: statuses.length,
         lastStatus: statuses[statuses.length - 1],
       });
     }
