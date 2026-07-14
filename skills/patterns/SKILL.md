@@ -16,22 +16,22 @@ Search accumulated patterns and best practices in CLAUDE.md files (global + proj
 /bs:patterns "deployment"              # Search for deployment patterns
 /bs:patterns "bash" --interactive      # Interactive fzf search
 /bs:patterns --all                     # Show all section headers
-/bs:patterns "auth" --all-projects     # Search all projects (CS-072)
+/bs:patterns "auth" --all-projects     # Search all projects
 /bs:patterns "auth" --project my-app  # Search a specific project
 /bs:patterns --deprecated              # Include deprecated patterns
 /bs:patterns --since 2026-01-01        # Only patterns added since date
 /bs:patterns --list-meta               # Show all patterns with metadata
 /bs:patterns --list-projects           # List all registered projects
-/bs:patterns --learn                   # Auto-learn patterns from codebase (CS-089)
+/bs:patterns --learn                   # Auto-learn patterns from codebase
 /bs:patterns --learn --dry-run         # Preview what would be learned
 ```
 
-## Pattern Metadata Schema (CS-071)
+## Pattern Metadata Schema
 
 Patterns in CLAUDE.md can include metadata using HTML comment markers:
 
 ```markdown
-<!-- pattern:id=P-001 added=2026-01-15 status=active source=CS-055 -->
+<!-- pattern:id=P-001 added=2026-01-15 status=active source=manual -->
 
 ### Pattern Name
 
@@ -49,17 +49,17 @@ Pattern description...
 | `--interactive`   | Use fzf for interactive browsing                    |
 | `--all`           | Show all section headers (no filtering)             |
 | `--global`        | Search only global CLAUDE.md                        |
-| `--project NAME`  | Search specific project by name (CS-072)            |
-| `--all-projects`  | Search CLAUDE.md in all projects (CS-072)           |
+| `--project NAME`  | Search specific project by name                     |
+| `--all-projects`  | Search CLAUDE.md in all projects                    |
 | `--rank`          | Sort results by relevance score                     |
 | `--deprecated`    | Include deprecated patterns (hidden by default)     |
 | `--since DATE`    | Only show patterns added on/after DATE (YYYY-MM-DD) |
 | `--status STATUS` | Filter by status: active, deprecated, experimental  |
 | `--list-meta`     | List all patterns with their metadata               |
-| `--list-projects` | List all registered/discovered projects (CS-072)    |
-| `--no-cache`      | Bypass search index cache (CS-072)                  |
-| `--refresh-cache` | Force cache refresh (CS-072)                        |
-| `--learn`         | Auto-learn patterns from codebase (CS-089)          |
+| `--list-projects` | List all registered/discovered projects             |
+| `--no-cache`      | Bypass search index cache                           |
+| `--refresh-cache` | Force cache refresh                                 |
+| `--learn`         | Auto-learn patterns from codebase                   |
 | `--dry-run`       | Preview what would be learned (use with `--learn`)  |
 
 ---
@@ -105,7 +105,7 @@ PROJECT_CLAUDE="./CLAUDE.md"
 
 ```bash
 parse_pattern_metadata() {
-  # Parse <!-- pattern:id=P-001 added=2026-01-15 status=active source=CS-055 -->
+  # Parse <!-- pattern:id=P-001 added=2026-01-15 status=active source=manual -->
   # Sets: PATTERN_ID, PATTERN_ADDED, PATTERN_STATUS, PATTERN_SOURCE
 }
 
@@ -147,7 +147,7 @@ interactive_search() {
 ```bash
 case "$MODE" in
   learn)
-    # CS-089: Run scripts/learn-patterns.sh [--dry-run] on current directory
+    # Run scripts/learn-patterns.sh [--dry-run] on current directory
     ;;
   search)
     if all-projects + rank: search_all_projects_ranked
@@ -163,7 +163,7 @@ esac
 
 ---
 
-## Cross-Project Search (CS-072)
+## Cross-Project Search
 
 ```bash
 /bs:patterns "authentication" --all-projects        # Search all projects
@@ -176,7 +176,7 @@ esac
 
 **Ranking:** +1 per match, +10 for header matches. Results sorted highest first.
 
-## Auto-Learn Patterns from Codebase (CS-089)
+## Auto-Learn Patterns from Codebase
 
 ```bash
 /bs:patterns --learn                   # Generate .defensive-patterns.json
@@ -185,7 +185,7 @@ esac
 
 **Discovers:** Auth middleware (withAuth, requireAuth, protectedProcedure), safe parse helpers (.safeParse, safeJsonParse), public routes, error handling patterns (try/catch, Result pattern, ErrorBoundary), React callback patterns (useCallback vs inline).
 
-## Pattern Versioning & Lifecycle (CS-071)
+## Pattern Versioning & Lifecycle
 
 - **active** - Current best practice, recommended
 - **experimental** - Being tested, may change

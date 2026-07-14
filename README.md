@@ -93,7 +93,7 @@ cd ~/Projects/claude-kit
 ```
 
 This symlinks `commands/`, `skills/`, `agents/` and `scripts/` into `~/.claude/`.
-`scripts/` is load-bearing — `config/settings.json` wires 14 hooks to
+`scripts/` is load-bearing — `config/settings.json` wires 17 hooks to
 `$HOME/.claude/scripts/*.sh`, so without it every hook silently no-ops. It works,
 but skills land unprefixed, so they can shadow Claude Code built-ins. Prefer the
 plugin.

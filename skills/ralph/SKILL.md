@@ -55,6 +55,7 @@ ralph is invoked from claude-kit (parser at `scripts/`) or a downstream consumer
 ```bash
 resolve_parser() {
   local candidates=(
+    "${CLAUDE_PLUGIN_ROOT:-}/scripts/inline-list-parser.js"
     "${KIT_REPO:-}/scripts/inline-list-parser.js"
     "$(git rev-parse --show-toplevel 2>/dev/null)/core/core/scripts/inline-list-parser.js"
     "$(git rev-parse --show-toplevel 2>/dev/null)/core/scripts/inline-list-parser.js"

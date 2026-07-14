@@ -9,18 +9,31 @@ License, Version 2.0 and retain their original license terms.
 Apache License 2.0 components
 --------------------------------------------------------------------------------
 
-The following skills originate from Anthropic's publicly released Claude skills
-and are redistributed under the Apache License, Version 2.0. Each retains the
-full, unmodified license text alongside it:
+The following skills are derived from Anthropic's publicly released Claude skills
+(https://github.com/anthropics/skills) and are redistributed under the Apache
+License, Version 2.0. Each retains the full upstream license text alongside it:
 
-  skills/frontend-design/    — see skills/frontend-design/LICENSE.txt
-  skills/webapp-testing/     — see skills/webapp-testing/LICENSE.txt
+  skills/frontend-design/    Copyright 2026 Anthropic, PBC.
+                             see skills/frontend-design/LICENSE.txt
+  skills/webapp-testing/     Copyright 2026 Anthropic, PBC.
+                             see skills/webapp-testing/LICENSE.txt
 
 A copy of the Apache License, Version 2.0 is available at:
   http://www.apache.org/licenses/LICENSE-2.0
 
-These components have been modified from their originals. Modifications are
-tracked in this repository's git history.
+BOTH SKILLS HAVE BEEN MODIFIED from their originals. Per Apache-2.0 §4(b), each
+modified file carries a prominent notice at the top of its SKILL.md stating what
+was changed. In summary:
+
+  frontend-design  — added auto_invoke/context frontmatter; added an AI-ism
+                     denylist and a mandatory self-review pass; added the
+                     "Design Reference Data" section and data/*.csv files.
+  webapp-testing   — added auto_invoke/context frontmatter; reformatted.
+
+EXCEPTION — skills/frontend-design/data/*.csv (colors, typography, styles,
+charts, products, ux-guidelines) are original buildproven work. They do not
+exist upstream and are NOT covered by the Apache-2.0 license of the surrounding
+skill; they are MIT, like the rest of this repository.
 
 --------------------------------------------------------------------------------
 Dependencies

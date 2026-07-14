@@ -26,7 +26,7 @@ Do **not** use this for:
 - raw architecture review
 - PR review
 
-For code, use `/bs:quality` or `/gh:review-pr`.
+For code, use `/bs:quality` or `/code-review`.
 
 Use this skill as the rubric source for `/bs:review`. The command is the entrypoint; this skill supplies the review frame and artifact-specific standards.
 

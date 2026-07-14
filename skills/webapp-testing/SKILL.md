@@ -6,6 +6,16 @@ description: Toolkit for interacting with and testing local web applications usi
 license: Complete terms in LICENSE.txt
 ---
 
+<!--
+  Derived from the `webapp-testing` skill in https://github.com/anthropics/skills
+  Copyright 2026 Anthropic, PBC. Licensed under the Apache License, Version 2.0 —
+  full terms in LICENSE.txt alongside this file.
+
+  MODIFIED by buildproven from the original:
+    - added `auto_invoke` / `context` frontmatter
+    - reformatted for this repository's conventions
+-->
+
 # Web Application Testing
 
 To test local web applications, write native Python Playwright scripts.

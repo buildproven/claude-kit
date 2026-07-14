@@ -17,7 +17,7 @@ Use this when you want a serious collaborative review of a built artifact before
 - slide decks
 - general long-form written assets
 
-This is **not** a code-review command. For code, use `/bs:quality` or `/gh:review-pr`.
+This is **not** a code-review command. For code, use `/bs:quality` or `/code-review`.
 
 ## Review Standard
 

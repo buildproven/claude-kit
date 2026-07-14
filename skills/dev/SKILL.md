@@ -125,6 +125,7 @@ markdown task list. If yes, switch to **list mode** (Step 9 below).
 # at core/), or a downstream consumer.
 resolve_parser() {
   local candidates=(
+    "${CLAUDE_PLUGIN_ROOT:-}/scripts/inline-list-parser.js"
     "${KIT_REPO:-}/scripts/inline-list-parser.js"
     "$(git rev-parse --show-toplevel 2>/dev/null)/core/core/scripts/inline-list-parser.js"
     "$(git rev-parse --show-toplevel 2>/dev/null)/core/scripts/inline-list-parser.js"
@@ -513,6 +514,7 @@ When `--alt` is passed, after Claude generates its approach (Step 4), run the sh
 ```bash
 # Resolve runner via the same candidates as the inline-list parser
 for p in \
+  "${CLAUDE_PLUGIN_ROOT:-}/scripts/ensemble-runner.js" \
   "${KIT_REPO:-}/scripts/ensemble-runner.js" \
   "$(git rev-parse --show-toplevel 2>/dev/null)/core/core/scripts/ensemble-runner.js" \
   "$(git rev-parse --show-toplevel 2>/dev/null)/core/scripts/ensemble-runner.js" \

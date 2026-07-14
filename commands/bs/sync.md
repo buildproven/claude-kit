@@ -13,7 +13,7 @@ model: haiku
 
 Verifies and repairs the symlinks that connect this repo to `~/.claude/`.
 
-This matters more than it looks: `config/settings.json` wires 14 hooks to
+This matters more than it looks: `config/settings.json` wires 17 hooks to
 `$HOME/.claude/scripts/*.sh`. If `scripts/` is not linked, **every hook silently
 no-ops** — no error, no output, just no safety rails. `--check` catches exactly that.
 
