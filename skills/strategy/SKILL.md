@@ -38,15 +38,20 @@ Use the shared runner instead of embedding provider-specific logic in this comma
 Base form:
 
 ```bash
-# Resolve the runner rather than assuming a checkout location; the last
-# candidate is the symlink install.sh creates.
-for c in \
-  "${CLAUDE_KIT_ROOT:-}/scripts/ensemble-runner.js" \
-  "${CLAUDE_PLUGIN_ROOT:-}/scripts/ensemble-runner.js" \
-  "$HOME/.claude/scripts/ensemble-runner.js"; do
-  if [ -n "$c" ] && [ -f "$c" ]; then RUNNER="$c"; break; fi
+# Resolve via the kit's canonical resolver — it covers every install layout
+# (plugin, ~/.claude symlink, bare clone). Resolve in the SAME block that runs
+# the script: each Bash tool call is a fresh shell.
+for c in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/kit-find-script.sh}" \
+         "${CLAUDE_KIT_ROOT:+$CLAUDE_KIT_ROOT/scripts/kit-find-script.sh}" \
+         "$HOME/.claude/scripts/kit-find-script.sh" \
+         "$HOME/.claude/plugins/bs/scripts/kit-find-script.sh" \
+         "./scripts/kit-find-script.sh"; do
+  [ -n "$c" ] && [ -f "$c" ] && { . "$c"; break; }
 done
-[ -n "${RUNNER:-}" ] || { echo "strategy: cannot locate ensemble-runner.js" >&2; exit 1; }
+command -v bs_kit_find_script >/dev/null \
+  || { echo "strategy: cannot locate kit-find-script.sh — is claude-kit installed?" >&2; exit 1; }
+RUNNER="$(bs_kit_find_script ensemble-runner.js)" \
+  || { echo "strategy: cannot locate ensemble-runner.js" >&2; exit 1; }
 
 node "$RUNNER" \
   "<question>" \

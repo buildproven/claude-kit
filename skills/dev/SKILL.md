@@ -219,15 +219,19 @@ else
 fi
 
 # Initialize HUD state for live dashboard display (CS-061).
-# Optional: if the script can't be resolved, skip the HUD rather than failing.
-for c in \
-  "${CLAUDE_KIT_ROOT:-}/scripts/hud-update.sh" \
-  "${CLAUDE_PLUGIN_ROOT:-}/scripts/hud-update.sh" \
-  "$HOME/.claude/scripts/hud-update.sh"; do
-  if [ -n "$c" ] && [ -f "$c" ]; then HUD_SCRIPT="$c"; break; fi
+# The HUD is optional decoration — if it can't be resolved, note it on stderr and
+# carry on. Never fail /bs:dev because a status dashboard is missing.
+for c in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/kit-find-script.sh}" \
+         "${CLAUDE_KIT_ROOT:+$CLAUDE_KIT_ROOT/scripts/kit-find-script.sh}" \
+         "$HOME/.claude/scripts/kit-find-script.sh" \
+         "$HOME/.claude/plugins/bs/scripts/kit-find-script.sh" \
+         "./scripts/kit-find-script.sh"; do
+  [ -n "$c" ] && [ -f "$c" ] && { . "$c"; break; }
 done
-if [ -n "${HUD_SCRIPT:-}" ]; then
+if command -v bs_kit_find_script >/dev/null && HUD_SCRIPT="$(bs_kit_find_script hud-update.sh)"; then
   "$HUD_SCRIPT" --start --command "/bs:dev" --item "$NAME" --status "running"
+else
+  echo "dev: hud-update.sh not found — skipping HUD (cosmetic only)" >&2
 fi
 ```
 

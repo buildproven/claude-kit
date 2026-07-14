@@ -29,16 +29,20 @@ Monitors and enforces quality gates across the entire fleet. Runs automatically 
 Run the fleet quality audit:
 
 ```bash
-# Resolve the kit root rather than assuming a checkout location. The last
-# candidate is the installed symlink (install.sh links scripts/ into ~/.claude),
-# so this works for a plain `./install.sh` user with no env vars set.
-for c in \
-  "${CLAUDE_KIT_ROOT:-}/scripts/fleet-quality-audit.sh" \
-  "${CLAUDE_PLUGIN_ROOT:-}/scripts/fleet-quality-audit.sh" \
-  "$HOME/.claude/scripts/fleet-quality-audit.sh"; do
-  if [ -n "$c" ] && [ -f "$c" ]; then AUDIT="$c"; break; fi
+# Resolve via the kit's canonical resolver — it covers every install layout
+# (plugin, ~/.claude symlink, bare clone). Resolve in the SAME block that runs
+# the script: each Bash tool call is a fresh shell.
+for c in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/kit-find-script.sh}" \
+         "${CLAUDE_KIT_ROOT:+$CLAUDE_KIT_ROOT/scripts/kit-find-script.sh}" \
+         "$HOME/.claude/scripts/kit-find-script.sh" \
+         "$HOME/.claude/plugins/bs/scripts/kit-find-script.sh" \
+         "./scripts/kit-find-script.sh"; do
+  [ -n "$c" ] && [ -f "$c" ] && { . "$c"; break; }
 done
-[ -n "${AUDIT:-}" ] || { echo "sentry: cannot locate fleet-quality-audit.sh" >&2; exit 1; }
+command -v bs_kit_find_script >/dev/null \
+  || { echo "sentry: cannot locate kit-find-script.sh — is claude-kit installed?" >&2; exit 1; }
+AUDIT="$(bs_kit_find_script fleet-quality-audit.sh)" \
+  || { echo "sentry: cannot locate fleet-quality-audit.sh" >&2; exit 1; }
 bash "$AUDIT"
 ```
 
@@ -61,25 +65,37 @@ For each project below 8/8, identify which gates are failing:
 
 ### Step 3: Auto-Fix
 
-For each failing project:
+For each failing project, run the block below **as a single Bash call**, substituting
+the project name from the audit table. The `cd`, the resolve, and the `bash` must
+share one shell: each Bash tool call is a fresh shell, so a variable set in an
+earlier block is empty by the time a later block runs it (that would silently
+`bash ""` and skip the bootstrap while the run marched on to open a PR).
 
-1. `cd` into the project directory (the audit reports each project's path)
-2. `git checkout main && git pull`
-3. `git checkout -b chore/sentry-quality-fix`
-4. Run the bootstrap for gates 1-3, 5-8. Resolve it in the SAME shell that runs
-   it — each bash block is a fresh shell, so a path resolved in an earlier block
-   is gone by the time you get here:
+`fleet-quality-audit.sh` reports project names relative to `$FLEET_PROJECTS_DIR`
+(default `$HOME/Projects`), not absolute paths — so rebuild the path from that base.
 
-   ```bash
-   for c in \
-     "${CLAUDE_KIT_ROOT:-}/scripts/bootstrap-ai-gates.sh" \
-     "${CLAUDE_PLUGIN_ROOT:-}/scripts/bootstrap-ai-gates.sh" \
-     "$HOME/.claude/scripts/bootstrap-ai-gates.sh"; do
-     if [ -n "$c" ] && [ -f "$c" ]; then BOOTSTRAP="$c"; break; fi
-   done
-   [ -n "${BOOTSTRAP:-}" ] || { echo "sentry: cannot locate bootstrap-ai-gates.sh" >&2; exit 1; }
-   bash "$BOOTSTRAP"
-   ```
+```bash
+PROJECT="<name from the audit table>"
+cd "${FLEET_PROJECTS_DIR:-$HOME/Projects}/$PROJECT" || { echo "sentry: no such project: $PROJECT" >&2; exit 1; }
+
+git checkout main && git pull
+git checkout -b chore/sentry-quality-fix
+
+for c in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/kit-find-script.sh}" \
+         "${CLAUDE_KIT_ROOT:+$CLAUDE_KIT_ROOT/scripts/kit-find-script.sh}" \
+         "$HOME/.claude/scripts/kit-find-script.sh" \
+         "$HOME/.claude/plugins/bs/scripts/kit-find-script.sh"; do
+  [ -n "$c" ] && [ -f "$c" ] && { . "$c"; break; }
+done
+command -v bs_kit_find_script >/dev/null \
+  || { echo "sentry: cannot locate kit-find-script.sh — is claude-kit installed?" >&2; exit 1; }
+BOOTSTRAP="$(bs_kit_find_script bootstrap-ai-gates.sh)" \
+  || { echo "sentry: cannot locate bootstrap-ai-gates.sh" >&2; exit 1; }
+
+bash "$BOOTSTRAP"   # gates 1-3, 5-8
+```
+
+Then, still per project:
 
 5. For gate 4 (imports): `npm install -D eslint-plugin-n` and add to eslint config
 6. Verify fixes: run `npm run lint`, check gate files exist

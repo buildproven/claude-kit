@@ -47,22 +47,41 @@ bs_quality_root_file() {
 # "runs everything, then never merges" stall. Never resolve a kit script by
 # guessing two paths again: call this, and fail loudly if it returns nothing.
 #
+# The resolver itself now lives in kit-find-script.sh so that callers OUTSIDE
+# the quality skill (/bs:review, /bs:strategy, /bs:sentry, /bs:dev) can use the
+# same logic without inheriting this file's cd-to-git-root side effect. This
+# function is kept as a thin alias so existing quality-skill callers are
+# unchanged. One resolution contract, not two.
+#
 # Echoes the resolved absolute path and returns 0, or returns 1 (silent) so
 # the caller owns the error message.
-bs_quality_find_script() {
-  local name="$1" c
-  for c in \
-    "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$name}" \
-    "${CLAUDE_KIT_ROOT:+$CLAUDE_KIT_ROOT/scripts/$name}" \
-    "$HOME/.claude/scripts/$name" \
-    "$HOME/.claude/plugins/bs/scripts/$name" \
-    "$GIT_ROOT/scripts/$name" \
-    "$GIT_ROOT/core/scripts/$name"
-  do
-    [ -n "$c" ] && [ -f "$c" ] && { printf '%s' "$c"; return 0; }
-  done
-  return 1
-}
+# Sibling candidate: kit-find-script.sh ships next to this file. ${BASH_SOURCE[0]}
+# is a bashism (empty under zsh), so fall back to $0 and then to the repo root —
+# this file is sourced by bash in every real path, but never trust one expansion.
+_self="${BASH_SOURCE[0]:-$0}"
+_sib=""
+[ -n "$_self" ] && [ -f "$_self" ] && _sib="$(cd "$(dirname "$_self")" && pwd)/kit-find-script.sh"
+_repo="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+
+for _c in \
+  "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/kit-find-script.sh}" \
+  "${CLAUDE_KIT_ROOT:+$CLAUDE_KIT_ROOT/scripts/kit-find-script.sh}" \
+  "$HOME/.claude/scripts/kit-find-script.sh" \
+  "$HOME/.claude/plugins/bs/scripts/kit-find-script.sh" \
+  "$_sib" \
+  "${_repo:+$_repo/scripts/kit-find-script.sh}"
+do
+  # shellcheck source=/dev/null  # path is resolved at runtime by design
+  [ -n "$_c" ] && [ -f "$_c" ] && { . "$_c"; break; }
+done
+unset _c _self _sib _repo
+
+if ! command -v bs_kit_find_script >/dev/null 2>&1; then
+  echo "❌ cannot locate kit-find-script.sh (claude-kit install is incomplete)" >&2
+  return 1 2>/dev/null || exit 1
+fi
+
+bs_quality_find_script() { bs_kit_find_script "$@"; }
 
 CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
 GIT_ROOT=""

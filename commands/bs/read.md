@@ -27,11 +27,27 @@ Present a brief summary (5-8 lines max) so the user confirms it was read correct
 Read these files to understand the current configuration:
 
 ```bash
-# Global config — the user's installed CLAUDE.md, not a kit checkout
-cat "$HOME/.claude/CLAUDE.md" 2>/dev/null
+# The user's installed config — not a kit checkout. Absence must be LOUD: if
+# both files are missing and we silently print nothing, the gap analysis below
+# runs against an empty config and confidently reports every insight as "not
+# covered" — fabricated gaps, then edits proposed against a config never read.
+FOUND=0
 
-# Project CLAUDE.md (session learnings, workflows), if the cwd has one
-cat ./CLAUDE.md 2>/dev/null
+if [ -f "$HOME/.claude/CLAUDE.md" ]; then
+  echo "--- ~/.claude/CLAUDE.md ---"; cat "$HOME/.claude/CLAUDE.md"; FOUND=1
+fi
+
+# Project CLAUDE.md — resolve from the repo root, not the cwd, since Claude Code
+# loads the root one and /bs:read may be invoked from a subdirectory.
+PROJ="$(git rev-parse --show-toplevel 2>/dev/null)/CLAUDE.md"
+if [ -f "$PROJ" ]; then
+  echo "--- $PROJ ---"; cat "$PROJ"; FOUND=1
+fi
+
+[ "$FOUND" -eq 1 ] || {
+  echo "read: no CLAUDE.md found (checked ~/.claude/CLAUDE.md and the repo root)." >&2
+  echo "      Say so explicitly — do NOT infer gaps from an empty config." >&2
+}
 ```
 
 For each key insight from the article, assess:
