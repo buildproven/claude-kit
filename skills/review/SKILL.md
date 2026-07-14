@@ -86,7 +86,17 @@ Use the artifact file(s) directly when possible. If the artifact requires extrac
 Use the shared runner:
 
 ```bash
-node ~/Projects/claude-kit/scripts/ensemble-runner.js \
+# Resolve the runner rather than assuming a checkout location; the last
+# candidate is the symlink install.sh creates.
+for c in \
+  "${CLAUDE_KIT_ROOT:-}/scripts/ensemble-runner.js" \
+  "${CLAUDE_PLUGIN_ROOT:-}/scripts/ensemble-runner.js" \
+  "$HOME/.claude/scripts/ensemble-runner.js"; do
+  if [ -n "$c" ] && [ -f "$c" ]; then RUNNER="$c"; break; fi
+done
+[ -n "${RUNNER:-}" ] || { echo "review: cannot locate ensemble-runner.js" >&2; exit 1; }
+
+node "$RUNNER" \
   "Review this [artifact type] for [goal]. Is it strong enough to ship?" \
   --decision "Decide whether this artifact is ready to ship and what must change first" \
   --artifact [artifact file or temp packet] \
