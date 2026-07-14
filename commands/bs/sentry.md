@@ -61,24 +61,26 @@ For each project below 8/8, identify which gates are failing:
 
 ### Step 3: Auto-Fix
 
-Resolve the bootstrap script once, using the same candidate chain as Step 1:
-
-```bash
-for c in \
-  "${CLAUDE_KIT_ROOT:-}/scripts/bootstrap-ai-gates.sh" \
-  "${CLAUDE_PLUGIN_ROOT:-}/scripts/bootstrap-ai-gates.sh" \
-  "$HOME/.claude/scripts/bootstrap-ai-gates.sh"; do
-  if [ -n "$c" ] && [ -f "$c" ]; then BOOTSTRAP="$c"; break; fi
-done
-[ -n "${BOOTSTRAP:-}" ] || { echo "sentry: cannot locate bootstrap-ai-gates.sh" >&2; exit 1; }
-```
-
 For each failing project:
 
 1. `cd` into the project directory (the audit reports each project's path)
 2. `git checkout main && git pull`
 3. `git checkout -b chore/sentry-quality-fix`
-4. Run `bash "$BOOTSTRAP"` for gates 1-3, 5-8
+4. Run the bootstrap for gates 1-3, 5-8. Resolve it in the SAME shell that runs
+   it — each bash block is a fresh shell, so a path resolved in an earlier block
+   is gone by the time you get here:
+
+   ```bash
+   for c in \
+     "${CLAUDE_KIT_ROOT:-}/scripts/bootstrap-ai-gates.sh" \
+     "${CLAUDE_PLUGIN_ROOT:-}/scripts/bootstrap-ai-gates.sh" \
+     "$HOME/.claude/scripts/bootstrap-ai-gates.sh"; do
+     if [ -n "$c" ] && [ -f "$c" ]; then BOOTSTRAP="$c"; break; fi
+   done
+   [ -n "${BOOTSTRAP:-}" ] || { echo "sentry: cannot locate bootstrap-ai-gates.sh" >&2; exit 1; }
+   bash "$BOOTSTRAP"
+   ```
+
 5. For gate 4 (imports): `npm install -D eslint-plugin-n` and add to eslint config
 6. Verify fixes: run `npm run lint`, check gate files exist
 7. Fix any pre-push hook blockers (npm audit → `--omit=dev`, pattern-check false positives, etc.)
