@@ -218,9 +218,15 @@ else
   # When work is done: git worktree remove "$WORKTREE_DIR"
 fi
 
-# Initialize HUD state for live dashboard display (CS-061)
-HUD_SCRIPT="${SETUP_REPO:-$HOME/Projects/claude-kit}/scripts/hud-update.sh"
-if [ -f "$HUD_SCRIPT" ]; then
+# Initialize HUD state for live dashboard display (CS-061).
+# Optional: if the script can't be resolved, skip the HUD rather than failing.
+for c in \
+  "${CLAUDE_KIT_ROOT:-}/scripts/hud-update.sh" \
+  "${CLAUDE_PLUGIN_ROOT:-}/scripts/hud-update.sh" \
+  "$HOME/.claude/scripts/hud-update.sh"; do
+  if [ -n "$c" ] && [ -f "$c" ]; then HUD_SCRIPT="$c"; break; fi
+done
+if [ -n "${HUD_SCRIPT:-}" ]; then
   "$HUD_SCRIPT" --start --command "/bs:dev" --item "$NAME" --status "running"
 fi
 ```

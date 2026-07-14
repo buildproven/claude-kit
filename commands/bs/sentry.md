@@ -29,7 +29,17 @@ Monitors and enforces quality gates across the entire fleet. Runs automatically 
 Run the fleet quality audit:
 
 ```bash
-bash ~/Projects/claude-kit/scripts/fleet-quality-audit.sh
+# Resolve the kit root rather than assuming a checkout location. The last
+# candidate is the installed symlink (install.sh links scripts/ into ~/.claude),
+# so this works for a plain `./install.sh` user with no env vars set.
+for c in \
+  "${CLAUDE_KIT_ROOT:-}/scripts/fleet-quality-audit.sh" \
+  "${CLAUDE_PLUGIN_ROOT:-}/scripts/fleet-quality-audit.sh" \
+  "$HOME/.claude/scripts/fleet-quality-audit.sh"; do
+  if [ -n "$c" ] && [ -f "$c" ]; then AUDIT="$c"; break; fi
+done
+[ -n "${AUDIT:-}" ] || { echo "sentry: cannot locate fleet-quality-audit.sh" >&2; exit 1; }
+bash "$AUDIT"
 ```
 
 Report the table to the user. If `--audit-only` was passed, stop here.
@@ -53,10 +63,24 @@ For each project below 8/8, identify which gates are failing:
 
 For each failing project:
 
-1. `cd ~/Projects/<project>`
+1. `cd` into the project directory (the audit reports each project's path)
 2. `git checkout main && git pull`
 3. `git checkout -b chore/sentry-quality-fix`
-4. Run `bash ~/Projects/claude-kit/scripts/bootstrap-ai-gates.sh` for gates 1-3, 5-8
+4. Run the bootstrap for gates 1-3, 5-8. Resolve it in the SAME shell that runs
+   it — each bash block is a fresh shell, so a path resolved in an earlier block
+   is gone by the time you get here:
+
+   ```bash
+   for c in \
+     "${CLAUDE_KIT_ROOT:-}/scripts/bootstrap-ai-gates.sh" \
+     "${CLAUDE_PLUGIN_ROOT:-}/scripts/bootstrap-ai-gates.sh" \
+     "$HOME/.claude/scripts/bootstrap-ai-gates.sh"; do
+     if [ -n "$c" ] && [ -f "$c" ]; then BOOTSTRAP="$c"; break; fi
+   done
+   [ -n "${BOOTSTRAP:-}" ] || { echo "sentry: cannot locate bootstrap-ai-gates.sh" >&2; exit 1; }
+   bash "$BOOTSTRAP"
+   ```
+
 5. For gate 4 (imports): `npm install -D eslint-plugin-n` and add to eslint config
 6. Verify fixes: run `npm run lint`, check gate files exist
 7. Fix any pre-push hook blockers (npm audit → `--omit=dev`, pattern-check false positives, etc.)

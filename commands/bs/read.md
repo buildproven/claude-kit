@@ -27,11 +27,11 @@ Present a brief summary (5-8 lines max) so the user confirms it was read correct
 Read these files to understand the current configuration:
 
 ```bash
-# Global config
-cat ~/Projects/claude-kit/config/CLAUDE.md
+# Global config — the user's installed CLAUDE.md, not a kit checkout
+cat "$HOME/.claude/CLAUDE.md" 2>/dev/null
 
-# Project CLAUDE.md (session learnings, workflows)
-cat ~/Projects/claude-kit/CLAUDE.md
+# Project CLAUDE.md (session learnings, workflows), if the cwd has one
+cat ./CLAUDE.md 2>/dev/null
 ```
 
 For each key insight from the article, assess:
