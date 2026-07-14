@@ -123,6 +123,18 @@ jsx.run("require-useCallback", plugin.rules["require-useCallback"], {
     "const C = () => <List renderItem={() => <Row />} />;",
     // Non-handler props are untouched.
     "const C = () => <div className={'x'} />;",
+    // Regression: a namespaced JSX attribute (JSXNamespacedName) has no
+    // `node.name.name` string. The rule used to call .startsWith on the
+    // resulting object and throw, which ESLint reports as a rule crash that
+    // aborts the entire lint run — `xlink:href` is ordinary in SVG markup.
+    "const C = () => <a xlink:href={'#id'} />;",
+    // Regression: a prop named exactly `on` passes startsWith("on") but has no
+    // third character, so the on<Event> capital check indexed past the end and
+    // threw. `on` is not a handler prop.
+    "const C = () => <x on={1} />;",
+    // Guard the boundary from the other side: lowercase third char is not a
+    // handler either, and must not be reported.
+    "const C = () => <x onthing={() => {}} />;",
   ],
   invalid: [
     // Inline arrow in a handler prop allocates a new fn every render.

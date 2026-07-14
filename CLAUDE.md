@@ -76,7 +76,7 @@ scripts/          Hooks, CI gates, utilities (bash + node + python)
 config/           Template CLAUDE.md + settings.json for distribution
 eslint-plugin-defensive/   Local ESLint plugin published via path import
 templates/        Starter files copied by /bs:new and related commands
-.github/workflows/  quality, auto-release, stale-branches, stale-prs
+.github/workflows/  quality, auto-release, stale-prs
 ```
 
 `scripts/` is the only code surface with runtime logic worth testing. Commands, skills, and agents are prompt documents — they're "code" only in that Claude executes them, so keep them terse and concrete rather than trying to unit-test them.
@@ -96,7 +96,7 @@ When changing any of these scripts: the hook invokes them as `$HOME/.claude/scri
 ### Quality / release automation
 
 - `.github/workflows/quality.yml` runs the gate in CI — lint, format, tests, security scan, license check.
-- `.github/workflows/auto-release.yml` handles releases; `stale-branches.yml` / `stale-prs.yml` do housekeeping.
+- `.github/workflows/auto-release.yml` handles releases; `stale-prs.yml` does housekeeping.
 - `.husky/` + `lint-staged` run prettier/eslint/bash-syntax on commit. `commitlint.config.js` enforces conventional commits (`feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert`).
 
 ### ESLint setup

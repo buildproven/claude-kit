@@ -165,6 +165,14 @@ configs.push({
       vi: "readonly",
     },
   },
+  rules: {
+    // Tests legitimately index into objects with computed keys — e.g. asserting
+    // every rule name in a plugin's recommended config resolves to a real rule
+    // (`plugin.rules[name]`). That is the same justified dynamic access the
+    // `scripts/**` block above exempts, and there is no untrusted input in a
+    // test fixture, so the object-injection warning is pure noise here.
+    "security/detect-object-injection": "off",
+  },
 });
 
 // Import verification (eslint-plugin-n)
