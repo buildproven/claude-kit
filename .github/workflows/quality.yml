@@ -23,7 +23,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
-      - run: npm install
+      - run: npm ci
       - name: Format check
         run: npm run format:check
       - name: Lint
@@ -51,7 +51,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
-      - run: npm install
+      - run: npm ci
       - name: Run tests
         run: npm test
 
@@ -64,7 +64,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
-      - run: npm install
+      - run: npm ci
       - name: Dependency audit
         run: npm audit --audit-level high
       - name: Dependency licenses

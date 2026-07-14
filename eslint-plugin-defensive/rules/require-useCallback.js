@@ -87,11 +87,14 @@ module.exports = {
           return;
         }
 
-        // Check if the value is an inline arrow function
+        // Check if the value is an inline function. Arrow and function
+        // expressions both allocate a new function on every render, so both
+        // defeat memoisation — treat them the same.
         if (
           node.value &&
           node.value.type === "JSXExpressionContainer" &&
-          node.value.expression.type === "ArrowFunctionExpression"
+          (node.value.expression.type === "ArrowFunctionExpression" ||
+            node.value.expression.type === "FunctionExpression")
         ) {
           inlineHandlerCount++;
 
