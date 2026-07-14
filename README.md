@@ -212,4 +212,13 @@ npx claude-hud@latest
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
+
+Two skills are third-party components under the **Apache License 2.0**, not MIT:
+`skills/frontend-design/` and `skills/webapp-testing/`, both originating from
+Anthropic's publicly released Claude skills. Each retains its full original
+license text alongside it (`LICENSE.txt`), and both are itemized in
+[NOTICE](NOTICE). Everything else in this repository is MIT.
+
+Dependencies are permissively licensed; `npm run license:check` enforces this in
+CI and fails the build on anything outside the allowlist.

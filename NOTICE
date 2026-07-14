@@ -1,0 +1,31 @@
+claude-kit
+Copyright (c) 2026 buildproven
+
+This product is licensed under the MIT License (see LICENSE), EXCEPT for the
+third-party components listed below, which are licensed under the Apache
+License, Version 2.0 and retain their original license terms.
+
+--------------------------------------------------------------------------------
+Apache License 2.0 components
+--------------------------------------------------------------------------------
+
+The following skills originate from Anthropic's publicly released Claude skills
+and are redistributed under the Apache License, Version 2.0. Each retains the
+full, unmodified license text alongside it:
+
+  skills/frontend-design/    — see skills/frontend-design/LICENSE.txt
+  skills/webapp-testing/     — see skills/webapp-testing/LICENSE.txt
+
+A copy of the Apache License, Version 2.0 is available at:
+  http://www.apache.org/licenses/LICENSE-2.0
+
+These components have been modified from their originals. Modifications are
+tracked in this repository's git history.
+
+--------------------------------------------------------------------------------
+Dependencies
+--------------------------------------------------------------------------------
+
+Third-party npm dependencies are permissively licensed (MIT, ISC, BSD, Apache-2.0,
+MPL-2.0 and equivalents). This is enforced in CI by `npm run license:check`, which
+fails the build on any license outside the allowlist in package.json.

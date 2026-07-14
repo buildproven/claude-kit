@@ -2,6 +2,30 @@
 
 All notable changes to claude-kit are documented here.
 
+## [Unreleased]
+
+### BREAKING — two skills and one command removed
+
+`market-validation` and `office-hours` (and the `/bs:office-hours` command) have
+been **removed** from the kit. They evaluate a business idea rather than code, and
+have moved to the maintainer's private repo.
+
+If you scripted `/bs:office-hours`, it will no longer resolve. The `market-validation`
+skill will no longer auto-invoke. There is no in-kit replacement — `/bs:strategy` and
+`/bs:review` are the closest remaining tools.
+
+### Licensing — attribution made explicit
+
+Added a root `NOTICE` file itemizing the two Apache-2.0 components
+(`skills/frontend-design/`, `skills/webapp-testing/` — both Anthropic-original) and
+their in-tree `LICENSE.txt` files. The README and LICENSE previously said only "MIT",
+which was inaccurate for a repo containing Apache-2.0 code; both now disclose the
+carve-out.
+
+`package.json` now declares `"license": "MIT"` (it declared none, reporting as
+`UNLICENSED`), and `npm run license:check` — which existed but was wired into no
+workflow — now runs in CI, so a copyleft dependency fails the build.
+
 ## [3.1.0] - 2026-07-13
 
 The kit stops doing things to your repo that you didn't ask for.

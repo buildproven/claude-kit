@@ -2,6 +2,11 @@ MIT License
 
 Copyright (c) 2026 buildproven
 
+NOTE: Portions of this repository are third-party components licensed under the
+Apache License 2.0 rather than the MIT License below. They are itemized in the
+NOTICE file and each retains its original license text in-tree. The MIT terms
+below apply to all other content.
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
