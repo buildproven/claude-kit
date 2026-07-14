@@ -58,7 +58,7 @@ npm run license:check       # MIT/ISC/BSD/Apache/MPL only
 npm run check:commands      # scripts/check-command-readme.sh
 ```
 
-Node 20+ (`engines.node`, pinned via Volta to 20.11.1). Python tooling (ruff/black/mypy) is configured in `pyproject.toml` for the handful of Python scripts in `scripts/` — but there is no `pytest` suite wired up despite `tests/` existing.
+Node `^20.19.0 || >=22.12.0` (`engines.node`, pinned via Volta to 22.12.0, and CI runs that exact version). The floor is not cosmetic: the Vite 8 / Rolldown toolchain vitest builds on imports `node:util.styleText`, which only exists from Node 20.12 — an older Node 20 crashes `npm test` at startup rather than failing a test. Python tooling (ruff/black/mypy) is configured in `pyproject.toml` for the handful of Python scripts in `scripts/` — but there is no `pytest` suite wired up despite `tests/` existing.
 
 ## Architecture
 

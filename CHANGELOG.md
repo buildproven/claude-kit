@@ -7,8 +7,8 @@ All notable changes to claude-kit are documented here.
 ### BREAKING — two skills and one command removed
 
 `market-validation` and `office-hours` (and the `/bs:office-hours` command) have
-been **removed** from the kit. They evaluate a business idea rather than code, and
-have moved to the maintainer's private repo.
+been **removed** from the kit. They evaluate a business idea rather than code, so
+they now live outside this repository.
 
 If you scripted `/bs:office-hours`, it will no longer resolve. The `market-validation`
 skill will no longer auto-invoke. There is no in-kit replacement — `/bs:strategy` and
