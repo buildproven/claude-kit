@@ -26,7 +26,7 @@ Repeatable scorecard that rates your Claude Code setup against state-of-the-art 
 
 ### Step 0: Rubric Refresh + Fetch Latest CC Features
 
-**Rubric version: 3.0 | Last reviewed: 2026-07-10 | Baseline: Claude Code 2.1.207**
+**Rubric version: 3.0 | Last reviewed: 2026-07-15 | Baseline: Claude Code 2.1.210**
 
 > **Why 3.0 is a rewrite, not a bump.** Rubric 2.1 claimed to be fresh (its own
 > staleness check only fires at >30 days) while scoring people against a Q1 2026
@@ -168,7 +168,7 @@ Read the existing file, append the new entry to `entries[]`, update `lastUpdated
 
 ### Step 4.5: Write Report File (always)
 
-Write the full rendered scorecard (everything shown to the user in Steps 3/5/6) to `.claude/sota-report.md`.
+Write the full rendered scorecard (everything shown to the user in Steps 3/5/6) to `data/sota-report.md`.
 
 **Rolling file format — keep last 3 assessments:**
 
