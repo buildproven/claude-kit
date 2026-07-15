@@ -110,8 +110,17 @@ For a specific Sentry issue ID:
 1. Pull full issue from Sentry MCP: stack trace, breadcrumbs, user context, release version
 2. Find the repo + commit that shipped the regression (via release tag in Sentry)
 3. `git worktree add ../fix-sentry-<issue-id> -b fix-sentry-<issue-id>` in the relevant repo
-4. **HUMAN PAUSE GATE**: present a one-paragraph hypothesis of root cause. Ask user to confirm before writing code.
-5. After confirmation, implement minimal fix in worktree
+4. **HUMAN PAUSE GATE**: present a one-paragraph hypothesis of root cause. Generate it with a Sonnet-pinned subagent — reading a stack trace and proposing a root cause is analysis, not the coding work, so it does not need the session model's tier (matches the budget gate below: "hypothesis → Sonnet, fix → session/Opus"). The pin is a per-call `model` override, never a frontmatter pin, so it can't trip the 1M-context billing gate:
+
+   ```javascript
+   Task(subagent_type: "general-purpose",
+        model: "sonnet",
+        prompt: `Read this Sentry issue (stack trace, breadcrumbs, release) and propose a one-paragraph root-cause hypothesis + the file:line most likely responsible. Do NOT write a fix. <issue context>`)
+   ```
+
+   Ask the user to confirm before writing code.
+
+5. After confirmation, implement minimal fix in worktree (this leg keeps the session model — it's the actual coding work)
 6. Add regression test that reproduces the error
 7. Run `/bs:quality --merge`
 8. Open PR with body:
