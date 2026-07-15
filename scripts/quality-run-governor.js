@@ -179,6 +179,16 @@ function commitsSinceBaseline(cwd, startSha) {
     return null;
   }
   try {
+    // `<sha>..HEAD` only means "new commits since baseline" when the baseline
+    // is actually an ANCESTOR of HEAD. If it isn't — a hard reset, a rebase
+    // that orphaned it, or a check running from a divergent checkout — the
+    // range counts unrelated history and can reproduce the very false-trip this
+    // fix exists to kill. Fail CLOSED in that case (return null → evaluateBudget
+    // halts via its Number.isFinite guard) rather than trusting a bogus count.
+    execFileSync("git", ["merge-base", "--is-ancestor", startSha, "HEAD"], {
+      cwd,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
     const out = execFileSync(
       "git",
       ["rev-list", "--count", `${startSha}..HEAD`],
@@ -187,6 +197,8 @@ function commitsSinceBaseline(cwd, startSha) {
     const parsed = parseInt(out.trim(), 10);
     return Number.isFinite(parsed) ? parsed : null;
   } catch {
+    // Non-zero exit from --is-ancestor (baseline not an ancestor) OR any git
+    // failure both land here → null → fail closed.
     return null;
   }
 }

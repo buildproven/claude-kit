@@ -157,17 +157,30 @@ function detectMerge(tokens) {
 // exactly how a bare PR number arrives from the slash command — resolved to
 // nothing and fell through to merge-refuse / a silent cwd audit (2026-07-14).
 // Runs LAST, only under --merge, and only if no PR was already claimed, so it
-// can never shadow an explicit flag, a `#`-prefixed PR, a branch, or a path.
+// can never shadow a `#`-prefixed PR, a branch, or a path.
+//
+// CRITICAL: a bare integer must NOT be grabbed when it is the OPERAND of some
+// other flag — e.g. `--merge --level 98` or `--merge --tail 40` — or we'd read
+// `98`/`40` as a PR number. A token starting with `-` is skipped, but its
+// following value doesn't start with `-`, so we must also skip any integer that
+// immediately follows a `--flag`. We therefore only accept an integer whose
+// PRECEDING token is not itself a flag (i.e. a genuine positional / the direct
+// operand of `--merge`, which detectMerge already consumed as the merge marker).
 function applyBarePrToken(tokens, result) {
   if (result.pr !== null || !result.merge) return;
-  for (const tok of tokens) {
+  for (let i = 0; i < tokens.length; i += 1) {
+    const tok = tokens[i];
     if (tok.startsWith("-")) continue;
     if (tok === result.branch || tok === result.path) continue;
-    if (/^\d+$/.test(tok)) {
-      result.pr = Number(tok);
-      if (result.source === "none") result.source = "pr-bare";
-      return;
-    }
+    if (!/^\d+$/.test(tok)) continue;
+    // Skip an integer that is the operand of a preceding value-taking flag
+    // (`--level 98`, `--tail 40`, …). `--merge` is exempt: `--merge 558` is the
+    // documented bare-PR form, and `--merge=…` never leaves a bare int operand.
+    const prev = tokens[i - 1];
+    if (prev && prev.startsWith("-") && prev !== "--merge") continue;
+    result.pr = Number(tok);
+    if (result.source === "none") result.source = "pr-bare";
+    return;
   }
 }
 

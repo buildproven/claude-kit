@@ -75,6 +75,22 @@ describe("parseArgs", () => {
       // a PR number is still captured, but the branch remains authoritative
       expect(r.source).toBe("branch-pattern");
     });
+
+    it("does NOT read a flag's numeric operand as a PR (--level)", () => {
+      const r = parseArgs("--merge --level 98");
+      expect(r.pr).toBeNull();
+    });
+
+    it("does NOT read a flag's numeric operand as a PR (--tail)", () => {
+      const r = parseArgs("--merge --tail 40");
+      expect(r.pr).toBeNull();
+    });
+
+    it("still reads the bare PR when a flag-with-operand precedes it", () => {
+      const r = parseArgs("--merge --level 98 558");
+      expect(r.pr).toBe(558);
+      expect(r.source).toBe("pr-bare");
+    });
   });
 
   describe("branch extraction", () => {
