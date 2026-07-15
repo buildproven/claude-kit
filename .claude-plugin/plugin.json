@@ -2,7 +2,7 @@
   "name": "bs",
   "displayName": "claude-kit",
   "version": "3.1.0",
-  "description": "Quality automation, autonomous backlog execution, multi-LLM strategy panels, fleet auditing, and founder domain intelligence. Free and MIT.",
+  "description": "Quality automation, autonomous backlog execution, multi-LLM strategy panels, and fleet auditing. Free and MIT.",
   "author": {
     "name": "buildproven",
     "url": "https://github.com/buildproven"
