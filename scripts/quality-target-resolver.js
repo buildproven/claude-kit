@@ -56,7 +56,7 @@ const EXPLICIT_PATH_FLAG = new Set(["--target-dir", "--target", "--worktree"]);
  *   pr: number | null,
  *   branch: string | null,
  *   path: string | null,
- *   source: 'pr-flag' | 'pr-pattern' | 'branch-flag' | 'branch-pattern' | 'path-flag' | 'path-pattern' | 'none',
+ *   source: 'pr-flag' | 'pr-pattern' | 'pr-bare' | 'branch-flag' | 'branch-pattern' | 'path-flag' | 'path-pattern' | 'none',
  *   tokens: string[],
  * }}
  */
@@ -152,6 +152,25 @@ function detectMerge(tokens) {
   return tokens.some((t) => t === "--merge" || t.startsWith("--merge="));
 }
 
+// A bare positive integer (e.g. `--merge 558`) is a PR number. The PR_PATTERNS
+// above only match `#558`/`pr 558`/`pull/558`, so `/bs:quality --merge 558` —
+// exactly how a bare PR number arrives from the slash command — resolved to
+// nothing and fell through to merge-refuse / a silent cwd audit (2026-07-14).
+// Runs LAST, only under --merge, and only if no PR was already claimed, so it
+// can never shadow an explicit flag, a `#`-prefixed PR, a branch, or a path.
+function applyBarePrToken(tokens, result) {
+  if (result.pr !== null || !result.merge) return;
+  for (const tok of tokens) {
+    if (tok.startsWith("-")) continue;
+    if (tok === result.branch || tok === result.path) continue;
+    if (/^\d+$/.test(tok)) {
+      result.pr = Number(tok);
+      if (result.source === "none") result.source = "pr-bare";
+      return;
+    }
+  }
+}
+
 function parseArgs(rawArgs) {
   const tokens = normalizeTokens(rawArgs);
   const text = tokens.join(" ");
@@ -169,6 +188,7 @@ function parseArgs(rawArgs) {
   applyPrPattern(text, result);
   applyBranchPattern(tokens, result);
   applyPathPattern(tokens, result);
+  applyBarePrToken(tokens, result);
 
   return result;
 }

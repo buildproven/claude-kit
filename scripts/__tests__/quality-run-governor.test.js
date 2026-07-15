@@ -177,6 +177,44 @@ describe("evaluateBudget", () => {
     expect(result.roundTripped).toBe(true);
   });
 
+  // --- SHA-baselined commit accounting (2026-07-14 false-trip fix) ----------
+  // With a start_commit_sha, commitCount is ALREADY the run-scoped
+  // `<sha>..HEAD` count, so it's used directly — NOT subtracted from
+  // start_commit_count. This is what makes the count rebase/checkout-immune.
+  const shaState = {
+    start_epoch: 1000,
+    start_commit_sha: "abc1234",
+    start_commit_count: 999999, // deliberately absurd: must be IGNORED with a SHA
+    max_fix_commits: 4,
+    max_wall_seconds: 1800,
+    max_review_rounds: 2,
+    rounds_used: 0,
+  };
+
+  it("uses commitCount directly as commitsUsed when a SHA baseline is present", () => {
+    // The exact false-trip scenario: start_commit_count is huge/stale, but 0
+    // commits were made since the baseline SHA. Old code did 0 - 999999 (or a
+    // cross-baseline delta) and mis-tripped; now it reads commitsUsed = 0.
+    const result = evaluateBudget(shaState, { nowEpoch: 1100, commitCount: 0 });
+    expect(result.commitsUsed).toBe(0);
+    expect(result.commitTripped).toBe(false);
+    expect(result.ok).toBe(true);
+  });
+
+  it("still trips on real fix-commits with a SHA baseline", () => {
+    const result = evaluateBudget(shaState, { nowEpoch: 1100, commitCount: 4 });
+    expect(result.commitsUsed).toBe(4);
+    expect(result.commitTripped).toBe(true);
+  });
+
+  it("does not require start_commit_count when a SHA baseline is present", () => {
+    const { start_commit_count, ...noCount } = shaState;
+    void start_commit_count;
+    const result = evaluateBudget(noCount, { nowEpoch: 1100, commitCount: 1 });
+    expect(result.configInvalid).toBe(false);
+    expect(result.commitsUsed).toBe(1);
+  });
+
   // --- review-round budget --------------------------------------------------
   // The round cap is what terminates the outer fix -> re-review loop. Before
   // 2026-07-10 there was no round dimension at all and the cap lived only as

@@ -8,7 +8,22 @@ category: quality
 
 **Invocation args:** `$ARGUMENTS`
 
+## Step 0 — Loop guard (CHECK THIS FIRST)
+
+**If `$ARGUMENTS` already contains `--args-file`, the args have already been
+persisted by a prior pass of this wrapper. Do NOT run Step 1 or Step 2's
+persistence again — that re-runs the whole wrapper preamble and loops forever.
+Instead, invoke the `quality` skill directly with the existing `$ARGUMENTS`
+verbatim, then stop processing this wrapper.**
+
+This fires when the Skill re-enters `/bs:quality` carrying the transformed args
+(e.g. `--args-file /tmp/…/args.txt --merge 558`). Without this guard the model
+dutifully writes a _second_ args file and calls Skill again — the infinite
+wrapper recursion observed 2026-07-14.
+
 ## Step 1 — Persist args so the forked skill can read them (REQUIRED)
+
+_(Skip this and Step 2's re-invocation if Step 0's guard fired.)_
 
 The `quality` skill runs in a forked Claude context that does NOT
 inherit this turn's `$ARGUMENTS`. To bridge that gap, **before
