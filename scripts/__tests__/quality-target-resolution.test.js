@@ -56,6 +56,41 @@ describe("parseArgs", () => {
       expect(r.pr).toBe(410);
       expect(r.source).toBe("pr-flag");
     });
+
+    it("treats a bare integer under --merge as a PR number", () => {
+      const r = parseArgs("--merge 558");
+      expect(r.pr).toBe(558);
+      expect(r.source).toBe("pr-bare");
+    });
+
+    it("does NOT treat a bare integer as a PR without --merge", () => {
+      const r = parseArgs("558");
+      expect(r.pr).toBeNull();
+      expect(r.source).toBe("none");
+    });
+
+    it("bare int does not shadow an explicit branch under --merge", () => {
+      const r = parseArgs("--merge codex/foo 558");
+      expect(r.branch).toBe("codex/foo");
+      // a PR number is still captured, but the branch remains authoritative
+      expect(r.source).toBe("branch-pattern");
+    });
+
+    it("does NOT read a flag's numeric operand as a PR (--level)", () => {
+      const r = parseArgs("--merge --level 98");
+      expect(r.pr).toBeNull();
+    });
+
+    it("does NOT read a flag's numeric operand as a PR (--tail)", () => {
+      const r = parseArgs("--merge --tail 40");
+      expect(r.pr).toBeNull();
+    });
+
+    it("still reads the bare PR when a flag-with-operand precedes it", () => {
+      const r = parseArgs("--merge --level 98 558");
+      expect(r.pr).toBe(558);
+      expect(r.source).toBe("pr-bare");
+    });
   });
 
   describe("branch extraction", () => {

@@ -371,10 +371,11 @@ Write failing tests from spec/acceptance criteria before any implementation. Ver
 
 ### Step 6: Explore Before Implementing (Medium/Complex)
 
-Check `docs/dev_guide/CONVENTIONS.md` first if it exists. Then spawn an `Explore` subagent (keeps main context clean):
+Check `docs/dev_guide/CONVENTIONS.md` first if it exists. Then spawn an `Explore` subagent (keeps main context clean). Pin it to Sonnet — codebase exploration is search-read-summarize work that does not need the session model's tier, and this is a per-call override (not a frontmatter pin), so it never trips the 1M-context billing gate:
 
 ```javascript
 Task(subagent_type: "Explore",
+     model: "sonnet",
      prompt: `Explore the codebase for [feature area]. Find relevant files, patterns, integration points, constraints. Return: file list with roles, key patterns, dependencies, recommended approach.`)
 ```
 

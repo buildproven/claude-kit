@@ -158,6 +158,71 @@ function currentCommitCount(cwd) {
 }
 
 /**
+ * Count commits made ON TOP OF the baseline SHA — i.e. `<startSha>..HEAD`.
+ *
+ * This is the correct "fix-commits made during THIS run" measure. The legacy
+ * approach (total `rev-list --count HEAD` minus a numeric baseline) is only
+ * valid when HEAD's total ancestry stays fixed except for appended commits.
+ * That assumption breaks in the `--merge <PR>` flow: Step -1 baselines inside
+ * a PR-branch worktree, but a later governor check can run from a HEAD whose
+ * total ancestry differs (rebase onto updated main, or a cross-checkout cwd),
+ * producing a bogus cross-baseline delta — observed 2026-07-14 as
+ * `commitsUsed: 21` with ZERO fix commits, falsely tripping the commit cap.
+ *
+ * `<startSha>..HEAD` is immune to all of that: it counts exactly the commits
+ * reachable from HEAD but not from the baseline, which is the definition of
+ * new work. Returns `null` on any git failure (same fail-closed contract as
+ * `currentCommitCount`), so `evaluateBudget`'s `Number.isFinite` guard halts.
+ */
+function commitsSinceBaseline(cwd, startSha) {
+  if (typeof startSha !== "string" || !/^[0-9a-f]{7,40}$/i.test(startSha)) {
+    return null;
+  }
+  try {
+    // `<sha>..HEAD` only means "new commits since baseline" when the baseline
+    // is actually an ANCESTOR of HEAD. If it isn't — a hard reset, a rebase
+    // that orphaned it, or a check running from a divergent checkout — the
+    // range counts unrelated history and can reproduce the very false-trip this
+    // fix exists to kill. Fail CLOSED in that case (return null → evaluateBudget
+    // halts via its Number.isFinite guard) rather than trusting a bogus count.
+    execFileSync("git", ["merge-base", "--is-ancestor", startSha, "HEAD"], {
+      cwd,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    const out = execFileSync(
+      "git",
+      ["rev-list", "--count", `${startSha}..HEAD`],
+      { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    );
+    const parsed = parseInt(out.trim(), 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    // Non-zero exit from --is-ancestor (baseline not an ancestor) OR any git
+    // failure both land here → null → fail closed.
+    return null;
+  }
+}
+
+/**
+ * Resolve the run-scoped fix-commit count for a given state + cwd.
+ *
+ * Preferred path: `start_commit_sha` present → count `<sha>..HEAD` directly
+ * (rebase/checkout-immune). This returns commits-USED, not a total; callers
+ * pass it as `commitCount` and `evaluateBudget` treats it accordingly.
+ *
+ * Legacy fallback: sentinels written before `start_commit_sha` existed only
+ * have `start_commit_count`, so fall back to total-ancestry `HEAD` count and
+ * let `evaluateBudget` do the subtraction (the old, rebase-fragile behavior —
+ * but no worse than before, and only for in-flight pre-upgrade runs).
+ */
+function resolveCommitCount(cwd, state) {
+  if (state && typeof state.start_commit_sha === "string") {
+    return commitsSinceBaseline(cwd, state.start_commit_sha);
+  }
+  return currentCommitCount(cwd);
+}
+
+/**
  * Load the governor sentinel. Returns `null` on any read/parse failure
  * (missing file, truncated write, corrupt JSON) instead of throwing —
  * callers treat `null` as "state unreadable" and fail CLOSED (the sentinel
@@ -247,12 +312,17 @@ function priorFindingsFrom(state) {
  * case here.
  */
 function evaluateBudget(state, { nowEpoch, commitCount }) {
+  // `start_commit_count` is only required on legacy sentinels (no SHA baseline);
+  // a SHA-baselined sentinel measures `<sha>..HEAD` directly and doesn't need it.
+  const hasShaBaseline = !!(
+    state && typeof state.start_commit_sha === "string"
+  );
   const requiredFields = [
     "start_epoch",
-    "start_commit_count",
     "max_fix_commits",
     "max_wall_seconds",
     "max_review_rounds",
+    ...(hasShaBaseline ? [] : ["start_commit_count"]),
   ];
   const configInvalid =
     requiredFields.some((key) => !Number.isFinite(state && state[key])) ||
@@ -274,7 +344,15 @@ function evaluateBudget(state, { nowEpoch, commitCount }) {
   }
 
   const elapsedSeconds = nowEpoch - state.start_epoch;
-  const commitsUsed = commitCount - state.start_commit_count;
+  // With a SHA baseline, `commitCount` is ALREADY the run-scoped `<sha>..HEAD`
+  // count (commits made during the run), so use it directly. Without one (a
+  // legacy sentinel), it's the total-ancestry HEAD count and we subtract the
+  // numeric baseline — the old rebase-fragile path, kept only for in-flight
+  // pre-upgrade runs. See resolveCommitCount / commitsSinceBaseline.
+  const commitsUsed =
+    state && typeof state.start_commit_sha === "string"
+      ? commitCount
+      : commitCount - state.start_commit_count;
   // rounds_used is absent on a sentinel written before this field existed;
   // treat as 0 rather than tripping configInvalid, so an in-flight run that
   // straddles an upgrade degrades to "no rounds consumed yet" instead of
@@ -334,7 +412,7 @@ function bumpRound(sentinelPath, cwd) {
 
   const result = evaluateBudget(state, {
     nowEpoch: Math.floor(Date.now() / 1000),
-    commitCount: currentCommitCount(cwd),
+    commitCount: resolveCommitCount(cwd, state),
   });
 
   if (result.configInvalid) {
@@ -390,7 +468,7 @@ function main() {
     const state = loadState(sentinelPath);
     const result = evaluateBudget(state, {
       nowEpoch: Math.floor(Date.now() / 1000),
-      commitCount: currentCommitCount(cwd),
+      commitCount: resolveCommitCount(cwd, state),
     });
     if (result.configInvalid) {
       process.stderr.write(
@@ -436,7 +514,7 @@ function main() {
     const state = loadState(sentinelPath);
     const result = evaluateBudget(state, {
       nowEpoch: Math.floor(Date.now() / 1000),
-      commitCount: currentCommitCount(cwd),
+      commitCount: resolveCommitCount(cwd, state),
     });
     if (result.configInvalid) {
       process.stderr.write(

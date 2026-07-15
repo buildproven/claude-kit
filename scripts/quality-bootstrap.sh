@@ -269,10 +269,18 @@ BS_QUALITY_MAX_FIX_COMMITS="${BS_QUALITY_MAX_FIX_COMMITS:-4}"
 BS_QUALITY_MAX_WALL_SECONDS="${BS_QUALITY_MAX_WALL_SECONDS:-900}"
 BS_QUALITY_GOVERNOR_FILE="${BS_QUALITY_ROOT_FILE%.txt}-governor.json"
 GOVERNOR_START_EPOCH=$(date +%s)
+# Baseline the run by HEAD SHA, not by total commit count. The governor counts
+# fix-commits as `<start_commit_sha>..HEAD`, which is immune to rebases and to
+# the cwd/checkout the later `check` runs from. The old total-count delta
+# tripped falsely under `--merge <PR>` (baseline in the PR worktree, check from
+# a differently-based HEAD → bogus cross-baseline delta; 2026-07-14). We still
+# record start_commit_count for legacy readers / diagnostics.
+GOVERNOR_START_COMMIT_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
 GOVERNOR_START_COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo 0)
 cat > "$BS_QUALITY_GOVERNOR_FILE" <<EOF
 {
   "start_epoch": ${GOVERNOR_START_EPOCH},
+  "start_commit_sha": "${GOVERNOR_START_COMMIT_SHA}",
   "start_commit_count": ${GOVERNOR_START_COMMIT_COUNT},
   "max_fix_commits": ${BS_QUALITY_MAX_FIX_COMMITS},
   "max_wall_seconds": ${BS_QUALITY_MAX_WALL_SECONDS},
