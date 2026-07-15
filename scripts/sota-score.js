@@ -1,497 +1,470 @@
 #!/usr/bin/env node
 /**
- * Automated SOTA scoring — runs without Claude CLI.
- * Checks files, counts, validates structure, produces a deterministic score.
- * Used by: .github/workflows/sota-assessment.yml (weekly cron)
+ * Deterministic Claude Code SOTA rubric 3.0 scorer.
+ *
+ * The interactive rubric lives in skills/sota/SKILL.md. Keep this file's
+ * categories in one-to-one correspondence with that 15-category rubric so the
+ * weekly assessment cannot certify a different, older definition of "SOTA".
  */
 
 const fs = require("fs");
 const path = require("path");
+const Ajv = require("ajv");
 
-const ROOT = path.resolve(__dirname, "..");
+const ROOT = path.resolve(process.env.SOTA_ROOT || path.join(__dirname, ".."));
+const SETTINGS_SCHEMA_URL =
+  "https://json.schemastore.org/claude-code-settings.json";
+const CURRENT_BASELINE = "2.1.210";
 
-function countFiles(dir, ext) {
-  if (!fs.existsSync(dir)) return 0;
-  let count = 0;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.isDirectory()) {
-      count += countFiles(path.join(dir, entry.name), ext);
-    } else if (!ext || entry.name.endsWith(ext)) {
-      count++;
-    }
-  }
-  return count;
+function exists(relativePath) {
+  return fs.existsSync(path.join(ROOT, relativePath));
 }
 
-function fileLines(filePath) {
-  if (!fs.existsSync(filePath)) return 0;
-  return fs.readFileSync(filePath, "utf8").split("\n").length;
-}
-
-function readJSON(filePath) {
+function readText(relativePath) {
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return fs.readFileSync(path.join(ROOT, relativePath), "utf8");
+  } catch {
+    return "";
+  }
+}
+
+function readJSON(relativePath) {
+  try {
+    return JSON.parse(readText(relativePath));
   } catch {
     return null;
   }
 }
 
-function scoreCLAUDEmd() {
-  const f = path.join(ROOT, "config", "CLAUDE.md");
-  const lines = fileLines(f);
-  if (lines === 0) return { score: 0, gap: "CLAUDE.md missing" };
-  const content = fs.readFileSync(f, "utf8");
-  let score = 5;
-  if (lines <= 120) score += 2;
-  else if (lines <= 200) score += 1;
-  const sections = [
-    "action default",
-    "code quality",
-    "communication",
-    "tool",
-    "git",
-    "config",
-  ];
-  const found = sections.filter((s) =>
-    content.toLowerCase().includes(s),
-  ).length;
-  score += Math.min(found, 3);
-  return {
-    score: Math.min(score, 10),
-    gap: lines > 120 ? `${lines} lines (target <100)` : null,
-  };
-}
-
-function scoreSettings() {
-  const settings = readJSON(path.join(ROOT, "config", "settings.json"));
-  if (!settings) return { score: 0, gap: "settings.json missing" };
-  let score = 5;
-  if (settings.permissions) {
-    const allow = (settings.permissions.allow || []).length;
-    const deny = (settings.permissions.deny || []).length;
-    const ask = (settings.permissions.ask || []).length;
-    const totalRules = allow + deny + ask;
-    if (totalRules >= 20) score += 2;
-    else if (totalRules >= 10) score += 1;
-    // Bonus for having all three categories (allow + deny + ask)
-    if (allow > 0 && deny > 0 && ask > 0) score += 1;
-  }
-  if (settings.hooks) {
-    const hookCount = Object.keys(settings.hooks).length;
-    if (hookCount >= 3) score += 2;
-    else if (hookCount >= 1) score += 1;
-  }
-  if (settings.env) score += 1;
-  return { score: Math.min(score, 10), gap: null };
-}
-
-function scoreHooks() {
-  const settings = readJSON(path.join(ROOT, "config", "settings.json"));
-  if (!settings || !settings.hooks)
-    return { score: 2, gap: "No hooks configured" };
-  const hookTypes = Object.keys(settings.hooks);
-  let score = Math.min(hookTypes.length * 2, 8);
-  if (fs.existsSync(path.join(ROOT, ".husky"))) score += 2;
-  return {
-    score: Math.min(score, 10),
-    gap: hookTypes.length < 3 ? "Add more hook types" : null,
-  };
-}
-
-function scoreSkills() {
-  const dir = path.join(ROOT, "skills");
-  const count = countFiles(dir, ".md");
-  let score = Math.min(Math.floor(count / 2), 7);
-  // Check for auto-invoke and context:fork
-  let autoInvoke = 0;
-  let contextFork = 0;
-  if (fs.existsSync(dir)) {
-    const walk = (d) => {
-      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-        if (e.isDirectory()) walk(path.join(d, e.name));
-        else if (e.name.endsWith(".md")) {
-          const c = fs.readFileSync(path.join(d, e.name), "utf8");
-          if (c.includes("auto-invoke") || c.includes("Auto-invoke"))
-            autoInvoke++;
-          if (c.includes("context: fork")) contextFork++;
-        }
-      }
-    };
-    walk(dir);
-  }
-  if (autoInvoke >= 3) score += 2;
-  if (contextFork >= 1) score += 1;
-  return {
-    score: Math.min(score, 10),
-    gap: count < 15 ? `${count} skills (target 15+)` : null,
-  };
-}
-
-function scoreCommands() {
-  const dir = path.join(ROOT, "commands");
-  const count = countFiles(dir, ".md");
-  let score = Math.min(Math.floor(count / 4), 7);
-  // Check frontmatter completeness
-  let withFrontmatter = 0;
-  if (fs.existsSync(dir)) {
-    const walk = (d) => {
-      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-        if (e.isDirectory()) walk(path.join(d, e.name));
-        else if (e.name.endsWith(".md")) {
-          const c = fs.readFileSync(path.join(d, e.name), "utf8");
-          if (c.startsWith("---") && c.includes("description:"))
-            withFrontmatter++;
-        }
-      }
-    };
-    walk(dir);
-  }
-  const ratio = count > 0 ? withFrontmatter / count : 0;
-  if (ratio >= 0.9) score += 3;
-  else if (ratio >= 0.7) score += 2;
-  else if (ratio >= 0.5) score += 1;
-  return {
-    score: Math.min(score, 10),
-    gap: ratio < 0.9 ? `${Math.round(ratio * 100)}% have frontmatter` : null,
-  };
-}
-
-function scoreMCP() {
-  const settings = readJSON(path.join(ROOT, "config", "settings.json"));
-  if (!settings) return { score: 2, gap: "No settings.json" };
-  const plugins = settings.enabledPlugins || {};
-  const enabled = Object.entries(plugins).filter(([, v]) => v === true).length;
-  const mcpServers = Object.keys(settings.mcpServers || {}).length;
-  const total = enabled + mcpServers;
-  let score = Math.min(Math.floor(total / 2), 8);
-  if (total >= 5) score += 2;
-  return {
-    score: Math.min(score, 10),
-    gap: total < 5 ? `${total} MCP servers (target 5+)` : null,
-  };
-}
-
-function scoreQuality() {
-  let score = 3;
-  if (
-    fs.existsSync(path.join(ROOT, "skills", "quality")) ||
-    fs.existsSync(path.join(ROOT, "skills", "quality", "SKILL.md"))
-  )
-    score += 3;
-  if (fs.existsSync(path.join(ROOT, "scripts", "pattern-check.sh"))) score += 2;
-  if (fs.existsSync(path.join(ROOT, ".defensive-patterns.json"))) score += 2;
-  return { score: Math.min(score, 10), gap: null };
-}
-
-function scoreAutonomousDev() {
-  let score = 3;
-  if (fs.existsSync(path.join(ROOT, "commands", "bs", "ralph.md"))) score += 2;
-  if (fs.existsSync(path.join(ROOT, "commands", "bs", "agent-run.md")))
-    score += 2;
-  if (fs.existsSync(path.join(ROOT, "skills", "workflow", "SKILL.md")))
-    score += 2;
-  if (fs.existsSync(path.join(ROOT, "docs", "ralph-patterns.md"))) score += 1;
-  return { score: Math.min(score, 10), gap: null };
-}
-
-function scoreSecurity() {
-  let score = 2;
-  if (fs.existsSync(path.join(ROOT, ".semgrep"))) score += 2;
-  if (fs.existsSync(path.join(ROOT, "scripts", "pattern-check.sh"))) score += 2;
-  if (fs.existsSync(path.join(ROOT, ".husky", "pre-commit"))) score += 2;
-  if (fs.existsSync(path.join(ROOT, ".defensive-patterns.json"))) score += 2;
-  return { score: Math.min(score, 10), gap: null };
-}
-
-function scoreGitWorkflow() {
-  let score = 3;
-  if (fs.existsSync(path.join(ROOT, ".husky", "pre-commit"))) score += 2;
-  if (fs.existsSync(path.join(ROOT, ".husky", "pre-push"))) score += 2;
-  if (
-    fs.existsSync(path.join(ROOT, "commitlint.config.cjs")) ||
-    fs.existsSync(path.join(ROOT, "commitlint.config.js"))
-  )
-    score += 2;
-  if (fs.existsSync(path.join(ROOT, ".husky", "commit-msg"))) score += 1;
-  return { score: Math.min(score, 10), gap: null };
-}
-
-function scoreDocs() {
-  let score = 3;
-  const docsCount = countFiles(path.join(ROOT, "docs"), ".md");
-  if (docsCount >= 10) score += 3;
-  else if (docsCount >= 5) score += 2;
-  if (fs.existsSync(path.join(ROOT, "BACKLOG.md"))) score += 1;
-  if (fs.existsSync(path.join(ROOT, "docs", "WORKFLOW-CHEATSHEET.md")))
-    score += 1;
-  if (fs.existsSync(path.join(ROOT, "docs", "session-learnings.md")))
-    score += 1;
-  if (fs.existsSync(path.join(ROOT, "commands", "bs", "help.md"))) score += 1;
-  return { score: Math.min(score, 10), gap: null };
-}
-
-function scorePortability() {
-  let score = 3;
-  if (fs.existsSync(path.join(ROOT, "install.sh"))) score += 3;
-  if (fs.existsSync(path.join(ROOT, "commands", "bs", "sync.md"))) score += 2;
-  if (fs.existsSync(path.join(ROOT, "commands", "bs", "help.md"))) score += 2;
-  return { score: Math.min(score, 10), gap: null };
-}
-
-function hasDep(pkg, name) {
-  return pkg && pkg.devDependencies && pkg.devDependencies[name];
-}
-
-function hasScript(pkg, name) {
-  return pkg && pkg.scripts && pkg.scripts[name];
-}
-
-function fileContains(filePath, text) {
-  if (!fs.existsSync(filePath)) return false;
-  return fs.readFileSync(filePath, "utf8").includes(text);
-}
-
-function scoreAIQuality() {
-  let score = 0;
-  const gaps = [];
-  const pkg = readJSON(path.join(ROOT, "package.json"));
-
-  // Dead code detection (knip)
-  if (hasScript(pkg, "dead-code")) score += 2;
-  else gaps.push("No dead-code script (add knip)");
-
-  // AI pattern checks in pattern-check.sh
-  const patternScript = path.join(ROOT, "scripts", "pattern-check.sh");
-  const aiPatterns = [
-    "CONSOLE_ERROR_HANDLING",
-    "UNUSED_ASYNC",
-    "ESLINT_DISABLE",
-    "ANY_TYPE",
-  ];
-  const found = aiPatterns.filter((p) => fileContains(patternScript, p)).length;
-  score += Math.min(found, 3);
-  if (found < 4) gaps.push(`${found}/4 AI patterns in pattern-check.sh`);
-
-  // Complexity gate + import verification
-  const eslintConfig = path.join(ROOT, "eslint.config.cjs");
-  if (fileContains(eslintConfig, "complexity")) score += 1;
-  else gaps.push("No ESLint complexity rule");
-  if (fileContains(eslintConfig, "max-depth")) score += 1;
-  else gaps.push("No ESLint max-depth rule");
-  if (hasDep(pkg, "eslint-plugin-n")) score += 1;
-  else gaps.push("No import verification (eslint-plugin-n)");
-
-  // Knip config
-  const hasKnipConfig = ["knip.config.js", "knip.config.ts", "knip.json"].some(
-    (f) => fs.existsSync(path.join(ROOT, f)),
-  );
-  if (hasKnipConfig) score += 1;
-  else gaps.push("No knip config");
-
-  // Mutation testing (future)
-  if (hasDep(pkg, "@stryker-mutator/core")) score += 1;
-
-  return {
-    score: Math.min(score, 10),
-    gap: gaps.length > 0 ? gaps[0] : null,
-  };
-}
-
-/**
- * Walks a directory recursively, collecting files matching given extensions.
- * Skips vendored/generated directories.
- */
-function walkFiles(dir, extensions) {
+function walkFiles(relativeDir, predicate = () => true) {
+  const root = path.join(ROOT, relativeDir);
+  if (!fs.existsSync(root)) return [];
   const results = [];
-  if (!fs.existsSync(dir)) return results;
-  const skipDirs = [
-    "node_modules",
-    ".git",
-    "__pycache__",
-    ".claude",
-    ".venv",
-    "dist",
-    "build",
-  ];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (skipDirs.includes(entry.name)) continue;
-      results.push(...walkFiles(full, extensions));
-    } else if (extensions.some((ext) => entry.name.endsWith(ext))) {
-      results.push(full);
+  const visit = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (["node_modules", ".git", "dist", "build"].includes(entry.name)) {
+        continue;
+      }
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) visit(full);
+      else if (predicate(full)) results.push(full);
     }
-  }
+  };
+  visit(root);
   return results;
 }
 
-const LOCK_FILE_PATTERNS = ["uv.lock", "package-lock", "node_modules"];
-
-function isLockFile(filePath) {
-  return LOCK_FILE_PATTERNS.some((p) => filePath.includes(p));
+function result(score, gap = null, details = undefined) {
+  return { score: Math.max(0, Math.min(10, score)), gap, ...details };
 }
 
-function scanDeprecatedPyImports(findings) {
-  for (const file of walkFiles(ROOT, [".py"])) {
-    const rel = path.relative(ROOT, file);
-    const lines = fs.readFileSync(file, "utf8").split("\n");
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      if (/(?:import|from)\s+google\.generativeai/.test(line)) {
-        findings.push({
-          file: rel,
-          line: i + 1,
-          issue: "Deprecated import: google.generativeai (use google.genai)",
-          severity: "high",
-        });
-      }
-      if (/model\s*=\s*["']dall-e-3["']/.test(line)) {
-        findings.push({
-          file: rel,
-          line: i + 1,
-          issue: "Deprecated model: dall-e-3 (use gpt-image-1.5)",
-          severity: "high",
-        });
-      }
-    }
+async function fetchSettingsSchema() {
+  const response = await fetch(SETTINGS_SCHEMA_URL, {
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    throw new Error(`settings schema request failed: HTTP ${response.status}`);
   }
+  return response.json();
 }
 
-function scanStaleApiVersions(findings) {
-  const now = new Date();
-  for (const file of walkFiles(ROOT, [".py", ".js"])) {
-    if (isLockFile(file)) continue;
-    const rel = path.relative(ROOT, file);
-    const lines = fs.readFileSync(file, "utf8").split("\n");
-    for (let i = 0; i < lines.length; i++) {
-      for (const match of lines[i].matchAll(/["'](\d{4})[_-](\d{2})["'_-]/g)) {
-        const year = parseInt(match[1]);
-        const month = parseInt(match[2]);
-        if (year < 2020 || year > 2030 || month < 1 || month > 12) continue;
-        const ageMonths =
-          (now.getFullYear() - year) * 12 + (now.getMonth() + 1 - month);
-        if (ageMonths > 12) {
-          findings.push({
-            file: rel,
-            line: i + 1,
-            issue: `Possibly stale API version: ${match[0]} (${ageMonths} months old)`,
-            severity: "medium",
-          });
-        }
-      }
-    }
+function scoreSettingsValidity(schema, schemaError) {
+  const settings = readJSON("config/settings.json");
+  if (!settings)
+    return result(0, "config/settings.json is missing or invalid JSON");
+  if (!schema) {
+    return result(0, `Live settings schema unavailable: ${schemaError}`);
   }
+  const ajv = new Ajv({
+    allErrors: true,
+    strict: false,
+    formats: { uri: true },
+  });
+  const valid = ajv.validate(schema, settings);
+  if (valid) return result(10);
+  const errors = (ajv.errors || []).map((error) => {
+    const location = error.instancePath || "settings root";
+    return `${location} ${error.message}`;
+  });
+  return result(0, `${errors.length} live-schema violation(s)`, { errors });
 }
 
-const OUTDATED_MODELS = [
-  { pattern: /["']imagen-3["']/g, replacement: "imagen-4", label: "imagen-3" },
-  {
-    pattern: /model\s*=\s*["']dall-e-3["']/g,
-    replacement: "gpt-image-1.5",
-    label: "dall-e-3",
-  },
-  {
-    pattern: /["']gemini-2\.0-flash-exp["']/g,
-    replacement: "gemini-2.0-flash (stable)",
-    label: "gemini-2.0-flash-exp",
-  },
-];
-
-function checkLineForModels(line, lineNum, file, rel, findings) {
-  for (const model of OUTDATED_MODELS) {
-    const matched = model.pattern.test(line);
-    model.pattern.lastIndex = 0;
-    if (matched && !(model.label === "dall-e-3" && file.endsWith(".py"))) {
-      findings.push({
-        file: rel,
-        line: lineNum,
-        issue: `Outdated model reference: ${model.label} (replaced by ${model.replacement})`,
-        severity: "medium",
-      });
-    }
+function scorePermissionPosture() {
+  const settings = readJSON("config/settings.json");
+  if (!settings) return result(0, "settings.json missing");
+  const permissions = settings.permissions || {};
+  const allow = permissions.allow || [];
+  const deny = permissions.deny || [];
+  const ask = permissions.ask || [];
+  let score = 0;
+  const gaps = [];
+  if (permissions.defaultMode === "auto") score += 4;
+  else gaps.push('permissions.defaultMode is not "auto"');
+  if (!allow.includes("Bash")) score += 2;
+  else gaps.push("blanket Bash permission is allowed");
+  if (deny.some((rule) => rule.includes("rm -rf"))) score += 1;
+  else gaps.push("no destructive-delete deny rule");
+  if (ask.some((rule) => rule.includes("git push --force"))) score += 1;
+  else gaps.push("force-push is not confirmation-gated");
+  const sandbox = settings.sandbox || {};
+  if (sandbox.credentials) score += 1;
+  else gaps.push("sandbox.credentials is not configured");
+  if (
+    Array.isArray(sandbox.deniedDomains) &&
+    sandbox.deniedDomains.length > 0
+  ) {
+    score += 1;
+  } else {
+    gaps.push("sandbox.deniedDomains is not configured");
   }
+  return result(score, gaps[0] || null, { gaps });
 }
 
-function scanOutdatedModels(findings) {
-  const allFiles = walkFiles(ROOT, [
-    ".py",
-    ".js",
-    ".ts",
-    ".json",
-    ".md",
-    ".yaml",
-    ".yml",
-    ".sh",
-  ]);
-  for (const file of allFiles) {
-    if (isLockFile(file)) continue;
+function scoreNativeFirst() {
+  const obsoletePaths = [
+    "commands/bs/cost.md",
+    "commands/gh/review-pr.md",
+    "commands/bs/session.md",
+    "commands/bs/resume.md",
+    "commands/bs/context.md",
+    "commands/bs/dashboard.md",
+    "commands/bs/agent-run.md",
+    "commands/bs/agent-new.md",
+    "scripts/cost-tracker.js",
+  ];
+  const offenders = obsoletePaths.filter(exists);
+  return result(
+    10 - offenders.length * 2,
+    offenders.length ? `Reimplements native feature: ${offenders[0]}` : null,
+    { offenders },
+  );
+}
+
+function scoreDistribution() {
+  const plugin = readJSON(".claude-plugin/plugin.json");
+  const marketplace = readJSON(".claude-plugin/marketplace.json");
+  let score = 0;
+  const gaps = [];
+  if (plugin && plugin.name) score += 5;
+  else gaps.push("plugin manifest missing or invalid");
+  if (marketplace && Array.isArray(marketplace.plugins)) score += 3;
+  else gaps.push("marketplace manifest missing or invalid");
+  if (plugin && plugin.name === "bs") score += 2;
+  else gaps.push("plugin does not provide the bs namespace");
+  return result(score, gaps[0] || null, { gaps });
+}
+
+function notificationMatchers(settings) {
+  return (settings?.hooks?.Notification || []).map((entry) => entry.matcher);
+}
+
+function scoreAgentOrchestration() {
+  const settings = readJSON("config/settings.json");
+  if (!settings) return result(0, "settings.json missing");
+  const matchers = notificationMatchers(settings);
+  const corpus = [
+    readText("skills/dev/SKILL.md"),
+    readText("skills/ralph/SKILL.md"),
+    readText("config/CLAUDE.md"),
+  ].join("\n");
+  let score = 0;
+  const gaps = [];
+  if (/background (?:Agent|subagent)|run_in_background/.test(corpus))
+    score += 2;
+  else gaps.push("no native background-agent workflow found");
+  if (/agent team|TeamCreate|TaskCreate/.test(corpus)) score += 2;
+  else gaps.push("no agent-team workflow found");
+  if (/\bWorkflow\b/.test(corpus)) score += 2;
+  else gaps.push("no Workflow-tool usage found");
+  if (/isolation:\s*["']worktree["']|worktree isolation/.test(corpus))
+    score += 2;
+  else gaps.push("no worktree-isolated agent usage found");
+  if (matchers.includes("agent_completed")) score += 1;
+  else gaps.push("agent_completed notification missing");
+  if (matchers.includes("agent_needs_input")) score += 1;
+  else gaps.push("agent_needs_input notification missing");
+  return result(score, gaps[0] || null, { gaps });
+}
+
+function scoreClaudeMd() {
+  const content = readText("config/CLAUDE.md");
+  if (!content) return result(0, "config/CLAUDE.md missing");
+  const lines = content.split("\n").length;
+  const required = ["Action Defaults", "Code Quality", "Communication", "Git"];
+  const missing = required.filter((heading) => !content.includes(heading));
+  let score = lines < 100 ? 6 : lines <= 120 ? 5 : 3;
+  score += required.length - missing.length;
+  return result(
+    score,
+    lines >= 100 ? `${lines} lines (target <100)` : missing[0] || null,
+    { lines, missing },
+  );
+}
+
+function scoreBoundedAutonomy() {
+  const checks = [
+    exists("scripts/quality-run-governor.js"),
+    /MAX_TRANSITIONS=\d+/.test(readText("scripts/ralph-next-run.sh")),
+    exists("scripts/__tests__/quality-run-governor-bump.test.js"),
+    /max_wall_seconds/.test(readText("scripts/quality-run-governor.js")),
+    /max_review_rounds/.test(readText("scripts/quality-run-governor.js")),
+  ];
+  const passed = checks.filter(Boolean).length;
+  return result(
+    passed * 2,
+    passed < checks.length ? "Autonomy cap missing" : null,
+  );
+}
+
+function scoreHooks() {
+  const settings = readJSON("config/settings.json");
+  const hooks = settings?.hooks;
+  if (!hooks) return result(0, "No hooks configured");
+  const required = ["PreToolUse", "PostToolUse", "PreCompact", "Notification"];
+  const missing = required.filter((name) => !hooks[name]);
+  let score = required.length - missing.length;
+  if (exists("scripts/block-push-main.sh")) score += 2;
+  if (exists("scripts/block-destructive-paths.sh")) score += 2;
+  if (exists(".husky/pre-commit")) score += 2;
+  return result(score, missing[0] ? `Missing ${missing[0]} hook` : null, {
+    missing,
+  });
+}
+
+function scoreSkillDesign() {
+  const skillFiles = walkFiles("skills", (file) => file.endsWith("SKILL.md"));
+  const oversized = [];
+  const inert = [];
+  let forked = 0;
+  for (const file of skillFiles) {
+    const content = fs.readFileSync(file, "utf8");
+    const frontmatter = content.match(/^---\n([\s\S]*?)\n---/)?.[1] || "";
+    const words = content.trim().split(/\s+/).length;
+    if ((words * 13) / 10 > 5_000) oversized.push(path.relative(ROOT, file));
+    if (/^(?:invokes|auto_invoke):/m.test(frontmatter))
+      inert.push(path.relative(ROOT, file));
+    if (/^context:\s*fork\s*$/m.test(content)) forked += 1;
+  }
+  let score = 10;
+  if (oversized.length) score -= 4;
+  if (inert.length) score -= 3;
+  if (forked === 0) score -= 2;
+  const gap =
+    oversized[0] || inert[0] || (forked === 0 ? "No forked skills" : null);
+  return result(score, gap, { oversized, inert, forked });
+}
+
+function scanRetiredModels() {
+  const retired = ["claude-3-opus", "claude-3-sonnet", "gemini-2.0-flash-exp"];
+  const findings = [];
+  for (const file of walkFiles(".", (candidate) =>
+    /\.(md|json|js|sh)$/.test(candidate),
+  )) {
     if (
-      file.includes("sota-score.js") ||
-      file.includes("check-deprecated-apis.sh")
+      file.endsWith("sota-score.js") ||
+      file.endsWith("check-deprecated-apis.sh")
     )
       continue;
-    const rel = path.relative(ROOT, file);
-    const lines = fs.readFileSync(file, "utf8").split("\n");
-    for (let i = 0; i < lines.length; i++) {
-      checkLineForModels(lines[i], i + 1, file, rel, findings);
+    const content = fs.readFileSync(file, "utf8");
+    for (const model of retired) {
+      if (content.includes(model))
+        findings.push(`${path.relative(ROOT, file)}: ${model}`);
     }
   }
+  return findings;
 }
 
-function checkApiCurrency() {
-  const findings = [];
-  scanDeprecatedPyImports(findings);
-  scanStaleApiVersions(findings);
-  scanOutdatedModels(findings);
+function scoreModelConfig() {
+  const settings = readJSON("config/settings.json");
+  if (!settings) return result(0, "settings.json missing");
+  let score = 0;
+  const gaps = [];
+  if (
+    Array.isArray(settings.fallbackModel) &&
+    settings.fallbackModel.length >= 2
+  )
+    score += 4;
+  else gaps.push("fallbackModel chain missing");
+  const effortReferences = walkFiles("skills", (file) =>
+    file.endsWith(".md"),
+  ).some((file) =>
+    /(?:effort|codex-effort).*(?:medium|high|xhigh)/.test(
+      fs.readFileSync(file, "utf8"),
+    ),
+  );
+  if (effortReferences) score += 2;
+  else gaps.push("no deliberate effort routing found");
+  if (exists("scripts/check-deprecated-apis.sh")) score += 2;
+  else gaps.push("no deprecation scanner");
+  const retiredModels = scanRetiredModels();
+  if (retiredModels.length === 0) score += 2;
+  else gaps.push(`retired model reference: ${retiredModels[0]}`);
+  return result(score, gaps[0] || null, { gaps, retiredModels });
+}
 
-  const highCount = findings.filter((f) => f.severity === "high").length;
-  const mediumCount = findings.filter((f) => f.severity === "medium").length;
-  const score = Math.max(0, 10 - (highCount * 3 + mediumCount));
+function scoreQualityGates() {
+  const pkg = readJSON("package.json");
+  const scripts = pkg?.scripts || {};
+  const required = ["lint", "test", "test:patterns", "security:scan"];
+  const missing = required.filter((name) => !scripts[name]);
+  let score = required.length - missing.length;
+  if (exists("skills/quality/SKILL.md")) score += 2;
+  if (exists("scripts/quality-codex-review.sh")) score += 2;
+  if (exists("scripts/quality-run-governor.js")) score += 2;
+  return result(score, missing[0] ? `Missing ${missing[0]} gate` : null, {
+    missing,
+  });
+}
 
-  return {
-    score: Math.min(score, 10),
-    gap:
-      findings.length > 0
-        ? `${findings.length} deprecated API/model references found`
+function scoreSecurity() {
+  const checks = [
+    exists("scripts/block-destructive-paths.sh"),
+    exists("scripts/run-semgrep.sh"),
+    exists(".semgrep"),
+    exists(".husky/pre-commit"),
+    /\.env/.test(readText("config/CLAUDE.md")),
+  ];
+  const privateLeak = /(?:\/Users\/brett|Projects\/internal|brettstark)/i.test(
+    [readText("README.md"), readText("config/settings.json")].join("\n"),
+  );
+  const passed = checks.filter(Boolean).length;
+  return result(
+    passed * 2 - (privateLeak ? 2 : 0),
+    privateLeak ? "Private path/data leak" : null,
+  );
+}
+
+function scoreGitWorkflow() {
+  const checks = [
+    exists(".husky/pre-commit"),
+    exists(".husky/pre-push"),
+    exists(".husky/commit-msg"),
+    exists("commitlint.config.js") || exists("commitlint.config.cjs"),
+    exists("scripts/block-commit-main.sh"),
+  ];
+  const passed = checks.filter(Boolean).length;
+  return result(
+    passed * 2,
+    passed < checks.length ? "Git workflow gate missing" : null,
+  );
+}
+
+function scoreObservability() {
+  const corpus = [readText("README.md"), readText("skills/sota/SKILL.md")].join(
+    "\n",
+  );
+  const settings = readJSON("config/settings.json");
+  const env = settings?.env || {};
+  const hasUsage = corpus.includes("/usage");
+  const hasOtel = Object.keys(env).some((key) => key.startsWith("OTEL_"));
+  const score = (hasUsage ? 6 : 0) + (hasOtel ? 4 : 0);
+  return result(
+    score,
+    !hasUsage
+      ? "/usage is not documented"
+      : !hasOtel
+        ? "OpenTelemetry is not configured"
         : null,
-    findings,
+  );
+}
+
+function compareVersions(left, right) {
+  const a = left.split(".").map(Number);
+  const b = right.split(".").map(Number);
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    const difference = (a[i] || 0) - (b[i] || 0);
+    if (difference !== 0) return Math.sign(difference);
+  }
+  return 0;
+}
+
+function scoreCurrency() {
+  const settings = readJSON("config/settings.json");
+  const pinned = settings?.requiredMinimumVersion;
+  const rubric = readText("skills/sota/SKILL.md");
+  const reviewedMatch = rubric.match(/Last reviewed:\s*(\d{4}-\d{2}-\d{2})/);
+  const reviewed = reviewedMatch
+    ? new Date(`${reviewedMatch[1]}T00:00:00Z`)
+    : null;
+  const ageDays = reviewed
+    ? Math.floor((Date.now() - reviewed.getTime()) / 86_400_000)
+    : Infinity;
+  let score = 0;
+  const gaps = [];
+  if (pinned && compareVersions(pinned, CURRENT_BASELINE) >= 0) score += 6;
+  else gaps.push(`requiredMinimumVersion is below ${CURRENT_BASELINE}`);
+  if (ageDays <= 30) score += 4;
+  else gaps.push("SOTA rubric is older than 30 days");
+  return result(score, gaps[0] || null, {
+    pinned,
+    baseline: CURRENT_BASELINE,
+    ageDays,
+  });
+}
+
+async function scoreRepository({ schema, schemaError } = {}) {
+  let liveSchema = schema;
+  let liveSchemaError = schemaError;
+  if (!liveSchema && !liveSchemaError) {
+    try {
+      liveSchema = await fetchSettingsSchema();
+    } catch (error) {
+      liveSchemaError = error.message;
+    }
+  }
+  const categories = {
+    settings_validity: scoreSettingsValidity(liveSchema, liveSchemaError),
+    permission_posture: scorePermissionPosture(),
+    native_first: scoreNativeFirst(),
+    distribution: scoreDistribution(),
+    agent_orchestration: scoreAgentOrchestration(),
+    claude_md: scoreClaudeMd(),
+    bounded_autonomy: scoreBoundedAutonomy(),
+    hooks: scoreHooks(),
+    skill_design: scoreSkillDesign(),
+    model_config: scoreModelConfig(),
+    quality_gates: scoreQualityGates(),
+    security: scoreSecurity(),
+    git_workflow: scoreGitWorkflow(),
+    observability: scoreObservability(),
+    currency: scoreCurrency(),
+  };
+  const scores = Object.fromEntries(
+    Object.entries(categories).map(([name, value]) => [name, value.score]),
+  );
+  const values = Object.values(scores);
+  const overall =
+    Math.round(
+      (values.reduce((sum, value) => sum + value, 0) / values.length) * 10,
+    ) / 10;
+  return {
+    date: new Date().toISOString().split("T")[0],
+    rubricVersion: "3.0",
+    overall,
+    scores,
+    topGaps: Object.values(categories)
+      .map((value) => value.gap)
+      .filter(Boolean)
+      .slice(0, 3),
+    categories,
   };
 }
 
-// Run all categories
-const categories = {
-  claude_md: scoreCLAUDEmd(),
-  settings: scoreSettings(),
-  hooks: scoreHooks(),
-  skills: scoreSkills(),
-  commands: scoreCommands(),
-  mcp: scoreMCP(),
-  quality: scoreQuality(),
-  ai_quality: scoreAIQuality(),
-  autonomous_dev: scoreAutonomousDev(),
-  security: scoreSecurity(),
-  git_workflow: scoreGitWorkflow(),
-  docs: scoreDocs(),
-  portability: scorePortability(),
-  api_currency: checkApiCurrency(),
-};
-
-const scores = {};
-const topGaps = [];
-for (const [key, result] of Object.entries(categories)) {
-  scores[key] = result.score;
-  if (result.gap) topGaps.push(result.gap);
+async function main() {
+  const output = await scoreRepository();
+  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
 
-const values = Object.values(scores);
-const overall =
-  Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10) / 10;
-
-const output = {
-  date: new Date().toISOString().split("T")[0],
-  overall,
-  scores,
-  topGaps: topGaps.slice(0, 3),
+module.exports = {
+  CURRENT_BASELINE,
+  compareVersions,
+  scoreRepository,
+  scoreSettingsValidity,
 };
 
-console.log(JSON.stringify(output, null, 2));
+if (require.main === module) {
+  main().catch((error) => {
+    process.stderr.write(`sota-score: ${error.message}\n`);
+    process.exit(1);
+  });
+}

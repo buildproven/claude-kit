@@ -96,6 +96,8 @@ SKILL.md is now split (under 5,000 tokens) and `check-skill-size.sh` is a hard g
 ### Changed
 
 - `requiredMinimumVersion` 2.1.198 → 2.1.207.
+- `requiredMinimumVersion` 2.1.207 → 2.1.210 for the latest worktree and
+  destructive-path safety fixes.
 
 ## [3.0.0] - 2026-07-12
 

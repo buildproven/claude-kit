@@ -10,7 +10,7 @@ file taints a mixed changeset.
 That is not a prompt saying "please be thorough". It is
 [`risk-score.js`](scripts/risk-score.js) (537 lines), a
 [run governor](scripts/quality-run-governor.js) that caps runaway review loops and
-fails _closed_, and a target resolver — **312 tests, 88% coverage**.
+fails _closed_, and a target resolver — **333 tests, 88% coverage**.
 
 Plus autonomous backlog execution, multi-LLM strategy panels, fleet auditing, and 14
 specialist agents.
@@ -151,7 +151,7 @@ Agents: `business-panel-experts`, `competitive-analyst`, `critic`,
 
 ### Removed — Claude Code now does these natively
 
-Don't reimplement what the platform ships. As of 2.1.207:
+Don't reimplement what the platform ships. As of 2.1.210:
 
 | Was                                        | Use instead                                                            |
 | ------------------------------------------ | ---------------------------------------------------------------------- |
