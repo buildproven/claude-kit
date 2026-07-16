@@ -24,6 +24,8 @@ All notable changes to claude-kit are documented here.
   available where they are useful; internal implementation skills are hidden from
   user menus with `user-invocable: false`.
 - Steward state moved out of the repository into the XDG state directory.
+- The distributed plugin and marketplace manifests now match v4.0.0, and the
+  duplicate standard hooks declaration was removed so fresh installs load cleanly.
 
 ## [3.2.0] - 2026-07-15
 

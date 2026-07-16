@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -93,11 +94,9 @@ describe("provider-native platform", () => {
       "--target",
       target,
     ]);
-    expect(
-      execFileSync("readlink", [path.join(target, "keep")], {
-        encoding: "utf8",
-      }).trim(),
-    ).toBe(path.join(source, "keep"));
+    expect(readlinkSync(path.join(target, "keep"))).toBe(
+      path.join(source, "keep"),
+    );
     expect(
       spawnSync("bash", [
         SKILL_SYNC,
