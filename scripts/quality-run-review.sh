@@ -37,7 +37,13 @@ source "$SCRIPT_DIR/quality-review-plan.sh"
 REVIEW_INFO="$(node "$SCRIPT_DIR/quality-invocation.js" review-info "$MANIFEST")" || exit 1
 REVIEW_ROUND="$(printf '%s' "$REVIEW_INFO" | jq -r '.round')"
 if [ "$REVIEW_ROUND" -gt 1 ]; then
-  QUALITY_REVIEW_TIMEOUT="$(field risk.runtime.verificationSeconds)"
+  # A mandatory fix-validation pass owns its own provider allowance. The
+  # verification reserve is campaign-planning metadata, not a provider
+  # timeout; using it here made large reviews time out before they could
+  # validate otherwise-complete remediation. Legacy manifests predate the
+  # persisted validation allowance and use the bounded default.
+  QUALITY_REVIEW_TIMEOUT="$(field risk.runtime.validationSeconds)"
+  [ -n "$QUALITY_REVIEW_TIMEOUT" ] || QUALITY_REVIEW_TIMEOUT=300
   QUALITY_REVIEW_PASSES=1
   QUALITY_REVIEW_DEPTH=high
   QUALITY_REVIEW_FOCUS="Targeted verification only: prove each prior blocker is fixed and inspect the fix delta for regressions."

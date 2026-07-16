@@ -1074,8 +1074,7 @@ function providerPhaseSeconds(manifest) {
   return manifest.reviews.length === 0
     ? (manifest.risk?.runtime?.reviewSeconds ??
         manifest.governor.providerWindowSeconds)
-    : (manifest.risk?.runtime?.verificationSeconds ??
-        manifest.governor.reReviewReserveSeconds);
+    : (manifest.risk?.runtime?.validationSeconds ?? 300);
 }
 
 function authorizeProviderAttempt(manifest, options) {

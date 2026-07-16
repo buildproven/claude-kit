@@ -81,6 +81,24 @@ describe("provider review runtime", () => {
     expect(runner.indexOf(riskLoad)).toBeLessThan(runner.indexOf(planLoad));
   });
 
+  it("gives mandatory fix validation its persisted provider allowance", () => {
+    const runner = readFileSync(RUN_REVIEW, "utf8");
+    const invocation = readFileSync(
+      path.join(ROOT, "scripts", "quality-invocation.js"),
+      "utf8",
+    );
+
+    expect(runner).toContain(
+      'QUALITY_REVIEW_TIMEOUT="$(field risk.runtime.validationSeconds)"',
+    );
+    expect(runner).toContain(
+      '[ -n "$QUALITY_REVIEW_TIMEOUT" ] || QUALITY_REVIEW_TIMEOUT=300',
+    );
+    expect(invocation).toMatch(
+      /manifest\.reviews\.length === 0[\s\S]*risk\?\.runtime\?\.reviewSeconds[\s\S]*risk\?\.runtime\?\.validationSeconds \?\? 300/,
+    );
+  });
+
   it("kills the provider tree when the wrapper itself is cancelled", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "bounded-cancel-"));
     const pidFile = path.join(dir, "child.pid");
