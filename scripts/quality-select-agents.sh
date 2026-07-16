@@ -4,11 +4,17 @@
 # tier/level fallback) and persists the panel to a sentinel file, since bash
 # arrays do not survive across the quality skill's fenced bash blocks.
 #
-# Must be `source`d from a context that already has GIT_ROOT, TIER, LEVEL,
-# and (optionally) AGENT_TARGET set (see quality-risk-resolve.sh). Sets
-# AGENTS (array) and REQUIRE_BREAK_GLASS in the caller's shell, and writes
+# Must be `source`d after quality-load-root.sh. It restores the persisted risk
+# plan itself because fenced quality blocks are separate shell processes.
+# Sets AGENTS (array) and REQUIRE_BREAK_GLASS in the caller's shell, and writes
 # the panel to $TMPDIR/bs-quality-agents-<session>.txt.
 set -u
+
+RISK_STATE_FILE="${BS_QUALITY_ROOT_FILE:-/nonexistent}"
+RISK_STATE_FILE="${RISK_STATE_FILE%.txt}-riskstate.env"
+[ -f "$RISK_STATE_FILE" ] && source "$RISK_STATE_FILE"
+LEVEL="${LEVEL:-auto}"
+REQUIRE_BREAK_GLASS=false
 
 # The review panel in PRIORITY ORDER. The risk score selects the first N from
 # this list; the always-on floor (first 2) means no change merges with zero

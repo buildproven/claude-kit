@@ -14,6 +14,7 @@ const VALIDATOR = path.join(
   "quality-validate-review-trailers.sh",
 );
 const RUN_REVIEW = path.join(ROOT, "scripts", "quality-run-review.sh");
+const SELECT_AGENTS = path.join(ROOT, "scripts", "quality-select-agents.sh");
 const NORMALIZE_CODEX_REVIEW = path.join(
   ROOT,
   "scripts",
@@ -235,6 +236,35 @@ printf '%s' "$LEVEL|$TIER|$RISK_SCORE|$QUALITY_WORKLOAD|$QUALITY_DIFF_FILES|$QUA
     expect(result.stderr).not.toContain("parse error");
     expect(result.stdout.trim().split("\n").at(-1)).toBe(
       "auto|high|51|medium|9|495|600|210",
+    );
+  });
+
+  it("restores the persisted plan when agent selection starts in a fresh shell", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "quality-agent-state-"));
+    const rootFile = path.join(dir, "root.txt");
+    writeFileSync(
+      rootFile.replace(/\.txt$/, "-riskstate.env"),
+      "TIER='high'\nRISK_SCORE='54'\nAGENT_TARGET='6'\nLEVEL='auto'\n",
+    );
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `
+BS_QUALITY_ROOT_FILE="$1"
+BS_QUALITY_SESSION_ID="fresh-shell"
+source "$2"
+printf '%s' "$LEVEL|$TIER|\${#AGENTS[@]}|\${AGENTS[0]}|\${AGENTS[5]}"
+`,
+        "agent-state",
+        rootFile,
+        SELECT_AGENTS,
+      ],
+      { cwd: ROOT, encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n").at(-1)).toBe(
+      "auto|high|6|code-reviewer|code-simplifier",
     );
   });
 
