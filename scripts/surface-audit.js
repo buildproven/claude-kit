@@ -86,7 +86,14 @@ function allowedSkills() {
   const allowed = new Set();
   for (const allowlist of skillAllowlistArgs) {
     if (!fs.existsSync(allowlist)) continue;
-    const payload = JSON.parse(fs.readFileSync(allowlist, "utf8"));
+    let payload;
+    try {
+      payload = JSON.parse(fs.readFileSync(allowlist, "utf8"));
+    } catch (error) {
+      throw new Error(`Invalid skill allowlist JSON: ${allowlist}`, {
+        cause: error,
+      });
+    }
     for (const name of payload.skills || []) allowed.add(name);
   }
   return allowed;
