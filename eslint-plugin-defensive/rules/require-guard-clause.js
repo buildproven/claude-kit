@@ -34,6 +34,7 @@ module.exports = {
   },
 
   create(context) {
+    const sourceCode = context.sourceCode ?? context.getSourceCode();
     const options = context.options[0] || {};
     const allowLiterals = options.allowLiterals !== false; // Default true
 
@@ -113,7 +114,7 @@ module.exports = {
               messageId: "unsafeDivision",
               data: {
                 divisor: "0",
-                expression: context.getSourceCode().getText(node),
+                expression: sourceCode.getText(node),
               },
             });
           }
@@ -140,7 +141,7 @@ module.exports = {
             messageId: "unsafeDivision",
             data: {
               divisor: divisorName,
-              expression: context.getSourceCode().getText(node),
+              expression: sourceCode.getText(node),
             },
           });
         }
