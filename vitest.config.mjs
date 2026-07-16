@@ -2,7 +2,11 @@ export default {
   test: {
     globals: true,
     environment: "node",
-    include: ["scripts/__tests__/**/*.test.js", "tests/unit/**/*.test.js"],
+    include: [
+      "scripts/__tests__/**/*.test.js",
+      "eslint-plugin-defensive/__tests__/**/*.test.js",
+      "tests/unit/**/*.test.js",
+    ],
     coverage: {
       provider: "v8",
       reporter: ["text", "text-summary"],

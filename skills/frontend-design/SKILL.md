@@ -6,6 +6,11 @@ description: Create distinctive, production-grade frontend interfaces with high 
 license: Complete terms in LICENSE.txt
 ---
 
+> Derived from Anthropic's Apache-2.0 `frontend-design` skill and substantially
+> modified by buildproven. Changes include expanded production guidance, the
+> AI-ism denylist, mandatory self-review, and original design-reference datasets.
+> See `LICENSE.txt` and the repository `NOTICE` for provenance and license scope.
+
 This skill guides creation of distinctive, production-grade frontend interfaces that avoid generic "AI slop" aesthetics. Implement real working code with exceptional attention to aesthetic details and creative choices.
 
 The user provides frontend requirements: a component, page, application, or interface to build. They may include context about the purpose, audience, or technical constraints.

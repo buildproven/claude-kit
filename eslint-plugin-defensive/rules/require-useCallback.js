@@ -1,5 +1,5 @@
 /**
- * @fileoverview Require useCallback for inline handlers in JSX
+ * @fileoverview Require useCallback for inline functions in JSX handlers
  * @description Prevents re-render storms from unstable function references
  */
 
@@ -9,14 +9,13 @@ module.exports = {
   meta: {
     type: "suggestion",
     docs: {
-      description:
-        "Require useCallback for inline arrow function handlers in JSX",
+      description: "Require useCallback for inline function handlers in JSX",
       category: "Performance",
       recommended: true,
     },
     messages: {
       inlineHandler:
-        "Inline arrow function in JSX prop '{{prop}}' creates new function on every render. Use useCallback instead.",
+        "Inline function in JSX prop '{{prop}}' creates a new function on every render. Use useCallback instead.",
     },
     schema: [
       {
@@ -69,7 +68,8 @@ module.exports = {
     return {
       JSXAttribute(node) {
         // Check if this is an event handler prop
-        const propName = node.name.name;
+        const propName =
+          typeof node.name.name === "string" ? node.name.name : null;
 
         // Skip ignored props
         if (ignoredProps.includes(propName)) {
@@ -80,6 +80,7 @@ module.exports = {
         const isHandlerProp =
           handlerProps.includes(propName) ||
           (propName &&
+            propName.length > 2 &&
             propName.startsWith("on") &&
             propName[2] === propName[2].toUpperCase());
 
@@ -87,11 +88,13 @@ module.exports = {
           return;
         }
 
-        // Check if the value is an inline arrow function
+        // Check if the value is an inline function
         if (
           node.value &&
           node.value.type === "JSXExpressionContainer" &&
-          node.value.expression.type === "ArrowFunctionExpression"
+          ["ArrowFunctionExpression", "FunctionExpression"].includes(
+            node.value.expression.type,
+          )
         ) {
           inlineHandlerCount++;
 

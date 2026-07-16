@@ -5,6 +5,10 @@ rules:
     languages:
       - javascript
       - typescript
+    paths:
+      exclude:
+        - /scripts/__tests__/**
+        - /eslint-plugin-defensive/__tests__/**
     patterns:
       - pattern: JSON.parse(...)
       - pattern-not-inside: |

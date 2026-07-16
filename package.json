@@ -1,8 +1,9 @@
 {
   "name": "claude-kit",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "private": true,
   "description": "Free, open-source Claude Code toolkit \u2014 commands, skills, agents, and quality automation",
+  "license": "MIT AND Apache-2.0",
   "scripts": {
     "prepare": "[ \"$CI\" = \"true\" ] && echo 'Skipping Husky in CI' || husky",
     "format": "prettier --write .",
@@ -57,10 +58,10 @@
     "fast-uri": ">=3.1.2"
   },
   "engines": {
-    "node": ">=20"
+    "node": "^20.19.0 || >=22.12.0"
   },
   "volta": {
-    "node": "20.11.1",
-    "npm": "10.2.4"
+    "node": "22.12.0",
+    "npm": "10.9.0"
   }
 }

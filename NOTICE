@@ -1,0 +1,25 @@
+claude-kit
+Copyright 2026 buildproven
+
+Third-party and derivative component notices
+=============================================
+
+skills/frontend-design/SKILL.md
+--------------------------------
+Derived from Anthropic's `frontend-design` skill:
+https://github.com/anthropics/skills/tree/main/skills/frontend-design
+
+The upstream work is licensed under the Apache License, Version 2.0. This copy
+has been substantially modified by buildproven, including expanded production
+guidance, an AI-ism denylist, a mandatory self-review pass, and integration with
+the design-reference data shipped alongside it. See
+skills/frontend-design/LICENSE.txt for the complete license terms.
+
+skills/frontend-design/data/*.csv
+---------------------------------
+The design-reference datasets are original buildproven work and are licensed
+under the repository's MIT License. They are not derived from Anthropic's skill.
+
+The previously vendored Anthropic `webapp-testing` skill was removed in v3.2.0.
+Use Anthropic's maintained upstream version instead:
+https://github.com/anthropics/skills/tree/main/skills/webapp-testing
