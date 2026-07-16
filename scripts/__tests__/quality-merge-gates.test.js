@@ -69,16 +69,23 @@ describe("quality merge gates", () => {
     expect(AUTHORIZE).toMatch(/\.mergeCommit\.oid/);
   });
 
+  it("delegates concrete ruleset applicability to GitHub", () => {
+    expect(AUTHORIZE).toMatch(/rules\/branches\/\$ENCODED_BASE_NAME/);
+    expect(AUTHORIZE).not.toMatch(/rulesets\?includes_parents/);
+    expect(AUTHORIZE).not.toMatch(/conditions\.ref_name/);
+    expect(AUTHORIZE).toMatch(/strict_required_status_checks_policy == true/);
+  });
+
   it("persists one exact empty stamp and waits boundedly for its CI", () => {
     expect(STAMP_AND_MERGE).toMatch(/merge\.stampHead/);
     expect(STAMP_AND_MERGE).toMatch(/record-stamp/);
     expect(STAMP_AND_MERGE).toMatch(/quality-run-bounded\.sh/);
     expect(STAMP_AND_MERGE).toMatch(
-      /gh pr checks "\$PR" --required --watch --interval 10/,
+      /quality-wait-required-checks\.sh" --pr "\$PR"/,
     );
-    expect(STAMP_AND_MERGE.indexOf("gh pr checks")).toBeLessThan(
-      STAMP_AND_MERGE.indexOf("quality-authorize-merge.sh"),
-    );
+    expect(
+      STAMP_AND_MERGE.indexOf("quality-wait-required-checks.sh"),
+    ).toBeLessThan(STAMP_AND_MERGE.indexOf("quality-authorize-merge.sh"));
     expect(AUTHORIZE).toMatch(/persisted empty stamp/);
   });
 

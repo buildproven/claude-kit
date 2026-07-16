@@ -61,54 +61,34 @@ git merge-base --is-ancestor "$EXPECTED_BASE_OID" "$EXPECTED_HEAD" || {
   exit 1
 }
 REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
-DEFAULT_BRANCH="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)" || exit 1
 ATOMIC_BASE_FRESHNESS=false
 ENCODED_BASE_NAME="$(jq -rn --arg value "$ACTUAL_BASE_NAME" '$value | @uri')" || exit 1
 if [ "$(gh api "repos/$REPOSITORY/branches/$ENCODED_BASE_NAME/protection/required_status_checks" \
   --jq '.strict' 2>/dev/null || true)" = true ]; then
   ATOMIC_BASE_FRESHNESS=true
 fi
-RULESET_IDS="$(gh api "repos/$REPOSITORY/rulesets?includes_parents=true" --jq '.[].id')" || exit 1
-for RULESET_ID in $RULESET_IDS; do
-  RULESET_JSON="$(gh api "repos/$REPOSITORY/rulesets/$RULESET_ID")" || {
-    echo "❌ MERGE BLOCKED: could not inspect repository ruleset $RULESET_ID." >&2
-    exit 1
-  }
-  if printf '%s' "$RULESET_JSON" |
-    jq -e --arg ref "refs/heads/$ACTUAL_BASE_NAME" --arg default "$DEFAULT_BRANCH" '
-      .enforcement == "active" and
-      any(.rules[]?; .type == "merge_queue") and
-      any(.conditions.ref_name.include[]?;
-        . as $pattern |
-        . == "~ALL" or
-        (. == "~DEFAULT_BRANCH" and $ref == ("refs/heads/" + $default)) or
-        . == $ref or
-        ($pattern | endswith("/*")) and ($ref | startswith($pattern[0:-1]))
-      ) and
-      ([.conditions.ref_name.exclude[]?] | index($ref) | not)
-    ' >/dev/null; then
+# GitHub evaluates ruleset include/exclude patterns for this concrete branch.
+# Do not duplicate fnmatch semantics locally: exclusions, nested wildcards,
+# organization rulesets, and future pattern syntax must remain server-owned.
+# If this endpoint is unavailable, rulesets provide no authorization and the
+# classic strict-protection check above is the only accepted guarantee.
+if EFFECTIVE_RULES="$(gh api \
+  "repos/$REPOSITORY/rules/branches/$ENCODED_BASE_NAME" 2>/dev/null)"; then
+  if printf '%s' "$EFFECTIVE_RULES" |
+    jq -e 'any(.[]?; .type == "merge_queue")' >/dev/null; then
     echo "❌ MERGE BLOCKED: merge-queue branches require a queue-aware monitored merge path." >&2
     exit 1
   fi
-  if printf '%s' "$RULESET_JSON" |
-    jq -e --arg ref "refs/heads/$ACTUAL_BASE_NAME" --arg default "$DEFAULT_BRANCH" '
-      .enforcement == "active" and
-      any(.rules[]?;
+  if printf '%s' "$EFFECTIVE_RULES" |
+    jq -e '
+      any(.[]?;
         .type == "required_status_checks" and
         .parameters.strict_required_status_checks_policy == true
-      ) and
-      any(.conditions.ref_name.include[]?;
-        . as $pattern |
-        . == "~ALL" or
-        (. == "~DEFAULT_BRANCH" and $ref == ("refs/heads/" + $default)) or
-        . == $ref or
-        ($pattern | endswith("/*")) and ($ref | startswith($pattern[0:-1]))
-      ) and
-      ([.conditions.ref_name.exclude[]?] | index($ref) | not)
+      )
     ' >/dev/null; then
     ATOMIC_BASE_FRESHNESS=true
   fi
-done
+fi
 [ "$ATOMIC_BASE_FRESHNESS" = true ] || {
   echo "❌ MERGE BLOCKED: the PR base lacks server-enforced strict freshness." >&2
   echo "   Enable strict required-status checks or use a supported merge queue." >&2

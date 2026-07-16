@@ -61,7 +61,7 @@ esac
 }
 echo "[quality] waiting up to ${CI_TIMEOUT}s for required CI on stamp $STAMP_HEAD"
 bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CI_TIMEOUT" -- \
-  gh pr checks "$PR" --required --watch --interval 10 || {
+  bash "$SCRIPT_DIR/quality-wait-required-checks.sh" --pr "$PR" || {
     RC=$?
     [ "$RC" -eq 124 ] &&
       echo "❌ MERGE BLOCKED: timed out waiting for CI on stamp $STAMP_HEAD." >&2

@@ -80,6 +80,7 @@ function normalizeManifestCollections(manifest) {
   manifest.reviews ??= [];
   manifest.gates ??= [];
   manifest.merge ??= {};
+  manifest.merge.invalidatedStamps ??= [];
   manifest.governor ??= {};
   manifest.governor.authorizedAttempts ??= [];
 }
@@ -167,10 +168,10 @@ function validateIdentity(manifest, cwd, { requireHead = true } = {}) {
   return { actualRoot, currentHead };
 }
 
-function isEmptyStampCommit(root, reviewedHead) {
+function isEmptyStampCommit(root, reviewedHead, stampHead = "HEAD") {
   try {
-    const parent = git(root, ["rev-parse", "HEAD~1"]);
-    execFileSync("git", ["diff", "--quiet", "HEAD~1", "HEAD"], {
+    const parent = git(root, ["rev-parse", `${stampHead}~1`]);
+    execFileSync("git", ["diff", "--quiet", `${stampHead}~1`, stampHead], {
       cwd: root,
       stdio: "ignore",
     });
@@ -381,6 +382,15 @@ function advanceHead(manifest, root) {
   const nextHead = git(root, ["rev-parse", "HEAD"]);
   const priorHead = manifest.revisions.currentHead;
   if (nextHead === priorHead) return false;
+  const stampHead = manifest.merge?.stampHead;
+  if (stampHead) {
+    if (!isEmptyStampCommit(root, priorHead, stampHead)) {
+      throw new Error(
+        `quality persisted stamp ${stampHead} is not an empty child of reviewed HEAD ${priorHead}`,
+      );
+    }
+    if (nextHead === stampHead) return false;
+  }
   try {
     git(root, ["merge-base", "--is-ancestor", priorHead, nextHead]);
   } catch {
@@ -397,6 +407,15 @@ function advanceHead(manifest, root) {
       invalidatedAt: new Date().toISOString(),
       reason: `HEAD advanced from ${manifest.approval.head} to ${nextHead}`,
     };
+  }
+  if (stampHead) {
+    manifest.merge.invalidatedStamps.push({
+      head: stampHead,
+      invalidatedAt: new Date().toISOString(),
+      reason: `HEAD advanced beyond reviewed stamp to ${nextHead}`,
+    });
+    delete manifest.merge.stampHead;
+    delete manifest.merge.stampedAt;
   }
   manifest.revisions.currentHead = nextHead;
   return true;

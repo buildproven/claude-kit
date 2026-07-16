@@ -218,6 +218,20 @@ if [ "$1" = "api" ]; then
     fi
     exit 1
   fi
+  if [[ "$2" == *"/rules/branches/"* ]]; then
+    case "\${QUALITY_TEST_EFFECTIVE_RULES:-none}" in
+      strict)
+        printf '%s\\n' '[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true}}]'
+        exit 0
+        ;;
+      queue)
+        printf '%s\\n' '[{"type":"merge_queue","parameters":{"grouping_strategy":"ALLGREEN"}}]'
+        exit 0
+        ;;
+      unavailable) exit 1 ;;
+      *) printf '%s\\n' '[]'; exit 0 ;;
+    esac
+  fi
   printf '%s\\n' '[]'
   exit 0
 fi
@@ -449,6 +463,107 @@ wait
     expect(second.artifactDir).toContain(second.to);
   });
 
+  it("preserves the reviewed HEAD at its persisted stamp and invalidates the stamp after remediation", () => {
+    const root = repo("stamp-aware-advance");
+    const manifest = create(root);
+    const reviewedHead = git(root, ["rev-parse", "HEAD"]);
+    prepareCodexReview(root, manifest);
+    git(root, ["commit", "--allow-empty", "-q", "-m", "quality stamp"]);
+    const stampHead = git(root, ["rev-parse", "HEAD"]);
+    execFileSync(
+      "node",
+      [INVOCATION, "record-stamp", manifest, "--head", stampHead],
+      { cwd: root },
+    );
+
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    let state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.revisions.currentHead).toBe(reviewedHead);
+    expect(state.merge.stampHead).toBe(stampHead);
+    expect(state.merge.invalidatedStamps).toEqual([]);
+
+    writeFileSync(
+      path.join(root, "remediation.js"),
+      "export const fixed = true;\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "fix: remediate review finding"]);
+    const remediationHead = git(root, ["rev-parse", "HEAD"]);
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+
+    state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.revisions.currentHead).toBe(remediationHead);
+    expect(state.merge.stampHead).toBeUndefined();
+    expect(state.merge.stampedAt).toBeUndefined();
+    expect(state.merge.invalidatedStamps).toMatchObject([
+      {
+        head: stampHead,
+        reason: `HEAD advanced beyond reviewed stamp to ${remediationHead}`,
+      },
+    ]);
+    const nextReview = JSON.parse(
+      execFileSync("node", [INVOCATION, "review-info", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(nextReview.from).toBe(reviewedHead);
+    expect(nextReview.to).toBe(remediationHead);
+  });
+
+  it("bootstraps a persisted stamp without advancing review state, then resumes remediation incrementally", () => {
+    const root = repo("stamp-aware-bootstrap");
+    const manifest = create(root);
+    const reviewedHead = git(root, ["rev-parse", "HEAD"]);
+    prepareCodexReview(root, manifest);
+    git(root, ["commit", "--allow-empty", "-q", "-m", "quality stamp"]);
+    const stampHead = git(root, ["rev-parse", "HEAD"]);
+    execFileSync(
+      "node",
+      [INVOCATION, "record-stamp", manifest, "--head", stampHead],
+      { cwd: root },
+    );
+
+    const stampedResume = spawnSync(
+      "bash",
+      [BOOTSTRAP, "--manifest", manifest],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(stampedResume.status, stampedResume.stderr).toBe(0);
+    expect(stampedResume.stdout).toContain(`at ${reviewedHead}`);
+    let state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.revisions.currentHead).toBe(reviewedHead);
+    expect(state.merge.stampHead).toBe(stampHead);
+
+    writeFileSync(
+      path.join(root, "resume-fix.js"),
+      "export const fixed = true;\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "fix: resume remediation"]);
+    const remediationHead = git(root, ["rev-parse", "HEAD"]);
+    const remediationResume = spawnSync(
+      "bash",
+      [BOOTSTRAP, "--manifest", manifest],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(remediationResume.status, remediationResume.stderr).toBe(0);
+    expect(remediationResume.stdout).toContain(`at ${remediationHead}`);
+    state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.revisions.currentHead).toBe(remediationHead);
+    expect(state.merge.stampHead).toBeUndefined();
+    expect(state.merge.invalidatedStamps.at(-1).head).toBe(stampHead);
+
+    const nextReview = JSON.parse(
+      execFileSync("node", [INVOCATION, "review-info", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(nextReview.from).toBe(reviewedHead);
+    expect(nextReview.to).toBe(remediationHead);
+  });
+
   it("refuses a second review when HEAD has not advanced", () => {
     const root = repo("same-head");
     const manifest = create(root);
@@ -674,6 +789,31 @@ wait
     });
     expect(unprotected.status).not.toBe(0);
     expect(unprotected.stderr).toMatch(/server-enforced strict freshness/);
+
+    const queueOnly = spawnSync("bash", [AUTHORIZE, "--manifest", manifest], {
+      cwd: caller,
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        QUALITY_TEST_EFFECTIVE_RULES: "queue",
+      },
+      encoding: "utf8",
+    });
+    expect(queueOnly.status).not.toBe(0);
+    expect(queueOnly.stderr).toMatch(/queue-aware monitored merge path/);
+
+    expect(
+      spawnSync("bash", [AUTHORIZE, "--manifest", manifest], {
+        cwd: caller,
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          QUALITY_TEST_EFFECTIVE_RULES: "strict",
+        },
+        encoding: "utf8",
+      }).status,
+    ).toBe(0);
+
     expect(
       spawnSync("bash", [AUTHORIZE, "--manifest", manifest], {
         cwd: caller,
@@ -681,6 +821,7 @@ wait
           ...process.env,
           PATH: `${bin}:${process.env.PATH}`,
           QUALITY_TEST_STRICT_PROTECTION: "true",
+          QUALITY_TEST_EFFECTIVE_RULES: "unavailable",
         },
         encoding: "utf8",
       }).status,
