@@ -212,6 +212,7 @@ auto-fix loop, re-run `npm test` to verify they pass before continuing.
 | `BS_QUALITY_REVIEW_TIMEOUT`       | tier    | Override the mechanically selected provider wall-clock cap.                                                                                  |
 | `BS_QUALITY_TARGET_DIR`           | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd.                                           |
 | `BS_QUALITY_TRUST_TARGET_SCRIPTS` | false   | Explicit toolkit-development mode: allow the audited checkout's quality scripts to enforce their own review. Never enable for untrusted PRs. |
+| `BS_QUALITY_RESET_CAMPAIGN`       | false   | Explicitly discard the same branch's existing deadline/round state. Never set autonomously after findings or timeout.                        |
 | `BS_QUALITY_MAX_FIX_COMMITS`      | 4       | Run-governor cap: max fix commits across the whole invocation before autonomous halt (see below).                                            |
 | `BS_QUALITY_MAX_WALL_SECONDS`     | 900     | Absolute local wall-clock deadline for the whole invocation, including fallback and synchronous CI.                                          |
 
@@ -492,7 +493,7 @@ sites were all downstream of the panel. `bump-round` (called immediately
 before every review panel, see SKILL.md Step 2.0) closes that gap: it is the
 governor call that actually terminates the outer fix -> re-review loop, by
 incrementing `rounds_used` and exiting non-zero at `max_review_rounds`
-(default 2). Before that fix, the round cap was a sentence of prose — and
+(default 3). Before that fix, the round cap was a sentence of prose — and
 since the MODEL orchestrates this loop, prose is not a cap.
 
 A further 2026-07-15 finding showed a foreground Codex review could outlive the

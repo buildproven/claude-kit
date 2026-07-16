@@ -56,6 +56,53 @@ describe("provider review runtime", () => {
     expect(reference).not.toMatch(/default 1800 = 30 min/);
   });
 
+  it("reinvocation resumes the same branch campaign instead of resetting time", () => {
+    const repo = mkdtempSync(path.join(tmpdir(), "quality-campaign-"));
+    spawnSync("bash", [
+      "-c",
+      `
+git init -q -b main "$1"
+cd "$1"
+git config user.name test
+git config user.email test@example.com
+echo base > file
+git add file
+git commit -q -m base
+git switch -q -c feature
+`,
+      "setup",
+      repo,
+    ]);
+    const env = {
+      ...process.env,
+      CODEX_THREAD_ID: `campaign-${Date.now()}`,
+    };
+    const first = spawnSync("bash", [BOOTSTRAP, "--target-dir", repo], {
+      cwd: ROOT,
+      encoding: "utf8",
+      env,
+    });
+    expect(first.status).toBe(0);
+    const governor = first.stdout.match(
+      /^BS_QUALITY_GOVERNOR_FILE=(.+)$/m,
+    )?.[1];
+    expect(governor).toBeTruthy();
+    const state = JSON.parse(readFileSync(governor, "utf8"));
+    state.rounds_used = 1;
+    writeFileSync(governor, JSON.stringify(state));
+
+    const second = spawnSync("bash", [BOOTSTRAP, "--target-dir", repo], {
+      cwd: ROOT,
+      encoding: "utf8",
+      env,
+    });
+    expect(second.status).toBe(0);
+    expect(second.stdout).toContain("resuming existing campaign");
+    const resumed = JSON.parse(readFileSync(governor, "utf8"));
+    expect(resumed.start_epoch).toBe(state.start_epoch);
+    expect(resumed.rounds_used).toBe(1);
+  });
+
   it("kills a hanging provider process group at the wall-clock cap", () => {
     const started = Date.now();
     const result = spawnSync(

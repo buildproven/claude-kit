@@ -224,7 +224,7 @@ severity level. Output a consolidated report (format + rules in
 `checklist.md` "Judge Agent Validation"): 0 BLOCKING → PASS; any BLOCKING →
 auto-fix → re-run the panel → still BLOCKING → FAIL. **The number of
 re-review rounds is not your judgment call** — the round gate above owns it
-(default cap 2); a non-zero exit from it is a hard stop, not "just check
+(default cap 3, all sharing one deadline); a non-zero exit from it is a hard stop, not "just check
 once more." An empty report (0/0) is a valid, real outcome — never fabricate
 findings.
 
@@ -285,6 +285,11 @@ node "$GOVERNOR" check "$BS_QUALITY_GOVERNOR_FILE" || {
 Also run `node "$GOVERNOR" record-finding "$BS_QUALITY_GOVERNOR_FILE"
 '<findings-json>'` before committing a fix; if `repeated=true`, batch every
 matching call site into one commit instead of one round per occurrence.
+
+Reinvoking `/bs:quality` on the same branch resumes the existing campaign
+sentinel and deadline. Never reset the clock after findings or a round-cap
+stop. `BS_QUALITY_RESET_CAMPAIGN=true` is an explicit operator override, not an
+autonomous retry mechanism.
 
 ### Provider fallback
 

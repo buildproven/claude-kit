@@ -267,12 +267,37 @@ fi
 #
 # max_review_rounds is enforced by `bump-round` immediately before the review
 # panel — this is what actually terminates the outer fix -> re-review loop.
-BS_QUALITY_MAX_REVIEW_ROUNDS="${BS_QUALITY_MAX_REVIEW_ROUNDS:-2}"
+BS_QUALITY_MAX_REVIEW_ROUNDS="${BS_QUALITY_MAX_REVIEW_ROUNDS:-3}"
 BS_QUALITY_MAX_FIX_COMMITS="${BS_QUALITY_MAX_FIX_COMMITS:-4}"
 BS_QUALITY_MAX_WALL_SECONDS="${BS_QUALITY_MAX_WALL_SECONDS:-900}"
 BS_QUALITY_GOVERNOR_FILE="${BS_QUALITY_ROOT_FILE%.txt}-governor.json"
-# A fresh invocation starts with a full-branch review. Only re-review rounds
-# inside this invocation may use the last-successful-review delta.
+GOVERNOR_BRANCH=$(git branch --show-current 2>/dev/null || echo DETACHED)
+GOVERNOR_NOW=$(date +%s)
+if [ -f "$BS_QUALITY_GOVERNOR_FILE" ] &&
+   [ "${BS_QUALITY_RESET_CAMPAIGN:-false}" != true ]; then
+  EXISTING_BRANCH=$(jq -r '.branch // ""' "$BS_QUALITY_GOVERNOR_FILE" 2>/dev/null)
+  EXISTING_DEADLINE=$(jq -r '.deadline_epoch // 0' "$BS_QUALITY_GOVERNOR_FILE" 2>/dev/null)
+  EXISTING_START=$(jq -r '.start_commit_sha // ""' "$BS_QUALITY_GOVERNOR_FILE" 2>/dev/null)
+  if [ "$EXISTING_BRANCH" = "$GOVERNOR_BRANCH" ] &&
+     git merge-base --is-ancestor "$EXISTING_START" HEAD 2>/dev/null; then
+    if [ "$GOVERNOR_NOW" -ge "$EXISTING_DEADLINE" ]; then
+      echo "❌ QUALITY CAMPAIGN DEADLINE EXHAUSTED for $GOVERNOR_BRANCH." >&2
+      echo "   The same PR/branch cannot reset its clock by reinvoking /bs:quality." >&2
+      echo "   Stop and report remaining findings. A deliberate new campaign requires" >&2
+      echo "   BS_QUALITY_RESET_CAMPAIGN=true." >&2
+      exit 1
+    fi
+    echo "BS_QUALITY_ROOT_FILE=$BS_QUALITY_ROOT_FILE"
+    echo "BS_QUALITY_GOVERNOR_FILE=$BS_QUALITY_GOVERNOR_FILE"
+    echo "GIT_ROOT=$GIT_ROOT"
+    echo "[quality] audit target resolved: $GIT_ROOT"
+    node "$SCRIPT_DIR/quality-run-governor.js" status "$BS_QUALITY_GOVERNOR_FILE"
+    echo "[quality] resuming existing campaign for $GOVERNOR_BRANCH"
+    exit 0
+  fi
+fi
+
+# A genuinely new branch campaign starts with a full-branch review.
 rm -f "${BS_QUALITY_GOVERNOR_FILE%.json}-last-reviewed.sha"
 GOVERNOR_START_EPOCH=$(date +%s)
 GOVERNOR_DEADLINE_EPOCH=$((GOVERNOR_START_EPOCH + BS_QUALITY_MAX_WALL_SECONDS))
@@ -288,6 +313,7 @@ cat > "$BS_QUALITY_GOVERNOR_FILE" <<EOF
 {
   "start_epoch": ${GOVERNOR_START_EPOCH},
   "deadline_epoch": ${GOVERNOR_DEADLINE_EPOCH},
+  "branch": "${GOVERNOR_BRANCH}",
   "start_commit_sha": "${GOVERNOR_START_COMMIT_SHA}",
   "start_commit_count": ${GOVERNOR_START_COMMIT_COUNT},
   "max_fix_commits": ${BS_QUALITY_MAX_FIX_COMMITS},
