@@ -171,6 +171,80 @@ describe("provider-native platform", () => {
     );
   });
 
+  it("rejects invalid allowlists without pruning managed skills", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-skill-invalid-"));
+    const source = path.join(dir, "source");
+    const target = path.join(dir, "target");
+    const allowlist = path.join(dir, "allowlist.json");
+    mkdirSync(path.join(source, "keep"), { recursive: true });
+    writeFileSync(path.join(source, "keep", "SKILL.md"), "# keep\n");
+    writeFileSync(allowlist, '{"skills":["keep"]}\n');
+
+    execFileSync("bash", [
+      SKILL_SYNC,
+      "--source",
+      source,
+      "--allowlist",
+      allowlist,
+      "--target",
+      target,
+    ]);
+    writeFileSync(allowlist, "not json\n");
+
+    expect(
+      spawnSync("bash", [
+        SKILL_SYNC,
+        "--source",
+        source,
+        "--allowlist",
+        allowlist,
+        "--target",
+        target,
+      ]).status,
+    ).toBe(1);
+    expect(readlinkSync(path.join(target, "keep"))).toBe(
+      path.join(source, "keep"),
+    );
+  });
+
+  it("preflights conflicts before removing stale managed skills", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-skill-conflict-"));
+    const source = path.join(dir, "source");
+    const target = path.join(dir, "target");
+    const allowlist = path.join(dir, "allowlist.json");
+    for (const name of ["drop", "blocked"]) {
+      mkdirSync(path.join(source, name), { recursive: true });
+      writeFileSync(path.join(source, name, "SKILL.md"), `# ${name}\n`);
+    }
+    writeFileSync(allowlist, '{"skills":["drop"]}\n');
+    execFileSync("bash", [
+      SKILL_SYNC,
+      "--source",
+      source,
+      "--allowlist",
+      allowlist,
+      "--target",
+      target,
+    ]);
+    writeFileSync(path.join(target, "blocked"), "unmanaged\n");
+    writeFileSync(allowlist, '{"skills":["blocked"]}\n');
+
+    expect(
+      spawnSync("bash", [
+        SKILL_SYNC,
+        "--source",
+        source,
+        "--allowlist",
+        allowlist,
+        "--target",
+        target,
+      ]).status,
+    ).toBe(1);
+    expect(readlinkSync(path.join(target, "drop"))).toBe(
+      path.join(source, "drop"),
+    );
+  });
+
   it("measures instruction and allowlisted skill discovery budgets", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "surface-budget-"));
     const skills = path.join(dir, "skills");
@@ -209,6 +283,33 @@ describe("provider-native platform", () => {
     expect(payload.instructionBytes).toBe(6);
     expect(payload.descriptionsOverBudget).toBe(false);
     expect(payload.instructionsOverBudget).toBe(false);
+  });
+
+  it("fails when explicit surface-audit inputs are missing or malformed", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "surface-invalid-"));
+    const skills = path.join(dir, "skills");
+    const allowlist = path.join(dir, "skills.json");
+    mkdirSync(skills);
+    writeFileSync(allowlist, '{"skillz":[]}\n');
+
+    expect(
+      spawnSync("node", [
+        SURFACE,
+        `--root=${dir}`,
+        `--skill-source=${skills}`,
+        `--skill-allowlist=${allowlist}`,
+        "--json",
+      ]).status,
+    ).toBe(1);
+    expect(
+      spawnSync("node", [
+        SURFACE,
+        `--root=${dir}`,
+        `--skill-source=${path.join(dir, "missing")}`,
+        `--instruction-file=${path.join(dir, "missing.md")}`,
+        "--json",
+      ]).status,
+    ).toBe(1);
   });
 
   it("discovers active non-bot repos and open-PR repos from fixtures", () => {

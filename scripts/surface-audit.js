@@ -36,6 +36,24 @@ const instructionFile = path.resolve(
     : path.join(root, "config", "CLAUDE.md"),
 );
 
+function requireExplicitPath(file, kind) {
+  if (!fs.existsSync(file)) {
+    throw new Error(`${kind} not found: ${file}`);
+  }
+}
+
+for (const source of skillSourceArgs) {
+  requireExplicitPath(source, "Skill source");
+  if (!fs.statSync(source).isDirectory()) {
+    throw new Error(`Skill source is not a directory: ${source}`);
+  }
+}
+for (const allowlist of skillAllowlistArgs) {
+  requireExplicitPath(allowlist, "Skill allowlist");
+}
+if (instructionFileArg)
+  requireExplicitPath(instructionFile, "Instruction file");
+
 function dirsWith(file, parent) {
   const base = path.join(root, parent);
   if (!fs.existsSync(base)) return [];
@@ -85,7 +103,6 @@ function allowedSkills() {
   if (skillAllowlistArgs.length === 0) return null;
   const allowed = new Set();
   for (const allowlist of skillAllowlistArgs) {
-    if (!fs.existsSync(allowlist)) continue;
     let payload;
     try {
       payload = JSON.parse(fs.readFileSync(allowlist, "utf8"));
@@ -94,7 +111,20 @@ function allowedSkills() {
         cause: error,
       });
     }
-    for (const name of payload.skills || []) allowed.add(name);
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      Array.isArray(payload) ||
+      !Array.isArray(payload.skills) ||
+      payload.skills.some(
+        (name) => typeof name !== "string" || name.trim().length === 0,
+      )
+    ) {
+      throw new Error(
+        `Invalid skill allowlist schema: ${allowlist}; skills must be an array of non-empty strings`,
+      );
+    }
+    for (const name of payload.skills) allowed.add(name);
   }
   return allowed;
 }
