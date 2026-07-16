@@ -309,6 +309,91 @@ describe("provider-native platform", () => {
     );
   });
 
+  it("retargets a previously managed skill and rolls back a failed transition", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-skill-retarget-"));
+    const base = path.join(dir, "base");
+    const overlay = path.join(dir, "overlay");
+    const target = path.join(dir, "target");
+    const bin = path.join(dir, "bin");
+    const allowlist = path.join(dir, "allowlist.json");
+    for (const source of [base, overlay]) {
+      mkdirSync(path.join(source, "shared"), { recursive: true });
+      writeFileSync(path.join(source, "shared", "SKILL.md"), "# shared\n");
+    }
+    writeFileSync(allowlist, '{"skills":["shared"]}\n');
+    execFileSync("bash", [
+      SKILL_SYNC,
+      "--source",
+      base,
+      "--allowlist",
+      allowlist,
+      "--target",
+      target,
+    ]);
+
+    mkdirSync(bin);
+    executable(path.join(bin, "ln"), "exit 1");
+    expect(
+      spawnSync(
+        "bash",
+        [
+          SKILL_SYNC,
+          "--source",
+          base,
+          "--source",
+          overlay,
+          "--allowlist",
+          allowlist,
+          "--target",
+          target,
+        ],
+        { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } },
+      ).status,
+    ).toBe(1);
+    expect(readlinkSync(path.join(target, "shared"))).toBe(
+      path.join(base, "shared"),
+    );
+
+    execFileSync("bash", [
+      SKILL_SYNC,
+      "--source",
+      base,
+      "--source",
+      overlay,
+      "--allowlist",
+      allowlist,
+      "--target",
+      target,
+    ]);
+    expect(readlinkSync(path.join(target, "shared"))).toBe(
+      path.join(overlay, "shared"),
+    );
+  });
+
+  it("rejects overlapping syncs without changing managed state", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-skill-lock-"));
+    const source = path.join(dir, "source");
+    const target = path.join(dir, "target");
+    const allowlist = path.join(dir, "allowlist.json");
+    mkdirSync(path.join(source, "keep"), { recursive: true });
+    mkdirSync(path.join(target, ".buildproven-sync.lock"), { recursive: true });
+    writeFileSync(path.join(source, "keep", "SKILL.md"), "# keep\n");
+    writeFileSync(allowlist, '{"skills":["keep"]}\n');
+
+    expect(
+      spawnSync("bash", [
+        SKILL_SYNC,
+        "--source",
+        source,
+        "--allowlist",
+        allowlist,
+        "--target",
+        target,
+      ]).status,
+    ).toBe(1);
+    expect(() => readlinkSync(path.join(target, "keep"))).toThrow();
+  });
+
   it("measures instruction and allowlisted skill discovery budgets", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "surface-budget-"));
     const skills = path.join(dir, "skills");
@@ -349,6 +434,56 @@ describe("provider-native platform", () => {
     expect(payload.instructionsOverBudget).toBe(false);
   });
 
+  it("audits the default Codex profile through installed skill symlinks", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "surface-symlinks-"));
+    const skills = path.join(dir, "skills");
+    const installed = path.join(dir, "installed");
+    const config = path.join(dir, "config");
+    mkdirSync(path.join(skills, "keep"), { recursive: true });
+    mkdirSync(path.join(skills, "skip"), { recursive: true });
+    mkdirSync(config);
+    writeFileSync(
+      path.join(skills, "keep", "SKILL.md"),
+      "---\nname: keep\ndescription: Useful workflow\n---\n",
+    );
+    writeFileSync(
+      path.join(skills, "skip", "SKILL.md"),
+      "---\nname: skip\ndescription: Hidden workflow\n---\n",
+    );
+    writeFileSync(
+      path.join(config, "codex-skills.json"),
+      '{"skills":["keep"]}\n',
+    );
+    execFileSync("bash", [
+      SKILL_SYNC,
+      "--source",
+      skills,
+      "--allowlist",
+      path.join(config, "codex-skills.json"),
+      "--target",
+      installed,
+    ]);
+
+    const installedPayload = JSON.parse(
+      execFileSync("node", [
+        SURFACE,
+        `--root=${dir}`,
+        `--skill-source=${installed}`,
+        `--skill-allowlist=${path.join(config, "codex-skills.json")}`,
+        "--json",
+      ]),
+    );
+    const defaultPayload = JSON.parse(
+      execFileSync("node", [SURFACE, `--root=${dir}`, "--json"]),
+    );
+
+    expect(installedPayload.discoverySkillCount).toBe(1);
+    expect(defaultPayload.discoverySkillCount).toBe(1);
+    expect(defaultPayload.descriptionChars).toBe(
+      "keep: Useful workflow".length,
+    );
+  });
+
   it("fails when explicit surface-audit inputs are missing or malformed", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "surface-invalid-"));
     const skills = path.join(dir, "skills");
@@ -371,6 +506,28 @@ describe("provider-native platform", () => {
         `--root=${dir}`,
         `--skill-source=${path.join(dir, "missing")}`,
         `--instruction-file=${path.join(dir, "missing.md")}`,
+        "--json",
+      ]).status,
+    ).toBe(1);
+    mkdirSync(path.join(skills, "keep"));
+    writeFileSync(path.join(skills, "keep", "SKILL.md"), "# keep\n");
+    writeFileSync(allowlist, '{"skills":[" missing "]}\n');
+    expect(
+      spawnSync("node", [
+        SURFACE,
+        `--root=${dir}`,
+        `--skill-source=${skills}`,
+        `--skill-allowlist=${allowlist}`,
+        "--json",
+      ]).status,
+    ).toBe(1);
+    writeFileSync(allowlist, '{"skills":["unknown"]}\n');
+    expect(
+      spawnSync("node", [
+        SURFACE,
+        `--root=${dir}`,
+        `--skill-source=${skills}`,
+        `--skill-allowlist=${allowlist}`,
         "--json",
       ]).status,
     ).toBe(1);

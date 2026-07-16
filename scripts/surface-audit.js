@@ -23,6 +23,12 @@ const skillAllowlistArgs = process.argv
   .map((arg) => path.resolve(arg.slice(18)));
 const json = process.argv.includes("--json");
 const root = path.resolve(rootArg ? rootArg.slice(7) : process.cwd());
+const skillSources =
+  skillSourceArgs.length > 0 ? skillSourceArgs : [path.join(root, "skills")];
+const skillAllowlists =
+  skillAllowlistArgs.length > 0
+    ? skillAllowlistArgs
+    : [path.join(root, "config", "codex-skills.json")];
 const budget = Number(budgetArg ? budgetArg.slice(17) : 24);
 const descriptionBudget = Number(
   descriptionBudgetArg ? descriptionBudgetArg.slice(21) : 8000,
@@ -52,13 +58,13 @@ function requireExplicitPath(file, kind) {
   }
 }
 
-for (const source of skillSourceArgs) {
+for (const source of skillSources) {
   requireExplicitPath(source, "Skill source");
   if (!fs.statSync(source).isDirectory()) {
     throw new Error(`Skill source is not a directory: ${source}`);
   }
 }
-for (const allowlist of skillAllowlistArgs) {
+for (const allowlist of skillAllowlists) {
   requireExplicitPath(allowlist, "Skill allowlist");
 }
 if (instructionFileArg)
@@ -110,9 +116,8 @@ function frontmatterDescription(file) {
 }
 
 function allowedSkills() {
-  if (skillAllowlistArgs.length === 0) return null;
   const allowed = new Set();
-  for (const allowlist of skillAllowlistArgs) {
+  for (const allowlist of skillAllowlists) {
     let payload;
     try {
       payload = JSON.parse(fs.readFileSync(allowlist, "utf8"));
@@ -127,7 +132,8 @@ function allowedSkills() {
       Array.isArray(payload) ||
       !Array.isArray(payload.skills) ||
       payload.skills.some(
-        (name) => typeof name !== "string" || name.trim().length === 0,
+        (name) =>
+          typeof name !== "string" || name.length === 0 || name !== name.trim(),
       )
     ) {
       throw new Error(
@@ -140,23 +146,25 @@ function allowedSkills() {
 }
 
 function skillMetadata() {
-  const sources =
-    skillSourceArgs.length > 0 ? skillSourceArgs : [path.join(root, "skills")];
   const allowed = allowedSkills();
   const byName = new Map();
-  for (const source of sources) {
-    if (!fs.existsSync(source)) continue;
+  for (const source of skillSources) {
     for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
       if (allowed && !allowed.has(entry.name)) continue;
       const file = path.join(source, entry.name, "SKILL.md");
-      if (!fs.existsSync(file)) continue;
+      if (!fs.existsSync(file) || !fs.statSync(file).isFile()) continue;
       byName.set(entry.name, {
         name: entry.name,
         description: frontmatterDescription(file),
         file,
       });
     }
+  }
+  const unresolved = [...allowed].filter((name) => !byName.has(name));
+  if (unresolved.length > 0) {
+    throw new Error(
+      `Allowlisted skills not found in configured sources: ${unresolved.join(", ")}`,
+    );
   }
   return [...byName.values()].sort((left, right) =>
     left.name.localeCompare(right.name),
