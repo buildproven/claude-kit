@@ -108,13 +108,13 @@ run_codex_review() {
       grep -Eiq 'not authenticated|not logged in|login required|setup required' "$error_file" 2>/dev/null && return 2
       return 1
     fi
-    if ! jq -e '.result and (.result.findings | type == "array")' "$raw_file" >/dev/null 2>&1; then
+    if ! jq -e '.findings | type == "array"' "$raw_file" >/dev/null 2>&1; then
       echo "INCONCLUSIVE: Codex output could not be parsed — human review required" >> "$REVIEW_OUT/codex.findings.txt"
       return 4
     fi
     jq -r '
-      if (.result.findings | length) == 0 then "NO FINDINGS. Verdict: \(.result.verdict). \(.result.summary)"
-      else .result.findings[] | "\(.severity // "WARNING"): \(.file // "unknown"):\(.line_start // 0) — \(.title // "finding")\n\(.body // "")\nFix: \(.recommendation // "")"
+      if (.findings | length) == 0 then "NO FINDINGS. Verdict: \(.verdict). \(.summary)"
+      else .findings[] | "\(.severity // "WARNING"): \(.file // "unknown"):\(.line_start // 0) — \(.title // "finding")\n\(.body // "")\nFix: \(.recommendation // "")"
       end' "$raw_file" >> "$REVIEW_OUT/codex.findings.txt"
     pass=$((pass + 1))
   done

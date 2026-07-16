@@ -191,5 +191,7 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
     expect(source).toMatch(/codex exec --ephemeral -s read-only/);
     expect(source).toMatch(/record_provider_exhaustion Codex/);
     expect(source).toMatch(/try again at/);
+    expect(source).toMatch(/\.findings \| type == "array"/);
+    expect(source).not.toContain(".result.findings");
   });
 });
