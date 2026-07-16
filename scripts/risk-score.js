@@ -51,7 +51,6 @@ const DEFAULTS = {
     "**/install.sh",
     "**/webhook*.*",
     "**/middleware.*",
-    "**/package.json",
     "**/*.pem",
     "**/*.key",
     "**/.env*",
@@ -89,7 +88,7 @@ const DEFAULTS = {
     { maxScore: 20, agents: 2, codex: "skip", codexRounds: 0 },
     { maxScore: 50, agents: 4, codex: "high", codexRounds: 1 },
     { maxScore: 75, agents: 6, codex: "high", codexRounds: 1 },
-    { maxScore: 100, agents: 6, codex: "xhigh", codexRounds: 2 },
+    { maxScore: 100, agents: 6, codex: "xhigh", codexRounds: 1 },
   ],
   // Score ≥ this always runs Codex even if the band says skip.
   codexForceFloor: 75,
@@ -273,11 +272,13 @@ function collectDescriptors(base, gitRunner) {
   const nameStatus = safeGit(gitRunner, [
     "diff",
     "--name-status",
+    "--no-renames",
     `${mergeBase}...HEAD`,
   ]);
   const numstat = safeGit(gitRunner, [
     "diff",
     "--numstat",
+    "--no-renames",
     `${mergeBase}...HEAD`,
   ]);
 
@@ -287,7 +288,10 @@ function collectDescriptors(base, gitRunner) {
     const parts = line.split("\t");
     const letter = parts[0][0];
     const file = parts[parts.length - 1];
-    statusByFile.set(file, letter);
+    statusByFile.set(file, {
+      status: letter,
+      baseFile: ["R", "C"].includes(letter) ? parts[1] : file,
+    });
   }
 
   let totalLines = 0;
@@ -300,19 +304,81 @@ function collectDescriptors(base, gitRunner) {
       ? 0
       : (parseInt(add, 10) || 0) + (parseInt(del, 10) || 0);
     totalLines += lines;
-    const status = statusByFile.get(file) || "M";
-    let patch = "";
-    if (!isBinary && status !== "D") {
-      patch = safeGit(gitRunner, ["diff", `${mergeBase}...HEAD`, "--", file]);
-      if (patch.length > 200 * 1024) patch = ""; // too large to trust → logic
-    }
-    descriptors.push({ file, status, isBinary, lines, patch });
+    const statusInfo = statusByFile.get(file) || {
+      status: "M",
+      baseFile: file,
+    };
+    descriptors.push(
+      collectDescriptor({
+        file,
+        isBinary,
+        lines,
+        statusInfo,
+        mergeBase,
+        gitRunner,
+      }),
+    );
   }
 
   return {
     descriptors,
     diffStats: { files: descriptors.length, lines: totalLines },
   };
+}
+
+function collectDescriptor({
+  file,
+  isBinary,
+  lines,
+  statusInfo,
+  mergeBase,
+  gitRunner,
+}) {
+  const status = statusInfo.status;
+  let patch = "";
+  if (!isBinary && status !== "D") {
+    patch = safeGit(gitRunner, ["diff", `${mergeBase}...HEAD`, "--", file]);
+    if (patch.length > 200 * 1024) patch = "";
+  }
+  const descriptor = {
+    file,
+    baseFile: statusInfo.baseFile,
+    status,
+    isBinary,
+    lines,
+    patch,
+  };
+  if (matchesPattern(file, ["**/package.json"])) {
+    descriptor.manifest = collectManifestSnapshots(
+      descriptor,
+      mergeBase,
+      gitRunner,
+    );
+  }
+  return descriptor;
+}
+
+function tryGit(gitRunner, args) {
+  try {
+    return { ok: true, value: gitRunner(args) };
+  } catch {
+    return { ok: false, value: "" };
+  }
+}
+
+function collectManifestSnapshots(descriptor, mergeBase, gitRunner) {
+  const before =
+    descriptor.status === "A"
+      ? { ok: true, value: null }
+      : tryGit(gitRunner, [
+          "show",
+          `${mergeBase}:${descriptor.baseFile || descriptor.file}`,
+        ]);
+  const after =
+    descriptor.status === "D"
+      ? { ok: true, value: null }
+      : tryGit(gitRunner, ["show", `HEAD:${descriptor.file}`]);
+  return { before, after };
 }
 
 function safeGit(gitRunner, args) {
@@ -342,6 +408,190 @@ function magnitudeAdd(lines, cfg) {
   return Math.round(frac * maxAdd);
 }
 
+const MANIFEST_CRITICAL_FIELDS = new Set(["overrides", "resolutions"]);
+const MANIFEST_HIGH_FIELDS = new Set([
+  "dependencies",
+  "optionalDependencies",
+  "peerDependencies",
+  "scripts",
+  "bin",
+  "exports",
+  "imports",
+  "main",
+  "module",
+  "browser",
+  "type",
+  "types",
+  "typings",
+  "files",
+  "name",
+  "workspaces",
+  "packageManager",
+  "publishConfig",
+]);
+const MANIFEST_MEDIUM_FIELDS = new Set([
+  "devDependencies",
+  "engines",
+  "os",
+  "cpu",
+  "version",
+  "license",
+  "private",
+]);
+const MANIFEST_LOW_FIELDS = new Set([
+  "description",
+  "keywords",
+  "homepage",
+  "bugs",
+  "author",
+  "contributors",
+  "funding",
+  "repository",
+]);
+const INSTALL_LIFECYCLE_SCRIPTS = new Set([
+  "preinstall",
+  "install",
+  "postinstall",
+  "prepare",
+]);
+const DEPENDENCY_FIELDS = new Set([
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies",
+  "overrides",
+  "resolutions",
+]);
+
+function parseManifestSnapshot(snapshot) {
+  if (!snapshot || snapshot.ok !== true) return { ok: false, value: null };
+  if (snapshot.value === null) return { ok: true, value: null };
+  try {
+    const value = JSON.parse(snapshot.value);
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? { ok: true, value }
+      : { ok: false, value: null };
+  } catch {
+    return { ok: false, value: null };
+  }
+}
+
+function changedTopLevelFields(before, after) {
+  const fields = new Set([
+    ...Object.keys(before || {}),
+    ...Object.keys(after || {}),
+  ]);
+  return [...fields].filter(
+    (field) =>
+      JSON.stringify(before?.[field]) !== JSON.stringify(after?.[field]),
+  );
+}
+
+function hasNonRegistryDependencySource(value) {
+  if (typeof value === "string") {
+    const normalized = value.toLowerCase();
+    return [
+      "git:",
+      "git+",
+      "http:",
+      "https:",
+      "file:",
+      "link:",
+      "github:",
+      "gitlab:",
+      "bitbucket:",
+    ].some((prefix) => normalized.startsWith(prefix));
+  }
+  if (!value || typeof value !== "object") return false;
+  return Object.values(value).some(hasNonRegistryDependencySource);
+}
+
+function manifestFieldRisk(field, before, after, cfg) {
+  const afterValue = after[field];
+  if (MANIFEST_CRITICAL_FIELDS.has(field)) {
+    return {
+      score: cfg.base.securityFloor,
+      reason: `critical manifest field changed: ${field}`,
+    };
+  }
+  if (
+    field === "scripts" &&
+    changedTopLevelFields(before.scripts, after.scripts).some((name) =>
+      INSTALL_LIFECYCLE_SCRIPTS.has(name),
+    )
+  ) {
+    return {
+      score: cfg.base.securityFloor,
+      reason: "install lifecycle script changed",
+    };
+  }
+  if (
+    DEPENDENCY_FIELDS.has(field) &&
+    hasNonRegistryDependencySource(afterValue)
+  ) {
+    return {
+      score: cfg.base.securityFloor,
+      reason: `non-registry dependency source changed: ${field}`,
+    };
+  }
+  if (MANIFEST_HIGH_FIELDS.has(field)) {
+    return {
+      score: cfg.base.high,
+      reason: `runtime manifest field changed: ${field}`,
+    };
+  }
+  if (MANIFEST_MEDIUM_FIELDS.has(field) || !MANIFEST_LOW_FIELDS.has(field)) {
+    return {
+      score: cfg.base.medium,
+      reason: `manifest field changed: ${field}`,
+    };
+  }
+  return { score: cfg.base.low, reason: "manifest metadata only" };
+}
+
+function manifestRisk(descriptor, cfg = DEFAULTS) {
+  if (
+    !descriptor.manifest ||
+    ["A", "D", "R", "C", "T"].includes(descriptor.status)
+  ) {
+    return {
+      score: cfg.base.securityFloor,
+      fields: [],
+      reason: "manifest added, deleted, renamed, copied, or type-changed",
+    };
+  }
+
+  const before = parseManifestSnapshot(descriptor.manifest.before);
+  const after = parseManifestSnapshot(descriptor.manifest.after);
+  if (!before.ok || !after.ok || !before.value || !after.value) {
+    return {
+      score: cfg.base.securityFloor,
+      fields: [],
+      reason: "manifest base or HEAD snapshot unreadable or invalid",
+    };
+  }
+
+  const fields = changedTopLevelFields(before.value, after.value);
+  const risks = fields.map((field) =>
+    manifestFieldRisk(field, before.value, after.value, cfg),
+  );
+  const highest = risks.reduce(
+    (highest, risk) => (risk.score > highest.score ? risk : highest),
+    { score: cfg.base.low, reason: "manifest metadata only" },
+  );
+  return { ...highest, fields };
+}
+
+function descriptorBaseRisk(descriptor, cfg) {
+  if (
+    matchesPattern(descriptor.file, ["**/package.json"]) &&
+    !matchesPattern(descriptor.file, cfg.securityFloor)
+  ) {
+    return manifestRisk(descriptor, cfg);
+  }
+  return { score: pathBase(descriptor.file, cfg), reason: "" };
+}
+
 function computeScore(descriptors, diffStats, cfg) {
   const reasons = [];
   if (descriptors.length === 0) {
@@ -355,17 +605,20 @@ function computeScore(descriptors, diffStats, cfg) {
   // Base = highest path sensitivity across all files.
   let base = 0;
   let topFile = "";
+  let topReason = "";
   for (const d of descriptors) {
-    const b = pathBase(d.file, cfg);
-    if (b > base) {
-      base = b;
+    const risk = descriptorBaseRisk(d, cfg);
+    if (risk.score > base) {
+      base = risk.score;
       topFile = d.file;
+      topReason = risk.reason;
     }
   }
   const touchesFloor = descriptors.some((d) =>
     matchesPattern(d.file, cfg.securityFloor),
   );
   reasons.push(`path base ${base} (most-sensitive: ${topFile || "n/a"})`);
+  if (topReason) reasons.push(topReason);
 
   const changeNature = classifyChangeNature(descriptors, cfg.securityFloor);
   let score = base;
@@ -527,6 +780,7 @@ module.exports = {
   computeScore,
   classifyChangeNature,
   scoreToKnobs,
+  manifestRisk,
   matchesPattern,
   globToRegExp,
   fileIsMechanical,

@@ -151,20 +151,20 @@ fi
 
 ```bash
 source scripts/quality-load-root.sh
+BOUNDED="$(bs_quality_find_script quality-run-bounded.sh)" || exit 1
 
-npm test 2>&1
+bash "$BOUNDED" --governor "$BS_QUALITY_GOVERNOR_FILE" \
+  --cap 300 --reserve 300 -- npm test 2>&1
 TEST_EXIT=$?
 
 if [ $TEST_EXIT -ne 0 ]; then
-  echo "❌ Tests failed — attempting auto-fix (up to 3 attempts)"
-  for attempt in 1 2 3; do
-    echo "Fix attempt $attempt/3..."
-    npm test 2>&1
-    TEST_EXIT=$?
-    if [ $TEST_EXIT -eq 0 ]; then break; fi
-  done
+  echo "❌ Tests failed — diagnose and batch-fix the root cause once"
+  # Do not rerun an unchanged deterministic failure. Apply the fix, then:
+  bash "$BOUNDED" --governor "$BS_QUALITY_GOVERNOR_FILE" \
+    --cap 300 --reserve 120 -- npm test 2>&1
+  TEST_EXIT=$?
   if [ $TEST_EXIT -ne 0 ]; then
-    echo "❌ HARD FAIL: Tests still failing after 3 fix attempts"
+    echo "❌ HARD FAIL: Tests still failing after the verified fix attempt"
     echo "Cannot proceed to review agents with broken tests."
     exit 1
   fi
@@ -205,14 +205,14 @@ auto-fix loop, re-run `npm test` to verify they pass before continuing.
 
 ### Environment Variables
 
-| Variable                      | Default | Description                                                                                        |
-| ----------------------------- | ------- | -------------------------------------------------------------------------------------------------- |
-| `BS_QUALITY_PRIMARY`          | config  | Per-run primary override: `claude` or `codex`.                                                     |
-| `BS_QUALITY_FALLBACK`         | config  | Per-run fallback override: `claude`, `codex`, or `none`.                                           |
-| `BS_QUALITY_REVIEW_TIMEOUT`   | tier    | Override the mechanically selected provider wall-clock cap.                                        |
-| `BS_QUALITY_TARGET_DIR`       | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd. |
-| `BS_QUALITY_MAX_FIX_COMMITS`  | 4       | Run-governor cap: max fix commits across the whole invocation before autonomous halt (see below).  |
-| `BS_QUALITY_MAX_WALL_SECONDS` | 1800    | Run-governor cap: max wall-clock seconds across the whole invocation before autonomous halt.       |
+| Variable                      | Default | Description                                                                                         |
+| ----------------------------- | ------- | --------------------------------------------------------------------------------------------------- |
+| `BS_QUALITY_PRIMARY`          | config  | Per-run primary override: `claude` or `codex`.                                                      |
+| `BS_QUALITY_FALLBACK`         | config  | Per-run fallback override: `claude`, `codex`, or `none`.                                            |
+| `BS_QUALITY_REVIEW_TIMEOUT`   | tier    | Override the mechanically selected provider wall-clock cap.                                         |
+| `BS_QUALITY_TARGET_DIR`       | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd.  |
+| `BS_QUALITY_MAX_FIX_COMMITS`  | 4       | Run-governor cap: max fix commits across the whole invocation before autonomous halt (see below).   |
+| `BS_QUALITY_MAX_WALL_SECONDS` | 900     | Absolute local wall-clock deadline for the whole invocation, including fallback and synchronous CI. |
 
 ### Run Governor (runaway-loop guardrails)
 
@@ -226,8 +226,9 @@ alongside the Step -1 git-root sentinel) with:
 - **Fix-commit cap** (`BS_QUALITY_MAX_FIX_COMMITS`, default 4) — commits made
   since the run started, checked before every fix attempt and every Codex
   re-verification round.
-- **Wall-clock cap** (`BS_QUALITY_MAX_WALL_SECONDS`, default 1800 = 30 min) —
-  elapsed time since the run started, checked at the same points.
+- **Absolute deadline** (`BS_QUALITY_MAX_WALL_SECONDS`, default 900 = 15 min) —
+  persisted as `deadline_epoch`; every blocking subprocess is clamped to the
+  remaining time. Fallback and synchronous CI share the same allowance.
 - **Repeated-pattern detection** — findings are recorded round-over-round;
   if a round's findings mostly repeat a shape seen in an earlier round (e.g.
   the same on-disk-vs-loaded-job gap at 4 different call sites), the skill is
@@ -273,14 +274,15 @@ of auto-stamping — auto-stamping then would be forging review evidence.
 
 ### `--scope branch` (Default)
 
-- Time: 30-60 min
+- Typical local time: 5-15 min; hard default deadline: 15 min
 - All files changed in branch vs main
 - Full quality agents on changed files
 - Creates PR after quality passes
 
 ### `--scope all` (Full Project)
 
-- Time: 45-90 min
+- Uses the same 15-minute default deadline; raise it explicitly for repositories
+  whose deterministic full-project checks cannot complete inside that bound
 - Every file in the project
 - Full quality agents on entire codebase
 - For major refactors, pre-release audits
@@ -294,11 +296,17 @@ When `harness-config.json` exists in the repo root, the skill reads the resolved
 | Tier       | Provider-equivalent depth  | Time cap |
 | ---------- | -------------------------- | -------- |
 | `low`      | focused regression         | ≤2 min   |
-| `medium`   | broad correctness/security | ≤8 min   |
-| `high`     | deep adversarial           | ≤15 min  |
-| `critical` | release-veto + break-glass | ≤15 min  |
+| `medium`   | broad correctness/security | ≤5 min   |
+| `high`     | deep adversarial           | ≤8 min   |
+| `critical` | release-veto discovery     | ≤10 min  |
 
 If no `harness-config.json` is present, `--level auto` falls back to L95.
+
+Manifest risk is semantic, not path-only. The scorer compares parsed
+base-versus-HEAD `package.json` values: metadata stays low; development tooling
+and engines are medium; runtime dependencies, exports, bins, and workspaces are
+high; install lifecycle hooks, overrides/resolutions, non-registry dependency
+sources, and unreadable/structural manifest changes are critical.
 
 ### Level 95 (Ship-Ready, no tier classification)
 
@@ -317,7 +325,10 @@ If no `harness-config.json` is present, `--level auto` falls back to L95.
 
 Codex uses `codex exec` directly with a structured output schema and the
 scorer-selected `model_reasoning_effort`; this avoids ambient-effort drift.
-`quality-run-bounded.sh` places it in a process group and enforces the tier cap:
+Critical discovery is one xhigh pass. A second outer round is one high-effort
+targeted verification of persisted findings against the fix delta.
+`quality-run-bounded.sh` places each command in a process group and clamps it to
+both its stage cap and the run's absolute remaining time:
 
 ```
 codex exec --ephemeral -s read-only \
@@ -377,8 +388,9 @@ Best for `--level 98` or `--scope all` (10+ min runs). Task subagents are faster
 ## Merge Flow (`--merge`)
 
 1. Push branch, create PR
-2. Wait for CI (unless `--skip-ci`)
-3. Auto-merge via `gh pr merge --squash`
+2. Enable required-check-gated auto-merge via `gh pr merge --auto --squash`
+3. If auto-merge is unavailable, bounded-watch CI using the same governor;
+   return `LOCAL_PASS_CI_PENDING` when the deadline is spent
 4. Manually verify the deployed system using your normal deployment tooling
 
 ## Next-Step Suggestions (CS-046)
@@ -483,8 +495,10 @@ incrementing `rounds_used` and exiting non-zero at `max_review_rounds`
 since the MODEL orchestrates this loop, prose is not a cap.
 
 A further 2026-07-15 finding showed a foreground Codex review could outlive the
-governor entirely. `quality-run-bounded.sh` now owns a hard tier deadline and
-kills the provider process group before a typed timeout can trigger fallback.
+governor entirely. `quality-run-bounded.sh` now owns the process-group kill and
+clamps every stage to the absolute remaining run budget. Timeout does not
+trigger fallback; only immediate unavailability or typed account exhaustion
+does.
 
 **Never make the governor check silently optional.** Every call site fails
 CLOSED when the governor script or its sentinel file is missing or

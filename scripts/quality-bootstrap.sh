@@ -275,6 +275,7 @@ BS_QUALITY_GOVERNOR_FILE="${BS_QUALITY_ROOT_FILE%.txt}-governor.json"
 # inside this invocation may use the last-successful-review delta.
 rm -f "${BS_QUALITY_GOVERNOR_FILE%.json}-last-reviewed.sha"
 GOVERNOR_START_EPOCH=$(date +%s)
+GOVERNOR_DEADLINE_EPOCH=$((GOVERNOR_START_EPOCH + BS_QUALITY_MAX_WALL_SECONDS))
 # Baseline the run by HEAD SHA, not by total commit count. The governor counts
 # fix-commits as `<start_commit_sha>..HEAD`, which is immune to rebases and to
 # the cwd/checkout the later `check` runs from. The old total-count delta
@@ -286,6 +287,7 @@ GOVERNOR_START_COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo 0)
 cat > "$BS_QUALITY_GOVERNOR_FILE" <<EOF
 {
   "start_epoch": ${GOVERNOR_START_EPOCH},
+  "deadline_epoch": ${GOVERNOR_DEADLINE_EPOCH},
   "start_commit_sha": "${GOVERNOR_START_COMMIT_SHA}",
   "start_commit_count": ${GOVERNOR_START_COMMIT_COUNT},
   "max_fix_commits": ${BS_QUALITY_MAX_FIX_COMMITS},

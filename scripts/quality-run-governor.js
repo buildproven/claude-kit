@@ -3,12 +3,11 @@
 /**
  * Quality Run Governor
  *
- * /bs:quality has two nested autonomous loops: the BLOCKING-findings
- * auto-fix loop (Step 2.5, up to 3 attempts) and the Codex re-verification
- * loop (Step 2.6, CODEX_ROUNDS). CODEX_ROUNDS only bounds the inner Codex
- * loop — nothing bounded the OUTER cycle of fix -> re-review across a whole
- * invocation. Two PRs in one night ran 128min/6 commits and 167min/13
- * commits with no circuit breaker (2026-07-03 incident).
+ * /bs:quality has an outer BLOCKING-findings -> batch-fix -> targeted
+ * verification loop. Earlier versions also had repeated inner Codex passes,
+ * but neither mechanism imposed an absolute deadline on the subprocess that
+ * was already running. Two PRs in one night ran 128min/6 commits and
+ * 167min/13 commits with no circuit breaker (2026-07-03 incident).
  *
  * This module is the run-wide governor every fix/round loop in SKILL.md
  * checks before doing another round of work. It tracks, against a
@@ -16,7 +15,7 @@
  *
  *   - review-round count (panels run since the run started)
  *   - fix-commit count (commits made since the run started)
- *   - wall-clock elapsed since the run started
+ *   - an absolute wall-clock deadline shared by every blocking stage
  *   - repeated-finding-shape detection (same root-cause shape recurring
  *     across rounds, independent of which file it shows up in — see
  *     findingShapeKey), so a run doing N narrow variants of the same fix at
@@ -26,18 +25,19 @@
  * WHY THE ROUND COUNTER EXISTS (2026-07-10):
  * The original governor bounded commits and wall-clock but had NO round
  * dimension, and — more importantly — was never called on the review leg. Its
- * three call sites were all downstream of the panel (before a Codex round,
- * mid-Codex-poll, before a fix attempt). The "up to 3 attempts" cap on the
- * outer fix -> re-review cycle existed only as a sentence of English prose in
+ * three call sites were all downstream of the panel (before a provider round,
+ * mid-provider poll, before a fix attempt). The outer review cap existed only
+ * as a sentence of English prose in
  * SKILL.md. Since the MODEL orchestrates that loop, an unenforced sentence is
  * not a cap. Consequences:
  *
  *   - 20min elapsed + 0 fix commits => `check` returned ok:true
- *   - a `check` passing at 29:59 could be followed by a 10min review panel and
- *     a 25min Codex poll => ~65min past a nominal "30min cap"
+ *   - a `check` passing just before the limit could start a fresh full provider
+ *     allowance, and timeout fallback could start another
  *
- * `bump-round` is therefore called immediately BEFORE the review panel and
- * fails CLOSED at the cap. The model cannot argue with a non-zero exit code.
+ * `bump-round` bounds review count; `remaining` clamps each process to the
+ * shared `deadline_epoch`. Both fail closed. The model cannot argue with a
+ * non-zero exit code.
  *
  * Pure functions exported for unit testing — see
  *   scripts/__tests__/quality-run-governor.test.js
@@ -319,6 +319,7 @@ function evaluateBudget(state, { nowEpoch, commitCount }) {
   );
   const requiredFields = [
     "start_epoch",
+    "deadline_epoch",
     "max_fix_commits",
     "max_wall_seconds",
     "max_review_rounds",
@@ -358,7 +359,24 @@ function evaluateBudget(state, { nowEpoch, commitCount }) {
   // straddles an upgrade degrades to "no rounds consumed yet" instead of
   // halting. Every NEW sentinel writes it explicitly (see SKILL.md Step -1).
   const roundsUsed = Number.isFinite(state.rounds_used) ? state.rounds_used : 0;
-  const wallTripped = elapsedSeconds >= state.max_wall_seconds;
+  const deadlineConsistent =
+    state.deadline_epoch === state.start_epoch + state.max_wall_seconds;
+  if (!deadlineConsistent) {
+    return {
+      ok: false,
+      configInvalid: true,
+      elapsedSeconds,
+      commitsUsed,
+      roundsUsed,
+      maxWallSeconds: state.max_wall_seconds,
+      maxFixCommits: state.max_fix_commits,
+      maxReviewRounds: state.max_review_rounds,
+      wallTripped: true,
+      commitTripped: false,
+      roundTripped: false,
+    };
+  }
+  const wallTripped = nowEpoch >= state.deadline_epoch;
   const commitTripped = commitsUsed >= state.max_fix_commits;
   // `rounds_used` is incremented BEFORE evaluation (bump-round), so it is the
   // 1-based index of the round about to run. A cap of 2 must therefore permit
@@ -378,6 +396,29 @@ function evaluateBudget(state, { nowEpoch, commitCount }) {
     commitTripped,
     roundTripped,
   };
+}
+
+function remainingBudget(
+  state,
+  { nowEpoch, reserveSeconds = 0, capSeconds = Number.MAX_SAFE_INTEGER },
+) {
+  const valid =
+    state &&
+    Number.isFinite(state.start_epoch) &&
+    Number.isFinite(state.deadline_epoch) &&
+    Number.isFinite(state.max_wall_seconds) &&
+    state.deadline_epoch === state.start_epoch + state.max_wall_seconds &&
+    Number.isFinite(nowEpoch) &&
+    Number.isFinite(reserveSeconds) &&
+    reserveSeconds >= 0 &&
+    Number.isFinite(capSeconds) &&
+    capSeconds > 0;
+  if (!valid) return { ok: false, seconds: 0, configInvalid: true };
+  const seconds = Math.max(
+    0,
+    Math.min(capSeconds, state.deadline_epoch - nowEpoch - reserveSeconds),
+  );
+  return { ok: seconds > 0, seconds, configInvalid: false };
 }
 
 /**
@@ -453,11 +494,31 @@ function bumpRound(sentinelPath, cwd) {
   return 0;
 }
 
+function printRemaining(sentinelPath, args) {
+  const reserveIndex = args.indexOf("--reserve");
+  const capIndex = args.indexOf("--cap");
+  const reserveSeconds = reserveIndex >= 0 ? Number(args[reserveIndex + 1]) : 0;
+  const capSeconds =
+    capIndex >= 0 ? Number(args[capIndex + 1]) : Number.MAX_SAFE_INTEGER;
+  const result = remainingBudget(loadState(sentinelPath), {
+    nowEpoch: Math.floor(Date.now() / 1000),
+    reserveSeconds,
+    capSeconds,
+  });
+  process.stdout.write(`${result.seconds}\n`);
+  if (result.configInvalid) {
+    process.stderr.write(
+      `[quality] governor deadline unreadable or inconsistent at ${sentinelPath} — failing CLOSED.\n`,
+    );
+  }
+  return result.ok ? 0 : 1;
+}
+
 function main() {
   const [, , cmd, sentinelPath, ...rest] = process.argv;
   if (!cmd || !sentinelPath) {
     process.stderr.write(
-      "usage: quality-run-governor.js <check|bump-round|record-finding|status> <sentinel-path> [args]\n",
+      "usage: quality-run-governor.js <check|bump-round|record-finding|status|remaining> <sentinel-path> [args]\n",
     );
     process.exit(2);
   }
@@ -505,6 +566,10 @@ function main() {
     const priorFindings = priorFindingsFrom(state);
     const pattern = detectRepeatedPattern(priorFindings, currentFindings);
     state.findings_seen = priorFindings.concat(currentFindings);
+    state.last_findings = currentFindings;
+    state.last_findings_round = Number.isFinite(state.rounds_used)
+      ? state.rounds_used
+      : 0;
     saveState(sentinelPath, state);
     process.stdout.write(JSON.stringify(pattern) + "\n");
     process.exit(0);
@@ -532,6 +597,10 @@ function main() {
     process.exit(0);
   }
 
+  if (cmd === "remaining") {
+    process.exit(printRemaining(sentinelPath, rest));
+  }
+
   process.stderr.write(`unknown command: ${cmd}\n`);
   process.exit(2);
 }
@@ -540,6 +609,7 @@ module.exports = {
   findingShapeKey,
   detectRepeatedPattern,
   evaluateBudget,
+  remainingBudget,
   bumpRound,
   parseFindingsArg,
   priorFindingsFrom,

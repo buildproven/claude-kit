@@ -26,8 +26,7 @@ const TIER_RULES = [
       /^\.github\/workflows\//.test(f) ||
       /^\.husky\//.test(f) ||
       f === "install.sh" ||
-      f === ".qualityrc.json" ||
-      f === "package.json",
+      f === ".qualityrc.json",
   ],
   // high
   [
@@ -37,6 +36,7 @@ const TIER_RULES = [
       f === "commands/bs/dev.md" ||
       f === "commands/bs/ralph.md" ||
       f === "commands/bs/new.md" ||
+      f === "package.json" ||
       /^skills\/quality\//.test(f) ||
       /^skills\/workflow\//.test(f) ||
       /^skills\/test-strategy\//.test(f) ||
