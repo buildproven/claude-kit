@@ -36,6 +36,16 @@ const instructionFile = path.resolve(
     : path.join(root, "config", "CLAUDE.md"),
 );
 
+function requireBudget(value, label) {
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative integer`);
+  }
+}
+
+requireBudget(budget, "Command budget");
+requireBudget(descriptionBudget, "Description budget");
+requireBudget(instructionBudget, "Instruction budget");
+
 function requireExplicitPath(file, kind) {
   if (!fs.existsSync(file)) {
     throw new Error(`${kind} not found: ${file}`);

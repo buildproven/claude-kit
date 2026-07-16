@@ -245,6 +245,70 @@ describe("provider-native platform", () => {
     );
   });
 
+  it("rejects unknown allowlisted names before pruning managed skills", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-skill-unknown-"));
+    const source = path.join(dir, "source");
+    const target = path.join(dir, "target");
+    const allowlist = path.join(dir, "allowlist.json");
+    mkdirSync(path.join(source, "keep"), { recursive: true });
+    writeFileSync(path.join(source, "keep", "SKILL.md"), "# keep\n");
+    writeFileSync(allowlist, '{"skills":["keep"]}\n');
+    execFileSync("bash", [
+      SKILL_SYNC,
+      "--source",
+      source,
+      "--allowlist",
+      allowlist,
+      "--target",
+      target,
+    ]);
+    writeFileSync(allowlist, '{"skills":["kepe"]}\n');
+
+    expect(
+      spawnSync("bash", [
+        SKILL_SYNC,
+        "--source",
+        source,
+        "--allowlist",
+        allowlist,
+        "--target",
+        target,
+      ]).status,
+    ).toBe(1);
+    expect(readlinkSync(path.join(target, "keep"))).toBe(
+      path.join(source, "keep"),
+    );
+  });
+
+  it("uses the last source for duplicate skill names without partial sync", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-skill-overlay-"));
+    const base = path.join(dir, "base");
+    const overlay = path.join(dir, "overlay");
+    const target = path.join(dir, "target");
+    const allowlist = path.join(dir, "allowlist.json");
+    for (const source of [base, overlay]) {
+      mkdirSync(path.join(source, "shared"), { recursive: true });
+      writeFileSync(path.join(source, "shared", "SKILL.md"), "# shared\n");
+    }
+    writeFileSync(allowlist, '{"skills":["shared"]}\n');
+
+    execFileSync("bash", [
+      SKILL_SYNC,
+      "--source",
+      base,
+      "--source",
+      overlay,
+      "--allowlist",
+      allowlist,
+      "--target",
+      target,
+    ]);
+
+    expect(readlinkSync(path.join(target, "shared"))).toBe(
+      path.join(overlay, "shared"),
+    );
+  });
+
   it("measures instruction and allowlisted skill discovery budgets", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "surface-budget-"));
     const skills = path.join(dir, "skills");
@@ -307,6 +371,25 @@ describe("provider-native platform", () => {
         `--root=${dir}`,
         `--skill-source=${path.join(dir, "missing")}`,
         `--instruction-file=${path.join(dir, "missing.md")}`,
+        "--json",
+      ]).status,
+    ).toBe(1);
+  });
+
+  it("fails closed when a surface budget is not a valid integer", () => {
+    expect(
+      spawnSync("node", [
+        SURFACE,
+        `--root=${ROOT}`,
+        "--description-budget=wat",
+        "--json",
+      ]).status,
+    ).toBe(1);
+    expect(
+      spawnSync("node", [
+        SURFACE,
+        `--root=${ROOT}`,
+        "--instruction-budget=-1",
         "--json",
       ]).status,
     ).toBe(1);
