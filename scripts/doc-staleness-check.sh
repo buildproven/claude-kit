@@ -17,6 +17,8 @@ set -euo pipefail
 
 STRICT=false
 [[ "${1:-}" == "--strict" ]] && STRICT=true
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CHANGELOG_HELPER="$SCRIPT_DIR/generate-changelog.sh"
 
 # Ensure git repo
 GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Not in a git repo"; exit 1; }
@@ -77,7 +79,11 @@ if [ ${#WARNINGS[@]} -gt 0 ]; then
     echo "   - $w"
   done
   echo ""
-  echo "   Run: ./scripts/generate-changelog.sh --apply"
+  if [[ -f "$CHANGELOG_HELPER" ]]; then
+    echo "   Run: bash \"$CHANGELOG_HELPER\" --apply"
+  else
+    echo "   Update CHANGELOG.md before pushing."
+  fi
   echo "   Or skip with: DOC_STALENESS_SKIP=1 git push"
   echo ""
 
