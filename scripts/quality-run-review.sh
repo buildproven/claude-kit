@@ -3,7 +3,14 @@
 # the fallback runs only when the primary is unavailable or account-exhausted.
 set -u
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -n "${BASH_VERSION:-}" ]; then
+  SCRIPT_PATH="${BASH_SOURCE[0]}"
+elif [ -n "${ZSH_VERSION:-}" ]; then
+  SCRIPT_PATH="${(%):-%x}"
+else
+  SCRIPT_PATH="$0"
+fi
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 # shellcheck source=quality-provider-policy.sh
 source "$SCRIPT_DIR/quality-provider-policy.sh"
 # shellcheck source=quality-review-plan.sh

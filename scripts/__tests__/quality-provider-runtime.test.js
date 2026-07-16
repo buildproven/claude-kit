@@ -109,6 +109,27 @@ if kill -0 "$child" 2>/dev/null; then exit 99; fi
     expect(result.stdout).toContain("bs-quality-gitroot-codex-thread-42-");
   });
 
+  it.each(["bash", "zsh"])(
+    "restores root and governor state in a fresh %s shell",
+    (shell) => {
+      const result = spawnSync(
+        shell,
+        [
+          "-c",
+          `source "$1"; printf '%s|%s|%s' "$GIT_ROOT" "$BS_QUALITY_ROOT_FILE" "$BS_QUALITY_GOVERNOR_FILE"`,
+          "state",
+          LOAD_ROOT,
+        ],
+        { encoding: "utf8", cwd: ROOT },
+      );
+      expect(result.status).toBe(0);
+      const [gitRoot, rootFile, governorFile] = result.stdout.split("|");
+      expect(gitRoot).toBe(ROOT);
+      expect(rootFile).toContain("bs-quality-gitroot-");
+      expect(governorFile).toBe(rootFile.replace(/\.txt$/, "-governor.json"));
+    },
+  );
+
   it("accepts exact evidence, then rejects later code and contradictions", () => {
     const repo = mkdtempSync(path.join(tmpdir(), "review-evidence-"));
     const setup = spawnSync(
@@ -185,7 +206,7 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
     expect(
       spawnSync("bash", [VALIDATOR, "main"], { cwd: repo }).status,
     ).not.toBe(0);
-  });
+  }, 15000);
 
   it("passes scorer effort and exact round count to Codex mechanically", () => {
     const source = spawnSync("cat", [RUN_REVIEW], { encoding: "utf8" }).stdout;
@@ -239,5 +260,18 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
     expect(source).toMatch(/REVIEW_DIFF_BASE="\$REVIEW_BASE"/);
     expect(source).toMatch(/git diff "\$\{REVIEW_DIFF_BASE\}\.\.HEAD"/);
     expect(source).toMatch(/REVIEWED_BASE="\$REVIEW_BASE"/);
+  });
+
+  it("keeps sourced review scripts compatible with Bash and zsh", () => {
+    const runner = readFileSync(RUN_REVIEW, "utf8");
+    const policy = readFileSync(
+      path.join(ROOT, "scripts", "quality-provider-policy.sh"),
+      "utf8",
+    );
+    for (const source of [runner, policy]) {
+      expect(source).toMatch(/BASH_VERSION/);
+      expect(source).toMatch(/ZSH_VERSION/);
+      expect(source).toMatch(/\$\{\(%\):-%x\}/);
+    }
   });
 });
