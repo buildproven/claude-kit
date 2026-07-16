@@ -577,7 +577,7 @@ wait
     expect(state.governor.providerDeadlineEpoch).toBe(
       state.governor.startedAtEpoch + 120,
     );
-    state.governor.providerAttempts = [];
+    state.governor.providerAttempts = [state.governor.providerAttempts[0]];
     state.governor.providerDeadlineEpoch = Math.floor(Date.now() / 1000) - 1;
     writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
     const pastDeadline = spawnSync(
@@ -615,6 +615,27 @@ wait
     expect(current.governor.providerDeadlineEpoch).toBeGreaterThan(
       Math.floor(Date.now() / 1000),
     );
+  });
+
+  it("starts the provider phase clock at the first attempt, not bootstrap", () => {
+    const root = repo("provider-phase-start");
+    const manifest = create(root, [], {
+      BS_QUALITY_MAX_PROVIDER_SECONDS: "120",
+    });
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    state.governor.providerDeadlineEpoch = Math.floor(Date.now() / 1000) - 1;
+    state.governor.campaignDeadlineEpoch = Math.floor(Date.now() / 1000) + 600;
+    writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
+
+    const authorization = JSON.parse(
+      execFileSync(
+        "node",
+        [INVOCATION, "provider-attempt", manifest, "--provider", "codex"],
+        { cwd: root, encoding: "utf8" },
+      ),
+    );
+    expect(authorization.remainingSeconds).toBeGreaterThanOrEqual(119);
+    expect(authorization.remainingSeconds).toBeLessThanOrEqual(120);
   });
 
   it("does not accept break-glass approval through wrapper argv", () => {
