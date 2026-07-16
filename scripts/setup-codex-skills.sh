@@ -135,13 +135,19 @@ done
 
 validate_manifest
 
-acquire_lock
-EXPECTED=$(mktemp "$TARGET/.buildproven-manifest.XXXXXX")
+if [ "$MODE" != check ]; then acquire_lock; fi
+if [ "$MODE" = check ]; then
+  EXPECTED=$(mktemp "${TMPDIR:-/tmp}/codex-skills-manifest.XXXXXX")
+  NEXT_EXPECTED=$(mktemp "${TMPDIR:-/tmp}/codex-skills-manifest-next.XXXXXX")
+  BACKUP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/codex-skills-backup.XXXXXX")
+else
+  EXPECTED=$(mktemp "$TARGET/.buildproven-manifest.XXXXXX")
+  NEXT_EXPECTED=$(mktemp "$TARGET/.buildproven-manifest-next.XXXXXX")
+  BACKUP_DIR=$(mktemp -d "$TARGET/.buildproven-backup.XXXXXX")
+fi
 REQUESTED=$(mktemp "${TMPDIR:-/tmp}/codex-skills-requested.XXXXXX")
-NEXT_EXPECTED=$(mktemp "$TARGET/.buildproven-manifest-next.XXXXXX")
 ORIGINAL=$(mktemp "${TMPDIR:-/tmp}/codex-skills-original.XXXXXX")
 CREATED=$(mktemp "${TMPDIR:-/tmp}/codex-skills-created.XXXXXX")
-BACKUP_DIR=$(mktemp -d "$TARGET/.buildproven-backup.XXXXXX")
 COMMITTED=false
 cleanup_expected() {
   status=$?
@@ -188,7 +194,7 @@ for source in "${SOURCES[@]}"; do
     grep -Fqx "$name" "$REQUESTED" || continue
     awk -F'|' -v name="$name" '$1 != name' "$EXPECTED" > "$NEXT_EXPECTED"
     mv "$NEXT_EXPECTED" "$EXPECTED"
-    NEXT_EXPECTED=$(mktemp "$TARGET/.buildproven-manifest-next.XXXXXX")
+    NEXT_EXPECTED=$(mktemp "${TMPDIR:-/tmp}/codex-skills-manifest-next.XXXXXX")
     printf '%s|%s\n' "$name" "$skill" >> "$EXPECTED"
   done
 done

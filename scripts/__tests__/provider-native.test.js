@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -142,6 +143,30 @@ describe("provider-native platform", () => {
         "--check",
       ]).status,
     ).toBe(1);
+  });
+
+  it("keeps Codex skill check mode read-only", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-skills-check-"));
+    const source = path.join(dir, "source");
+    const target = path.join(dir, "missing-target");
+    const allowlist = path.join(dir, "allowlist.json");
+    mkdirSync(path.join(source, "keep"), { recursive: true });
+    writeFileSync(path.join(source, "keep", "SKILL.md"), "# Keep\n");
+    writeFileSync(allowlist, '{"skills":["keep"]}\n');
+
+    expect(
+      spawnSync("bash", [
+        SKILL_SYNC,
+        "--source",
+        source,
+        "--allowlist",
+        allowlist,
+        "--target",
+        target,
+        "--check",
+      ]).status,
+    ).toBe(1);
+    expect(existsSync(target)).toBe(false);
   });
 
   it("removes only stale skills owned by the previous managed manifest", () => {
