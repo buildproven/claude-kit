@@ -41,6 +41,17 @@ provider_exhausted() {
   grep -Eiq '(^|[^0-9])429([^0-9]|$)|weekly (usage )?limit|usage limit|rate.?limit|quota (exceeded|exhausted)|too many requests' "$1" 2>/dev/null
 }
 
+record_provider_exhaustion() {
+  local provider="$1"; shift
+  local detail=""
+  for evidence in "$@"; do
+    [ -f "$evidence" ] || continue
+    detail="$(grep -Ei 'reset|429|weekly (usage )?limit|usage limit|rate.?limit|quota|try again at' "$evidence" | head -1 | tr '\n' ' ')"
+    [ -n "$detail" ] && break
+  done
+  printf '%s provider exhausted%s\n' "$provider" "${detail:+: $detail}" > "$REVIEW_OUT/provider-exhausted"
+}
+
 run_claude_review() {
   local companion agents_file agents_csv rc
   companion="$(bs_quality_find_script claude-review-companion.sh)" || return 2
@@ -89,7 +100,10 @@ run_codex_review() {
       < "$prompt_file" > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file"
     rc=$?
     if [ "$rc" -ne 0 ]; then
-      if provider_exhausted "$raw_file" || provider_exhausted "$error_file"; then return 75; fi
+      if provider_exhausted "$raw_file" || provider_exhausted "$error_file"; then
+        record_provider_exhaustion Codex "$raw_file" "$error_file"
+        return 75
+      fi
       [ "$rc" -eq 124 ] && return 76
       grep -Eiq 'not authenticated|not logged in|login required|setup required' "$error_file" 2>/dev/null && return 2
       return 1
