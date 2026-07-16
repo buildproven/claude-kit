@@ -238,14 +238,12 @@ function loadState(sentinelPath) {
     if (parsed.schemaVersion === 1 && parsed.governor) {
       const governor = parsed.governor;
       return {
-        // Provider time is bounded independently by quality-review-plan.sh and
-        // must not consume remediation time. Until the first remediation
-        // check starts its clock, evaluate review-round gates against "now".
-        start_epoch:
-          governor.remediationStartedAtEpoch ?? Math.floor(Date.now() / 1000),
+        // The workload plan is an end-to-end campaign bound. Provider,
+        // orchestration, and remediation time all consume the same clock.
+        start_epoch: governor.startedAtEpoch,
         start_commit_sha: governor.startCommitSha,
         max_fix_commits: governor.maxFixCommits,
-        max_wall_seconds: governor.remediationSeconds,
+        max_wall_seconds: governor.campaignSeconds,
         max_rereview_reserve_seconds: governor.reReviewReserveSeconds,
         max_review_rounds: governor.maxReviewRounds,
         rounds_used: governor.roundsUsed,
@@ -578,13 +576,6 @@ function prepareReviewAttempt(sentinelPath, requestedCwd) {
     authorizedHead,
   );
   state.rounds_used = reusableAttempt ? reusableAttempt.number : nextRound;
-  if (
-    state._manifest &&
-    state.rounds_used >= 2 &&
-    Number.isFinite(state.max_rereview_reserve_seconds)
-  ) {
-    state.max_wall_seconds += state.max_rereview_reserve_seconds;
-  }
   return {
     state,
     priorRounds,

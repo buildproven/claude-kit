@@ -39,6 +39,14 @@ source "$SCRIPT_DIR/quality-review-plan.sh"
 
 REVIEW_INFO="$(node "$SCRIPT_DIR/quality-invocation.js" review-info "$MANIFEST")" || exit 1
 REVIEW_ROUND="$(printf '%s' "$REVIEW_INFO" | jq -r '.round')"
+if [ "$REVIEW_ROUND" -gt 1 ]; then
+  QUALITY_REVIEW_TIMEOUT="$(field risk.runtime.verificationSeconds)"
+  QUALITY_REVIEW_PASSES=1
+  QUALITY_REVIEW_DEPTH=high
+  QUALITY_REVIEW_FOCUS="Targeted verification only: prove each prior blocker is fixed and inspect the fix delta for regressions."
+else
+  QUALITY_REVIEW_TIMEOUT="$(field risk.runtime.reviewSeconds)"
+fi
 REVIEW_DIFF_BASE="$(printf '%s' "$REVIEW_INFO" | jq -r '.from')"
 REVIEWED_HEAD="$(printf '%s' "$REVIEW_INFO" | jq -r '.to')"
 REVIEW_OUT="$(printf '%s' "$REVIEW_INFO" | jq -r '.artifactDir')"
@@ -53,28 +61,6 @@ git diff --name-only "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" > "$REVIEW_OUT/file
 git log "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" --oneline > "$REVIEW_OUT/log.txt"
 node "$SCRIPT_DIR/quality-invocation.js" review-identity "$MANIFEST" \
   > "$REVIEW_OUT/identity.json" || exit 1
-
-structured_provider_exhausted() {
-  local evidence="$1"
-  [ -s "$evidence" ] || return 1
-  jq -e '
-    .. | objects |
-    select(
-      (.status? == 429) or
-      (.statusCode? == 429) or
-      (.code? | tostring | test("^(429|rate_limit|rate_limit_exceeded|resource_exhausted|quota_exhausted)$"; "i")) or
-      (.type? | tostring | test("^(rate_limit|rate_limit_error|resource_exhausted|quota_exhausted)$"; "i"))
-    )
-  ' "$evidence" >/dev/null 2>&1
-}
-
-provider_stderr_exhausted() {
-  local evidence="$1"
-  structured_provider_exhausted "$evidence" && return 0
-  grep -Eiq \
-    '(^|[^0-9])429([^0-9]|$)|rate[ -]?limit(ed| exceeded)?|quota (exhausted|exceeded)|usage limit' \
-    "$evidence" 2>/dev/null
-}
 
 record_provider_exhaustion() {
   printf '%s provider exhausted (structured error metadata)\n' "$1" > "$REVIEW_OUT/provider-exhausted"
@@ -116,6 +102,7 @@ run_claude_review() {
 
 run_codex_review() {
   local bounded normalizer schema prompt_file raw_file normalized_file error_file rc pass pass_timeout
+  local review_selector review_selector_value
   bounded="$SCRIPT_DIR/quality-run-bounded.sh"
   normalizer="$SCRIPT_DIR/quality-normalize-codex-review.sh"
   schema="$SCRIPT_DIR/schemas/quality-review-output.schema.json"
@@ -136,21 +123,27 @@ run_codex_review() {
       echo "Independent code-review pass $pass/$QUALITY_REVIEW_PASSES. Tier: $QUALITY_REVIEW_TIER. $QUALITY_REVIEW_FOCUS"
       echo "Repository/revision identity (must match every finding):"
       cat "$REVIEW_OUT/identity.json"
-      echo "Review ONLY the supplied commit delta. Return structured findings with precise file:line evidence."
-      echo "Changed files:"; cat "$REVIEW_OUT/files.txt"
-      echo "Commit log:"; cat "$REVIEW_OUT/log.txt"
-      echo "Diff:"; cat "$REVIEW_OUT/diff.txt"
+      echo "Review only the native Codex review target. Return structured findings with precise file:line evidence."
     } > "$prompt_file"
+    if [ "$REVIEW_ROUND" -gt 1 ]; then
+      review_selector=--commit
+      review_selector_value="$REVIEWED_HEAD"
+    else
+      review_selector=--base
+      review_selector_value="$RESOLVED_BASE"
+    fi
     pass_timeout="$(authorize_provider_attempt codex "$pass_timeout")" \
       || return 77
     bash "$bounded" --timeout "$pass_timeout" -- \
-      codex exec --ephemeral -s read-only \
+      codex exec --ephemeral -s read-only --json \
       -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
-      --output-schema "$schema" -o "$raw_file" - \
+      --output-schema "$schema" -o "$raw_file" review \
+      "$review_selector" "$review_selector_value" - \
       < "$prompt_file" > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file"
     rc=$?
     if [ "$rc" -ne 0 ]; then
-      if provider_stderr_exhausted "$error_file"; then
+      if node "$SCRIPT_DIR/quality-provider-error.js" \
+        "$REVIEW_OUT/codex-${pass}.progress"; then
         record_provider_exhaustion Codex
         return 75
       fi

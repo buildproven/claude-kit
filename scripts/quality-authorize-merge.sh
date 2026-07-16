@@ -151,11 +151,17 @@ if EFFECTIVE_RULES="$(gh api \
     ATOMIC_BASE_FRESHNESS=true
   fi
 fi
-[ "$ATOMIC_BASE_FRESHNESS" = true ] || {
-  echo "❌ MERGE BLOCKED: the PR base lacks server-enforced strict freshness." >&2
-  echo "   Enable strict required-status checks or use a supported merge queue." >&2
-  exit 1
-}
+if [ "$ATOMIC_BASE_FRESHNESS" = true ]; then
+  echo "[quality] merge freshness: server-enforced strict checks"
+else
+  # Solo-owned repositories commonly have required CI without strict branch
+  # protection. Keep the same exact-head, exact-base, successful-CI checks and
+  # repeat both identities immediately before `gh pr merge`. GitHub's
+  # --match-head-commit closes the head race; a base race is detected by the
+  # final ls-remote comparison below. This is guarded direct mode, not an
+  # excuse to skip freshness validation.
+  echo "⚠️  [quality] merge freshness: guarded direct mode (strict branch protection is not enabled)." >&2
+fi
 [ "$PREFLIGHT" = false ] || {
   echo "[quality] non-mutating merge authorization preflight passed"
   exit 0

@@ -232,8 +232,8 @@ auto-fix loop, re-run `npm test` to verify they pass before continuing.
 | `BS_QUALITY_REVIEW_TIMEOUT`           | tier    | Override the mechanically selected provider wall-clock cap.                                        |
 | `BS_QUALITY_TARGET_DIR`               | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd. |
 | `BS_QUALITY_MAX_FIX_COMMITS`          | 4       | Run-governor cap: max fix commits across the whole invocation before autonomous halt (see below).  |
-| `BS_QUALITY_MAX_REMEDIATION_SECONDS`  | 900     | Remediation allowance, excluding the reserved mandatory re-review allowance.                       |
-| `BS_QUALITY_REREVIEW_RESERVE_SECONDS` | 900     | Dedicated allowance for the required validation review after fixes.                                |
+| `BS_QUALITY_MAX_REMEDIATION_SECONDS`  | planned | Batched-fix allowance remaining after proportional discovery and verification reserves.            |
+| `BS_QUALITY_REREVIEW_RESERVE_SECONDS` | planned | Workload-scaled allowance for one targeted validation review after fixes.                          |
 
 ### Run Governor (runaway-loop guardrails)
 
@@ -244,12 +244,15 @@ re-review across the whole invocation. `scripts/quality-run-governor.js`
 tracks a per-invocation sentinel (`$TMPDIR/bs-quality-gitroot-*-governor.json`,
 alongside the Step -1 git-root sentinel) with:
 
-- **Fix-commit cap** (`BS_QUALITY_MAX_FIX_COMMITS`, default 4) — commits made
-  since the run started, checked before every fix attempt and every Codex
-  re-verification round.
-- **Phase wall-clock caps** — remediation defaults to 900 seconds and the
-  mandatory validation re-review owns a separate 900-second reserve. Initial
-  provider overhead cannot consume the required second review.
+- **Fix-commit cap** (`BS_QUALITY_MAX_FIX_COMMITS`, default 1) — one batched
+  remediation commit, checked before every fix attempt and verification.
+- **Proportional phase caps** — changed lines plus 25 units per changed file
+  select a micro/small/medium/large/huge band. Default campaigns scale from
+  300 to 900 seconds; gate, discovery, and targeted-verification subprocesses
+  each receive smaller workload-derived limits.
+- **Two-review convergence** — one discovery review and one targeted
+  verification are allowed. A blocker discovered by verification is reported
+  as the terminal result; it cannot trigger another fix/review recursion.
 - **Repeated-pattern detection** — findings are recorded round-over-round;
   if a round's findings mostly repeat a shape seen in an earlier round (e.g.
   the same on-disk-vs-loaded-job gap at 4 different call sites), the skill is
@@ -313,14 +316,15 @@ of auto-stamping — auto-stamping then would be forging review evidence.
 
 When `harness-config.json` exists in the repo root, the skill reads the resolved risk tier and mechanically selects provider-equivalent depth:
 
-| Tier       | Provider-equivalent depth  | Time cap |
-| ---------- | -------------------------- | -------- |
-| `low`      | focused regression         | ≤2 min   |
-| `medium`   | broad correctness/security | ≤8 min   |
-| `high`     | deep adversarial           | ≤15 min  |
-| `critical` | release-veto + break-glass | ≤15 min  |
+| Tier       | Provider-equivalent depth  | Minimum review |
+| ---------- | -------------------------- | -------------- |
+| `low`      | focused regression         | 75s            |
+| `medium`   | broad correctness/security | 120s           |
+| `high`     | deep adversarial           | 180s           |
+| `critical` | release-veto + break-glass | 240s           |
 
-If no `harness-config.json` is present, `--level auto` falls back to L95.
+Workload can raise these limits, but the complete default campaign remains
+bounded at 5–15 minutes.
 
 ### Level 95 (Ship-Ready, no tier classification)
 
@@ -337,13 +341,16 @@ If no `harness-config.json` is present, `--level auto` falls back to L95.
 
 ## Provider Invocation
 
-Codex uses `codex exec` directly with a structured output schema and the
-scorer-selected `model_reasoning_effort`; this avoids ambient-effort drift.
+Codex uses the native `codex exec review` surface with a structured output
+schema and the scorer-selected `model_reasoning_effort`; this avoids
+ambient-effort drift and avoids pasting the repository diff into a generic
+prompt.
 `quality-run-bounded.sh` places it in a process group and enforces the tier cap:
 
 ```
-codex exec --ephemeral -s read-only \
-  -c 'model_reasoning_effort="high"' --output-schema <schema> -
+codex exec --ephemeral -s read-only --json \
+  -c 'model_reasoning_effort="high"' --output-schema <schema> \
+  review --base origin/main -
 ```
 
 The runner normalizes both current root-level Codex structured output and the

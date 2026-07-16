@@ -52,9 +52,27 @@ if [ "$SKIP" = true ]; then
 fi
 EXECUTABLE="$(printf '%s' "$PLAN" | jq -er '.executable')" || exit 1
 mapfile -t COMMAND_ARGS < <(printf '%s' "$PLAN" | jq -er '.args[]')
-"$EXECUTABLE" "${COMMAND_ARGS[@]}" >"$LOG" 2>&1 || {
+GATE_TIMEOUT="$(node "$SCRIPT_DIR/quality-invocation.js" \
+  field "$MANIFEST" risk.runtime.gateSeconds)" || exit 1
+[ -n "$GATE_TIMEOUT" ] || GATE_TIMEOUT=300
+CAMPAIGN_DEADLINE="$(node "$SCRIPT_DIR/quality-invocation.js" \
+  field "$MANIFEST" governor.campaignDeadlineEpoch)" || exit 1
+if [ -n "$CAMPAIGN_DEADLINE" ]; then
+  CAMPAIGN_REMAINING=$((CAMPAIGN_DEADLINE - $(date +%s)))
+  [ "$CAMPAIGN_REMAINING" -gt 0 ] || {
+    echo "quality-run-gate: campaign budget is exhausted before '$NAME'" >&2
+    exit 1
+  }
+  [ "$GATE_TIMEOUT" -le "$CAMPAIGN_REMAINING" ] ||
+    GATE_TIMEOUT="$CAMPAIGN_REMAINING"
+fi
+bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$GATE_TIMEOUT" -- \
+  "$EXECUTABLE" "${COMMAND_ARGS[@]}" >"$LOG" 2>&1 || {
+  RC=$?
   cat "$LOG" >&2
-  exit 1
+  [ "$RC" -eq 124 ] &&
+    echo "quality-run-gate: '$NAME' exceeded its proportional ${GATE_TIMEOUT}s budget" >&2
+  exit "$RC"
 }
 bash "$SCRIPT_DIR/quality-assert-clean.sh" \
   --manifest "$MANIFEST" --phase "gate '$NAME' completion" || exit 1

@@ -630,24 +630,20 @@ wait
     expect(result.stderr).toMatch(/unexpected quality argument/);
   });
 
-  it("excludes provider time from the remediation budget", () => {
+  it("counts provider and orchestration time against the campaign budget", () => {
     const root = repo("provider-budget");
-    const manifest = create(root, [], {
-      BS_QUALITY_MAX_REMEDIATION_SECONDS: "2",
-    });
+    const manifest = create(root);
     const state = JSON.parse(readFileSync(manifest, "utf8"));
-    state.governor.startedAtEpoch -= 3600;
+    state.governor.campaignSeconds = 2;
+    state.governor.startedAtEpoch = Math.floor(Date.now() / 1000) - 3;
+    state.governor.campaignDeadlineEpoch =
+      state.governor.startedAtEpoch + state.governor.campaignSeconds;
     writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
 
     expect(
       spawnSync("node", [GOVERNOR, "bump-round", manifest], { cwd: root })
         .status,
-    ).toBe(0);
-    expect(
-      spawnSync("node", [GOVERNOR, "check", manifest], { cwd: root }).status,
-    ).toBe(0);
-    const updated = JSON.parse(readFileSync(manifest, "utf8"));
-    expect(updated.governor.remediationStartedAtEpoch).not.toBeNull();
+    ).not.toBe(0);
   });
 
   it("retries an unconsumed provider attempt without spending the mandatory rereview round", () => {
@@ -977,7 +973,7 @@ wait
     expect(plan.args).toContain("--ignore-unknown");
   });
 
-  it("reserves a mandatory second-review allowance after remediation time", () => {
+  it("does not let verification extend an expired campaign clock", () => {
     const root = repo("reserve");
     const manifest = create(root, [], {
       BS_QUALITY_MAX_REMEDIATION_SECONDS: "1",
@@ -985,8 +981,10 @@ wait
     });
     prepareCodexReview(root, manifest);
     const state = JSON.parse(readFileSync(manifest, "utf8"));
-    state.governor.remediationStartedAtEpoch =
-      Math.floor(Date.now() / 1000) - 2;
+    state.governor.campaignSeconds = 1;
+    state.governor.startedAtEpoch = Math.floor(Date.now() / 1000) - 2;
+    state.governor.campaignDeadlineEpoch =
+      state.governor.startedAtEpoch + state.governor.campaignSeconds;
     writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
     expect(
       spawnSync("node", [GOVERNOR, "check", manifest], { cwd: root }).status,
@@ -994,7 +992,7 @@ wait
     expect(
       spawnSync("node", [GOVERNOR, "bump-round", manifest], { cwd: root })
         .status,
-    ).toBe(0);
+    ).not.toBe(0);
   });
 
   it("passes a structured wrapper argv without executing spaces or metacharacters", () => {
@@ -1237,13 +1235,17 @@ exit 99
     );
     expect(wrongHeadRef.status).not.toBe(0);
     expect(wrongHeadRef.stderr).toMatch(/head branch identity changed/);
-    const unprotected = spawnSync("bash", [AUTHORIZE, "--manifest", manifest], {
-      cwd: caller,
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
-      encoding: "utf8",
-    });
-    expect(unprotected.status).not.toBe(0);
-    expect(unprotected.stderr).toMatch(/server-enforced strict freshness/);
+    const unprotected = spawnSync(
+      "bash",
+      [AUTHORIZE, "--manifest", manifest, "--preflight"],
+      {
+        cwd: caller,
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        encoding: "utf8",
+      },
+    );
+    expect(unprotected.status).toBe(0);
+    expect(unprotected.stderr).toMatch(/guarded direct mode/);
 
     const queueOnly = spawnSync("bash", [AUTHORIZE, "--manifest", manifest], {
       cwd: caller,
@@ -1380,6 +1382,8 @@ if [ "$1" = "api" ]; then
   if [[ "$2" == *"protection/required_status_checks"* ]]; then
     [ ! -f ${JSON.stringify(denyPreflight)} ] || exit 1
     printf '%s\\n' 'true'
+  elif [ -f ${JSON.stringify(denyPreflight)} ]; then
+    printf '%s\\n' '[{"type":"merge_queue","parameters":{"grouping_strategy":"ALLGREEN"}}]'
   else
     printf '%s\\n' '[]'
   fi
@@ -1508,7 +1512,7 @@ if [ "$1 $2" = "pr view" ]; then
 fi
 if [ "$1" = api ]; then
   [[ "$2" == *"required_status_checks"* ]] && exit 1
-  printf '%s\\n' '[]'
+  printf '%s\\n' '[{"type":"merge_queue","parameters":{"grouping_strategy":"ALLGREEN"}}]'
   exit 0
 fi
 exit 1
@@ -1539,7 +1543,7 @@ exit 1
       { cwd: root, env, encoding: "utf8" },
     );
     expect(mappedFork.status).not.toBe(0);
-    expect(mappedFork.stderr).toMatch(/server-enforced strict freshness/);
+    expect(mappedFork.stderr).toMatch(/queue-aware monitored merge path/);
     expect(readFileSync(log, "utf8")).toContain(`repo view ${forkRemote}`);
     expect(git(root, ["rev-parse", "HEAD"])).toBe(reviewedHead);
   }, 20_000);
@@ -1681,7 +1685,7 @@ exit 1
     ).not.toBe(0);
   });
 
-  it("reserves three bounded review rounds for critical risk by default", () => {
+  it("caps critical campaigns at discovery plus one verification", () => {
     const root = repo("critical-rounds");
     const manifest = create(root);
     execFileSync(
@@ -1703,7 +1707,7 @@ exit 1
     );
     expect(
       JSON.parse(readFileSync(manifest, "utf8")).governor.maxReviewRounds,
-    ).toBe(3);
+    ).toBe(2);
 
     const explicitlyBounded = create(root, [], {
       BS_QUALITY_MAX_REVIEW_ROUNDS: "2",

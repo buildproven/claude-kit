@@ -87,6 +87,12 @@ function normalizeGovernor(manifest) {
     manifest.governor.startedAtEpoch + manifest.governor.providerWindowSeconds;
   manifest.governor.providerDeadlineHead ??= null;
   manifest.governor.providerAttempts ??= [];
+  manifest.governor.campaignSeconds ??=
+    manifest.governor.providerWindowSeconds +
+    manifest.governor.remediationSeconds +
+    manifest.governor.reReviewReserveSeconds;
+  manifest.governor.campaignDeadlineEpoch ??=
+    manifest.governor.startedAtEpoch + manifest.governor.campaignSeconds;
 }
 
 function normalizeManifestCollections(manifest) {
@@ -409,6 +415,8 @@ function buildGovernor(head) {
     providerDeadlineEpoch: startedAtEpoch + providerDeadlineSeconds,
     providerDeadlineHead: head,
     providerAttempts: [],
+    campaignSeconds: providerDeadlineSeconds,
+    campaignDeadlineEpoch: startedAtEpoch + providerDeadlineSeconds,
     remediationStartedAtEpoch: null,
     findingsSeen: [],
     startCommitSha: head,
@@ -662,17 +670,85 @@ function recordStampPublished(manifest, options) {
   manifest.merge.stampPublication.publishedAt ??= new Date().toISOString();
 }
 
-function reserveCriticalReviewRounds(manifest, tier) {
-  if (
-    tier === "critical" &&
-    manifest.governor.maxReviewRoundsExplicit !== true &&
-    manifest.governor.maxReviewRounds < 3
-  ) {
-    // Critical reviews can surface release blockers during the mandatory
-    // validation round. Reserve one bounded final round so fixing those
-    // blockers does not force a stale authorization or an unbounded override.
-    manifest.governor.maxReviewRounds = 3;
+function requestedRiskMinimum(requestedLevel) {
+  if (requestedLevel === "98") return "critical";
+  if (requestedLevel === "95") return "high";
+  return ["low", "medium", "high", "critical"].includes(requestedLevel)
+    ? requestedLevel
+    : "low";
+}
+
+function buildRuntimePlan(manifest, options) {
+  return {
+    workload: options.workload || "unknown",
+    workloadUnits: parseInteger(
+      options["workload-units"] || "0",
+      "workload units",
+    ),
+    diffFiles: parseInteger(options["diff-files"] || "0", "diff files"),
+    diffLines: parseInteger(options["diff-lines"] || "0", "diff lines"),
+    campaignSeconds: parseInteger(
+      options["campaign-seconds"] ||
+        String(manifest.governor.remediationSeconds),
+      "campaign seconds",
+      { minimum: 1 },
+    ),
+    reviewSeconds: parseInteger(
+      options["review-seconds"] ||
+        String(manifest.governor.providerWindowSeconds),
+      "review seconds",
+      { minimum: 1 },
+    ),
+    verificationSeconds: parseInteger(
+      options["verification-seconds"] ||
+        String(manifest.governor.reReviewReserveSeconds),
+      "verification seconds",
+      { minimum: 1 },
+    ),
+    gateSeconds: parseInteger(
+      options["gate-seconds"] || "300",
+      "gate seconds",
+      {
+        minimum: 1,
+      },
+    ),
+  };
+}
+
+function applyRuntimeGovernor(manifest, options, runtime) {
+  const governor = manifest.governor;
+  if (governor.maxReviewRoundsExplicit !== true) {
+    governor.maxReviewRounds = parseInteger(
+      options["max-review-rounds"] || "2",
+      "max review rounds",
+      { minimum: 1 },
+    );
   }
+  if (process.env.BS_QUALITY_MAX_FIX_COMMITS === undefined) {
+    governor.maxFixCommits = parseInteger(
+      options["max-fix-commits"] || "1",
+      "max fix commits",
+    );
+  }
+  if (process.env.BS_QUALITY_MAX_REMEDIATION_SECONDS === undefined) {
+    governor.remediationSeconds = Math.max(
+      60,
+      runtime.campaignSeconds -
+        runtime.reviewSeconds -
+        runtime.verificationSeconds,
+    );
+  }
+  if (process.env.BS_QUALITY_REREVIEW_RESERVE_SECONDS === undefined) {
+    governor.reReviewReserveSeconds = runtime.verificationSeconds;
+  }
+  if (process.env.BS_QUALITY_MAX_PROVIDER_SECONDS === undefined) {
+    governor.providerWindowSeconds = runtime.reviewSeconds;
+    governor.providerDeadlineEpoch =
+      governor.startedAtEpoch + runtime.reviewSeconds;
+  }
+  governor.campaignSeconds = runtime.campaignSeconds;
+  governor.campaignDeadlineEpoch =
+    governor.startedAtEpoch + runtime.campaignSeconds;
 }
 
 function setRisk(manifest, options) {
@@ -681,16 +757,7 @@ function setRisk(manifest, options) {
     throw new Error(`invalid resolved tier '${tier}'`);
   }
   const tierRank = { low: 0, medium: 1, high: 2, critical: 3 };
-  const requestedMinimum =
-    manifest.risk.requestedLevel === "98"
-      ? "critical"
-      : manifest.risk.requestedLevel === "95"
-        ? "high"
-        : ["low", "medium", "high", "critical"].includes(
-              manifest.risk.requestedLevel,
-            )
-          ? manifest.risk.requestedLevel
-          : "low";
+  const requestedMinimum = requestedRiskMinimum(manifest.risk.requestedLevel);
   if (tierRank[tier] < tierRank[requestedMinimum]) {
     throw new Error(
       `resolved tier ${tier} is below requested minimum ${requestedMinimum}`,
@@ -708,8 +775,8 @@ function setRisk(manifest, options) {
     codexDepth: options["codex-depth"] || "medium",
     codexRounds: parseInteger(options["codex-rounds"] || "1", "codex rounds"),
     level: options.level || manifest.options.level,
+    runtime: buildRuntimePlan(manifest, options),
   };
-  reserveCriticalReviewRounds(manifest, tier);
   if (manifest.risk?.resolved) {
     if (JSON.stringify(manifest.risk) === JSON.stringify(resolved)) return;
     throw new Error("risk resolution is immutable once persisted");
@@ -717,6 +784,7 @@ function setRisk(manifest, options) {
   if (manifest.reviews.length > 0) {
     throw new Error("risk resolution is immutable once persisted");
   }
+  applyRuntimeGovernor(manifest, options, resolved.runtime);
   manifest.risk = resolved;
 }
 
@@ -976,7 +1044,11 @@ function authorizeProviderAttempt(manifest, options) {
   ) {
     throw new Error("provider attempt governor is missing or invalid");
   }
-  if (now >= governor.providerDeadlineEpoch) {
+  const deadline = Math.min(
+    governor.providerDeadlineEpoch,
+    governor.campaignDeadlineEpoch,
+  );
+  if (now >= deadline) {
     throw new Error("absolute provider deadline exhausted");
   }
   if (governor.providerAttempts.length >= governor.maxProviderAttempts) {
@@ -991,7 +1063,7 @@ function authorizeProviderAttempt(manifest, options) {
   governor.providerAttempts.push(attempt);
   return {
     ...attempt,
-    remainingSeconds: governor.providerDeadlineEpoch - now,
+    remainingSeconds: deadline - now,
     maxAttempts: governor.maxProviderAttempts,
   };
 }
@@ -1804,8 +1876,13 @@ function runAdvance(manifestArg, manifest, rawArgs) {
     advanceHead(locked, manifest.repo.realpath);
     validateIdentity(locked, manifest.repo.realpath);
     if (locked.governor.providerDeadlineHead !== locked.revisions.currentHead) {
-      locked.governor.providerDeadlineEpoch =
-        Math.floor(Date.now() / 1000) + locked.governor.providerWindowSeconds;
+      const verificationWindow =
+        locked.risk?.runtime?.verificationSeconds ??
+        locked.governor.providerWindowSeconds;
+      locked.governor.providerDeadlineEpoch = Math.min(
+        Math.floor(Date.now() / 1000) + verificationWindow,
+        locked.governor.campaignDeadlineEpoch,
+      );
       locked.governor.providerDeadlineHead = locked.revisions.currentHead;
     }
     const discovered = discoverRequiredGates(
