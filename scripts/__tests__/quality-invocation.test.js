@@ -12,6 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -32,6 +33,23 @@ const STAMP_AND_MERGE = path.join(
   "scripts",
   "quality-stamp-and-merge.sh",
 );
+const require = createRequire(import.meta.url);
+const invocation = require(INVOCATION);
+
+function recordGateFixture(manifestPath, name, overrides = {}) {
+  invocation.withManifestLock(manifestPath, (manifest) => {
+    const required = manifest.requiredGates.find((gate) => gate.name === name);
+    const log = path.join(path.dirname(manifestPath), `${name}.gate.log`);
+    writeFileSync(log, `${name} passed\n`);
+    invocation.recordGate(manifest, {
+      name,
+      source: required.source,
+      command: required.command,
+      log,
+      ...overrides,
+    });
+  });
+}
 
 function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -156,30 +174,8 @@ function prepareCodexReview(root, manifestPath, providerFindings = []) {
     ],
     { cwd: root },
   );
-  const requiredGates = JSON.parse(
-    readFileSync(manifestPath, "utf8"),
-  ).requiredGates;
   for (const name of ["lint", "test", "security"]) {
-    const required = requiredGates.find((gate) => gate.name === name);
-    const log = path.join(path.dirname(manifestPath), `${name}.gate.log`);
-    writeFileSync(log, `${name} passed\n`);
-    execFileSync(
-      "node",
-      [
-        INVOCATION,
-        "gate",
-        manifestPath,
-        "--name",
-        name,
-        "--source",
-        required.source,
-        "--command",
-        required.command,
-        "--log",
-        log,
-      ],
-      { cwd: root },
-    );
+    recordGateFixture(manifestPath, name);
   }
   return info;
 }
@@ -428,6 +424,24 @@ wait
         cwd: root,
       }).status,
     ).not.toBe(0);
+    expect(
+      spawnSync(
+        "node",
+        [INVOCATION, "approval-attach", directManifest, "--artifact", "fake"],
+        { cwd: root },
+      ).status,
+    ).not.toBe(0);
+    execFileSync("node", [INVOCATION, "advance", directManifest], {
+      cwd: root,
+      env: {
+        ...process.env,
+        BS_QUALITY_APPROVAL_CHALLENGE_SHA256: "a".repeat(64),
+        BS_QUALITY_APPROVAL_PUBLIC_KEY: "self-minted",
+      },
+    });
+    expect(
+      JSON.parse(readFileSync(directManifest, "utf8")).approvalTrust,
+    ).toBeNull();
     expect(
       spawnSync(
         "node",
@@ -1763,13 +1777,6 @@ exit 1
     expect(
       JSON.parse(readFileSync(falseManifest, "utf8")).options.skipTests,
     ).toBe(false);
-    const requiredTest = JSON.parse(
-      readFileSync(manifest, "utf8"),
-    ).requiredGates.find((gate) => gate.name === "test");
-    const falseRequiredTest = JSON.parse(
-      readFileSync(falseManifest, "utf8"),
-    ).requiredGates.find((gate) => gate.name === "test");
-
     execFileSync(
       "bash",
       [
@@ -1794,27 +1801,10 @@ exit 1
     });
 
     prepareCodexReview(root, manifest);
-    execFileSync(
-      "node",
-      [
-        INVOCATION,
-        "gate",
-        manifest,
-        "--name",
-        "test",
-        "--status",
-        "skipped",
-        "--reason",
-        "config-only fixture has no executable tests",
-        "--source",
-        requiredTest.source,
-        "--command",
-        requiredTest.command,
-        "--log",
-        path.join(path.dirname(manifest), "test.gate.log"),
-      ],
-      { cwd: root },
-    );
+    recordGateFixture(manifest, "test", {
+      status: "skipped",
+      reason: "config-only fixture has no executable tests",
+    });
     recordJudgeArtifact(root, manifest, []);
     expect(() =>
       execFileSync("node", [INVOCATION, "review-authorization", manifest], {
@@ -1824,21 +1814,7 @@ exit 1
 
     const missingReason = spawnSync(
       "node",
-      [
-        INVOCATION,
-        "gate",
-        falseManifest,
-        "--name",
-        "test",
-        "--status",
-        "skipped",
-        "--source",
-        falseRequiredTest.source,
-        "--command",
-        falseRequiredTest.command,
-        "--log",
-        path.join(path.dirname(manifest), "test.gate.log"),
-      ],
+      [INVOCATION, "gate-run", falseManifest, "--name", "test", "--skip"],
       { cwd: root, encoding: "utf8" },
     );
     expect(missingReason.status).not.toBe(0);
@@ -1938,28 +1914,8 @@ exit 1
       }).stderr,
     ).toMatch(/required build gate evidence is missing or stale/);
 
-    for (const name of ["build", "type", "consumer"]) {
-      const gate = required.find((candidate) => candidate.name === name);
-      const log = path.join(path.dirname(manifest), `${name}.gate.log`);
-      writeFileSync(log, `${name} passed\n`);
-      execFileSync(
-        "node",
-        [
-          INVOCATION,
-          "gate",
-          manifest,
-          "--name",
-          name,
-          "--source",
-          gate.source,
-          "--command",
-          gate.command,
-          "--log",
-          log,
-        ],
-        { cwd: root },
-      );
-    }
+    for (const name of ["build", "type", "consumer"])
+      recordGateFixture(manifest, name);
     recordJudgeArtifact(root, manifest);
     expect(() =>
       execFileSync("node", [INVOCATION, "review-authorization", manifest], {
@@ -2015,7 +1971,9 @@ exit 1
         { cwd: root, encoding: "utf8" },
       );
       expect(forged.status).not.toBe(0);
-      expect(forged.stderr).toMatch(/does not match required source/);
+      expect(forged.stderr).toMatch(
+        /unknown quality invocation command 'gate'/,
+      );
     }
 
     const callerCommand = spawnSync(
@@ -2113,6 +2071,25 @@ exit 1
         /unsupported required-gates policy version/,
       );
     }
+  });
+
+  it("refuses to execute cross-repository PR scripts on the operator host", () => {
+    const root = repo("cross-repository-gates");
+    const manifest = create(root, [
+      "--pr",
+      "1",
+      "--head-repository",
+      "fork/repo",
+      "--cross-repository",
+      "true",
+    ]);
+    const result = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifest, "--name", "lint"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/isolated CI.*host execution is forbidden/);
   });
 
   it("migrates legacy required gates only during an explicit locked resume", () => {

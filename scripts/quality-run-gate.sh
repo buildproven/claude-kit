@@ -40,24 +40,13 @@ mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/$NAME.log"
 cd "$ROOT" || exit 1
 PLAN="$(node "$SCRIPT_DIR/quality-invocation.js" gate-plan "$MANIFEST" --name "$NAME")" || exit 1
-SOURCE="$(printf '%s' "$PLAN" | jq -er '.source')" || exit 1
-COMMAND="$(printf '%s' "$PLAN" | jq -er '.command')" || exit 1
 if [ "$SKIP" = true ]; then
-  printf 'SKIPPED: %s\n' "$REASON" >"$LOG"
-  node "$SCRIPT_DIR/quality-invocation.js" gate "$MANIFEST" \
-    --name "$NAME" --status skipped --reason "$REASON" \
-    --source "$SOURCE" --command "$COMMAND" --log "$LOG" || exit 1
+  node "$SCRIPT_DIR/quality-invocation.js" gate-run "$MANIFEST" \
+    --name "$NAME" --skip --reason "$REASON" || exit 1
   cat "$LOG"
   exit 0
 fi
-EXECUTABLE="$(printf '%s' "$PLAN" | jq -er '.executable')" || exit 1
-mapfile -t COMMAND_ARGS < <(printf '%s' "$PLAN" | jq -er '.args[]')
-"$EXECUTABLE" "${COMMAND_ARGS[@]}" >"$LOG" 2>&1 || {
-  cat "$LOG" >&2
-  exit 1
-}
+node "$SCRIPT_DIR/quality-invocation.js" gate-run "$MANIFEST" \
+  --name "$NAME" || exit 1
 bash "$SCRIPT_DIR/quality-assert-clean.sh" \
   --manifest "$MANIFEST" --phase "gate '$NAME' completion" || exit 1
-node "$SCRIPT_DIR/quality-invocation.js" gate "$MANIFEST" \
-  --name "$NAME" --source "$SOURCE" --command "$COMMAND" --log "$LOG" || exit 1
-cat "$LOG"

@@ -156,10 +156,6 @@ fi
   echo "   Enable strict required-status checks or use a supported merge queue." >&2
   exit 1
 }
-[ "$PREFLIGHT" = false ] || {
-  echo "[quality] non-mutating merge authorization preflight passed"
-  exit 0
-}
 TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"
 if [ "$TIER" = critical ]; then
   node "$SCRIPT_DIR/quality-invocation.js" approval-valid "$MANIFEST" || {
@@ -167,6 +163,10 @@ if [ "$TIER" = critical ]; then
     exit 1
   }
 fi
+[ "$PREFLIGHT" = false ] || {
+  echo "[quality] non-mutating merge authorization preflight passed"
+  exit 0
+}
 BASE_REF="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseRef)"
 bash "$SCRIPT_DIR/quality-validate-review-trailers.sh" \
   --manifest "$MANIFEST" --base "$BASE_REF" || exit 1

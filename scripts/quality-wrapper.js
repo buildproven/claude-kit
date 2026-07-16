@@ -5,6 +5,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
 const { spawnSync } = require("child_process");
+const invocation = require("./quality-invocation.js");
 
 function parseJson(raw, label) {
   try {
@@ -44,18 +45,13 @@ function approvalRequested() {
   return process.env.BREAK_GLASS_APPROVED === "true";
 }
 
-function childEnvironment(challengeSha256, publicKey) {
+function childEnvironment() {
   const environment = { ...process.env };
   delete environment.BREAK_GLASS_APPROVED;
   delete environment.BREAK_GLASS_APPROVER;
   delete environment.BS_QUALITY_APPROVAL_TTL_SECONDS;
   delete environment.BS_QUALITY_APPROVAL_PUBLIC_KEY;
-  if (challengeSha256) {
-    environment.BS_QUALITY_APPROVAL_CHALLENGE_SHA256 = challengeSha256;
-    environment.BS_QUALITY_APPROVAL_PUBLIC_KEY = publicKey;
-  } else {
-    delete environment.BS_QUALITY_APPROVAL_CHALLENGE_SHA256;
-  }
+  delete environment.BS_QUALITY_APPROVAL_CHALLENGE_SHA256;
   return environment;
 }
 
@@ -63,6 +59,7 @@ function issueApprovalCapability(
   manifestPath,
   invocationScript,
   challenge,
+  publicKey,
   privateKey,
 ) {
   const manifest = parseJson(
@@ -109,20 +106,19 @@ function issueApprovalCapability(
     mode: 0o600,
     flag: "wx",
   });
-  const attached = spawnSync(
-    process.execPath,
-    [
-      invocationScript,
-      "approval-attach",
-      manifestPath,
-      "--artifact",
-      artifactPath,
-    ],
-    { encoding: "utf8", env: childEnvironment() },
-  );
-  if (attached.status !== 0) {
-    throw new Error(attached.stderr || "approval capability attachment failed");
+  if (
+    fs.realpathSync(invocationScript) !==
+    fs.realpathSync(path.join(__dirname, "quality-invocation.js"))
+  ) {
+    throw new Error("approval invocation script is outside the wrapper root");
   }
+  invocation.withManifestLock(manifestPath, (locked) => {
+    invocation.armApprovalChallenge(locked, {
+      challenge: crypto.createHash("sha256").update(challenge).digest("hex"),
+      publicKey,
+    });
+    invocation.attachApproval(locked, { artifact: artifactPath });
+  });
 }
 
 function main() {
@@ -139,13 +135,10 @@ function main() {
         .export({ type: "spki", format: "der" })
         .toString("base64")
     : null;
-  const challengeSha256 = challenge
-    ? crypto.createHash("sha256").update(challenge).digest("hex")
-    : null;
   const result = spawnSync("bash", [bootstrap, ...argv], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    env: childEnvironment(challengeSha256, publicKey),
+    env: childEnvironment(),
   });
   if (result.status === 0 && wantsApproval) {
     const manifestPath = (result.stdout || "")
@@ -158,6 +151,7 @@ function main() {
       manifestPath,
       path.join(path.dirname(bootstrap), "quality-invocation.js"),
       challenge,
+      publicKey,
       keyPair.privateKey,
     );
   }

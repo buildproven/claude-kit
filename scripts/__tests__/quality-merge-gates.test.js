@@ -95,6 +95,18 @@ describe("quality merge gates", () => {
     expect(AUTHORIZE).toMatch(/strict_required_status_checks_policy == true/);
   });
 
+  it("checks critical approval during non-mutating preflight", () => {
+    const approval = AUTHORIZE.indexOf('if [ "$TIER" = critical ]');
+    const preflight = AUTHORIZE.lastIndexOf('[ "$PREFLIGHT" = false ]');
+    expect(approval).toBeGreaterThan(-1);
+    expect(preflight).toBeGreaterThan(approval);
+  });
+
+  it("documents only persisted-policy gate invocations", () => {
+    expect(SKILL).toMatch(/--manifest "<exact-manifest-path>" --name lint/);
+    expect(SKILL).not.toMatch(/--name (?:lint|test|security) -- </);
+  });
+
   it("persists one exact empty stamp and waits boundedly for its CI", () => {
     expect(STAMP_AND_MERGE).toMatch(/merge\.stampHead/);
     expect(STAMP_AND_MERGE).toMatch(/record-stamp/);

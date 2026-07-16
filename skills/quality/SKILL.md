@@ -82,12 +82,16 @@ before launch; fallback and resumed review rounds cannot reset either bound.
 
 ```bash
 bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
-  --manifest "<exact-manifest-path>" --name lint -- <real-lint-command>
+  --manifest "<exact-manifest-path>" --name lint
 bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
-  --manifest "<exact-manifest-path>" --name test -- <real-test-command>
+  --manifest "<exact-manifest-path>" --name test
 bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
-  --manifest "<exact-manifest-path>" --name security -- <real-security-command>
+  --manifest "<exact-manifest-path>" --name security
 ```
+
+The runner resolves commands only from the revision-bound `requiredGates`
+policy and executes and records each result atomically. It rejects caller
+commands and refuses to execute fork-controlled scripts on the operator host.
 
 When `options.skipTests` is true, record the config-only decision explicitly
 instead of inventing a passing test command:

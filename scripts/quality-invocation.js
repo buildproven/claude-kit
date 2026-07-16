@@ -5,7 +5,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawnSync } = require("child_process");
 
 const SCHEMA_VERSION = 1;
 const REQUIRED_GATES_POLICY_VERSION = 2;
@@ -427,7 +427,7 @@ function parseOptions(args) {
     const equals = token.indexOf("=");
     const name = equals === -1 ? token : token.slice(0, equals);
     const inlineValue = equals === -1 ? null : token.slice(equals + 1);
-    if (["--merge", "--skip-tests"].includes(name)) {
+    if (["--merge", "--skip-tests", "--skip"].includes(name)) {
       if (inlineValue !== null && !["true", "false"].includes(inlineValue)) {
         throw new Error(`${name} accepts only true or false`);
       }
@@ -553,7 +553,6 @@ function createManifest(options) {
     requiredGatesPolicyVersion: REQUIRED_GATES_POLICY_VERSION,
     gates: [],
   };
-  initializeApprovalTrustFromEnvironment(manifest);
   atomicWrite(manifestPath, manifest);
   return manifestPath;
 }
@@ -953,13 +952,6 @@ function armApprovalChallenge(manifest, options) {
     publicKey,
     pinnedAt: new Date().toISOString(),
   };
-}
-
-function initializeApprovalTrustFromEnvironment(manifest) {
-  const challenge = process.env.BS_QUALITY_APPROVAL_CHALLENGE_SHA256;
-  const publicKey = process.env.BS_QUALITY_APPROVAL_PUBLIC_KEY;
-  if (!challenge && !publicKey) return;
-  armApprovalChallenge(manifest, { challenge, publicKey });
 }
 
 function authorizeProviderAttempt(manifest, options) {
@@ -1558,6 +1550,58 @@ function recordGate(manifest, options) {
   });
 }
 
+function runGate(manifest, options) {
+  if (manifest.repo.isCrossRepository === true) {
+    throw new Error(
+      "cross-repository PR gates must run in isolated CI; host execution is forbidden",
+    );
+  }
+  const name = options.name;
+  const required = manifest.requiredGates.find((gate) => gate.name === name);
+  if (!required) throw new Error(`gate '${name}' is not required by policy`);
+  const log = path.join(
+    manifest.stateRoot,
+    "gates",
+    manifest.revisions.currentHead,
+    `${name}.log`,
+  );
+  fs.mkdirSync(path.dirname(log), { recursive: true, mode: 0o700 });
+  if (options.skip === true) {
+    const reason = options.reason?.trim();
+    fs.writeFileSync(log, `SKIPPED: ${reason || ""}\n`, { mode: 0o600 });
+    recordGate(manifest, {
+      name,
+      source: required.source,
+      command: required.command,
+      log,
+      status: "skipped",
+      reason,
+    });
+    return;
+  }
+  const result = spawnSync(required.executable, required.args, {
+    cwd: manifest.repo.realpath,
+    encoding: "utf8",
+    env: process.env,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const output = `${result.stdout || ""}${result.stderr || ""}`;
+  fs.writeFileSync(log, output, { mode: 0o600 });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    process.stderr.write(output);
+    throw new Error(`gate '${name}' failed with exit status ${result.status}`);
+  }
+  recordGate(manifest, {
+    name,
+    source: required.source,
+    command: required.command,
+    log,
+    status: "success",
+  });
+  process.stdout.write(output);
+}
+
 function validGateArtifact(gate) {
   return Boolean(
     gate && fs.existsSync(gate.log) && sha256File(gate.log) === gate.logSha256,
@@ -1736,10 +1780,6 @@ const COMMANDS = {
   "approval-valid": ({ manifest }) => {
     process.exitCode = approvalValid(manifest) ? 0 : 1;
   },
-  "approval-attach": ({ manifestArg, rawArgs }) =>
-    mutate(manifestArg, (locked) =>
-      attachApproval(locked, parseOptions(rawArgs)),
-    ),
   "provider-attempt": ({ manifestArg, rawArgs }) => {
     let result;
     mutate(manifestArg, (locked) => {
@@ -1757,8 +1797,8 @@ const COMMANDS = {
     ),
   judge: ({ manifestArg, rawArgs }) =>
     mutate(manifestArg, (locked) => recordJudge(locked, parseOptions(rawArgs))),
-  gate: ({ manifestArg, rawArgs }) =>
-    mutate(manifestArg, (locked) => recordGate(locked, parseOptions(rawArgs))),
+  "gate-run": ({ manifestArg, rawArgs }) =>
+    mutate(manifestArg, (locked) => runGate(locked, parseOptions(rawArgs))),
   "gate-plan": ({ manifest, rawArgs }) => {
     const options = parseOptions(rawArgs);
     const required = manifest.requiredGates.find(
@@ -1818,11 +1858,6 @@ function runAdvance(manifestArg, manifest, rawArgs) {
       : unionRequiredGates(locked.requiredGates, discovered);
     locked.requiredGatesPolicyVersion = REQUIRED_GATES_POLICY_VERSION;
     locked[NEEDS_REQUIRED_GATES_MIGRATION] = false;
-    const challenge = process.env.BS_QUALITY_APPROVAL_CHALLENGE_SHA256;
-    const publicKey = process.env.BS_QUALITY_APPROVAL_PUBLIC_KEY;
-    if (challenge || publicKey) {
-      armApprovalChallenge(locked, { challenge, publicKey });
-    }
   });
   process.stdout.write(`${updated.revisions.currentHead}\n`);
 }
@@ -1868,8 +1903,8 @@ module.exports = {
   advanceHead,
   approvalValid,
   armApprovalChallenge,
-  authorizeProviderAttempt,
   attachApproval,
+  authorizeProviderAttempt,
   atomicWrite,
   canonicalRoot,
   createManifest,
@@ -1879,6 +1914,7 @@ module.exports = {
   recordReview,
   recordJudge,
   recordGate,
+  runGate,
   recordStamp,
   judgeContext,
   repoKey,
