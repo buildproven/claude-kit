@@ -29,7 +29,7 @@ while true; do
     exec gh pr checks "$PR" --required --watch --interval 10
   fi
   case "$OUTPUT" in
-    "no checks reported"|"no required checks reported")
+    "no checks reported"*|"no required checks reported"*)
       echo "[quality] required checks are not registered yet; retrying" >&2
       sleep "$INTERVAL"
       ;;
