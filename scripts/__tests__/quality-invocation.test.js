@@ -278,7 +278,11 @@ describe("quality invocation manifest", () => {
     writeFileSync(
       gh,
       `#!/usr/bin/env bash
-printf '%s\\n' '{"number":7,"headRefName":"feature","headRefOid":"${git(root, ["rev-parse", "HEAD"])}","baseRefName":"release","baseRefOid":"${base}"}'
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s\\n' '{"number":7,"headRefName":"feature","headRefOid":"${git(root, ["rev-parse", "HEAD"])}","baseRefName":"release","baseRefOid":"${base}"}'
+  exit 0
+fi
+exit 1
 `,
     );
     chmodSync(gh, 0o755);
@@ -287,7 +291,11 @@ printf '%s\\n' '{"number":7,"headRefName":"feature","headRefOid":"${git(root, ["
       [BOOTSTRAP, "--pr", "7", "--level", "auto"],
       {
         cwd: root,
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        env: {
+          ...process.env,
+          CLAUDE_SETUP_ROOT: ROOT,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
         encoding: "utf8",
       },
     );
