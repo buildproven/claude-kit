@@ -1,16 +1,6 @@
 #!/usr/bin/env bash
 # Mechanical provider-equivalent review depth. Claude realizes depth through
 # its selected agent panel; Codex realizes it through a tier-specific scope.
-QUALITY_PLAN_EXPLICIT_TIER="${TIER+x}"
-QUALITY_PLAN_EXPLICIT_CODEX_DEPTH="${CODEX_DEPTH+x}"
-QUALITY_PLAN_EXPLICIT_CODEX_ROUNDS="${CODEX_ROUNDS+x}"
-QUALITY_PLAN_TIER="${TIER-}"
-QUALITY_PLAN_CODEX_DEPTH="${CODEX_DEPTH-}"
-QUALITY_PLAN_CODEX_ROUNDS="${CODEX_ROUNDS-}"
-[ -f "${BS_QUALITY_ROOT_FILE:-/nonexistent}" ] && [ -f "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env" ] && . "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env"
-[ -n "$QUALITY_PLAN_EXPLICIT_TIER" ] && TIER="$QUALITY_PLAN_TIER"
-[ -n "$QUALITY_PLAN_EXPLICIT_CODEX_DEPTH" ] && CODEX_DEPTH="$QUALITY_PLAN_CODEX_DEPTH"
-[ -n "$QUALITY_PLAN_EXPLICIT_CODEX_ROUNDS" ] && CODEX_ROUNDS="$QUALITY_PLAN_CODEX_ROUNDS"
 QUALITY_REVIEW_TIER="${TIER:-${QUALITY_REVIEW_TIER:-medium}}"
 case "$QUALITY_REVIEW_TIER" in
   low) QUALITY_REVIEW_TIMEOUT=120; QUALITY_REVIEW_FOCUS="Focused regression review of changed behavior only." ;;

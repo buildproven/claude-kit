@@ -69,6 +69,17 @@ describe("provider review runtime", () => {
     expect(result.stdout).toBe("xhigh|2");
   });
 
+  it("loads persisted risk state at the runner boundary", () => {
+    const plan = readFileSync(PLAN, "utf8");
+    const runner = readFileSync(RUN_REVIEW, "utf8");
+    const riskLoad = 'source "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env"';
+    const planLoad = 'source "$SCRIPT_DIR/quality-review-plan.sh"';
+
+    expect(plan).not.toContain("riskstate.env");
+    expect(runner).toContain(riskLoad);
+    expect(runner.indexOf(riskLoad)).toBeLessThan(runner.indexOf(planLoad));
+  });
+
   it("kills the provider tree when the wrapper itself is cancelled", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "bounded-cancel-"));
     const pidFile = path.join(dir, "child.pid");
