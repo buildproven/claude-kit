@@ -2045,6 +2045,7 @@ function runAdvance(manifestArg, manifest, rawArgs) {
     ) {
       locked.governor.validationDeadlineEpoch =
         Math.floor(Date.now() / 1000) +
+        (locked.risk?.runtime?.gateSeconds ?? 300) +
         (locked.risk?.runtime?.validationSeconds ?? 300);
     }
   });

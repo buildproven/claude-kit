@@ -1234,12 +1234,16 @@ exit 99
     writeFileSync(path.join(root, "fix.js"), "export const fixed = true;\n");
     git(root, ["add", "."]);
     git(root, ["commit", "-q", "-m", "fix"]);
+    const advanceStarted = Math.floor(Date.now() / 1000);
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
-    expect(
-      JSON.parse(readFileSync(manifest, "utf8")).governor
-        .validationDeadlineEpoch,
-    ).toBeGreaterThan(Math.floor(Date.now() / 1000));
     const validationState = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(
+      validationState.governor.validationDeadlineEpoch,
+    ).toBeGreaterThanOrEqual(
+      advanceStarted +
+        validationState.risk.runtime.gateSeconds +
+        validationState.risk.runtime.validationSeconds,
+    );
     validationState.governor.startedAtEpoch =
       Math.floor(Date.now() / 1000) - 2000;
     validationState.governor.campaignSeconds = 900;
