@@ -11,7 +11,8 @@ Run autonomously to completion. Every mutable fact belongs to one versioned
 JSON invocation manifest. Never infer active state from environment inheritance,
 session IDs, globbing, mtimes, or a "latest" pointer.
 
-Resolve the installed runtime once, then reuse it:
+Each fenced Bash block runs in a fresh shell. Resolve the installed runtime at
+the start of every block; never assume a variable from an earlier block exists.
 
 ```bash
 QUALITY_SCRIPTS_DIR=""
@@ -38,6 +39,7 @@ in every command. Never source or eval manifest content.
 Before a command block needs state, validate it and fetch only required fields:
 
 ```bash
+QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
 bash "$QUALITY_SCRIPTS_DIR/quality-load-root.sh" \
   --manifest "<exact-manifest-path>"
 GIT_ROOT="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" \
@@ -50,6 +52,7 @@ Do not source Bash-only scripts from zsh.
 ## 2. Risk and agent contract
 
 ```bash
+QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
 bash "$QUALITY_SCRIPTS_DIR/quality-risk-resolve.sh" \
   --manifest "<exact-manifest-path>"
 bash "$QUALITY_SCRIPTS_DIR/quality-select-agents.sh" \
@@ -81,6 +84,7 @@ from its start time. Every Claude panel and Codex pass consumes an attempt
 before launch; fallback and resumed review rounds cannot reset either bound.
 
 ```bash
+QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
 bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
   --manifest "<exact-manifest-path>" --name lint
 bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
@@ -98,6 +102,7 @@ When `options.skipTests` is true, record the config-only decision explicitly
 instead of inventing a passing test command:
 
 ```bash
+QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
 bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
   --manifest "<exact-manifest-path>" --name test --skip \
   --reason "config-only repository has no executable test suite"
@@ -110,6 +115,7 @@ behaving like branch scope.
 Formatting remediation must use:
 
 ```bash
+QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
 node "$QUALITY_SCRIPTS_DIR/quality-format.js" \
   --manifest "<exact-manifest-path>" -- <changed-files...>
 ```
@@ -123,6 +129,7 @@ directly to Prettier.
 Before every review:
 
 ```bash
+QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
 node "$QUALITY_SCRIPTS_DIR/quality-run-governor.js" \
   bump-round "<exact-manifest-path>" || exit 1
 bash "$QUALITY_SCRIPTS_DIR/quality-run-review.sh" \
@@ -163,6 +170,9 @@ The runtime rejects missing, extra, or stale finding IDs and derives the
 blocking count mechanically:
 
 ```bash
+QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
+JUDGE_ARTIFACT="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" field \
+  "<exact-manifest-path>" stateRoot)/judge-input.json"
 node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" judge-context \
   "<exact-manifest-path>" > "$JUDGE_ARTIFACT"
 # Add disposition and reason to every findings[] entry without changing identity.
@@ -194,6 +204,7 @@ Reviewed-By: <provider> (tier=<tier>, findings=0, head=<reviewed-head>, base=<ba
 ```
 
 ```bash
+QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
 bash "$QUALITY_SCRIPTS_DIR/quality-stamp-and-merge.sh" \
   --manifest "<exact-manifest-path>"
 ```

@@ -1326,14 +1326,17 @@ function providerFindings(manifest) {
         });
       });
     }
-    if (findings.length > reviewFindingsStart) continue;
+    const hasStructuredFindings = findings.length > reviewFindingsStart;
     for (const item of inventory.files.filter((file) =>
       file.name.endsWith(".findings.txt"),
     )) {
+      if (hasStructuredFindings && item.name === "codex.findings.txt") {
+        continue;
+      }
       const text = fs
         .readFileSync(path.join(review.artifactDir, item.name), "utf8")
         .trim();
-      if (!text || /^NO FINDINGS\./.test(text)) continue;
+      if (!text || text === "NO FINDINGS.") continue;
       findings.push({
         id: crypto
           .createHash("sha256")
@@ -2069,7 +2072,7 @@ function runAdvance(manifestArg, manifest, rawArgs) {
   const updated = withManifestLock(manifestArg, (locked) => {
     validateIdentity(locked, manifest.repo.realpath, { requireHead: false });
     bindPrRepositoryIdentity(locked, options);
-    advanceHead(locked, manifest.repo.realpath);
+    const advanced = advanceHead(locked, manifest.repo.realpath);
     validateIdentity(locked, manifest.repo.realpath);
     const discovered = discoverRequiredGates(
       locked.repo.realpath,
@@ -2082,6 +2085,7 @@ function runAdvance(manifestArg, manifest, rawArgs) {
     locked.requiredGatesPolicyVersion = REQUIRED_GATES_POLICY_VERSION;
     locked[NEEDS_REQUIRED_GATES_MIGRATION] = false;
     if (
+      advanced &&
       locked.reviews.length > 0 &&
       locked.governor.providerDeadlineHead !== locked.revisions.currentHead
     ) {
