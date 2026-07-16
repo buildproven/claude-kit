@@ -88,20 +88,10 @@ if kill -0 "$child" 2>/dev/null; then exit 99; fi
     expect(result.status).toBe(0);
   });
 
-  it("names state by Codex thread when no Claude session exists", () => {
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        `unset CLAUDE_CODE_SESSION_ID; CODEX_THREAD_ID=codex-thread-42; source "$1"; bs_quality_root_file "$2"`,
-        "state",
-        LOAD_ROOT,
-        ROOT,
-      ],
-      { encoding: "utf8", cwd: ROOT },
-    );
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("bs-quality-gitroot-codex-thread-42-");
+  it("does not name active state by Claude or Codex session IDs", () => {
+    const source = spawnSync("cat", [LOAD_ROOT], { encoding: "utf8" }).stdout;
+    expect(source).not.toMatch(/CLAUDE_CODE_SESSION_ID|CODEX_THREAD_ID/);
+    expect(source).toMatch(/--manifest is required/);
   });
 
   it("accepts exact evidence, then rejects later code and contradictions", () => {
@@ -190,6 +180,7 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
     expect(source).toMatch(/model_reasoning_effort=.*QUALITY_REVIEW_DEPTH/);
     expect(source).toMatch(/codex exec --ephemeral -s read-only/);
     expect(source).toMatch(/record_provider_exhaustion Codex/);
-    expect(source).toMatch(/try again at/);
+    expect(source).toMatch(/structured_provider_exhausted/);
+    expect(source).not.toMatch(/provider_exhausted "\$raw_file"/);
   });
 });

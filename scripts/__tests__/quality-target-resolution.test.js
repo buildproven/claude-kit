@@ -57,10 +57,9 @@ describe("parseArgs", () => {
       expect(r.source).toBe("pr-flag");
     });
 
-    it("treats a bare integer under --merge as a PR number", () => {
+    it("rejects ambiguous bare integers under --merge", () => {
       const r = parseArgs("--merge 558");
-      expect(r.pr).toBe(558);
-      expect(r.source).toBe("pr-bare");
+      expect(r.pr).toBeNull();
     });
 
     it("does NOT treat a bare integer as a PR without --merge", () => {
@@ -86,10 +85,9 @@ describe("parseArgs", () => {
       expect(r.pr).toBeNull();
     });
 
-    it("still reads the bare PR when a flag-with-operand precedes it", () => {
+    it("requires --pr even when a flag-with-operand precedes a number", () => {
       const r = parseArgs("--merge --level 98 558");
-      expect(r.pr).toBe(558);
-      expect(r.source).toBe("pr-bare");
+      expect(r.pr).toBeNull();
     });
   });
 

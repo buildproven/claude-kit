@@ -25,15 +25,13 @@ const RUN_REVIEW = readFileSync(
  */
 describe("quality merge gates", () => {
   it("blocks the merge when BLOCKING_COUNT is non-zero", () => {
-    expect(SKILL).toMatch(/if\s+\[\s+"\$\{BLOCKING_COUNT:-0\}"\s+-ne\s+0\s+\]/);
-    expect(SKILL).toMatch(/MERGE BLOCKED:.*BLOCKING finding/i);
+    expect(SKILL).toMatch(/Any BLOCKING finding must be fixed/);
+    expect(SKILL).toMatch(/BLOCKING findings remain/);
   });
 
   it("the blocking-findings gate runs BEFORE the trailer gate", () => {
-    const findingsGate = SKILL.indexOf('${BLOCKING_COUNT:-0}" -ne 0');
-    const trailerGate = SKILL.indexOf(
-      "MERGE BLOCKED: No 'Reviewed-By: quality'",
-    );
+    const findingsGate = SKILL.indexOf("Any BLOCKING finding must be fixed");
+    const trailerGate = SKILL.indexOf("Reviewed-By: quality");
     expect(findingsGate).toBeGreaterThan(-1);
     expect(trailerGate).toBeGreaterThan(-1);
     // A merge must not be authorized by a trailer while findings are outstanding.
@@ -42,31 +40,31 @@ describe("quality merge gates", () => {
 
   it("authorizes either reviewer through a provider-neutral quality trailer", () => {
     expect(SKILL).toMatch(/Reviewed-By: quality/);
-    expect(SKILL).toMatch(/reviewer=\$\{REVIEW_PROVIDER\}/);
+    expect(SKILL).toMatch(/reviewer=<provider>/);
     expect(SKILL).not.toMatch(/requires a 'Reviewed-By: codex'/);
   });
 
   it("binds neutral evidence to HEAD/HEAD~1 and merge-base", () => {
-    expect(SKILL).toMatch(/head=\$\{HEAD_SHA\}, base=\$\{BASE_SHA\}/);
-    expect(SKILL).toMatch(/git log -1 --format=%B/);
-    expect(SKILL).toMatch(/quality-validate-review-trailers\.sh/);
+    expect(SKILL).toMatch(/head=<reviewed-head>, base=<base-sha>/);
+    expect(SKILL).toMatch(/quality-authorize-merge\.sh/);
     expect(VALIDATOR).toMatch(/STAMP_HEAD.*CURRENT_PARENT/s);
     expect(VALIDATOR).toMatch(/STAMP_BASE.*CURRENT_BASE/s);
     expect(VALIDATOR).toMatch(/grep -Fxq "\$EXPECTED"/);
   });
 
   it("persists and reloads the exact reviewed base across fenced shells", () => {
-    expect(RUN_REVIEW).toMatch(/-reviewstate\.env/);
-    expect(RUN_REVIEW).toMatch(/REVIEWED_BASE=.*git merge-base/);
-    expect(RUN_REVIEW).toMatch(/RESOLVED_BASE='\$REVIEW_BASE'/);
-    expect(SKILL).toMatch(/BS_QUALITY_REVIEWSTATE_FILE/);
-    expect(SKILL).toMatch(/\. "\$BS_QUALITY_REVIEWSTATE_FILE"/);
+    expect(RUN_REVIEW).toMatch(/quality-invocation\.js" record-review/);
+    expect(RUN_REVIEW).toMatch(/--from "\$REVIEW_DIFF_BASE"/);
+    expect(RUN_REVIEW).toMatch(/--to "\$REVIEWED_HEAD"/);
+    expect(SKILL).toMatch(/contiguous review checkpoints/);
   });
 
   it("BLOCKING_COUNT is not merely decorative in the trailer", () => {
     // It must be COMPARED, not just interpolated. Guard against a regression
     // that drops the check but keeps `findings=${BLOCKING_COUNT}` in the stamp.
-    const compared = /BLOCKING_COUNT:-0\}"\s+-ne\s+0/.test(SKILL);
+    const compared =
+      /Any BLOCKING finding must be fixed/.test(SKILL) &&
+      /BLOCKING findings remain/.test(SKILL);
     expect(compared).toBe(true);
   });
 

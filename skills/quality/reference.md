@@ -2,6 +2,30 @@
 
 ## Target Resolution (Step -1)
 
+### Invocation manifest and isolation
+
+Bootstrap creates one schema-versioned JSON manifest and prints its exact path.
+Every later entrypoint requires `--manifest <that-path>` and validates the
+repository realpath, PR, base SHA, and expected HEAD before reading or writing
+state. There is no session sentinel, active-state glob, mtime lookup, or
+`latest` pointer.
+
+The state directory is:
+
+```text
+$TMPDIR/bs-quality/<repo-hash>/pr-<number|none>/<base-sha>/<invocation-id>/
+```
+
+Provider artifacts add `reviews/<head-sha>/round-N/`. Safe resumption is
+explicit and accepts only a descendant HEAD. Each successful checkpoint
+records its exact `from..to` range and diff hash, allowing fix rounds to review
+only `previousReviewedHead..currentHead` while final evidence remains bound to
+the complete base/final-HEAD relationship.
+
+Break-glass approval is persisted with repository key, PR, HEAD, actor, source,
+and timestamp. It is available to every subprocess and becomes invalid when
+HEAD changes.
+
 **Bug fixed 2026-05-11**: when invoked as `/bs:quality --merge` with PR
 context in the natural-language args (e.g. `#410`, `codex/foo`, or a
 worktree path), prior versions ignored those references and audited
@@ -48,7 +72,8 @@ reviewed again. Bootstrap clears this state for every new invocation.
 - **2026-05-11**: target resolution ignored PR/branch args in favor of
   operator cwd (see above) — fixed by the resolver + priority order.
 - **2026-05-12**: `Skill(args=...)` did not propagate into a forked skill's
-  `$@` — fixed by the `--args-file` bridge in `quality-bootstrap.sh`.
+  `$@`. The temporary args-file bridge was removed in July 2026 in favor of
+  direct arguments plus the structured invocation manifest.
 - **2026-05-13**: cwd and shell vars set in one fenced bash block do not
   survive into the next — every step must restore `$GIT_ROOT` via the
   sentinel dance in `quality-load-root.sh`, or silently operate on the
@@ -122,7 +147,9 @@ required): `*.config.*`, `*.d.ts`, `types.ts`, `index.ts` (re-exports only),
 migration files, seed files.
 
 ```bash
-source scripts/quality-load-root.sh
+bash "$HOME/.claude/scripts/quality-load-root.sh" --manifest "<exact-manifest-path>"
+GIT_ROOT="$(node "$HOME/.claude/scripts/quality-invocation.js" field "<exact-manifest-path>" repo.realpath)"
+cd "$GIT_ROOT"
 
 CHANGED_SRC=$(git diff --name-only main...HEAD | grep -E '\.(ts|tsx|js|jsx)$' | grep -v -E '\.(test|spec|d)\.' | grep -v -E '(config|setup|types|index\.d)\.')
 MISSING_TESTS=""
@@ -150,7 +177,9 @@ fi
 **1.3b — Run tests (hard gate).**
 
 ```bash
-source scripts/quality-load-root.sh
+bash "$HOME/.claude/scripts/quality-load-root.sh" --manifest "<exact-manifest-path>"
+GIT_ROOT="$(node "$HOME/.claude/scripts/quality-invocation.js" field "<exact-manifest-path>" repo.realpath)"
+cd "$GIT_ROOT"
 
 npm test 2>&1
 TEST_EXIT=$?
@@ -205,14 +234,15 @@ auto-fix loop, re-run `npm test` to verify they pass before continuing.
 
 ### Environment Variables
 
-| Variable                      | Default | Description                                                                                        |
-| ----------------------------- | ------- | -------------------------------------------------------------------------------------------------- |
-| `BS_QUALITY_PRIMARY`          | config  | Per-run primary override: `claude` or `codex`.                                                     |
-| `BS_QUALITY_FALLBACK`         | config  | Per-run fallback override: `claude`, `codex`, or `none`.                                           |
-| `BS_QUALITY_REVIEW_TIMEOUT`   | tier    | Override the mechanically selected provider wall-clock cap.                                        |
-| `BS_QUALITY_TARGET_DIR`       | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd. |
-| `BS_QUALITY_MAX_FIX_COMMITS`  | 4       | Run-governor cap: max fix commits across the whole invocation before autonomous halt (see below).  |
-| `BS_QUALITY_MAX_WALL_SECONDS` | 1800    | Run-governor cap: max wall-clock seconds across the whole invocation before autonomous halt.       |
+| Variable                              | Default | Description                                                                                        |
+| ------------------------------------- | ------- | -------------------------------------------------------------------------------------------------- |
+| `BS_QUALITY_PRIMARY`                  | config  | Per-run primary override: `claude` or `codex`.                                                     |
+| `BS_QUALITY_FALLBACK`                 | config  | Per-run fallback override: `claude`, `codex`, or `none`.                                           |
+| `BS_QUALITY_REVIEW_TIMEOUT`           | tier    | Override the mechanically selected provider wall-clock cap.                                        |
+| `BS_QUALITY_TARGET_DIR`               | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd. |
+| `BS_QUALITY_MAX_FIX_COMMITS`          | 4       | Run-governor cap: max fix commits across the whole invocation before autonomous halt (see below).  |
+| `BS_QUALITY_MAX_REMEDIATION_SECONDS`  | 900     | Remediation allowance, excluding the reserved mandatory re-review allowance.                       |
+| `BS_QUALITY_REREVIEW_RESERVE_SECONDS` | 900     | Dedicated allowance for the required validation review after fixes.                                |
 
 ### Run Governor (runaway-loop guardrails)
 
@@ -226,8 +256,9 @@ alongside the Step -1 git-root sentinel) with:
 - **Fix-commit cap** (`BS_QUALITY_MAX_FIX_COMMITS`, default 4) — commits made
   since the run started, checked before every fix attempt and every Codex
   re-verification round.
-- **Wall-clock cap** (`BS_QUALITY_MAX_WALL_SECONDS`, default 1800 = 30 min) —
-  elapsed time since the run started, checked at the same points.
+- **Phase wall-clock caps** — remediation defaults to 900 seconds and the
+  mandatory validation re-review owns a separate 900-second reserve. Initial
+  provider overhead cannot consume the required second review.
 - **Repeated-pattern detection** — findings are recorded round-over-round;
   if a round's findings mostly repeat a shape seen in an earlier round (e.g.
   the same on-disk-vs-loaded-job gap at 4 different call sites), the skill is
@@ -397,7 +428,9 @@ main loop. Requires acpx >= 0.5.3 (commands are agent-scoped, `acpx claude
 2. **Create sessions, then fire prompts concurrently**:
 
 ```bash
-source scripts/quality-load-root.sh   # GIT_ROOT resolved, cwd restored
+bash "$HOME/.claude/scripts/quality-load-root.sh" --manifest "<exact-manifest-path>"
+GIT_ROOT="$(node "$HOME/.claude/scripts/quality-invocation.js" field "<exact-manifest-path>" repo.realpath)"
+cd "$GIT_ROOT"
 
 TIMESTAMP=$(date +%s)
 for kind in security coverage perf; do

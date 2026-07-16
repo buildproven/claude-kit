@@ -1,69 +1,98 @@
 #!/usr/bin/env bash
-# Step 1.8 provider-neutral blocking review. The configured primary runs first;
-# the fallback runs only when the primary is unavailable or account-exhausted.
+# Provider-neutral, revision-bound blocking review.
 set -u
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+MANIFEST=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --manifest) MANIFEST="${2:-}"; shift 2 ;;
+    --manifest=*) MANIFEST="${1#*=}"; shift ;;
+    *) echo "quality-run-review: unknown argument '$1'" >&2; exit 1 ;;
+  esac
+done
+[ -n "$MANIFEST" ] || { echo "quality-run-review: --manifest is required" >&2; exit 1; }
+
+bash "$SCRIPT_DIR/quality-load-root.sh" --manifest "$MANIFEST" >/dev/null || exit 1
+field() { node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" "$1"; }
+GIT_ROOT="$(field repo.realpath)"
+BS_QUALITY_INVOCATION_ID="$(field invocationId)"
+BASE_SHA="$(field revisions.baseSha)"
+RESOLVED_BASE="$(field revisions.baseRef)"
+TIER="$(field risk.tier)"
+CODEX_DEPTH="$(field risk.codexDepth)"
+CODEX_ROUNDS="$(field risk.codexRounds)"
+BS_QUALITY_PRIMARY="$(field provider.primaryOverride)"
+BS_QUALITY_FALLBACK="$(field provider.fallbackOverride)"
+BS_QUALITY_PROVIDER_CONFIG="$(field provider.config)"
+export BS_QUALITY_PRIMARY BS_QUALITY_FALLBACK BS_QUALITY_PROVIDER_CONFIG
+cd "$GIT_ROOT" || exit 1
+
 # shellcheck source=quality-provider-policy.sh
 source "$SCRIPT_DIR/quality-provider-policy.sh"
 # shellcheck source=quality-review-plan.sh
 source "$SCRIPT_DIR/quality-review-plan.sh"
 
-REVIEW_BASE=""
-for ref in origin/main origin/master main master; do
-  if git rev-parse --verify --quiet "${ref}^{commit}" >/dev/null 2>&1; then
-    REVIEW_BASE="$ref"; break
-  fi
-done
-[ -n "$REVIEW_BASE" ] || { echo "❌ MERGE BLOCKED: no base ref for review diff" >&2; exit 1; }
+REVIEW_INFO="$(node "$SCRIPT_DIR/quality-invocation.js" review-info "$MANIFEST")" || exit 1
+REVIEW_ROUND="$(printf '%s' "$REVIEW_INFO" | jq -r '.round')"
+REVIEW_DIFF_BASE="$(printf '%s' "$REVIEW_INFO" | jq -r '.from')"
+REVIEWED_HEAD="$(printf '%s' "$REVIEW_INFO" | jq -r '.to')"
+REVIEW_OUT="$(printf '%s' "$REVIEW_INFO" | jq -r '.artifactDir')"
+[ "$REVIEWED_HEAD" = "$(git rev-parse HEAD)" ] || {
+  echo "quality-run-review: manifest HEAD changed before review" >&2
+  exit 1
+}
 
-# First round reviews the branch. Later rounds review only commits made since
-# the last successful review, avoiding repeated spend on unchanged commits.
-REVIEW_STATE_FILE="${BS_QUALITY_GOVERNOR_FILE:-${TMPDIR:-/tmp}/bs-quality-governor.json}"
-REVIEW_STATE_FILE="${REVIEW_STATE_FILE%.json}-last-reviewed.sha"
-REVIEW_DIFF_BASE="$REVIEW_BASE"
-if [ -s "$REVIEW_STATE_FILE" ]; then
-  LAST_REVIEWED="$(sed -n '1p' "$REVIEW_STATE_FILE")"
-  if git rev-parse --verify --quiet "${LAST_REVIEWED}^{commit}" >/dev/null 2>&1 \
-     && git merge-base --is-ancestor "$LAST_REVIEWED" HEAD \
-     && [ "$LAST_REVIEWED" != "$(git rev-parse HEAD)" ]; then
-    REVIEW_DIFF_BASE="$LAST_REVIEWED"
-    echo "[quality] re-reviewing new commits only: ${LAST_REVIEWED}..HEAD" >&2
-  fi
-fi
+mkdir -p "$REVIEW_OUT"
+git diff "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" > "$REVIEW_OUT/diff.txt"
+git diff --name-only "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" > "$REVIEW_OUT/files.txt"
+git log "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" --oneline > "$REVIEW_OUT/log.txt"
+PR_VALUE="$(node "$SCRIPT_DIR/quality-invocation.js" get "$MANIFEST" repo.pr)"
+[ -n "$PR_VALUE" ] || PR_VALUE=null
+cat > "$REVIEW_OUT/identity.json" <<EOF
+{
+  "schemaVersion": 1,
+  "invocationId": "$BS_QUALITY_INVOCATION_ID",
+  "repositoryRealpath": "$GIT_ROOT",
+  "repositoryKey": "$(node "$SCRIPT_DIR/quality-invocation.js" get "$MANIFEST" repo.key)",
+  "pr": $PR_VALUE,
+  "baseSha": "$BASE_SHA",
+  "diffBase": "$REVIEW_DIFF_BASE",
+  "headSha": "$REVIEWED_HEAD",
+  "round": $REVIEW_ROUND
+}
+EOF
 
-REVIEW_OUT="$(mktemp -d "${TMPDIR:-/tmp}/bs-quality-review.XXXXXX")"
-git diff "${REVIEW_DIFF_BASE}..HEAD" > "$REVIEW_OUT/diff.txt"
-git diff --name-only "${REVIEW_DIFF_BASE}..HEAD" > "$REVIEW_OUT/files.txt"
-git log "${REVIEW_DIFF_BASE}..HEAD" --oneline > "$REVIEW_OUT/log.txt"
-
-provider_exhausted() {
-  grep -Eiq '(^|[^0-9])429([^0-9]|$)|weekly (usage )?limit|usage limit|rate.?limit|quota (exceeded|exhausted)|too many requests' "$1" 2>/dev/null
+structured_provider_exhausted() {
+  local evidence="$1"
+  [ -s "$evidence" ] || return 1
+  jq -e '
+    .. | objects |
+    select(
+      (.status? == 429) or
+      (.statusCode? == 429) or
+      (.code? | tostring | test("^(429|rate_limit|rate_limit_exceeded|resource_exhausted|quota_exhausted)$"; "i")) or
+      (.type? | tostring | test("^(rate_limit|rate_limit_error|resource_exhausted|quota_exhausted)$"; "i"))
+    )
+  ' "$evidence" >/dev/null 2>&1
 }
 
 record_provider_exhaustion() {
-  local provider="$1"; shift
-  local detail=""
-  for evidence in "$@"; do
-    [ -f "$evidence" ] || continue
-    detail="$(grep -Ei 'reset|429|weekly (usage )?limit|usage limit|rate.?limit|quota|try again at' "$evidence" | head -1 | tr '\n' ' ')"
-    [ -n "$detail" ] && break
-  done
-  printf '%s provider exhausted%s\n' "$provider" "${detail:+: $detail}" > "$REVIEW_OUT/provider-exhausted"
+  printf '%s provider exhausted (structured error metadata)\n' "$1" > "$REVIEW_OUT/provider-exhausted"
 }
 
 run_claude_review() {
-  local companion agents_file agents_csv rc
-  companion="$(bs_quality_find_script claude-review-companion.sh)" || return 2
+  local agents_csv rc
   command -v claude >/dev/null 2>&1 || return 2
   claude auth status --json 2>/dev/null | jq -e '.loggedIn == true' >/dev/null 2>&1 || return 2
-  agents_file="${TMPDIR:-/tmp}/bs-quality-agents-${BS_QUALITY_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-default}}}.txt"
-  agents_csv="$(paste -sd, "$agents_file" 2>/dev/null | sed 's/,*$//')"
+  agents_csv="$(node "$SCRIPT_DIR/quality-invocation.js" get "$MANIFEST" agents \
+    | jq -r 'join(",")')"
   [ -n "$agents_csv" ] || { echo "quality: Claude panel unresolved" >&2; return 1; }
-  bash "$companion" \
+  bash "$SCRIPT_DIR/claude-review-companion.sh" \
     --diff-file "$REVIEW_OUT/diff.txt" \
     --files-file "$REVIEW_OUT/files.txt" \
     --log-file "$REVIEW_OUT/log.txt" \
+    --identity-file "$REVIEW_OUT/identity.json" \
     --out-dir "$REVIEW_OUT" \
     --agents "$agents_csv" \
     --timeout "$QUALITY_REVIEW_TIMEOUT"
@@ -72,8 +101,7 @@ run_claude_review() {
 }
 
 run_codex_review() {
-  local bounded schema prompt_file raw_file error_file rc pass pass_timeout
-  bounded="$(bs_quality_find_script quality-run-bounded.sh)" || return 2
+  local schema prompt_file raw_file error_file rc pass pass_timeout
   schema="$SCRIPT_DIR/schemas/quality-review-output.schema.json"
   [ -f "$schema" ] || return 2
   command -v codex >/dev/null 2>&1 || return 2
@@ -89,19 +117,22 @@ run_codex_review() {
     prompt_file="$REVIEW_OUT/codex-${pass}.prompt"
     {
       echo "Independent code-review pass $pass/$QUALITY_REVIEW_PASSES. Tier: $QUALITY_REVIEW_TIER. $QUALITY_REVIEW_FOCUS"
+      echo "Repository/revision identity (must match every finding):"
+      cat "$REVIEW_OUT/identity.json"
       echo "Review ONLY the supplied commit delta. Return structured findings with precise file:line evidence."
       echo "Changed files:"; cat "$REVIEW_OUT/files.txt"
       echo "Commit log:"; cat "$REVIEW_OUT/log.txt"
       echo "Diff:"; cat "$REVIEW_OUT/diff.txt"
     } > "$prompt_file"
-    bash "$bounded" --timeout "$pass_timeout" -- codex exec --ephemeral -s read-only \
+    bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$pass_timeout" -- \
+      codex exec --ephemeral -s read-only \
       -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
       --output-schema "$schema" -o "$raw_file" - \
       < "$prompt_file" > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file"
     rc=$?
     if [ "$rc" -ne 0 ]; then
-      if provider_exhausted "$raw_file" || provider_exhausted "$error_file"; then
-        record_provider_exhaustion Codex "$raw_file" "$error_file"
+      if structured_provider_exhausted "$error_file"; then
+        record_provider_exhaustion Codex
         return 75
       fi
       [ "$rc" -eq 124 ] && return 76
@@ -133,17 +164,9 @@ echo "[quality] reviewer policy: primary=$QUALITY_PRIMARY fallback=$QUALITY_FALL
 run_provider "$QUALITY_PRIMARY"
 PROVIDER_RC=$?
 
-if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 2 ] || [ "$PROVIDER_RC" -eq 76 ]; } && [ "$QUALITY_FALLBACK" != none ]; then
-  if [ "$PROVIDER_RC" -eq 75 ]; then
-    DETAIL="$(cat "$REVIEW_OUT/provider-exhausted" 2>/dev/null || true)"
-    echo "⚠️  [quality] $QUALITY_PRIMARY exhausted${DETAIL:+ — $DETAIL}; switching immediately to $QUALITY_FALLBACK." >&2
-  elif [ "$PROVIDER_RC" -eq 2 ]; then
-    echo "⚠️  [quality] $QUALITY_PRIMARY unavailable; switching immediately to $QUALITY_FALLBACK." >&2
-  else
-    echo "⚠️  [quality] $QUALITY_PRIMARY exceeded its ${QUALITY_REVIEW_TIMEOUT}s review budget and was cancelled; switching to $QUALITY_FALLBACK." >&2
-  fi
-  # Preserve failed-primary evidence without feeding its INCONCLUSIVE files
-  # into synthesis after the fallback succeeds.
+if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 2 ] || [ "$PROVIDER_RC" -eq 76 ]; } \
+   && [ "$QUALITY_FALLBACK" != none ]; then
+  echo "⚠️  [quality] $QUALITY_PRIMARY unavailable/exhausted/bounded; switching to $QUALITY_FALLBACK." >&2
   mkdir -p "$REVIEW_OUT/failed-primary"
   for evidence in "$REVIEW_OUT"/*.findings.txt "$REVIEW_OUT"/*.stderr; do
     [ -e "$evidence" ] && mv "$evidence" "$REVIEW_OUT/failed-primary/"
@@ -164,19 +187,20 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
   exit 1
 fi
 
-printf '%s\n' "$(git rev-parse HEAD)" > "$REVIEW_STATE_FILE"
-REVIEWED_HEAD="$(git rev-parse HEAD)"
-REVIEWED_BASE="$(git merge-base HEAD "$REVIEW_BASE")"
-cat > "${BS_QUALITY_ROOT_FILE%.txt}-reviewstate.env" <<EOF
-REVIEWED_HEAD='$REVIEWED_HEAD'
-REVIEWED_BASE='$REVIEWED_BASE'
-RESOLVED_BASE='$REVIEW_BASE'
-REVIEW_PROVIDER='$REVIEW_PROVIDER'
-QUALITY_PRIMARY='$QUALITY_PRIMARY'
-QUALITY_FALLBACK='$QUALITY_FALLBACK'
-EOF
-export REVIEW_OUT REVIEW_BASE REVIEW_DIFF_BASE REVIEW_PROVIDER QUALITY_PRIMARY QUALITY_FALLBACK
+DIFF_SHA="$(shasum -a 256 "$REVIEW_OUT/diff.txt" | awk '{print $1}')"
+node "$SCRIPT_DIR/quality-invocation.js" inventory "$MANIFEST" \
+  --artifact-dir "$REVIEW_OUT" \
+  --provider "$REVIEW_PROVIDER" || exit 1
+node "$SCRIPT_DIR/quality-invocation.js" record-review "$MANIFEST" \
+  --from "$REVIEW_DIFF_BASE" \
+  --to "$REVIEWED_HEAD" \
+  --provider "$REVIEW_PROVIDER" \
+  --primary "$QUALITY_PRIMARY" \
+  --fallback "$QUALITY_FALLBACK" \
+  --artifact-dir "$REVIEW_OUT" \
+  --diff-sha "$DIFF_SHA" || exit 1
+
 echo "REVIEW_OUT=$REVIEW_OUT"
-echo "REVIEW_BASE=$REVIEW_BASE"
+echo "REVIEW_BASE=$RESOLVED_BASE"
 echo "REVIEW_DIFF_BASE=$REVIEW_DIFF_BASE"
 echo "REVIEW_PROVIDER=$REVIEW_PROVIDER"

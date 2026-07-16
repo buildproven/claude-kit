@@ -13,6 +13,22 @@ const SCRIPT = path.resolve(__dirname, "..", "claude-review-companion.sh");
 const KIT_ROOT = path.resolve(__dirname, "..", "..");
 
 function run(args, { env } = {}) {
+  if (args.includes("--diff-file") && !args.includes("--identity-file")) {
+    const identity = path.join(
+      os.tmpdir(),
+      `crc-identity-${process.pid}-${Math.random().toString(36).slice(2)}.json`,
+    );
+    fs.writeFileSync(
+      identity,
+      JSON.stringify({
+        invocationId: "test",
+        repositoryRealpath: process.cwd(),
+        baseSha: "a".repeat(40),
+        headSha: "b".repeat(40),
+      }),
+    );
+    args = [...args, "--identity-file", identity];
+  }
   // Capture stderr on BOTH success and failure. execFileSync throws only on
   // non-zero exit; on success it returns stdout but stderr is still written to
   // the pipe, so redirect stderr→a file we read back to avoid losing it.
@@ -173,6 +189,7 @@ describe("claude-review-companion.sh", () => {
       () => {
         const d = tmpdir();
         fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+        fs.writeFileSync(path.join(d, "identity.json"), "{}\n");
         const out = path.join(d, "o");
         // --dry-run avoids a live claude call but still exercises arg parsing,
         // guards, and the array-expansion code paths under set -u.
@@ -187,6 +204,8 @@ describe("claude-review-companion.sh", () => {
             out,
             "--agents",
             "code-reviewer",
+            "--identity-file",
+            path.join(d, "identity.json"),
           ],
           { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
         );
@@ -219,7 +238,7 @@ describe("claude-review-companion.sh", () => {
       expect(r.code).toBe(4);
     });
 
-    it("exits 0 when at least one agent resolves (--dry-run)", () => {
+    it("blocks when any mandatory agent is inconclusive (--dry-run)", () => {
       const d = tmpdir();
       fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
       const r = run([
@@ -231,7 +250,7 @@ describe("claude-review-companion.sh", () => {
         "--agents",
         "code-reviewer,bogus",
       ]);
-      expect(r.code).toBe(0);
+      expect(r.code).toBe(4);
     });
   });
 
@@ -245,7 +264,7 @@ describe("claude-review-companion.sh", () => {
         fakeClaude,
         `#!/bin/bash
 case "$*" in
-  *code-reviewer.md*) echo 'HTTP 429: weekly usage limit reached; resets Jul 17 at 1am CT' >&2; exit 1 ;;
+  *code-reviewer.md*) echo '{"is_error":true,"error":{"status":429,"code":"rate_limit_exceeded"}}'; exit 1 ;;
   *) sleep 30; printf '{"is_error":false,"result":"NO FINDINGS."}\\n' ;;
 esac
 `,
@@ -276,6 +295,38 @@ esac
         ),
       ).toMatch(/cancelled/i);
     });
+
+    it("does not classify successful review text mentioning 429 and quota as exhaustion", () => {
+      const d = tmpdir();
+      const bin = path.join(d, "bin");
+      fs.mkdirSync(bin);
+      const fakeClaude = path.join(bin, "claude");
+      fs.writeFileSync(
+        fakeClaude,
+        `#!/bin/bash
+printf '%s\\n' '{"is_error":false,"result":"WARNING: src/http.js:10 — status === 429 should preserve quota headers."}'
+`,
+      );
+      fs.chmodSync(fakeClaude, 0o755);
+      fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+      const out = path.join(d, "o");
+      const r = run(
+        [
+          "--diff-file",
+          path.join(d, "diff.txt"),
+          "--out-dir",
+          out,
+          "--agents",
+          "code-reviewer",
+        ],
+        { env: { PATH: `${bin}:${process.env.PATH}` } },
+      );
+      expect(r.code, r.stderr).toBe(0);
+      expect(
+        fs.readFileSync(path.join(out, "code-reviewer.findings.txt"), "utf8"),
+      ).toContain("status === 429");
+      expect(fs.existsSync(path.join(out, "provider-exhausted"))).toBe(false);
+    });
   });
 
   describe("quality skill wiring (findings #1/#2/#6)", () => {
@@ -299,21 +350,27 @@ esac
     );
     const COMBINED = `${BOOTSTRAP}\n${SELECT_AGENTS}\n${RUN_REVIEW}`;
 
-    it("persists the AGENTS panel to a sentinel (survives across fenced blocks)", () => {
-      expect(SELECT_AGENTS).toMatch(/bs-quality-agents-.*\.txt/);
+    it("persists the AGENTS panel to the explicit manifest", () => {
+      expect(SELECT_AGENTS).toMatch(
+        /quality-invocation\.js" agents "\$MANIFEST"/,
+      );
     });
-    it("companion block reads the agents sentinel, not an in-scope array", () => {
-      expect(RUN_REVIEW).toMatch(/agents_file=.*bs-quality-agents/);
-      expect(RUN_REVIEW).toMatch(/agents_csv=.*paste -sd, "\$agents_file"/);
+    it("companion block reads agents from the explicit manifest", () => {
+      expect(RUN_REVIEW).toMatch(
+        /quality-invocation\.js" get "\$MANIFEST" agents/,
+      );
+      expect(RUN_REVIEW).not.toMatch(/bs-quality-agents/);
     });
     it("falls back only for typed exhaustion or provider unavailability", () => {
       expect(RUN_REVIEW).toMatch(/PROVIDER_RC" -eq 75/);
       expect(RUN_REVIEW).toMatch(/PROVIDER_RC" -eq 2/);
       expect(RUN_REVIEW).toMatch(/QUALITY_FALLBACK/);
     });
-    it("uses a last-reviewed SHA for later-round delta review", () => {
-      expect(RUN_REVIEW).toMatch(/last-reviewed\.sha/);
-      expect(RUN_REVIEW).toMatch(/REVIEW_DIFF_BASE="\$LAST_REVIEWED"/);
+    it("uses the manifest checkpoint for later-round delta review", () => {
+      expect(RUN_REVIEW).toMatch(
+        /quality-invocation\.js" review-info "\$MANIFEST"/,
+      );
+      expect(RUN_REVIEW).toMatch(/REVIEW_DIFF_BASE=.*\.from/);
     });
     it("no panel/AGENTS line lists the phantom test-generator agent", () => {
       // test-generator has no agent .md anywhere → would permanently block
@@ -328,22 +385,10 @@ esac
         expect(l).not.toMatch(/test-generator/);
       }
     });
-    it("clears any stale review-panel sentinel before the pipeline runs", () => {
-      // The sentinel is session- (not run-) namespaced. A run that SKIPS agent
-      // selection (--scope changed) must not inherit a prior run's panel, so
-      // Step -1 (quality-bootstrap.sh) removes any stale sentinel up front,
-      // before Step 1.8 (quality-select-agents.sh) writes a fresh one.
-      const rmIdx = BOOTSTRAP.search(
-        /rm -f "\$\{TMPDIR:-\/tmp\}\/bs-quality-agents-/,
-      );
-      const writeIdx = SELECT_AGENTS.search(
-        /> "\$\{TMPDIR:-\/tmp\}\/bs-quality-agents-/,
-      );
-      expect(rmIdx).toBeGreaterThan(-1);
-      expect(writeIdx).toBeGreaterThan(-1);
-      // These are now in different files (bootstrap runs at Step -1, well
-      // before select-agents at Step 1.8), so there is no single offset to
-      // compare — the file-order IS the execution-order guarantee.
+    it("does not discover or clear session-scoped panel state", () => {
+      expect(BOOTSTRAP).not.toMatch(/bs-quality-agents/);
+      expect(SELECT_AGENTS).not.toMatch(/bs-quality-agents/);
+      expect(RUN_REVIEW).not.toMatch(/bs-quality-agents/);
     });
   });
 });

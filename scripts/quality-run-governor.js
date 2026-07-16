@@ -47,6 +47,7 @@
 
 const fs = require("fs");
 const { execFileSync } = require("child_process");
+const { loadManifest, withManifestLock } = require("./quality-invocation");
 
 /**
  * Derive a coarse "shape" key for a finding so near-duplicate findings
@@ -232,13 +233,39 @@ function resolveCommitCount(cwd, state) {
 function loadState(sentinelPath) {
   try {
     const raw = fs.readFileSync(sentinelPath, "utf8");
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (parsed.schemaVersion === 1 && parsed.governor) {
+      const governor = parsed.governor;
+      return {
+        // Provider time is bounded independently by quality-review-plan.sh and
+        // must not consume remediation time. Until the first remediation
+        // check starts its clock, evaluate review-round gates against "now".
+        start_epoch:
+          governor.remediationStartedAtEpoch ?? Math.floor(Date.now() / 1000),
+        start_commit_sha: governor.startCommitSha,
+        max_fix_commits: governor.maxFixCommits,
+        max_wall_seconds: governor.remediationSeconds,
+        max_rereview_reserve_seconds: governor.reReviewReserveSeconds,
+        max_review_rounds: governor.maxReviewRounds,
+        rounds_used: governor.roundsUsed,
+        findings_seen: governor.findingsSeen,
+        _manifest: true,
+      };
+    }
+    return parsed;
   } catch {
     return null;
   }
 }
 
 function saveState(sentinelPath, state) {
+  if (state._manifest) {
+    withManifestLock(sentinelPath, (manifest) => {
+      manifest.governor.roundsUsed = state.rounds_used;
+      manifest.governor.findingsSeen = state.findings_seen;
+    });
+    return;
+  }
   fs.writeFileSync(sentinelPath, JSON.stringify(state, null, 2) + "\n");
 }
 
@@ -410,6 +437,17 @@ function bumpRound(sentinelPath, cwd) {
   state.rounds_used = priorRounds + 1;
   saveState(sentinelPath, state);
 
+  // A mandatory validation round has its own reserved allowance. The first
+  // provider review and remediation cannot consume it and make the required
+  // second review impossible.
+  if (
+    state._manifest &&
+    state.rounds_used >= 2 &&
+    Number.isFinite(state.max_rereview_reserve_seconds)
+  ) {
+    state.max_wall_seconds += state.max_rereview_reserve_seconds;
+  }
+
   const result = evaluateBudget(state, {
     nowEpoch: Math.floor(Date.now() / 1000),
     commitCount: resolveCommitCount(cwd, state),
@@ -453,6 +491,28 @@ function bumpRound(sentinelPath, cwd) {
   return 0;
 }
 
+function startRemediationClock(sentinelPath) {
+  try {
+    const loaded = loadManifest(sentinelPath);
+    if (
+      loaded.manifest.schemaVersion !== 1 ||
+      !loaded.manifest.governor ||
+      loaded.manifest.governor.remediationStartedAtEpoch !== null
+    ) {
+      return;
+    }
+    withManifestLock(sentinelPath, (manifest) => {
+      if (manifest.governor.remediationStartedAtEpoch === null) {
+        manifest.governor.remediationStartedAtEpoch = Math.floor(
+          Date.now() / 1000,
+        );
+      }
+    });
+  } catch {
+    // Legacy governor sentinels are not invocation manifests.
+  }
+}
+
 function main() {
   const [, , cmd, sentinelPath, ...rest] = process.argv;
   if (!cmd || !sentinelPath) {
@@ -465,6 +525,7 @@ function main() {
   const cwd = process.env.QUALITY_CWD || process.cwd();
 
   if (cmd === "check") {
+    startRemediationClock(sentinelPath);
     const state = loadState(sentinelPath);
     const result = evaluateBudget(state, {
       nowEpoch: Math.floor(Date.now() / 1000),

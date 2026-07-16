@@ -51,6 +51,7 @@ AGENTS=""
 DIFF_FILE=""
 FILES_FILE=""
 LOG_FILE=""
+IDENTITY_FILE=""
 OUT_DIR=""
 DRY_RUN=false
 
@@ -59,6 +60,7 @@ while [ $# -gt 0 ]; do
     --diff-file)  DIFF_FILE="$2"; shift 2 ;;
     --files-file) FILES_FILE="$2"; shift 2 ;;
     --log-file)   LOG_FILE="$2"; shift 2 ;;
+    --identity-file) IDENTITY_FILE="$2"; shift 2 ;;
     --out-dir)    OUT_DIR="$2"; shift 2 ;;
     --agents)     AGENTS="$2"; shift 2 ;;
     --timeout)    TIMEOUT="$2"; shift 2 ;;
@@ -71,8 +73,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if [ -z "$AGENTS" ] || [ -z "$OUT_DIR" ] || [ -z "$DIFF_FILE" ]; then
-  echo "claude-review-companion: --agents, --out-dir, --diff-file required" >&2
+if [ -z "$AGENTS" ] || [ -z "$OUT_DIR" ] || [ -z "$DIFF_FILE" ] || [ -z "$IDENTITY_FILE" ]; then
+  echo "claude-review-companion: --agents, --out-dir, --diff-file, --identity-file required" >&2
   exit 1
 fi
 
@@ -128,6 +130,9 @@ CTX_FILE="$OUT_DIR/review-context.txt"
 {
   echo "Review ONLY the following diff. Do NOT scan unchanged code."
   echo
+  echo "## Repository and revision identity"
+  cat "$IDENTITY_FILE"
+  echo
   echo "## Changed files"
   [ -f "$FILES_FILE" ] && cat "$FILES_FILE"
   echo
@@ -182,8 +187,22 @@ run_with_timeout() {
 # --- run one agent as a blocking subprocess ----------------------------------
 # Writes the agent's .result (final answer) to $OUT_DIR/<agent>.md, or an
 # INCONCLUSIVE marker.
+structured_exhaustion_file() {
+  local evidence="$1"
+  [ -s "$evidence" ] || return 1
+  jq -e '
+    .. | objects |
+    select(
+      (.status? == 429) or
+      (.statusCode? == 429) or
+      (.code? | tostring | test("^(429|rate_limit|rate_limit_exceeded|resource_exhausted|quota_exhausted)$"; "i")) or
+      (.type? | tostring | test("^(rate_limit|rate_limit_error|resource_exhausted|quota_exhausted)$"; "i"))
+    )
+  ' "$evidence" >/dev/null 2>&1
+}
+
 run_agent() {
-  local agent="$1" sysfile out raw result rc stderr_file error_text reset_detail
+  local agent="$1" sysfile out raw result rc stderr_file error_json
   out="$OUT_DIR/${agent##*:}.findings.txt"
   stderr_file="$OUT_DIR/${agent##*:}.stderr"
   if ! sysfile="$(resolve_agent_file "$agent")"; then
@@ -219,14 +238,27 @@ run_agent() {
           ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} \
           --output-format json 2>>"$stderr_file" )"
   rc=$?
+  printf '%s\n' "$raw" > "$OUT_DIR/${agent##*:}.result.json"
 
-  error_text="$(printf '%s\n' "$raw"; cat "$stderr_file" 2>/dev/null)"
-  if printf '%s\n' "$error_text" | grep -Eiq '(^|[^0-9])429([^0-9]|$)|weekly (usage )?limit|usage limit|rate.?limit|quota (exceeded|exhausted)|too many requests'; then
-    reset_detail="$(printf '%s\n' "$error_text" | grep -Ei 'reset|429|weekly (usage )?limit|usage limit|rate.?limit|quota' | head -1 | tr '\n' ' ')"
-    printf 'Claude provider exhausted%s\n' "${reset_detail:+: $reset_detail}" > "$EXHAUSTED_FILE"
-    : > "$CANCEL_FILE"
-    echo "INCONCLUSIVE: Claude provider exhausted${reset_detail:+ — $reset_detail}" > "$out"
-    return 75
+  # Generated review text is untrusted content, not provider telemetry. Only a
+  # non-zero process status plus structured API/CLI error metadata can classify
+  # account exhaustion. A successful review may legitimately discuss HTTP 429
+  # or quota-handling code and must remain successful.
+  if [ "$rc" -ne 0 ]; then
+    error_json="$OUT_DIR/${agent##*:}.error-metadata.json"
+    if printf '%s' "$raw" | jq -e . > "$error_json" 2>/dev/null \
+       && structured_exhaustion_file "$error_json"; then
+      printf 'Claude provider exhausted (structured error metadata)\n' > "$EXHAUSTED_FILE"
+      : > "$CANCEL_FILE"
+      echo "INCONCLUSIVE: Claude provider exhausted" > "$out"
+      return 75
+    fi
+    if structured_exhaustion_file "$stderr_file"; then
+      printf 'Claude provider exhausted (structured error metadata)\n' > "$EXHAUSTED_FILE"
+      : > "$CANCEL_FILE"
+      echo "INCONCLUSIVE: Claude provider exhausted" > "$out"
+      return 75
+    fi
   fi
 
   if [ -f "$CANCEL_FILE" ]; then
@@ -294,8 +326,8 @@ if [ "$exhausted" = true ] || [ -f "$EXHAUSTED_FILE" ]; then
 fi
 
 echo "claude-review-companion: wrote findings for $resolved agent(s) to $OUT_DIR ($inconclusive inconclusive)" >&2
-if [ "$inconclusive" -ge "$resolved" ]; then
-  echo "claude-review-companion: ALL $resolved agent(s) inconclusive — review degraded" >&2
+if [ "$inconclusive" -gt 0 ]; then
+  echo "claude-review-companion: $inconclusive mandatory agent(s) inconclusive — checkpoint blocked" >&2
   exit 4
 fi
 exit 0

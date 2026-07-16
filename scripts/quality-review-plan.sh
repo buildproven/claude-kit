@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Mechanical provider-equivalent review depth. Claude realizes depth through
-# its selected agent panel; Codex realizes it through a tier-specific scope.
-[ -f "${BS_QUALITY_ROOT_FILE:-/nonexistent}" ] && [ -f "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env" ] && . "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env"
+# Mechanical provider-equivalent review depth. The caller must first load the
+# explicit invocation manifest through quality-load-root.sh.
 QUALITY_REVIEW_TIER="${TIER:-${QUALITY_REVIEW_TIER:-medium}}"
 case "$QUALITY_REVIEW_TIER" in
   low) QUALITY_REVIEW_TIMEOUT=120; QUALITY_REVIEW_FOCUS="Focused regression review of changed behavior only." ;;
