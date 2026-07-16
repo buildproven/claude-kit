@@ -64,6 +64,13 @@ function atomicWrite(file, value) {
   fs.chmodSync(file, 0o600);
 }
 
+function normalizeManifestCollections(manifest) {
+  manifest.reviews ??= [];
+  manifest.gates ??= [];
+  manifest.governor ??= {};
+  manifest.governor.authorizedAttempts ??= [];
+}
+
 function loadManifest(file) {
   const requested = path.resolve(file);
   const stat = fs.lstatSync(requested);
@@ -80,10 +87,7 @@ function loadManifest(file) {
       `unsupported quality manifest schema ${manifest.schemaVersion}`,
     );
   }
-  manifest.reviews ??= [];
-  manifest.gates ??= [];
-  manifest.governor ??= {};
-  manifest.governor.authorizedAttempts ??= [];
+  normalizeManifestCollections(manifest);
   if (
     !manifest.invocationId ||
     !manifest.repo?.realpath ||
