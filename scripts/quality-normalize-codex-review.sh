@@ -34,5 +34,9 @@ jq -e '
       and (.summary | length) >= 1
       and (.findings | type) == "array"
       and all(.findings[]; valid_finding)
+      and (
+        (.verdict == "approve" and (.findings | length) == 0)
+        or (.verdict == "needs-attention" and (.findings | length) > 0)
+      )
     )
 ' "$INPUT" > "$OUTPUT"

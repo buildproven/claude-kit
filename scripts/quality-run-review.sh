@@ -13,6 +13,9 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 # shellcheck source=quality-provider-policy.sh
 source "$SCRIPT_DIR/quality-provider-policy.sh"
+[ -f "${BS_QUALITY_ROOT_FILE:-/nonexistent}" ] \
+  && [ -f "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env" ] \
+  && source "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env"
 # shellcheck source=quality-review-plan.sh
 source "$SCRIPT_DIR/quality-review-plan.sh"
 
