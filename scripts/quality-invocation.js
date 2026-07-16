@@ -8,6 +8,8 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 
 const SCHEMA_VERSION = 1;
+const REQUIRED_GATES_POLICY_VERSION = 1;
+const NEEDS_REQUIRED_GATES_MIGRATION = Symbol("needs-required-gates-migration");
 
 function parseJson(raw, label) {
   try {
@@ -83,11 +85,13 @@ function normalizeManifestCollections(manifest) {
   manifest.merge.invalidatedStamps ??= [];
   manifest.governor ??= {};
   manifest.governor.authorizedAttempts ??= [];
-  manifest.requiredGates ??= [
-    { name: "lint", source: "baseline-policy", allowSkip: false },
-    { name: "test", source: "baseline-policy", allowSkip: false },
-    { name: "security", source: "baseline-policy", allowSkip: false },
-  ];
+  if (manifest.requiredGatesPolicyVersion !== REQUIRED_GATES_POLICY_VERSION) {
+    Object.defineProperty(manifest, NEEDS_REQUIRED_GATES_MIGRATION, {
+      value: true,
+      writable: true,
+    });
+  }
+  manifest.requiredGates ??= [];
 }
 
 function loadManifest(file) {
@@ -425,6 +429,7 @@ function createManifest(options) {
     reviews: [],
     governor: buildGovernor(head),
     requiredGates: discoverRequiredGates(root, options),
+    requiredGatesPolicyVersion: REQUIRED_GATES_POLICY_VERSION,
     gates: [],
   };
   atomicWrite(manifestPath, manifest);
@@ -1430,6 +1435,13 @@ const COMMANDS = {
 function runAdvance(manifestArg, manifest) {
   const updated = withManifestLock(manifestArg, (locked) => {
     validateIdentity(locked, manifest.repo.realpath, { requireHead: false });
+    if (locked[NEEDS_REQUIRED_GATES_MIGRATION]) {
+      locked.requiredGates = discoverRequiredGates(locked.repo.realpath, {
+        "skip-tests": locked.options?.skipTests === true,
+      });
+      locked.requiredGatesPolicyVersion = REQUIRED_GATES_POLICY_VERSION;
+      locked[NEEDS_REQUIRED_GATES_MIGRATION] = false;
+    }
     advanceHead(locked, manifest.repo.realpath);
     validateIdentity(locked, manifest.repo.realpath);
     const challenge = process.env.BS_QUALITY_APPROVAL_CHALLENGE_SHA256;
@@ -1452,6 +1464,11 @@ function runCommand(command, rawArgs) {
     return;
   }
   if (command === "advance") return runAdvance(manifestArg, manifest);
+  if (manifest[NEEDS_REQUIRED_GATES_MIGRATION]) {
+    throw new Error(
+      "legacy manifest requires an explicit advance before gate evaluation",
+    );
+  }
   validateIdentity(manifest, manifest.repo.realpath);
   const handler = COMMANDS[command];
   if (!handler)

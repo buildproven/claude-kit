@@ -1468,4 +1468,55 @@ exit 1
       required,
     );
   });
+
+  it("migrates legacy required gates only during an explicit locked resume", () => {
+    const root = repo("legacy-required-gates");
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: {
+          lint: "eslint .",
+          test: "node --test",
+          build: "node build.js",
+          "type-check": "tsc --noEmit",
+          "test:consumer": "node consumer.js",
+        },
+      }),
+    );
+    git(root, ["add", "package.json"]);
+    git(root, ["commit", "-q", "-m", "add applicable legacy gates"]);
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    delete manifest.requiredGates;
+    delete manifest.requiredGatesPolicyVersion;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const rejected = spawnSync("node", [INVOCATION, "validate", manifestPath], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(rejected.status).not.toBe(0);
+    expect(rejected.stderr).toMatch(/requires an explicit advance/);
+
+    execFileSync("node", [INVOCATION, "advance", manifestPath], { cwd: root });
+    const migrated = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(migrated.requiredGatesPolicyVersion).toBe(1);
+    expect(migrated.requiredGates.map((gate) => gate.name)).toEqual([
+      "lint",
+      "test",
+      "security",
+      "build",
+      "type",
+      "consumer",
+    ]);
+
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ scripts: { lint: "eslint .", test: "node --test" } }),
+    );
+    execFileSync("node", [INVOCATION, "advance", manifestPath], { cwd: root });
+    expect(
+      JSON.parse(readFileSync(manifestPath, "utf8")).requiredGates,
+    ).toEqual(migrated.requiredGates);
+  });
 });
