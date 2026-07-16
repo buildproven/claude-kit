@@ -22,7 +22,17 @@ EXPECTED_HEAD="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revi
 ROOT="$(node "$SCRIPT_DIR/quality-invocation.js" locate "$MANIFEST")" || exit 1
 cd "$ROOT" || exit 1
 [ -n "$PR" ] || { echo "❌ MERGE BLOCKED: manifest has no PR identity." >&2; exit 1; }
-ACTUAL_HEAD="$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" || exit 1
+PR_JSON="$(gh pr view "$PR" --json headRefOid,baseRefName,baseRefOid)" || exit 1
+ACTUAL_HEAD="$(printf '%s' "$PR_JSON" | jq -r '.headRefOid')"
+ACTUAL_BASE_NAME="$(printf '%s' "$PR_JSON" | jq -r '.baseRefName')"
+ACTUAL_BASE_OID="$(printf '%s' "$PR_JSON" | jq -r '.baseRefOid')"
+EXPECTED_BASE_REF="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseRef)"
+EXPECTED_BASE_OID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseSha)"
+[ "$EXPECTED_BASE_REF" = "origin/$ACTUAL_BASE_NAME" ] &&
+  [ "$EXPECTED_BASE_OID" = "$ACTUAL_BASE_OID" ] || {
+    echo "❌ MERGE BLOCKED: PR base changed after review." >&2
+    exit 1
+  }
 LOCAL_HEAD="$(git rev-parse HEAD)"
 [ "$ACTUAL_HEAD" = "$LOCAL_HEAD" ] || {
   echo "❌ MERGE BLOCKED: PR HEAD does not match reviewed HEAD." >&2
@@ -49,4 +59,5 @@ fi
 BASE_REF="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseRef)"
 bash "$SCRIPT_DIR/quality-validate-review-trailers.sh" \
   --manifest "$MANIFEST" --base "$BASE_REF" || exit 1
-echo "[quality] merge authorized for exact reviewed revision"
+gh pr merge "$PR" --squash --match-head-commit "$ACTUAL_HEAD"
+echo "[quality] merged exact reviewed revision $ACTUAL_HEAD"

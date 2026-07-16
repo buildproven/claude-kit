@@ -461,6 +461,7 @@ function reviewInfo(manifest) {
   }
   return {
     round: successful.length + 1,
+    attempt: manifest.governor.roundsUsed,
     from: previous?.to || manifest.revisions.baseSha,
     to: manifest.revisions.currentHead,
     previousReviewedHead: previous?.to || null,
@@ -468,7 +469,7 @@ function reviewInfo(manifest) {
       manifest.stateRoot,
       "reviews",
       manifest.revisions.currentHead,
-      `round-${successful.length + 1}`,
+      `round-${successful.length + 1}-attempt-${manifest.governor.roundsUsed}`,
     ),
   };
 }
@@ -492,6 +493,7 @@ function reviewIdentity(manifest) {
     diffBase: info.from,
     headSha: info.to,
     round: info.round,
+    attempt: info.attempt,
     tier: manifest.risk.tier,
     agentsSha256: agentsSha256(manifest),
   };
@@ -506,20 +508,54 @@ function reviewedEvidence(manifest) {
 
 function recordJudge(manifest, options) {
   const authorization = reviewCoverage(manifest);
-  const blockingCount = Number(options["blocking-count"]);
-  if (!Number.isSafeInteger(blockingCount) || blockingCount < 0) {
-    throw new Error("judge blocking-count must be a non-negative integer");
+  if (!options.artifact) {
+    throw new Error("judge requires a structured --artifact");
   }
+  const input = parseJson(
+    fs.readFileSync(path.resolve(options.artifact), "utf8"),
+    "judge artifact",
+  );
+  if (!Array.isArray(input.findings)) {
+    throw new Error("judge artifact findings must be an array");
+  }
+  for (const finding of input.findings) {
+    if (
+      typeof finding.id !== "string" ||
+      !["BLOCKING", "WARNING", "SUPPRESSED"].includes(finding.disposition)
+    ) {
+      throw new Error("judge findings require an id and valid disposition");
+    }
+  }
+  const blockingCount = input.findings.filter(
+    (finding) => finding.disposition === "BLOCKING",
+  ).length;
+  const evidenceSha256 = crypto
+    .createHash("sha256")
+    .update(reviewedEvidence(manifest))
+    .digest("hex");
+  const artifactPath = path.join(
+    manifest.stateRoot,
+    "judge",
+    `${manifest.revisions.currentHead}.json`,
+  );
+  atomicWrite(artifactPath, {
+    schemaVersion: 1,
+    head: authorization.head,
+    reviewCount: manifest.reviews.filter(
+      (review) => review.status === "success",
+    ).length,
+    evidenceSha256,
+    findings: input.findings,
+  });
   manifest.judge = {
     head: authorization.head,
     reviewCount: manifest.reviews.filter(
       (review) => review.status === "success",
     ).length,
     blockingCount,
-    evidenceSha256: crypto
-      .createHash("sha256")
-      .update(reviewedEvidence(manifest))
-      .digest("hex"),
+    evidenceSha256,
+    artifactPath,
+    artifactSha256: sha256File(artifactPath),
     recordedAt: new Date().toISOString(),
   };
 }
@@ -546,6 +582,7 @@ function recordReview(manifest, options) {
   });
   manifest.reviews.push({
     round: expected.round,
+    attempt: expected.attempt,
     from: options.from,
     to: options.to,
     provider: options.provider,
@@ -628,7 +665,7 @@ function artifactPaths(manifest, review) {
     manifest.stateRoot,
     "reviews",
     review.to,
-    `round-${review.round}`,
+    `round-${review.round}-attempt-${review.attempt}`,
   );
   if (
     artifactDir !== expectedDir ||
@@ -661,6 +698,7 @@ function verifyIdentityFile(manifest, review, identityFile) {
     diffBase: review.from,
     headSha: review.to,
     round: review.round,
+    attempt: review.attempt,
     tier: review.tier,
     agentsSha256: review.agentsSha256,
   };
@@ -797,6 +835,21 @@ function reviewAuthorization(manifest) {
     throw new Error(
       "judge result is missing, stale, or not bound to review evidence",
     );
+  }
+  const judgeArtifact = parseJson(
+    fs.readFileSync(manifest.judge.artifactPath, "utf8"),
+    "persisted judge artifact",
+  );
+  const persistedBlockingCount = judgeArtifact.findings.filter(
+    (finding) => finding.disposition === "BLOCKING",
+  ).length;
+  if (
+    sha256File(manifest.judge.artifactPath) !== manifest.judge.artifactSha256 ||
+    judgeArtifact.head !== manifest.revisions.currentHead ||
+    judgeArtifact.evidenceSha256 !== evidenceSha256 ||
+    persistedBlockingCount !== manifest.judge.blockingCount
+  ) {
+    throw new Error("persisted judge artifact is stale or has been modified");
   }
   if (manifest.judge.blockingCount !== 0) {
     throw new Error(

@@ -204,10 +204,33 @@ if [ "$ARGS_MERGE" = true ]; then
     echo "   Move uncommitted changes there with: git stash; cd <worktree>; git stash pop"
     exit 1
   fi
+  PR_QUERY=()
+  [ -n "${RES_PR:-}" ] && PR_QUERY=("$RES_PR")
+  PR_JSON="$(gh pr view "${PR_QUERY[@]}" \
+    --json number,baseRefName,baseRefOid,headRefOid 2>/dev/null)" || {
+    echo "❌ /bs:quality --merge requires an open PR for the target branch." >&2
+    exit 1
+  }
+  RES_PR="$(printf '%s' "$PR_JSON" | jq -r '.number')"
+  PR_BASE_NAME="$(printf '%s' "$PR_JSON" | jq -r '.baseRefName')"
+  PR_BASE_OID="$(printf '%s' "$PR_JSON" | jq -r '.baseRefOid')"
+  PR_HEAD_OID="$(printf '%s' "$PR_JSON" | jq -r '.headRefOid')"
+  [ "$PR_HEAD_OID" = "$(git rev-parse HEAD)" ] || {
+    echo "❌ /bs:quality PR HEAD does not match the target worktree." >&2
+    exit 1
+  }
 fi
 
 BASE_REF=""
-for candidate in origin/main origin/master main master; do
+if [ -n "${PR_BASE_NAME:-}" ]; then
+  git fetch origin "$PR_BASE_NAME" -q || exit 1
+  BASE_REF="origin/$PR_BASE_NAME"
+  [ "$(git rev-parse "$BASE_REF")" = "$PR_BASE_OID" ] || {
+    echo "❌ /bs:quality PR base moved during bootstrap." >&2
+    exit 1
+  }
+fi
+for candidate in ${BASE_REF:+"$BASE_REF"} origin/main origin/master main master; do
   if git rev-parse --verify --quiet "${candidate}^{commit}" >/dev/null 2>&1; then
     BASE_REF="$candidate"
     break

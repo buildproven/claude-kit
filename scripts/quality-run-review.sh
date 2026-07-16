@@ -63,6 +63,14 @@ structured_provider_exhausted() {
   ' "$evidence" >/dev/null 2>&1
 }
 
+provider_stderr_exhausted() {
+  local evidence="$1"
+  structured_provider_exhausted "$evidence" && return 0
+  grep -Eiq \
+    '(^|[^0-9])429([^0-9]|$)|rate[ -]?limit(ed| exceeded)?|quota (exhausted|exceeded)|usage limit' \
+    "$evidence" 2>/dev/null
+}
+
 record_provider_exhaustion() {
   printf '%s provider exhausted (structured error metadata)\n' "$1" > "$REVIEW_OUT/provider-exhausted"
 }
@@ -120,7 +128,7 @@ run_codex_review() {
       < "$prompt_file" > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file"
     rc=$?
     if [ "$rc" -ne 0 ]; then
-      if structured_provider_exhausted "$error_file"; then
+      if provider_stderr_exhausted "$error_file"; then
         record_provider_exhaustion Codex
         return 75
       fi

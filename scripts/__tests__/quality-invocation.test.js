@@ -133,15 +133,26 @@ function prepareCodexReview(root, manifestPath) {
   return info;
 }
 
-function fakeGh(root, head) {
+function recordJudgeArtifact(root, manifest, findings = []) {
+  const artifact = path.join(root, "judge-input.json");
+  writeFileSync(artifact, JSON.stringify({ findings }));
+  execFileSync(
+    "node",
+    [INVOCATION, "judge", manifest, "--artifact", artifact],
+    { cwd: root },
+  );
+}
+
+function fakeGh(root, head, baseOid) {
   const bin = path.join(root, "fake-bin");
   mkdirSync(bin);
   const gh = path.join(bin, "gh");
   writeFileSync(
     gh,
     `#!/usr/bin/env bash
-if [ "$1 $2" = "pr view" ]; then printf '%s\\n' '${head}'; exit 0; fi
+if [ "$1 $2" = "pr view" ]; then printf '%s\\n' '{"headRefOid":"${head}","baseRefName":"main","baseRefOid":"${baseOid}"}'; exit 0; fi
 if [ "$1 $2" = "pr checks" ]; then exit 0; fi
+if [ "$1 $2" = "pr merge" ]; then exit 0; fi
 exit 1
 `,
   );
@@ -524,11 +535,7 @@ wait
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
     const second = prepareCodexReview(root, manifest);
     expect(second.from).toBe(first.to);
-    execFileSync(
-      "node",
-      [INVOCATION, "judge", manifest, "--blocking-count", "0"],
-      { cwd: root },
-    );
+    recordJudgeArtifact(root, manifest);
 
     const trailers = execFileSync("node", [INVOCATION, "trailers", manifest], {
       cwd: root,
@@ -539,7 +546,12 @@ wait
     const lifecycle = [];
     lifecycle.push("push");
     lifecycle.push("ci:success");
-    const bin = fakeGh(root, git(root, ["rev-parse", "HEAD"]));
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    const bin = fakeGh(
+      root,
+      git(root, ["rev-parse", "HEAD"]),
+      state.revisions.baseSha,
+    );
     const caller = repo("authorization-caller");
     expect(
       spawnSync("bash", [AUTHORIZE, "--manifest", manifest], {
@@ -567,11 +579,7 @@ wait
     const root = repo("artifact-tamper");
     const manifest = create(root);
     const review = prepareCodexReview(root, manifest);
-    execFileSync(
-      "node",
-      [INVOCATION, "judge", manifest, "--blocking-count", "0"],
-      { cwd: root },
-    );
+    recordJudgeArtifact(root, manifest);
     writeFileSync(
       path.join(review.artifactDir, "codex.findings.txt"),
       "REPLACED\n",
@@ -587,11 +595,10 @@ wait
     const root = repo("judge-block");
     const manifest = create(root);
     prepareCodexReview(root, manifest);
-    execFileSync(
-      "node",
-      [INVOCATION, "judge", manifest, "--blocking-count", "2"],
-      { cwd: root },
-    );
+    recordJudgeArtifact(root, manifest, [
+      { id: "one", disposition: "BLOCKING", reason: "unresolved" },
+      { id: "two", disposition: "BLOCKING", reason: "unresolved" },
+    ]);
     const result = spawnSync(
       "node",
       [INVOCATION, "review-authorization", manifest],

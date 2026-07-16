@@ -107,11 +107,13 @@ path. Round and fix-commit caps remain hard.
 
 Read only findings artifacts listed by the manifest. Verify artifact identity
 before synthesis. Classify findings as BLOCKING, WARNING, or SUPPRESSED.
-Persist the synthesis before stamping:
+Persist the synthesis before stamping. The artifact must contain
+`{"findings":[{"id":"...","disposition":"BLOCKING|WARNING|SUPPRESSED","reason":"..."}]}`;
+the runtime derives the blocking count mechanically:
 
 ```bash
 node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" judge \
-  "<exact-manifest-path>" --blocking-count "$BLOCKING_COUNT"
+  "<exact-manifest-path>" --artifact "$JUDGE_ARTIFACT"
 ```
 
 - Any BLOCKING finding must be fixed.
@@ -144,9 +146,6 @@ $TRAILERS"
 git push
 bash "$QUALITY_SCRIPTS_DIR/quality-authorize-merge.sh" \
   --manifest "<exact-manifest-path>"
-PR="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" field \
-  "<exact-manifest-path>" repo.pr)"
-gh pr merge "$PR" --squash
 ```
 
 Merge is forbidden when:
