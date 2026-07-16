@@ -264,8 +264,10 @@ describe("provider-native platform", () => {
   it("syncs the same declarative MCP server into both clients", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "mcp-sync-"));
     const bin = path.join(dir, "bin");
+    const codexHome = path.join(dir, "codex");
     const calls = path.join(dir, "calls");
     mkdirSync(bin);
+    mkdirSync(codexHome);
     const body = `printf '%s %s\\n' "$(basename "$0")" "$*" >> '${calls}'\nif [ "$1 $2" = "mcp list" ]; then exit 0; fi`;
     executable(path.join(bin, "claude"), body);
     executable(path.join(bin, "codex"), body);
@@ -286,15 +288,20 @@ describe("provider-native platform", () => {
 
     const result = spawnSync("python3", [MCP_SYNC, "--manifest", manifest], {
       encoding: "utf8",
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        PATH: `${bin}:${process.env.PATH}`,
+      },
     });
     expect(result.status).toBe(0);
     const logged = readFileSync(calls, "utf8");
     expect(logged).toContain(
       "claude mcp add --scope user --transport http shared https://example.test/mcp",
     );
-    expect(logged).toContain(
-      "codex mcp add shared --url https://example.test/mcp",
+    expect(logged).not.toContain("codex mcp add shared");
+    expect(readFileSync(path.join(codexHome, "config.toml"), "utf8")).toContain(
+      '[mcp_servers."shared"]\nurl = "https://example.test/mcp"',
     );
   });
 
