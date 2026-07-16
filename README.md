@@ -143,6 +143,14 @@ plugin.
 /bs:legal       Legal review for software founders
 ```
 
+For bounded unattended runs across Claude usage windows, `scripts/overnight-loop.sh`
+selects one exact issue from a named Linear project, invokes Ralph with a hard
+wall-clock deadline, and accepts completion only when the reviewed merge receipt
+and Linear `Done` state agree. It requires `LINEAR_API_KEY` and an explicit
+`--linear-project`; target, item, and hour caps are configurable and default to
+the current directory, 8 items, and 8 hours. Run with `--dry-run` first to validate
+scope without launching Ralph.
+
 ### Domain intelligence
 
 Skills, invoked in conversation: `monetize`, `seo`,
