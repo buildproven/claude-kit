@@ -1642,35 +1642,20 @@ function recordGate(manifest, options) {
   });
 }
 
-function runGate(manifest, options) {
-  if (manifest.repo.isCrossRepository === true) {
-    throw new Error(
-      "cross-repository PR gates must run in isolated CI; host execution is forbidden",
-    );
-  }
-  const name = options.name;
-  const required = manifest.requiredGates.find((gate) => gate.name === name);
-  if (!required) throw new Error(`gate '${name}' is not required by policy`);
-  const log = path.join(
-    manifest.stateRoot,
-    "gates",
-    manifest.revisions.currentHead,
-    `${name}.log`,
-  );
-  fs.mkdirSync(path.dirname(log), { recursive: true, mode: 0o700 });
-  if (options.skip === true) {
-    const reason = options.reason?.trim();
-    fs.writeFileSync(log, `SKIPPED: ${reason || ""}\n`, { mode: 0o600 });
-    recordGate(manifest, {
-      name,
-      source: required.source,
-      command: required.command,
-      log,
-      status: "skipped",
-      reason,
-    });
-    return;
-  }
+function recordSkippedGate(manifest, required, name, log, options) {
+  const reason = options.reason?.trim();
+  fs.writeFileSync(log, `SKIPPED: ${reason || ""}\n`, { mode: 0o600 });
+  recordGate(manifest, {
+    name,
+    source: required.source,
+    command: required.command,
+    log,
+    status: "skipped",
+    reason,
+  });
+}
+
+function executeGate(manifest, required, name, log) {
   const gateSeconds = manifest.risk?.runtime?.gateSeconds ?? 300;
   const campaignRemaining = manifest.governor?.campaignDeadlineEpoch
     ? manifest.governor.campaignDeadlineEpoch - Math.floor(Date.now() / 1000)
@@ -1698,6 +1683,30 @@ function runGate(manifest, options) {
     process.stderr.write(output);
     throw new Error(`gate '${name}' failed with exit status ${result.status}`);
   }
+  return output;
+}
+
+function runGate(manifest, options) {
+  if (manifest.repo.isCrossRepository === true) {
+    throw new Error(
+      "cross-repository PR gates must run in isolated CI; host execution is forbidden",
+    );
+  }
+  const name = options.name;
+  const required = manifest.requiredGates.find((gate) => gate.name === name);
+  if (!required) throw new Error(`gate '${name}' is not required by policy`);
+  const log = path.join(
+    manifest.stateRoot,
+    "gates",
+    manifest.revisions.currentHead,
+    `${name}.log`,
+  );
+  fs.mkdirSync(path.dirname(log), { recursive: true, mode: 0o700 });
+  if (options.skip === true) {
+    recordSkippedGate(manifest, required, name, log, options);
+    return;
+  }
+  const output = executeGate(manifest, required, name, log);
   recordGate(manifest, {
     name,
     source: required.source,
