@@ -410,6 +410,86 @@ function evaluateBudget(state, { nowEpoch, commitCount }) {
   };
 }
 
+function reviewHead(state, sentinelPath, cwd) {
+  if (state._manifest) {
+    return loadManifest(sentinelPath).manifest.revisions.currentHead;
+  }
+  return execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd,
+    encoding: "utf8",
+  }).trim();
+}
+
+function reusableAuthorization(state, round, head) {
+  return [...state.authorized_attempts]
+    .reverse()
+    .find(
+      (attempt) =>
+        attempt.number === round &&
+        attempt.head === head &&
+        attempt.consumedAt === null &&
+        !attempt.invalidatedAt,
+    );
+}
+
+function replaceAuthorization(state, head, reusableAttempt) {
+  const authorizedAt = new Date().toISOString();
+  for (const attempt of state.authorized_attempts) {
+    if (
+      attempt.consumedAt === null &&
+      !attempt.invalidatedAt &&
+      (attempt.head !== head ||
+        attempt.number !== state.rounds_used ||
+        attempt === reusableAttempt)
+    ) {
+      attempt.invalidatedAt = authorizedAt;
+      attempt.invalidationReason =
+        attempt === reusableAttempt
+          ? "replaced for provider retry"
+          : "stale after review identity changed";
+    }
+  }
+  state.authorized_attempts.push({
+    number: state.rounds_used,
+    token: crypto.randomUUID(),
+    head,
+    authorizedAt,
+    consumedAt: null,
+    ...(reusableAttempt ? { retryOf: reusableAttempt.token } : {}),
+  });
+}
+
+function reconcileManifestRounds(sentinelPath) {
+  withManifestLock(sentinelPath, (manifest) => {
+    const successful = manifest.reviews.filter(
+      (review) => review.status === "success",
+    );
+    const rounds = [...new Set(successful.map((review) => review.round))].sort(
+      (left, right) => left - right,
+    );
+    rounds.forEach((round, index) => {
+      if (round !== index + 1) {
+        throw new Error("successful review rounds are not contiguous");
+      }
+    });
+    for (const review of successful) {
+      const authorization = manifest.governor.authorizedAttempts.find(
+        (attempt) =>
+          attempt.token === review.governorAttemptToken &&
+          attempt.head === review.to &&
+          attempt.consumedAt !== null &&
+          !attempt.invalidatedAt,
+      );
+      if (!authorization) {
+        throw new Error(
+          `successful review round ${review.round} lacks consumed governor authorization`,
+        );
+      }
+    }
+    manifest.governor.roundsUsed = rounds.length;
+  });
+}
+
 /**
  * `bump-round` — called IMMEDIATELY BEFORE the review panel runs (SKILL.md
  * Step 2.0). Increments rounds_used, persists, then evaluates every budget.
@@ -426,21 +506,41 @@ function evaluateBudget(state, { nowEpoch, commitCount }) {
  * no breaker, because it reads as protection that isn't there.
  */
 function bumpRound(sentinelPath, cwd) {
-  const state = loadState(sentinelPath);
+  let state = loadState(sentinelPath);
   if (!state) {
     process.stderr.write(
       `[quality] governor sentinel unreadable at ${sentinelPath} — failing CLOSED. The review loop cannot be bounded without it, and an unbounded loop is the exact failure this governor exists to prevent.\n`,
     );
     return 1;
   }
+  if (state._manifest) {
+    try {
+      reconcileManifestRounds(sentinelPath);
+      state = loadState(sentinelPath);
+    } catch (error) {
+      process.stderr.write(
+        `[quality] governor review reconciliation failed CLOSED: ${error.message}\n`,
+      );
+      return 1;
+    }
+  }
 
   const priorRounds = Number.isFinite(state.rounds_used)
     ? state.rounds_used
     : 0;
-  state.rounds_used = priorRounds + 1;
   if (state._manifest) {
     cwd = loadManifest(sentinelPath).manifest.repo.realpath;
   }
+  state.authorized_attempts = state.authorized_attempts || [];
+  const authorizedHead = reviewHead(state, sentinelPath, cwd);
+  const nextRound = priorRounds + 1;
+  const reusableAttempt = reusableAuthorization(
+    state,
+    state._manifest ? nextRound : priorRounds,
+    authorizedHead,
+  );
+  const retryingRound = Boolean(reusableAttempt);
+  state.rounds_used = retryingRound ? reusableAttempt.number : nextRound;
 
   // A mandatory validation round has its own reserved allowance. The first
   // provider review and remediation cannot consume it and make the required
@@ -487,24 +587,11 @@ function bumpRound(sentinelPath, cwd) {
     );
     return 1;
   }
-  state.authorized_attempts = state.authorized_attempts || [];
-  const authorizedHead = state._manifest
-    ? loadManifest(sentinelPath).manifest.revisions.currentHead
-    : execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd,
-        encoding: "utf8",
-      }).trim();
-  state.authorized_attempts.push({
-    number: state.rounds_used,
-    token: crypto.randomUUID(),
-    head: authorizedHead,
-    authorizedAt: new Date().toISOString(),
-    consumedAt: null,
-  });
+  replaceAuthorization(state, authorizedHead, reusableAttempt);
   saveState(sentinelPath, state);
 
   process.stdout.write(
-    `[quality] review round ${result.roundsUsed}/${result.maxReviewRounds} ` +
+    `[quality] ${retryingRound ? "retrying" : "review"} round ${result.roundsUsed}/${result.maxReviewRounds} ` +
       `(elapsed ${result.elapsedSeconds}s/${result.maxWallSeconds}s, ` +
       `fix-commits ${result.commitsUsed}/${result.maxFixCommits})\n`,
   );

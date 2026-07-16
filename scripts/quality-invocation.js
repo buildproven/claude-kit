@@ -928,7 +928,8 @@ function recordReview(manifest, options) {
     (attempt) =>
       attempt.number === expected.attempt &&
       attempt.head === manifest.revisions.currentHead &&
-      attempt.consumedAt === null,
+      attempt.consumedAt === null &&
+      !attempt.invalidatedAt,
   );
   if (!authorizedAttempt) {
     throw new Error("review attempt was not authorized by the governor");
@@ -1165,7 +1166,8 @@ function reviewCoverage(manifest) {
       (attempt) =>
         attempt.token === review.governorAttemptToken &&
         attempt.head === review.to &&
-        attempt.consumedAt !== null,
+        attempt.consumedAt !== null &&
+        !attempt.invalidatedAt,
     );
     if (!authorizedAttempt) {
       throw new Error("review lacks an authorized governor attempt");

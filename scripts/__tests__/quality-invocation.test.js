@@ -490,6 +490,101 @@ wait
     expect(updated.governor.remediationStartedAtEpoch).not.toBeNull();
   });
 
+  it("retries an unconsumed provider attempt without spending the mandatory rereview round", () => {
+    const root = repo("provider-retry-budget");
+    const manifest = create(root, [], {
+      BS_QUALITY_MAX_REVIEW_ROUNDS: "2",
+    });
+    const firstHead = git(root, ["rev-parse", "HEAD"]);
+
+    execFileSync("node", [GOVERNOR, "bump-round", manifest], { cwd: root });
+    let state = JSON.parse(readFileSync(manifest, "utf8"));
+    const timedOutToken = state.governor.authorizedAttempts.at(-1).token;
+    expect(state.governor.roundsUsed).toBe(1);
+
+    const firstReview = prepareCodexReview(root, manifest);
+    state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.governor.roundsUsed).toBe(1);
+    expect(state.reviews).toHaveLength(1);
+    expect(state.governor.authorizedAttempts).toHaveLength(2);
+    expect(state.governor.authorizedAttempts[0]).toMatchObject({
+      token: timedOutToken,
+      invalidationReason: "replaced for provider retry",
+      consumedAt: null,
+    });
+    expect(state.governor.authorizedAttempts[1]).toMatchObject({
+      retryOf: timedOutToken,
+      head: firstHead,
+    });
+    expect(state.governor.authorizedAttempts[1].consumedAt).not.toBeNull();
+
+    state.governor.roundsUsed = 2;
+    delete state.governor.authorizedAttempts[0].invalidatedAt;
+    delete state.governor.authorizedAttempts[0].invalidationReason;
+    state.governor.authorizedAttempts[1].number = 2;
+    writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
+
+    writeFileSync(
+      path.join(root, "retry-fix.js"),
+      "export const fixed = true;\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "fix: provider finding"]);
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    const secondReview = prepareCodexReview(root, manifest);
+
+    state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.governor.roundsUsed).toBe(2);
+    expect(state.reviews).toHaveLength(2);
+    expect(secondReview.from).toBe(firstReview.to);
+    expect(secondReview.to).toBe(git(root, ["rev-parse", "HEAD"]));
+  });
+
+  it("does not authorize a changed HEAD with an unconsumed stale token", () => {
+    const root = repo("stale-provider-token");
+    const manifest = create(root);
+    execFileSync("node", [GOVERNOR, "bump-round", manifest], { cwd: root });
+
+    writeFileSync(
+      path.join(root, "changed.js"),
+      "export const changed = true;\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "fix: changed head"]);
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    const info = JSON.parse(
+      execFileSync("node", [INVOCATION, "review-info", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    const result = spawnSync(
+      "node",
+      [
+        INVOCATION,
+        "record-review",
+        manifest,
+        "--from",
+        info.from,
+        "--to",
+        info.to,
+        "--provider",
+        "codex",
+        "--primary",
+        "codex",
+        "--fallback",
+        "none",
+        "--artifact-dir",
+        info.artifactDir,
+        "--diff-sha",
+        "stale",
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/not authorized by the governor/);
+  });
+
   it("uses an explicit composite checkpoint for an incremental second review", () => {
     const root = repo("delta");
     const manifest = create(root);
