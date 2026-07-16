@@ -50,7 +50,7 @@ fi
 
 # Persist the resolved panel to a sentinel so the LATER companion block can
 # read it — bash arrays do NOT survive across separate fenced bash blocks.
-printf '%s\n' "${AGENTS[@]}" > "${TMPDIR:-/tmp}/bs-quality-agents-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+printf '%s\n' "${AGENTS[@]}" > "${TMPDIR:-/tmp}/bs-quality-agents-${BS_QUALITY_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-default}}}.txt"
 
 # Break-glass approval (critical tier only): critical-tier changes (per
 # harness-config.json:mergePolicy.critical.requiredChecks) require explicit

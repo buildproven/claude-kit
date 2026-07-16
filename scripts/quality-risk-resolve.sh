@@ -67,3 +67,16 @@ if [ "${LEVEL:-auto}" = "auto" ]; then
     LEVEL=95
   fi
 fi
+
+# Fenced Bash blocks do not share variables. Persist the resolved knobs so the
+# later provider runner enforces the scorer's actual effort/round policy.
+if [ -n "${BS_QUALITY_ROOT_FILE:-}" ]; then
+  cat > "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env" <<EOF
+TIER='${TIER:-}'
+RISK_SCORE='${RISK_SCORE:-}'
+AGENT_TARGET='${AGENT_TARGET:-}'
+CODEX_DEPTH='${CODEX_DEPTH:-}'
+CODEX_ROUNDS='${CODEX_ROUNDS:-}'
+LEVEL='${LEVEL:-}'
+EOF
+fi

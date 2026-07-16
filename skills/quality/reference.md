@@ -28,6 +28,20 @@ calls it as a subprocess and acts on the JSON result. If no local worktree
 exists for a resolved PR/branch, one is materialized in a sibling directory
 (`git worktree add`), so repeat invocations reuse it deterministically.
 
+## Reviewer Provider Policy
+
+Both Claude Code and Codex read `~/.claude/quality-providers.json`. Configure it
+with `scripts/quality-provider-config.sh --primary codex --fallback claude`
+(or reverse the providers). `BS_QUALITY_PRIMARY`, `BS_QUALITY_FALLBACK`, and
+`BS_QUALITY_PROVIDER_CONFIG` are per-run overrides. The fallback runs only for
+typed account exhaustion (HTTP 429, weekly/rate/usage limit, exhausted quota)
+or an unavailable CLI—not when the primary reports code findings.
+
+Claude panels share a cancellation sentinel: the first exhausted reviewer
+causes sibling process groups to terminate. A successful review records HEAD;
+later fix rounds use that SHA as their diff base so unchanged commits are not
+reviewed again. Bootstrap clears this state for every new invocation.
+
 ## Regression History
 
 - **2026-05-11**: target resolution ignored PR/branch args in favor of
@@ -166,36 +180,35 @@ auto-fix loop, re-run `npm test` to verify they pass before continuing.
 
 ## Flags
 
-| Flag                      | Default | Description                                                                                              |
-| ------------------------- | ------- | -------------------------------------------------------------------------------------------------------- |
-| `--level N`               | auto    | Quality level: `auto` (read tier from harness-config.json), `95`, or `98`                                |
-| `--scope S`               | branch  | Scope: changed, branch, all                                                                              |
-| `--merge`                 | false   | Auto-merge PR after quality                                                                              |
-| `--skip-ci`               | false   | Bypass CI checks                                                                                         |
-| `--skip-rebase`           | false   | Skip auto-rebase                                                                                         |
-| `--status`                | false   | Show quality history and exit                                                                            |
-| `--verbose`               | false   | Show trends with `--status`                                                                              |
-| `--audit`                 | false   | Read-only assessment                                                                                     |
-| `--deep`                  | false   | 6-agent deep review (with `--audit`)                                                                     |
-| `--dry-run`               | false   | Preview without modifying                                                                                |
-| `--fix`                   | false   | Auto-fix common issues (with `--audit`)                                                                  |
-| `--json`                  | false   | Machine-readable output                                                                                  |
-| `--coverage-diff`         | false   | Show per-file coverage changes                                                                           |
-| `--skip-docs`             | false   | Skip doc sync check                                                                                      |
-| `--teams`                 | false   | Use agent teams (tmux visibility)                                                                        |
-| `--no-teams`              | -       | Force Task subagents (default)                                                                           |
-| `--no-codex`              | false   | Skip Codex cross-review entirely                                                                         |
-| `--codex-effort E`        | high    | Codex reasoning effort: `medium`, `high`, or `xhigh`                                                     |
-| `--codex-skip "<reason>"` | -       | Skip Codex on this run with a non-empty reason (logged + Quality-Skip trailer required at high/critical) |
-| `--skip-tests`            | false   | Skip hard test gate (config-only repos)                                                                  |
-| `--preflight`             | false   | Quick readiness check (<10 sec)                                                                          |
-| `--target-dir <path>`     | -       | Run against this repo (use when invoking from a forked/agent context with no inherited cwd)              |
+| Flag                  | Default | Description                                                                                 |
+| --------------------- | ------- | ------------------------------------------------------------------------------------------- |
+| `--level N`           | auto    | Quality level: `auto` (read tier from harness-config.json), `95`, or `98`                   |
+| `--scope S`           | branch  | Scope: changed, branch, all                                                                 |
+| `--merge`             | false   | Auto-merge PR after quality                                                                 |
+| `--skip-ci`           | false   | Bypass CI checks                                                                            |
+| `--skip-rebase`       | false   | Skip auto-rebase                                                                            |
+| `--status`            | false   | Show quality history and exit                                                               |
+| `--verbose`           | false   | Show trends with `--status`                                                                 |
+| `--audit`             | false   | Read-only assessment                                                                        |
+| `--deep`              | false   | 6-agent deep review (with `--audit`)                                                        |
+| `--dry-run`           | false   | Preview without modifying                                                                   |
+| `--fix`               | false   | Auto-fix common issues (with `--audit`)                                                     |
+| `--json`              | false   | Machine-readable output                                                                     |
+| `--coverage-diff`     | false   | Show per-file coverage changes                                                              |
+| `--skip-docs`         | false   | Skip doc sync check                                                                         |
+| `--teams`             | false   | Use agent teams (tmux visibility)                                                           |
+| `--no-teams`          | -       | Force Task subagents (default)                                                              |
+| `--skip-tests`        | false   | Skip hard test gate (config-only repos)                                                     |
+| `--preflight`         | false   | Quick readiness check (<10 sec)                                                             |
+| `--target-dir <path>` | -       | Run against this repo (use when invoking from a forked/agent context with no inherited cwd) |
 
 ### Environment Variables
 
 | Variable                      | Default | Description                                                                                        |
 | ----------------------------- | ------- | -------------------------------------------------------------------------------------------------- |
-| `CODEX_TIMEOUT`               | 120     | Seconds to wait for Codex cross-review (0=skip)                                                    |
+| `BS_QUALITY_PRIMARY`          | config  | Per-run primary override: `claude` or `codex`.                                                     |
+| `BS_QUALITY_FALLBACK`         | config  | Per-run fallback override: `claude`, `codex`, or `none`.                                           |
+| `BS_QUALITY_REVIEW_TIMEOUT`   | tier    | Override the mechanically selected provider wall-clock cap.                                        |
 | `BS_QUALITY_TARGET_DIR`       | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd. |
 | `BS_QUALITY_MAX_FIX_COMMITS`  | 4       | Run-governor cap: max fix commits across the whole invocation before autonomous halt (see below).  |
 | `BS_QUALITY_MAX_WALL_SECONDS` | 1800    | Run-governor cap: max wall-clock seconds across the whole invocation before autonomous halt.       |
@@ -239,9 +252,9 @@ scanned the agent's cwd" failure mode.
 
 When `--merge` is used and the quality pipeline ran in the same invocation
 (Step 1.8 completed), the merge gate (Step 4) auto-stamps a
-`Reviewed-By: claude-quality` trailer via an empty commit if no existing
-commit on the branch carries one. This makes the gate consistent regardless
-of whether the fix commits happened to include the trailer.
+provider-neutral `Reviewed-By: quality` plus provider-specific trailers via
+an empty commit when HEAD is unstamped. The neutral trailer binds the reviewed
+HEAD and merge-base SHAs; later commits invalidate it.
 
 If the pipeline did NOT run in this invocation (e.g. operator passed
 `--merge` alone with no prior quality work), the gate hard-blocks instead
@@ -275,14 +288,14 @@ of auto-stamping — auto-stamping then would be forging review evidence.
 
 ### Level auto (Default — tier-aware)
 
-When `harness-config.json` exists in the repo root, the skill reads the resolved risk tier from `scripts/risk-policy-gate.js` and routes agents + Codex per tier:
+When `harness-config.json` exists in the repo root, the skill reads the resolved risk tier and mechanically selects provider-equivalent depth:
 
-| Tier       | Claude agents                                 | Codex role          | Time cap |
-| ---------- | --------------------------------------------- | ------------------- | -------- |
-| `low`      | 2 (code-reviewer + silent-failure-hunter)     | skip                | ≤2 min   |
-| `medium`   | 4 (+ type-design-analyzer + security-auditor) | judge findings      | ≤8 min   |
-| `high`     | 6 (full L95)                                  | judge + adversarial | ≤25 min  |
-| `critical` | 6 + existing `break-glass-approval` check     | judge + adversarial | ≤25 min  |
+| Tier       | Provider-equivalent depth  | Time cap |
+| ---------- | -------------------------- | -------- |
+| `low`      | focused regression         | ≤2 min   |
+| `medium`   | broad correctness/security | ≤8 min   |
+| `high`     | deep adversarial           | ≤15 min  |
+| `critical` | release-veto + break-glass | ≤15 min  |
 
 If no `harness-config.json` is present, `--level auto` falls back to L95.
 
@@ -299,39 +312,33 @@ If no `harness-config.json` is present, `--level auto` falls back to L95.
 - Requires at least `--scope branch` (not compatible with changed)
 - For production launches, customer-facing features
 
-## Codex Invocation
+## Provider Invocation
 
-The canonical CLI is the codex-companion plugin (NOT `codex:rescue` — rescue is for hand-offs, review must be bounded):
+Codex uses `codex exec` directly with a structured output schema and the
+scorer-selected `model_reasoning_effort`; this avoids ambient-effort drift.
+`quality-run-bounded.sh` places it in a process group and enforces the tier cap:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" \
-  adversarial-review --wait --base <resolved-base> --scope branch [focus text]
+codex exec --ephemeral -s read-only \
+  -c 'model_reasoning_effort="high"' --output-schema <schema> -
 ```
 
-Flags:
-
-- `--codex-effort high` (default) | `medium` | `xhigh`
-- `--no-codex` — skip entirely
-- `--codex-skip "<reason>"` — skip on this run only; non-empty reason required; at `high`/`critical` writes a `Quality-Skip` trailer with full HEAD + base SHAs (verified at merge time)
-
-Wait/background:
-
-- `medium` tier (judge): `--wait` (foreground)
-- `high` / `critical` tier (judge + adversarial): `--background` then poll via companion `status` / `result`
-
-The `--base` arg uses the resolved base from `risk-policy-gate.js` (origin/main → origin/master → main → master), NOT hardcoded `main`.
+The `--base` arg is the branch base on the first round and the last successfully
+reviewed SHA on later rounds. Claude uses the same tier timeout around each
+parallel reviewer and cancels sibling process groups on account exhaustion.
 
 ## Trailer Convention
 
 ```
-Reviewed-By: claude-quality (tier=high, agents=6, findings=0)
-Reviewed-By: codex (tier=high, mode=judge+adversarial, status=pass, findings=0)
+Reviewed-By: quality (tier=high, reviewer=codex, primary=codex, fallback=claude, findings=0, head=<SHA>, base=<SHA>)
+Reviewed-By: codex (tier=high, findings=0, head=<SHA>, base=<SHA>)
 ```
 
-- `Reviewed-By: claude-quality` is always written (preserves CI grep in `harness-gate.yml`)
-- `Reviewed-By: codex` is added only when Codex actually ran (medium+ tiers, not skipped)
-- `Quality-Skip: codex-judge (reason="..."; head=<SHA>; base=<SHA>)` — required at `high`/`critical` when `--codex-skip` is used. Trailer SHAs are verified against current HEAD + merge-base before merge — stale trailers cannot authorize a new merge.
-- `.claude/quality-skip-log.json` is **telemetry only** — never authoritative for whether a skip was authorized.
+- `Reviewed-By: quality` is the provider-neutral authorization record.
+- The provider-specific trailer records which reviewer actually completed; it
+  can differ from `primary` when fallback was required.
+- `head` must equal HEAD or HEAD~1 (a dedicated stamp commit), and `base` must
+  equal the current merge-base. Any later code commit invalidates the stamp.
 
 ## Deep Review Mode (`--audit --deep`)
 
@@ -470,15 +477,9 @@ incrementing `rounds_used` and exiting non-zero at `max_review_rounds`
 (default 2). Before that fix, the round cap was a sentence of prose — and
 since the MODEL orchestrates this loop, prose is not a cap.
 
-A further 2026-07-03 finding refined the Codex poll loop specifically: the
-wall-clock governor check only ran _before_ launching a Codex round, not
-_during_ the up-to-25-minute poll for that round to finish. A run that
-tripped its wall-clock cap 1 second into a poll could still wait out the
-full poll deadline (~25 min) before the next check — meaning the advertised
-30-minute wall-clock cap was only a pre-flight check, not a hard cap, and a
-run could reach ~55 minutes total. The mid-poll recheck in
-`quality-codex-review.sh` (checked every 15s inside the poll loop, not just
-before it starts) closes that gap.
+A further 2026-07-15 finding showed a foreground Codex review could outlive the
+governor entirely. `quality-run-bounded.sh` now owns a hard tier deadline and
+kills the provider process group before a typed timeout can trigger fallback.
 
 **Never make the governor check silently optional.** Every call site fails
 CLOSED when the governor script or its sentinel file is missing or

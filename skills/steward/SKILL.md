@@ -81,7 +81,7 @@ STATE_FILE="$HOME/Projects/claude-kit/data/steward-state.json"
    a. Create a feature branch: `steward/fix-<module>-<date>`
    b. Apply the fix (generate missing docs, add test stubs)
    c. Commit with conventional format: `docs: update stale README for <repo>` or `test: add coverage for <file>`
-   d. **Run `/bs:quality --merge` on the branch** before opening the PR. This stamps the `Reviewed-By: claude-quality` trailer (and `Reviewed-By: codex` if `risk-policy-gate.js` classifies the diff as high/critical), so the harness gate sees verifiable evidence and the merge is autonomous. Same pattern as ralph and triage.
+   d. **Run `/bs:quality --merge` on the branch** before opening the PR. This stamps SHA-bound `Reviewed-By: quality` and actual-provider trailers, so the harness gate sees verifiable evidence and the merge is autonomous. Same pattern as ralph and triage.
    e. The skill will open the PR + auto-merge if green; steward does not need to call `gh pr create` separately when quality runs in `--merge` mode.
 3. Max 3 PRs per run. One concern per branch.
 4. Update state: increment `pr_count_today`, set `last_pr_date`

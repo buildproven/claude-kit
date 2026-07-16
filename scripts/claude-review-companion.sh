@@ -27,6 +27,7 @@
 #   0  every agent produced a findings file (some may be INCONCLUSIVE)
 #   1  bad args / no agents resolved / OUT_DIR unwritable
 #   2  the `claude` CLI is unavailable (caller must fail LOUD, never skip review)
+#   75 Claude account quota/rate limit exhausted (safe to invoke fallback)
 #
 # Design invariants (each maps to a staff-engineer review finding):
 #   - MODEL: never pin a *[1m] model. Inherit by default (omit --model). Only
@@ -83,6 +84,9 @@ if [ "$DRY_RUN" != true ] && ! command -v claude >/dev/null 2>&1; then
 fi
 
 mkdir -p "$OUT_DIR" 2>/dev/null || { echo "claude-review-companion: cannot create OUT_DIR $OUT_DIR" >&2; exit 1; }
+CANCEL_FILE="$OUT_DIR/provider-cancel"
+EXHAUSTED_FILE="$OUT_DIR/provider-exhausted"
+rm -f "$CANCEL_FILE" "$EXHAUSTED_FILE"
 
 # --- MODEL guard: never pin a [1m] variant (Extra Usage billing gate) --------
 MODEL_ARGS=()
@@ -157,10 +161,14 @@ run_with_timeout() {
   set +m
 
   (
-    sleep "$secs"
+    waited=0
+    while [ "$waited" -lt "$secs" ] && [ ! -f "$CANCEL_FILE" ]; do
+      sleep 1
+      waited=$((waited + 1))
+    done
     # Negative PID = the whole process group, so claude's children die too.
     kill -TERM "-${child_pid}" 2>/dev/null || kill -TERM "$child_pid" 2>/dev/null
-    sleep 5
+    sleep 1
     kill -KILL "-${child_pid}" 2>/dev/null || kill -KILL "$child_pid" 2>/dev/null
   ) &
   watchdog_pid=$!
@@ -175,8 +183,9 @@ run_with_timeout() {
 # Writes the agent's .result (final answer) to $OUT_DIR/<agent>.md, or an
 # INCONCLUSIVE marker.
 run_agent() {
-  local agent="$1" sysfile out raw result rc
+  local agent="$1" sysfile out raw result rc stderr_file error_text reset_detail
   out="$OUT_DIR/${agent##*:}.findings.txt"
+  stderr_file="$OUT_DIR/${agent##*:}.stderr"
   if ! sysfile="$(resolve_agent_file "$agent")"; then
     echo "claude-review-companion: agent file for '$agent' not found (kit agents/ or pr-review-toolkit)" >&2
     echo "INCONCLUSIVE: agent definition '$agent' could not be resolved — human review required" > "$out"
@@ -208,8 +217,22 @@ run_agent() {
           --permission-mode bypassPermissions \
           --allowedTools "Read,Grep,Glob" \
           ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} \
-          --output-format json 2>>"$OUT_DIR/${agent##*:}.stderr" )"
+          --output-format json 2>>"$stderr_file" )"
   rc=$?
+
+  error_text="$(printf '%s\n' "$raw"; cat "$stderr_file" 2>/dev/null)"
+  if printf '%s\n' "$error_text" | grep -Eiq '(^|[^0-9])429([^0-9]|$)|weekly (usage )?limit|usage limit|rate.?limit|quota (exceeded|exhausted)|too many requests'; then
+    reset_detail="$(printf '%s\n' "$error_text" | grep -Ei 'reset|429|weekly (usage )?limit|usage limit|rate.?limit|quota' | head -1 | tr '\n' ' ')"
+    printf 'Claude provider exhausted%s\n' "${reset_detail:+: $reset_detail}" > "$EXHAUSTED_FILE"
+    : > "$CANCEL_FILE"
+    echo "INCONCLUSIVE: Claude provider exhausted${reset_detail:+ — $reset_detail}" > "$out"
+    return 75
+  fi
+
+  if [ -f "$CANCEL_FILE" ]; then
+    echo "INCONCLUSIVE: agent '$agent' cancelled because a sibling reported provider exhaustion" > "$out"
+    return 78
+  fi
 
   if [ $rc -ne 0 ] || [ -z "$raw" ]; then
     echo "INCONCLUSIVE: agent '$agent' timed out or errored (rc=$rc) — human review required" > "$out"
@@ -253,11 +276,22 @@ fi
 # review is degraded — exit 4 so the caller can block the merge rather than
 # treat "N inconclusive files" as a clean pass.
 inconclusive=0
+exhausted=false
 for pid in "${pids[@]}"; do
-  if ! wait "$pid"; then
+  wait "$pid"
+  rc=$?
+  if [ "$rc" -eq 75 ]; then
+    exhausted=true
+  elif [ "$rc" -ne 0 ]; then
     inconclusive=$((inconclusive + 1))
   fi
 done
+
+if [ "$exhausted" = true ] || [ -f "$EXHAUSTED_FILE" ]; then
+  cat "$EXHAUSTED_FILE" >&2 2>/dev/null || true
+  echo "claude-review-companion: cancelled sibling reviewers; fallback may run immediately" >&2
+  exit 75
+fi
 
 echo "claude-review-companion: wrote findings for $resolved agent(s) to $OUT_DIR ($inconclusive inconclusive)" >&2
 if [ "$inconclusive" -ge "$resolved" ]; then

@@ -1,6 +1,6 @@
 # claude-kit
 
-**A Claude Code toolkit whose quality gate reads your diff, scores its risk, and
+**A Claude Code + Codex toolkit whose quality gate reads your diff, scores its risk, and
 scales its own review depth to match.**
 
 A doc typo gets a light pass. A change to `.github/workflows/` pins a security floor
@@ -21,13 +21,13 @@ one substantially modified skill retains its upstream Apache-2.0 license.
 
 ## What's inside
 
-| Dir         | Contents                                                           |
-| ----------- | ------------------------------------------------------------------ |
-| `commands/` | 32 namespaced `/bs:*`, `/gh:*`, and `/cc:*` commands               |
-| `skills/`   | 33 skills — quality, autonomous workflow, strategy, domain         |
-| `agents/`   | 14 specialist agents                                               |
-| `scripts/`  | Hooks, lint, branch-protection, quality governor, review companion |
-| `config/`   | Generic `CLAUDE.md` and `settings.json` templates                  |
+| Dir         | Contents                                                          |
+| ----------- | ----------------------------------------------------------------- |
+| `commands/` | 32 namespaced `/bs:*`, `/gh:*`, and `/cc:*` commands              |
+| `skills/`   | 33 skills — quality, autonomous workflow, strategy, domain        |
+| `agents/`   | 14 specialist agents                                              |
+| `scripts/`  | Hooks, lint, quality governor, provider-neutral review companions |
+| `config/`   | Generic `CLAUDE.md` and `settings.json` templates                 |
 
 ## What this is (and isn't)
 
@@ -57,6 +57,21 @@ strategy panels).
 Some skills also need an MCP server and will tell you so rather than failing
 quietly: `/bs:backlog` and `/bs:dev --next` need **Linear**; `/bs:triage` needs
 **Sentry**.
+
+### Choose the primary reviewer
+
+Quality can run from either Claude Code or Codex. Its reviewer policy is shared
+across both CLIs; the fallback runs only when the primary is unavailable or has
+exhausted its account quota:
+
+```bash
+bash ~/.claude/scripts/quality-provider-config.sh --primary codex --fallback claude
+```
+
+Reverse the two values for Claude-primary, or use `--fallback none`. Claude
+HTTP 429/weekly-limit responses are surfaced immediately and cancel sibling
+reviewers. Fix/re-review rounds inspect only commits added since the previous
+successful review, reducing repeated tokens.
 
 **macOS-only:** the desktop-notification hooks use `osascript`. On Linux/WSL they
 are skipped — everything else works.
@@ -107,7 +122,7 @@ plugin.
 
 ```text
 /bs:dev         Start a feature with complexity-appropriate planning
-/bs:quality     Autonomous quality loop (tier-aware, Codex cross-review, break-glass)
+/bs:quality     Provider-neutral quality loop (tier-aware, quota fallback, break-glass)
 /bs:test        Run tests with auto-detected framework
 /bs:hotfix      Emergency production fix workflow
 /bs:plan        Structured spec before complex work
@@ -176,7 +191,7 @@ Don't reimplement what the platform ships. As of 2.1.210:
 
 Skills auto-invoke from natural language — you don't have to type a command.
 
-**Engineering** — `quality` (tier-aware review + Codex cross-review),
+**Engineering** — `quality` (tier-aware provider review + quota fallback),
 `test-strategy`, `error-handling`, `api-conventions`, `recover`, `cleanup`,
 `scrub`, `deps`, `status`, `workflow`, `healthcheck`
 

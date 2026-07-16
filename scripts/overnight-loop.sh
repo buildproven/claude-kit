@@ -159,7 +159,7 @@ issue_receipt() {
     [ -n "$sha" ] || continue
     body=$(git -C "$TARGET_DIR" show -s --format=%B "$sha") || return 1
     if printf '%s\n' "$body" | grep -Eq "(^|[^A-Za-z0-9-])${issue}([^A-Za-z0-9-]|$)" && \
-       printf '%s\n' "$body" | grep -Eiq '^Reviewed-By: (claude-quality|codex)'; then
+       printf '%s\n' "$body" | grep -Eiq '^Reviewed-By: (quality|claude-quality|codex|claude)( |$)'; then
       matches=$((matches + 1)); receipt="$sha"
     fi
   done < <(git -C "$TARGET_DIR" rev-list "$before..$after")
