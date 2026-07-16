@@ -78,11 +78,7 @@ function atomicWrite(file, value) {
   fs.chmodSync(file, 0o600);
 }
 
-function normalizeManifestCollections(manifest) {
-  manifest.reviews ??= [];
-  manifest.gates ??= [];
-  manifest.merge ??= {};
-  manifest.merge.invalidatedStamps ??= [];
+function normalizeGovernor(manifest) {
   manifest.governor ??= {};
   manifest.governor.authorizedAttempts ??= [];
   manifest.governor.maxProviderAttempts ??= 6;
@@ -91,6 +87,14 @@ function normalizeManifestCollections(manifest) {
     manifest.governor.startedAtEpoch + manifest.governor.providerWindowSeconds;
   manifest.governor.providerDeadlineHead ??= null;
   manifest.governor.providerAttempts ??= [];
+}
+
+function normalizeManifestCollections(manifest) {
+  manifest.reviews ??= [];
+  manifest.gates ??= [];
+  manifest.merge ??= {};
+  manifest.merge.invalidatedStamps ??= [];
+  normalizeGovernor(manifest);
   if (
     manifest.requiredGatesPolicyVersion === undefined ||
     manifest.requiredGatesPolicyVersion === 1
