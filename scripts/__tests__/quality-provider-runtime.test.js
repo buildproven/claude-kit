@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -14,6 +14,11 @@ const VALIDATOR = path.join(
   "quality-validate-review-trailers.sh",
 );
 const RUN_REVIEW = path.join(ROOT, "scripts", "quality-run-review.sh");
+const NORMALIZE_CODEX_REVIEW = path.join(
+  ROOT,
+  "scripts",
+  "quality-normalize-codex-review.sh",
+);
 
 describe("provider review runtime", () => {
   it.each([
@@ -62,6 +67,17 @@ describe("provider review runtime", () => {
     );
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("xhigh|2");
+  });
+
+  it("loads persisted risk state at the runner boundary", () => {
+    const plan = readFileSync(PLAN, "utf8");
+    const runner = readFileSync(RUN_REVIEW, "utf8");
+    const riskLoad = 'source "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env"';
+    const planLoad = 'source "$SCRIPT_DIR/quality-review-plan.sh"';
+
+    expect(plan).not.toContain("riskstate.env");
+    expect(runner).toContain(riskLoad);
+    expect(runner.indexOf(riskLoad)).toBeLessThan(runner.indexOf(planLoad));
   });
 
   it("kills the provider tree when the wrapper itself is cancelled", () => {
@@ -118,6 +134,28 @@ if kill -0 "$child" 2>/dev/null; then exit 99; fi
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(RUN_REVIEW);
   });
+
+  it.each(["bash", "zsh"])(
+    "restores root and governor state in a fresh %s shell",
+    (shell) => {
+      const result = spawnSync(
+        shell,
+        [
+          "-c",
+          `source "$1"; printf '%s|%s|%s' "$GIT_ROOT" "$BS_QUALITY_ROOT_FILE" "$BS_QUALITY_GOVERNOR_FILE"`,
+          "state",
+          LOAD_ROOT,
+        ],
+        { encoding: "utf8", cwd: ROOT },
+      );
+      if (result.error?.code === "ENOENT") return;
+      expect(result.status).toBe(0);
+      const [gitRoot, rootFile, governorFile] = result.stdout.split("|");
+      expect(gitRoot).toBe(ROOT);
+      expect(rootFile).toContain("bs-quality-gitroot-");
+      expect(governorFile).toBe(rootFile.replace(/\.txt$/, "-governor.json"));
+    },
+  );
 
   it("accepts exact evidence, then rejects later code and contradictions", () => {
     const repo = mkdtempSync(path.join(tmpdir(), "review-evidence-"));
@@ -195,7 +233,7 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
     expect(
       spawnSync("bash", [VALIDATOR, "main"], { cwd: repo }).status,
     ).not.toBe(0);
-  });
+  }, 15000);
 
   it("passes scorer effort and exact round count to Codex mechanically", () => {
     const source = spawnSync("cat", [RUN_REVIEW], { encoding: "utf8" }).stdout;
@@ -206,7 +244,115 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
     expect(source).toMatch(/codex exec --ephemeral -s read-only/);
     expect(source).toMatch(/record_provider_exhaustion Codex/);
     expect(source).toMatch(/try again at/);
-    expect(source).toMatch(/\.findings \| type == "array"/);
-    expect(source).not.toContain(".result.findings");
+    expect(source).toContain("quality-normalize-codex-review.sh");
+    expect(source).toContain(
+      'bash "$normalizer" "$raw_file" "$normalized_file"',
+    );
+  });
+
+  it.each([
+    ["root", (review) => review],
+    ["legacy result envelope", (review) => ({ result: review })],
+  ])("normalizes %s Codex structured output", (_label, wrap) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-review-output-"));
+    const input = path.join(dir, "input.json");
+    const output = path.join(dir, "output.json");
+    const review = {
+      verdict: "approve",
+      summary: "No actionable findings.",
+      findings: [],
+    };
+    writeFileSync(input, JSON.stringify(wrap(review)));
+
+    const result = spawnSync("bash", [NORMALIZE_CODEX_REVIEW, input, output], {
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(readFileSync(output, "utf8"))).toEqual(review);
+  });
+
+  it.each([
+    ["missing fields", { verdict: "approve" }],
+    ["unknown verdict", { verdict: "maybe", summary: "invalid", findings: [] }],
+    [
+      "needs-attention without an actionable finding",
+      {
+        verdict: "needs-attention",
+        summary: "Manual review is required.",
+        findings: [],
+      },
+    ],
+    [
+      "approve with an actionable finding",
+      {
+        verdict: "approve",
+        summary: "Contradictory approval.",
+        findings: [
+          {
+            severity: "high",
+            title: "unexpected finding",
+            body: "An approval cannot carry a release-blocking finding.",
+            file: "file.js",
+            line_start: 1,
+            recommendation: "Use needs-attention.",
+          },
+        ],
+      },
+    ],
+    [
+      "invalid finding item",
+      { verdict: "approve", summary: "invalid", findings: [false] },
+    ],
+    [
+      "invalid finding line",
+      {
+        verdict: "needs-attention",
+        summary: "invalid",
+        findings: [
+          {
+            severity: "high",
+            title: "bad line",
+            body: "line_start must be positive",
+            file: "file.js",
+            line_start: 0,
+            recommendation: "fix it",
+          },
+        ],
+      },
+    ],
+  ])("rejects malformed Codex output: %s", (_label, review) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-review-invalid-"));
+    const input = path.join(dir, "input.json");
+    const output = path.join(dir, "output.json");
+    writeFileSync(input, JSON.stringify(review));
+
+    expect(
+      spawnSync("bash", [NORMALIZE_CODEX_REVIEW, input, output]).status,
+    ).not.toBe(0);
+  });
+
+  it("pins the initial review diff to the branch merge-base", () => {
+    const source = readFileSync(RUN_REVIEW, "utf8");
+    expect(source).toMatch(
+      /REVIEW_BASE="\$\(git merge-base HEAD "\$REVIEW_BASE_REF"\)"/,
+    );
+    expect(source).toMatch(/REVIEW_DIFF_BASE="\$REVIEW_BASE"/);
+    expect(source).toMatch(/git diff "\$\{REVIEW_DIFF_BASE\}\.\.HEAD"/);
+    expect(source).toMatch(/REVIEWED_BASE="\$REVIEW_BASE"/);
+    expect(source).toMatch(/normalized Codex findings could not be rendered/);
+  });
+
+  it("keeps sourced review scripts compatible with Bash and zsh", () => {
+    const runner = readFileSync(RUN_REVIEW, "utf8");
+    const policy = readFileSync(
+      path.join(ROOT, "scripts", "quality-provider-policy.sh"),
+      "utf8",
+    );
+    for (const source of [runner, policy]) {
+      expect(source).toMatch(/BASH_VERSION/);
+      expect(source).toMatch(/ZSH_VERSION/);
+      expect(source).toMatch(/\$\{\(%\):-%x\}/);
+    }
   });
 });

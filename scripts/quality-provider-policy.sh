@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # Quality compatibility adapter over the shared workflow provider policy.
 
-_quality_policy_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+if [ -n "${BASH_VERSION:-}" ]; then
+  _quality_policy_path="${BASH_SOURCE[0]}"
+elif [ -n "${ZSH_VERSION:-}" ]; then
+  _quality_policy_path="${(%):-%x}"
+else
+  _quality_policy_path="$0"
+fi
+_quality_policy_dir=$(cd "$(dirname "$_quality_policy_path")" && pwd)
 # shellcheck source=provider-policy.sh
 source "$_quality_policy_dir/provider-policy.sh"
 
