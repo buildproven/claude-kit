@@ -268,8 +268,12 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
     expect(source).toContain(
       'bash "$bounded" --timeout "$QUALITY_REVIEW_TIMEOUT" -- codex exec',
     );
-    expect(source).toMatch(/2>"\$error_file" &\n\s+pids\+=\("\$!"\)/);
-    expect(source).toContain('wait "${pids[$((pass - 1))]}"');
+    expect(source).toMatch(
+      /2>"\$error_file" &\n\s+printf '%s\\n' "\$!" >> "\$pid_file"/,
+    );
+    expect(source).toContain("while IFS= read -r pid; do");
+    expect(source).toContain('wait "$pid"');
+    expect(source).not.toContain("local pids=()");
     expect(source).not.toContain(
       "pass_timeout=$((QUALITY_REVIEW_TIMEOUT / QUALITY_REVIEW_PASSES))",
     );

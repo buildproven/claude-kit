@@ -89,8 +89,7 @@ run_claude_review() {
 }
 
 run_codex_review() {
-  local bounded normalizer schema prompt_file raw_file normalized_file error_file rc pass overall_rc
-  local pids=()
+  local bounded normalizer schema prompt_file raw_file normalized_file error_file rc pass overall_rc pid pid_file
   bounded="$(bs_quality_find_script quality-run-bounded.sh)" || return 2
   normalizer="$(bs_quality_find_script quality-normalize-codex-review.sh)" || return 2
   schema="$SCRIPT_DIR/schemas/quality-review-output.schema.json"
@@ -99,6 +98,8 @@ run_codex_review() {
   codex login status 2>&1 | grep -q 'Logged in' || return 2
 
   : > "$REVIEW_OUT/codex.findings.txt"
+  pid_file="$REVIEW_OUT/codex.pids"
+  : > "$pid_file"
 
   # Independent passes share the tier's wall-clock budget, so run them
   # concurrently. Dividing the budget across sequential xhigh passes made a
@@ -119,14 +120,14 @@ run_codex_review() {
       -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
       --output-schema "$schema" -o "$raw_file" - \
       < "$prompt_file" > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file" &
-    pids+=("$!")
+    printf '%s\n' "$!" >> "$pid_file"
     pass=$((pass + 1))
   done
 
   overall_rc=0
   pass=1
-  while [ "$pass" -le "$QUALITY_REVIEW_PASSES" ]; do
-    wait "${pids[$((pass - 1))]}"
+  while IFS= read -r pid; do
+    wait "$pid"
     rc=$?
     if [ "$rc" -ne 0 ]; then
       # The bounded runner's timeout is authoritative. Codex echoes the full
@@ -150,7 +151,7 @@ run_codex_review() {
       fi
     fi
     pass=$((pass + 1))
-  done
+  done < "$pid_file"
   [ "$overall_rc" -ne 0 ] && return "$overall_rc"
 
   pass=1
