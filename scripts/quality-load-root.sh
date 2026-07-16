@@ -39,15 +39,40 @@ bs_quality_root_file() {
   printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
 }
 
+bs_quality_campaign_file() {
+  # $1 = resolved git root; $2 = branch/ref identity.
+  # Campaign state must outlive a Claude/Codex session and a branch rebase, so
+  # key it by the clone's common git directory plus branch rather than by the
+  # session-scoped root sentinel or starting commit.
+  local root="$1" branch="$2" common_raw common_dir identity key
+  common_dir="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+  if [ -z "$common_dir" ]; then
+    common_raw="$(git -C "$root" rev-parse --git-common-dir 2>/dev/null)"
+    case "$common_raw" in
+      /*) common_dir="$(cd "$common_raw" 2>/dev/null && pwd -P)" ;;
+      *) common_dir="$(cd "$root/$common_raw" 2>/dev/null && pwd -P)" ;;
+    esac
+  fi
+  [ -n "$common_dir" ] || common_dir="$root"
+  identity="${common_dir}"$'\n'"${branch}"
+  if command -v sha256sum >/dev/null 2>&1; then
+    key=$(printf '%s' "$identity" | sha256sum | cut -c1-20)
+  elif command -v shasum >/dev/null 2>&1; then
+    key=$(printf '%s' "$identity" | shasum -a 256 | cut -c1-20)
+  else
+    key=$(printf '%s' "$identity" | cksum | tr -d ' ' | cut -c1-20)
+  fi
+  printf '%s/bs-quality-campaign-%s.json' "${TMPDIR:-/tmp}" "$key"
+}
+
 BS_QUALITY_SESSION_ID="${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-default}}"
 BS_QUALITY_SESSION_ID="$(printf '%s' "$BS_QUALITY_SESSION_ID" | tr -cd '[:alnum:]_.-' | cut -c1-80)"
 [ -n "$BS_QUALITY_SESSION_ID" ] || BS_QUALITY_SESSION_ID=default
 export BS_QUALITY_SESSION_ID
 
-BS_QUALITY_RUNTIME_ROOT="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
-export BS_QUALITY_RUNTIME_ROOT
-
-# bs_quality_find_script — resolve a kit script across EVERY install layout.
+# bs_quality_find_script — resolve a trusted kit script across every install
+# layout. Target-local scripts come last unless an operator explicitly enables
+# BS_QUALITY_TRUST_TARGET_SCRIPTS for toolkit self-development.
 #
 # Why this exists (2026-07-10): the review runner was resolved by checking
 # exactly two hardcoded paths. On the primary install both missed —
@@ -61,15 +86,24 @@ export BS_QUALITY_RUNTIME_ROOT
 # the caller owns the error message.
 bs_quality_find_script() {
   local name="$1" c
-  for c in \
-    "$BS_QUALITY_RUNTIME_ROOT/scripts/$name" \
+  local trusted_candidates=(
+    "${CLAUDE_SETUP_ROOT:+$CLAUDE_SETUP_ROOT/scripts/$name}" \
     "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$name}" \
     "${CLAUDE_KIT_ROOT:+$CLAUDE_KIT_ROOT/scripts/$name}" \
-    "$([ "${BS_QUALITY_USE_TARGET_SCRIPTS:-}" = true ] && printf '%s' "$GIT_ROOT/scripts/$name")" \
-    "$([ "${BS_QUALITY_USE_TARGET_SCRIPTS:-}" = true ] && printf '%s' "$GIT_ROOT/core/scripts/$name")" \
     "$HOME/.claude/scripts/$name" \
     "$HOME/.claude/plugins/bs/scripts/$name"
-  do
+  )
+  local target_candidates=(
+    "$GIT_ROOT/scripts/$name"
+    "$GIT_ROOT/core/scripts/$name"
+  )
+  if [ "${BS_QUALITY_TRUST_TARGET_SCRIPTS:-false}" = true ]; then
+    for c in "${target_candidates[@]}" "${trusted_candidates[@]}"; do
+      [ -n "$c" ] && [ -f "$c" ] && { printf '%s' "$c"; return 0; }
+    done
+    return 1
+  fi
+  for c in "${trusted_candidates[@]}"; do
     [ -n "$c" ] && [ -f "$c" ] && { printf '%s' "$c"; return 0; }
   done
   return 1
@@ -100,5 +134,7 @@ fi
 # here because each tool call starts a fresh shell; bootstrap's child-process
 # exports cannot survive into the next call.
 BS_QUALITY_ROOT_FILE="$(bs_quality_root_file "$GIT_ROOT")"
-BS_QUALITY_GOVERNOR_FILE="${BS_QUALITY_ROOT_FILE%.txt}-governor.json"
+BS_QUALITY_CAMPAIGN_BRANCH="$(git branch --show-current 2>/dev/null)"
+[ -n "$BS_QUALITY_CAMPAIGN_BRANCH" ] || BS_QUALITY_CAMPAIGN_BRANCH="DETACHED:$(git rev-parse HEAD 2>/dev/null)"
+BS_QUALITY_GOVERNOR_FILE="$(bs_quality_campaign_file "$GIT_ROOT" "$BS_QUALITY_CAMPAIGN_BRANCH")"
 export BS_QUALITY_ROOT_FILE BS_QUALITY_GOVERNOR_FILE

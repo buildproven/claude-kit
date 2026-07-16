@@ -3,15 +3,28 @@ const {
   classifyChangeNature,
   scoreToKnobs,
   matchesPattern,
-  fileIsMechanical,
   isForcedLogic,
   deepMerge,
+  manifestRisk,
   DEFAULTS,
 } = require("../risk-score");
 
 // Helper: build a descriptor.
 function d(file, status = "M", patch = "", lines = 10, isBinary = false) {
   return { file, status, isBinary, lines, patch };
+}
+
+function manifest(before, after, status = "M", file = "package.json") {
+  return {
+    ...d(file, status, "+ manifest", 1),
+    manifest: {
+      before: {
+        ok: true,
+        value: before === null ? null : JSON.stringify(before),
+      },
+      after: { ok: true, value: after === null ? null : JSON.stringify(after) },
+    },
+  };
 }
 
 // Helper: full score from a descriptor list (computes diffStats from lines).
@@ -127,9 +140,147 @@ describe("computeScore — security floor never beaten by mechanical", () => {
     const r = scoreOf([d(".github/workflows/quality.yml", "M", "+# note", 1)]);
     expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
   });
-  it("package.json touch pins the floor", () => {
-    const r = scoreOf([d("package.json", "M", '+  "x": "1",', 1)]);
+});
+
+describe("computeScore — package manifests use semantic field risk", () => {
+  it("metadata-only edits stay low", () => {
+    const r = scoreOf([
+      manifest({ description: "before" }, { description: "after" }),
+    ]);
+    expect(r.riskScore).toBeLessThanOrEqual(20);
+  });
+
+  it("dev tooling and engines are medium", () => {
+    for (const descriptor of [
+      manifest({ devDependencies: {} }, { devDependencies: { vitest: "^4" } }),
+      manifest({ engines: { node: "22" } }, { engines: { node: "24" } }),
+    ]) {
+      const r = scoreOf([descriptor]);
+      expect(r.riskScore).toBeGreaterThan(20);
+      expect(r.riskScore).toBeLessThan(50);
+    }
+  });
+
+  it.each([
+    [
+      "runtime dependencies",
+      { dependencies: {} },
+      { dependencies: { zod: "^4" } },
+    ],
+    ["exports", {}, { exports: { ".": "./index.js" } }],
+    ["bin", {}, { bin: { tool: "./cli.js" } }],
+    ["workspaces", {}, { workspaces: ["packages/*"] }],
+  ])("%s are high but not critical", (_label, before, after) => {
+    const r = scoreOf([manifest(before, after)]);
+    expect(r.riskScore).toBeGreaterThanOrEqual(50);
+    expect(r.riskScore).toBeLessThan(DEFAULTS.base.securityFloor);
+  });
+
+  it.each([
+    [
+      "install lifecycle",
+      { scripts: {} },
+      { scripts: { postinstall: "node install.js" } },
+    ],
+    [
+      "remote dependency",
+      { dependencies: {} },
+      { dependencies: { pkg: "git+https://example.com/pkg.git" } },
+    ],
+    [
+      "GitHub shorthand dependency",
+      { dependencies: {} },
+      { dependencies: { pkg: "attacker/repo" } },
+    ],
+    [
+      "SCP-style Git dependency",
+      { dependencies: {} },
+      { dependencies: { pkg: "git@github.com:attacker/repo.git" } },
+    ],
+    [
+      "unprefixed local dependency",
+      { dependencies: {} },
+      { dependencies: { pkg: "../pkg" } },
+    ],
+    [
+      "bare tgz dependency",
+      { dependencies: {} },
+      { dependencies: { pkg: "pkg.tgz" } },
+    ],
+    [
+      "bare tar.gz dependency",
+      { dependencies: {} },
+      { dependencies: { pkg: "package.tar.gz" } },
+    ],
+    ["overrides", {}, { overrides: { pkg: "1.0.0" } }],
+    ["resolutions", {}, { resolutions: { pkg: "1.0.0" } }],
+  ])("%s changes are critical", (_label, before, after) => {
+    const r = scoreOf([manifest(before, after)]);
     expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
+  });
+
+  it.each([
+    "^1.2.3",
+    "latest",
+    "npm:real-pkg",
+    "npm:@scope/real-pkg",
+    "npm:real-pkg@^2",
+    "workspace:*",
+  ])("registry dependency form %s stays high rather than critical", (spec) => {
+    const r = scoreOf([
+      manifest({ dependencies: {} }, { dependencies: { pkg: spec } }),
+    ]);
+    expect(r.riskScore).toBe(DEFAULTS.base.high);
+  });
+
+  it("mixed fields take the highest risk", () => {
+    const r = scoreOf([
+      manifest(
+        { description: "before", dependencies: {} },
+        { description: "after", dependencies: { zod: "^4" } },
+      ),
+    ]);
+    expect(r.riskScore).toBeGreaterThanOrEqual(50);
+  });
+
+  it("nested workspace manifests are classified", () => {
+    const r = scoreOf([
+      manifest(
+        { dependencies: {} },
+        { dependencies: { zod: "^4" } },
+        "M",
+        "packages/app/package.json",
+      ),
+    ]);
+    expect(r.riskScore).toBeGreaterThanOrEqual(50);
+  });
+
+  it.each(["A", "D", "R", "C", "T"])(
+    "%s manifest changes fail critical",
+    (status) => {
+      const r = scoreOf([manifest({}, {}, status)]);
+      expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
+    },
+  );
+
+  it("unreadable or invalid snapshots fail critical", () => {
+    for (const descriptor of [
+      {
+        ...manifest({}, {}),
+        manifest: { before: { ok: false }, after: { ok: true, value: "{}" } },
+      },
+      {
+        ...manifest({}, {}),
+        manifest: {
+          before: { ok: true, value: "{" },
+          after: { ok: true, value: "{}" },
+        },
+      },
+    ]) {
+      expect(scoreOf([descriptor]).riskScore).toBeGreaterThanOrEqual(
+        DEFAULTS.base.securityFloor,
+      );
+    }
   });
 });
 
@@ -178,11 +329,11 @@ describe("scoreToKnobs — Moderate curve", () => {
       codexRounds: 1,
     });
   });
-  it("score 90 → 6 agents, codex xhigh x2", () => {
+  it("score 90 → 6 agents, one xhigh discovery pass", () => {
     expect(scoreToKnobs(90, DEFAULTS)).toEqual({
       agents: 6,
       codex: "xhigh",
-      codexRounds: 2,
+      codexRounds: 1,
     });
   });
   it("codexForceFloor: a ≥75 score never has codex skip", () => {
@@ -218,9 +369,14 @@ describe("isForcedLogic / fileIsMechanical", () => {
   it("rename is forced logic", () => {
     expect(isForcedLogic("lib/a.js", "R", false)).toBe(true);
   });
-  it("floor file is never mechanical", () => {
+  it("manifest risk classifies non-registry sources from values", () => {
     expect(
-      fileIsMechanical("package.json", "M", "+// note", DEFAULTS.securityFloor),
-    ).toBe(false);
+      manifestRisk(
+        manifest(
+          { devDependencies: {} },
+          { devDependencies: { tool: "file:../tool" } },
+        ),
+      ).score,
+    ).toBe(DEFAULTS.base.securityFloor);
   });
 });

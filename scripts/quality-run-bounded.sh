@@ -2,7 +2,30 @@
 # Run one provider command in its own process group with a hard wall-clock cap.
 set -u
 TIMEOUT=""
-if [ "${1:-}" = --timeout ]; then TIMEOUT="$2"; shift 2; fi
+GOVERNOR_FILE=""
+CAP=""
+RESERVE=0
+while [ "$#" -gt 0 ]; do
+  case "${1:-}" in
+    --timeout) TIMEOUT="$2"; shift 2 ;;
+    --governor) GOVERNOR_FILE="$2"; shift 2 ;;
+    --cap) CAP="$2"; shift 2 ;;
+    --reserve) RESERVE="$2"; shift 2 ;;
+    --) break ;;
+    *) break ;;
+  esac
+done
+if [ -n "$GOVERNOR_FILE" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  GOVERNOR="$SCRIPT_DIR/quality-run-governor.js"
+  [ -f "$GOVERNOR" ] || {
+    echo "quality-run-bounded: governor script missing" >&2
+    exit 1
+  }
+  EFFECTIVE_CAP="${CAP:-${TIMEOUT:-2147483647}}"
+  TIMEOUT="$(node "$GOVERNOR" remaining "$GOVERNOR_FILE" \
+    --reserve "$RESERVE" --cap "$EFFECTIVE_CAP")" || exit 124
+fi
 [ -n "$TIMEOUT" ] && [ "${1:-}" = -- ] || { echo "usage: quality-run-bounded.sh --timeout <seconds> -- <command>" >&2; exit 1; }
 shift
 MARKER="$(mktemp "${TMPDIR:-/tmp}/quality-timeout.XXXXXX")"

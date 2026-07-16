@@ -112,6 +112,7 @@ describe("detectRepeatedPattern", () => {
 describe("evaluateBudget", () => {
   const baseState = {
     start_epoch: 1000,
+    deadline_epoch: 2800,
     start_commit_count: 5,
     max_fix_commits: 4,
     max_wall_seconds: 1800,
@@ -183,6 +184,7 @@ describe("evaluateBudget", () => {
   // start_commit_count. This is what makes the count rebase/checkout-immune.
   const shaState = {
     start_epoch: 1000,
+    deadline_epoch: 2800,
     start_commit_sha: "abc1234",
     start_commit_count: 999999, // deliberately absurd: must be IGNORED with a SHA
     max_fix_commits: 4,

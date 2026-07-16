@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 
 const { score, loadConfig, deepMerge, DEFAULTS } = require("../risk-score");
 
@@ -121,5 +122,44 @@ describe("score — the end-to-end entry point", () => {
     const out = score({ gitRunner: gitRunner([]), config: DEFAULTS });
     expect(out).toHaveProperty("riskScore");
     expect(out).toHaveProperty("knobs");
+  });
+
+  it("loads base and HEAD manifests before assigning semantic risk", () => {
+    const dir = repoWith(null);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+    execFileSync("git", ["config", "user.name", "test"], { cwd: dir });
+    execFileSync("git", ["config", "user.email", "test@example.com"], {
+      cwd: dir,
+    });
+    fs.writeFileSync(
+      path.join(dir, "package.json"),
+      JSON.stringify({ description: "before" }),
+    );
+    execFileSync("git", ["add", "package.json"], { cwd: dir });
+    execFileSync("git", ["commit", "-q", "-m", "base"], { cwd: dir });
+    execFileSync("git", ["switch", "-q", "-c", "feature"], { cwd: dir });
+    fs.writeFileSync(
+      path.join(dir, "package.json"),
+      JSON.stringify({ description: "after" }),
+    );
+    execFileSync("git", ["commit", "-qam", "metadata"], { cwd: dir });
+
+    const runGit = (args) =>
+      execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
+    expect(
+      score({ base: "main", gitRunner: runGit, config: DEFAULTS }).riskScore,
+    ).toBeLessThanOrEqual(20);
+
+    fs.writeFileSync(
+      path.join(dir, "package.json"),
+      JSON.stringify({
+        description: "after",
+        scripts: { postinstall: "node install.js" },
+      }),
+    );
+    execFileSync("git", ["commit", "-qam", "install hook"], { cwd: dir });
+    expect(
+      score({ base: "main", gitRunner: runGit, config: DEFAULTS }).riskScore,
+    ).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
   });
 });
