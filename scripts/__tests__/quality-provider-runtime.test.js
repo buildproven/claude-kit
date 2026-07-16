@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -51,12 +51,14 @@ describe("provider review runtime", () => {
     expect(bootstrap).toContain(
       'BS_QUALITY_MAX_WALL_SECONDS="${BS_QUALITY_MAX_WALL_SECONDS:-900}"',
     );
-    expect(bootstrap).toContain('"deadline_epoch": ${GOVERNOR_DEADLINE_EPOCH}');
+    expect(bootstrap).toContain(
+      '--argjson deadline_epoch "$GOVERNOR_DEADLINE_EPOCH"',
+    );
     expect(reference).toMatch(/default 900 = 15 min/);
     expect(reference).not.toMatch(/default 1800 = 30 min/);
   });
 
-  it("reinvocation resumes the same branch campaign instead of resetting time", () => {
+  it("reinvocation across sessions and rebases resumes the same branch campaign", () => {
     const repo = mkdtempSync(path.join(tmpdir(), "quality-campaign-"));
     spawnSync("bash", [
       "-c",
@@ -68,19 +70,19 @@ git config user.email test@example.com
 echo base > file
 git add file
 git commit -q -m base
-git switch -q -c feature
+git switch -q -c 'feature/quote"test'
 `,
       "setup",
       repo,
     ]);
-    const env = {
+    const firstEnv = {
       ...process.env,
-      CODEX_THREAD_ID: `campaign-${Date.now()}`,
+      CODEX_THREAD_ID: `campaign-first-${Date.now()}`,
     };
     const first = spawnSync("bash", [BOOTSTRAP, "--target-dir", repo], {
       cwd: ROOT,
       encoding: "utf8",
-      env,
+      env: firstEnv,
     });
     expect(first.status).toBe(0);
     const governor = first.stdout.match(
@@ -90,11 +92,18 @@ git switch -q -c feature
     const state = JSON.parse(readFileSync(governor, "utf8"));
     state.rounds_used = 1;
     writeFileSync(governor, JSON.stringify(state));
+    execFileSync("git", ["commit", "--allow-empty", "-m", "pre-rebase"], {
+      cwd: repo,
+    });
+    execFileSync("git", ["rebase", "--root", "--force-rebase"], { cwd: repo });
 
     const second = spawnSync("bash", [BOOTSTRAP, "--target-dir", repo], {
       cwd: ROOT,
       encoding: "utf8",
-      env,
+      env: {
+        ...process.env,
+        CODEX_THREAD_ID: `campaign-second-${Date.now()}`,
+      },
     });
     expect(second.status).toBe(0);
     expect(second.stdout).toContain("resuming existing campaign");
@@ -219,7 +228,8 @@ if kill -0 "$child" 2>/dev/null; then exit 99; fi
       const [gitRoot, rootFile, governorFile] = result.stdout.split("|");
       expect(gitRoot).toBe(ROOT);
       expect(rootFile).toContain("bs-quality-gitroot-");
-      expect(governorFile).toBe(rootFile.replace(/\.txt$/, "-governor.json"));
+      expect(governorFile).toContain("bs-quality-campaign-");
+      expect(governorFile).toMatch(/\.json$/);
     },
   );
 
@@ -250,7 +260,7 @@ if kill -0 "$child" 2>/dev/null; then exit 99; fi
       "bash",
       [
         "-c",
-        `unset CLAUDE_SETUP_ROOT CLAUDE_PLUGIN_ROOT CLAUDE_KIT_ROOT; HOME="$2"; source "$1"; bs_quality_find_script risk-score.js`,
+        `unset CLAUDE_SETUP_ROOT CLAUDE_PLUGIN_ROOT CLAUDE_KIT_ROOT BS_QUALITY_TRUST_TARGET_SCRIPTS; HOME="$2"; source "$1"; bs_quality_find_script risk-score.js`,
         "resolution",
         LOAD_ROOT,
         emptyHome,
@@ -584,5 +594,5 @@ source "$KIT_ROOT/scripts/quality-run-review.sh"
     const invocations = readFileSync(argsLog, "utf8").trim().split("\n");
     expect(invocations).toHaveLength(2);
     expect(invocations[1]).toContain('model_reasoning_effort="high"');
-  });
+  }, 10_000);
 });

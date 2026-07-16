@@ -39,6 +39,32 @@ bs_quality_root_file() {
   printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
 }
 
+bs_quality_campaign_file() {
+  # $1 = resolved git root; $2 = branch/ref identity.
+  # Campaign state must outlive a Claude/Codex session and a branch rebase, so
+  # key it by the clone's common git directory plus branch rather than by the
+  # session-scoped root sentinel or starting commit.
+  local root="$1" branch="$2" common_raw common_dir identity key
+  common_dir="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+  if [ -z "$common_dir" ]; then
+    common_raw="$(git -C "$root" rev-parse --git-common-dir 2>/dev/null)"
+    case "$common_raw" in
+      /*) common_dir="$(cd "$common_raw" 2>/dev/null && pwd -P)" ;;
+      *) common_dir="$(cd "$root/$common_raw" 2>/dev/null && pwd -P)" ;;
+    esac
+  fi
+  [ -n "$common_dir" ] || common_dir="$root"
+  identity="${common_dir}"$'\n'"${branch}"
+  if command -v sha256sum >/dev/null 2>&1; then
+    key=$(printf '%s' "$identity" | sha256sum | cut -c1-20)
+  elif command -v shasum >/dev/null 2>&1; then
+    key=$(printf '%s' "$identity" | shasum -a 256 | cut -c1-20)
+  else
+    key=$(printf '%s' "$identity" | cksum | tr -d ' ' | cut -c1-20)
+  fi
+  printf '%s/bs-quality-campaign-%s.json' "${TMPDIR:-/tmp}" "$key"
+}
+
 BS_QUALITY_SESSION_ID="${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-default}}"
 BS_QUALITY_SESSION_ID="$(printf '%s' "$BS_QUALITY_SESSION_ID" | tr -cd '[:alnum:]_.-' | cut -c1-80)"
 [ -n "$BS_QUALITY_SESSION_ID" ] || BS_QUALITY_SESSION_ID=default
@@ -108,5 +134,7 @@ fi
 # here because each tool call starts a fresh shell; bootstrap's child-process
 # exports cannot survive into the next call.
 BS_QUALITY_ROOT_FILE="$(bs_quality_root_file "$GIT_ROOT")"
-BS_QUALITY_GOVERNOR_FILE="${BS_QUALITY_ROOT_FILE%.txt}-governor.json"
+BS_QUALITY_CAMPAIGN_BRANCH="$(git branch --show-current 2>/dev/null)"
+[ -n "$BS_QUALITY_CAMPAIGN_BRANCH" ] || BS_QUALITY_CAMPAIGN_BRANCH="DETACHED:$(git rev-parse HEAD 2>/dev/null)"
+BS_QUALITY_GOVERNOR_FILE="$(bs_quality_campaign_file "$GIT_ROOT" "$BS_QUALITY_CAMPAIGN_BRANCH")"
 export BS_QUALITY_ROOT_FILE BS_QUALITY_GOVERNOR_FILE

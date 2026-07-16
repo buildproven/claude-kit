@@ -147,7 +147,7 @@ describe("score — the end-to-end entry point", () => {
     const runGit = (args) =>
       execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
     expect(
-      score({ gitRunner: runGit, config: DEFAULTS }).riskScore,
+      score({ base: "main", gitRunner: runGit, config: DEFAULTS }).riskScore,
     ).toBeLessThanOrEqual(20);
 
     fs.writeFileSync(
@@ -159,7 +159,7 @@ describe("score — the end-to-end entry point", () => {
     );
     execFileSync("git", ["commit", "-qam", "install hook"], { cwd: dir });
     expect(
-      score({ gitRunner: runGit, config: DEFAULTS }).riskScore,
+      score({ base: "main", gitRunner: runGit, config: DEFAULTS }).riskScore,
     ).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
   });
 });

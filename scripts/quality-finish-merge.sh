@@ -36,7 +36,13 @@ run_gh() {
 run_gh 30 120 pr merge --auto --squash
 AUTO_RC=$?
 if [ "$AUTO_RC" -eq 0 ]; then
-  PR_STATE="$(run_gh 15 90 pr view --json state --jq .state)" || exit 1
+  PR_STATE="$(run_gh 15 90 pr view --json state --jq .state)"
+  VIEW_RC=$?
+  if [ "$VIEW_RC" -eq 124 ]; then
+    echo "LOCAL_PASS_CI_PENDING: shared deadline reached while confirming auto-merge state."
+    exit 0
+  fi
+  [ "$VIEW_RC" -eq 0 ] || exit "$VIEW_RC"
   if [ "$PR_STATE" != MERGED ]; then
     echo "LOCAL_PASS_CI_PENDING: auto-merge armed; required CI owns completion."
   fi
@@ -59,3 +65,9 @@ if [ "$CHECKS_RC" -ne 0 ]; then
 fi
 
 run_gh 45 0 pr merge --squash
+MERGE_RC=$?
+if [ "$MERGE_RC" -eq 124 ]; then
+  echo "LOCAL_PASS_CI_PENDING: shared deadline reached during final merge."
+  exit 0
+fi
+exit "$MERGE_RC"

@@ -37,11 +37,23 @@ cmd="$*"
 case "$GH_MODE:$cmd" in
   auto-pending:"pr merge --auto --squash") exit 0 ;;
   auto-pending:"pr view --json state --jq .state") echo OPEN; exit 0 ;;
+  view-timeout:"pr merge --auto --squash")
+    jq '.deadline_epoch = (now | floor) + 91' "$GH_GOVERNOR" > "$GH_GOVERNOR.tmp"
+    mv "$GH_GOVERNOR.tmp" "$GH_GOVERNOR"
+    exit 0
+    ;;
+  view-timeout:"pr view --json state --jq .state") sleep 5 ;;
   ci-fail:"pr merge --auto --squash") exit 1 ;;
   ci-fail:"pr checks --watch") exit 7 ;;
   fallback-success:"pr merge --auto --squash") exit 1 ;;
   fallback-success:"pr checks --watch") exit 0 ;;
   fallback-success:"pr merge --squash") exit 0 ;;
+  final-timeout:"pr merge --auto --squash") exit 1 ;;
+  final-timeout:"pr checks --watch")
+    jq '.deadline_epoch = (now | floor)' "$GH_GOVERNOR" > "$GH_GOVERNOR.tmp"
+    mv "$GH_GOVERNOR.tmp" "$GH_GOVERNOR"
+    exit 0
+    ;;
   *) exit 9 ;;
 esac
 `,
@@ -54,6 +66,7 @@ esac
       PATH: `${bin}:${process.env.PATH}`,
       GH_LOG: log,
       GH_MODE: mode,
+      GH_GOVERNOR: governor,
     },
   });
   return {
@@ -97,5 +110,19 @@ describe("quality-finish-merge", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("LOCAL_PASS_CI_PENDING");
     expect(commands).toEqual([]);
+  });
+
+  it("returns pending when auto-merge state inspection times out", () => {
+    const { result, commands } = fixture("view-timeout");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("LOCAL_PASS_CI_PENDING");
+    expect(commands).toEqual(["pr merge --auto --squash"]);
+  });
+
+  it("returns pending when the final merge reaches the shared deadline", () => {
+    const { result, commands } = fixture("final-timeout");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("LOCAL_PASS_CI_PENDING");
+    expect(commands).toEqual(["pr merge --auto --squash", "pr checks --watch"]);
   });
 });
