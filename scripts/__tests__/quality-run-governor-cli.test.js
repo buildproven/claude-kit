@@ -43,15 +43,19 @@ const commitCount = () =>
     }).trim(),
   );
 
-const healthy = (over = {}) => ({
-  start_epoch: Math.floor(Date.now() / 1000),
-  start_commit_count: commitCount(),
-  max_fix_commits: 10,
-  max_wall_seconds: 3600,
-  max_review_rounds: 3,
-  rounds_used: 0,
-  ...over,
-});
+const healthy = (over = {}) => {
+  const start_epoch = Math.floor(Date.now() / 1000);
+  return {
+    start_epoch,
+    deadline_epoch: start_epoch + 3600,
+    start_commit_count: commitCount(),
+    max_fix_commits: 10,
+    max_wall_seconds: 3600,
+    max_review_rounds: 3,
+    rounds_used: 0,
+    ...over,
+  };
+};
 
 describe("quality-run-governor CLI", () => {
   it("exits 2 with usage when called with no arguments", () => {
@@ -99,5 +103,54 @@ describe("quality-run-governor CLI", () => {
     expect(code).toBe(0);
     expect(out).toMatch(/review-rounds 1\/3/);
     expect(JSON.parse(fs.readFileSync(p, "utf8")).rounds_used).toBe(1);
+  });
+
+  it("remaining: clamps a stage to the absolute deadline", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const p = sentinel(
+      healthy({
+        start_epoch: now - 3560,
+        deadline_epoch: now + 40,
+      }),
+    );
+    const { code, out } = run([
+      "remaining",
+      p,
+      "--reserve",
+      "5",
+      "--cap",
+      "900",
+    ]);
+    expect(code).toBe(0);
+    expect(Number(out.trim())).toBeGreaterThanOrEqual(34);
+    expect(Number(out.trim())).toBeLessThanOrEqual(35);
+  });
+
+  it("remaining: fails closed at the exact deadline", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const p = sentinel(
+      healthy({
+        start_epoch: now - 3600,
+        deadline_epoch: now,
+      }),
+    );
+    const { code, out } = run(["remaining", p]);
+    expect(code).not.toBe(0);
+    expect(out.trim().split("\n")[0]).toBe("0");
+  });
+
+  it("remaining: fails closed without a consistent deadline", () => {
+    const state = healthy();
+    delete state.deadline_epoch;
+    expect(run(["remaining", sentinel(state)]).code).not.toBe(0);
+  });
+
+  it("record-finding persists the exact set for targeted verification", () => {
+    const p = sentinel(healthy({ rounds_used: 1 }));
+    const findings = [{ file: "src/a.js", summary: "missing guard" }];
+    expect(run(["record-finding", p, JSON.stringify(findings)]).code).toBe(0);
+    const state = JSON.parse(fs.readFileSync(p, "utf8"));
+    expect(state.last_findings).toEqual(findings);
+    expect(state.last_findings_round).toBe(1);
   });
 });

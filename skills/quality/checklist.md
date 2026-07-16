@@ -11,7 +11,7 @@ Review depth scales with the resolved risk tier (see `reference.md` §Quality Le
 | Defensive pattern analysis              | ✓   | ✓      | ✓    | ✓        |
 | code-reviewer + silent-failure-hunter   | ✓   | ✓      | ✓    | ✓        |
 | type-design-analyzer + security-auditor |     | ✓      | ✓    | ✓        |
-| test-generator + pr-test-analyzer       |     |        | ✓    | ✓        |
+| pr-test-analyzer                        |     |        | ✓    | ✓        |
 | break-glass-approval                    |     |        |      | ✓        |
 | provider review completed               | ✓   | ✓      | ✓    | ✓        |
 | `Reviewed-By: quality` trailer          | ✓   | ✓      | ✓    | ✓        |
@@ -20,7 +20,7 @@ Review depth scales with the resolved risk tier (see `reference.md` §Quality Le
 
 - [ ] **Tests pass**: `npm test` exits 0 (HARD GATE — blocks everything)
 - [ ] **Tests exist**: Every changed source file has a corresponding `.test.*` or `.spec.*` (exempt: config, types, migrations)
-- [ ] **Generated tests pass**: If test-generator created tests, they must pass before continuing
+- [ ] **Changed tests pass**: Any tests added during fixes must pass before continuing
 - [ ] ESLint: 0 errors, 0 warnings
 - [ ] TypeScript: strict mode, no `any`, 0 errors
 - [ ] Build: successful with 0 errors
@@ -49,7 +49,7 @@ Review depth scales with the resolved risk tier (see `reference.md` §Quality Le
 | silent-failure-hunter | findings, patterns_checked, risk_level               |
 | type-design-analyzer  | findings, type_coverage, any_usage_count             |
 | security-auditor      | findings, vulnerabilities, secrets_scan, owasp_check |
-| test-analyzer         | findings, coverage_gaps, test_quality_score          |
+| pr-test-analyzer      | findings, coverage_gaps, test_quality_score          |
 | accessibility-tester  | findings, wcag_violations, a11y_score                |
 | performance-engineer  | findings, lighthouse_scores, web_vitals              |
 | architect-reviewer    | findings, pattern_violations, tech_debt_items        |

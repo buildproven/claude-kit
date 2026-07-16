@@ -533,11 +533,47 @@ function startRemediationClock(sentinelPath) {
   }
 }
 
+function remainingBudget(
+  state,
+  { nowEpoch, reserveSeconds = 0, capSeconds = Number.MAX_SAFE_INTEGER },
+) {
+  const valid =
+    state &&
+    Number.isFinite(state.start_epoch) &&
+    Number.isFinite(state.deadline_epoch) &&
+    Number.isFinite(state.max_wall_seconds) &&
+    state.deadline_epoch === state.start_epoch + state.max_wall_seconds &&
+    Number.isFinite(nowEpoch) &&
+    Number.isFinite(reserveSeconds) &&
+    reserveSeconds >= 0 &&
+    Number.isFinite(capSeconds) &&
+    capSeconds > 0;
+  if (!valid) return { ok: false, seconds: 0 };
+  const seconds = Math.max(
+    0,
+    Math.min(capSeconds, state.deadline_epoch - nowEpoch - reserveSeconds),
+  );
+  return { ok: seconds > 0, seconds };
+}
+
+function printRemaining(sentinelPath, rest) {
+  const reserveIndex = rest.indexOf("--reserve");
+  const capIndex = rest.indexOf("--cap");
+  const result = remainingBudget(loadState(sentinelPath), {
+    nowEpoch: Math.floor(Date.now() / 1000),
+    reserveSeconds: reserveIndex >= 0 ? Number(rest[reserveIndex + 1]) : 0,
+    capSeconds:
+      capIndex >= 0 ? Number(rest[capIndex + 1]) : Number.MAX_SAFE_INTEGER,
+  });
+  process.stdout.write(`${result.seconds}\n`);
+  return result.ok ? 0 : 1;
+}
+
 function main() {
   const [, , cmd, sentinelPath, ...rest] = process.argv;
   if (!cmd || !sentinelPath) {
     process.stderr.write(
-      "usage: quality-run-governor.js <check|bump-round|record-finding|status> <sentinel-path> [args]\n",
+      "usage: quality-run-governor.js <check|bump-round|remaining|record-finding|status> <sentinel-path> [args]\n",
     );
     process.exit(2);
   }
@@ -564,6 +600,10 @@ function main() {
     process.exit(bumpRound(sentinelPath, cwd));
   }
 
+  if (cmd === "remaining") {
+    process.exit(printRemaining(sentinelPath, rest));
+  }
+
   if (cmd === "record-finding") {
     // rest = JSON array of {file, summary} for this round's findings, as a
     // single JSON string argument.
@@ -586,6 +626,8 @@ function main() {
     const priorFindings = priorFindingsFrom(state);
     const pattern = detectRepeatedPattern(priorFindings, currentFindings);
     state.findings_seen = priorFindings.concat(currentFindings);
+    state.last_findings = currentFindings;
+    state.last_findings_round = state.rounds_used;
     saveState(sentinelPath, state);
     process.stdout.write(JSON.stringify(pattern) + "\n");
     process.exit(0);
@@ -621,6 +663,7 @@ module.exports = {
   findingShapeKey,
   detectRepeatedPattern,
   evaluateBudget,
+  remainingBudget,
   bumpRound,
   parseFindingsArg,
   priorFindingsFrom,

@@ -36,15 +36,19 @@ const startCommits = () =>
       .trim(),
   );
 
-const healthy = (over = {}) => ({
-  start_epoch: Math.floor(Date.now() / 1000),
-  start_commit_count: startCommits(),
-  max_fix_commits: 10,
-  max_wall_seconds: 3600,
-  max_review_rounds: 3,
-  rounds_used: 0,
-  ...over,
-});
+const healthy = (over = {}) => {
+  const start_epoch = Math.floor(Date.now() / 1000);
+  return {
+    start_epoch,
+    deadline_epoch: start_epoch + 3600,
+    start_commit_count: startCommits(),
+    max_fix_commits: 10,
+    max_wall_seconds: 3600,
+    max_review_rounds: 3,
+    rounds_used: 0,
+    ...over,
+  };
+};
 
 describe("bumpRound — the round cap that stops runaway review loops", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -103,6 +107,7 @@ describe("bumpRound — the round cap that stops runaway review loops", () => {
     const p = sentinel(
       healthy({
         start_epoch: Math.floor(Date.now() / 1000) - 7200, // started 2h ago
+        deadline_epoch: Math.floor(Date.now() / 1000) - 7140,
         max_wall_seconds: 60,
       }),
     );

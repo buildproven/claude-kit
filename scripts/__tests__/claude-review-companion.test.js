@@ -71,6 +71,46 @@ describe("claude-review-companion.sh", () => {
     expect(r.stderr).toMatch(/required/);
   });
 
+  it("requires and injects prior findings for verification mode", () => {
+    const d = tmpdir();
+    const diff = path.join(d, "diff.txt");
+    const findings = path.join(d, "findings.json");
+    fs.writeFileSync(diff, "+fixed\n");
+    fs.writeFileSync(findings, '[{"file":"a.js","summary":"missing guard"}]');
+
+    const missing = run([
+      "--diff-file",
+      diff,
+      "--out-dir",
+      path.join(d, "missing"),
+      "--agents",
+      "code-reviewer",
+      "--review-mode",
+      "verification",
+      "--dry-run",
+    ]);
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).toMatch(/prior-findings-file/);
+
+    const ok = run([
+      "--diff-file",
+      diff,
+      "--out-dir",
+      path.join(d, "ok"),
+      "--agents",
+      "code-reviewer",
+      "--review-mode",
+      "verification",
+      "--prior-findings-file",
+      findings,
+      "--dry-run",
+    ]);
+    expect(ok.code).toBe(0);
+    expect(
+      fs.readFileSync(path.join(d, "ok", "review-context.txt"), "utf8"),
+    ).toContain("missing guard");
+  });
+
   it("exits 2 (fail LOUD) when the claude CLI is unavailable", () => {
     const d = tmpdir();
     fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
