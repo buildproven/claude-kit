@@ -40,8 +40,8 @@ const WORKLOAD_BANDS = [
     name: "huge",
     maxUnits: Number.POSITIVE_INFINITY,
     campaignSeconds: 900,
-    reviewSeconds: 480,
-    verificationSeconds: 240,
+    reviewSeconds: 720,
+    verificationSeconds: 120,
     gateSeconds: 360,
   },
 ];

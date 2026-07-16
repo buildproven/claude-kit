@@ -16,7 +16,7 @@ describe("quality runtime planning", () => {
       300, 420, 600, 780, 900,
     ]);
     expect(plans.map((item) => item.reviewSeconds)).toEqual([
-      75, 120, 210, 330, 480,
+      75, 120, 210, 330, 720,
     ]);
   });
 
@@ -42,7 +42,7 @@ describe("quality runtime planning", () => {
     expect(result.campaignSeconds).toBe(900);
     expect(result.maxReviewRounds).toBe(2);
     expect(result.maxFixCommits).toBe(1);
-    expect(result.verificationSeconds).toBe(240);
+    expect(result.verificationSeconds).toBe(120);
   });
 
   it("lets requested quality raise depth without erasing size scaling", () => {
