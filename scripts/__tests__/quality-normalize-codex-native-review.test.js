@@ -44,4 +44,16 @@ Full review comments:
       /no recognizable verdict/,
     );
   });
+
+  it("rejects malformed structured output even when its text says no findings", () => {
+    expect(() =>
+      parseNativeReview(
+        JSON.stringify({
+          verdict: "needs-attention",
+          summary: "No findings were normalized",
+          findings: [{ severity: "high" }],
+        }),
+      ),
+    ).toThrow(/malformed structured Codex review/);
+  });
 });

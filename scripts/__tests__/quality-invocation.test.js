@@ -1926,6 +1926,67 @@ exit 1
     ).not.toThrow();
   });
 
+  it("exposes persisted judge dispositions to targeted verification", () => {
+    const root = repo("prior-judge-dispositions");
+    const manifest = create(root);
+    prepareCodexReview(root, manifest, [
+      {
+        severity: "medium",
+        title: "Retry evidence",
+        body: "The retry path needs verification",
+        recommendation: "Verify the bounded retry path",
+        evidence: { file: "file.js", line: 1 },
+      },
+    ]);
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    context.findings[0].disposition = "WARNING";
+    context.findings[0].reason = "Useful targeted verification context";
+    const artifact = path.join(root, "judge.json");
+    writeFileSync(artifact, JSON.stringify(context));
+    execFileSync(
+      "node",
+      [INVOCATION, "judge", manifest, "--artifact", artifact],
+      { cwd: root },
+    );
+
+    const prior = JSON.parse(
+      execFileSync("node", [INVOCATION, "prior-findings", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(prior.findings[0]).toMatchObject({
+      disposition: "WARNING",
+      reason: "Useful targeted verification context",
+    });
+  });
+
+  it("treats unjudged prior findings as blocking verification targets", () => {
+    const root = repo("prior-unjudged-findings");
+    const manifest = create(root);
+    prepareCodexReview(root, manifest, [
+      {
+        severity: "high",
+        title: "Unjudged blocker",
+        body: "Must remain in the verification set",
+        recommendation: "Verify it",
+        evidence: { file: "file.js", line: 1 },
+      },
+    ]);
+    const prior = JSON.parse(
+      execFileSync("node", [INVOCATION, "prior-findings", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(prior.findings[0]).toMatchObject({ disposition: "BLOCKING" });
+  });
+
   it("persists applicable required gates and requires current-head evidence", () => {
     const root = repo("required-gates");
     writeFileSync(

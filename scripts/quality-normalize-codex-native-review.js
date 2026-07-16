@@ -37,6 +37,11 @@ function normalizeFile(file, root) {
 }
 
 function parseNativeReview(raw, root = process.cwd()) {
+  if (/^\s*[{[]/.test(String(raw))) {
+    throw new Error(
+      "malformed structured Codex review cannot be treated as native prose",
+    );
+  }
   const lines = String(raw).split(/\r?\n/);
   const findings = [];
   for (let index = 0; index < lines.length; index += 1) {

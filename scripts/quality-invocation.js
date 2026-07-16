@@ -1342,6 +1342,41 @@ function providerFindings(manifest) {
   return findings;
 }
 
+function priorFindings(manifest) {
+  const findings = providerFindings(manifest);
+  if (!manifest.judge) {
+    return findings.map((finding) => ({
+      ...finding,
+      disposition: "BLOCKING",
+      reason:
+        "Unclassified prior finding is conservatively treated as blocking.",
+    }));
+  }
+  if (
+    !fs.existsSync(manifest.judge.artifactPath) ||
+    sha256File(manifest.judge.artifactPath) !== manifest.judge.artifactSha256
+  ) {
+    throw new Error("persisted judge artifact identity is invalid");
+  }
+  const artifact = parseJson(
+    fs.readFileSync(manifest.judge.artifactPath, "utf8"),
+    "persisted judge artifact",
+  );
+  const judgedById = new Map(
+    (artifact.findings || []).map((finding) => [finding.id, finding]),
+  );
+  return findings.map((finding) => {
+    const judged = judgedById.get(finding.id);
+    return {
+      ...finding,
+      disposition: judged?.disposition || "BLOCKING",
+      reason:
+        judged?.reason ||
+        "Unclassified prior finding is conservatively treated as blocking.",
+    };
+  });
+}
+
 function judgeContext(manifest) {
   const authorization = reviewCoverage(manifest);
   return {
@@ -2016,7 +2051,7 @@ const COMMANDS = {
     process.stdout.write(`${JSON.stringify(judgeContext(manifest))}\n`),
   "prior-findings": ({ manifest }) =>
     process.stdout.write(
-      `${JSON.stringify({ findings: providerFindings(manifest) })}\n`,
+      `${JSON.stringify({ findings: priorFindings(manifest) })}\n`,
     ),
   trailers: ({ manifest }) =>
     process.stdout.write(`${reviewTrailers(manifest)}\n`),
