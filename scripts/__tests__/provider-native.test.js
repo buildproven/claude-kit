@@ -17,6 +17,7 @@ const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const PROVIDER_RUN = path.join(ROOT, "scripts", "provider-run.sh");
 const SKILL_SYNC = path.join(ROOT, "scripts", "setup-codex-skills.sh");
 const MCP_SYNC = path.join(ROOT, "scripts", "mcp-sync.py");
+const AUDIT_REPO = path.join(ROOT, "scripts", "steward", "audit-repo.sh");
 const DISCOVER = path.join(
   ROOT,
   "scripts",
@@ -303,6 +304,53 @@ describe("provider-native platform", () => {
     expect(readFileSync(path.join(codexHome, "config.toml"), "utf8")).toContain(
       '[mcp_servers."shared"]\nurl = "https://example.test/mcp"',
     );
+  });
+
+  it("runs fleet checks with the repository's declared Node version", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "steward-node-version-"));
+    const repo = path.join(dir, "repo");
+    const bin = path.join(dir, "bin");
+    const nvm = path.join(dir, "nvm");
+    const observed = path.join(dir, "observed-version");
+    mkdirSync(repo);
+    mkdirSync(bin);
+    mkdirSync(nvm);
+    writeFileSync(path.join(repo, ".nvmrc"), "22\n");
+    writeFileSync(
+      path.join(repo, "package.json"),
+      JSON.stringify({ scripts: { test: "test" } }),
+    );
+    executable(
+      path.join(bin, "git"),
+      `case "$*" in
+        *"branch --show-current"*) echo main ;;
+        *"rev-list --left-right --count"*) echo "0 0" ;;
+        *"remote get-url"*) exit 0 ;;
+      esac`,
+    );
+    executable(path.join(bin, "npm"), 'echo "npm $*"');
+    writeFileSync(
+      path.join(nvm, "nvm.sh"),
+      `nvm() {
+        shift
+        shift
+        printf '%s\\n' "$1" > '${observed}'
+        shift
+        "$@"
+      }`,
+    );
+
+    const result = spawnSync("bash", [AUDIT_REPO, repo], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NVM_DIR: nvm,
+        PATH: `${bin}:${process.env.PATH}`,
+      },
+    });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).failedChecks).toBe(0);
+    expect(readFileSync(observed, "utf8").trim()).toBe("22");
   });
 
   it("keeps the public command surface within its budget", () => {
