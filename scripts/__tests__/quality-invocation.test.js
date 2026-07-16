@@ -640,6 +640,7 @@ wait
     expect(current.governor.campaignDeadlineEpoch).toBe(
       initial.governor.campaignDeadlineEpoch,
     );
+    expect(current.governor.validationDeadlineEpoch).toBeNull();
     const authorization = JSON.parse(
       execFileSync(
         "node",
@@ -1234,6 +1235,10 @@ exit 99
     git(root, ["add", "."]);
     git(root, ["commit", "-q", "-m", "fix"]);
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    expect(
+      JSON.parse(readFileSync(manifest, "utf8")).governor
+        .validationDeadlineEpoch,
+    ).toBeGreaterThan(Math.floor(Date.now() / 1000));
     const second = prepareCodexReview(root, manifest);
     expect(second.from).toBe(first.to);
     recordJudgeArtifact(root, manifest);

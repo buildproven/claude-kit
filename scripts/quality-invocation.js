@@ -93,6 +93,7 @@ function normalizeGovernor(manifest) {
     manifest.governor.reReviewReserveSeconds;
   manifest.governor.campaignDeadlineEpoch ??=
     manifest.governor.startedAtEpoch + manifest.governor.campaignSeconds;
+  manifest.governor.validationDeadlineEpoch ??= null;
 }
 
 function normalizeManifestCollections(manifest) {
@@ -432,6 +433,7 @@ function buildGovernor(head) {
     providerAttempts: [],
     campaignSeconds: providerDeadlineSeconds,
     campaignDeadlineEpoch: startedAtEpoch + providerDeadlineSeconds,
+    validationDeadlineEpoch: null,
     remediationStartedAtEpoch: null,
     findingsSeen: [],
     startCommitSha: head,
@@ -741,6 +743,11 @@ function buildRuntimePlan(manifest, options) {
       {
         minimum: 1,
       },
+    ),
+    validationSeconds: parseInteger(
+      options["validation-seconds"] || "300",
+      "validation seconds",
+      { minimum: 1 },
     ),
   };
 }
@@ -1056,6 +1063,21 @@ function armApprovalChallenge(manifest, options) {
   };
 }
 
+function providerPhaseDeadline(manifest) {
+  const validation = manifest.governor.validationDeadlineEpoch;
+  return manifest.reviews.length > 0 && Number.isInteger(validation)
+    ? validation
+    : manifest.governor.campaignDeadlineEpoch;
+}
+
+function providerPhaseSeconds(manifest) {
+  return manifest.reviews.length === 0
+    ? (manifest.risk?.runtime?.reviewSeconds ??
+        manifest.governor.providerWindowSeconds)
+    : (manifest.risk?.runtime?.verificationSeconds ??
+        manifest.governor.reReviewReserveSeconds);
+}
+
 function authorizeProviderAttempt(manifest, options) {
   const provider = options.provider;
   if (!["claude", "codex"].includes(provider)) {
@@ -1071,26 +1093,19 @@ function authorizeProviderAttempt(manifest, options) {
     throw new Error("provider attempt governor is missing or invalid");
   }
   const currentHead = manifest.revisions.currentHead;
+  const phaseDeadline = providerPhaseDeadline(manifest);
   const firstAttemptForHead = !governor.providerAttempts.some(
     (attempt) => attempt.head === currentHead,
   );
   if (firstAttemptForHead) {
-    const phaseSeconds =
-      manifest.reviews.length === 0
-        ? (manifest.risk?.runtime?.reviewSeconds ??
-          governor.providerWindowSeconds)
-        : (manifest.risk?.runtime?.verificationSeconds ??
-          governor.reReviewReserveSeconds);
+    const phaseSeconds = providerPhaseSeconds(manifest);
     governor.providerDeadlineEpoch = Math.min(
       now + phaseSeconds,
-      governor.campaignDeadlineEpoch,
+      phaseDeadline,
     );
     governor.providerDeadlineHead = currentHead;
   }
-  const deadline = Math.min(
-    governor.providerDeadlineEpoch,
-    governor.campaignDeadlineEpoch,
-  );
+  const deadline = Math.min(governor.providerDeadlineEpoch, phaseDeadline);
   if (now >= deadline) {
     throw new Error("absolute provider deadline exhausted");
   }
@@ -1688,8 +1703,13 @@ function recordSkippedGate(manifest, required, name, log, options) {
 
 function executeGate(manifest, required, name, log) {
   const gateSeconds = manifest.risk?.runtime?.gateSeconds ?? 300;
-  const campaignRemaining = manifest.governor?.campaignDeadlineEpoch
-    ? manifest.governor.campaignDeadlineEpoch - Math.floor(Date.now() / 1000)
+  const phaseDeadline =
+    manifest.reviews.length > 0 &&
+    Number.isInteger(manifest.governor?.validationDeadlineEpoch)
+      ? manifest.governor.validationDeadlineEpoch
+      : manifest.governor?.campaignDeadlineEpoch;
+  const campaignRemaining = phaseDeadline
+    ? phaseDeadline - Math.floor(Date.now() / 1000)
     : gateSeconds;
   if (campaignRemaining <= 0) {
     throw new Error(`campaign budget is exhausted before gate '${name}'`);
@@ -2010,6 +2030,14 @@ function runAdvance(manifestArg, manifest, rawArgs) {
       : unionRequiredGates(locked.requiredGates, discovered);
     locked.requiredGatesPolicyVersion = REQUIRED_GATES_POLICY_VERSION;
     locked[NEEDS_REQUIRED_GATES_MIGRATION] = false;
+    if (
+      locked.reviews.length > 0 &&
+      locked.governor.providerDeadlineHead !== locked.revisions.currentHead
+    ) {
+      locked.governor.validationDeadlineEpoch =
+        Math.floor(Date.now() / 1000) +
+        (locked.risk?.runtime?.validationSeconds ?? 300);
+    }
   });
   process.stdout.write(`${updated.revisions.currentHead}\n`);
 }
