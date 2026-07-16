@@ -59,12 +59,13 @@ export BS_QUALITY_SESSION_ID
 bs_quality_find_script() {
   local name="$1" c
   for c in \
+    "$GIT_ROOT/scripts/$name" \
+    "$GIT_ROOT/core/scripts/$name" \
+    "${CLAUDE_SETUP_ROOT:+$CLAUDE_SETUP_ROOT/scripts/$name}" \
     "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$name}" \
     "${CLAUDE_KIT_ROOT:+$CLAUDE_KIT_ROOT/scripts/$name}" \
     "$HOME/.claude/scripts/$name" \
-    "$HOME/.claude/plugins/bs/scripts/$name" \
-    "$GIT_ROOT/scripts/$name" \
-    "$GIT_ROOT/core/scripts/$name"
+    "$HOME/.claude/plugins/bs/scripts/$name"
   do
     [ -n "$c" ] && [ -f "$c" ] && { printf '%s' "$c"; return 0; }
   done

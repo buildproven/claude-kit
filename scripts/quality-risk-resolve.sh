@@ -24,14 +24,7 @@ CODEX_DEPTH=""     # skip|medium|high|xhigh
 CODEX_ROUNDS=""
 
 if [ "${LEVEL:-auto}" = "auto" ]; then
-  RISK_SCORER=""
-  for candidate in \
-    "${CLAUDE_SETUP_ROOT:-}/scripts/risk-score.js" \
-    "${CLAUDE_PLUGIN_ROOT:-}/scripts/risk-score.js" \
-    "${CLAUDE_PLUGIN_ROOT:-}/../scripts/risk-score.js" \
-    "$HOME/.claude/scripts/risk-score.js"; do
-    if [ -n "$candidate" ] && [ -f "$candidate" ]; then RISK_SCORER="$candidate"; break; fi
-  done
+  RISK_SCORER="$(bs_quality_find_script risk-score.js 2>/dev/null || true)"
 
   if [ -n "$RISK_SCORER" ]; then
     SCORE_JSON=$(node "$RISK_SCORER" --json 2>/dev/null)

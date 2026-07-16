@@ -176,6 +176,23 @@ if kill -0 "$child" 2>/dev/null; then exit 99; fi
     },
   );
 
+  it("prefers the audited target's quality scripts over stale global installs", () => {
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `source "$1"; bs_quality_find_script risk-score.js`,
+        "resolution",
+        LOAD_ROOT,
+      ],
+      { encoding: "utf8", cwd: ROOT },
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(
+      path.join(ROOT, "scripts", "risk-score.js"),
+    );
+  });
+
   it("accepts exact evidence, then rejects later code and contradictions", () => {
     const repo = mkdtempSync(path.join(tmpdir(), "review-evidence-"));
     const setup = spawnSync(
