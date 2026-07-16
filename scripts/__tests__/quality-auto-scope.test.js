@@ -17,8 +17,8 @@ describe("classifyFile", () => {
     expect(classifyFile(".github/workflows/ci.yml")).toBe("critical");
   });
 
-  it("classifies package.json as critical", () => {
-    expect(classifyFile("package.json")).toBe("critical");
+  it("classifies package.json as high pending semantic scoring", () => {
+    expect(classifyFile("package.json")).toBe("high");
   });
 
   it("classifies skills/quality/ as high", () => {

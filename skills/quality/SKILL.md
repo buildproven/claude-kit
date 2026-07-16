@@ -95,8 +95,9 @@ early exits: `--status`, `--preflight` (<10s), `--audit` (read-only).
 
 Review is machine-only and provider-neutral on flat-rate subscriptions, so
 cost is wall-clock, not dollars. `--level auto` (default)
-computes a 0–100 risk score from `git diff` and scales agent count (2→10),
-Codex effort (skip→xhigh), and Codex rounds (0→2) to it. Logic lives in
+computes a 0–100 risk score from `git diff` and scales agent count (2→10)
+and Codex effort (skip→xhigh). Discovery is one pass; only accepted findings
+can trigger the separate targeted verification round. Logic lives in
 `scripts/quality-risk-resolve.sh` — `source` it after the Step -1 preamble.
 **Floor invariant: every change gets a real primary-provider review** —
 nothing merges with zero machine review.
@@ -105,12 +106,12 @@ nothing merges with zero machine review.
 `harness-config.json:riskTierRules` at runtime — never hand-render path
 globs in this skill):
 
-| Tier       | Review depth                 | Time cap |
-| ---------- | ---------------------------- | -------- |
-| `low`      | focused                      | ≤2 min   |
-| `medium`   | broad                        | ≤8 min   |
-| `high`     | broad + adversarial          | ≤25 min  |
-| `critical` | broad + break-glass approval | ≤25 min  |
+| Tier       | Review depth           | Time cap |
+| ---------- | ---------------------- | -------- |
+| `low`      | focused                | ≤2 min   |
+| `medium`   | broad                  | ≤5 min   |
+| `high`     | broad + adversarial    | ≤8 min   |
+| `critical` | release-veto discovery | ≤10 min  |
 
 Full tier table + agent focus descriptions: `reference.md` "Quality Levels".
 
@@ -118,6 +119,12 @@ Full tier table + agent focus descriptions: `reference.md` "Quality Levels".
 
 Determine files by scope, run TypeScript/ESLint/build, optional
 Trivy/Semgrep/Lighthouse, compute a quality score.
+
+**One absolute deadline owns the whole invocation.** Every blocking subprocess
+must run through `quality-run-bounded.sh --governor
+"$BS_QUALITY_GOVERNOR_FILE" --cap <stage-cap> --reserve <seconds> -- ...`.
+The wrapper clamps the stage to the governor's remaining time. Run independent
+checks concurrently where safe. Never grant a stage or fallback a fresh budget.
 
 ### Step 1.3: Hard Test Gate (BLOCKING)
 
@@ -189,7 +196,7 @@ node "$GOVERNOR" bump-round "$BS_QUALITY_GOVERNOR_FILE" || exit 1
 RUNNER="$(bs_quality_find_script quality-run-review.sh)" || {
   echo "❌ MERGE BLOCKED: quality-run-review.sh not found." >&2; exit 1;
 }
-source "$RUNNER"   # sets REVIEW_OUT, REVIEW_BASE; exits non-zero on any review failure
+source "$RUNNER"   # round 1 discovers; round 2 verifies persisted findings against the fix delta
 ```
 
 Read every `"$REVIEW_OUT"/*.findings.txt` and feed into Step 2.5
@@ -217,7 +224,7 @@ severity level. Output a consolidated report (format + rules in
 `checklist.md` "Judge Agent Validation"): 0 BLOCKING → PASS; any BLOCKING →
 auto-fix → re-run the panel → still BLOCKING → FAIL. **The number of
 re-review rounds is not your judgment call** — the round gate above owns it
-(default cap 2); a non-zero exit from it is a hard stop, not "just check
+(default cap 3, all sharing one deadline); a non-zero exit from it is a hard stop, not "just check
 once more." An empty report (0/0) is a valid, real outcome — never fabricate
 findings.
 
@@ -279,13 +286,19 @@ Also run `node "$GOVERNOR" record-finding "$BS_QUALITY_GOVERNOR_FILE"
 '<findings-json>'` before committing a fix; if `repeated=true`, batch every
 matching call site into one commit instead of one round per occurrence.
 
+Reinvoking `/bs:quality` on the same branch resumes the existing campaign
+sentinel and deadline. Never reset the clock after findings or a round-cap
+stop. `BS_QUALITY_RESET_CAMPAIGN=true` is an explicit operator override, not an
+autonomous retry mechanism.
+
 ### Provider fallback
 
-The configured fallback runs only when the primary CLI is unavailable or
-returns a typed account-exhaustion response (including HTTP 429/weekly usage
-limits). It never runs merely because the primary found a bug. Claude panels
-cancel sibling reviewers as soon as one reports exhaustion. Successful later
-rounds review only commits added since the prior review in this invocation.
+The configured fallback runs only when the primary CLI is immediately
+unavailable or returns a typed account-exhaustion response (including HTTP
+429/weekly usage limits). A provider timeout is a bounded review failure, not a
+reason to start another expensive provider. It never runs merely because the
+primary found a bug. Successful round 2 uses one high-effort pass over only the
+fix commits plus the persisted findings from round 1.
 
 ### Review Stamp
 
@@ -422,8 +435,17 @@ This gate prevents merging when review agents were skipped — by
 shortcutting, by error, or by automated-checks-only. No trailer = no merge,
 no exceptions.
 
-1. Push branch, create PR (`gh pr create`), wait for CI (unless
-   `--skip-ci`), auto-merge (`gh pr merge --squash`).
+1. Push branch and create the PR. Prefer `gh pr merge --auto --squash` so
+   required CI owns the final merge without keeping the quality session alive.
+   If auto-merge is unavailable, any synchronous `gh pr checks --watch` must
+   run through `quality-run-bounded.sh` with the same governor. On deadline,
+   return `LOCAL_PASS_CI_PENDING`; never silently extend the run.
+
+```bash
+FINISH_MERGE="$(bs_quality_find_script quality-finish-merge.sh)" || exit 1
+bash "$FINISH_MERGE" --governor "$BS_QUALITY_GOVERNOR_FILE"
+```
+
 2. **Worktree-aware cleanup** — run `scripts/quality-merge-cleanup.sh` after
    a successful merge. Leaves the operator on primary `main`, worktree
    removed, branch deleted, refs pruned. Failures here MUST surface (zero
@@ -458,3 +480,4 @@ Sub-Review Mode" for the full acpx invocation, polling, and fallback.
 - `scripts/quality-run-bounded.sh` — provider process-group timeout
 - `scripts/quality-validate-review-trailers.sh` — SHA/provider evidence gate
 - `scripts/quality-merge-cleanup.sh` — Step 4 post-merge worktree teardown
+- `scripts/quality-finish-merge.sh` — deadline-bound CI/auto-merge orchestration

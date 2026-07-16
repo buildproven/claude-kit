@@ -267,14 +267,39 @@ fi
 #
 # max_review_rounds is enforced by `bump-round` immediately before the review
 # panel — this is what actually terminates the outer fix -> re-review loop.
-BS_QUALITY_MAX_REVIEW_ROUNDS="${BS_QUALITY_MAX_REVIEW_ROUNDS:-2}"
+BS_QUALITY_MAX_REVIEW_ROUNDS="${BS_QUALITY_MAX_REVIEW_ROUNDS:-3}"
 BS_QUALITY_MAX_FIX_COMMITS="${BS_QUALITY_MAX_FIX_COMMITS:-4}"
 BS_QUALITY_MAX_WALL_SECONDS="${BS_QUALITY_MAX_WALL_SECONDS:-900}"
-BS_QUALITY_GOVERNOR_FILE="${BS_QUALITY_ROOT_FILE%.txt}-governor.json"
-# A fresh invocation starts with a full-branch review. Only re-review rounds
-# inside this invocation may use the last-successful-review delta.
+GOVERNOR_BRANCH=$(git branch --show-current 2>/dev/null || echo DETACHED)
+[ -n "$GOVERNOR_BRANCH" ] || GOVERNOR_BRANCH="DETACHED:$(git rev-parse HEAD 2>/dev/null)"
+BS_QUALITY_GOVERNOR_FILE=$(bs_quality_campaign_file "$GIT_ROOT" "$GOVERNOR_BRANCH")
+GOVERNOR_NOW=$(date +%s)
+if [ -f "$BS_QUALITY_GOVERNOR_FILE" ] &&
+   [ "${BS_QUALITY_RESET_CAMPAIGN:-false}" != true ]; then
+  EXISTING_BRANCH=$(jq -r '.branch // ""' "$BS_QUALITY_GOVERNOR_FILE" 2>/dev/null)
+  EXISTING_DEADLINE=$(jq -r '.deadline_epoch // 0' "$BS_QUALITY_GOVERNOR_FILE" 2>/dev/null)
+  if [ "$EXISTING_BRANCH" = "$GOVERNOR_BRANCH" ]; then
+    if [ "$GOVERNOR_NOW" -ge "$EXISTING_DEADLINE" ]; then
+      echo "❌ QUALITY CAMPAIGN DEADLINE EXHAUSTED for $GOVERNOR_BRANCH." >&2
+      echo "   The same PR/branch cannot reset its clock by reinvoking /bs:quality." >&2
+      echo "   Stop and report remaining findings. A deliberate new campaign requires" >&2
+      echo "   BS_QUALITY_RESET_CAMPAIGN=true." >&2
+      exit 1
+    fi
+    echo "BS_QUALITY_ROOT_FILE=$BS_QUALITY_ROOT_FILE"
+    echo "BS_QUALITY_GOVERNOR_FILE=$BS_QUALITY_GOVERNOR_FILE"
+    echo "GIT_ROOT=$GIT_ROOT"
+    echo "[quality] audit target resolved: $GIT_ROOT"
+    node "$SCRIPT_DIR/quality-run-governor.js" status "$BS_QUALITY_GOVERNOR_FILE"
+    echo "[quality] resuming existing campaign for $GOVERNOR_BRANCH"
+    exit 0
+  fi
+fi
+
+# A genuinely new branch campaign starts with a full-branch review.
 rm -f "${BS_QUALITY_GOVERNOR_FILE%.json}-last-reviewed.sha"
 GOVERNOR_START_EPOCH=$(date +%s)
+GOVERNOR_DEADLINE_EPOCH=$((GOVERNOR_START_EPOCH + BS_QUALITY_MAX_WALL_SECONDS))
 # Baseline the run by HEAD SHA, not by total commit count. The governor counts
 # fix-commits as `<start_commit_sha>..HEAD`, which is immune to rebases and to
 # the cwd/checkout the later `check` runs from. The old total-count delta
@@ -283,18 +308,27 @@ GOVERNOR_START_EPOCH=$(date +%s)
 # record start_commit_count for legacy readers / diagnostics.
 GOVERNOR_START_COMMIT_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
 GOVERNOR_START_COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo 0)
-cat > "$BS_QUALITY_GOVERNOR_FILE" <<EOF
-{
-  "start_epoch": ${GOVERNOR_START_EPOCH},
-  "start_commit_sha": "${GOVERNOR_START_COMMIT_SHA}",
-  "start_commit_count": ${GOVERNOR_START_COMMIT_COUNT},
-  "max_fix_commits": ${BS_QUALITY_MAX_FIX_COMMITS},
-  "max_wall_seconds": ${BS_QUALITY_MAX_WALL_SECONDS},
-  "max_review_rounds": ${BS_QUALITY_MAX_REVIEW_ROUNDS},
-  "rounds_used": 0,
-  "findings_seen": []
-}
-EOF
+jq -n \
+  --argjson start_epoch "$GOVERNOR_START_EPOCH" \
+  --argjson deadline_epoch "$GOVERNOR_DEADLINE_EPOCH" \
+  --arg branch "$GOVERNOR_BRANCH" \
+  --arg start_commit_sha "$GOVERNOR_START_COMMIT_SHA" \
+  --argjson start_commit_count "$GOVERNOR_START_COMMIT_COUNT" \
+  --argjson max_fix_commits "$BS_QUALITY_MAX_FIX_COMMITS" \
+  --argjson max_wall_seconds "$BS_QUALITY_MAX_WALL_SECONDS" \
+  --argjson max_review_rounds "$BS_QUALITY_MAX_REVIEW_ROUNDS" \
+  '{
+    start_epoch: $start_epoch,
+    deadline_epoch: $deadline_epoch,
+    branch: $branch,
+    start_commit_sha: $start_commit_sha,
+    start_commit_count: $start_commit_count,
+    max_fix_commits: $max_fix_commits,
+    max_wall_seconds: $max_wall_seconds,
+    max_review_rounds: $max_review_rounds,
+    rounds_used: 0,
+    findings_seen: []
+  }' > "$BS_QUALITY_GOVERNOR_FILE"
 
 echo "BS_QUALITY_ROOT_FILE=$BS_QUALITY_ROOT_FILE"
 echo "BS_QUALITY_GOVERNOR_FILE=$BS_QUALITY_GOVERNOR_FILE"
