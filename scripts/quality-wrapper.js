@@ -6,15 +6,18 @@ const crypto = require("crypto");
 const path = require("path");
 const { spawnSync } = require("child_process");
 
-function parseRequest(raw) {
-  let request;
+function parseJson(raw, label) {
   try {
-    request = JSON.parse(raw);
+    return JSON.parse(raw);
   } catch (error) {
-    throw new Error(`request is not valid JSON: ${error.message}`, {
+    throw new Error(`${label} is not valid JSON: ${error.message}`, {
       cause: error,
     });
   }
+}
+
+function parseRequest(raw) {
+  const request = parseJson(raw, "request");
   if (
     !request ||
     !Array.isArray(request.argv) ||
@@ -68,7 +71,10 @@ function childEnvironment(challengeSha256) {
 }
 
 function issueApprovalCapability(manifestPath, invocationScript, challenge) {
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const manifest = parseJson(
+    fs.readFileSync(manifestPath, "utf8"),
+    "quality manifest",
+  );
   const ttl = Number(process.env.BS_QUALITY_APPROVAL_TTL_SECONDS || "3600");
   if (!Number.isInteger(ttl) || ttl < 1 || ttl > 86400) {
     throw new Error(

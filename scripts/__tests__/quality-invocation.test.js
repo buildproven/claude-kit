@@ -728,6 +728,27 @@ wait
     expect(existsSync(marker)).toBe(false);
   });
 
+  it("fails safely when approval bootstrap returns malformed manifest JSON", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "quality-wrapper-json-"));
+    const bootstrap = path.join(dir, "bootstrap.sh");
+    const manifest = path.join(dir, "invocation.json");
+    writeFileSync(manifest, "{not-json\n");
+    writeFileSync(
+      bootstrap,
+      `#!/usr/bin/env bash
+printf 'BS_QUALITY_MANIFEST=%s\\n' ${JSON.stringify(manifest)}
+`,
+    );
+    chmodSync(bootstrap, 0o755);
+
+    const result = spawnSync("node", [WRAPPER, bootstrap], {
+      input: JSON.stringify({ argv: ["--break-glass-approved"] }),
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/quality manifest is not valid JSON/);
+  });
+
   it("rejects malformed merge arguments before any GitHub or repository mutation", () => {
     const root = repo("strict-wrapper-args");
     const harness = mkdtempSync(path.join(tmpdir(), "quality-strict-args-"));
