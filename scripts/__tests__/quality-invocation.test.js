@@ -784,6 +784,7 @@ wait
       BS_QUALITY_MAX_REMEDIATION_SECONDS: "1",
       BS_QUALITY_REREVIEW_RESERVE_SECONDS: "60",
     });
+    prepareCodexReview(root, manifest);
     const state = JSON.parse(readFileSync(manifest, "utf8"));
     state.governor.remediationStartedAtEpoch =
       Math.floor(Date.now() / 1000) - 2;
@@ -791,8 +792,6 @@ wait
     expect(
       spawnSync("node", [GOVERNOR, "check", manifest], { cwd: root }).status,
     ).not.toBe(0);
-    state.governor.roundsUsed = 1;
-    writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
     expect(
       spawnSync("node", [GOVERNOR, "bump-round", manifest], { cwd: root })
         .status,
