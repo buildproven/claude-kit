@@ -536,6 +536,109 @@ function mandatoryValidationMayExceedCommitCap(
   }
 }
 
+function loadReconciledState(sentinelPath) {
+  let state = loadState(sentinelPath);
+  if (!state) {
+    return {
+      error: `[quality] governor sentinel unreadable at ${sentinelPath} — failing CLOSED. The review loop cannot be bounded without it, and an unbounded loop is the exact failure this governor exists to prevent.\n`,
+    };
+  }
+  if (!state._manifest) return { state };
+  try {
+    reconcileManifestRounds(sentinelPath);
+    state = loadState(sentinelPath);
+    return state
+      ? { state }
+      : {
+          error: `[quality] governor sentinel unreadable after reconciliation at ${sentinelPath} — failing CLOSED.\n`,
+        };
+  } catch (error) {
+    return {
+      error: `[quality] governor review reconciliation failed CLOSED: ${error.message}\n`,
+    };
+  }
+}
+
+function prepareReviewAttempt(sentinelPath, requestedCwd) {
+  const loaded = loadReconciledState(sentinelPath);
+  if (loaded.error) return loaded;
+  const { state } = loaded;
+  const priorRounds = Number.isFinite(state.rounds_used)
+    ? state.rounds_used
+    : 0;
+  const cwd = state._manifest
+    ? loadManifest(sentinelPath).manifest.repo.realpath
+    : requestedCwd;
+  state.authorized_attempts = state.authorized_attempts || [];
+  const authorizedHead = reviewHead(state, sentinelPath, cwd);
+  const nextRound = priorRounds + 1;
+  const reusableAttempt = reusableAuthorization(
+    state,
+    state._manifest ? nextRound : priorRounds,
+    authorizedHead,
+  );
+  state.rounds_used = reusableAttempt ? reusableAttempt.number : nextRound;
+  if (
+    state._manifest &&
+    state.rounds_used >= 2 &&
+    Number.isFinite(state.max_rereview_reserve_seconds)
+  ) {
+    state.max_wall_seconds += state.max_rereview_reserve_seconds;
+  }
+  return {
+    state,
+    priorRounds,
+    cwd,
+    authorizedHead,
+    reusableAttempt,
+    retryingRound: Boolean(reusableAttempt),
+  };
+}
+
+function reviewBudgetDecision(context, sentinelPath) {
+  const { state, priorRounds, cwd } = context;
+  const result = evaluateBudget(state, {
+    nowEpoch: Math.floor(Date.now() / 1000),
+    commitCount: resolveCommitCount(cwd, state),
+  });
+  if (result.configInvalid) {
+    return {
+      result,
+      error: `[quality] governor sentinel missing required fields at ${sentinelPath} — failing CLOSED (halting), not silently passing.\n`,
+    };
+  }
+  if (result.roundTripped) {
+    return {
+      result,
+      error:
+        `[quality] ROUND BUDGET EXHAUSTED: review round ${result.roundsUsed} would exceed the cap of ${result.maxReviewRounds}.\n` +
+        `[quality] Stopping the fix -> re-review loop. Report the outstanding findings and STOP — do not run another panel.\n` +
+        `[quality] Override deliberately with BS_QUALITY_MAX_REVIEW_ROUNDS if a repo genuinely needs more.\n`,
+    };
+  }
+  const mandatoryOverride = mandatoryValidationMayExceedCommitCap(
+    state,
+    priorRounds,
+    result,
+    sentinelPath,
+  );
+  if (result.ok || mandatoryOverride) {
+    return { result, mandatoryOverride };
+  }
+  const wall = result.wallTripped
+    ? `wall-clock ${result.elapsedSeconds}s >= ${result.maxWallSeconds}s `
+    : "";
+  const commits = result.commitTripped
+    ? `fix-commits ${result.commitsUsed} >= ${result.maxFixCommits}`
+    : "";
+  return {
+    result,
+    error:
+      `[quality] BUDGET EXHAUSTED before review round ${result.roundsUsed}: ${wall}${commits}\n` +
+      `[quality] Stopping. Report outstanding findings and STOP.\n`,
+  };
+}
+
 /**
  * `bump-round` — called IMMEDIATELY BEFORE the review panel runs (SKILL.md
  * Step 2.0). Increments rounds_used, persists, then evaluates every budget.
@@ -552,105 +655,32 @@ function mandatoryValidationMayExceedCommitCap(
  * no breaker, because it reads as protection that isn't there.
  */
 function bumpRound(sentinelPath, cwd) {
-  let state = loadState(sentinelPath);
-  if (!state) {
-    process.stderr.write(
-      `[quality] governor sentinel unreadable at ${sentinelPath} — failing CLOSED. The review loop cannot be bounded without it, and an unbounded loop is the exact failure this governor exists to prevent.\n`,
-    );
+  const context = prepareReviewAttempt(sentinelPath, cwd);
+  if (context.error) {
+    process.stderr.write(context.error);
     return 1;
   }
-  if (state._manifest) {
-    try {
-      reconcileManifestRounds(sentinelPath);
-      state = loadState(sentinelPath);
-    } catch (error) {
-      process.stderr.write(
-        `[quality] governor review reconciliation failed CLOSED: ${error.message}\n`,
-      );
-      return 1;
-    }
-  }
-
-  const priorRounds = Number.isFinite(state.rounds_used)
-    ? state.rounds_used
-    : 0;
-  if (state._manifest) {
-    cwd = loadManifest(sentinelPath).manifest.repo.realpath;
-  }
-  state.authorized_attempts = state.authorized_attempts || [];
-  const authorizedHead = reviewHead(state, sentinelPath, cwd);
-  const nextRound = priorRounds + 1;
-  const reusableAttempt = reusableAuthorization(
-    state,
-    state._manifest ? nextRound : priorRounds,
-    authorizedHead,
-  );
-  const retryingRound = Boolean(reusableAttempt);
-  state.rounds_used = retryingRound ? reusableAttempt.number : nextRound;
-
-  // A mandatory validation round has its own reserved allowance. The first
-  // provider review and remediation cannot consume it and make the required
-  // second review impossible.
-  if (
-    state._manifest &&
-    state.rounds_used >= 2 &&
-    Number.isFinite(state.max_rereview_reserve_seconds)
-  ) {
-    state.max_wall_seconds += state.max_rereview_reserve_seconds;
-  }
-
-  const result = evaluateBudget(state, {
-    nowEpoch: Math.floor(Date.now() / 1000),
-    commitCount: resolveCommitCount(cwd, state),
-  });
-
-  if (result.configInvalid) {
-    process.stderr.write(
-      `[quality] governor sentinel missing required fields at ${sentinelPath} — failing CLOSED (halting), not silently passing.\n`,
-    );
+  const decision = reviewBudgetDecision(context, sentinelPath);
+  if (decision.error) {
+    process.stderr.write(decision.error);
     return 1;
   }
-
-  if (result.roundTripped) {
-    process.stderr.write(
-      `[quality] ROUND BUDGET EXHAUSTED: review round ${result.roundsUsed} would exceed the cap of ${result.maxReviewRounds}.\n` +
-        `[quality] Stopping the fix -> re-review loop. Report the outstanding findings and STOP — do not run another panel.\n` +
-        `[quality] Override deliberately with BS_QUALITY_MAX_REVIEW_ROUNDS if a repo genuinely needs more.\n`,
-    );
-    return 1;
-  }
-
-  const mandatoryValidationOverride = mandatoryValidationMayExceedCommitCap(
-    state,
-    priorRounds,
-    result,
-    sentinelPath,
-  );
-  if (!result.ok && !mandatoryValidationOverride) {
-    const wall = result.wallTripped
-      ? `wall-clock ${result.elapsedSeconds}s >= ${result.maxWallSeconds}s `
-      : "";
-    const commits = result.commitTripped
-      ? `fix-commits ${result.commitsUsed} >= ${result.maxFixCommits}`
-      : "";
-    process.stderr.write(
-      `[quality] BUDGET EXHAUSTED before review round ${result.roundsUsed}: ${wall}${commits}\n` +
-        `[quality] Stopping. Report outstanding findings and STOP.\n`,
-    );
-    return 1;
-  }
-  if (mandatoryValidationOverride) {
+  if (decision.mandatoryOverride) {
     process.stdout.write(
       `[quality] fix-commit cap exceeded; authorizing mandatory incremental review round 2 without permitting further remediation.\n`,
     );
   }
-  replaceAuthorization(state, authorizedHead, reusableAttempt);
-  saveState(sentinelPath, state);
+  replaceAuthorization(
+    context.state,
+    context.authorizedHead,
+    context.reusableAttempt,
+  );
+  saveState(sentinelPath, context.state);
 
   process.stdout.write(
-    `[quality] ${retryingRound ? "retrying" : "review"} round ${result.roundsUsed}/${result.maxReviewRounds} ` +
-      `(elapsed ${result.elapsedSeconds}s/${result.maxWallSeconds}s, ` +
-      `fix-commits ${result.commitsUsed}/${result.maxFixCommits})\n`,
+    `[quality] ${context.retryingRound ? "retrying" : "review"} round ${decision.result.roundsUsed}/${decision.result.maxReviewRounds} ` +
+      `(elapsed ${decision.result.elapsedSeconds}s/${decision.result.maxWallSeconds}s, ` +
+      `fix-commits ${decision.result.commitsUsed}/${decision.result.maxFixCommits})\n`,
   );
   return 0;
 }
