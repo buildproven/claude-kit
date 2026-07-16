@@ -10,7 +10,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -140,6 +140,22 @@ function prepareCodexReview(root, manifestPath) {
   return info;
 }
 
+function fakeGh(root, head) {
+  const bin = path.join(root, "fake-bin");
+  mkdirSync(bin);
+  const gh = path.join(bin, "gh");
+  writeFileSync(
+    gh,
+    `#!/usr/bin/env bash
+if [ "$1 $2" = "pr view" ]; then printf '%s\\n' '${head}'; exit 0; fi
+if [ "$1 $2" = "pr checks" ]; then exit 0; fi
+exit 1
+`,
+  );
+  chmodSync(gh, 0o755);
+  return bin;
+}
+
 describe("quality invocation manifest", () => {
   it("bootstraps one explicit manifest from a zsh parent", () => {
     const root = repo("bootstrap");
@@ -198,7 +214,7 @@ printf '%s\\n' "$manifest"
     expect(manifest.agents.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("fails closed when another repository tries to consume the manifest", () => {
+  it("locates an explicit target manifest without trusting the caller cwd", () => {
     const first = repo("first");
     const second = repo("second");
     const manifest = create(first);
@@ -206,8 +222,8 @@ printf '%s\\n' "$manifest"
       cwd: second,
       encoding: "utf8",
     });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toMatch(/repository identity mismatch/);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('"status":"validated"');
   });
 
   it("isolates concurrent repositories even under the same parent session", () => {
@@ -273,7 +289,7 @@ wait
     expect(
       spawnSync("bash", [SELECT, "--manifest", manifest], { cwd: root }).status,
     ).toBe(0);
-  });
+  }, 15_000);
 
   it("excludes provider time from the remediation budget", () => {
     const root = repo("provider-budget");
@@ -319,6 +335,18 @@ wait
     expect(second.from).toBe(first.to);
     expect(second.to).toBe(git(root, ["rev-parse", "HEAD"]));
     expect(second.artifactDir).toContain(second.to);
+  });
+
+  it("refuses a second review when HEAD has not advanced", () => {
+    const root = repo("same-head");
+    const manifest = create(root);
+    prepareCodexReview(root, manifest);
+    const result = spawnSync("node", [INVOCATION, "review-info", manifest], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/descendant HEAD/);
   });
 
   it("rejects ambiguous positional PR syntax", () => {
@@ -448,6 +476,37 @@ wait
     ).not.toBe(0);
   });
 
+  it("recovers a stale lock owned by a dead local process", () => {
+    const root = repo("stale-lock");
+    const manifest = create(root);
+    writeFileSync(
+      `${manifest}.lock`,
+      JSON.stringify({
+        pid: 99999999,
+        hostname: hostname(),
+        acquiredAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    const result = spawnSync(
+      "node",
+      [
+        INVOCATION,
+        "risk",
+        manifest,
+        "--tier",
+        "high",
+        "--agents",
+        "5",
+        "--codex-depth",
+        "high",
+        "--codex-rounds",
+        "1",
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("rejects changed origin identity and contains no shell-evaluable exports", () => {
     const root = repo("origin");
     const manifest = create(root);
@@ -462,7 +521,7 @@ wait
 
   it("simulates first review, fix, incremental review, push, CI, and merge authorization", () => {
     const root = repo("lifecycle");
-    const manifest = create(root, ["--level", "95"]);
+    const manifest = create(root, ["--level", "95", "--pr", "1"]);
     execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
     execFileSync("bash", [SELECT, "--manifest", manifest], { cwd: root });
     const first = prepareCodexReview(root, manifest);
@@ -473,6 +532,11 @@ wait
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
     const second = prepareCodexReview(root, manifest);
     expect(second.from).toBe(first.to);
+    execFileSync(
+      "node",
+      [INVOCATION, "judge", manifest, "--blocking-count", "0"],
+      { cwd: root },
+    );
 
     const state = JSON.parse(readFileSync(manifest, "utf8"));
     const message = `chore: quality stamp
@@ -483,20 +547,13 @@ Reviewed-By: codex (tier=high, findings=0, head=${second.to}, base=${state.revis
     const lifecycle = [];
     lifecycle.push("push");
     lifecycle.push("ci:success");
+    const bin = fakeGh(root, git(root, ["rev-parse", "HEAD"]));
     expect(
-      spawnSync(
-        "bash",
-        [
-          AUTHORIZE,
-          "--manifest",
-          manifest,
-          "--blocking-count",
-          "0",
-          "--ci-status",
-          "success",
-        ],
-        { cwd: root, encoding: "utf8" },
-      ).status,
+      spawnSync("bash", [AUTHORIZE, "--manifest", manifest], {
+        cwd: root,
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        encoding: "utf8",
+      }).status,
     ).toBe(0);
     lifecycle.push("merge");
     expect(lifecycle).toEqual(["push", "ci:success", "merge"]);
@@ -506,26 +563,22 @@ Reviewed-By: codex (tier=high, findings=0, head=${second.to}, base=${state.revis
     git(root, ["add", "."]);
     git(root, ["commit", "-q", "-m", "unreviewed"]);
     expect(
-      spawnSync(
-        "bash",
-        [
-          AUTHORIZE,
-          "--manifest",
-          manifest,
-          "--blocking-count",
-          "0",
-          "--ci-status",
-          "success",
-        ],
-        { cwd: root },
-      ).status,
+      spawnSync("bash", [AUTHORIZE, "--manifest", manifest], {
+        cwd: root,
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      }).status,
     ).not.toBe(0);
-  });
+  }, 15_000);
 
   it("fails authorization when inventoried findings are replaced", () => {
     const root = repo("artifact-tamper");
     const manifest = create(root);
     const review = prepareCodexReview(root, manifest);
+    execFileSync(
+      "node",
+      [INVOCATION, "judge", manifest, "--blocking-count", "0"],
+      { cwd: root },
+    );
     writeFileSync(
       path.join(review.artifactDir, "codex.findings.txt"),
       "REPLACED\n",
@@ -535,5 +588,23 @@ Reviewed-By: codex (tier=high, findings=0, head=${second.to}, base=${state.revis
         cwd: root,
       }).status,
     ).not.toBe(0);
+  });
+
+  it("blocks authorization when the persisted judge reports findings", () => {
+    const root = repo("judge-block");
+    const manifest = create(root);
+    prepareCodexReview(root, manifest);
+    execFileSync(
+      "node",
+      [INVOCATION, "judge", manifest, "--blocking-count", "2"],
+      { cwd: root },
+    );
+    const result = spawnSync(
+      "node",
+      [INVOCATION, "review-authorization", manifest],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/2 unresolved BLOCKING/);
   });
 });

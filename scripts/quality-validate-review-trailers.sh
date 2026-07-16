@@ -19,6 +19,7 @@ if [ -n "$MANIFEST" ]; then
   AUTH_PROVIDER="$(printf '%s' "$AUTHORIZATION" | jq -r '.provider')"
   AUTH_PRIMARY="$(printf '%s' "$AUTHORIZATION" | jq -r '.primary')"
   AUTH_FALLBACK="$(printf '%s' "$AUTHORIZATION" | jq -r '.fallback')"
+  AUTH_FINDINGS="$(printf '%s' "$AUTHORIZATION" | jq -r '.blockingCount')"
 fi
 
 PARSED="$(git log -1 --format=%B | git interpret-trailers --parse 2>/dev/null)"
@@ -46,7 +47,8 @@ if [ -n "$AUTHORIZATION" ] && {
   [ "$STAMP_HEAD" != "$AUTH_HEAD" ] || [ "$STAMP_BASE" != "$AUTH_BASE" ] ||
   [ "$STAMP_PROVIDER" != "$AUTH_PROVIDER" ] ||
   [ "$STAMP_PRIMARY" != "$AUTH_PRIMARY" ] ||
-  [ "$STAMP_FALLBACK" != "$AUTH_FALLBACK" ]
+  [ "$STAMP_FALLBACK" != "$AUTH_FALLBACK" ] ||
+  [ "$STAMP_FINDINGS" != "$AUTH_FINDINGS" ]
 }; then
   echo "quality trailer does not match manifest authorization" >&2
   exit 1

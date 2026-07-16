@@ -25,5 +25,7 @@ done
   exit 1
 }
 
+ROOT="$(node "$SCRIPT_DIR/quality-invocation.js" locate "$MANIFEST")" || exit 1
+cd "$ROOT" || exit 1
 node "$SCRIPT_DIR/quality-invocation.js" validate "$MANIFEST" >/dev/null || exit 1
 printf '{"manifest":"%s","status":"validated"}\n' "$MANIFEST"

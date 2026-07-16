@@ -432,6 +432,11 @@ function reviewInfo(manifest) {
     (review) => review.status === "success",
   );
   const previous = successful.at(-1);
+  if (previous?.to === manifest.revisions.currentHead) {
+    throw new Error(
+      "review retry requires a descendant HEAD; the current HEAD is already reviewed",
+    );
+  }
   return {
     round: successful.length + 1,
     from: previous?.to || manifest.revisions.baseSha,
@@ -443,6 +448,33 @@ function reviewInfo(manifest) {
       manifest.revisions.currentHead,
       `round-${successful.length + 1}`,
     ),
+  };
+}
+
+function reviewedEvidence(manifest) {
+  return manifest.reviews
+    .filter((review) => review.status === "success")
+    .map((review) => review.inventorySha256)
+    .join(":");
+}
+
+function recordJudge(manifest, options) {
+  const authorization = reviewCoverage(manifest);
+  const blockingCount = Number(options["blocking-count"]);
+  if (!Number.isSafeInteger(blockingCount) || blockingCount < 0) {
+    throw new Error("judge blocking-count must be a non-negative integer");
+  }
+  manifest.judge = {
+    head: authorization.head,
+    reviewCount: manifest.reviews.filter(
+      (review) => review.status === "success",
+    ).length,
+    blockingCount,
+    evidenceSha256: crypto
+      .createHash("sha256")
+      .update(reviewedEvidence(manifest))
+      .digest("hex"),
+    recordedAt: new Date().toISOString(),
   };
 }
 
@@ -634,7 +666,7 @@ function verifyReviewArtifact(manifest, review) {
   verifyInventory(manifest, review, inventoryFile, artifactDir);
 }
 
-function reviewAuthorization(manifest) {
+function reviewCoverage(manifest) {
   const successful = manifest.reviews.filter(
     (review) => review.status === "success",
   );
@@ -667,21 +699,74 @@ function reviewAuthorization(manifest) {
   };
 }
 
+function reviewAuthorization(manifest) {
+  const authorization = reviewCoverage(manifest);
+  const successful = manifest.reviews.filter(
+    (review) => review.status === "success",
+  );
+  const evidenceSha256 = crypto
+    .createHash("sha256")
+    .update(reviewedEvidence(manifest))
+    .digest("hex");
+  if (
+    manifest.judge?.head !== manifest.revisions.currentHead ||
+    manifest.judge?.reviewCount !== successful.length ||
+    manifest.judge?.evidenceSha256 !== evidenceSha256
+  ) {
+    throw new Error(
+      "judge result is missing, stale, or not bound to review evidence",
+    );
+  }
+  if (manifest.judge.blockingCount !== 0) {
+    throw new Error(
+      `${manifest.judge.blockingCount} unresolved BLOCKING finding(s)`,
+    );
+  }
+  return { ...authorization, blockingCount: manifest.judge.blockingCount };
+}
+
+function openManifestLock(lock) {
+  try {
+    return fs.openSync(lock, "wx", 0o600);
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+  }
+  let owner;
+  try {
+    owner = parseJson(fs.readFileSync(lock, "utf8"), "quality manifest lock");
+  } catch {
+    throw new Error("quality manifest is locked by another process");
+  }
+  const localOwner =
+    owner?.hostname === os.hostname() && Number.isSafeInteger(owner?.pid);
+  let ownerAlive = true;
+  if (localOwner) {
+    try {
+      process.kill(owner.pid, 0);
+    } catch (error) {
+      if (error.code === "ESRCH") ownerAlive = false;
+      else throw error;
+    }
+  }
+  if (!localOwner || ownerAlive) {
+    throw new Error("quality manifest is locked by another process");
+  }
+  fs.unlinkSync(lock);
+  return fs.openSync(lock, "wx", 0o600);
+}
+
 function withManifestLock(file, mutation) {
   const lock = `${path.resolve(file)}.lock`;
-  let descriptor;
+  const descriptor = openManifestLock(lock);
   try {
-    descriptor = fs.openSync(lock, "wx", 0o600);
-  } catch (error) {
-    if (error.code === "EEXIST") {
-      throw new Error("quality manifest is locked by another process", {
-        cause: error,
-      });
-    }
-    throw error;
-  }
-  try {
-    fs.writeFileSync(descriptor, `${process.pid}\n`);
+    fs.writeFileSync(
+      descriptor,
+      `${JSON.stringify({
+        pid: process.pid,
+        hostname: os.hostname(),
+        acquiredAt: new Date().toISOString(),
+      })}\n`,
+    );
     const loaded = loadManifest(file);
     const before = loaded.manifest.manifestRevision;
     mutation(loaded.manifest, loaded.manifestPath);
@@ -712,7 +797,7 @@ function printValue(value) {
 
 function mutate(manifestArg, operation) {
   return withManifestLock(manifestArg, (locked) => {
-    validateIdentity(locked, process.cwd());
+    validateIdentity(locked, locked.repo.realpath);
     operation(locked);
   });
 }
@@ -730,7 +815,7 @@ const COMMANDS = {
   approve: ({ manifestArg, rawArgs }) => {
     const options = parseOptions(rawArgs);
     withManifestLock(manifestArg, (locked) => {
-      validateIdentity(locked, process.cwd());
+      validateIdentity(locked, locked.repo.realpath);
       renewApproval(locked, options);
     });
   },
@@ -740,6 +825,8 @@ const COMMANDS = {
     mutate(manifestArg, (locked) =>
       recordReview(locked, parseOptions(rawArgs)),
     ),
+  judge: ({ manifestArg, rawArgs }) =>
+    mutate(manifestArg, (locked) => recordJudge(locked, parseOptions(rawArgs))),
   inventory: ({ manifest, rawArgs }) => {
     const options = parseOptions(rawArgs);
     writeArtifactInventory(manifest, options["artifact-dir"], options.provider);
@@ -775,8 +862,12 @@ function runCommand(command, rawArgs) {
   if (!manifestArg)
     throw new Error(`${command || "command"} requires a manifest`);
   const { manifest } = loadManifest(manifestArg);
+  if (command === "locate") {
+    process.stdout.write(`${manifest.repo.realpath}\n`);
+    return;
+  }
   if (command === "advance") return runAdvance(manifestArg, manifest);
-  validateIdentity(manifest, process.cwd());
+  validateIdentity(manifest, manifest.repo.realpath);
   const handler = COMMANDS[command];
   if (!handler)
     throw new Error(`unknown quality invocation command '${command}'`);
@@ -804,6 +895,7 @@ module.exports = {
   parseOptions,
   parseJson,
   recordReview,
+  recordJudge,
   renewApproval,
   repoKey,
   reviewInfo,

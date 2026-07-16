@@ -11,6 +11,24 @@ Run autonomously to completion. Every mutable fact belongs to one versioned
 JSON invocation manifest. Never infer active state from environment inheritance,
 session IDs, globbing, mtimes, or a "latest" pointer.
 
+Resolve the installed runtime once, then reuse it:
+
+```bash
+QUALITY_SCRIPTS_DIR=""
+for candidate in \
+  "${CLAUDE_PLUGIN_ROOT:-}/scripts" \
+  "${CLAUDE_KIT_ROOT:-}/scripts" \
+  "$HOME/.claude/scripts" \
+  "./scripts"
+do
+  if [ -f "$candidate/quality-invocation.js" ]; then
+    QUALITY_SCRIPTS_DIR="$(cd "$candidate" && pwd -P)"
+    break
+  fi
+done
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
+```
+
 ## 1. Manifest handoff
 
 The wrapper has already run bootstrap and must invoke this fork with exactly
@@ -20,9 +38,9 @@ in every command. Never source or eval manifest content.
 Before a command block needs state, validate it and fetch only required fields:
 
 ```bash
-bash "$HOME/.claude/scripts/quality-load-root.sh" \
+bash "$QUALITY_SCRIPTS_DIR/quality-load-root.sh" \
   --manifest "<exact-manifest-path>"
-GIT_ROOT="$(node "$HOME/.claude/scripts/quality-invocation.js" \
+GIT_ROOT="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" \
   field "<exact-manifest-path>" repo.realpath)"
 cd "$GIT_ROOT"
 ```
@@ -32,9 +50,9 @@ Do not source Bash-only scripts from zsh.
 ## 2. Risk and agent contract
 
 ```bash
-bash "$HOME/.claude/scripts/quality-risk-resolve.sh" \
+bash "$QUALITY_SCRIPTS_DIR/quality-risk-resolve.sh" \
   --manifest "<exact-manifest-path>"
-bash "$HOME/.claude/scripts/quality-select-agents.sh" \
+bash "$QUALITY_SCRIPTS_DIR/quality-select-agents.sh" \
   --manifest "<exact-manifest-path>"
 ```
 
@@ -52,7 +70,7 @@ explicitly selected for a config-only repository.
 Formatting remediation must use:
 
 ```bash
-node "$HOME/.claude/scripts/quality-format.js" \
+node "$QUALITY_SCRIPTS_DIR/quality-format.js" \
   --manifest "<exact-manifest-path>" -- <changed-files...>
 ```
 
@@ -65,9 +83,9 @@ directly to Prettier.
 Before every review:
 
 ```bash
-node "$HOME/.claude/scripts/quality-run-governor.js" \
+node "$QUALITY_SCRIPTS_DIR/quality-run-governor.js" \
   bump-round "<exact-manifest-path>"
-bash "$HOME/.claude/scripts/quality-run-review.sh" \
+bash "$QUALITY_SCRIPTS_DIR/quality-run-review.sh" \
   --manifest "<exact-manifest-path>"
 ```
 
@@ -89,6 +107,12 @@ path. Round and fix-commit caps remain hard.
 
 Read only findings artifacts listed by the manifest. Verify artifact identity
 before synthesis. Classify findings as BLOCKING, WARNING, or SUPPRESSED.
+Persist the synthesis before stamping:
+
+```bash
+node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" judge \
+  "<exact-manifest-path>" --blocking-count "$BLOCKING_COUNT"
+```
 
 - Any BLOCKING finding must be fixed.
 - Before a fix, run governor `check` against the same manifest.
@@ -111,10 +135,8 @@ Reviewed-By: <provider> (tier=<tier>, findings=0, head=<reviewed-head>, base=<ba
 ```
 
 ```bash
-bash "$HOME/.claude/scripts/quality-authorize-merge.sh" \
-  --manifest "<exact-manifest-path>" \
-  --blocking-count "$BLOCKING_COUNT" \
-  --ci-status success
+bash "$QUALITY_SCRIPTS_DIR/quality-authorize-merge.sh" \
+  --manifest "<exact-manifest-path>"
 ```
 
 Merge is forbidden when:
