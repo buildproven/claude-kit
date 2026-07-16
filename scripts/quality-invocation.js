@@ -612,6 +612,23 @@ function providerFindings(manifest) {
         });
       });
     }
+    for (const item of inventory.files.filter((file) =>
+      file.name.endsWith(".findings.txt"),
+    )) {
+      const text = fs
+        .readFileSync(path.join(review.artifactDir, item.name), "utf8")
+        .trim();
+      if (!text || text.startsWith("NO FINDINGS.")) continue;
+      findings.push({
+        id: crypto
+          .createHash("sha256")
+          .update(`${review.inventorySha256}:${item.name}:${text}`)
+          .digest("hex"),
+        severity: "blocking",
+        title: text.split("\n")[0],
+        source: item.name,
+      });
+    }
   }
   return findings;
 }

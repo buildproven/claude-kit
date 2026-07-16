@@ -39,7 +39,7 @@ done
   echo "❌ --manifest requires a path" >&2
   exit 1
 }
-set -- "${BOOTSTRAP_ARGS[@]}"
+set -- ${BOOTSTRAP_ARGS[@]+"${BOOTSTRAP_ARGS[@]}"}
 
 # Safe resumption is explicit: the caller must pass the exact manifest path.
 # Never discover an active invocation through a session ID, glob, pointer, or
@@ -204,10 +204,14 @@ if [ "$ARGS_MERGE" = true ]; then
     echo "   Move uncommitted changes there with: git stash; cd <worktree>; git stash pop"
     exit 1
   fi
-  PR_QUERY=()
-  [ -n "${RES_PR:-}" ] && PR_QUERY=("$RES_PR")
-  PR_JSON="$(gh pr view "${PR_QUERY[@]}" \
-    --json number,baseRefName,headRefOid 2>/dev/null)" || {
+  if [ -n "${RES_PR:-}" ]; then
+    PR_JSON="$(gh pr view "$RES_PR" \
+      --json number,baseRefName,headRefOid 2>/dev/null)"
+  else
+    PR_JSON="$(gh pr view \
+      --json number,baseRefName,headRefOid 2>/dev/null)"
+  fi
+  [ -n "$PR_JSON" ] || {
     echo "❌ /bs:quality --merge requires an open PR for the target branch." >&2
     exit 1
   }

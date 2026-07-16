@@ -17,6 +17,11 @@ done
 }
 
 node "$SCRIPT_DIR/quality-invocation.js" review-authorization "$MANIFEST" >/dev/null || exit 1
+MERGE_REQUESTED="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" options.merge)"
+[ "$MERGE_REQUESTED" = true ] || {
+  echo "❌ MERGE BLOCKED: invocation was created without --merge." >&2
+  exit 1
+}
 PR="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" repo.pr)"
 EXPECTED_HEAD="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.currentHead)"
 ROOT="$(node "$SCRIPT_DIR/quality-invocation.js" locate "$MANIFEST")" || exit 1
@@ -79,10 +84,20 @@ gh pr merge "$PR" --squash --match-head-commit "$ACTUAL_HEAD" || {
   exit 1
 }
 MERGED_JSON="$(gh pr view "$PR" --json state,mergedAt,mergeCommit)" || exit 1
-[ "$(printf '%s' "$MERGED_JSON" | jq -r '.state')" = MERGED ] &&
+if ! { [ "$(printf '%s' "$MERGED_JSON" | jq -r '.state')" = MERGED ] &&
   [ "$(printf '%s' "$MERGED_JSON" | jq -r '.mergedAt // empty')" != "" ] &&
-  [ "$(printf '%s' "$MERGED_JSON" | jq -r '.mergeCommit.oid // empty')" != "" ] || {
-    echo "❌ MERGE BLOCKED: PR was queued or remains open after merge request." >&2
+  [ "$(printf '%s' "$MERGED_JSON" | jq -r '.mergeCommit.oid // empty')" != "" ]; }; then
+  gh pr merge "$PR" --disable-auto >/dev/null 2>&1 || {
+    echo "❌ MERGE BLOCKED: PR queued without a verifiable rollback." >&2
     exit 1
   }
+  ROLLED_BACK="$(gh pr view "$PR" --json state,autoMergeRequest)" || exit 1
+  [ "$(printf '%s' "$ROLLED_BACK" | jq -r '.state')" = OPEN ] &&
+    [ "$(printf '%s' "$ROLLED_BACK" | jq -r '.autoMergeRequest // empty')" = "" ] || {
+    echo "❌ MERGE BLOCKED: queued merge could not be rolled back." >&2
+    exit 1
+  }
+  echo "❌ MERGE BLOCKED: GitHub queued instead of completing the merge; queue request was rolled back." >&2
+  exit 1
+fi
 echo "[quality] merged exact reviewed revision $ACTUAL_HEAD"

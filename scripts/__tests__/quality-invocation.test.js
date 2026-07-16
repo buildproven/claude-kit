@@ -549,7 +549,7 @@ wait
 
   it("simulates first review, fix, incremental review, push, CI, and merge authorization", () => {
     const root = repo("lifecycle");
-    const manifest = create(root, ["--level", "95", "--pr", "1"]);
+    const manifest = create(root, ["--level", "95", "--pr", "1", "--merge"]);
     execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
     execFileSync("bash", [SELECT, "--manifest", manifest], { cwd: root });
     const first = prepareCodexReview(root, manifest);
