@@ -218,6 +218,7 @@ Quality-Base: ${base}`;
     expect(source).toMatch(/codex exec --ephemeral -s read-only --json/);
     expect(source).toMatch(/review_selector=--base/);
     expect(source).toMatch(/review_selector=--commit/);
+    expect(source).not.toMatch(/\$review_selector_value" -/);
     expect(source).toMatch(/record_provider_exhaustion Codex/);
     expect(source).toMatch(/quality-provider-error\.js/);
     expect(source).not.toMatch(/provider_stderr_exhausted/);

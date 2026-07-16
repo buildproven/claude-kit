@@ -101,7 +101,7 @@ run_claude_review() {
 }
 
 run_codex_review() {
-  local bounded normalizer schema prompt_file raw_file normalized_file error_file rc pass pass_timeout
+  local bounded normalizer schema raw_file normalized_file error_file rc pass pass_timeout
   local review_selector review_selector_value
   bounded="$SCRIPT_DIR/quality-run-bounded.sh"
   normalizer="$SCRIPT_DIR/quality-normalize-codex-review.sh"
@@ -118,13 +118,6 @@ run_codex_review() {
     raw_file="$REVIEW_OUT/codex-${pass}.json"
     normalized_file="$REVIEW_OUT/codex-${pass}.normalized.json"
     error_file="$REVIEW_OUT/codex-${pass}.stderr"
-    prompt_file="$REVIEW_OUT/codex-${pass}.prompt"
-    {
-      echo "Independent code-review pass $pass/$QUALITY_REVIEW_PASSES. Tier: $QUALITY_REVIEW_TIER. $QUALITY_REVIEW_FOCUS"
-      echo "Repository/revision identity (must match every finding):"
-      cat "$REVIEW_OUT/identity.json"
-      echo "Review only the native Codex review target. Return structured findings with precise file:line evidence."
-    } > "$prompt_file"
     if [ "$REVIEW_ROUND" -gt 1 ]; then
       review_selector=--commit
       review_selector_value="$REVIEWED_HEAD"
@@ -138,8 +131,8 @@ run_codex_review() {
       codex exec --ephemeral -s read-only --json \
       -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
       --output-schema "$schema" -o "$raw_file" review \
-      "$review_selector" "$review_selector_value" - \
-      < "$prompt_file" > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file"
+      "$review_selector" "$review_selector_value" \
+      > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file"
     rc=$?
     if [ "$rc" -ne 0 ]; then
       if node "$SCRIPT_DIR/quality-provider-error.js" \
