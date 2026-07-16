@@ -89,7 +89,8 @@ run_claude_review() {
 }
 
 run_codex_review() {
-  local bounded normalizer schema prompt_file raw_file normalized_file error_file rc pass pass_timeout
+  local bounded normalizer schema prompt_file raw_file normalized_file error_file rc pass overall_rc
+  local pids=()
   bounded="$(bs_quality_find_script quality-run-bounded.sh)" || return 2
   normalizer="$(bs_quality_find_script quality-normalize-codex-review.sh)" || return 2
   schema="$SCRIPT_DIR/schemas/quality-review-output.schema.json"
@@ -98,12 +99,13 @@ run_codex_review() {
   codex login status 2>&1 | grep -q 'Logged in' || return 2
 
   : > "$REVIEW_OUT/codex.findings.txt"
-  pass_timeout=$((QUALITY_REVIEW_TIMEOUT / QUALITY_REVIEW_PASSES))
-  [ "$pass_timeout" -ge 30 ] || pass_timeout=30
+
+  # Independent passes share the tier's wall-clock budget, so run them
+  # concurrently. Dividing the budget across sequential xhigh passes made a
+  # critical review mechanically unable to finish even when Codex was healthy.
   pass=1
   while [ "$pass" -le "$QUALITY_REVIEW_PASSES" ]; do
     raw_file="$REVIEW_OUT/codex-${pass}.json"
-    normalized_file="$REVIEW_OUT/codex-${pass}.normalized.json"
     error_file="$REVIEW_OUT/codex-${pass}.stderr"
     prompt_file="$REVIEW_OUT/codex-${pass}.prompt"
     {
@@ -113,24 +115,48 @@ run_codex_review() {
       echo "Commit log:"; cat "$REVIEW_OUT/log.txt"
       echo "Diff:"; cat "$REVIEW_OUT/diff.txt"
     } > "$prompt_file"
-    bash "$bounded" --timeout "$pass_timeout" -- codex exec --ephemeral -s read-only \
+    bash "$bounded" --timeout "$QUALITY_REVIEW_TIMEOUT" -- codex exec --ephemeral -s read-only \
       -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
       --output-schema "$schema" -o "$raw_file" - \
-      < "$prompt_file" > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file"
+      < "$prompt_file" > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file" &
+    pids+=("$!")
+    pass=$((pass + 1))
+  done
+
+  overall_rc=0
+  pass=1
+  while [ "$pass" -le "$QUALITY_REVIEW_PASSES" ]; do
+    wait "${pids[$((pass - 1))]}"
     rc=$?
     if [ "$rc" -ne 0 ]; then
       # The bounded runner's timeout is authoritative. Codex echoes the full
       # review prompt (including the supplied diff) to stderr, so scanning a
       # timed-out invocation for quota phrases can match source/test text and
       # misclassify the timeout as account exhaustion.
-      [ "$rc" -eq 124 ] && return 76
+      if [ "$rc" -eq 124 ]; then
+        [ "$overall_rc" -eq 0 ] && overall_rc=76
+        pass=$((pass + 1))
+        continue
+      fi
+      raw_file="$REVIEW_OUT/codex-${pass}.json"
+      error_file="$REVIEW_OUT/codex-${pass}.stderr"
       if provider_exhausted "$raw_file" || provider_exhausted "$error_file"; then
         record_provider_exhaustion Codex "$raw_file" "$error_file"
-        return 75
+        overall_rc=75
+      elif grep -Eiq 'not authenticated|not logged in|login required|setup required' "$error_file" 2>/dev/null; then
+        [ "$overall_rc" -eq 0 ] && overall_rc=2
+      elif [ "$overall_rc" -eq 0 ]; then
+        overall_rc=1
       fi
-      grep -Eiq 'not authenticated|not logged in|login required|setup required' "$error_file" 2>/dev/null && return 2
-      return 1
     fi
+    pass=$((pass + 1))
+  done
+  [ "$overall_rc" -ne 0 ] && return "$overall_rc"
+
+  pass=1
+  while [ "$pass" -le "$QUALITY_REVIEW_PASSES" ]; do
+    raw_file="$REVIEW_OUT/codex-${pass}.json"
+    normalized_file="$REVIEW_OUT/codex-${pass}.normalized.json"
     if ! bash "$normalizer" "$raw_file" "$normalized_file"; then
       echo "INCONCLUSIVE: Codex output could not be parsed — human review required" >> "$REVIEW_OUT/codex.findings.txt"
       return 4

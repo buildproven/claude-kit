@@ -252,13 +252,26 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
 
   it("classifies a bounded Codex timeout before scanning echoed prompt text", () => {
     const source = readFileSync(RUN_REVIEW, "utf8");
-    const timeoutClassification = '[ "$rc" -eq 124 ] && return 76';
+    const timeoutClassification = 'if [ "$rc" -eq 124 ]; then';
     const exhaustionScan =
       'if provider_exhausted "$raw_file" || provider_exhausted "$error_file"; then';
 
     expect(source.indexOf(timeoutClassification)).toBeGreaterThan(-1);
     expect(source.indexOf(timeoutClassification)).toBeLessThan(
       source.indexOf(exhaustionScan),
+    );
+  });
+
+  it("runs independent Codex passes concurrently under the tier deadline", () => {
+    const source = readFileSync(RUN_REVIEW, "utf8");
+
+    expect(source).toContain(
+      'bash "$bounded" --timeout "$QUALITY_REVIEW_TIMEOUT" -- codex exec',
+    );
+    expect(source).toMatch(/2>"\$error_file" &\n\s+pids\+=\("\$!"\)/);
+    expect(source).toContain('wait "${pids[$((pass - 1))]}"');
+    expect(source).not.toContain(
+      "pass_timeout=$((QUALITY_REVIEW_TIMEOUT / QUALITY_REVIEW_PASSES))",
     );
   });
 
