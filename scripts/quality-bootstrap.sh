@@ -111,10 +111,24 @@ if [ -n "$MANIFEST_ARG" ]; then
     echo "❌ quality invocation manifest not found: $MANIFEST_ARG" >&2
     exit 1
   }
-  node "$SCRIPT_DIR/quality-invocation.js" advance "$MANIFEST_ARG" >/dev/null || exit 1
   RESUME_ROOT="$(node -e 'const q=require(process.argv[1]); process.stdout.write(q.loadManifest(process.argv[2]).manifest.repo.realpath)' \
     "$SCRIPT_DIR/quality-invocation.js" "$MANIFEST_ARG")" || exit 1
   cd "$RESUME_ROOT" || exit 1
+  RESUME_PR="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" repo.pr)"
+  ADVANCE_ARGS=(advance "$MANIFEST_ARG")
+  if [ -n "$RESUME_PR" ] && [ "$RESUME_PR" != null ]; then
+    RESUME_PR_JSON="$(gh pr view "$RESUME_PR" \
+      --json headRefName,headRepository,isCrossRepository 2>/dev/null)" || exit 1
+    RESUME_GITHUB_REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
+    RESUME_HEAD_REF="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.headRefName')" || exit 1
+    RESUME_HEAD_REPOSITORY="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.headRepository.nameWithOwner')" || exit 1
+    RESUME_CROSS_REPOSITORY="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.isCrossRepository')" || exit 1
+    ADVANCE_ARGS+=(--github-repo "$RESUME_GITHUB_REPOSITORY" \
+      --head-ref "$RESUME_HEAD_REF" \
+      --head-repository "$RESUME_HEAD_REPOSITORY" \
+      --cross-repository "$RESUME_CROSS_REPOSITORY")
+  fi
+  node "$SCRIPT_DIR/quality-invocation.js" "${ADVANCE_ARGS[@]}" >/dev/null || exit 1
   INVOCATION_ID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" invocationId)"
   HEAD_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" revisions.currentHead)"
   echo "BS_QUALITY_MANIFEST=$MANIFEST_ARG"

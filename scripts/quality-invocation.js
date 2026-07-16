@@ -739,6 +739,40 @@ function setAgents(manifest, names) {
   manifest.agents = names;
 }
 
+function bindPrRepositoryIdentity(manifest, options) {
+  if (manifest.repo.pr === null) return;
+  const identity = {
+    githubRepository: firstValue(options["github-repo"], null),
+    headRefName: firstValue(options["head-ref"], null),
+    headRepository: firstValue(options["head-repository"], null),
+    isCrossRepository:
+      options["cross-repository"] === "true"
+        ? true
+        : options["cross-repository"] === "false"
+          ? false
+          : null,
+  };
+  if (
+    !identity.githubRepository ||
+    !identity.headRefName ||
+    !identity.headRepository ||
+    identity.isCrossRepository === null ||
+    identity.isCrossRepository !==
+      (identity.githubRepository !== identity.headRepository)
+  ) {
+    throw new Error("resumed PR repository identity is incomplete");
+  }
+  for (const [key, value] of Object.entries(identity)) {
+    if (manifest.repo[key] !== null && manifest.repo[key] !== undefined) {
+      if (manifest.repo[key] !== value) {
+        throw new Error(`resumed PR ${key} identity mismatch`);
+      }
+    } else {
+      manifest.repo[key] = value;
+    }
+  }
+}
+
 function approvalRecordValid(manifest, approval) {
   const expected = {
     repoKey: manifest.repo.key,
@@ -1725,9 +1759,11 @@ const COMMANDS = {
     process.stdout.write(`${reviewTrailers(manifest)}\n`),
 };
 
-function runAdvance(manifestArg, manifest) {
+function runAdvance(manifestArg, manifest, rawArgs) {
+  const options = parseOptions(rawArgs);
   const updated = withManifestLock(manifestArg, (locked) => {
     validateIdentity(locked, manifest.repo.realpath, { requireHead: false });
+    bindPrRepositoryIdentity(locked, options);
     advanceHead(locked, manifest.repo.realpath);
     validateIdentity(locked, manifest.repo.realpath);
     if (locked.governor.providerDeadlineHead !== locked.revisions.currentHead) {
@@ -1767,7 +1803,7 @@ function runCommand(command, rawArgs) {
     process.stdout.write(`${manifest.repo.realpath}\n`);
     return;
   }
-  if (command === "advance") return runAdvance(manifestArg, manifest);
+  if (command === "advance") return runAdvance(manifestArg, manifest, rawArgs);
   if (manifest[NEEDS_REQUIRED_GATES_MIGRATION]) {
     throw new Error(
       "legacy manifest requires an explicit advance before gate evaluation",
