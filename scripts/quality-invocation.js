@@ -86,8 +86,10 @@ function normalizeManifestCollections(manifest) {
   manifest.governor ??= {};
   manifest.governor.authorizedAttempts ??= [];
   manifest.governor.maxProviderAttempts ??= 6;
+  manifest.governor.providerWindowSeconds ??= 3600;
   manifest.governor.providerDeadlineEpoch ??=
-    manifest.governor.startedAtEpoch + 3600;
+    manifest.governor.startedAtEpoch + manifest.governor.providerWindowSeconds;
+  manifest.governor.providerDeadlineHead ??= null;
   manifest.governor.providerAttempts ??= [];
   if (
     manifest.requiredGatesPolicyVersion === undefined ||
@@ -399,7 +401,9 @@ function buildGovernor(head) {
       "max provider attempts",
       1,
     ),
+    providerWindowSeconds: providerDeadlineSeconds,
     providerDeadlineEpoch: startedAtEpoch + providerDeadlineSeconds,
+    providerDeadlineHead: head,
     providerAttempts: [],
     remediationStartedAtEpoch: null,
     findingsSeen: [],
@@ -1722,6 +1726,11 @@ function runAdvance(manifestArg, manifest) {
     validateIdentity(locked, manifest.repo.realpath, { requireHead: false });
     advanceHead(locked, manifest.repo.realpath);
     validateIdentity(locked, manifest.repo.realpath);
+    if (locked.governor.providerDeadlineHead !== locked.revisions.currentHead) {
+      locked.governor.providerDeadlineEpoch =
+        Math.floor(Date.now() / 1000) + locked.governor.providerWindowSeconds;
+      locked.governor.providerDeadlineHead = locked.revisions.currentHead;
+    }
     const discovered = discoverRequiredGates(
       locked.repo.realpath,
       { "skip-tests": locked.options?.skipTests === true },

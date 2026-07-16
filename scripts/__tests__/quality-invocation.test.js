@@ -589,6 +589,34 @@ wait
     expect(pastDeadline.stderr).toMatch(/absolute provider deadline exhausted/);
   });
 
+  it("opens one bounded provider window for each advanced review head", () => {
+    const root = repo("provider-window");
+    const manifestPath = create(root, [], {
+      BS_QUALITY_MAX_PROVIDER_SECONDS: "120",
+    });
+    const initial = JSON.parse(readFileSync(manifestPath, "utf8"));
+    initial.governor.providerDeadlineEpoch = Math.floor(Date.now() / 1000) - 1;
+    writeFileSync(manifestPath, `${JSON.stringify(initial, null, 2)}\n`);
+
+    execFileSync("node", [INVOCATION, "advance", manifestPath], { cwd: root });
+    let current = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(current.governor.providerDeadlineEpoch).toBe(
+      initial.governor.providerDeadlineEpoch,
+    );
+
+    writeFileSync(path.join(root, "next-head.js"), "export const next = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "fix: advance provider window"]);
+    execFileSync("node", [INVOCATION, "advance", manifestPath], { cwd: root });
+    current = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(current.governor.providerDeadlineHead).toBe(
+      git(root, ["rev-parse", "HEAD"]),
+    );
+    expect(current.governor.providerDeadlineEpoch).toBeGreaterThan(
+      Math.floor(Date.now() / 1000),
+    );
+  });
+
   it("does not accept break-glass approval through wrapper argv", () => {
     const root = repo("approval-argv");
     const result = spawnSync("node", [WRAPPER, BOOTSTRAP], {
