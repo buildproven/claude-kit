@@ -639,6 +639,9 @@ wait
     expect(current.governor.providerDeadlineEpoch).toBeGreaterThan(
       Math.floor(Date.now() / 1000),
     );
+    expect(current.governor.campaignDeadlineEpoch).toBeGreaterThan(
+      current.governor.providerDeadlineEpoch,
+    );
   });
 
   it("starts the provider phase clock at the first attempt, not bootstrap", () => {
