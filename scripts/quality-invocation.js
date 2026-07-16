@@ -85,11 +85,21 @@ function normalizeManifestCollections(manifest) {
   manifest.merge.invalidatedStamps ??= [];
   manifest.governor ??= {};
   manifest.governor.authorizedAttempts ??= [];
-  if (manifest.requiredGatesPolicyVersion !== REQUIRED_GATES_POLICY_VERSION) {
+  manifest.governor.maxProviderAttempts ??= 6;
+  manifest.governor.providerDeadlineEpoch ??=
+    manifest.governor.startedAtEpoch + 3600;
+  manifest.governor.providerAttempts ??= [];
+  if (manifest.requiredGatesPolicyVersion === undefined) {
     Object.defineProperty(manifest, NEEDS_REQUIRED_GATES_MIGRATION, {
       value: true,
       writable: true,
     });
+  } else if (
+    manifest.requiredGatesPolicyVersion !== REQUIRED_GATES_POLICY_VERSION
+  ) {
+    throw new Error(
+      `unsupported required-gates policy version ${manifest.requiredGatesPolicyVersion}`,
+    );
   }
   manifest.requiredGates ??= [];
 }
@@ -202,56 +212,117 @@ function firstValue(...values) {
   return values.find((value) => value !== undefined && value !== "");
 }
 
-function discoverRequiredGates(root, options) {
-  const packageFile = path.join(root, "package.json");
+function committedFile(root, head, file) {
+  try {
+    return git(root, ["show", `${head}:${file}`]);
+  } catch {
+    return null;
+  }
+}
+
+function packageManagerAt(root, head, packageJson) {
+  const declared = String(packageJson.packageManager || "").split("@")[0];
+  if (["npm", "pnpm", "yarn", "bun"].includes(declared)) return declared;
+  if (committedFile(root, head, "pnpm-lock.yaml") !== null) return "pnpm";
+  if (committedFile(root, head, "yarn.lock") !== null) return "yarn";
+  if (
+    committedFile(root, head, "bun.lock") !== null ||
+    committedFile(root, head, "bun.lockb") !== null
+  ) {
+    return "bun";
+  }
+  return "npm";
+}
+
+function scriptGate(name, script, manager, allowSkip = false) {
+  return {
+    name,
+    source: `package-script:${script}`,
+    command: `${manager} run ${script}`,
+    executable: manager,
+    args: ["run", script],
+    allowSkip,
+  };
+}
+
+function baselineGate(name, scripts, candidates, manager, allowSkip = false) {
+  const script = candidates.find((candidate) =>
+    Object.hasOwn(scripts, candidate),
+  );
+  return script
+    ? scriptGate(name, script, manager, allowSkip)
+    : {
+        name,
+        source: "baseline-policy",
+        command: `external:${name}`,
+        executable: null,
+        args: [],
+        allowSkip,
+      };
+}
+
+function discoverRequiredGates(
+  root,
+  options,
+  head = git(root, ["rev-parse", "HEAD"]),
+) {
+  const packageContent = committedFile(root, head, "package.json");
   let scripts = {};
-  if (fs.existsSync(packageFile)) {
-    const packageJson = parseJson(
-      fs.readFileSync(packageFile, "utf8"),
-      "package.json",
-    );
+  let packageJson = {};
+  if (packageContent !== null) {
+    packageJson = parseJson(packageContent, `package.json at ${head}`);
     scripts = packageJson.scripts || {};
   }
+  const manager = packageManagerAt(root, head, packageJson);
   const required = [
-    { name: "lint", source: "baseline-policy", allowSkip: false },
-    {
-      name: "test",
-      source: "baseline-policy",
-      allowSkip: options["skip-tests"] === true,
-    },
-    { name: "security", source: "baseline-policy", allowSkip: false },
+    baselineGate("lint", scripts, ["lint", "lint:check"], manager),
+    baselineGate(
+      "test",
+      scripts,
+      ["test", "test:unit", "test:ci"],
+      manager,
+      options["skip-tests"] === true,
+    ),
+    baselineGate("security", scripts, ["security:audit", "security"], manager),
   ];
   if (typeof scripts.build === "string") {
-    required.push({
-      name: "build",
-      source: "package-script:build",
-      allowSkip: false,
-    });
+    required.push(scriptGate("build", "build", manager));
   }
   const typeScript = ["type-check:all", "type-check", "typecheck"].find(
     (name) => typeof scripts[name] === "string",
   );
   if (typeScript) {
-    required.push({
-      name: "type",
-      source: `package-script:${typeScript}`,
-      allowSkip: false,
-    });
+    required.push(scriptGate("type", typeScript, manager));
   }
   const consumerScript = Object.keys(scripts).find((name) =>
     /^test:consumer(?:$|[-:])/.test(name),
   );
-  const consumerFixture = fs.existsSync(
-    path.join(root, "tests", "consumer-workflow-integration.test.js"),
-  );
+  const consumerFixture =
+    committedFile(root, head, "tests/consumer-workflow-integration.test.js") !==
+    null;
   if (consumerScript || consumerFixture) {
-    required.push({
-      name: "consumer",
-      source: consumerScript
-        ? `package-script:${consumerScript}`
-        : "fixture:tests/consumer-workflow-integration.test.js",
-      allowSkip: false,
-    });
+    required.push(
+      consumerScript
+        ? scriptGate("consumer", consumerScript, manager)
+        : {
+            name: "consumer",
+            source: "fixture:tests/consumer-workflow-integration.test.js",
+            command: "node tests/consumer-workflow-integration.test.js",
+            executable: process.execPath,
+            args: ["tests/consumer-workflow-integration.test.js"],
+            allowSkip: false,
+          },
+    );
+  }
+  return required;
+}
+
+function unionRequiredGates(existing, discovered) {
+  const required = [...existing];
+  for (const gate of discovered) {
+    if (!required.some((current) => current.name === gate.name)) {
+      required.push(gate);
+    }
   }
   return required;
 }
@@ -283,8 +354,15 @@ function governorInteger(name, fallback, label, minimum = 0) {
 }
 
 function buildGovernor(head) {
+  const startedAtEpoch = Math.floor(Date.now() / 1000);
+  const providerDeadlineSeconds = governorInteger(
+    "BS_QUALITY_MAX_PROVIDER_SECONDS",
+    "3600",
+    "provider deadline seconds",
+    1,
+  );
   return {
-    startedAtEpoch: Math.floor(Date.now() / 1000),
+    startedAtEpoch,
     maxFixCommits: governorInteger(
       "BS_QUALITY_MAX_FIX_COMMITS",
       "4",
@@ -310,6 +388,14 @@ function buildGovernor(head) {
     ),
     roundsUsed: 0,
     authorizedAttempts: [],
+    maxProviderAttempts: governorInteger(
+      "BS_QUALITY_MAX_PROVIDER_ATTEMPTS",
+      "6",
+      "max provider attempts",
+      1,
+    ),
+    providerDeadlineEpoch: startedAtEpoch + providerDeadlineSeconds,
+    providerAttempts: [],
     remediationStartedAtEpoch: null,
     findingsSeen: [],
     startCommitSha: head,
@@ -328,7 +414,7 @@ function parseOptions(args) {
     const equals = token.indexOf("=");
     const name = equals === -1 ? token : token.slice(0, equals);
     const inlineValue = equals === -1 ? null : token.slice(equals + 1);
-    if (["--merge", "--break-glass-approved", "--skip-tests"].includes(name)) {
+    if (["--merge", "--skip-tests"].includes(name)) {
       if (inlineValue !== null && !["true", "false"].includes(inlineValue)) {
         throw new Error(`${name} accepts only true or false`);
       }
@@ -369,10 +455,30 @@ function createManifest(options) {
       : parseInteger(options.pr, "pr", { minimum: 1 });
   const githubRepository = firstValue(options["github-repo"], null);
   const headRefName = firstValue(options["head-ref"], null);
-  if (pr !== null && (!githubRepository || !headRefName)) {
+  const headRepository = firstValue(options["head-repository"], null);
+  const crossRepositoryValue = options["cross-repository"];
+  const isCrossRepository =
+    crossRepositoryValue === "true"
+      ? true
+      : crossRepositoryValue === "false"
+        ? false
+        : null;
+  if (
+    pr !== null &&
+    (!githubRepository ||
+      !headRefName ||
+      !headRepository ||
+      isCrossRepository === null)
+  ) {
     throw new Error(
-      "PR manifests require --github-repo <owner/name> and --head-ref <branch>",
+      "PR manifests require base/head repository, head ref, and cross-repository identity",
     );
+  }
+  if (
+    pr !== null &&
+    isCrossRepository !== (githubRepository !== headRepository)
+  ) {
+    throw new Error("PR cross-repository identity is inconsistent");
   }
   if (options.manifest !== undefined) {
     throw new Error("create does not accept a custom manifest path");
@@ -407,6 +513,8 @@ function createManifest(options) {
       pr,
       githubRepository,
       headRefName,
+      headRepository,
+      isCrossRepository,
       gitCommonDir: gitCommonDir(root),
       origin: originIdentity(root),
     },
@@ -418,8 +526,8 @@ function createManifest(options) {
       currentHead: head,
     },
     approval: { approved: false },
-    approvalChallengeSha256:
-      process.env.BS_QUALITY_APPROVAL_CHALLENGE_SHA256 || null,
+    approvalTrust: null,
+    approvalChallengeSha256: null,
     risk: {
       requestedLevel: firstValue(options.level, "auto"),
       resolved: false,
@@ -432,6 +540,7 @@ function createManifest(options) {
     requiredGatesPolicyVersion: REQUIRED_GATES_POLICY_VERSION,
     gates: [],
   };
+  initializeApprovalTrustFromEnvironment(manifest);
   atomicWrite(manifestPath, manifest);
   return manifestPath;
 }
@@ -474,6 +583,7 @@ function advanceHead(manifest, root) {
     });
     delete manifest.merge.stampHead;
     delete manifest.merge.stampedAt;
+    delete manifest.merge.stampPublication;
   }
   manifest.revisions.currentHead = nextHead;
   return true;
@@ -498,6 +608,45 @@ function recordStamp(manifest, root, options) {
   }
   manifest.merge.stampHead = stampHead;
   manifest.merge.stampedAt ??= new Date().toISOString();
+  const remote = options.remote;
+  const expectedOldHead = options["expected-old-head"];
+  if (!remote || !expectedOldHead) {
+    throw new Error("record-stamp requires remote publication identity");
+  }
+  manifest.merge.stampPublication ??= {
+    status: "local",
+    remote,
+    expectedOldHead,
+    recordedAt: new Date().toISOString(),
+  };
+  if (
+    manifest.merge.stampPublication.remote !== remote ||
+    manifest.merge.stampPublication.expectedOldHead !== expectedOldHead
+  ) {
+    throw new Error("quality stamp publication identity is immutable");
+  }
+}
+
+function recordStampPublished(manifest, options) {
+  const stampHead = options.head;
+  const remote = options.remote;
+  const previousHead = options["previous-head"];
+  if (
+    !stampHead ||
+    manifest.merge.stampHead !== stampHead ||
+    manifest.merge.stampPublication?.remote !== remote
+  ) {
+    throw new Error("published stamp identity does not match persisted state");
+  }
+  if (
+    previousHead !== stampHead &&
+    previousHead !== manifest.merge.stampPublication.expectedOldHead
+  ) {
+    throw new Error("published stamp previous-head identity mismatch");
+  }
+  manifest.merge.stampPublication.status = "published";
+  manifest.merge.stampPublication.publishedHead = stampHead;
+  manifest.merge.stampPublication.publishedAt ??= new Date().toISOString();
 }
 
 function setRisk(manifest, options) {
@@ -585,11 +734,19 @@ function approvalRecordValid(manifest, approval) {
   );
 }
 
-function capabilitySignatureValid(artifact) {
+function capabilitySignatureValid(manifest, artifact) {
+  const pinnedKey = manifest.approvalTrust?.publicKey;
+  if (typeof pinnedKey !== "string" || artifact.publicKey !== undefined) {
+    return false;
+  }
   return crypto.verify(
     null,
     Buffer.from(JSON.stringify(canonicalJson(artifact.payload))),
-    artifact.publicKey,
+    crypto.createPublicKey({
+      key: Buffer.from(pinnedKey, "base64"),
+      type: "spki",
+      format: "der",
+    }),
     Buffer.from(artifact.signature || "", "base64"),
   );
 }
@@ -610,7 +767,7 @@ function approvalValid(manifest) {
       payload?.invocationId === manifest.invocationId &&
       payload?.approver === approval.approver &&
       payload?.expiresAt === approval.expiresAt;
-    return identityMatches && capabilitySignatureValid(artifact);
+    return identityMatches && capabilitySignatureValid(manifest, artifact);
   } catch {
     return false;
   }
@@ -666,7 +823,7 @@ function attachApproval(manifest, options) {
     }
   }
   validateApprovalPayload(payload);
-  if (!capabilitySignatureValid(artifact)) {
+  if (!capabilitySignatureValid(manifest, artifact)) {
     throw new Error("approval capability signature is invalid");
   }
   manifest.approval = {
@@ -684,13 +841,68 @@ function attachApproval(manifest, options) {
 
 function armApprovalChallenge(manifest, options) {
   const challenge = options.challenge;
+  const publicKey = options.publicKey;
   if (!/^[0-9a-f]{64}$/.test(challenge || "")) {
     throw new Error("approval challenge must be a SHA-256 digest");
+  }
+  try {
+    crypto.createPublicKey({
+      key: Buffer.from(publicKey || "", "base64"),
+      type: "spki",
+      format: "der",
+    });
+  } catch {
+    throw new Error("approval trust key is invalid");
   }
   if (approvalValid(manifest)) {
     throw new Error("cannot replace a currently valid approval capability");
   }
   manifest.approvalChallengeSha256 = challenge;
+  manifest.approvalTrust = {
+    publicKey,
+    pinnedAt: new Date().toISOString(),
+  };
+}
+
+function initializeApprovalTrustFromEnvironment(manifest) {
+  const challenge = process.env.BS_QUALITY_APPROVAL_CHALLENGE_SHA256;
+  const publicKey = process.env.BS_QUALITY_APPROVAL_PUBLIC_KEY;
+  if (!challenge && !publicKey) return;
+  armApprovalChallenge(manifest, { challenge, publicKey });
+}
+
+function authorizeProviderAttempt(manifest, options) {
+  const provider = options.provider;
+  if (!["claude", "codex"].includes(provider)) {
+    throw new Error(`invalid review provider '${provider}'`);
+  }
+  const governor = manifest.governor;
+  const now = Math.floor(Date.now() / 1000);
+  if (
+    !Number.isInteger(governor.maxProviderAttempts) ||
+    !Number.isInteger(governor.providerDeadlineEpoch) ||
+    !Array.isArray(governor.providerAttempts)
+  ) {
+    throw new Error("provider attempt governor is missing or invalid");
+  }
+  if (now >= governor.providerDeadlineEpoch) {
+    throw new Error("absolute provider deadline exhausted");
+  }
+  if (governor.providerAttempts.length >= governor.maxProviderAttempts) {
+    throw new Error("absolute provider attempt cap exhausted");
+  }
+  const attempt = {
+    number: governor.providerAttempts.length + 1,
+    provider,
+    head: manifest.revisions.currentHead,
+    startedAt: new Date().toISOString(),
+  };
+  governor.providerAttempts.push(attempt);
+  return {
+    ...attempt,
+    remainingSeconds: governor.providerDeadlineEpoch - now,
+    maxAttempts: governor.maxProviderAttempts,
+  };
 }
 
 function reviewInfo(manifest) {
@@ -1195,13 +1407,26 @@ function reviewCoverage(manifest) {
   };
 }
 
-function recordGate(manifest, options) {
+function gateEvidenceIdentity(manifest, options) {
   const name = options.name;
   const command = options.command;
-  const log = path.resolve(options.log);
-  if (!name || !command || !fs.existsSync(log)) {
-    throw new Error("gate evidence requires --name, --command, and --log");
+  const source = options.source;
+  const log = options.log ? path.resolve(options.log) : null;
+  if (!name || !source || !command || !fs.existsSync(log)) {
+    throw new Error(
+      "gate evidence requires --name, --source, --command, and --log",
+    );
   }
+  const required = manifest.requiredGates.find((gate) => gate.name === name);
+  if (!required) throw new Error(`gate '${name}' is not required by policy`);
+  if (source !== required.source || command !== required.command) {
+    throw new Error(`gate '${name}' evidence does not match required source`);
+  }
+  return { name, command, source, log, required };
+}
+
+function gateEvidenceInput(manifest, options) {
+  const identity = gateEvidenceIdentity(manifest, options);
   const status = options.status || "success";
   const reason = options.reason?.trim() || null;
   if (!["success", "skipped"].includes(status)) {
@@ -1209,21 +1434,29 @@ function recordGate(manifest, options) {
   }
   if (
     status === "skipped" &&
-    (name !== "test" ||
-      manifest.requiredGates.find((required) => required.name === "test")
-        ?.allowSkip !== true ||
+    (identity.name !== "test" ||
+      identity.required.allowSkip !== true ||
       !reason)
   ) {
     throw new Error(
       "test gate skipping requires --skip-tests and an explicit skip reason",
     );
   }
+  return { ...identity, status, reason };
+}
+
+function recordGate(manifest, options) {
+  const { name, command, source, log, status, reason } = gateEvidenceInput(
+    manifest,
+    options,
+  );
   manifest.gates = manifest.gates.filter(
     (gate) =>
       gate.head !== manifest.revisions.currentHead || gate.name !== name,
   );
   manifest.gates.push({
     name,
+    source,
     command,
     head: manifest.revisions.currentHead,
     status,
@@ -1240,8 +1473,18 @@ function validGateArtifact(gate) {
   );
 }
 
+function gateMatchesRequirement(gate, required) {
+  return Boolean(
+    gate?.source === required.source && gate?.command === required.command,
+  );
+}
+
 function validTestGate(manifest, gate) {
   if (!validGateArtifact(gate)) return false;
+  const required = manifest.requiredGates.find(
+    (candidate) => candidate.name === "test",
+  );
+  if (!gateMatchesRequirement(gate, required)) return false;
   if (gate.status === "success") return true;
   return Boolean(
     manifest.requiredGates.find((required) => required.name === "test")
@@ -1261,7 +1504,9 @@ function verifyGateEvidence(manifest) {
     const valid =
       required.name === "test"
         ? validTestGate(manifest, gate)
-        : gate?.status === "success" && validGateArtifact(gate);
+        : gate?.status === "success" &&
+          gateMatchesRequirement(gate, required) &&
+          validGateArtifact(gate);
     if (!valid) {
       throw new Error(
         `required ${required.name} gate evidence is missing or stale`,
@@ -1397,6 +1642,13 @@ const COMMANDS = {
     mutate(manifestArg, (locked) =>
       attachApproval(locked, parseOptions(rawArgs)),
     ),
+  "provider-attempt": ({ manifestArg, rawArgs }) => {
+    let result;
+    mutate(manifestArg, (locked) => {
+      result = authorizeProviderAttempt(locked, parseOptions(rawArgs));
+    });
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+  },
   "review-info": ({ manifest }) =>
     process.stdout.write(`${JSON.stringify(reviewInfo(manifest))}\n`),
   "review-identity": ({ manifest }) =>
@@ -1409,9 +1661,21 @@ const COMMANDS = {
     mutate(manifestArg, (locked) => recordJudge(locked, parseOptions(rawArgs))),
   gate: ({ manifestArg, rawArgs }) =>
     mutate(manifestArg, (locked) => recordGate(locked, parseOptions(rawArgs))),
+  "gate-plan": ({ manifest, rawArgs }) => {
+    const options = parseOptions(rawArgs);
+    const required = manifest.requiredGates.find(
+      (gate) => gate.name === options.name,
+    );
+    if (!required) throw new Error(`gate '${options.name}' is not required`);
+    process.stdout.write(`${JSON.stringify(required)}\n`);
+  },
   "record-stamp": ({ manifestArg, rawArgs }) =>
     mutate(manifestArg, (locked) =>
       recordStamp(locked, locked.repo.realpath, parseOptions(rawArgs)),
+    ),
+  "record-stamp-published": ({ manifestArg, rawArgs }) =>
+    mutate(manifestArg, (locked) =>
+      recordStampPublished(locked, parseOptions(rawArgs)),
     ),
   inventory: ({ manifest, rawArgs }) => {
     const options = parseOptions(rawArgs);
@@ -1437,17 +1701,23 @@ const COMMANDS = {
 function runAdvance(manifestArg, manifest) {
   const updated = withManifestLock(manifestArg, (locked) => {
     validateIdentity(locked, manifest.repo.realpath, { requireHead: false });
-    if (locked[NEEDS_REQUIRED_GATES_MIGRATION]) {
-      locked.requiredGates = discoverRequiredGates(locked.repo.realpath, {
-        "skip-tests": locked.options?.skipTests === true,
-      });
-      locked.requiredGatesPolicyVersion = REQUIRED_GATES_POLICY_VERSION;
-      locked[NEEDS_REQUIRED_GATES_MIGRATION] = false;
-    }
     advanceHead(locked, manifest.repo.realpath);
     validateIdentity(locked, manifest.repo.realpath);
+    const discovered = discoverRequiredGates(
+      locked.repo.realpath,
+      { "skip-tests": locked.options?.skipTests === true },
+      locked.revisions.currentHead,
+    );
+    locked.requiredGates = locked[NEEDS_REQUIRED_GATES_MIGRATION]
+      ? discovered
+      : unionRequiredGates(locked.requiredGates, discovered);
+    locked.requiredGatesPolicyVersion = REQUIRED_GATES_POLICY_VERSION;
+    locked[NEEDS_REQUIRED_GATES_MIGRATION] = false;
     const challenge = process.env.BS_QUALITY_APPROVAL_CHALLENGE_SHA256;
-    if (challenge) armApprovalChallenge(locked, { challenge });
+    const publicKey = process.env.BS_QUALITY_APPROVAL_PUBLIC_KEY;
+    if (challenge || publicKey) {
+      armApprovalChallenge(locked, { challenge, publicKey });
+    }
   });
   process.stdout.write(`${updated.revisions.currentHead}\n`);
 }
@@ -1493,6 +1763,7 @@ module.exports = {
   advanceHead,
   approvalValid,
   armApprovalChallenge,
+  authorizeProviderAttempt,
   attachApproval,
   atomicWrite,
   canonicalRoot,

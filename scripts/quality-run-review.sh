@@ -80,13 +80,28 @@ record_provider_exhaustion() {
   printf '%s provider exhausted (structured error metadata)\n' "$1" > "$REVIEW_OUT/provider-exhausted"
 }
 
+authorize_provider_attempt() {
+  local provider="$1" requested_timeout="$2" authorization remaining
+  authorization="$(node "$SCRIPT_DIR/quality-invocation.js" provider-attempt \
+    "$MANIFEST" --provider "$provider")" || return 77
+  remaining="$(printf '%s' "$authorization" | jq -r '.remainingSeconds')"
+  [ "$remaining" -gt 0 ] || return 77
+  if [ "$requested_timeout" -lt "$remaining" ]; then
+    printf '%s\n' "$requested_timeout"
+  else
+    printf '%s\n' "$remaining"
+  fi
+}
+
 run_claude_review() {
-  local agents_csv rc
+  local agents_csv rc attempt_timeout
   command -v claude >/dev/null 2>&1 || return 2
   claude auth status --json 2>/dev/null | jq -e '.loggedIn == true' >/dev/null 2>&1 || return 2
   agents_csv="$(node "$SCRIPT_DIR/quality-invocation.js" get "$MANIFEST" agents \
     | jq -r 'join(",")')"
   [ -n "$agents_csv" ] || { echo "quality: Claude panel unresolved" >&2; return 1; }
+  attempt_timeout="$(authorize_provider_attempt claude "$QUALITY_REVIEW_TIMEOUT")" \
+    || return 77
   bash "$SCRIPT_DIR/claude-review-companion.sh" \
     --diff-file "$REVIEW_OUT/diff.txt" \
     --files-file "$REVIEW_OUT/files.txt" \
@@ -94,7 +109,7 @@ run_claude_review() {
     --identity-file "$REVIEW_OUT/identity.json" \
     --out-dir "$REVIEW_OUT" \
     --agents "$agents_csv" \
-    --timeout "$QUALITY_REVIEW_TIMEOUT"
+    --timeout "$attempt_timeout"
   rc=$?
   return "$rc"
 }
@@ -126,6 +141,8 @@ run_codex_review() {
       echo "Commit log:"; cat "$REVIEW_OUT/log.txt"
       echo "Diff:"; cat "$REVIEW_OUT/diff.txt"
     } > "$prompt_file"
+    pass_timeout="$(authorize_provider_attempt codex "$pass_timeout")" \
+      || return 77
     bash "$bounded" --timeout "$pass_timeout" -- \
       codex exec --ephemeral -s read-only \
       -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
@@ -186,6 +203,7 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
     75) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER account quota exhausted and no usable fallback is configured." >&2 ;;
     2) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER CLI unavailable and no usable fallback is configured." >&2 ;;
     76) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER exceeded its bounded review budget and no usable fallback is configured." >&2 ;;
+    77) echo "❌ MERGE BLOCKED: the invocation-wide provider attempt cap or absolute deadline is exhausted." >&2 ;;
     4) echo "❌ MERGE BLOCKED: every $REVIEW_PROVIDER review was inconclusive." >&2 ;;
     *) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER review runner failed (rc=$PROVIDER_RC)." >&2 ;;
   esac

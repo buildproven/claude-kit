@@ -77,7 +77,10 @@ describe("quality merge gates", () => {
       STAMP_AND_MERGE.indexOf("git commit"),
     );
     expect(STAMP_AND_MERGE).toMatch(
-      /git push origin "\$STAMP_HEAD:refs\/heads\/\$EXPECTED_HEAD_REF"/,
+      /--force-with-lease="refs\/heads\/\$EXPECTED_HEAD_REF:\$PREFLIGHT_PR_HEAD"/,
+    );
+    expect(STAMP_AND_MERGE).toMatch(
+      /"\$HEAD_REMOTE" "\$STAMP_HEAD:refs\/heads\/\$EXPECTED_HEAD_REF"/,
     );
     expect(STAMP_AND_MERGE).not.toMatch(/^git push\s*$/m);
     expect(AUTHORIZE).toMatch(/repo\.githubRepository/);

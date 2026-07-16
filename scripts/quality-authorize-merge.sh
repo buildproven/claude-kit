@@ -29,7 +29,7 @@ EXPECTED_HEAD="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revi
 EXPECTED_REPOSITORY="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" repo.githubRepository)"
 EXPECTED_HEAD_REF="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" repo.headRefName)"
 STAMP_HEAD="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" merge.stampHead)"
-EXPECTED_REMOTE_HEAD="${STAMP_HEAD:-$EXPECTED_HEAD}"
+STAMP_PUBLICATION="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" merge.stampPublication.status)"
 ROOT="$(node "$SCRIPT_DIR/quality-invocation.js" locate "$MANIFEST")" || exit 1
 cd "$ROOT" || exit 1
 bash "$SCRIPT_DIR/quality-assert-clean.sh" \
@@ -78,16 +78,35 @@ EXPECTED_BASE_OID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" 
     exit 1
   }
 LOCAL_HEAD="$(git rev-parse HEAD)"
-[ "$ACTUAL_HEAD" = "$LOCAL_HEAD" ] || {
-  echo "❌ MERGE BLOCKED: PR HEAD does not match reviewed HEAD." >&2
-  exit 1
-}
 if [ "$PREFLIGHT" = true ]; then
-  [ "$LOCAL_HEAD" = "$EXPECTED_REMOTE_HEAD" ] || {
-    echo "❌ MERGE BLOCKED: preflight HEAD does not match the expected PR head." >&2
+  if [ -n "$STAMP_HEAD" ]; then
+    [ "$LOCAL_HEAD" = "$STAMP_HEAD" ] || {
+      echo "❌ MERGE BLOCKED: persisted local stamp is not checked out." >&2
+      exit 1
+    }
+    if [ "$STAMP_PUBLICATION" = published ]; then
+      [ "$ACTUAL_HEAD" = "$STAMP_HEAD" ] || {
+        echo "❌ MERGE BLOCKED: published stamp no longer matches PR HEAD." >&2
+        exit 1
+      }
+    else
+      { [ "$ACTUAL_HEAD" = "$EXPECTED_HEAD" ] || [ "$ACTUAL_HEAD" = "$STAMP_HEAD" ]; } || {
+        echo "❌ MERGE BLOCKED: local stamp is orphaned from the expected PR revision." >&2
+        exit 1
+      }
+    fi
+  else
+    [ "$LOCAL_HEAD" = "$EXPECTED_HEAD" ] && [ "$ACTUAL_HEAD" = "$EXPECTED_HEAD" ] || {
+      echo "❌ MERGE BLOCKED: preflight HEAD does not match the reviewed PR head." >&2
+      exit 1
+    }
+  fi
+  echo "BS_QUALITY_PR_HEAD=$ACTUAL_HEAD"
+else
+  [ "$ACTUAL_HEAD" = "$LOCAL_HEAD" ] || {
+    echo "❌ MERGE BLOCKED: PR HEAD does not match reviewed HEAD." >&2
     exit 1
   }
-else
   [ -n "$STAMP_HEAD" ] && [ "$LOCAL_HEAD" = "$STAMP_HEAD" ] &&
     [ "$(git rev-parse HEAD~1)" = "$EXPECTED_HEAD" ] &&
     git diff --quiet HEAD~1 HEAD || {

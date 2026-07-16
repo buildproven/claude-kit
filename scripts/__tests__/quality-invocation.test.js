@@ -55,7 +55,16 @@ function repo(label) {
 
 function create(root, extra = [], env = {}) {
   const prIdentity = extra.includes("--pr")
-    ? ["--github-repo", "owner/repo", "--head-ref", "feature"]
+    ? [
+        "--github-repo",
+        "owner/repo",
+        "--head-ref",
+        "feature",
+        "--head-repository",
+        "owner/repo",
+        "--cross-repository",
+        "false",
+      ]
     : [];
   return execFileSync(
     "node",
@@ -147,7 +156,11 @@ function prepareCodexReview(root, manifestPath, providerFindings = []) {
     ],
     { cwd: root },
   );
+  const requiredGates = JSON.parse(
+    readFileSync(manifestPath, "utf8"),
+  ).requiredGates;
   for (const name of ["lint", "test", "security"]) {
+    const required = requiredGates.find((gate) => gate.name === name);
     const log = path.join(path.dirname(manifestPath), `${name}.gate.log`);
     writeFileSync(log, `${name} passed\n`);
     execFileSync(
@@ -158,8 +171,10 @@ function prepareCodexReview(root, manifestPath, providerFindings = []) {
         manifestPath,
         "--name",
         name,
+        "--source",
+        required.source,
         "--command",
-        `test-${name}`,
+        required.command,
         "--log",
         log,
       ],
@@ -289,7 +304,7 @@ describe("quality invocation manifest", () => {
       gh,
       `#!/usr/bin/env bash
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  printf '%s\\n' '{"number":7,"headRefName":"feature","headRefOid":"${git(root, ["rev-parse", "HEAD"])}","baseRefName":"release","baseRefOid":"${base}"}'
+  printf '%s\\n' '{"number":7,"headRefName":"feature","headRefOid":"${git(root, ["rev-parse", "HEAD"])}","headRepository":{"nameWithOwner":"owner/repo"},"isCrossRepository":false,"baseRefName":"release","baseRefOid":"${base}"}'
   exit 0
 fi
 if [ "$1 $2" = "repo view" ]; then
@@ -323,6 +338,8 @@ exit 1
     expect(manifest.repo.pr).toBe(7);
     expect(manifest.repo.githubRepository).toBe("owner/repo");
     expect(manifest.repo.headRefName).toBe("feature");
+    expect(manifest.repo.headRepository).toBe("owner/repo");
+    expect(manifest.repo.isCrossRepository).toBe(false);
     expect(manifest.revisions.baseRef).toBe("origin/release");
     expect(manifest.revisions.baseHeadSha).toBe(base);
   }, 120_000);
@@ -411,6 +428,21 @@ wait
         cwd: root,
       }).status,
     ).not.toBe(0);
+    expect(
+      spawnSync(
+        "node",
+        [
+          INVOCATION,
+          "create",
+          "--repo",
+          root,
+          "--base-ref",
+          "origin/main",
+          "--break-glass-approved",
+        ],
+        { cwd: root },
+      ).status,
+    ).not.toBe(0);
 
     const wrapped = spawnSync("node", [WRAPPER, BOOTSTRAP], {
       cwd: root,
@@ -430,6 +462,40 @@ wait
       .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
       ?.slice("BS_QUALITY_MANIFEST=".length);
     execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", manifest], {
+        cwd: root,
+      }).status,
+    ).toBe(0);
+    const approvedState = JSON.parse(readFileSync(manifest, "utf8"));
+    const approvalArtifact = JSON.parse(
+      readFileSync(approvedState.approval.artifactPath, "utf8"),
+    );
+    expect(approvedState.approvalTrust.publicKey).toMatch(/^[A-Za-z0-9+/=]+$/);
+    expect(approvalArtifact.publicKey).toBeUndefined();
+    approvalArtifact.publicKey = approvedState.approvalTrust.publicKey;
+    writeFileSync(
+      approvedState.approval.artifactPath,
+      `${JSON.stringify(approvalArtifact, null, 2)}\n`,
+    );
+    approvedState.approval.artifactSha256 = createHash("sha256")
+      .update(readFileSync(approvedState.approval.artifactPath))
+      .digest("hex");
+    writeFileSync(manifest, `${JSON.stringify(approvedState, null, 2)}\n`);
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", manifest], {
+        cwd: root,
+      }).status,
+    ).not.toBe(0);
+    delete approvalArtifact.publicKey;
+    writeFileSync(
+      approvedState.approval.artifactPath,
+      `${JSON.stringify(approvalArtifact, null, 2)}\n`,
+    );
+    approvedState.approval.artifactSha256 = createHash("sha256")
+      .update(readFileSync(approvedState.approval.artifactPath))
+      .digest("hex");
+    writeFileSync(manifest, `${JSON.stringify(approvedState, null, 2)}\n`);
     expect(
       spawnSync("node", [INVOCATION, "approval-valid", manifest], {
         cwd: root,
@@ -469,6 +535,72 @@ wait
     });
     expect(Date.parse(renewed.expiresAt)).toBeGreaterThan(Date.now());
   }, 120_000);
+
+  it("rejects headless review children before the resume path", () => {
+    const root = repo("headless-resume");
+    const manifest = create(root);
+    const before = readFileSync(manifest, "utf8");
+    const result = spawnSync("bash", [BOOTSTRAP, "--manifest", manifest], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, BS_QUALITY_HEADLESS: "1" },
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/headless review child/);
+    expect(readFileSync(manifest, "utf8")).toBe(before);
+  });
+
+  it("persists an invocation-wide provider attempt cap and deadline", () => {
+    const root = repo("provider-attempt-cap");
+    const manifest = create(root, [], {
+      BS_QUALITY_MAX_PROVIDER_ATTEMPTS: "2",
+      BS_QUALITY_MAX_PROVIDER_SECONDS: "120",
+    });
+    for (const provider of ["claude", "codex"]) {
+      const result = spawnSync(
+        "node",
+        [INVOCATION, "provider-attempt", manifest, "--provider", provider],
+        { cwd: root, encoding: "utf8" },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout).remainingSeconds).toBeGreaterThan(0);
+    }
+    const exhausted = spawnSync(
+      "node",
+      [INVOCATION, "provider-attempt", manifest, "--provider", "codex"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(exhausted.status).not.toBe(0);
+    expect(exhausted.stderr).toMatch(/absolute provider attempt cap exhausted/);
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.governor.providerAttempts).toHaveLength(2);
+    expect(state.governor.providerDeadlineEpoch).toBe(
+      state.governor.startedAtEpoch + 120,
+    );
+    state.governor.providerAttempts = [];
+    state.governor.providerDeadlineEpoch = Math.floor(Date.now() / 1000) - 1;
+    writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
+    const pastDeadline = spawnSync(
+      "node",
+      [INVOCATION, "provider-attempt", manifest, "--provider", "claude"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(pastDeadline.status).not.toBe(0);
+    expect(pastDeadline.stderr).toMatch(/absolute provider deadline exhausted/);
+  });
+
+  it("does not accept break-glass approval through wrapper argv", () => {
+    const root = repo("approval-argv");
+    const result = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+      cwd: root,
+      input: JSON.stringify({
+        argv: ["--target-dir", root, "--break-glass-approved"],
+      }),
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/unexpected quality argument/);
+  });
 
   it("excludes provider time from the remediation budget", () => {
     const root = repo("provider-budget");
@@ -625,7 +757,17 @@ wait
     const stampHead = git(root, ["rev-parse", "HEAD"]);
     execFileSync(
       "node",
-      [INVOCATION, "record-stamp", manifest, "--head", stampHead],
+      [
+        INVOCATION,
+        "record-stamp",
+        manifest,
+        "--head",
+        stampHead,
+        "--remote",
+        "origin",
+        "--expected-old-head",
+        reviewedHead,
+      ],
       { cwd: root },
     );
 
@@ -648,6 +790,7 @@ wait
     expect(state.revisions.currentHead).toBe(remediationHead);
     expect(state.merge.stampHead).toBeUndefined();
     expect(state.merge.stampedAt).toBeUndefined();
+    expect(state.merge.stampPublication).toBeUndefined();
     expect(state.merge.invalidatedStamps).toMatchObject([
       {
         head: stampHead,
@@ -673,7 +816,17 @@ wait
     const stampHead = git(root, ["rev-parse", "HEAD"]);
     execFileSync(
       "node",
-      [INVOCATION, "record-stamp", manifest, "--head", stampHead],
+      [
+        INVOCATION,
+        "record-stamp",
+        manifest,
+        "--head",
+        stampHead,
+        "--remote",
+        "origin",
+        "--expected-old-head",
+        reviewedHead,
+      ],
       { cwd: root },
     );
 
@@ -841,8 +994,9 @@ printf 'BS_QUALITY_MANIFEST=%s\\n' ${JSON.stringify(manifest)}
     chmodSync(bootstrap, 0o755);
 
     const result = spawnSync("node", [WRAPPER, bootstrap], {
-      input: JSON.stringify({ argv: ["--break-glass-approved"] }),
+      input: JSON.stringify({ argv: [] }),
       encoding: "utf8",
+      env: { ...process.env, BREAK_GLASS_APPROVED: "true" },
     });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/quality manifest is not valid JSON/);
@@ -994,7 +1148,17 @@ exit 99
     const stampHead = git(root, ["rev-parse", "HEAD"]);
     execFileSync(
       "node",
-      [INVOCATION, "record-stamp", manifest, "--head", stampHead],
+      [
+        INVOCATION,
+        "record-stamp",
+        manifest,
+        "--head",
+        stampHead,
+        "--remote",
+        "origin",
+        "--expected-old-head",
+        second.to,
+      ],
       { cwd: root },
     );
     const lifecycle = [];
@@ -1091,7 +1255,7 @@ exit 99
         env: { ...process.env, PATH: `${staleBin}:${process.env.PATH}` },
       }).status,
     ).not.toBe(0);
-  }, 15_000);
+  }, 30_000);
 
   it("rejects a dirty working tree before gates, review, and stamp", () => {
     const root = repo("dirty-preflight");
@@ -1101,10 +1265,7 @@ exit 99
     writeFileSync(path.join(root, "dirty.txt"), "unreviewed\n");
 
     for (const invocation of [
-      [
-        "bash",
-        [RUN_GATE, "--manifest", manifest, "--name", "lint", "--", "true"],
-      ],
+      ["bash", [RUN_GATE, "--manifest", manifest, "--name", "lint"]],
       ["bash", [RUN_REVIEW, "--manifest", manifest]],
       ["bash", [STAMP_AND_MERGE, "--manifest", manifest]],
     ]) {
@@ -1135,12 +1296,27 @@ exit 99
     const bin = path.join(harness, "bin");
     mkdirSync(bin);
     const log = path.join(harness, "gh-order.log");
+    const pushLog = path.join(harness, "git-push.log");
     const fail = path.join(harness, "fail-ci");
+    const failPush = path.join(harness, "fail-push");
     const denyPreflight = path.join(harness, "deny-preflight");
     const merged = path.join(harness, "merged");
     writeFileSync(fail, "fail\n");
     writeFileSync(denyPreflight, "deny\n");
     const gh = path.join(bin, "gh");
+    const gitWrapper = path.join(bin, "git");
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    writeFileSync(
+      gitWrapper,
+      `#!/usr/bin/env bash
+if [ "$1" = push ]; then
+  printf '%s\\n' "$*" >> ${JSON.stringify(pushLog)}
+  if [ -f ${JSON.stringify(failPush)} ]; then exit 75; fi
+fi
+exec ${JSON.stringify(realGit)} "$@"
+`,
+    );
+    chmodSync(gitWrapper, 0o755);
     writeFileSync(
       gh,
       `#!/usr/bin/env bash
@@ -1193,6 +1369,7 @@ exit 1
       undefined,
     );
     unlinkSync(denyPreflight);
+    writeFileSync(failPush, "fail\n");
 
     const first = spawnSync("bash", [STAMP_AND_MERGE, "--manifest", manifest], {
       cwd: root,
@@ -1203,6 +1380,14 @@ exit 1
     const afterFirst = JSON.parse(readFileSync(manifest, "utf8"));
     const stampHead = afterFirst.merge.stampHead;
     expect(stampHead).toBe(git(root, ["rev-parse", "HEAD"]));
+    expect(afterFirst.merge.stampPublication).toMatchObject({
+      status: "local",
+      remote: "origin",
+      expectedOldHead: reviewedHead,
+    });
+    expect(git(root, ["ls-remote", "origin", "refs/heads/feature"])).toContain(
+      reviewedHead,
+    );
     expect(
       git(root, [
         "rev-list",
@@ -1211,6 +1396,7 @@ exit 1
       ]),
     ).toBe("1");
 
+    unlinkSync(failPush);
     unlinkSync(fail);
     const second = spawnSync(
       "bash",
@@ -1219,10 +1405,102 @@ exit 1
     );
     expect(second.status, second.stderr).toBe(0);
     expect(git(root, ["rev-parse", "HEAD"])).toBe(stampHead);
+    expect(
+      JSON.parse(readFileSync(manifest, "utf8")).merge.stampPublication,
+    ).toMatchObject({ status: "published", publishedHead: stampHead });
+    expect(readFileSync(pushLog, "utf8")).toContain(
+      `--force-with-lease=refs/heads/feature:${reviewedHead} origin ${stampHead}:refs/heads/feature`,
+    );
     const calls = readFileSync(log, "utf8");
     expect(calls.indexOf("pr checks 1 --required --watch")).toBeLessThan(
       calls.indexOf("pr merge 1"),
     );
+  }, 20_000);
+
+  it("maps cross-repository PR heads to one exact remote before stamping", () => {
+    const root = repo("cross-repo-remote");
+    const baseRemote = mkdtempSync(path.join(tmpdir(), "quality-base-remote-"));
+    const forkRemote = mkdtempSync(path.join(tmpdir(), "quality-fork-remote-"));
+    git(baseRemote, ["init", "--bare", "-q"]);
+    git(forkRemote, ["init", "--bare", "-q"]);
+    git(root, ["remote", "set-url", "origin", baseRemote]);
+    git(root, ["push", "-q", "origin", "main"]);
+    git(root, ["push", "-q", "origin", "feature"]);
+
+    const manifest = create(root, [
+      "--level",
+      "95",
+      "--pr",
+      "1",
+      "--merge",
+      "--head-repository",
+      "fork/repo",
+      "--cross-repository",
+      "true",
+    ]);
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
+    execFileSync("bash", [SELECT, "--manifest", manifest], { cwd: root });
+    prepareCodexReview(root, manifest);
+    recordJudgeArtifact(root, manifest);
+
+    const harness = mkdtempSync(path.join(tmpdir(), "quality-cross-gh-"));
+    const bin = path.join(harness, "bin");
+    mkdirSync(bin);
+    const log = path.join(harness, "gh.log");
+    const gh = path.join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+echo "$*" >> ${JSON.stringify(log)}
+if [ "$1 $2" = "repo view" ]; then
+  case "\${3:-}" in
+    ${JSON.stringify(baseRemote)}) printf '%s\\n' 'owner/repo' ;;
+    ${JSON.stringify(forkRemote)}) printf '%s\\n' 'fork/repo' ;;
+    *) printf '%s\\n' 'owner/repo' ;;
+  esac
+  exit 0
+fi
+if [ "$1 $2" = "pr view" ]; then
+  head="$(${JSON.stringify(execFileSync("which", ["git"], { encoding: "utf8" }).trim())} rev-parse HEAD)"
+  printf '{"state":"OPEN","mergedAt":null,"mergeCommit":null,"headRefName":"feature","headRefOid":"%s","baseRefName":"main"}\\n' "$head"
+  exit 0
+fi
+if [ "$1" = api ]; then
+  [[ "$2" == *"required_status_checks"* ]] && exit 1
+  printf '%s\\n' '[]'
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(gh, 0o755);
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    const reviewedHead = git(root, ["rev-parse", "HEAD"]);
+
+    const missingFork = spawnSync(
+      "bash",
+      [STAMP_AND_MERGE, "--manifest", manifest],
+      { cwd: root, env, encoding: "utf8" },
+    );
+    expect(missingFork.status).not.toBe(0);
+    expect(missingFork.stderr).toMatch(
+      /no local remote maps to PR head repository/,
+    );
+    expect(git(root, ["rev-parse", "HEAD"])).toBe(reviewedHead);
+    expect(JSON.parse(readFileSync(manifest, "utf8")).merge.stampHead).toBe(
+      undefined,
+    );
+
+    git(root, ["remote", "add", "fork", forkRemote]);
+    const mappedFork = spawnSync(
+      "bash",
+      [STAMP_AND_MERGE, "--manifest", manifest],
+      { cwd: root, env, encoding: "utf8" },
+    );
+    expect(mappedFork.status).not.toBe(0);
+    expect(mappedFork.stderr).toMatch(/server-enforced strict freshness/);
+    expect(readFileSync(log, "utf8")).toContain(`repo view ${forkRemote}`);
+    expect(git(root, ["rev-parse", "HEAD"])).toBe(reviewedHead);
   }, 20_000);
 
   it("fails authorization when inventoried findings are replaced", () => {
@@ -1394,6 +1672,12 @@ exit 1
     expect(
       JSON.parse(readFileSync(falseManifest, "utf8")).options.skipTests,
     ).toBe(false);
+    const requiredTest = JSON.parse(
+      readFileSync(manifest, "utf8"),
+    ).requiredGates.find((gate) => gate.name === "test");
+    const falseRequiredTest = JSON.parse(
+      readFileSync(falseManifest, "utf8"),
+    ).requiredGates.find((gate) => gate.name === "test");
 
     execFileSync(
       "bash",
@@ -1431,8 +1715,10 @@ exit 1
         "skipped",
         "--reason",
         "config-only fixture has no executable tests",
+        "--source",
+        requiredTest.source,
         "--command",
-        "skip-tests",
+        requiredTest.command,
         "--log",
         path.join(path.dirname(manifest), "test.gate.log"),
       ],
@@ -1455,8 +1741,10 @@ exit 1
         "test",
         "--status",
         "skipped",
+        "--source",
+        falseRequiredTest.source,
         "--command",
-        "skip-tests",
+        falseRequiredTest.command,
         "--log",
         path.join(path.dirname(manifest), "test.gate.log"),
       ],
@@ -1560,6 +1848,7 @@ exit 1
     ).toMatch(/required build gate evidence is missing or stale/);
 
     for (const name of ["build", "type", "consumer"]) {
+      const gate = required.find((candidate) => candidate.name === name);
       const log = path.join(path.dirname(manifest), `${name}.gate.log`);
       writeFileSync(log, `${name} passed\n`);
       execFileSync(
@@ -1570,8 +1859,10 @@ exit 1
           manifest,
           "--name",
           name,
+          "--source",
+          gate.source,
           "--command",
-          `test-${name}`,
+          gate.command,
           "--log",
           log,
         ],
@@ -1587,6 +1878,150 @@ exit 1
     expect(JSON.parse(readFileSync(manifest, "utf8")).requiredGates).toEqual(
       required,
     );
+  });
+
+  it("binds optional gate evidence to the persisted trusted source and command", () => {
+    const root = repo("trusted-gate-runner");
+    const marker = path.join(tmpdir(), `quality-build-${process.pid}.marker`);
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: {
+          lint: "node --check file.js",
+          test: "node --test",
+          "security:audit": "node --check file.js",
+          build:
+            "node -e \"require('fs').writeFileSync(process.env.QUALITY_GATE_MARKER, 'built')\"",
+          typecheck: "node --check file.js",
+          "test:consumer": "node --check file.js",
+        },
+      }),
+    );
+    git(root, ["add", "package.json"]);
+    git(root, ["commit", "-q", "-m", "add trusted gate scripts"]);
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+
+    for (const name of ["build", "type", "consumer"]) {
+      const gate = required.find((candidate) => candidate.name === name);
+      const log = path.join(path.dirname(manifest), `${name}.forged.log`);
+      writeFileSync(log, "forged pass\n");
+      const forged = spawnSync(
+        "node",
+        [
+          INVOCATION,
+          "gate",
+          manifest,
+          "--name",
+          name,
+          "--source",
+          gate.source,
+          "--command",
+          "true",
+          "--log",
+          log,
+        ],
+        { cwd: root, encoding: "utf8" },
+      );
+      expect(forged.status).not.toBe(0);
+      expect(forged.stderr).toMatch(/does not match required source/);
+    }
+
+    const callerCommand = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifest, "--name", "build", "--", "true"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(callerCommand.status).not.toBe(0);
+    expect(callerCommand.stderr).toMatch(/resolved from the persisted/);
+    expect(existsSync(marker)).toBe(false);
+
+    execFileSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifest, "--name", "build"],
+      {
+        cwd: root,
+        env: { ...process.env, QUALITY_GATE_MARKER: marker },
+      },
+    );
+    expect(readFileSync(marker, "utf8")).toBe("built");
+    const evidence = JSON.parse(readFileSync(manifest, "utf8")).gates.find(
+      (gate) => gate.name === "build",
+    );
+    expect(evidence).toMatchObject({
+      source: "package-script:build",
+      command: "npm run build",
+    });
+    unlinkSync(marker);
+  });
+
+  it("discovers committed gates on every advance and unions them monotonically", () => {
+    const root = repo("monotonic-gates");
+    const packageFile = path.join(root, "package.json");
+    const scripts = {
+      lint: "node --check file.js",
+      test: "node --test",
+      "security:audit": "node --check file.js",
+    };
+    writeFileSync(packageFile, JSON.stringify({ scripts }));
+    git(root, ["add", "package.json"]);
+    git(root, ["commit", "-q", "-m", "add baseline scripts"]);
+    const manifest = create(root);
+
+    writeFileSync(
+      packageFile,
+      JSON.stringify({ scripts: { ...scripts, build: "node build.js" } }),
+    );
+    git(root, ["add", "package.json"]);
+    git(root, ["commit", "-q", "-m", "require build"]);
+    writeFileSync(
+      packageFile,
+      JSON.stringify({
+        scripts: {
+          ...scripts,
+          build: "node build.js",
+          "test:consumer": "node consumer.js",
+        },
+      }),
+    );
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    let required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.map((gate) => gate.name)).toContain("build");
+    expect(required.map((gate) => gate.name)).not.toContain("consumer");
+
+    writeFileSync(
+      packageFile,
+      JSON.stringify({ scripts: { ...scripts, typecheck: "tsc --noEmit" } }),
+    );
+    git(root, ["add", "package.json"]);
+    git(root, ["commit", "-q", "-m", "replace build with typecheck"]);
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.map((gate) => gate.name)).toEqual([
+      "lint",
+      "test",
+      "security",
+      "build",
+      "type",
+    ]);
+  });
+
+  it("fails closed on future required-gate policy versions", () => {
+    const root = repo("future-gate-policy");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.requiredGatesPolicyVersion = 2;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    for (const command of ["validate", "advance"]) {
+      const result = spawnSync("node", [INVOCATION, command, manifestPath], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(
+        /unsupported required-gates policy version/,
+      );
+    }
   });
 
   it("migrates legacy required gates only during an explicit locked resume", () => {

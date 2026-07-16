@@ -40,37 +40,31 @@ function canonicalJson(value) {
   return value;
 }
 
-function approvalRequested(argv) {
-  if (process.env.BREAK_GLASS_APPROVED === "true") return true;
-  return argv.some(
-    (argument) =>
-      argument === "--break-glass-approved" ||
-      argument === "--break-glass-approved=true",
-  );
+function approvalRequested() {
+  return process.env.BREAK_GLASS_APPROVED === "true";
 }
 
-function withoutApprovalChannel(argv) {
-  return argv.filter(
-    (argument) =>
-      argument !== "--break-glass-approved" &&
-      !argument.startsWith("--break-glass-approved="),
-  );
-}
-
-function childEnvironment(challengeSha256) {
+function childEnvironment(challengeSha256, publicKey) {
   const environment = { ...process.env };
   delete environment.BREAK_GLASS_APPROVED;
   delete environment.BREAK_GLASS_APPROVER;
   delete environment.BS_QUALITY_APPROVAL_TTL_SECONDS;
+  delete environment.BS_QUALITY_APPROVAL_PUBLIC_KEY;
   if (challengeSha256) {
     environment.BS_QUALITY_APPROVAL_CHALLENGE_SHA256 = challengeSha256;
+    environment.BS_QUALITY_APPROVAL_PUBLIC_KEY = publicKey;
   } else {
     delete environment.BS_QUALITY_APPROVAL_CHALLENGE_SHA256;
   }
   return environment;
 }
 
-function issueApprovalCapability(manifestPath, invocationScript, challenge) {
+function issueApprovalCapability(
+  manifestPath,
+  invocationScript,
+  challenge,
+  privateKey,
+) {
   const manifest = parseJson(
     fs.readFileSync(manifestPath, "utf8"),
     "quality manifest",
@@ -94,11 +88,9 @@ function issueApprovalCapability(manifestPath, invocationScript, challenge) {
     nonce: crypto.randomUUID(),
     challenge,
   };
-  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
   const artifact = {
     schemaVersion: 1,
     payload,
-    publicKey: publicKey.export({ type: "spki", format: "pem" }),
     signature: crypto
       .sign(
         null,
@@ -137,22 +129,24 @@ function main() {
   const bootstrap = process.argv[2];
   if (!bootstrap) throw new Error("bootstrap path is required");
   const argv = parseRequest(fs.readFileSync(0, "utf8"));
-  const wantsApproval = approvalRequested(argv);
+  const wantsApproval = approvalRequested();
   const challenge = wantsApproval
     ? crypto.randomBytes(32).toString("hex")
+    : null;
+  const keyPair = wantsApproval ? crypto.generateKeyPairSync("ed25519") : null;
+  const publicKey = keyPair
+    ? keyPair.publicKey
+        .export({ type: "spki", format: "der" })
+        .toString("base64")
     : null;
   const challengeSha256 = challenge
     ? crypto.createHash("sha256").update(challenge).digest("hex")
     : null;
-  const result = spawnSync(
-    "bash",
-    [bootstrap, ...withoutApprovalChannel(argv)],
-    {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      env: childEnvironment(challengeSha256),
-    },
-  );
+  const result = spawnSync("bash", [bootstrap, ...argv], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    env: childEnvironment(challengeSha256, publicKey),
+  });
   if (result.status === 0 && wantsApproval) {
     const manifestPath = (result.stdout || "")
       .split("\n")
@@ -164,6 +158,7 @@ function main() {
       manifestPath,
       path.join(path.dirname(bootstrap), "quality-invocation.js"),
       challenge,
+      keyPair.privateKey,
     );
   }
   process.stdout.write(result.stdout || "");

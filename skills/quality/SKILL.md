@@ -59,8 +59,12 @@ bash "$QUALITY_SCRIPTS_DIR/quality-select-agents.sh" \
 Risk resolution must persist a concrete tier and numeric agent target before
 selection. Critical review requires a signed break-glass capability created by
 the outer wrapper and bound to repository, PR, HEAD, invocation, approver, and
-expiry identity. Nested quality processes cannot mint approval. A changed HEAD
-or expired/replaced capability invalidates approval.
+expiry identity. The wrapper pins its verification key into the invocation
+before attachment; artifacts cannot supply or replace their own trust key.
+Approval is accepted only from the outer `BREAK_GLASS_APPROVED=true`
+environment channel, never from quality argv. Nested quality processes cannot
+mint approval for an existing invocation. A changed HEAD or expired/replaced
+capability invalidates approval.
 
 ## 3. Automated gates and formatting
 
@@ -71,6 +75,10 @@ when applicable, all evidenced against the current HEAD. Tests must exist and
 pass unless the manifest's
 `options.skipTests` is true for a config-only repository. Execute the mandatory
 categories through the evidence-recording runner:
+
+The invocation also persists an absolute provider deadline and attempt cap
+from its start time. Every Claude panel and Codex pass consumes an attempt
+before launch; fallback and resumed review rounds cannot reset either bound.
 
 ```bash
 bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \

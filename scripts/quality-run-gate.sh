@@ -25,7 +25,9 @@ if [ "$SKIP" = true ]; then
     exit 1
   }
 elif [ "$#" -eq 0 ]; then
-  echo "quality-run-gate: a command is required unless --skip is used" >&2
+  :
+else
+  echo "quality-run-gate: commands are resolved from the persisted gate policy" >&2
   exit 1
 fi
 ROOT="$(node "$SCRIPT_DIR/quality-invocation.js" locate "$MANIFEST")" || exit 1
@@ -37,21 +39,25 @@ LOG_DIR="$STATE_ROOT/gates/$HEAD"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/$NAME.log"
 cd "$ROOT" || exit 1
+PLAN="$(node "$SCRIPT_DIR/quality-invocation.js" gate-plan "$MANIFEST" --name "$NAME")" || exit 1
+SOURCE="$(printf '%s' "$PLAN" | jq -er '.source')" || exit 1
+COMMAND="$(printf '%s' "$PLAN" | jq -er '.command')" || exit 1
 if [ "$SKIP" = true ]; then
   printf 'SKIPPED: %s\n' "$REASON" >"$LOG"
   node "$SCRIPT_DIR/quality-invocation.js" gate "$MANIFEST" \
     --name "$NAME" --status skipped --reason "$REASON" \
-    --command skip-tests --log "$LOG" || exit 1
+    --source "$SOURCE" --command "$COMMAND" --log "$LOG" || exit 1
   cat "$LOG"
   exit 0
 fi
-COMMAND="$(printf '%q ' "$@")"
-"$@" >"$LOG" 2>&1 || {
+EXECUTABLE="$(printf '%s' "$PLAN" | jq -er '.executable')" || exit 1
+mapfile -t COMMAND_ARGS < <(printf '%s' "$PLAN" | jq -er '.args[]')
+"$EXECUTABLE" "${COMMAND_ARGS[@]}" >"$LOG" 2>&1 || {
   cat "$LOG" >&2
   exit 1
 }
 bash "$SCRIPT_DIR/quality-assert-clean.sh" \
   --manifest "$MANIFEST" --phase "gate '$NAME' completion" || exit 1
 node "$SCRIPT_DIR/quality-invocation.js" gate "$MANIFEST" \
-  --name "$NAME" --command "$COMMAND" --log "$LOG" || exit 1
+  --name "$NAME" --source "$SOURCE" --command "$COMMAND" --log "$LOG" || exit 1
 cat "$LOG"

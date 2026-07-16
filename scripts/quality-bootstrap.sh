@@ -41,6 +41,16 @@ done
 }
 set -- ${BOOTSTRAP_ARGS[@]+"${BOOTSTRAP_ARGS[@]}"}
 
+# Headless review children must never resume or create a quality invocation.
+# Keep this before the resume fast path so an inherited manifest cannot bypass
+# the recursion guard.
+if [ "${BS_QUALITY_HEADLESS:-}" = "1" ]; then
+  echo "❌ /bs:quality refused: already running inside a headless review child" >&2
+  echo "   (BS_QUALITY_HEADLESS=1). Review subprocesses must not re-enter the" >&2
+  echo "   quality skill — this guard prevents fork→child→fork recursion." >&2
+  exit 1
+fi
+
 # Validate the complete invocation before target resolution or any GitHub
 # operation. Every token must belong to the supported grammar; a bare value
 # after a boolean flag (for example `--merge 1`) must never be reinterpreted as
@@ -111,19 +121,6 @@ if [ -n "$MANIFEST_ARG" ]; then
   echo "GIT_ROOT=$RESUME_ROOT"
   echo "[quality] resumed invocation $INVOCATION_ID at $HEAD_SHA"
   exit 0
-fi
-
-# --- Recursion guard (2026-06-04 wrapper-recursion incident) -----------------
-# The synchronous review leg runs each review agent as a blocking `claude -p`
-# subprocess with BS_QUALITY_HEADLESS=1 exported. If one of those review
-# children — via a hook, an agent, or a stray /goal — ever re-enters
-# /bs:quality, we would recurse (fork → review child → fork …). Hard-refuse
-# when we detect we are already inside a headless review child.
-if [ "${BS_QUALITY_HEADLESS:-}" = "1" ]; then
-  echo "❌ /bs:quality refused: already running inside a headless review child" >&2
-  echo "   (BS_QUALITY_HEADLESS=1). Review subprocesses must not re-enter the" >&2
-  echo "   quality skill — this guard prevents fork→child→fork recursion." >&2
-  exit 1
 fi
 
 # --- resolve the target-resolver script --------------------------------------
@@ -258,10 +255,10 @@ fi
 PR_JSON=""
 if [ -n "${RES_PR:-}" ]; then
   PR_JSON="$(gh pr view "$RES_PR" \
-    --json number,baseRefName,baseRefOid,headRefName,headRefOid 2>/dev/null)"
+    --json number,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,isCrossRepository 2>/dev/null)"
 elif [ "$ARGS_MERGE" = true ]; then
   PR_JSON="$(gh pr view \
-    --json number,baseRefName,baseRefOid,headRefName,headRefOid 2>/dev/null)"
+    --json number,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,isCrossRepository 2>/dev/null)"
 fi
 if [ "$ARGS_MERGE" = true ]; then
   [ -n "$PR_JSON" ] || {
@@ -275,9 +272,13 @@ if [ -n "$PR_JSON" ]; then
   PR_BASE_OID="$(printf '%s' "$PR_JSON" | jq -r '.baseRefOid')"
   PR_HEAD_NAME="$(printf '%s' "$PR_JSON" | jq -r '.headRefName')"
   PR_HEAD_OID="$(printf '%s' "$PR_JSON" | jq -r '.headRefOid')"
+  PR_HEAD_REPOSITORY="$(printf '%s' "$PR_JSON" | jq -r '.headRepository.nameWithOwner')"
+  PR_IS_CROSS_REPOSITORY="$(printf '%s' "$PR_JSON" | jq -r '.isCrossRepository')"
   [ -n "$PR_BASE_NAME" ] && [ "$PR_BASE_NAME" != null ] &&
     [ -n "$PR_BASE_OID" ] && [ "$PR_BASE_OID" != null ] &&
-    [ -n "$PR_HEAD_NAME" ] && [ "$PR_HEAD_NAME" != null ] || {
+    [ -n "$PR_HEAD_NAME" ] && [ "$PR_HEAD_NAME" != null ] &&
+    [ -n "$PR_HEAD_REPOSITORY" ] && [ "$PR_HEAD_REPOSITORY" != null ] &&
+    { [ "$PR_IS_CROSS_REPOSITORY" = true ] || [ "$PR_IS_CROSS_REPOSITORY" = false ]; } || {
       echo "❌ /bs:quality could not resolve the PR base identity." >&2
       exit 1
     }
@@ -333,7 +334,9 @@ CREATE_ARGS=(create --repo "$GIT_ROOT" --base-ref "$BASE_REF" \
 [ -n "${RES_PR:-}" ] && CREATE_ARGS+=(--pr "$RES_PR")
 if [ -n "${RES_PR:-}" ]; then
   GITHUB_REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
-  CREATE_ARGS+=(--github-repo "$GITHUB_REPOSITORY" --head-ref "$PR_HEAD_NAME")
+  CREATE_ARGS+=(--github-repo "$GITHUB_REPOSITORY" --head-ref "$PR_HEAD_NAME" \
+    --head-repository "$PR_HEAD_REPOSITORY" \
+    --cross-repository "$PR_IS_CROSS_REPOSITORY")
 fi
 BS_QUALITY_MANIFEST="$(node "$SCRIPT_DIR/quality-invocation.js" "${CREATE_ARGS[@]}")" || exit 1
 INVOCATION_ID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$BS_QUALITY_MANIFEST" invocationId)"
