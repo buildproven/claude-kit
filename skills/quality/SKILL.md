@@ -120,7 +120,9 @@ Full tier table + agent focus descriptions: `reference.md` "Quality Levels".
 Determine files by scope, run TypeScript/ESLint/build, optional
 Trivy/Semgrep/Lighthouse, compute a quality score.
 
-**One absolute deadline owns the whole invocation.** Every blocking subprocess
+**One proportional absolute deadline owns the whole invocation.** The runtime
+plan separates risk (review depth) from workload (changed lines plus per-file
+overhead), producing a 5–15 minute default campaign. Every blocking subprocess
 must run through `quality-run-bounded.sh --governor
 "$BS_QUALITY_GOVERNOR_FILE" --cap <stage-cap> --reserve <seconds> -- ...`.
 The wrapper clamps the stage to the governor's remaining time. Run independent
@@ -474,6 +476,7 @@ Sub-Review Mode" for the full acpx invocation, polling, and fallback.
 - `scripts/quality-bootstrap.sh` — Step -1 target resolution + governor init
 - `scripts/quality-load-root.sh` — per-block cwd/root restore (source this)
 - `scripts/quality-risk-resolve.sh` — Step 0.5 risk scoring
+- `scripts/quality-runtime-plan.js` — change-size-proportional stage and campaign budgets
 - `scripts/quality-select-agents.sh` — Step 1.8 panel construction
 - `scripts/quality-run-review.sh` — Step 1.8 blocking review subprocess
 - `scripts/quality-provider-policy.sh` — cross-CLI primary/fallback policy

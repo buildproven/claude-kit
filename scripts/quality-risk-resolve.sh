@@ -24,15 +24,21 @@ CODEX_DEPTH=""     # skip|medium|high|xhigh
 CODEX_ROUNDS=""
 
 if [ "${LEVEL:-auto}" = "auto" ]; then
+  QUALITY_PLAN_FILE="${BS_QUALITY_ROOT_FILE:-/nonexistent}"
+  QUALITY_PLAN_FILE="${QUALITY_PLAN_FILE%.txt}-plan.json"
   RISK_SCORER="$(bs_quality_find_script risk-score.js 2>/dev/null || true)"
 
-  if [ -n "$RISK_SCORER" ]; then
+  if jq -e '.riskScore >= 0' "$QUALITY_PLAN_FILE" >/dev/null 2>&1; then
+    SCORE_JSON=$(cat "$QUALITY_PLAN_FILE")
+  elif [ -n "$RISK_SCORER" ]; then
     SCORE_JSON=$(node "$RISK_SCORER" --json 2>/dev/null)
+  fi
+  if [ -n "${SCORE_JSON:-}" ]; then
     RISK_SCORE=$(printf '%s' "$SCORE_JSON" | node -e 'try{const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(r.riskScore))}catch{}' 2>/dev/null)
     if [ -n "$RISK_SCORE" ]; then
-      AGENT_TARGET=$(printf '%s' "$SCORE_JSON" | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(r.knobs.agents))')
-      CODEX_DEPTH=$(printf '%s' "$SCORE_JSON" | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(r.knobs.codex))')
-      CODEX_ROUNDS=$(printf '%s' "$SCORE_JSON" | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(r.knobs.codexRounds))')
+      AGENT_TARGET=$(printf '%s' "$SCORE_JSON" | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(r.agents ?? r.knobs.agents))')
+      CODEX_DEPTH=$(printf '%s' "$SCORE_JSON" | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(r.reviewDepth ?? r.knobs.codex))')
+      CODEX_ROUNDS=$(printf '%s' "$SCORE_JSON" | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(r.reviewPasses ?? r.knobs.codexRounds))')
       NATURE=$(printf '%s' "$SCORE_JSON" | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(r.changeNature))')
       if [ "$RISK_SCORE" -ge 75 ]; then TIER=critical
       elif [ "$RISK_SCORE" -ge 50 ]; then TIER=high
@@ -70,6 +76,15 @@ RISK_SCORE='${RISK_SCORE:-}'
 AGENT_TARGET='${AGENT_TARGET:-}'
 CODEX_DEPTH='${CODEX_DEPTH:-}'
 CODEX_ROUNDS='${CODEX_ROUNDS:-}'
+QUALITY_WORKLOAD='$(printf '%s' "${SCORE_JSON:-{}}" | jq -r '.workload // "unknown"')'
+QUALITY_DIFF_FILES='$(printf '%s' "${SCORE_JSON:-{}}" | jq -r '.diffStats.files // 0')'
+QUALITY_DIFF_LINES='$(printf '%s' "${SCORE_JSON:-{}}" | jq -r '.diffStats.lines // 0')'
+QUALITY_CAMPAIGN_TIMEOUT='$(printf '%s' "${SCORE_JSON:-{}}" | jq -r '.campaignSeconds // 900')'
+QUALITY_REVIEW_TIMEOUT='$(printf '%s' "${SCORE_JSON:-{}}" | jq -r '.reviewSeconds // 300')'
+QUALITY_VERIFICATION_TIMEOUT='$(printf '%s' "${SCORE_JSON:-{}}" | jq -r '.verificationSeconds // 120')'
+QUALITY_CHECK_TIMEOUT='$(printf '%s' "${SCORE_JSON:-{}}" | jq -r '.checkSeconds // 300')'
+QUALITY_CHECK_RESERVE='$(printf '%s' "${SCORE_JSON:-{}}" | jq -r '.checkReserveSeconds // 300')'
+QUALITY_REVIEW_RESERVE='$(printf '%s' "${SCORE_JSON:-{}}" | jq -r '.reviewReserveSeconds // 120')'
 LEVEL='${LEVEL:-}'
 EOF
 fi

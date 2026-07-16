@@ -45,17 +45,15 @@ describe("provider review runtime", () => {
     expect(result.stdout).toContain(focus);
   });
 
-  it("documents and initializes one 15-minute absolute default deadline", () => {
+  it("initializes the absolute deadline from the persisted proportional plan", () => {
     const bootstrap = readFileSync(BOOTSTRAP, "utf8");
     const reference = readFileSync(REFERENCE, "utf8");
-    expect(bootstrap).toContain(
-      'BS_QUALITY_MAX_WALL_SECONDS="${BS_QUALITY_MAX_WALL_SECONDS:-900}"',
-    );
+    expect(bootstrap).toContain("QUALITY_CAMPAIGN_SECONDS");
+    expect(bootstrap).toContain("quality-runtime-plan.js");
     expect(bootstrap).toContain(
       '--argjson deadline_epoch "$GOVERNOR_DEADLINE_EPOCH"',
     );
-    expect(reference).toMatch(/default 900 = 15 min/);
-    expect(reference).not.toMatch(/default 1800 = 30 min/);
+    expect(reference).toMatch(/5–15 minute default campaign/);
   });
 
   it("reinvocation across sessions and rebases resumes the same branch campaign", () => {

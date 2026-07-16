@@ -16,8 +16,6 @@ source "$SCRIPT_DIR/quality-provider-policy.sh"
 [ -f "${BS_QUALITY_ROOT_FILE:-/nonexistent}" ] \
   && [ -f "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env" ] \
   && source "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env"
-# shellcheck source=quality-review-plan.sh
-source "$SCRIPT_DIR/quality-review-plan.sh"
 
 GOVERNOR="$(bs_quality_find_script quality-run-governor.js)" || {
   echo "❌ MERGE BLOCKED: quality-run-governor.js not found." >&2
@@ -61,7 +59,6 @@ REVIEW_ROUND="$(jq -r '.rounds_used // 0' "$BS_QUALITY_GOVERNOR_FILE" 2>/dev/nul
   exit 1
 }
 REVIEW_MODE=discovery
-QUALITY_REVIEW_RESERVE=300
 PRIOR_FINDINGS_FILE="${BS_QUALITY_GOVERNOR_FILE%.json}-prior-findings.json"
 if [ -s "$REVIEW_STATE_FILE" ]; then
   LAST_REVIEWED="$(sed -n '1p' "$REVIEW_STATE_FILE")"
@@ -88,12 +85,37 @@ if [ "$REVIEW_ROUND" -gt 1 ]; then
     exit 1
   }
   REVIEW_MODE=verification
-  QUALITY_REVIEW_DEPTH=high
-  QUALITY_REVIEW_PASSES=1
-  QUALITY_REVIEW_TIMEOUT=300
-  QUALITY_REVIEW_RESERVE=120
+fi
+
+RUNTIME_PLANNER="$(bs_quality_find_script quality-runtime-plan.js)" || {
+  echo "❌ MERGE BLOCKED: quality-runtime-plan.js not found." >&2
+  exit 1
+}
+ROUND_PLAN="$(node "$RUNTIME_PLANNER" --base "$REVIEW_DIFF_BASE" \
+  --mode "$REVIEW_MODE" --json 2>/dev/null)" || {
+  echo "❌ MERGE BLOCKED: could not plan runtime for ${REVIEW_DIFF_BASE}..HEAD." >&2
+  exit 1
+}
+ROUND_TIER="$(printf '%s' "$ROUND_PLAN" | jq -r '.tier')"
+ROUND_DEPTH="$(printf '%s' "$ROUND_PLAN" | jq -r '.reviewDepth')"
+ROUND_PASSES="$(printf '%s' "$ROUND_PLAN" | jq -r '.reviewPasses')"
+if [ "$REVIEW_MODE" = verification ]; then
+  TIER="$ROUND_TIER"
+  CODEX_DEPTH="$ROUND_DEPTH"
+  CODEX_ROUNDS="$ROUND_PASSES"
+else
+  TIER="${TIER:-$ROUND_TIER}"
+  CODEX_DEPTH="${CODEX_DEPTH:-$ROUND_DEPTH}"
+  CODEX_ROUNDS="${CODEX_ROUNDS:-$ROUND_PASSES}"
+fi
+QUALITY_REVIEW_TIMEOUT="$(printf '%s' "$ROUND_PLAN" | jq -r '.reviewSeconds')"
+QUALITY_REVIEW_RESERVE="$(printf '%s' "$ROUND_PLAN" | jq -r '.reviewReserveSeconds')"
+# shellcheck source=quality-review-plan.sh
+source "$SCRIPT_DIR/quality-review-plan.sh"
+if [ "$REVIEW_MODE" = verification ]; then
   QUALITY_REVIEW_FOCUS="Verify each persisted finding is fixed, check the fix delta for regressions, and require relevant test evidence."
 fi
+echo "[quality] ${REVIEW_MODE} budget: $(printf '%s' "$ROUND_PLAN" | jq -r '"\(.workload), \(.diffStats.files) files/\(.diffStats.lines) lines → \(.reviewSeconds)s"')" >&2
 
 REVIEW_OUT="$(mktemp -d "${TMPDIR:-/tmp}/bs-quality-review.XXXXXX")"
 git diff "${REVIEW_DIFF_BASE}..HEAD" > "$REVIEW_OUT/diff.txt"

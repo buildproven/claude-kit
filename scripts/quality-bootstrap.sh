@@ -269,7 +269,51 @@ fi
 # panel — this is what actually terminates the outer fix -> re-review loop.
 BS_QUALITY_MAX_REVIEW_ROUNDS="${BS_QUALITY_MAX_REVIEW_ROUNDS:-3}"
 BS_QUALITY_MAX_FIX_COMMITS="${BS_QUALITY_MAX_FIX_COMMITS:-4}"
-BS_QUALITY_MAX_WALL_SECONDS="${BS_QUALITY_MAX_WALL_SECONDS:-900}"
+QUALITY_PLAN_FILE="${BS_QUALITY_ROOT_FILE%.txt}-plan.json"
+QUALITY_PLANNER="$SCRIPT_DIR/quality-runtime-plan.js"
+QUALITY_MINIMUM_RISK=0
+QUALITY_LEVEL=""
+prev_arg=""
+for arg in "$@"; do
+  if [ "$prev_arg" = "--level" ]; then
+    QUALITY_LEVEL="$arg"
+    prev_arg=""
+    continue
+  fi
+  case "$arg" in
+    --level) prev_arg="--level" ;;
+    --level=*) QUALITY_LEVEL="${arg#*=}" ;;
+  esac
+done
+case "$QUALITY_LEVEL" in
+  95) QUALITY_MINIMUM_RISK=50 ;;
+  98) QUALITY_MINIMUM_RISK=75 ;;
+esac
+if [ -f "$QUALITY_PLANNER" ]; then
+  node "$QUALITY_PLANNER" --minimum-risk "$QUALITY_MINIMUM_RISK" --json \
+    > "$QUALITY_PLAN_FILE" 2>/dev/null || true
+fi
+if ! jq -e '.campaignSeconds > 0' "$QUALITY_PLAN_FILE" >/dev/null 2>&1; then
+  echo "[quality] WARNING: proportional runtime planning failed; using conservative 15-minute fallback." >&2
+  jq -n '{
+    riskScore: 75,
+    tier: "critical",
+    workload: "unknown",
+    workloadUnits: 0,
+    diffStats: {files: 0, lines: 0},
+    campaignSeconds: 900,
+    reviewSeconds: 480,
+    verificationSeconds: 240,
+    checkSeconds: 360,
+    reviewReserveSeconds: 270,
+    checkReserveSeconds: 720,
+    agents: 6,
+    reviewDepth: "xhigh",
+    reviewPasses: 1
+  }' > "$QUALITY_PLAN_FILE"
+fi
+QUALITY_CAMPAIGN_SECONDS=$(jq -r '.campaignSeconds' "$QUALITY_PLAN_FILE")
+BS_QUALITY_MAX_WALL_SECONDS="${BS_QUALITY_MAX_WALL_SECONDS:-$QUALITY_CAMPAIGN_SECONDS}"
 GOVERNOR_BRANCH=$(git branch --show-current 2>/dev/null || echo DETACHED)
 [ -n "$GOVERNOR_BRANCH" ] || GOVERNOR_BRANCH="DETACHED:$(git rev-parse HEAD 2>/dev/null)"
 BS_QUALITY_GOVERNOR_FILE=$(bs_quality_campaign_file "$GIT_ROOT" "$GOVERNOR_BRANCH")
@@ -334,4 +378,5 @@ echo "BS_QUALITY_ROOT_FILE=$BS_QUALITY_ROOT_FILE"
 echo "BS_QUALITY_GOVERNOR_FILE=$BS_QUALITY_GOVERNOR_FILE"
 echo "GIT_ROOT=$GIT_ROOT"
 echo "[quality] audit target resolved: $GIT_ROOT"
-echo "[quality] governor: cap=${BS_QUALITY_MAX_REVIEW_ROUNDS} review-rounds, ${BS_QUALITY_MAX_FIX_COMMITS} fix-commits, ${BS_QUALITY_MAX_WALL_SECONDS}s wall-clock"
+QUALITY_PLAN_SUMMARY=$(jq -r '"\(.workload), \(.diffStats.files) files/\(.diffStats.lines) lines, risk \(.riskScore)"' "$QUALITY_PLAN_FILE")
+echo "[quality] governor: ${QUALITY_PLAN_SUMMARY}; cap=${BS_QUALITY_MAX_REVIEW_ROUNDS} review-rounds, ${BS_QUALITY_MAX_FIX_COMMITS} fix-commits, ${BS_QUALITY_MAX_WALL_SECONDS}s wall-clock"

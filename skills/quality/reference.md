@@ -139,16 +139,20 @@ fi
 ```bash
 source scripts/quality-load-root.sh
 BOUNDED="$(bs_quality_find_script quality-run-bounded.sh)" || exit 1
+[ -f "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env" ] &&
+  source "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env"
 
 bash "$BOUNDED" --governor "$BS_QUALITY_GOVERNOR_FILE" \
-  --cap 300 --reserve 300 -- npm test 2>&1
+  --cap "${QUALITY_CHECK_TIMEOUT:-300}" \
+  --reserve "${QUALITY_CHECK_RESERVE:-300}" -- npm test 2>&1
 TEST_EXIT=$?
 
 if [ $TEST_EXIT -ne 0 ]; then
   echo "❌ Tests failed — diagnose and batch-fix the root cause once"
   # Do not rerun an unchanged deterministic failure. Apply the fix, then:
   bash "$BOUNDED" --governor "$BS_QUALITY_GOVERNOR_FILE" \
-    --cap 300 --reserve 120 -- npm test 2>&1
+    --cap "${QUALITY_CHECK_TIMEOUT:-300}" \
+    --reserve "${QUALITY_REVIEW_RESERVE:-120}" -- npm test 2>&1
   TEST_EXIT=$?
   if [ $TEST_EXIT -ne 0 ]; then
     echo "❌ HARD FAIL: Tests still failing after the verified fix attempt"
@@ -201,7 +205,7 @@ auto-fix loop, re-run `npm test` to verify they pass before continuing.
 | `BS_QUALITY_TRUST_TARGET_SCRIPTS` | false   | Explicit toolkit-development mode: allow the audited checkout's quality scripts to enforce their own review. Never enable for untrusted PRs. |
 | `BS_QUALITY_RESET_CAMPAIGN`       | false   | Explicitly discard the same branch's existing deadline/round state. Never set autonomously after findings or timeout.                        |
 | `BS_QUALITY_MAX_FIX_COMMITS`      | 4       | Run-governor cap: max fix commits across the whole invocation before autonomous halt (see below).                                            |
-| `BS_QUALITY_MAX_WALL_SECONDS`     | 900     | Absolute local wall-clock deadline for the whole invocation, including fallback and synchronous CI.                                          |
+| `BS_QUALITY_MAX_WALL_SECONDS`     | plan    | Override the proportional 5–15 minute campaign deadline derived from changed files, lines, and risk.                                         |
 
 ### Run Governor (runaway-loop guardrails)
 
@@ -215,9 +219,11 @@ alongside the Step -1 git-root sentinel) with:
 - **Fix-commit cap** (`BS_QUALITY_MAX_FIX_COMMITS`, default 4) — commits made
   since the run started, checked before every fix attempt and every Codex
   re-verification round.
-- **Absolute deadline** (`BS_QUALITY_MAX_WALL_SECONDS`, default 900 = 15 min) —
-  persisted as `deadline_epoch`; every blocking subprocess is clamped to the
-  remaining time. Fallback and synchronous CI share the same allowance.
+- **Absolute deadline** (`BS_QUALITY_MAX_WALL_SECONDS`, proportional default) —
+  5 minutes for micro changes, then 7/10/13/15 minutes as changed-file and
+  changed-line workload grows. Risk can raise the floor but never grants more
+  than 15 minutes by default. The deadline is persisted as `deadline_epoch`;
+  every blocking subprocess, fallback, and synchronous CI shares it.
 - **Repeated-pattern detection** — findings are recorded round-over-round;
   if a round's findings mostly repeat a shape seen in an earlier round (e.g.
   the same on-disk-vs-loaded-job gap at 4 different call sites), the skill is
@@ -263,14 +269,14 @@ of auto-stamping — auto-stamping then would be forging review evidence.
 
 ### `--scope branch` (Default)
 
-- Typical local time: 5-15 min; hard default deadline: 15 min
+- Typical local time: 5-15 min; proportional hard deadline: 5-15 min
 - All files changed in branch vs main
 - Full quality agents on changed files
 - Creates PR after quality passes
 
 ### `--scope all` (Full Project)
 
-- Uses the same 15-minute default deadline; raise it explicitly for repositories
+- Uses the same 5–15 minute default campaign; raise it explicitly for repositories
   whose deterministic full-project checks cannot complete inside that bound
 - Every file in the project
 - Full quality agents on entire codebase
