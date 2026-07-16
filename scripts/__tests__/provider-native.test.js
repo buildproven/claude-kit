@@ -453,6 +453,30 @@ describe("provider-native platform", () => {
     ).toBe(1);
   });
 
+  it("rejects a manifest directory without creating unowned links", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-manifest-dir-"));
+    const source = path.join(dir, "source");
+    const target = path.join(dir, "target");
+    const allowlist = path.join(dir, "allowlist.json");
+    mkdirSync(path.join(source, "keep"), { recursive: true });
+    mkdirSync(path.join(target, ".buildproven-managed"), { recursive: true });
+    writeFileSync(path.join(source, "keep", "SKILL.md"), "# keep\n");
+    writeFileSync(allowlist, '{"skills":["keep"]}\n');
+
+    expect(
+      spawnSync("bash", [
+        SKILL_SYNC,
+        "--source",
+        source,
+        "--allowlist",
+        allowlist,
+        "--target",
+        target,
+      ]).status,
+    ).toBe(1);
+    expect(() => readlinkSync(path.join(target, "keep"))).toThrow();
+  });
+
   it("measures instruction and allowlisted skill discovery budgets", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "surface-budget-"));
     const skills = path.join(dir, "skills");
@@ -540,6 +564,45 @@ describe("provider-native platform", () => {
     expect(defaultPayload.discoverySkillCount).toBe(1);
     expect(defaultPayload.descriptionChars).toBe(
       "keep: Useful workflow".length,
+    );
+  });
+
+  it("counts YAML block-scalar and escaped descriptions", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "surface-yaml-"));
+    const skills = path.join(dir, "skills");
+    const allowlist = path.join(dir, "skills.json");
+    for (const name of ["folded", "literal", "quoted"]) {
+      mkdirSync(path.join(skills, name), { recursive: true });
+    }
+    writeFileSync(
+      path.join(skills, "folded", "SKILL.md"),
+      "---\nname: folded\ndescription: >-\n  Folded\n  workflow\n---\n",
+    );
+    writeFileSync(
+      path.join(skills, "literal", "SKILL.md"),
+      "---\nname: literal\ndescription: |+\n  Literal\n  workflow\n---\n",
+    );
+    writeFileSync(
+      path.join(skills, "quoted", "SKILL.md"),
+      '---\nname: quoted\ndescription: "Escaped\\nworkflow"\n---\n',
+    );
+    writeFileSync(allowlist, '{"skills":["folded","literal","quoted"]}\n');
+
+    const payload = JSON.parse(
+      execFileSync("node", [
+        SURFACE,
+        `--root=${dir}`,
+        `--skill-source=${skills}`,
+        `--skill-allowlist=${allowlist}`,
+        "--json",
+      ]),
+    );
+    expect(payload.descriptionChars).toBe(
+      [
+        "folded: Folded workflow",
+        "literal: Literal workflow",
+        "quoted: Escaped\nworkflow",
+      ].reduce((total, description) => total + description.length, 0),
     );
   });
 

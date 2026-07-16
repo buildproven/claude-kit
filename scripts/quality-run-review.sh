@@ -166,7 +166,7 @@ run_codex_review() {
   printf '%s' "$auth_output" | grep -q 'Logged in' || return 2
   case "$QUALITY_REVIEW_PASSES" in
     1|2) ;;
-    *) echo "quality: Codex review passes must be 1 or 2" >&2; return 2 ;;
+    *) echo "quality: Codex review passes must be 1 or 2" >&2; return 64 ;;
   esac
 
   : > "$REVIEW_OUT/codex.findings.txt"

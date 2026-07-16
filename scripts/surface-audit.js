@@ -113,8 +113,18 @@ function frontmatterDescription(file) {
     const match = line.match(/^description:\s*(.*)$/);
     if (!match) continue;
     const value = match[1].trim();
-    if (value !== ">" && value !== "|") {
-      return value.replace(/^(['"])(.*)\1$/, "$2");
+    if (!/^[>|](?:[+-]?[1-9]?|[1-9][+-]?)$/.test(value)) {
+      if (value.startsWith('"') && value.endsWith('"')) {
+        try {
+          return JSON.parse(value);
+        } catch {
+          return value.slice(1, -1);
+        }
+      }
+      if (value.startsWith("'") && value.endsWith("'")) {
+        return value.slice(1, -1).replace(/''/g, "'");
+      }
+      return value;
     }
     const folded = [];
     for (let next = index + 1; next < lines.length; next += 1) {

@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import {
+  appendFileSync,
   mkdtempSync,
   mkdirSync,
   writeFileSync,
@@ -18,7 +19,15 @@ const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..");
 function run(args, configDir, scriptPath = SCRIPT) {
   try {
     const stdout = execFileSync("bash", [scriptPath, ...args], {
-      env: { ...process.env, CLAUDE_CONFIG_DIR: configDir },
+      env: {
+        ...process.env,
+        CLAUDE_CONFIG_DIR: configDir,
+        CODEX_AGENT_SKILLS_DIR: path.join(
+          path.dirname(configDir),
+          ".agents",
+          "skills",
+        ),
+      },
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -80,6 +89,21 @@ describe("setup-claude-sync.sh", () => {
     const cfg = sandbox();
     run(["--repair"], cfg);
     expect(run(["--check"], cfg).code).toBe(0);
+  });
+
+  it("--repair prunes stale managed Codex skills", () => {
+    const cfg = sandbox();
+    expect(run(["--repair"], cfg).code).toBe(0);
+    const codexSkills = path.join(path.dirname(cfg), ".agents", "skills");
+    const staleTarget = path.join(REPO_ROOT, "skills", "seo");
+    symlinkSync(staleTarget, path.join(codexSkills, "stale-skill"));
+    appendFileSync(
+      path.join(codexSkills, ".buildproven-managed"),
+      `stale-skill|${staleTarget}\n`,
+    );
+
+    expect(run(["--repair"], cfg).code).toBe(0);
+    expect(() => readlinkSync(path.join(codexSkills, "stale-skill"))).toThrow();
   });
 
   it("never clobbers a real directory the user owns", () => {

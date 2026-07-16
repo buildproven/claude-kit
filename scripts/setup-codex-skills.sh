@@ -30,7 +30,14 @@ LOCK_TOKEN="$$-${RANDOM:-0}-$(date +%s)"
 LOCK_STALE_SECONDS=30
 
 validate_manifest() {
-  [ -f "$MANIFEST" ] || return 0
+  if [ -e "$MANIFEST" ] || [ -L "$MANIFEST" ]; then
+    if [ ! -f "$MANIFEST" ] || [ -L "$MANIFEST" ]; then
+      echo "Invalid managed Codex skill manifest path: $MANIFEST" >&2
+      return 1
+    fi
+  else
+    return 0
+  fi
   awk -F'|' '
     NF != 2 || $1 !~ /^[a-z0-9]+(-[a-z0-9]+)*$/ || $2 == "" { exit 1 }
   ' "$MANIFEST" || {
@@ -269,7 +276,8 @@ done < "$EXPECTED"
 
 if [ "$MODE" = sync ] && [ "$DRIFT" -eq 0 ]; then
   trap '' INT TERM
-  mv "$EXPECTED" "$MANIFEST"
+  python3 -c 'import os,sys; os.replace(sys.argv[1], sys.argv[2])' \
+    "$EXPECTED" "$MANIFEST"
   COMMITTED=true
   trap 'exit 130' INT TERM
 fi
