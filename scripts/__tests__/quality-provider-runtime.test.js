@@ -216,13 +216,22 @@ Quality-Base: ${base}`;
     );
     expect(source).toMatch(/model_reasoning_effort=.*QUALITY_REVIEW_DEPTH/);
     expect(source).toMatch(/codex exec --ephemeral -s read-only --json/);
+    expect(source).toMatch(/-C "\$GIT_ROOT"/);
     expect(source).toMatch(/review_selector=--base/);
     expect(source).toMatch(/review_selector=--commit/);
     expect(source).not.toMatch(/\$review_selector_value" -/);
+    expect(source).toMatch(/Codex review passes must be 1 or 2/);
     expect(source).toMatch(/record_provider_exhaustion Codex/);
     expect(source).toMatch(/quality-provider-error\.js/);
     expect(source).not.toMatch(/provider_stderr_exhausted/);
     expect(source).not.toMatch(/provider_exhausted "\$raw_file"/);
+    expect(source.indexOf('[ "$rc" -eq 124 ] && return 76')).toBeLessThan(
+      source.indexOf("quality-provider-error.js"),
+    );
+    expect(source).toMatch(/for evidence in "\$REVIEW_OUT"\/\*\.stderr; do/);
+    expect(source).not.toMatch(
+      /PROVIDER_RC.*-eq 76.*QUALITY_FALLBACK|QUALITY_FALLBACK.*PROVIDER_RC.*-eq 76/,
+    );
   });
 
   it.each([

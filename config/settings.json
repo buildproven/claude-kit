@@ -84,6 +84,43 @@
       "deniedDomains": ["169.254.169.254", "metadata.google.internal"]
     }
   },
+  "skillOverrides": {
+    "agent-browser": "name-only",
+    "api-conventions": "on",
+    "backlog": "on",
+    "cleanup": "on",
+    "codebase-design": "name-only",
+    "deps": "on",
+    "dev": "on",
+    "diagnosing-bugs": "on",
+    "error-handling": "on",
+    "frontend-design": "name-only",
+    "healthcheck": "name-only",
+    "hotfix": "on",
+    "legal": "name-only",
+    "monetize": "name-only",
+    "new": "on",
+    "patterns": "name-only",
+    "prd": "on",
+    "quality": "on",
+    "ralph": "on",
+    "recover": "on",
+    "recover-quality": "name-only",
+    "review": "name-only",
+    "review-content": "name-only",
+    "scrub": "name-only",
+    "seo": "name-only",
+    "sota": "on",
+    "status": "on",
+    "steward": "name-only",
+    "strategy": "name-only",
+    "test-strategy": "on",
+    "triage": "name-only",
+    "ui-reviewer": "name-only",
+    "verify-claim": "on",
+    "visualise": "name-only",
+    "workflow": "name-only"
+  },
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -105,16 +142,6 @@
             "type": "command",
             "command": "$HOME/.claude/scripts/post-edit-lint.sh",
             "timeout": 10000
-          }
-        ]
-      },
-      {
-        "matcher": ".*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$HOME/.claude/scripts/post-tool-use-session-check.sh",
-            "timeout": 2000
           }
         ]
       }
@@ -151,18 +178,6 @@
           {
             "type": "command",
             "command": "$HOME/.claude/scripts/auto-branch-on-main.sh",
-            "timeout": 5000
-          }
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$HOME/.claude/scripts/pre-compact-backup.sh",
             "timeout": 5000
           }
         ]
@@ -245,11 +260,6 @@
       {
         "matcher": "",
         "hooks": [
-          {
-            "type": "command",
-            "command": "$HOME/.claude/scripts/session-start-context.sh",
-            "timeout": 5000
-          },
           {
             "type": "command",
             "command": "$HOME/.claude/scripts/multi-session-guard.sh",
