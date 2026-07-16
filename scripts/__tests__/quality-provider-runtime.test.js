@@ -192,4 +192,26 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
     expect(source).toMatch(/record_provider_exhaustion Codex/);
     expect(source).toMatch(/try again at/);
   });
+
+  it("parses the root object required by the Codex output schema", () => {
+    const source = spawnSync("cat", [RUN_REVIEW], { encoding: "utf8" }).stdout;
+    const schema = JSON.parse(
+      spawnSync(
+        "cat",
+        [
+          path.join(
+            ROOT,
+            "scripts",
+            "schemas",
+            "quality-review-output.schema.json",
+          ),
+        ],
+        { encoding: "utf8" },
+      ).stdout,
+    );
+
+    expect(schema.required).toEqual(["verdict", "summary", "findings"]);
+    expect(source).toContain("(.result // .)");
+    expect(source).not.toContain(".result and (.result.findings");
+  });
 });
