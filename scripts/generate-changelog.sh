@@ -62,7 +62,17 @@ fi
 # Temp files for collecting commits by type (Bash 3.2 compatible — no associative arrays)
 TMPDIR_CL=$(mktemp -d)
 touch "$TMPDIR_CL/feat" "$TMPDIR_CL/fix" "$TMPDIR_CL/docs" "$TMPDIR_CL/refactor" "$TMPDIR_CL/perf" "$TMPDIR_CL/other"
-cleanup_tmpdir() { [[ -n "$TMPDIR_CL" ]] && rm -rf "$TMPDIR_CL"; }
+cleanup_tmpdir() {
+  rm -f \
+    "$TMPDIR_CL/feat" \
+    "$TMPDIR_CL/fix" \
+    "$TMPDIR_CL/docs" \
+    "$TMPDIR_CL/refactor" \
+    "$TMPDIR_CL/perf" \
+    "$TMPDIR_CL/other" \
+    "$TMPDIR_CL/commits"
+  rmdir "$TMPDIR_CL" 2>/dev/null || true
+}
 trap cleanup_tmpdir EXIT
 
 # Write commits to temp file first, then process (avoids subshell pipe issue)
