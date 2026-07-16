@@ -1,6 +1,7 @@
 ---
 name: sota
 description: SOTA system assessment skill. Auto-invokes when user asks "how's my setup?", "rate my system", "am I SOTA?", "score my config", "audit my Claude setup", or similar assessment questions. Provides consistent, repeatable scoring against defined benchmarks.
+user-invocable: false
 ---
 
 # /bs:sota - System SOTA Assessment + Self-Heal

@@ -1,6 +1,7 @@
 ---
 name: patterns
 description: Search CLAUDE.md for patterns and best practices across all projects
+user-invocable: false
 ---
 
 # /bs:patterns - Search Learning Corpus

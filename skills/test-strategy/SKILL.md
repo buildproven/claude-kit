@@ -2,6 +2,7 @@
 name: test-strategy
 description: Auto-invoke skill for test strategy and coverage guidance. Activates when writing functions, React components, API endpoints, hooks, or utility modules. Provides test pyramid guidance, required test patterns per code type, and coverage threshold enforcement (88%+ target).
 context: fork
+user-invocable: false
 ---
 
 # Test Strategy Skill

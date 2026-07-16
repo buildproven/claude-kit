@@ -1,7 +1,7 @@
 ---
 name: bs:steward
-description: "Autonomous dev environment steward: hygiene, currency, quality across all projects"
-argument-hint: "[--daily|--weekly|--module <name>|--dry-run|--fix|--fix-prs|--status]"
+description: "Discover active repositories, audit convergence, and optionally repair through provider-neutral PRs"
+argument-hint: "[status|audit|fix] [--provider codex|claude] [--fallback codex|claude|none]"
 category: maintenance
 ---
 

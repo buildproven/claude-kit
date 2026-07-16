@@ -13,21 +13,21 @@ That is not a prompt saying "please be thorough". It is
 fails _closed_, and a target resolver — **415 tests with over 85% line and 75%
 branch coverage**.
 
-Plus autonomous backlog execution, multi-LLM strategy panels, fleet auditing, and 14
-specialist agents.
+Plus autonomous backlog execution, multi-LLM strategy panels, active-repo fleet
+auditing, native Codex skills, and 14 specialist agents.
 
 **Everything is here.** One repo, no paid tier, nothing held back. The kit is MIT;
 one substantially modified skill retains its upstream Apache-2.0 license.
 
 ## What's inside
 
-| Dir         | Contents                                                          |
-| ----------- | ----------------------------------------------------------------- |
-| `commands/` | 32 namespaced `/bs:*`, `/gh:*`, and `/cc:*` commands              |
-| `skills/`   | 33 skills — quality, autonomous workflow, strategy, domain        |
-| `agents/`   | 14 specialist agents                                              |
-| `scripts/`  | Hooks, lint, quality governor, provider-neutral review companions |
-| `config/`   | Generic `CLAUDE.md` and `settings.json` templates                 |
+| Dir         | Contents                                                           |
+| ----------- | ------------------------------------------------------------------ |
+| `commands/` | 17 curated `/bs:*`, `/gh:*`, and `/cc:*` entry points              |
+| `skills/`   | 33 skills — quality, autonomous workflow, strategy, domain         |
+| `agents/`   | 14 specialist agents                                               |
+| `scripts/`  | Hooks, lint, quality governor, provider-neutral review companions  |
+| `config/`   | Instructions, provider policy, Codex skills, fleet and MCP schemas |
 
 ## What this is (and isn't)
 
@@ -58,20 +58,19 @@ Some skills also need an MCP server and will tell you so rather than failing
 quietly: `/bs:backlog` and `/bs:dev --next` need **Linear**; `/bs:triage` needs
 **Sentry**.
 
-### Choose the primary reviewer
+### Choose the primary agent
 
-Quality can run from either Claude Code or Codex. Its reviewer policy is shared
-across both CLIs; the fallback runs only when the primary is unavailable or has
-exhausted its account quota:
+Model-using workflows can run from either Codex or Claude Code. One shared policy
+selects the primary and a quota/authentication/timeout fallback:
 
 ```bash
-bash ~/.claude/scripts/quality-provider-config.sh --primary codex --fallback claude
+bash ~/.claude/scripts/provider-config.sh --primary codex --fallback claude
 ```
 
-Reverse the two values for Claude-primary, or use `--fallback none`. Claude
-HTTP 429/weekly-limit responses are surfaced immediately and cancel sibling
-reviewers. Fix/re-review rounds inspect only commits added since the previous
-successful review, reducing repeated tokens.
+Reverse the two values for Claude-primary, or use `--fallback none`. HTTP 429 and
+weekly-limit responses are surfaced immediately instead of being misreported as
+timeouts. Quality re-review rounds inspect only commits added since the previous
+successful review.
 
 **macOS-only:** the desktop-notification hooks use `osascript`. On Linux/WSL they
 are skipped — everything else works.
@@ -110,7 +109,9 @@ cd ~/Projects/claude-kit
 ./install.sh
 ```
 
-This symlinks `commands/`, `skills/`, `agents/` and `scripts/` into `~/.claude/`.
+This symlinks `commands/`, `skills/`, `agents/` and `scripts/` into `~/.claude/`,
+installs the curated native Codex skills under `~/.agents/skills`, and points
+`~/.codex/AGENTS.md` at the same instruction source.
 `scripts/` is load-bearing — `config/settings.json` wires 18 command hooks to
 `$HOME/.claude/scripts/*.sh`, so without it every hook silently no-ops. It works,
 but skills land unprefixed, so they can shadow Claude Code built-ins. Prefer the
@@ -124,16 +125,12 @@ plugin.
 /bs:dev         Start a feature with complexity-appropriate planning
 /bs:quality     Provider-neutral quality loop (tier-aware, quota fallback, break-glass)
 /bs:test        Run tests with auto-detected framework
-/bs:hotfix      Emergency production fix workflow
 /bs:plan        Structured spec before complex work
 /bs:new         Bootstrap a new project
-/bs:init-project Bootstrap agent infrastructure in any project
-/bs:investigate Root-cause debugging — find the cause before touching code
 /bs:help        Full command reference
 /bs:workflow    Daily workflow guide
 /bs:status      Project catch-up summary
 /bs:deps        Dependency health (outdated, audit, upgrade)
-/bs:cleanup     Clean AI CLI caches and temp files
 /bs:sync        Verify and repair config symlinks
 /bs:scrub       Prep a project for public release
 /gh:fix-issue   Full issue workflow: analyze → branch → fix → test → PR
@@ -146,29 +143,34 @@ plugin.
 /bs:ralph       Autonomous backlog execution — pick, implement, test, reflect, repeat
 /bs:strategy    Multi-LLM strategy panel (Claude + Codex + Gemini, via API keys)
 /bs:review      Collaborative artifact review (PDFs, landing pages, emails, docs)
-/bs:prd         PRD discipline — clarifying questions, task list, pause gates
 /bs:backlog     Value-prioritized backlog
-/bs:sota        Score your setup against the state-of-the-art rubric, self-heal
 /bs:steward     Fleet-wide hygiene, currency and quality across all repos
-/bs:sentry      Fleet quality audit — 8 gates across every project
 /bs:triage      Sentry errors → cluster → Linear tickets → fix PR
-/bs:patterns    Search CLAUDE.md conventions across projects
-/bs:recover-quality  Audit + fix quality regression, integrate learnings
-/bs:verify-claim Extract claims, verify against primary sources
-/bs:legal       Legal review for software founders
 ```
 
-For bounded unattended runs across Claude usage windows, `scripts/overnight-loop.sh`
-selects one exact issue from a named Linear project, invokes Ralph with a hard
+For bounded unattended runs, `scripts/overnight-loop.sh` selects one exact issue
+from a named Linear project, invokes Ralph through the shared provider runner with a hard
 wall-clock deadline, and accepts completion only when the reviewed merge receipt
 and Linear `Done` state agree. It requires `LINEAR_API_KEY` and an explicit
 `--linear-project`; target, item, and hour caps are configurable and default to
 the current directory, 8 items, and 8 hours. Run with `--dry-run` first to validate
-scope without launching Ralph.
+scope without launching Ralph. Add `--provider codex --fallback claude` (or the
+reverse) to override the shared policy for a run.
+
+For ongoing maintenance, copy `config/fleet.example.json` to
+`${XDG_CONFIG_HOME:-~/.config}/buildproven/fleet.json`, set GitHub owners and local
+roots, then run `/bs:steward audit`. `fix` mode creates isolated worktrees and
+requires normal PR quality gates; it refuses dirty or locally-ahead repositories.
+
+For MCP parity, keep a private manifest shaped like `config/mcp.example.json` and
+run `python3 scripts/mcp-sync.py --manifest <path>`. Use `--force` to converge
+changed definitions and `--login` for OAuth. Credential-bearing stdio servers
+should use a private wrapper that loads environment variables; never place secrets
+in the manifest.
 
 ### Domain intelligence
 
-Skills, invoked in conversation: `monetize`, `seo`,
+Skills, invoked in conversation: `hotfix`, `prd`, `legal`, `monetize`, `seo`,
 `review-content`, `agent-browser`.
 
 Agents: `business-panel-experts`, `competitive-analyst`, `critic`,
@@ -189,7 +191,9 @@ Don't reimplement what the platform ships. As of 2.1.210:
 
 ## Skills
 
-Skills auto-invoke from natural language — you don't have to type a command.
+Skills auto-invoke from natural language in Claude Code and install natively for
+Codex from a curated allowlist. Internal implementation skills use
+`user-invocable: false` so the user-facing surface stays small.
 
 **Engineering** — `quality` (tier-aware provider review + quota fallback),
 `test-strategy`, `error-handling`, `api-conventions`, `recover`, `cleanup`,
@@ -208,7 +212,7 @@ Just ask: `"Run the quality skill"`, `"Use the visualise skill to diagram this"`
 
 ## Agents
 
-14 specialists. Claude picks the right one, or name it directly.
+14 specialists. The active agent picks the right one, or name it directly.
 
 **Engineering** — `code-reviewer`, `security-auditor`, `accessibility-tester`,
 `architect-reviewer`, `performance-engineer`, `postgres-pro`, `prompt-engineer`,
@@ -225,7 +229,8 @@ private commands and preferences on top without forking.
 
 ## Customize
 
-1. Copy `config/CLAUDE.md` and tune it to your workflow.
+1. Copy `config/CLAUDE.md` and tune it to your workflow; expose the same file as
+   `AGENTS.md` so Claude Code and Codex receive identical instructions.
 2. Edit `config/settings.json` for permissions, hooks, and model routing.
 3. Add your own commands, skills, or agents in a private overlay repo that submodules this one.
 

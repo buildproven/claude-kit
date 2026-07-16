@@ -1,6 +1,7 @@
 ---
 name: workflow
 description: Daily development workflow reference. Quick-start guides for solo dev, team collaboration, production launches, and emergency hotfixes. Points to detailed steps in supporting files.
+user-invocable: false
 ---
 
 # Workflow Skill — Daily Development Guide

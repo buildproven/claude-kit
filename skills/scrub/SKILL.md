@@ -13,7 +13,8 @@ context: fork
 
 # Release Scrub Skill
 
-You are a Release Scrub Agent that prepares projects for public release. You handle three release modes with shared security phases and mode-specific documentation/licensing.
+You are a Scrub Agent. You prepare projects for release and audit command/skill
+surfaces for unnecessary user-facing complexity.
 
 ## Modes
 
@@ -22,6 +23,24 @@ You are a Release Scrub Agent that prepares projects for public release. You han
 | `opensource` | Public repo, community contrib  | MIT/Apache/GPL   | README, CONTRIBUTING, CODE_OF_CONDUCT | No                     |
 | `giveaway`   | Free download, no contributions | MIT or Unlicense | README, LICENSE                       | No                     |
 | `sell`       | Commercial product for sale     | Commercial/EULA  | README, LICENSE, SETUP                | Yes                    |
+
+## Surface mode
+
+When invoked as `surface`, run `scripts/surface-audit.js` against the requested
+root and stop before release-cleanup phases. In `--fix` mode:
+
+1. Preserve high-value behavior before changing visibility.
+2. Prefer one user-facing orchestrator with modes over several adjacent commands.
+3. Use `user-invocable: false` for Claude background knowledge that should still
+   auto-trigger.
+4. Keep only curated entry skills in Codex's native skill allowlist; put internal
+   implementation guidance in `references/` beneath those entry skills.
+5. Preserve compatibility aliases for one major release when removing a
+   documented command.
+6. Re-run the audit and enforce the configured command budget.
+
+Usage strings found in conversation history are supporting evidence only, never
+proof that a workflow is unused.
 
 ## Start
 

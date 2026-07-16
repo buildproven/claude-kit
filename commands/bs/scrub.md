@@ -1,12 +1,38 @@
 ---
 name: bs:scrub
-description: "Scrub/clean a project for release: open source, giveaway, or commercial sale"
-argument-hint: "[path] [opensource|sell|giveaway]"
+description: "Scrub a release or audit the installed command/skill surface"
+argument-hint: "[path] [opensource|sell|giveaway] | surface [--root path] [--fix]"
 tags: [release, security, opensource]
 category: release
 ---
 
 **Invocation args:** `$ARGUMENTS`
+
+## Surface mode
+
+If the first argument is `surface`, do not enter the destructive release scrub.
+Resolve `scripts/surface-audit.js` through the installed kit root and run:
+
+```bash
+node ~/.claude/scripts/surface-audit.js --root="${TARGET_ROOT:-$PWD}" --command-budget=24
+```
+
+`--root <path>` overrides the target. Without `--fix`, report:
+
+- user-visible command count versus budget;
+- registered skill count;
+- thin wrappers;
+- commands without same-name skills;
+- direct provider executable references.
+
+With `--fix`, use the report to make a reviewed branch that consolidates
+wrappers into modes, marks background-only Claude skills
+`user-invocable: false`, and moves Codex-internal material beneath retained
+skills as references. Never remove a skill solely because its name did not
+appear in text history; histories contain examples and prompt bodies, not
+authoritative invocation telemetry.
+
+Stop after surface mode. The remaining steps apply only to release scrub.
 
 ## Step 1 — Persist args so the forked skill can read them (REQUIRED)
 

@@ -24,6 +24,7 @@ warn() { echo -e "${YELLOW}⚠${NC} $1"; }
 REPO_URL="https://github.com/buildproven/claude-kit.git"
 PROJECT_DIR="${CLAUDE_KIT_DIR:-$HOME/Projects/claude-kit}"
 CLAUDE_DIR="$HOME/.claude"
+CODEX_DIR="$HOME/.codex"
 
 echo ""
 echo "claude-kit installer"
@@ -42,6 +43,7 @@ fi
 
 # Ensure ~/.claude exists
 mkdir -p "$CLAUDE_DIR"
+mkdir -p "$CODEX_DIR"
 
 # Symlink commands, skills, agents, scripts.
 # `scripts` is load-bearing: config/settings.json wires command hooks to
@@ -85,11 +87,33 @@ if [[ -f "$CLAUDEMD_SRC" ]]; then
     fi
 fi
 
+# Install native Codex skills. Custom prompts remain a compatibility surface,
+# but Agent Skills are the supported reusable-workflow format.
+bash "$PROJECT_DIR/scripts/setup-codex-skills.sh"
+success "Installed curated native Codex skills"
+
+# Codex and Claude read the exact same instruction source.
+CODEX_AGENTS="$CODEX_DIR/AGENTS.md"
+if [[ ! -e "$CODEX_AGENTS" && ! -L "$CODEX_AGENTS" ]]; then
+    ln -s "$PROJECT_DIR/config/CLAUDE.md" "$CODEX_AGENTS"
+    success "Linked ~/.codex/AGENTS.md → config/CLAUDE.md"
+else
+    warn "~/.codex/AGENTS.md already exists — skipping (merge manually if needed)"
+fi
+
+# Install a provider-neutral default without overwriting operator policy.
+PROVIDER_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/buildproven/agent-providers.json"
+if [[ ! -e "$PROVIDER_CONFIG" ]]; then
+    mkdir -p "$(dirname "$PROVIDER_CONFIG")"
+    cp "$PROJECT_DIR/config/provider-policy.json" "$PROVIDER_CONFIG"
+    success "Installed provider policy: primary=auto fallback=none"
+fi
+
 echo ""
 echo "============================================================"
 success "Installation complete!"
 echo ""
-echo "Restart Claude Code to apply changes."
+echo "Restart Claude Code or Codex to apply changes."
 echo ""
 echo "Next steps:"
 echo "  • Edit ~/.claude/CLAUDE.md to match your workflow"

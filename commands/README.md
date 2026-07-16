@@ -21,19 +21,17 @@ Commands use prefixes: `/bs:` (workflow), `/gh:` (GitHub), `/cc:` (Claude Code),
 | `/bs:plan`     | Structure a larger task       | Ambiguous or multi-step    |
 | `/bs:test`     | Run tests with defaults       | During implementation      |
 | `/bs:quality`  | Run the quality loop          | Before PR or merge         |
-| `/bs:hotfix`   | Fast emergency path           | Production incidents       |
 | `/bs:workflow` | Show the daily workflow       | Quick lookup               |
 
 ## Maintenance & Status
 
-| Command       | Purpose                       | When to Use            |
-| ------------- | ----------------------------- | ---------------------- |
-| `/bs:cleanup` | Clean AI CLI caches           | Disk and state cleanup |
-| `/bs:sync`    | Verify or repair setup links  | Local setup health     |
-| `/bs:status`  | Show project status           | Quick catch-up         |
-| `/bs:read`    | Read and extract improvements | Learn from material    |
-| `/bs:help`    | Show all commands             | Reference              |
-| `/bs:scrub`   | Prepare a repo for release    | OSS, giveaway, sell    |
+| Command       | Purpose                      | When to Use         |
+| ------------- | ---------------------------- | ------------------- |
+| `/bs:sync`    | Verify or repair setup links | Local setup health  |
+| `/bs:status`  | Show project status          | Quick catch-up      |
+| `/bs:help`    | Show all commands            | Reference           |
+| `/bs:scrub`   | Prepare a repo for release   | OSS, giveaway, sell |
+| `/bs:steward` | Audit or repair active repos | Fleet convergence   |
 
 ## Utilities
 
@@ -46,5 +44,6 @@ Commands use prefixes: `/bs:` (workflow), `/gh:` (GitHub), `/cc:` (Claude Code),
 ## Notes
 
 - This repo is the public core.
+- Heavy or auto-invoked implementation lives in skills; commands stay thin.
 - Product, posting, sales, and private operator workflows are intentionally excluded.
 - The authoritative command set is whatever exists under `commands/`.
