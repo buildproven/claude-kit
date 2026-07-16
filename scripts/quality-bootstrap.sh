@@ -263,10 +263,10 @@ fi
 PR_JSON=""
 if [ -n "${RES_PR:-}" ]; then
   PR_JSON="$(gh pr view "$RES_PR" \
-    --json number,baseRefName,baseRefOid,headRefOid 2>/dev/null)"
+    --json number,baseRefName,baseRefOid,headRefName,headRefOid 2>/dev/null)"
 elif [ "$ARGS_MERGE" = true ]; then
   PR_JSON="$(gh pr view \
-    --json number,baseRefName,baseRefOid,headRefOid 2>/dev/null)"
+    --json number,baseRefName,baseRefOid,headRefName,headRefOid 2>/dev/null)"
 fi
 if [ "$ARGS_MERGE" = true ]; then
   [ -n "$PR_JSON" ] || {
@@ -278,9 +278,11 @@ if [ -n "$PR_JSON" ]; then
   RES_PR="$(printf '%s' "$PR_JSON" | jq -r '.number')"
   PR_BASE_NAME="$(printf '%s' "$PR_JSON" | jq -r '.baseRefName')"
   PR_BASE_OID="$(printf '%s' "$PR_JSON" | jq -r '.baseRefOid')"
+  PR_HEAD_NAME="$(printf '%s' "$PR_JSON" | jq -r '.headRefName')"
   PR_HEAD_OID="$(printf '%s' "$PR_JSON" | jq -r '.headRefOid')"
   [ -n "$PR_BASE_NAME" ] && [ "$PR_BASE_NAME" != null ] &&
-    [ -n "$PR_BASE_OID" ] && [ "$PR_BASE_OID" != null ] || {
+    [ -n "$PR_BASE_OID" ] && [ "$PR_BASE_OID" != null ] &&
+    [ -n "$PR_HEAD_NAME" ] && [ "$PR_HEAD_NAME" != null ] || {
       echo "❌ /bs:quality could not resolve the PR base identity." >&2
       exit 1
     }
@@ -334,7 +336,10 @@ CREATE_ARGS=(create --repo "$GIT_ROOT" --base-ref "$BASE_REF" \
 [ "$ARGS_MERGE" = true ] && CREATE_ARGS+=(--merge)
 [ "$SKIP_TESTS" = true ] && CREATE_ARGS+=(--skip-tests)
 [ -n "${RES_PR:-}" ] && CREATE_ARGS+=(--pr "$RES_PR")
-[ "${BREAK_GLASS_APPROVED:-}" = true ] && CREATE_ARGS+=(--break-glass-approved)
+if [ -n "${RES_PR:-}" ]; then
+  GITHUB_REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
+  CREATE_ARGS+=(--github-repo "$GITHUB_REPOSITORY" --head-ref "$PR_HEAD_NAME")
+fi
 BS_QUALITY_MANIFEST="$(node "$SCRIPT_DIR/quality-invocation.js" "${CREATE_ARGS[@]}")" || exit 1
 INVOCATION_ID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$BS_QUALITY_MANIFEST" invocationId)"
 BASE_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$BS_QUALITY_MANIFEST" revisions.baseSha)"

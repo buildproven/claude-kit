@@ -54,6 +54,9 @@ function repo(label) {
 }
 
 function create(root, extra = [], env = {}) {
+  const prIdentity = extra.includes("--pr")
+    ? ["--github-repo", "owner/repo", "--head-ref", "feature"]
+    : [];
   return execFileSync(
     "node",
     [
@@ -63,6 +66,7 @@ function create(root, extra = [], env = {}) {
       root,
       "--base-ref",
       "origin/main",
+      ...prIdentity,
       ...extra,
     ],
     {
@@ -189,25 +193,31 @@ function recordJudgeArtifact(root, manifest, dispositions = []) {
 function fakeGh(root, head) {
   const bin = mkdtempSync(path.join(tmpdir(), "quality-gh-"));
   const gh = path.join(bin, "gh");
+  const merged = path.join(bin, "merged");
   const base = git(root, ["rev-parse", "origin/main"]);
   writeFileSync(
     gh,
     `#!/usr/bin/env bash
 if [ "$1 $2" = "pr view" ]; then
   args="$*"
-  if [[ "$args" == *"state,mergedAt,mergeCommit"* ]]; then
-    printf '%s\\n' '{"state":"MERGED","mergedAt":"2026-07-16T00:00:00Z","mergeCommit":{"oid":"merge"}}'
+  head_ref="\${QUALITY_TEST_HEAD_REF:-feature}"
+  if [[ "$args" == *"state,mergedAt,mergeCommit"* ]] && [ -f ${JSON.stringify(merged)} ]; then
+    printf '{"state":"MERGED","mergedAt":"2026-07-16T00:00:00Z","mergeCommit":{"oid":"merge"},"headRefName":"%s","headRefOid":"${head}","baseRefName":"main"}\\n' "$head_ref"
   elif [[ "$args" == *"baseRefOid"* ]]; then
-    printf '%s\\n' '{"headRefOid":"${head}","baseRefName":"main","baseRefOid":"${base}"}'
+    printf '{"state":"OPEN","mergedAt":null,"mergeCommit":null,"headRefName":"%s","headRefOid":"${head}","baseRefName":"main","baseRefOid":"${base}"}\\n' "$head_ref"
   else
-    printf '%s\\n' '{"headRefOid":"${head}","baseRefName":"main"}'
+    printf '{"state":"OPEN","mergedAt":null,"mergeCommit":null,"headRefName":"%s","headRefOid":"${head}","baseRefName":"main"}\\n' "$head_ref"
   fi
   exit 0
 fi
 if [ "$1 $2" = "pr checks" ]; then exit 0; fi
-if [ "$1 $2" = "pr merge" ]; then exit 0; fi
+if [ "$1 $2" = "pr merge" ]; then
+  touch ${JSON.stringify(merged)}
+  [ "\${QUALITY_TEST_MERGE_RC:-0}" = 0 ]
+  exit $?
+fi
 if [ "$1 $2" = "repo view" ]; then
-  if [[ "$*" == *"nameWithOwner"* ]]; then printf '%s\\n' 'owner/repo'; else printf '%s\\n' 'main'; fi
+  if [[ "$*" == *"nameWithOwner"* ]]; then printf '%s\\n' "\${QUALITY_TEST_REPOSITORY:-owner/repo}"; else printf '%s\\n' 'main'; fi
   exit 0
 fi
 if [ "$1" = "api" ]; then
@@ -282,6 +292,10 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   printf '%s\\n' '{"number":7,"headRefName":"feature","headRefOid":"${git(root, ["rev-parse", "HEAD"])}","baseRefName":"release","baseRefOid":"${base}"}'
   exit 0
 fi
+if [ "$1 $2" = "repo view" ]; then
+  printf '%s\\n' 'owner/repo'
+  exit 0
+fi
 exit 1
 `,
     );
@@ -307,6 +321,8 @@ exit 1
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     expect(manifest.options.merge).toBe(false);
     expect(manifest.repo.pr).toBe(7);
+    expect(manifest.repo.githubRepository).toBe("owner/repo");
+    expect(manifest.repo.headRefName).toBe("feature");
     expect(manifest.revisions.baseRef).toBe("origin/release");
     expect(manifest.revisions.baseHeadSha).toBe(base);
   }, 120_000);
@@ -822,22 +838,47 @@ exit 99
     }).trim();
     const message = `chore: quality stamp\n\n${trailers}`;
     git(root, ["commit", "--allow-empty", "-q", "-m", message]);
+    const stampHead = git(root, ["rev-parse", "HEAD"]);
     execFileSync(
       "node",
-      [
-        INVOCATION,
-        "record-stamp",
-        manifest,
-        "--head",
-        git(root, ["rev-parse", "HEAD"]),
-      ],
+      [INVOCATION, "record-stamp", manifest, "--head", stampHead],
       { cwd: root },
     );
     const lifecycle = [];
     lifecycle.push("push");
     lifecycle.push("ci:success");
-    const bin = fakeGh(root, git(root, ["rev-parse", "HEAD"]));
+    const bin = fakeGh(root, stampHead);
     const caller = repo("authorization-caller");
+    const wrongRepository = spawnSync(
+      "bash",
+      [AUTHORIZE, "--manifest", manifest, "--preflight"],
+      {
+        cwd: caller,
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          QUALITY_TEST_REPOSITORY: "other/repository",
+        },
+        encoding: "utf8",
+      },
+    );
+    expect(wrongRepository.status).not.toBe(0);
+    expect(wrongRepository.stderr).toMatch(/repository identity changed/);
+    const wrongHeadRef = spawnSync(
+      "bash",
+      [AUTHORIZE, "--manifest", manifest, "--preflight"],
+      {
+        cwd: caller,
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          QUALITY_TEST_HEAD_REF: "other-feature",
+        },
+        encoding: "utf8",
+      },
+    );
+    expect(wrongHeadRef.status).not.toBe(0);
+    expect(wrongHeadRef.stderr).toMatch(/head branch identity changed/);
     const unprotected = spawnSync("bash", [AUTHORIZE, "--manifest", manifest], {
       cwd: caller,
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
@@ -865,6 +906,7 @@ exit 99
           ...process.env,
           PATH: `${bin}:${process.env.PATH}`,
           QUALITY_TEST_EFFECTIVE_RULES: "strict",
+          QUALITY_TEST_MERGE_RC: "1",
         },
         encoding: "utf8",
       }).status,
@@ -889,10 +931,11 @@ exit 99
     writeFileSync(path.join(root, "stale.js"), "export const stale = true;\n");
     git(root, ["add", "."]);
     git(root, ["commit", "-q", "-m", "unreviewed"]);
+    const staleBin = fakeGh(root, stampHead);
     expect(
       spawnSync("bash", [AUTHORIZE, "--manifest", manifest], {
         cwd: root,
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        env: { ...process.env, PATH: `${staleBin}:${process.env.PATH}` },
       }).status,
     ).not.toBe(0);
   }, 15_000);
@@ -940,28 +983,32 @@ exit 99
     mkdirSync(bin);
     const log = path.join(harness, "gh-order.log");
     const fail = path.join(harness, "fail-ci");
+    const denyPreflight = path.join(harness, "deny-preflight");
+    const merged = path.join(harness, "merged");
     writeFileSync(fail, "fail\n");
+    writeFileSync(denyPreflight, "deny\n");
     const gh = path.join(bin, "gh");
     writeFileSync(
       gh,
       `#!/usr/bin/env bash
 echo "$*" >> ${JSON.stringify(log)}
 if [ "$1 $2" = "pr view" ]; then
-  head="$(git rev-parse HEAD)"
+  head="$(git ls-remote origin refs/heads/feature | awk '{print $1}')"
   if [[ "$*" == *"--jq .headRefOid"* ]]; then printf '%s\\n' "$head"
-  elif [[ "$*" == *"state,mergedAt,mergeCommit"* ]]; then
-    printf '%s\\n' '{"state":"MERGED","mergedAt":"2026-07-16T00:00:00Z","mergeCommit":{"oid":"merge"}}'
-  else printf '{"headRefOid":"%s","baseRefName":"main"}\\n' "$head"; fi
+  elif [ -f ${JSON.stringify(merged)} ]; then
+    printf '{"state":"MERGED","mergedAt":"2026-07-16T00:00:00Z","mergeCommit":{"oid":"merge"},"headRefName":"feature","headRefOid":"%s","baseRefName":"main"}\\n' "$head"
+  else printf '{"state":"OPEN","mergedAt":null,"mergeCommit":null,"headRefName":"feature","headRefOid":"%s","baseRefName":"main"}\\n' "$head"; fi
   exit 0
 fi
 if [ "$1 $2" = "pr checks" ]; then [ ! -f ${JSON.stringify(fail)} ]; exit $?; fi
-if [ "$1 $2" = "pr merge" ]; then exit 0; fi
+if [ "$1 $2" = "pr merge" ]; then touch ${JSON.stringify(merged)}; exit 0; fi
 if [ "$1 $2" = "repo view" ]; then
   if [[ "$*" == *"nameWithOwner"* ]]; then printf '%s\\n' 'owner/repo'; else printf '%s\\n' 'main'; fi
   exit 0
 fi
 if [ "$1" = "api" ]; then
   if [[ "$2" == *"protection/required_status_checks"* ]]; then
+    [ ! -f ${JSON.stringify(denyPreflight)} ] || exit 1
     printf '%s\\n' 'true'
   else
     printf '%s\\n' '[]'
@@ -977,6 +1024,22 @@ exit 1
       PATH: `${bin}:${process.env.PATH}`,
       QUALITY_STAMP_CI_TIMEOUT: "5",
     };
+
+    const reviewedHead = git(root, ["rev-parse", "HEAD"]);
+    const denied = spawnSync(
+      "bash",
+      [STAMP_AND_MERGE, "--manifest", manifest],
+      { cwd: root, env, encoding: "utf8" },
+    );
+    expect(denied.status).not.toBe(0);
+    expect(git(root, ["rev-parse", "HEAD"])).toBe(reviewedHead);
+    expect(git(root, ["ls-remote", "origin", "refs/heads/feature"])).toContain(
+      reviewedHead,
+    );
+    expect(JSON.parse(readFileSync(manifest, "utf8")).merge.stampHead).toBe(
+      undefined,
+    );
+    unlinkSync(denyPreflight);
 
     const first = spawnSync("bash", [STAMP_AND_MERGE, "--manifest", manifest], {
       cwd: root,

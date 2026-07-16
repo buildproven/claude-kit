@@ -325,6 +325,13 @@ function createManifest(options) {
     options.pr === undefined
       ? null
       : parseInteger(options.pr, "pr", { minimum: 1 });
+  const githubRepository = firstValue(options["github-repo"], null);
+  const headRefName = firstValue(options["head-ref"], null);
+  if (pr !== null && (!githubRepository || !headRefName)) {
+    throw new Error(
+      "PR manifests require --github-repo <owner/name> and --head-ref <branch>",
+    );
+  }
   if (options.manifest !== undefined) {
     throw new Error("create does not accept a custom manifest path");
   }
@@ -356,6 +363,8 @@ function createManifest(options) {
       realpath: root,
       key,
       pr,
+      githubRepository,
+      headRefName,
       gitCommonDir: gitCommonDir(root),
       origin: originIdentity(root),
     },
