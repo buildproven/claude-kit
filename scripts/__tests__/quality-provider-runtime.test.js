@@ -221,10 +221,9 @@ git switch -q -c 'feature/quote"test'
         `
 bs_quality_find_script() { return 1; }
 BS_QUALITY_ROOT_FILE="$1"
-LEVEL=auto
 source "$2"
 source "\${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env"
-printf '%s' "$TIER|$RISK_SCORE|$QUALITY_WORKLOAD|$QUALITY_DIFF_FILES|$QUALITY_DIFF_LINES|$QUALITY_CAMPAIGN_TIMEOUT|$QUALITY_REVIEW_TIMEOUT"
+printf '%s' "$LEVEL|$TIER|$RISK_SCORE|$QUALITY_WORKLOAD|$QUALITY_DIFF_FILES|$QUALITY_DIFF_LINES|$QUALITY_CAMPAIGN_TIMEOUT|$QUALITY_REVIEW_TIMEOUT"
 `,
         "risk-state",
         rootFile,
@@ -235,7 +234,7 @@ printf '%s' "$TIER|$RISK_SCORE|$QUALITY_WORKLOAD|$QUALITY_DIFF_FILES|$QUALITY_DI
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).not.toContain("parse error");
     expect(result.stdout.trim().split("\n").at(-1)).toBe(
-      "high|51|medium|9|495|600|210",
+      "auto|high|51|medium|9|495|600|210",
     );
   });
 

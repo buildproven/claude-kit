@@ -17,6 +17,7 @@
 #   3. L95 — last resort if neither is available.
 set -u
 
+LEVEL="${LEVEL:-auto}"
 TIER=""
 RISK_SCORE=""
 AGENT_TARGET=""
