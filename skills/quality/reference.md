@@ -123,8 +123,8 @@ test reviewer to inspect existing coverage.
 ```bash
 source scripts/quality-load-root.sh
 
-CHANGED_SRC=$(git diff --name-only main...HEAD | grep -E '\.(ts|tsx|js|jsx|py|rb|go)$' | grep -v -E '\.(test|spec)\.' || true)
-CHANGED_TESTS=$(git diff --name-only main...HEAD | grep -E '(^|/)(test|tests|spec|__tests__)/|\.(test|spec)\.' || true)
+CHANGED_SRC=$(git diff --name-only main...HEAD | grep -E '\.(ts|tsx|js|jsx|py|rb|go)$' | grep -v -E '\.(test|spec)\.|(^|/)test_.*\.py$|_test\.(py|go)$' || true)
+CHANGED_TESTS=$(git diff --name-only main...HEAD | grep -E '(^|/)(test|tests|spec|__tests__)/|\.(test|spec)\.|(^|/)test_.*\.py$|_test\.(py|go)$' || true)
 
 if [ -n "$CHANGED_SRC" ] && [ -z "$CHANGED_TESTS" ]; then
   echo "⚠️ Production behavior changed with no test delta."
