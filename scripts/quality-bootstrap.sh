@@ -268,6 +268,9 @@ BS_QUALITY_MAX_REVIEW_ROUNDS="${BS_QUALITY_MAX_REVIEW_ROUNDS:-2}"
 BS_QUALITY_MAX_FIX_COMMITS="${BS_QUALITY_MAX_FIX_COMMITS:-4}"
 BS_QUALITY_MAX_WALL_SECONDS="${BS_QUALITY_MAX_WALL_SECONDS:-900}"
 BS_QUALITY_GOVERNOR_FILE="${BS_QUALITY_ROOT_FILE%.txt}-governor.json"
+# A fresh invocation starts with a full-branch review. Only re-review rounds
+# inside this invocation may use the last-successful-review delta.
+rm -f "${BS_QUALITY_GOVERNOR_FILE%.json}-last-reviewed.sha"
 GOVERNOR_START_EPOCH=$(date +%s)
 # Baseline the run by HEAD SHA, not by total commit count. The governor counts
 # fix-commits as `<start_commit_sha>..HEAD`, which is immune to rebases and to

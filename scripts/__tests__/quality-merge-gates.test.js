@@ -24,12 +24,18 @@ describe("quality merge gates", () => {
   it("the blocking-findings gate runs BEFORE the trailer gate", () => {
     const findingsGate = SKILL.indexOf('${BLOCKING_COUNT:-0}" -ne 0');
     const trailerGate = SKILL.indexOf(
-      "MERGE BLOCKED: No 'Reviewed-By: claude-quality'",
+      "MERGE BLOCKED: No 'Reviewed-By: quality'",
     );
     expect(findingsGate).toBeGreaterThan(-1);
     expect(trailerGate).toBeGreaterThan(-1);
     // A merge must not be authorized by a trailer while findings are outstanding.
     expect(findingsGate).toBeLessThan(trailerGate);
+  });
+
+  it("authorizes either reviewer through a provider-neutral quality trailer", () => {
+    expect(SKILL).toMatch(/Reviewed-By: quality/);
+    expect(SKILL).toMatch(/reviewer=\$\{REVIEW_PROVIDER\}/);
+    expect(SKILL).not.toMatch(/requires a 'Reviewed-By: codex'/);
   });
 
   it("BLOCKING_COUNT is not merely decorative in the trailer", () => {

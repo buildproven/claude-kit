@@ -85,30 +85,31 @@ resolution beyond Step -1.
 
 Read `reference.md` for flag definitions. Key flags: `--level` (auto|95|98),
 `--scope` (changed|branch|all), `--merge`, `--deploy`, `--preflight`,
-`--audit`, `--teams`, `--codex-effort` (medium|high|xhigh), `--codex-skip
-"<reason>"`, `--verify [N]` (adversarial verification, see Step 2.6). Handle
+`--audit`, `--teams`, `--verify [N]` (adversarial verification, see Step 2.6).
+Reviewer selection is shared across both CLIs via
+`~/.claude/quality-providers.json` (`primary` + `fallback`). Handle
 early exits: `--status`, `--preflight` (<10s), `--audit` (read-only).
 
 ### Step 0.5: Risk Scoring → Review Depth (`--level auto`)
 
-Review is machine-only (Claude finds, Codex verifies) on flat-rate
-subscriptions, so cost is wall-clock, not dollars. `--level auto` (default)
+Review is machine-only and provider-neutral on flat-rate subscriptions, so
+cost is wall-clock, not dollars. `--level auto` (default)
 computes a 0–100 risk score from `git diff` and scales agent count (2→10),
 Codex effort (skip→xhigh), and Codex rounds (0→2) to it. Logic lives in
 `scripts/quality-risk-resolve.sh` — `source` it after the Step -1 preamble.
-**Floor invariant: every change gets ≥2 Claude agents** — nothing merges
-with zero machine review.
+**Floor invariant: every change gets a real primary-provider review** —
+nothing merges with zero machine review.
 
 **Tier → agent + Codex map** (read tier names from
 `harness-config.json:riskTierRules` at runtime — never hand-render path
 globs in this skill):
 
-| Tier       | Claude agents                                 | Codex role          | Time cap |
-| ---------- | --------------------------------------------- | ------------------- | -------- |
-| `low`      | 2 (code-reviewer + silent-failure-hunter)     | skip                | ≤2 min   |
-| `medium`   | 4 (+ type-design-analyzer + security-auditor) | judge findings      | ≤8 min   |
-| `high`     | 6 (full L95)                                  | judge + adversarial | ≤25 min  |
-| `critical` | 6 + `break-glass-approval`                    | judge + adversarial | ≤25 min  |
+| Tier       | Review depth                 | Time cap |
+| ---------- | ---------------------------- | -------- |
+| `low`      | focused                      | ≤2 min   |
+| `medium`   | broad                        | ≤8 min   |
+| `high`     | broad + adversarial          | ≤25 min  |
+| `critical` | broad + break-glass approval | ≤25 min  |
 
 Full tier table + agent focus descriptions: `reference.md` "Quality Levels".
 
@@ -190,7 +191,7 @@ RUNNER="$(bs_quality_find_script quality-run-review.sh)" || {
 source "$RUNNER"   # sets REVIEW_OUT, REVIEW_BASE; exits non-zero on any review failure
 ```
 
-Read every `"$REVIEW_OUT"/<agent>.findings.txt` and feed into Step 2.5
+Read every `"$REVIEW_OUT"/*.findings.txt` and feed into Step 2.5
 synthesis. A file beginning `INCONCLUSIVE:` means that agent timed out,
 errored, or didn't parse — treat as **review inconclusive, human required**
 (never PASS, never silently dropped); under `--merge`, block until resolved.
@@ -277,20 +278,13 @@ Also run `node "$GOVERNOR" record-finding "$BS_QUALITY_GOVERNOR_FILE"
 '<findings-json>'` before committing a fix; if `repeated=true`, batch every
 matching call site into one commit instead of one round per occurrence.
 
-### Step 2.6: Codex Cross-Review (tier-aware)
+### Provider fallback
 
-Second-opinion review via a different model. Skipped at `low`, judge mode at
-`medium`, judge+adversarial at `high`/`critical`. Disable with `--no-codex`
-or skip this run with `--codex-skip "<reason>"`. Full polling/backoff
-mechanics (background job, bounded poll, repeated-pattern detection) are in
-`scripts/quality-codex-review.sh` — `source` it after the Step -1 preamble;
-it sets `CODEX_MODE`, `CODEX_VERDICT`, `CODEX_FINDINGS`, `RESOLVED_BASE`.
-
-**Failure modes** (asymmetric by tier — full table in `reference.md`):
-Codex unavailable → skip+warn at low/medium, **block** at high/critical
-until `--codex-skip "<reason>"`. BLOCKING findings after judge → always
-block. `--codex-skip` → allowed at low/medium; at high/critical requires a
-non-empty reason and is logged.
+The configured fallback runs only when the primary CLI is unavailable or
+returns a typed account-exhaustion response (including HTTP 429/weekly usage
+limits). It never runs merely because the primary found a bug. Claude panels
+cancel sibling reviewers as soon as one reports exhaustion. Successful later
+rounds review only commits added since the prior review in this invocation.
 
 ### Review Stamp + Quality-Skip Trailer
 
@@ -311,7 +305,8 @@ TIER_LABEL="${TIER:-L${LEVEL}}"
 AGENT_COUNT=${#AGENTS[@]}
 FINDING_COUNT=${BLOCKING_COUNT:-0}
 
-echo "Reviewed-By: claude-quality (tier=${TIER_LABEL}, agents=${AGENT_COUNT}, findings=${FINDING_COUNT})"
+echo "Reviewed-By: quality (tier=${TIER_LABEL}, reviewer=${REVIEW_PROVIDER}, primary=${QUALITY_PRIMARY}, fallback=${QUALITY_FALLBACK}, findings=${FINDING_COUNT})"
+echo "Reviewed-By: ${REVIEW_PROVIDER} (tier=${TIER_LABEL}, findings=${FINDING_COUNT})"
 
 # MUST go through the sentinel below, not a bare shell var — bash vars do NOT
 # survive between fenced blocks, so Step 4 (a different block) needs this to
@@ -328,20 +323,13 @@ RESOLVED_BASE='${RESOLVED_BASE:-}'
 CODEX_MODE='${CODEX_MODE:-skip}'
 CODEX_VERDICT='${CODEX_VERDICT:-}'
 CODEX_SKIP_REASON='${CODEX_SKIP_REASON:-}'
+REVIEW_PROVIDER='${REVIEW_PROVIDER:-}'
+QUALITY_PRIMARY='${QUALITY_PRIMARY:-}'
+QUALITY_FALLBACK='${QUALITY_FALLBACK:-}'
 EOF
-
-if [ "$CODEX_MODE" != "skip" ] && [ -z "$CODEX_SKIP_REASON" ] && [ "$NO_CODEX" != true ]; then
-  echo "Reviewed-By: codex (tier=${TIER_LABEL}, mode=${CODEX_MODE}, status=${CODEX_VERDICT:-unknown}, findings=${CODEX_FINDINGS:-0})"
-fi
-
-if [ -n "$CODEX_SKIP_REASON" ] && { [ "$TIER" = high ] || [ "$TIER" = critical ]; }; then
-  echo "Quality-Skip: codex-judge (reason=\"${CODEX_SKIP_REASON}\"; head=${HEAD_SHA}; base=${BASE_SHA})"
-fi
 ```
 
-Full telemetry-log append + trailer grammar: `reference.md` "Trailer
-Convention". CI checks the `Reviewed-By: claude-quality` trailer — see
-`harness-gate.yml`.
+Full trailer grammar: `reference.md` "Trailer Convention".
 
 ### Step 3: Verification & Commit
 
@@ -391,60 +379,27 @@ if [ "${BLOCKING_COUNT:-0}" -ne 0 ]; then
   exit 1
 fi
 
-# 1. Reviewed-By: claude-quality required at EVERY tier. If missing but the
+# 1. Provider-neutral quality trailer required at EVERY tier. If missing but the
 #    pipeline ran THIS invocation, auto-stamp via an empty commit (avoids the
 #    "quality passed but the last commit lacked the trailer" footgun). If the
 #    pipeline did NOT run this invocation, hard-block — auto-stamping then
 #    would forge review evidence.
-if ! git log "${BASE_REF}..HEAD" --format=%B | grep -q "Reviewed-By: claude-quality"; then
+if ! git log "${BASE_REF}..HEAD" --format=%B | grep -q "Reviewed-By: quality"; then
   if [ "${QUALITY_PIPELINE_RAN:-false}" = true ]; then
     git commit --allow-empty -m "chore(quality): stamp review trailer
 
-Reviewed-By: claude-quality (tier=${TIER_LABEL:-${TIER:-L${LEVEL}}}, agents=${AGENT_COUNT:-0}, findings=${BLOCKING_COUNT:-0})" \
+Reviewed-By: quality (tier=${TIER_LABEL:-${TIER:-L${LEVEL}}}, reviewer=${REVIEW_PROVIDER}, primary=${QUALITY_PRIMARY}, fallback=${QUALITY_FALLBACK}, findings=${BLOCKING_COUNT:-0})
+Reviewed-By: ${REVIEW_PROVIDER} (tier=${TIER_LABEL:-${TIER:-L${LEVEL}}}, findings=${BLOCKING_COUNT:-0})" \
       || { echo "❌ Failed to create auto-stamp commit — aborting merge"; exit 1; }
     git push || { echo "❌ Failed to push auto-stamp commit — aborting merge"; exit 1; }
   else
-    echo "❌ MERGE BLOCKED: No 'Reviewed-By: claude-quality' trailer found, and the"
+    echo "❌ MERGE BLOCKED: No 'Reviewed-By: quality' trailer found, and the"
     echo "   review pipeline did not run in this invocation. Run the full quality loop"
     echo "   (including review agents) before --merge. Do NOT manually add this trailer."
     exit 1
   fi
 fi
 
-# 2. High/critical: require EITHER a real Codex trailer OR a verified
-#    Quality-Skip trailer (non-empty reason, SHAs matching HEAD/HEAD~1 + merge-base
-#    — a stale trailer from an older commit cannot authorize a new merge).
-#    XOR, not OR: both present is ambiguous (which is authoritative?), neither
-#    is unauthorized. Full SHA-verification logic: reference.md "Trailer
-#    Convention" (mirrors harness-gate.yml's check).
-if [ "$TIER" = "high" ] || [ "$TIER" = "critical" ]; then
-  HAS_CODEX=false
-  git log "${BASE_REF}..HEAD" --format=%B | grep -q "^Reviewed-By: codex" && HAS_CODEX=true
-  HAS_SKIP=false
-  SKIP_TRAILER=$(git log "${BASE_REF}..HEAD" --format=%B | grep "^Quality-Skip:" | tail -1)
-  if [ -n "$SKIP_TRAILER" ]; then
-    SKIP_HEAD=$(echo "$SKIP_TRAILER" | grep -oE 'head=[a-f0-9]+' | cut -d= -f2)
-    SKIP_BASE=$(echo "$SKIP_TRAILER" | grep -oE 'base=[a-f0-9]+' | cut -d= -f2)
-    SKIP_REASON=$(echo "$SKIP_TRAILER" | grep -oE 'reason="[^"]*"' | sed 's/reason="//;s/"$//')
-    CURRENT_HEAD=$(git rev-parse HEAD)
-    CURRENT_HEAD_PARENT=$(git rev-parse HEAD~1 2>/dev/null || true)
-    CURRENT_BASE=$(git merge-base HEAD "$BASE_REF")
-    if { [ "$SKIP_HEAD" = "$CURRENT_HEAD" ] || [ "$SKIP_HEAD" = "$CURRENT_HEAD_PARENT" ]; } \
-       && [ "$SKIP_BASE" = "$CURRENT_BASE" ] \
-       && [ -n "$(echo "$SKIP_REASON" | tr -d '[:space:]')" ]; then
-      HAS_SKIP=true
-    fi
-  fi
-  if [ "$HAS_CODEX" = false ] && [ "$HAS_SKIP" = false ]; then
-    echo "❌ MERGE BLOCKED: tier=$TIER requires a 'Reviewed-By: codex' trailer OR a"
-    echo "   verified 'Quality-Skip: codex-judge' trailer with a non-empty reason. Neither found."
-    exit 1
-  fi
-  if [ "$HAS_CODEX" = true ] && [ "$HAS_SKIP" = true ]; then
-    echo "❌ MERGE BLOCKED: tier=$TIER has BOTH trailers — exactly one is authoritative. Drop the stale one."
-    exit 1
-  fi
-fi
 ```
 
 This gate prevents merging when review agents were skipped — by

@@ -2,7 +2,7 @@
 
 ## Tier-aware Exit Criteria (level auto)
 
-Number of review agents and Codex usage scale with the resolved risk tier (see `reference.md` §Quality Levels). Other gates apply at every tier.
+Review depth scales with the resolved risk tier (see `reference.md` §Quality Levels). The configured primary can be Claude or Codex; fallback is availability-only. Other gates apply at every tier.
 
 | Gate                                    | low | medium | high | critical |
 | --------------------------------------- | --- | ------ | ---- | -------- |
@@ -12,11 +12,9 @@ Number of review agents and Codex usage scale with the resolved risk tier (see `
 | code-reviewer + silent-failure-hunter   | ✓   | ✓      | ✓    | ✓        |
 | type-design-analyzer + security-auditor |     | ✓      | ✓    | ✓        |
 | test-generator + pr-test-analyzer       |     |        | ✓    | ✓        |
-| Codex judge                             |     | ✓      | ✓    | ✓        |
-| Codex adversarial review                |     |        | ✓    | ✓        |
 | break-glass-approval                    |     |        |      | ✓        |
-| `Reviewed-By: claude-quality` trailer   | ✓   | ✓      | ✓    | ✓        |
-| `Quality-Skip` trailer if Codex skipped |     |        | ✓    | ✓        |
+| provider review completed               | ✓   | ✓      | ✓    | ✓        |
+| `Reviewed-By: quality` trailer          | ✓   | ✓      | ✓    | ✓        |
 
 ## Level 95 Exit Criteria (legacy, full panel)
 

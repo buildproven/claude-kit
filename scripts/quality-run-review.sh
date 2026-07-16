@@ -1,41 +1,12 @@
 #!/usr/bin/env bash
-# quality-run-review.sh — Step 1.8 review execution for the quality skill.
-#
-# Runs the Claude review panel as a BLOCKING subprocess via
-# claude-review-companion.sh. Do NOT use the Task tool here: this skill runs
-# in a FORKED context, and Task-tool agents are fire-and-forget — their
-# results arrive asynchronously as task-notifications to the PARENT session,
-# never inside this fork's turn. The fork then hands back ("I'll wait for
-# the agents…"), is never re-invoked, and the merge gate downstream of
-# review never runs. This was the #1 way `--merge` silently failed to
-# complete. It is structural, not a prompting problem — verified empirically:
-# nested Task agents are async too, so this also breaks inside Task-agent
-# callers that invoke quality concurrently.
-#
-# The round-cap gate (bump-round) is NOT in this script — it is called
-# directly from SKILL.md immediately before this script, since it is one of
-# the three gates that must survive compaction. This script only does the
-# mechanical plumbing around it.
-#
-# Requires: GIT_ROOT, TMPDIR/session sentinel already set up (source
-# quality-load-root.sh first). Writes findings to $REVIEW_OUT and echoes
-# REVIEW_OUT=<path> on success.
+# Step 1.8 provider-neutral blocking review. The configured primary runs first;
+# the fallback runs only when the primary is unavailable or account-exhausted.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=quality-provider-policy.sh
+source "$SCRIPT_DIR/quality-provider-policy.sh"
 
-# Resolve the review runner across every install layout (plugin, ~/.claude
-# symlink, submodule, bare clone). Before 2026-07-10 this checked exactly two
-# paths; on the primary install (~/.claude/scripts -> an overlay repo, which
-# never carried this script) BOTH missed, `bash <missing>` returned 127, and
-# the skill printed "MERGE BLOCKED: review runner failed (rc=127)" and
-# exited — which is the "does all the work then never merges" stall.
-COMPANION="$(bs_quality_find_script claude-review-companion.sh)" || {
-  echo "❌ MERGE BLOCKED: claude-review-companion.sh not found on any candidate path — review could not run." >&2
-  exit 1
-}
-
-# Resolve the base ref the same way risk-policy-gate.js does.
 REVIEW_BASE=""
 for ref in origin/main origin/master main master; do
   if git rev-parse --verify --quiet "${ref}^{commit}" >/dev/null 2>&1; then
@@ -44,43 +15,124 @@ for ref in origin/main origin/master main master; do
 done
 [ -n "$REVIEW_BASE" ] || { echo "❌ MERGE BLOCKED: no base ref for review diff" >&2; exit 1; }
 
-# Read the tier-selected panel from the sentinel quality-select-agents.sh
-# wrote — bash arrays don't cross fenced blocks. Empty panel = a bug
-# upstream; block, don't skip.
-AGENTS_FILE="${TMPDIR:-/tmp}/bs-quality-agents-${CLAUDE_CODE_SESSION_ID:-default}.txt"
-AGENTS_CSV="$(paste -sd, "$AGENTS_FILE" 2>/dev/null | sed 's/,*$//')"
-if [ -z "$AGENTS_CSV" ]; then
-  echo "❌ MERGE BLOCKED: review panel unresolved (no agents sentinel) — review did not run." >&2
-  exit 1
+# First round reviews the branch. Later rounds review only commits made since
+# the last successful review, avoiding repeated spend on unchanged commits.
+REVIEW_STATE_FILE="${BS_QUALITY_GOVERNOR_FILE:-${TMPDIR:-/tmp}/bs-quality-governor.json}"
+REVIEW_STATE_FILE="${REVIEW_STATE_FILE%.json}-last-reviewed.sha"
+REVIEW_DIFF_BASE="$REVIEW_BASE"
+if [ -s "$REVIEW_STATE_FILE" ]; then
+  LAST_REVIEWED="$(sed -n '1p' "$REVIEW_STATE_FILE")"
+  if git rev-parse --verify --quiet "${LAST_REVIEWED}^{commit}" >/dev/null 2>&1 \
+     && git merge-base --is-ancestor "$LAST_REVIEWED" HEAD \
+     && [ "$LAST_REVIEWED" != "$(git rev-parse HEAD)" ]; then
+    REVIEW_DIFF_BASE="$LAST_REVIEWED"
+    echo "[quality] re-reviewing new commits only: ${LAST_REVIEWED}..HEAD" >&2
+  fi
 fi
 
 REVIEW_OUT="$(mktemp -d "${TMPDIR:-/tmp}/bs-quality-review.XXXXXX")"
-git diff "${REVIEW_BASE}...HEAD"            > "$REVIEW_OUT/diff.txt"
-git diff --name-only "${REVIEW_BASE}...HEAD" > "$REVIEW_OUT/files.txt"
-git log "${REVIEW_BASE}..HEAD" --oneline     > "$REVIEW_OUT/log.txt"
+git diff "${REVIEW_DIFF_BASE}..HEAD" > "$REVIEW_OUT/diff.txt"
+git diff --name-only "${REVIEW_DIFF_BASE}..HEAD" > "$REVIEW_OUT/files.txt"
+git log "${REVIEW_DIFF_BASE}..HEAD" --oneline > "$REVIEW_OUT/log.txt"
 
-# Do NOT pass --model: review inherits the session model on purpose (pinning
-# a *[1m] model trips the Extra Usage billing gate on non-Opus sessions; the
-# companion also refuses [1m] defensively).
-bash "$COMPANION" \
-  --diff-file "$REVIEW_OUT/diff.txt" \
-  --files-file "$REVIEW_OUT/files.txt" \
-  --log-file "$REVIEW_OUT/log.txt" \
-  --out-dir "$REVIEW_OUT" \
-  --agents "$AGENTS_CSV" \
-  --timeout "${BS_QUALITY_REVIEW_TIMEOUT:-300}"
-COMPANION_RC=$?
+provider_exhausted() {
+  grep -Eiq '(^|[^0-9])429([^0-9]|$)|weekly (usage )?limit|usage limit|rate.?limit|quota (exceeded|exhausted)|too many requests' "$1" 2>/dev/null
+}
 
-# FAIL LOUD on ANY non-zero: 2 = claude CLI unavailable, 1 = bad args / no
-# agents / unwritable out-dir. Either way review did not run cleanly — a
-# missing reviewer is a BLOCKED merge, never a silent pass.
-if [ "$COMPANION_RC" -ne 0 ]; then
-  case "$COMPANION_RC" in
-    2) echo "❌ MERGE BLOCKED: claude CLI unavailable — review could not run." >&2 ;;
-    *) echo "❌ MERGE BLOCKED: review runner failed (rc=$COMPANION_RC)." >&2 ;;
+run_claude_review() {
+  local companion agents_file agents_csv rc
+  companion="$(bs_quality_find_script claude-review-companion.sh)" || return 2
+  agents_file="${TMPDIR:-/tmp}/bs-quality-agents-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+  agents_csv="$(paste -sd, "$agents_file" 2>/dev/null | sed 's/,*$//')"
+  [ -n "$agents_csv" ] || { echo "quality: Claude panel unresolved" >&2; return 1; }
+  bash "$companion" \
+    --diff-file "$REVIEW_OUT/diff.txt" \
+    --files-file "$REVIEW_OUT/files.txt" \
+    --log-file "$REVIEW_OUT/log.txt" \
+    --out-dir "$REVIEW_OUT" \
+    --agents "$agents_csv" \
+    --timeout "${BS_QUALITY_REVIEW_TIMEOUT:-300}"
+  rc=$?
+  return "$rc"
+}
+
+run_codex_review() {
+  local companion raw_file error_file rc
+  companion=""
+  for candidate in \
+    "${CLAUDE_PLUGIN_ROOT:-}/scripts/codex-companion.mjs" \
+    "$HOME/.claude/plugins/marketplaces/openai-codex/plugins/codex/scripts/codex-companion.mjs" \
+    "$HOME/.claude/scripts/codex-companion.mjs"; do
+    [ -n "$candidate" ] && [ -f "$candidate" ] && { companion="$candidate"; break; }
+  done
+  [ -n "$companion" ] || return 2
+  command -v codex >/dev/null 2>&1 || return 2
+
+  raw_file="$REVIEW_OUT/codex.json"
+  error_file="$REVIEW_OUT/codex.stderr"
+  node "$companion" adversarial-review --wait --json \
+    --base "$REVIEW_DIFF_BASE" --scope branch \
+    "Review only the supplied commit delta. Find bugs, security issues, data loss, races, and breaking changes. Return APPROVE or REQUEST_CHANGES with precise file:line findings." \
+    >"$raw_file" 2>"$error_file"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    if provider_exhausted "$raw_file" || provider_exhausted "$error_file"; then return 75; fi
+    return 1
+  fi
+  if ! jq -e '.result and (.result.findings | type == "array")' "$raw_file" >/dev/null 2>&1; then
+    echo "INCONCLUSIVE: Codex output could not be parsed — human review required" > "$REVIEW_OUT/codex.findings.txt"
+    return 4
+  fi
+  jq -r '
+    if (.result.findings | length) == 0 then "NO FINDINGS. Verdict: \(.result.verdict). \(.result.summary)"
+    else .result.findings[] | "\(.severity // "WARNING"): \(.file // "unknown"):\(.line_start // 0) — \(.title // "finding")\n\(.body // "")\nFix: \(.recommendation // "")"
+    end' "$raw_file" > "$REVIEW_OUT/codex.findings.txt"
+}
+
+run_provider() {
+  case "$1" in
+    claude) run_claude_review ;;
+    codex) run_codex_review ;;
+    *) return 2 ;;
+  esac
+}
+
+REVIEW_PROVIDER="$QUALITY_PRIMARY"
+echo "[quality] reviewer policy: primary=$QUALITY_PRIMARY fallback=$QUALITY_FALLBACK" >&2
+run_provider "$QUALITY_PRIMARY"
+PROVIDER_RC=$?
+
+if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 2 ]; } && [ "$QUALITY_FALLBACK" != none ]; then
+  if [ "$PROVIDER_RC" -eq 75 ]; then
+    DETAIL="$(cat "$REVIEW_OUT/provider-exhausted" 2>/dev/null || true)"
+    echo "⚠️  [quality] $QUALITY_PRIMARY exhausted${DETAIL:+ — $DETAIL}; switching immediately to $QUALITY_FALLBACK." >&2
+  else
+    echo "⚠️  [quality] $QUALITY_PRIMARY unavailable; switching immediately to $QUALITY_FALLBACK." >&2
+  fi
+  # Preserve failed-primary evidence without feeding its INCONCLUSIVE files
+  # into synthesis after the fallback succeeds.
+  mkdir -p "$REVIEW_OUT/failed-primary"
+  for evidence in "$REVIEW_OUT"/*.findings.txt "$REVIEW_OUT"/*.stderr; do
+    [ -e "$evidence" ] && mv "$evidence" "$REVIEW_OUT/failed-primary/"
+  done
+  REVIEW_PROVIDER="$QUALITY_FALLBACK"
+  run_provider "$QUALITY_FALLBACK"
+  PROVIDER_RC=$?
+fi
+
+if [ "$PROVIDER_RC" -ne 0 ]; then
+  case "$PROVIDER_RC" in
+    75) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER account quota exhausted and no usable fallback is configured." >&2 ;;
+    2) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER CLI unavailable and no usable fallback is configured." >&2 ;;
+    4) echo "❌ MERGE BLOCKED: every $REVIEW_PROVIDER review was inconclusive." >&2 ;;
+    *) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER review runner failed (rc=$PROVIDER_RC)." >&2 ;;
   esac
   exit 1
 fi
 
+printf '%s\n' "$(git rev-parse HEAD)" > "$REVIEW_STATE_FILE"
+export REVIEW_OUT REVIEW_BASE REVIEW_DIFF_BASE REVIEW_PROVIDER QUALITY_PRIMARY QUALITY_FALLBACK
 echo "REVIEW_OUT=$REVIEW_OUT"
 echo "REVIEW_BASE=$REVIEW_BASE"
+echo "REVIEW_DIFF_BASE=$REVIEW_DIFF_BASE"
+echo "REVIEW_PROVIDER=$REVIEW_PROVIDER"

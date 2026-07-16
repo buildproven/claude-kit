@@ -28,6 +28,20 @@ calls it as a subprocess and acts on the JSON result. If no local worktree
 exists for a resolved PR/branch, one is materialized in a sibling directory
 (`git worktree add`), so repeat invocations reuse it deterministically.
 
+## Reviewer Provider Policy
+
+Both Claude Code and Codex read `~/.claude/quality-providers.json`. Configure it
+with `scripts/quality-provider-config.sh --primary codex --fallback claude`
+(or reverse the providers). `BS_QUALITY_PRIMARY`, `BS_QUALITY_FALLBACK`, and
+`BS_QUALITY_PROVIDER_CONFIG` are per-run overrides. The fallback runs only for
+typed account exhaustion (HTTP 429, weekly/rate/usage limit, exhausted quota)
+or an unavailable CLI—not when the primary reports code findings.
+
+Claude panels share a cancellation sentinel: the first exhausted reviewer
+causes sibling process groups to terminate. A successful review records HEAD;
+later fix rounds use that SHA as their diff base so unchanged commits are not
+reviewed again. Bootstrap clears this state for every new invocation.
+
 ## Regression History
 
 - **2026-05-11**: target resolution ignored PR/branch args in favor of
@@ -324,14 +338,13 @@ The `--base` arg uses the resolved base from `risk-policy-gate.js` (origin/main 
 ## Trailer Convention
 
 ```
-Reviewed-By: claude-quality (tier=high, agents=6, findings=0)
-Reviewed-By: codex (tier=high, mode=judge+adversarial, status=pass, findings=0)
+Reviewed-By: quality (tier=high, reviewer=codex, primary=codex, fallback=claude, findings=0)
+Reviewed-By: codex (tier=high, findings=0)
 ```
 
-- `Reviewed-By: claude-quality` is always written (preserves CI grep in `harness-gate.yml`)
-- `Reviewed-By: codex` is added only when Codex actually ran (medium+ tiers, not skipped)
-- `Quality-Skip: codex-judge (reason="..."; head=<SHA>; base=<SHA>)` — required at `high`/`critical` when `--codex-skip` is used. Trailer SHAs are verified against current HEAD + merge-base before merge — stale trailers cannot authorize a new merge.
-- `.claude/quality-skip-log.json` is **telemetry only** — never authoritative for whether a skip was authorized.
+- `Reviewed-By: quality` is the provider-neutral authorization record.
+- The provider-specific trailer records which reviewer actually completed; it
+  can differ from `primary` when fallback was required.
 
 ## Deep Review Mode (`--audit --deep`)
 

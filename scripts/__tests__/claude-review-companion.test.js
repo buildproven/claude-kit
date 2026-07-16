@@ -235,6 +235,49 @@ describe("claude-review-companion.sh", () => {
     });
   });
 
+  describe("account exhaustion", () => {
+    it("returns 75, exposes the 429, and cancels sibling reviewers", () => {
+      const d = tmpdir();
+      const bin = path.join(d, "bin");
+      fs.mkdirSync(bin);
+      const fakeClaude = path.join(bin, "claude");
+      fs.writeFileSync(
+        fakeClaude,
+        `#!/bin/bash
+case "$*" in
+  *code-reviewer.md*) echo 'HTTP 429: weekly usage limit reached; resets Jul 17 at 1am CT' >&2; exit 1 ;;
+  *) sleep 30; printf '{"is_error":false,"result":"NO FINDINGS."}\\n' ;;
+esac
+`,
+      );
+      fs.chmodSync(fakeClaude, 0o755);
+      fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+      const started = Date.now();
+      const r = run(
+        [
+          "--diff-file",
+          path.join(d, "diff.txt"),
+          "--out-dir",
+          path.join(d, "o"),
+          "--agents",
+          "code-reviewer,security-auditor",
+          "--timeout",
+          "30",
+        ],
+        { env: { PATH: `${bin}:${process.env.PATH}` } },
+      );
+      expect(r.code).toBe(75);
+      expect(r.stderr).toMatch(/weekly usage limit|provider exhausted/i);
+      expect(Date.now() - started).toBeLessThan(8000);
+      expect(
+        fs.readFileSync(
+          path.join(d, "o", "security-auditor.findings.txt"),
+          "utf8",
+        ),
+      ).toMatch(/cancelled/i);
+    });
+  });
+
   describe("quality skill wiring (findings #1/#2/#6)", () => {
     // #70 split SKILL.md's inline bash into scripts/ so SKILL.md stays under
     // the compaction re-attach token budget (see reference.md "Regression
@@ -260,11 +303,17 @@ describe("claude-review-companion.sh", () => {
       expect(SELECT_AGENTS).toMatch(/bs-quality-agents-.*\.txt/);
     });
     it("companion block reads the agents sentinel, not an in-scope array", () => {
-      expect(RUN_REVIEW).toMatch(/AGENTS_FILE=.*bs-quality-agents/);
-      expect(RUN_REVIEW).toMatch(/AGENTS_CSV=.*paste -sd, "\$AGENTS_FILE"/);
+      expect(RUN_REVIEW).toMatch(/agents_file=.*bs-quality-agents/);
+      expect(RUN_REVIEW).toMatch(/agents_csv=.*paste -sd, "\$agents_file"/);
     });
-    it("blocks the merge on ANY non-zero companion rc (not just rc==2)", () => {
-      expect(RUN_REVIEW).toMatch(/COMPANION_RC" -ne 0/);
+    it("falls back only for typed exhaustion or provider unavailability", () => {
+      expect(RUN_REVIEW).toMatch(/PROVIDER_RC" -eq 75/);
+      expect(RUN_REVIEW).toMatch(/PROVIDER_RC" -eq 2/);
+      expect(RUN_REVIEW).toMatch(/QUALITY_FALLBACK/);
+    });
+    it("uses a last-reviewed SHA for later-round delta review", () => {
+      expect(RUN_REVIEW).toMatch(/last-reviewed\.sha/);
+      expect(RUN_REVIEW).toMatch(/REVIEW_DIFF_BASE="\$LAST_REVIEWED"/);
     });
     it("no panel/AGENTS line lists the phantom test-generator agent", () => {
       // test-generator has no agent .md anywhere → would permanently block
