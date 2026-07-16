@@ -8,7 +8,7 @@ The latest release on `main` is actively maintained.
 
 Please **do not** open a public GitHub issue for security vulnerabilities.
 
-Report vulnerabilities by emailing the maintainers via the contact on the GitHub profile, or by using [GitHub's private vulnerability reporting](https://github.com/buildproven/claude-kit/security/advisories/new).
+Report vulnerabilities using [GitHub's private vulnerability reporting](https://github.com/buildproven/claude-kit/security/advisories/new).
 
 Include:
 

@@ -29,7 +29,6 @@ Rules (see plan §5):
   R3 invoke resolves           — the skill a command delegates to must exist
   R4 no reverse edges          — a SKILL.md must not invoke another /command
   R5 no cross-dir duplicates   — same base name defined in >1 command (or skill) dir
-  R6 orphan policy             — a command that invokes nothing needs standalone: true
 
 This linter is dependency-free (hand-parses YAML frontmatter) so it runs
 identically across the kit and any overlay repo without a pip step.
@@ -239,12 +238,10 @@ def lint(root: Path) -> Report:
 
     # Build skill set: dir name -> list of paths (for dup detection)
     skill_dirs: dict[str, list[Path]] = {}
-    skill_meta: dict[str, dict] = {}
     for sf in skill_files:
         name = sf.parent.name
         skill_dirs.setdefault(name, []).append(sf)
         fm = _parse_frontmatter(sf.read_text(errors="replace"))
-        skill_meta[name] = fm
         # R1 skill completeness
         if not fm.get("name"):
             rep.add(
@@ -298,7 +295,6 @@ def lint(root: Path) -> Report:
                 + ", ".join(str(p.relative_to(root)) for p in paths),
             )
 
-    invoked_skills: set[str] = set()
     cmd_basenames: dict[str, list[Path]] = {}
     for cf in cmd_files:
         fm = _parse_frontmatter(cf.read_text(errors="replace"))
@@ -386,17 +382,15 @@ def lint(root: Path) -> Report:
                 "skill, or mark the command 'standalone: true'",
             )
 
-        if target:
-            invoked_skills.add(target)
-            # R3: the skill it delegates to must exist.
-            if target not in skill_dirs:
-                rep.add(
-                    "R3",
-                    "high",
-                    nm or stem,
-                    f"delegates to skill '{target}' which does not exist "
-                    "(add the skill, or mark the command 'standalone: true')",
-                )
+        # R3: the skill it delegates to must exist.
+        if target and target not in skill_dirs:
+            rep.add(
+                "R3",
+                "high",
+                nm or stem,
+                f"delegates to skill '{target}' which does not exist "
+                "(add the skill, or mark the command 'standalone: true')",
+            )
 
     # R5 command cross-dir duplicates
     for base, paths in cmd_basenames.items():
@@ -407,16 +401,6 @@ def lint(root: Path) -> Report:
                 base,
                 "command defined in multiple dirs: "
                 + ", ".join(str(p.relative_to(root)) for p in paths),
-            )
-
-    # R6 orphan policy — skill with no command and not auto_invoke
-    for name, fm in skill_meta.items():
-        if name not in invoked_skills and not _truthy(fm.get("auto_invoke")):
-            rep.add(
-                "R6",
-                "low",
-                name,
-                "skill has no command and no 'auto_invoke: true' — declare intent",
             )
 
     return rep

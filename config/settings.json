@@ -7,7 +7,7 @@
   },
   "fallbackModel": ["claude-sonnet-5", "claude-haiku-4-5"],
   "permissions": {
-    "defaultMode": "default",
+    "defaultMode": "auto",
     "allow": [
       "Bash(**/grep *)",
       "Bash(**/head *)",
@@ -69,6 +69,21 @@
       "Read(**/*.key)"
     ]
   },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "credentials": {
+      "files": [
+        { "path": ".env", "mode": "deny" },
+        { "path": "~/.aws/credentials", "mode": "deny" },
+        { "path": "~/.ssh/id_rsa", "mode": "deny" },
+        { "path": "~/.ssh/id_ed25519", "mode": "deny" }
+      ]
+    },
+    "network": {
+      "deniedDomains": ["169.254.169.254", "metadata.google.internal"]
+    }
+  },
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -108,6 +123,11 @@
       {
         "matcher": "Bash",
         "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/scripts/block-destructive-paths.sh",
+            "timeout": 3000
+          },
           {
             "type": "command",
             "command": "$HOME/.claude/scripts/block-push-main.sh",

@@ -320,18 +320,12 @@ def test_r5_duplicate_skill_dirs_flagged(tmp_path: Path) -> None:
     assert any(v.rule == "R5" for v in rep.violations)
 
 
-def test_r6_orphan_skill_needs_auto_invoke(tmp_path: Path) -> None:
+def test_standalone_skill_needs_no_unsupported_auto_invoke_field(
+    tmp_path: Path,
+) -> None:
     _mk(tmp_path, "skills/error-handling/SKILL.md", _skill("error-handling"))
     rep = csc_lint.lint(tmp_path)
-    assert any(v.rule == "R6" for v in rep.violations)
-    # declaring auto_invoke clears it
-    _mk(
-        tmp_path,
-        "skills/error-handling/SKILL.md",
-        "---\nname: error-handling\ndescription: x\nauto_invoke: true\n---\nbody\n",
-    )
-    rep2 = csc_lint.lint(tmp_path)
-    assert not any(v.rule == "R6" for v in rep2.violations)
+    assert not rep.violations
 
 
 def test_standalone_command_skips_invoke_check(tmp_path: Path) -> None:

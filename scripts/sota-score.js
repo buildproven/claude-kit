@@ -96,26 +96,37 @@ function scorePermissionPosture() {
   const allow = permissions.allow || [];
   const deny = permissions.deny || [];
   const ask = permissions.ask || [];
+  const sandbox = settings.sandbox || {};
   let score = 0;
   const gaps = [];
-  if (permissions.defaultMode === "auto") score += 4;
-  else gaps.push('permissions.defaultMode is not "auto"');
-  if (!allow.includes("Bash")) score += 2;
-  else gaps.push("blanket Bash permission is allowed");
-  if (deny.some((rule) => rule.includes("rm -rf"))) score += 1;
-  else gaps.push("no destructive-delete deny rule");
-  if (ask.some((rule) => rule.includes("git push --force"))) score += 1;
-  else gaps.push("force-push is not confirmation-gated");
-  const sandbox = settings.sandbox || {};
-  if (sandbox.credentials) score += 1;
-  else gaps.push("sandbox.credentials is not configured");
-  if (
-    Array.isArray(sandbox.deniedDomains) &&
-    sandbox.deniedDomains.length > 0
-  ) {
-    score += 1;
-  } else {
-    gaps.push("sandbox.deniedDomains is not configured");
+  const checks = [
+    [
+      permissions.defaultMode === "auto",
+      4,
+      'permissions.defaultMode is not "auto"',
+    ],
+    [!allow.includes("Bash"), 2, "blanket Bash permission is allowed"],
+    [
+      deny.some((rule) => rule.includes("rm -rf")),
+      1,
+      "no destructive-delete deny rule",
+    ],
+    [
+      ask.some((rule) => rule.includes("git push --force")),
+      1,
+      "force-push is not confirmation-gated",
+    ],
+    [Boolean(sandbox.credentials), 1, "sandbox.credentials is not configured"],
+    [
+      Array.isArray(sandbox.network?.deniedDomains) &&
+        sandbox.network.deniedDomains.length > 0,
+      1,
+      "sandbox.network.deniedDomains is not configured",
+    ],
+  ];
+  for (const [passed, points, gap] of checks) {
+    if (passed) score += points;
+    else gaps.push(gap);
   }
   return result(score, gaps[0] || null, { gaps });
 }
@@ -131,6 +142,7 @@ function scoreNativeFirst() {
     "commands/bs/agent-run.md",
     "commands/bs/agent-new.md",
     "scripts/cost-tracker.js",
+    "skills/webapp-testing/SKILL.md",
   ];
   const offenders = obsoletePaths.filter(exists);
   return result(
@@ -317,12 +329,15 @@ function scoreQualityGates() {
 }
 
 function scoreSecurity() {
+  const workflow = readText(".github/workflows/quality.yml");
+  const semgrepRunner = readText("scripts/run-semgrep.sh");
+  const settings = readJSON("config/settings.json");
   const checks = [
     exists("scripts/block-destructive-paths.sh"),
-    exists("scripts/run-semgrep.sh"),
-    exists(".semgrep"),
-    exists(".husky/pre-commit"),
-    /\.env/.test(readText("config/CLAUDE.md")),
+    /security:scan:ci/.test(workflow) && /--error/.test(semgrepRunner),
+    /license:check/.test(workflow) && /npm audit/.test(workflow),
+    exists("package-lock.json") && /npm ci/.test(workflow),
+    Boolean(settings?.sandbox?.credentials),
   ];
   const privateLeak = /(?:\/Users\/brett|Projects\/internal|brettstark)/i.test(
     [readText("README.md"), readText("config/settings.json")].join("\n"),
@@ -356,14 +371,16 @@ function scoreObservability() {
   const settings = readJSON("config/settings.json");
   const env = settings?.env || {};
   const hasUsage = corpus.includes("/usage");
-  const hasOtel = Object.keys(env).some((key) => key.startsWith("OTEL_"));
+  const hasOtel =
+    Object.keys(env).some((key) => key.startsWith("OTEL_")) ||
+    /OpenTelemetry[\s\S]{0,200}opt-in/i.test(corpus);
   const score = (hasUsage ? 6 : 0) + (hasOtel ? 4 : 0);
   return result(
     score,
     !hasUsage
       ? "/usage is not documented"
       : !hasOtel
-        ? "OpenTelemetry is not configured"
+        ? "OpenTelemetry opt-in is not documented"
         : null,
   );
 }

@@ -1,6 +1,5 @@
 ---
 name: monetize
-auto_invoke: true
 description: Commercial launch automation for skills and projects. Guides through Polar.sh setup, license generation, webhook handlers, pricing components, and documentation. Use when user wants to monetize a skill, add paid features, or set up commercial licensing.
 context: fork
 ---

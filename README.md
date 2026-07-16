@@ -10,19 +10,21 @@ file taints a mixed changeset.
 That is not a prompt saying "please be thorough". It is
 [`risk-score.js`](scripts/risk-score.js) (537 lines), a
 [run governor](scripts/quality-run-governor.js) that caps runaway review loops and
-fails _closed_, and a target resolver — **333 tests, 88% coverage**.
+fails _closed_, and a target resolver — **415 tests with over 85% line and 75%
+branch coverage**.
 
 Plus autonomous backlog execution, multi-LLM strategy panels, fleet auditing, and 14
 specialist agents.
 
-**Everything is here.** One repo, MIT, no paid tier, nothing held back.
+**Everything is here.** One repo, no paid tier, nothing held back. The kit is MIT;
+one substantially modified skill retains its upstream Apache-2.0 license.
 
 ## What's inside
 
 | Dir         | Contents                                                           |
 | ----------- | ------------------------------------------------------------------ |
-| `commands/` | 33 `/bs:*` + `/gh:*` + `/cc:*` commands                            |
-| `skills/`   | 36 skills — quality, autonomous workflow, strategy, domain         |
+| `commands/` | 32 namespaced `/bs:*`, `/gh:*`, and `/cc:*` commands               |
+| `skills/`   | 33 skills — quality, autonomous workflow, strategy, domain         |
 | `agents/`   | 14 specialist agents                                               |
 | `scripts/`  | Hooks, lint, branch-protection, quality governor, review companion |
 | `config/`   | Generic `CLAUDE.md` and `settings.json` templates                  |
@@ -43,14 +45,14 @@ strategy panels).
 
 ## Prerequisites
 
-|                        | Needed for                                                  |
-| ---------------------- | ----------------------------------------------------------- |
-| **git**                | everything                                                  |
-| **Node ≥ 20**          | the quality gate's scoring scripts (`package.json` engines) |
-| **python3**            | `csc_lint.py` (the command/skill linter)                    |
-| **jq** _(recommended)_ | the hooks; they degrade to `grep` without it, less reliably |
-| **gh** _(optional)_    | PR-aware features in `/bs:quality`, `/bs:status`            |
-| **acpx** _(optional)_  | `/bs:strategy` only — every provider is invoked through it  |
+|                           | Needed for                                                  |
+| ------------------------- | ----------------------------------------------------------- |
+| **git**                   | everything                                                  |
+| **Node 20.19+ or 22.12+** | quality-gate scripts (`package.json` engines)               |
+| **python3**               | `csc_lint.py` (the command/skill linter)                    |
+| **jq** _(recommended)_    | the hooks; they degrade to `grep` without it, less reliably |
+| **gh** _(optional)_       | PR-aware features in `/bs:quality`, `/bs:status`            |
+| **acpx** _(optional)_     | `/bs:strategy` only — every provider is invoked through it  |
 
 Some skills also need an MCP server and will tell you so rather than failing
 quietly: `/bs:backlog` and `/bs:dev --next` need **Linear**; `/bs:triage` needs
@@ -94,7 +96,7 @@ cd ~/Projects/claude-kit
 ```
 
 This symlinks `commands/`, `skills/`, `agents/` and `scripts/` into `~/.claude/`.
-`scripts/` is load-bearing — `config/settings.json` wires 14 hooks to
+`scripts/` is load-bearing — `config/settings.json` wires 18 command hooks to
 `$HOME/.claude/scripts/*.sh`, so without it every hook silently no-ops. It works,
 but skills land unprefixed, so they can shadow Claude Code built-ins. Prefer the
 plugin.
@@ -179,7 +181,7 @@ Skills auto-invoke from natural language — you don't have to type a command.
 `scrub`, `deps`, `status`, `workflow`, `healthcheck`
 
 **Build quality** — `frontend-design` (Apache 2.0), `ui-reviewer`,
-`webapp-testing` (Apache 2.0), `visualise`
+`visualise`
 
 **Autonomous & strategy** — `ralph`, `strategy`, `review`, `prd`, `backlog`,
 `sota`, `steward`, `triage`, `patterns`, `recover-quality`, `verify-claim`
@@ -220,6 +222,22 @@ private commands and preferences on top without forking.
 npx claude-hud@latest
 ```
 
+### Optional: OpenTelemetry
+
+Claude Code supports opt-in OpenTelemetry for shared dashboards and fleet-level
+usage monitoring. This kit leaves telemetry disabled by default; configure it with
+Anthropic's [monitoring and usage documentation](https://docs.anthropic.com/en/docs/claude-code/monitoring-usage)
+when you control the collector and data policy. For local usage, use `/usage`.
+
+## Upstream skills
+
+`webapp-testing` is intentionally not vendored: use Anthropic's maintained
+[webapp-testing skill](https://github.com/anthropics/skills/tree/main/skills/webapp-testing)
+directly. `frontend-design` remains here because it includes substantial kit-specific
+guidance and original datasets; its attribution and modification notice are in
+[NOTICE](NOTICE).
+
 ## License
 
-MIT
+MIT, except `skills/frontend-design/SKILL.md`, which is a substantially modified
+Apache-2.0 work. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

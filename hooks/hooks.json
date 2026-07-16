@@ -40,6 +40,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/block-destructive-paths.sh",
+            "timeout": 3000
+          },
+          {
+            "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/scripts/block-push-main.sh",
             "timeout": 5000
           },

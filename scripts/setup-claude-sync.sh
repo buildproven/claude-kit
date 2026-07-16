@@ -4,7 +4,7 @@
 # =============================================================================
 # The kit is consumed via symlinks: ~/.claude/<dir> -> <repo>/<dir>. Hooks in
 # config/settings.json resolve through $HOME/.claude/scripts/..., so `scripts`
-# is load-bearing — if it is not linked, all 14 hooks silently no-op.
+# is load-bearing — if it is not linked, every hook silently no-ops.
 #
 # Modes:
 #   --check    verify every expected link; exit 1 if any are missing/broken
@@ -33,7 +33,7 @@ D="$(printf '~')/.claude"
 # script *through that link*. A naive `cd "$(dirname "$BASH_SOURCE")" && pwd`
 # returns the LOGICAL path, collapsing REPO_ROOT to the config dir itself —
 # whereupon --repair unlinked the working symlink and recreated it pointing at
-# itself (<config>/scripts -> <config>/scripts). ELOOP: all 14 hooks dead, and
+# itself (<config>/scripts -> <config>/scripts). ELOOP: every hook dead, and
 # the next --check reported "OK" because readlink == src. Walk the chain instead.
 src_path="${BASH_SOURCE[0]}"
 while [[ -L "$src_path" ]]; do

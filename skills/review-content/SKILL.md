@@ -1,6 +1,5 @@
 ---
 name: review-content
-auto_invoke: true
 description: Collaborative artifact review skill for products, PDFs, landing pages, email sequences, decks, and long-form docs. Use when you want a serious pre-ship critique focused on SOTA quality, differentiation, clarity, conversion strength, and competitive sharpness rather than code quality.
 ---
 

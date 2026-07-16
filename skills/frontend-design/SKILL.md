@@ -1,10 +1,14 @@
 ---
 name: frontend-design
-auto_invoke: true
 context: fork
 description: Create distinctive, production-grade frontend interfaces with high design quality. Use this skill when the user asks to build web components, pages, or applications. Generates creative, polished code that avoids generic AI aesthetics.
 license: Complete terms in LICENSE.txt
 ---
+
+> Derived from Anthropic's Apache-2.0 `frontend-design` skill and substantially
+> modified by buildproven. Changes include expanded production guidance, the
+> AI-ism denylist, mandatory self-review, and original design-reference datasets.
+> See `LICENSE.txt` and the repository `NOTICE` for provenance and license scope.
 
 This skill guides creation of distinctive, production-grade frontend interfaces that avoid generic "AI slop" aesthetics. Implement real working code with exceptional attention to aesthetic details and creative choices.
 

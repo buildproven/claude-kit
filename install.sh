@@ -44,7 +44,7 @@ fi
 mkdir -p "$CLAUDE_DIR"
 
 # Symlink commands, skills, agents, scripts.
-# `scripts` is load-bearing: config/settings.json wires 14 hooks to
+# `scripts` is load-bearing: config/settings.json wires command hooks to
 # $HOME/.claude/scripts/*.sh. Omit it and every hook silently no-ops.
 for dir in commands skills agents scripts; do
     src="$PROJECT_DIR/$dir"

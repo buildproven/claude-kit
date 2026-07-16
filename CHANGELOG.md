@@ -2,6 +2,33 @@
 
 All notable changes to claude-kit are documented here.
 
+## [3.2.0] - 2026-07-15
+
+### Changed
+
+- Removed the lightly modified vendored `webapp-testing` skill; Anthropic's upstream
+  repository is now the canonical maintained source.
+- Documented the substantial modifications and Apache-2.0 attribution for
+  `frontend-design`; all other kit content remains MIT.
+- Made plugin installs resolve the inline-list parser and ensemble runner through
+  `CLAUDE_PLUGIN_ROOT`.
+- Raised the supported runtime floor to Node 20.19 / 22.12 and committed the npm
+  lockfile for reproducible `npm ci` builds.
+
+### Security and quality
+
+- Added sandbox credential and metadata-network protections while using Claude
+  Code's guarded `auto` permission mode.
+- Promoted the tested destructive-path hook from the private overlay into the
+  public kit and wired it before every Bash tool call.
+- Made Semgrep findings fail CI, added license enforcement and a pre-push security
+  gate, and enabled weekly dependency and GitHub Actions updates.
+- Removed destructive stale-branch automation and two dead private-only scripts.
+- Corrected SOTA scoring for sandbox networking, skill frontmatter, CI security,
+  plugin-native paths, git hooks, and opt-in OpenTelemetry.
+- Added direct tests for every published defensive ESLint rule and hardened JSX
+  handler analysis against namespaced and short prop names.
+
 ## [3.1.0] - 2026-07-13
 
 The kit stops doing things to your repo that you didn't ask for.
