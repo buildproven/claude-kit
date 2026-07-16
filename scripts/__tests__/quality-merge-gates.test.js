@@ -17,6 +17,10 @@ const AUTHORIZE = readFileSync(
   path.join(ROOT, "scripts/quality-authorize-merge.sh"),
   "utf8",
 );
+const STAMP_AND_MERGE = readFileSync(
+  path.join(ROOT, "scripts/quality-stamp-and-merge.sh"),
+  "utf8",
+);
 
 /**
  * On 2026-07-12 a review panel returned FAIL with 2 blocking findings; the skill
@@ -50,7 +54,9 @@ describe("quality merge gates", () => {
 
   it("binds neutral evidence to HEAD/HEAD~1 and merge-base", () => {
     expect(SKILL).toMatch(/head=<reviewed-head>, base=<base-sha>/);
-    expect(SKILL).toMatch(/quality-authorize-merge\.sh/);
+    expect(SKILL).toMatch(/quality-stamp-and-merge\.sh/);
+    expect(STAMP_AND_MERGE).toMatch(/review-authorization/);
+    expect(STAMP_AND_MERGE).toMatch(/quality-authorize-merge\.sh/);
     expect(VALIDATOR).toMatch(/STAMP_HEAD.*CURRENT_PARENT/s);
     expect(VALIDATOR).toMatch(/STAMP_BASE.*CURRENT_BASE/s);
     expect(VALIDATOR).toMatch(/grep -Fxq "\$EXPECTED"/);

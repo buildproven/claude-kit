@@ -15,7 +15,17 @@ function packageManager(root) {
 
 function configuredExtensions(pkg) {
   const extensions = new Set();
-  for (const pattern of Object.keys(pkg["lint-staged"] || {})) {
+  for (const [pattern, commands] of Object.entries(pkg["lint-staged"] || {})) {
+    const commandList = Array.isArray(commands) ? commands : [commands];
+    if (
+      !commandList.some(
+        (command) =>
+          typeof command === "string" &&
+          /(^|[ /])prettier([ /]|$)/.test(command),
+      )
+    ) {
+      continue;
+    }
     const brace = pattern.match(/\{([^}]+)\}/);
     if (brace) {
       for (const extension of brace[1].split(",")) extensions.add(extension);

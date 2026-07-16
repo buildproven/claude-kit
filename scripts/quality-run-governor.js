@@ -438,6 +438,9 @@ function bumpRound(sentinelPath, cwd) {
     ? state.rounds_used
     : 0;
   state.rounds_used = priorRounds + 1;
+  if (state._manifest) {
+    cwd = loadManifest(sentinelPath).manifest.repo.realpath;
+  }
 
   // A mandatory validation round has its own reserved allowance. The first
   // provider review and remediation cannot consume it and make the required

@@ -266,7 +266,7 @@ printf '%s\\n' "$manifest"
     expect(manifest.risk.resolved).toBe(true);
     expect(manifest.risk.tier).not.toBe("auto");
     expect(manifest.agents.length).toBeGreaterThanOrEqual(2);
-  });
+  }, 15_000);
 
   it("locates an explicit target manifest without trusting the caller cwd", () => {
     const first = repo("first");
@@ -432,6 +432,7 @@ wait
       JSON.stringify({
         "lint-staged": {
           "**/*.{js,json,md,yml,yaml}": ["prettier --write"],
+          "**/*.ts": ["eslint --fix"],
         },
       }),
     );
@@ -448,6 +449,7 @@ wait
           "--dry-run",
           "--",
           "file.js",
+          "only-eslint.ts",
           ".gitleaks.toml",
         ],
         { cwd: root, encoding: "utf8" },

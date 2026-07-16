@@ -80,6 +80,10 @@ function loadManifest(file) {
       `unsupported quality manifest schema ${manifest.schemaVersion}`,
     );
   }
+  manifest.reviews ??= [];
+  manifest.gates ??= [];
+  manifest.governor ??= {};
+  manifest.governor.authorizedAttempts ??= [];
   if (
     !manifest.invocationId ||
     !manifest.repo?.realpath ||
@@ -289,6 +293,13 @@ function createManifest(options) {
     options["invocation-id"],
     crypto.randomUUID(),
   );
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      invocationId,
+    )
+  ) {
+    throw new Error("invocation-id must be a UUID");
+  }
   const pr =
     options.pr === undefined
       ? null
@@ -615,8 +626,9 @@ function providerFindings(manifest) {
         });
       });
     }
-    for (const item of inventory.files.filter((file) =>
-      file.name.endsWith(".findings.txt"),
+    for (const item of inventory.files.filter(
+      (file) =>
+        review.provider === "claude" && file.name.endsWith(".findings.txt"),
     )) {
       const text = fs
         .readFileSync(path.join(review.artifactDir, item.name), "utf8")

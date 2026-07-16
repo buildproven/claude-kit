@@ -96,9 +96,9 @@ Before every review:
 
 ```bash
 node "$QUALITY_SCRIPTS_DIR/quality-run-governor.js" \
-  bump-round "<exact-manifest-path>"
+  bump-round "<exact-manifest-path>" || exit 1
 bash "$QUALITY_SCRIPTS_DIR/quality-run-review.sh" \
-  --manifest "<exact-manifest-path>"
+  --manifest "<exact-manifest-path>" || exit 1
 ```
 
 The first successful review covers `baseSha..HEAD`. After a fix commit, resume
@@ -154,15 +154,8 @@ Reviewed-By: <provider> (tier=<tier>, findings=0, head=<reviewed-head>, base=<ba
 ```
 
 ```bash
-TRAILERS="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" trailers \
-  "<exact-manifest-path>")"
-git commit --allow-empty -m "chore: quality review stamp
-
-$TRAILERS"
-git push
-bash "$QUALITY_SCRIPTS_DIR/quality-authorize-merge.sh" \
+bash "$QUALITY_SCRIPTS_DIR/quality-stamp-and-merge.sh" \
   --manifest "<exact-manifest-path>"
-bash "$QUALITY_SCRIPTS_DIR/quality-merge-cleanup.sh" --preserve-branch
 ```
 
 Merge is forbidden when:
