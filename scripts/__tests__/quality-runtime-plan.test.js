@@ -43,6 +43,13 @@ describe("quality runtime planning", () => {
     expect(result.maxReviewRounds).toBe(2);
     expect(result.maxFixCommits).toBe(1);
     expect(result.verificationSeconds).toBe(120);
+    expect(result.validationSeconds).toBe(300);
+  });
+
+  it("scales the single validation phase from three to five minutes", () => {
+    expect(plan(10, 1, 5).validationSeconds).toBe(180);
+    expect(plan(10, 4, 120).validationSeconds).toBe(240);
+    expect(plan(10, 80, 9000).validationSeconds).toBe(300);
   });
 
   it("lets requested quality raise depth without erasing size scaling", () => {

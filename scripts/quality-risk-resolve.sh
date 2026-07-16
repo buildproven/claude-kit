@@ -58,6 +58,7 @@ node "$SCRIPT_DIR/quality-invocation.js" risk "$MANIFEST" \
   --review-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.reviewSeconds')" \
   --verification-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.verificationSeconds')" \
   --gate-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.gateSeconds')" \
+  --validation-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.validationSeconds')" \
   --max-review-rounds "$(printf '%s' "$PLAN_JSON" | jq -r '.maxReviewRounds')" \
   --max-fix-commits "$(printf '%s' "$PLAN_JSON" | jq -r '.maxFixCommits')" \
   --level "$LEVEL" || exit 1

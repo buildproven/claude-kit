@@ -233,9 +233,9 @@ tracks governor state inside the explicit invocation manifest with:
 - **Fix-commit cap** (`BS_QUALITY_MAX_FIX_COMMITS`, default 1) — one batched
   remediation commit, checked before every fix attempt and verification.
 - **Proportional phase caps** — changed lines plus 25 units per changed file
-  select a micro/small/medium/large/huge band. Default campaigns scale from
-  300 to 900 seconds; gate, discovery, and targeted-verification subprocesses
-  each receive smaller workload-derived limits.
+  select a micro/small/medium/large/huge band. Discovery scales from 300 to 900
+  seconds. A fix opens one 180–300 second validation phase for affected gates
+  and targeted verification, making the absolute default ceiling 8–20 minutes.
 - **Two-review convergence** — one discovery review and one targeted
   verification are allowed. A blocker discovered by verification is reported
   as the terminal result; it cannot trigger another fix/review recursion.

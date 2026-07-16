@@ -140,10 +140,12 @@ structured API/CLI metadata. Generated review text mentioning HTTP 429, quota,
 or rate-limit handling is ordinary review content.
 
 Runtime is derived from both risk and actual diff workload. Risk controls
-depth; changed lines plus per-file overhead control the clock. Default
-campaigns scale from 5 minutes for micro changes to 15 minutes for huge
-changes, with smaller independent limits for gates, discovery review, and
-verification.
+depth; changed lines plus per-file overhead control the clock. Discovery scales
+from 5 minutes for micro changes to 15 minutes for huge changes. If and only if
+the discovery review requires a fix, one separate validation phase adds a
+workload-scaled 3–5 minute ceiling for affected gates and targeted verification.
+The absolute default maximum is therefore 8–20 minutes, with no recursive third
+round.
 
 One campaign permits exactly one discovery review, one batched fix commit, and
 one targeted verification review. A verification finding is a terminal

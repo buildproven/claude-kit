@@ -11,6 +11,7 @@ const WORKLOAD_BANDS = [
     reviewSeconds: 75,
     verificationSeconds: 60,
     gateSeconds: 120,
+    validationSeconds: 180,
   },
   {
     name: "small",
@@ -19,6 +20,7 @@ const WORKLOAD_BANDS = [
     reviewSeconds: 120,
     verificationSeconds: 90,
     gateSeconds: 180,
+    validationSeconds: 240,
   },
   {
     name: "medium",
@@ -27,6 +29,7 @@ const WORKLOAD_BANDS = [
     reviewSeconds: 210,
     verificationSeconds: 120,
     gateSeconds: 240,
+    validationSeconds: 300,
   },
   {
     name: "large",
@@ -35,6 +38,7 @@ const WORKLOAD_BANDS = [
     reviewSeconds: 330,
     verificationSeconds: 180,
     gateSeconds: 300,
+    validationSeconds: 300,
   },
   {
     name: "huge",
@@ -43,6 +47,7 @@ const WORKLOAD_BANDS = [
     reviewSeconds: 720,
     verificationSeconds: 120,
     gateSeconds: 360,
+    validationSeconds: 300,
   },
 ];
 
@@ -100,6 +105,7 @@ function planRuntime({ riskScore, diffStats, minimumRisk = 0, knobs = null }) {
     reviewSeconds: Math.max(band.reviewSeconds, floor.reviewSeconds),
     verificationSeconds: band.verificationSeconds,
     gateSeconds: band.gateSeconds,
+    validationSeconds: band.validationSeconds,
     agents: resolvedKnobs.agents,
     reviewDepth: resolvedKnobs.codex === "skip" ? "low" : resolvedKnobs.codex,
     reviewPasses: resolvedKnobs.codexRounds || 1,
