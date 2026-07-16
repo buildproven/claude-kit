@@ -488,7 +488,7 @@ function reconcileManifestRounds(sentinelPath) {
   });
 }
 
-function mandatoryValidationMayExceedCommitCap(
+function mandatoryValidationHasReservedBudget(
   state,
   priorRounds,
   result,
@@ -498,8 +498,7 @@ function mandatoryValidationMayExceedCommitCap(
     !state._manifest ||
     priorRounds < 1 ||
     state.rounds_used !== priorRounds + 1 ||
-    !result.commitTripped ||
-    result.wallTripped ||
+    (!result.commitTripped && !result.wallTripped) ||
     result.roundTripped
   ) {
     return false;
@@ -515,6 +514,12 @@ function mandatoryValidationMayExceedCommitCap(
       successful.at(-1)?.round !== priorRounds ||
       !reviewedHead ||
       reviewedHead === manifest.revisions.currentHead
+    ) {
+      return false;
+    }
+    if (
+      !Number.isInteger(manifest.governor.validationDeadlineEpoch) ||
+      Math.floor(Date.now() / 1000) >= manifest.governor.validationDeadlineEpoch
     ) {
       return false;
     }
@@ -607,7 +612,7 @@ function reviewBudgetDecision(context, sentinelPath) {
         `[quality] Override deliberately with BS_QUALITY_MAX_REVIEW_ROUNDS if a repo genuinely needs more.\n`,
     };
   }
-  const mandatoryOverride = mandatoryValidationMayExceedCommitCap(
+  const mandatoryOverride = mandatoryValidationHasReservedBudget(
     state,
     priorRounds,
     result,
@@ -658,7 +663,7 @@ function bumpRound(sentinelPath, cwd) {
   }
   if (decision.mandatoryOverride) {
     process.stdout.write(
-      `[quality] fix-commit cap exceeded; authorizing bounded incremental review round ${decision.result.roundsUsed} without permitting further remediation.\n`,
+      `[quality] campaign cap reached; authorizing reserved incremental validation round ${decision.result.roundsUsed} without permitting further remediation.\n`,
     );
   }
   replaceAuthorization(
