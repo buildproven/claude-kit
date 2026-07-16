@@ -42,6 +42,7 @@ for ref in origin/main origin/master main master; do
   fi
 done
 [ -n "$REVIEW_BASE_REF" ] || { echo "❌ MERGE BLOCKED: no base ref for review diff" >&2; exit 1; }
+CODEX_REVIEW_ROOT="${GIT_ROOT:-$(git rev-parse --show-toplevel)}"
 
 # Pin the branch point before any provider starts. Remote-tracking refs are
 # shared by linked worktrees and can move when another session fetches or
@@ -163,6 +164,10 @@ run_codex_review() {
   [ "$rc" -eq 124 ] && return 76
   [ "$rc" -eq 0 ] || return 2
   printf '%s' "$auth_output" | grep -q 'Logged in' || return 2
+  case "$QUALITY_REVIEW_PASSES" in
+    1|2) ;;
+    *) echo "quality: Codex review passes must be 1 or 2" >&2; return 2 ;;
+  esac
 
   : > "$REVIEW_OUT/codex.findings.txt"
   pass=1
@@ -187,16 +192,20 @@ run_codex_review() {
       echo "Diff:"; cat "$REVIEW_OUT/diff.txt"
     } > "$prompt_file"
     bash "$BOUNDED" --timeout "$pass_timeout" -- codex exec --ephemeral -s read-only \
+      -C "$CODEX_REVIEW_ROOT" \
       -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
       --output-schema "$schema" -o "$raw_file" - \
       < "$prompt_file" > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file"
     rc=$?
     if [ "$rc" -ne 0 ]; then
+      # Codex echoes the supplied diff to stderr. A timed-out review can
+      # therefore contain quota words from source or tests even though the
+      # provider never returned a quota response.
+      [ "$rc" -eq 124 ] && return 76
       if provider_exhausted "$raw_file" || provider_exhausted "$error_file"; then
         record_provider_exhaustion Codex "$raw_file" "$error_file"
         return 75
       fi
-      [ "$rc" -eq 124 ] && return 76
       grep -Eiq 'not authenticated|not logged in|login required|setup required' "$error_file" 2>/dev/null && return 2
       return 1
     fi
@@ -235,10 +244,10 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 2 ]; } && [ "$QUALITY_FAL
   elif [ "$PROVIDER_RC" -eq 2 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY unavailable; switching immediately to $QUALITY_FALLBACK." >&2
   fi
-  # Preserve failed-primary evidence without feeding its INCONCLUSIVE files
-  # into synthesis after the fallback succeeds.
+  # Preserve failed-primary diagnostics. Findings from an earlier successful
+  # primary pass remain authoritative if a later pass triggers fallback.
   mkdir -p "$REVIEW_OUT/failed-primary"
-  for evidence in "$REVIEW_OUT"/*.findings.txt "$REVIEW_OUT"/*.stderr; do
+  for evidence in "$REVIEW_OUT"/*.stderr; do
     [ -e "$evidence" ] && mv "$evidence" "$REVIEW_OUT/failed-primary/"
   done
   REVIEW_PROVIDER="$QUALITY_FALLBACK"
