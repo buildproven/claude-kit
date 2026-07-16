@@ -651,6 +651,19 @@ function recordStampPublished(manifest, options) {
   manifest.merge.stampPublication.publishedAt ??= new Date().toISOString();
 }
 
+function reserveCriticalReviewRounds(manifest, tier) {
+  if (
+    tier === "critical" &&
+    manifest.governor.maxReviewRoundsExplicit !== true &&
+    manifest.governor.maxReviewRounds < 3
+  ) {
+    // Critical reviews can surface release blockers during the mandatory
+    // validation round. Reserve one bounded final round so fixing those
+    // blockers does not force a stale authorization or an unbounded override.
+    manifest.governor.maxReviewRounds = 3;
+  }
+}
+
 function setRisk(manifest, options) {
   const tier = options.tier;
   if (!["low", "medium", "high", "critical"].includes(tier)) {
@@ -685,16 +698,7 @@ function setRisk(manifest, options) {
     codexRounds: parseInteger(options["codex-rounds"] || "1", "codex rounds"),
     level: options.level || manifest.options.level,
   };
-  if (
-    tier === "critical" &&
-    manifest.governor.maxReviewRoundsExplicit !== true &&
-    manifest.governor.maxReviewRounds < 3
-  ) {
-    // Critical reviews can surface release blockers during the mandatory
-    // validation round. Reserve one bounded final round so fixing those
-    // blockers does not force a stale authorization or an unbounded override.
-    manifest.governor.maxReviewRounds = 3;
-  }
+  reserveCriticalReviewRounds(manifest, tier);
   if (manifest.risk?.resolved) {
     if (JSON.stringify(manifest.risk) === JSON.stringify(resolved)) return;
     throw new Error("risk resolution is immutable once persisted");
