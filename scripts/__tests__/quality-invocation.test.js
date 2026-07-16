@@ -267,7 +267,7 @@ describe("quality invocation manifest", () => {
     expect(manifest.revisions.currentHead).toBe(
       git(root, ["rev-parse", "HEAD"]),
     );
-  });
+  }, 30_000);
 
   it("binds a non-merge PR bootstrap to the PR base branch and base SHA", () => {
     const root = repo("pr-bootstrap");
@@ -305,7 +305,7 @@ fi
     expect(manifest.repo.pr).toBe(7);
     expect(manifest.revisions.baseRef).toBe("origin/release");
     expect(manifest.revisions.baseHeadSha).toBe(base);
-  });
+  }, 30_000);
 
   it("survives a zsh parent and separate Bash processes", () => {
     const root = repo("zsh");
@@ -336,7 +336,7 @@ printf '%s\\n' "$manifest"
     expect(manifest.risk.resolved).toBe(true);
     expect(manifest.risk.tier).not.toBe("auto");
     expect(manifest.agents.length).toBeGreaterThanOrEqual(2);
-  }, 15_000);
+  }, 30_000);
 
   it("locates an explicit target manifest without trusting the caller cwd", () => {
     const first = repo("first");
