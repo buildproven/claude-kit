@@ -202,6 +202,16 @@ describe("computeScore — package manifests use semantic field risk", () => {
       { dependencies: {} },
       { dependencies: { pkg: "../pkg" } },
     ],
+    [
+      "bare tgz dependency",
+      { dependencies: {} },
+      { dependencies: { pkg: "pkg.tgz" } },
+    ],
+    [
+      "bare tar.gz dependency",
+      { dependencies: {} },
+      { dependencies: { pkg: "package.tar.gz" } },
+    ],
     ["overrides", {}, { overrides: { pkg: "1.0.0" } }],
     ["resolutions", {}, { resolutions: { pkg: "1.0.0" } }],
   ])("%s changes are critical", (_label, before, after) => {
@@ -209,15 +219,19 @@ describe("computeScore — package manifests use semantic field risk", () => {
     expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
   });
 
-  it.each(["^1.2.3", "latest", "npm:real-pkg@^2", "workspace:*"])(
-    "registry dependency form %s stays high rather than critical",
-    (spec) => {
-      const r = scoreOf([
-        manifest({ dependencies: {} }, { dependencies: { pkg: spec } }),
-      ]);
-      expect(r.riskScore).toBe(DEFAULTS.base.high);
-    },
-  );
+  it.each([
+    "^1.2.3",
+    "latest",
+    "npm:real-pkg",
+    "npm:@scope/real-pkg",
+    "npm:real-pkg@^2",
+    "workspace:*",
+  ])("registry dependency form %s stays high rather than critical", (spec) => {
+    const r = scoreOf([
+      manifest({ dependencies: {} }, { dependencies: { pkg: spec } }),
+    ]);
+    expect(r.riskScore).toBe(DEFAULTS.base.high);
+  });
 
   it("mixed fields take the highest risk", () => {
     const r = scoreOf([

@@ -498,21 +498,54 @@ function hasNonRegistryDependencySource(value) {
 function isRegistryDependencySpec(value) {
   const spec = value.trim();
   if (!spec) return false;
+  const normalized = spec.toLowerCase();
+  if (normalized.endsWith(".tgz") || normalized.endsWith(".tar.gz"))
+    return false;
   if (spec.startsWith("workspace:")) {
     return isPlainRegistrySelector(spec.slice("workspace:".length));
   }
   if (spec.startsWith("npm:")) {
-    const separator = spec.lastIndexOf("@");
-    return (
-      separator > "npm:".length &&
-      isPlainRegistrySelector(spec.slice(separator + 1))
-    );
+    return isRegistryAlias(spec.slice("npm:".length));
   }
   return isPlainRegistrySelector(spec);
 }
 
+function isRegistryAlias(alias) {
+  const separator = alias.startsWith("@")
+    ? alias.indexOf("@", alias.indexOf("/") + 1)
+    : alias.indexOf("@");
+  const name = separator >= 0 ? alias.slice(0, separator) : alias;
+  const selector = separator >= 0 ? alias.slice(separator + 1) : "";
+  return (
+    isRegistryPackageName(name) &&
+    (!selector || isPlainRegistrySelector(selector))
+  );
+}
+
+function isRegistryPackageName(name) {
+  if (!name || [...name].some((character) => character.trim() === ""))
+    return false;
+  if (name.startsWith("@")) {
+    const slash = name.indexOf("/");
+    return (
+      slash > 1 &&
+      slash === name.lastIndexOf("/") &&
+      slash < name.length - 1 &&
+      !name.includes(":") &&
+      !name.includes("\\")
+    );
+  }
+  return !["/", ":", "@", "\\"].some((character) => name.includes(character));
+}
+
 function isPlainRegistrySelector(spec) {
   if (!spec || spec.startsWith(".")) return false;
+  const hasWhitespace = [...spec].some((character) => character.trim() === "");
+  const hasRangeSignal = [...spec].some(
+    (character) =>
+      (character >= "0" && character <= "9") || "<>=~^*|".includes(character),
+  );
+  if (hasWhitespace && !hasRangeSignal) return false;
   return !["/", ":", "@", "\\"].some((character) => spec.includes(character));
 }
 

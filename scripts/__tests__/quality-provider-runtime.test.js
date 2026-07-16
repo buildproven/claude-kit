@@ -197,6 +197,20 @@ if kill -0 "$child" 2>/dev/null; then exit 99; fi
       path.join(trustedScripts, "risk-score.js"),
       path.join(ROOT, "scripts", "risk-score.js"),
     ]);
+
+    const emptyHome = mkdtempSync(path.join(tmpdir(), "empty-home-"));
+    const untrusted = spawnSync(
+      "bash",
+      [
+        "-c",
+        `unset CLAUDE_SETUP_ROOT CLAUDE_PLUGIN_ROOT CLAUDE_KIT_ROOT; HOME="$2"; source "$1"; bs_quality_find_script risk-score.js`,
+        "resolution",
+        LOAD_ROOT,
+        emptyHome,
+      ],
+      { encoding: "utf8", cwd: ROOT },
+    );
+    expect(untrusted.status).not.toBe(0);
   });
 
   it("accepts exact evidence, then rejects later code and contradictions", () => {

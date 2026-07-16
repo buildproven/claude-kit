@@ -77,8 +77,7 @@ bs_quality_find_script() {
     done
     return 1
   fi
-  for c in "${trusted_candidates[@]}" "${target_candidates[@]}"
-  do
+  for c in "${trusted_candidates[@]}"; do
     [ -n "$c" ] && [ -f "$c" ] && { printf '%s' "$c"; return 0; }
   done
   return 1
