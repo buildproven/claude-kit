@@ -128,10 +128,13 @@ run_codex_review() {
       echo "INCONCLUSIVE: Codex output could not be parsed — human review required" >> "$REVIEW_OUT/codex.findings.txt"
       return 4
     fi
-    jq -r '
+    if ! jq -r '
       if (.findings | length) == 0 then "NO FINDINGS. Verdict: \(.verdict). \(.summary)"
       else .findings[] | "\(.severity // "WARNING"): \(.file // "unknown"):\(.line_start // 0) — \(.title // "finding")\n\(.body // "")\nFix: \(.recommendation // "")"
-      end' "$normalized_file" >> "$REVIEW_OUT/codex.findings.txt"
+      end' "$normalized_file" >> "$REVIEW_OUT/codex.findings.txt"; then
+      echo "INCONCLUSIVE: normalized Codex findings could not be rendered — human review required" >> "$REVIEW_OUT/codex.findings.txt"
+      return 4
+    fi
     pass=$((pass + 1))
   done
 }

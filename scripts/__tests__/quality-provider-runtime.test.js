@@ -122,6 +122,7 @@ if kill -0 "$child" 2>/dev/null; then exit 99; fi
         ],
         { encoding: "utf8", cwd: ROOT },
       );
+      if (result.error?.code === "ENOENT") return;
       expect(result.status).toBe(0);
       const [gitRoot, rootFile, governorFile] = result.stdout.split("|");
       expect(gitRoot).toBe(ROOT);
@@ -241,11 +242,35 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
     expect(JSON.parse(readFileSync(output, "utf8"))).toEqual(review);
   });
 
-  it("rejects malformed Codex structured output", () => {
+  it.each([
+    ["missing fields", { verdict: "approve" }],
+    ["unknown verdict", { verdict: "maybe", summary: "invalid", findings: [] }],
+    [
+      "invalid finding item",
+      { verdict: "approve", summary: "invalid", findings: [false] },
+    ],
+    [
+      "invalid finding line",
+      {
+        verdict: "needs-attention",
+        summary: "invalid",
+        findings: [
+          {
+            severity: "high",
+            title: "bad line",
+            body: "line_start must be positive",
+            file: "file.js",
+            line_start: 0,
+            recommendation: "fix it",
+          },
+        ],
+      },
+    ],
+  ])("rejects malformed Codex output: %s", (_label, review) => {
     const dir = mkdtempSync(path.join(tmpdir(), "codex-review-invalid-"));
     const input = path.join(dir, "input.json");
     const output = path.join(dir, "output.json");
-    writeFileSync(input, JSON.stringify({ verdict: "approve" }));
+    writeFileSync(input, JSON.stringify(review));
 
     expect(
       spawnSync("bash", [NORMALIZE_CODEX_REVIEW, input, output]).status,
@@ -260,6 +285,7 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
     expect(source).toMatch(/REVIEW_DIFF_BASE="\$REVIEW_BASE"/);
     expect(source).toMatch(/git diff "\$\{REVIEW_DIFF_BASE\}\.\.HEAD"/);
     expect(source).toMatch(/REVIEWED_BASE="\$REVIEW_BASE"/);
+    expect(source).toMatch(/normalized Codex findings could not be rendered/);
   });
 
   it("keeps sourced review scripts compatible with Bash and zsh", () => {
