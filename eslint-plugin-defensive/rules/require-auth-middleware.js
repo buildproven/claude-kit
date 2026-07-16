@@ -67,7 +67,7 @@ module.exports = {
       // Config file doesn't exist or is invalid, use defaults
     }
 
-    const filename = context.getFilename();
+    const filename = context.filename ?? context.getFilename();
 
     // Check if this is an API route file
     const isApiRoute =

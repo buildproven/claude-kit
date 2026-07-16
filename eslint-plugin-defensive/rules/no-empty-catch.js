@@ -35,6 +35,7 @@ module.exports = {
   },
 
   create(context) {
+    const sourceCode = context.sourceCode ?? context.getSourceCode();
     const options = context.options[0] || {};
     const allowedPatterns = options.allowedPatterns || [
       "setError",
@@ -52,7 +53,6 @@ module.exports = {
         return false;
       }
 
-      const sourceCode = context.getSourceCode();
       const text = sourceCode.getText(node);
 
       // Check for throw statement

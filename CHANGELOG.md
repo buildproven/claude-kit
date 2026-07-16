@@ -12,8 +12,10 @@ All notable changes to claude-kit are documented here.
   `frontend-design`; all other kit content remains MIT.
 - Made plugin installs resolve the inline-list parser and ensemble runner through
   `CLAUDE_PLUGIN_ROOT`.
-- Raised the supported runtime floor to Node 20.19 / 22.12 and committed the npm
-  lockfile for reproducible `npm ci` builds.
+- Raised the supported runtime floor to Node 24 LTS and committed the npm lockfile
+  for reproducible `npm ci` builds.
+- Upgraded the lint and commit toolchain, including ESLint 10 compatibility for
+  the bundled defensive rules.
 
 ### Security and quality
 

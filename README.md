@@ -45,14 +45,14 @@ strategy panels).
 
 ## Prerequisites
 
-|                           | Needed for                                                  |
-| ------------------------- | ----------------------------------------------------------- |
-| **git**                   | everything                                                  |
-| **Node 20.19+ or 22.12+** | quality-gate scripts (`package.json` engines)               |
-| **python3**               | `csc_lint.py` (the command/skill linter)                    |
-| **jq** _(recommended)_    | the hooks; they degrade to `grep` without it, less reliably |
-| **gh** _(optional)_       | PR-aware features in `/bs:quality`, `/bs:status`            |
-| **acpx** _(optional)_     | `/bs:strategy` only — every provider is invoked through it  |
+|                        | Needed for                                                  |
+| ---------------------- | ----------------------------------------------------------- |
+| **git**                | everything                                                  |
+| **Node 24+**           | quality-gate scripts (`package.json` engines)               |
+| **python3**            | `csc_lint.py` (the command/skill linter)                    |
+| **jq** _(recommended)_ | the hooks; they degrade to `grep` without it, less reliably |
+| **gh** _(optional)_    | PR-aware features in `/bs:quality`, `/bs:status`            |
+| **acpx** _(optional)_  | `/bs:strategy` only — every provider is invoked through it  |
 
 Some skills also need an MCP server and will tell you so rather than failing
 quietly: `/bs:backlog` and `/bs:dev --next` need **Linear**; `/bs:triage` needs
