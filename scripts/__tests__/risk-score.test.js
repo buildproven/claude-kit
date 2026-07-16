@@ -187,12 +187,37 @@ describe("computeScore — package manifests use semantic field risk", () => {
       { dependencies: {} },
       { dependencies: { pkg: "git+https://example.com/pkg.git" } },
     ],
+    [
+      "GitHub shorthand dependency",
+      { dependencies: {} },
+      { dependencies: { pkg: "attacker/repo" } },
+    ],
+    [
+      "SCP-style Git dependency",
+      { dependencies: {} },
+      { dependencies: { pkg: "git@github.com:attacker/repo.git" } },
+    ],
+    [
+      "unprefixed local dependency",
+      { dependencies: {} },
+      { dependencies: { pkg: "../pkg" } },
+    ],
     ["overrides", {}, { overrides: { pkg: "1.0.0" } }],
     ["resolutions", {}, { resolutions: { pkg: "1.0.0" } }],
   ])("%s changes are critical", (_label, before, after) => {
     const r = scoreOf([manifest(before, after)]);
     expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
   });
+
+  it.each(["^1.2.3", "latest", "npm:real-pkg@^2", "workspace:*"])(
+    "registry dependency form %s stays high rather than critical",
+    (spec) => {
+      const r = scoreOf([
+        manifest({ dependencies: {} }, { dependencies: { pkg: spec } }),
+      ]);
+      expect(r.riskScore).toBe(DEFAULTS.base.high);
+    },
+  );
 
   it("mixed fields take the highest risk", () => {
     const r = scoreOf([

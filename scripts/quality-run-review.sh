@@ -114,6 +114,7 @@ record_provider_exhaustion() {
 
 run_claude_review() {
   local companion agents_file agents_csv rc provider_timeout auth_output
+  local companion_args
   companion="$(bs_quality_find_script claude-review-companion.sh)" || return 2
   command -v claude >/dev/null 2>&1 || return 2
   provider_timeout="$(quality_remaining 10 "$QUALITY_REVIEW_RESERVE")" || return 76
@@ -129,13 +130,19 @@ run_claude_review() {
   [ "$REVIEW_MODE" = verification ] && agents_csv="code-reviewer,pr-test-analyzer"
   [ -n "$agents_csv" ] || { echo "quality: Claude panel unresolved" >&2; return 1; }
   provider_timeout="$(quality_remaining "$QUALITY_REVIEW_TIMEOUT" "$QUALITY_REVIEW_RESERVE")" || return 76
-  bash "$companion" \
-    --diff-file "$REVIEW_OUT/diff.txt" \
-    --files-file "$REVIEW_OUT/files.txt" \
-    --log-file "$REVIEW_OUT/log.txt" \
-    --out-dir "$REVIEW_OUT" \
-    --agents "$agents_csv" \
+  companion_args=(
+    --diff-file "$REVIEW_OUT/diff.txt"
+    --files-file "$REVIEW_OUT/files.txt"
+    --log-file "$REVIEW_OUT/log.txt"
+    --out-dir "$REVIEW_OUT"
+    --agents "$agents_csv"
+    --review-mode "$REVIEW_MODE"
     --timeout "$provider_timeout"
+  )
+  if [ "$REVIEW_MODE" = verification ]; then
+    companion_args+=(--prior-findings-file "$PRIOR_FINDINGS_FILE")
+  fi
+  bash "$companion" "${companion_args[@]}"
   rc=$?
   return "$rc"
 }

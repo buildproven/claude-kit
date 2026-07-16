@@ -205,14 +205,15 @@ auto-fix loop, re-run `npm test` to verify they pass before continuing.
 
 ### Environment Variables
 
-| Variable                      | Default | Description                                                                                         |
-| ----------------------------- | ------- | --------------------------------------------------------------------------------------------------- |
-| `BS_QUALITY_PRIMARY`          | config  | Per-run primary override: `claude` or `codex`.                                                      |
-| `BS_QUALITY_FALLBACK`         | config  | Per-run fallback override: `claude`, `codex`, or `none`.                                            |
-| `BS_QUALITY_REVIEW_TIMEOUT`   | tier    | Override the mechanically selected provider wall-clock cap.                                         |
-| `BS_QUALITY_TARGET_DIR`       | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd.  |
-| `BS_QUALITY_MAX_FIX_COMMITS`  | 4       | Run-governor cap: max fix commits across the whole invocation before autonomous halt (see below).   |
-| `BS_QUALITY_MAX_WALL_SECONDS` | 900     | Absolute local wall-clock deadline for the whole invocation, including fallback and synchronous CI. |
+| Variable                          | Default | Description                                                                                                                                  |
+| --------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BS_QUALITY_PRIMARY`              | config  | Per-run primary override: `claude` or `codex`.                                                                                               |
+| `BS_QUALITY_FALLBACK`             | config  | Per-run fallback override: `claude`, `codex`, or `none`.                                                                                     |
+| `BS_QUALITY_REVIEW_TIMEOUT`       | tier    | Override the mechanically selected provider wall-clock cap.                                                                                  |
+| `BS_QUALITY_TARGET_DIR`           | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd.                                           |
+| `BS_QUALITY_TRUST_TARGET_SCRIPTS` | false   | Explicit toolkit-development mode: allow the audited checkout's quality scripts to enforce their own review. Never enable for untrusted PRs. |
+| `BS_QUALITY_MAX_FIX_COMMITS`      | 4       | Run-governor cap: max fix commits across the whole invocation before autonomous halt (see below).                                            |
+| `BS_QUALITY_MAX_WALL_SECONDS`     | 900     | Absolute local wall-clock deadline for the whole invocation, including fallback and synchronous CI.                                          |
 
 ### Run Governor (runaway-loop guardrails)
 

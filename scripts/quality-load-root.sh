@@ -44,7 +44,9 @@ BS_QUALITY_SESSION_ID="$(printf '%s' "$BS_QUALITY_SESSION_ID" | tr -cd '[:alnum:
 [ -n "$BS_QUALITY_SESSION_ID" ] || BS_QUALITY_SESSION_ID=default
 export BS_QUALITY_SESSION_ID
 
-# bs_quality_find_script — resolve a kit script across EVERY install layout.
+# bs_quality_find_script — resolve a trusted kit script across every install
+# layout. Target-local scripts come last unless an operator explicitly enables
+# BS_QUALITY_TRUST_TARGET_SCRIPTS for toolkit self-development.
 #
 # Why this exists (2026-07-10): the review runner was resolved by checking
 # exactly two hardcoded paths. On the primary install both missed —
@@ -58,14 +60,24 @@ export BS_QUALITY_SESSION_ID
 # the caller owns the error message.
 bs_quality_find_script() {
   local name="$1" c
-  for c in \
-    "$GIT_ROOT/scripts/$name" \
-    "$GIT_ROOT/core/scripts/$name" \
+  local trusted_candidates=(
     "${CLAUDE_SETUP_ROOT:+$CLAUDE_SETUP_ROOT/scripts/$name}" \
     "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$name}" \
     "${CLAUDE_KIT_ROOT:+$CLAUDE_KIT_ROOT/scripts/$name}" \
     "$HOME/.claude/scripts/$name" \
     "$HOME/.claude/plugins/bs/scripts/$name"
+  )
+  local target_candidates=(
+    "$GIT_ROOT/scripts/$name"
+    "$GIT_ROOT/core/scripts/$name"
+  )
+  if [ "${BS_QUALITY_TRUST_TARGET_SCRIPTS:-false}" = true ]; then
+    for c in "${target_candidates[@]}" "${trusted_candidates[@]}"; do
+      [ -n "$c" ] && [ -f "$c" ] && { printf '%s' "$c"; return 0; }
+    done
+    return 1
+  fi
+  for c in "${trusted_candidates[@]}" "${target_candidates[@]}"
   do
     [ -n "$c" ] && [ -f "$c" ] && { printf '%s' "$c"; return 0; }
   done

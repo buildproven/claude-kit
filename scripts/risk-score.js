@@ -489,21 +489,31 @@ function changedTopLevelFields(before, after) {
 
 function hasNonRegistryDependencySource(value) {
   if (typeof value === "string") {
-    const normalized = value.toLowerCase();
-    return [
-      "git:",
-      "git+",
-      "http:",
-      "https:",
-      "file:",
-      "link:",
-      "github:",
-      "gitlab:",
-      "bitbucket:",
-    ].some((prefix) => normalized.startsWith(prefix));
+    return !isRegistryDependencySpec(value);
   }
   if (!value || typeof value !== "object") return false;
   return Object.values(value).some(hasNonRegistryDependencySource);
+}
+
+function isRegistryDependencySpec(value) {
+  const spec = value.trim();
+  if (!spec) return false;
+  if (spec.startsWith("workspace:")) {
+    return isPlainRegistrySelector(spec.slice("workspace:".length));
+  }
+  if (spec.startsWith("npm:")) {
+    const separator = spec.lastIndexOf("@");
+    return (
+      separator > "npm:".length &&
+      isPlainRegistrySelector(spec.slice(separator + 1))
+    );
+  }
+  return isPlainRegistrySelector(spec);
+}
+
+function isPlainRegistrySelector(spec) {
+  if (!spec || spec.startsWith(".")) return false;
+  return !["/", ":", "@", "\\"].some((character) => spec.includes(character));
 }
 
 function manifestFieldRisk(field, before, after, cfg) {

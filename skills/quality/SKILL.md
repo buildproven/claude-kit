@@ -437,20 +437,33 @@ no exceptions.
    return `LOCAL_PASS_CI_PENDING`; never silently extend the run.
 
 ```bash
-if gh pr merge --auto --squash; then
-  PR_STATE=$(gh pr view --json state --jq .state)
+BOUNDED="$(bs_quality_find_script quality-run-bounded.sh)" || exit 1
+bash "$BOUNDED" --governor "$BS_QUALITY_GOVERNOR_FILE" \
+  --cap 30 --reserve 120 -- gh pr merge --auto --squash
+AUTO_RC=$?
+if [ "$AUTO_RC" -eq 0 ]; then
+  PR_STATE=$(bash "$BOUNDED" --governor "$BS_QUALITY_GOVERNOR_FILE" \
+    --cap 15 --reserve 90 -- gh pr view --json state --jq .state) || exit 1
   if [ "$PR_STATE" != MERGED ]; then
     echo "LOCAL_PASS_CI_PENDING: auto-merge armed; required CI owns completion."
     exit 0
   fi
+elif [ "$AUTO_RC" -eq 124 ]; then
+  echo "LOCAL_PASS_CI_PENDING: shared deadline reached while arming auto-merge."
+  exit 0
 else
-  BOUNDED="$(bs_quality_find_script quality-run-bounded.sh)" || exit 1
-  bash "$BOUNDED" --governor "$BS_QUALITY_GOVERNOR_FILE" --cap 300 -- \
-    gh pr checks --watch || {
-      echo "LOCAL_PASS_CI_PENDING: shared deadline reached before CI completed."
-      exit 0
-    }
-  gh pr merge --squash
+  bash "$BOUNDED" --governor "$BS_QUALITY_GOVERNOR_FILE" \
+    --cap 300 --reserve 60 -- gh pr checks --watch
+  CHECKS_RC=$?
+  if [ "$CHECKS_RC" -eq 124 ]; then
+    echo "LOCAL_PASS_CI_PENDING: shared deadline reached before CI completed."
+    exit 0
+  elif [ "$CHECKS_RC" -ne 0 ]; then
+    echo "❌ MERGE BLOCKED: CI failed or could not be observed (rc=$CHECKS_RC)."
+    exit "$CHECKS_RC"
+  fi
+  bash "$BOUNDED" --governor "$BS_QUALITY_GOVERNOR_FILE" \
+    --cap 45 -- gh pr merge --squash || exit $?
 fi
 ```
 

@@ -176,21 +176,27 @@ if kill -0 "$child" 2>/dev/null; then exit 99; fi
     },
   );
 
-  it("prefers the audited target's quality scripts over stale global installs", () => {
+  it("uses target scripts only in explicit trusted-development mode", () => {
+    const trusted = mkdtempSync(path.join(tmpdir(), "trusted-kit-"));
+    const trustedScripts = path.join(trusted, "scripts");
+    spawnSync("mkdir", ["-p", trustedScripts]);
+    writeFileSync(path.join(trustedScripts, "risk-score.js"), "trusted\n");
     const result = spawnSync(
       "bash",
       [
         "-c",
-        `source "$1"; bs_quality_find_script risk-score.js`,
+        `CLAUDE_KIT_ROOT="$2"; source "$1"; bs_quality_find_script risk-score.js; printf '\\n'; BS_QUALITY_TRUST_TARGET_SCRIPTS=true; bs_quality_find_script risk-score.js`,
         "resolution",
         LOAD_ROOT,
+        trusted,
       ],
       { encoding: "utf8", cwd: ROOT },
     );
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(
+    expect(result.stdout.trim().split("\n")).toEqual([
+      path.join(trustedScripts, "risk-score.js"),
       path.join(ROOT, "scripts", "risk-score.js"),
-    );
+    ]);
   });
 
   it("accepts exact evidence, then rejects later code and contradictions", () => {

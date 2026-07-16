@@ -53,6 +53,8 @@ FILES_FILE=""
 LOG_FILE=""
 OUT_DIR=""
 DRY_RUN=false
+REVIEW_MODE=discovery
+PRIOR_FINDINGS_FILE=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -63,6 +65,8 @@ while [ $# -gt 0 ]; do
     --agents)     AGENTS="$2"; shift 2 ;;
     --timeout)    TIMEOUT="$2"; shift 2 ;;
     --model)      MODEL="$2"; shift 2 ;;
+    --review-mode) REVIEW_MODE="$2"; shift 2 ;;
+    --prior-findings-file) PRIOR_FINDINGS_FILE="$2"; shift 2 ;;
     # --dry-run: validate args, apply guards, resolve agent files, and write a
     # DRY-RUN marker per agent — but DO NOT call `claude`. For fast, no-token
     # unit tests of the guard/degradation paths.
@@ -73,6 +77,11 @@ done
 
 if [ -z "$AGENTS" ] || [ -z "$OUT_DIR" ] || [ -z "$DIFF_FILE" ]; then
   echo "claude-review-companion: --agents, --out-dir, --diff-file required" >&2
+  exit 1
+fi
+if [ "$REVIEW_MODE" = verification ] &&
+   { [ -z "$PRIOR_FINDINGS_FILE" ] || [ ! -f "$PRIOR_FINDINGS_FILE" ]; }; then
+  echo "claude-review-companion: verification requires --prior-findings-file" >&2
   exit 1
 fi
 
@@ -127,6 +136,14 @@ resolve_agent_file() {
 CTX_FILE="$OUT_DIR/review-context.txt"
 {
   echo "Review ONLY the following diff. Do NOT scan unchanged code."
+  echo "Review mode: $REVIEW_MODE"
+  if [ "$REVIEW_MODE" = verification ]; then
+    echo
+    echo "## Prior findings to verify"
+    cat "$PRIOR_FINDINGS_FILE"
+    echo
+    echo "Verify every prior finding is fixed and check the fix for regressions."
+  fi
   echo
   echo "## Changed files"
   [ -f "$FILES_FILE" ] && cat "$FILES_FILE"
