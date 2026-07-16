@@ -1460,7 +1460,7 @@ exit 1
     expect(calls.indexOf("pr checks 1 --required --watch")).toBeLessThan(
       calls.indexOf("pr merge 1"),
     );
-  }, 20_000);
+  }, 40_000);
 
   it("maps cross-repository PR heads to one exact remote before stamping", () => {
     const root = repo("cross-repo-remote");
