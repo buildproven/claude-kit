@@ -679,6 +679,58 @@ wait
     expect(existsSync(marker)).toBe(false);
   });
 
+  it("rejects malformed merge arguments before any GitHub or repository mutation", () => {
+    const root = repo("strict-wrapper-args");
+    const harness = mkdtempSync(path.join(tmpdir(), "quality-strict-args-"));
+    const bin = path.join(harness, "bin");
+    const ghMarker = path.join(harness, "gh-invoked");
+    mkdirSync(bin);
+    const gh = path.join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+printf '%s\n' "$*" >> ${JSON.stringify(ghMarker)}
+exit 99
+`,
+    );
+    chmodSync(gh, 0o755);
+    const beforeHead = git(root, ["rev-parse", "HEAD"]);
+    const beforeStatus = git(root, ["status", "--porcelain=v1"]);
+
+    for (const argv of [["--merge", "1"], ["--merge=false"]]) {
+      const result = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+        cwd: root,
+        input: JSON.stringify({ argv }),
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(
+        /unexpected quality argument|--merge accepts only/,
+      );
+    }
+
+    const directManifest = spawnSync(
+      "node",
+      [
+        INVOCATION,
+        "create",
+        "--repo",
+        root,
+        "--base-ref",
+        "origin/main",
+        "--merge=false",
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(directManifest.status).not.toBe(0);
+    expect(directManifest.stderr).toMatch(/--merge=false is invalid/);
+
+    expect(existsSync(ghMarker)).toBe(false);
+    expect(git(root, ["rev-parse", "HEAD"])).toBe(beforeHead);
+    expect(git(root, ["status", "--porcelain=v1"])).toBe(beforeStatus);
+  });
+
   it("rejects symlinked manifests and concurrent mutation locks", () => {
     const root = repo("hardening");
     const manifest = create(root);

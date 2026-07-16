@@ -290,6 +290,9 @@ function parseOptions(args) {
       if (inlineValue !== null && !["true", "false"].includes(inlineValue)) {
         throw new Error(`${name} accepts only true or false`);
       }
+      if (name === "--merge" && inlineValue === "false") {
+        throw new Error("--merge=false is invalid; omit --merge instead");
+      }
       options[name.slice(2)] = inlineValue === null || inlineValue === "true";
       continue;
     }

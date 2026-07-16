@@ -41,6 +41,57 @@ done
 }
 set -- ${BOOTSTRAP_ARGS[@]+"${BOOTSTRAP_ARGS[@]}"}
 
+# Validate the complete invocation before target resolution or any GitHub
+# operation. Every token must belong to the supported grammar; a bare value
+# after a boolean flag (for example `--merge 1`) must never be reinterpreted as
+# target context.
+if [ -n "$MANIFEST_ARG" ] && [ "${#BOOTSTRAP_ARGS[@]}" -ne 0 ]; then
+  echo "❌ quality resume accepts only --manifest <path>" >&2
+  exit 1
+fi
+for ((argument_index = 0; argument_index < ${#BOOTSTRAP_ARGS[@]}; argument_index += 1)); do
+  argument="${BOOTSTRAP_ARGS[$argument_index]}"
+  case "$argument" in
+    --merge|--merge=true|--skip-tests) ;;
+    --merge=*)
+      echo "❌ --merge accepts only the bare flag or --merge=true" >&2
+      exit 1
+      ;;
+    --level|--scope|--target-dir|--target|--worktree|--pr|--pull|--pull-request|--branch|--head|--head-ref)
+      argument_index=$((argument_index + 1))
+      [ "$argument_index" -lt "${#BOOTSTRAP_ARGS[@]}" ] &&
+        [ -n "${BOOTSTRAP_ARGS[$argument_index]}" ] &&
+        [[ "${BOOTSTRAP_ARGS[$argument_index]}" != --* ]] || {
+        echo "❌ $argument requires a value" >&2
+        exit 1
+      }
+      ;;
+    --level=*|--scope=*|--target-dir=*|--target=*|--worktree=*|--pr=*|--pull=*|--pull-request=*|--branch=*|--head=*|--head-ref=*)
+      [ -n "${argument#*=}" ] || {
+        echo "❌ ${argument%%=*} requires a value" >&2
+        exit 1
+      }
+      ;;
+    \#*)
+      [[ "$argument" =~ ^\#[1-9][0-9]*$ ]] || {
+        echo "❌ unexpected quality argument: $argument" >&2
+        exit 1
+      }
+      ;;
+    /*|~/*|./*|../*) ;;
+    */*)
+      [[ "$argument" =~ ^[A-Za-z][A-Za-z0-9_.-]*/[A-Za-z0-9_./-]+$ ]] || {
+        echo "❌ unexpected quality argument: $argument" >&2
+        exit 1
+      }
+      ;;
+    *)
+      echo "❌ unexpected quality argument: $argument" >&2
+      exit 1
+      ;;
+  esac
+done
+
 # Safe resumption is explicit: the caller must pass the exact manifest path.
 # Never discover an active invocation through a session ID, glob, pointer, or
 # mtime. A resumed manifest may advance only to a descendant HEAD; the helper
