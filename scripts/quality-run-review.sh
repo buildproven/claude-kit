@@ -27,7 +27,6 @@ BS_QUALITY_FALLBACK="$(field provider.fallbackOverride)"
 BS_QUALITY_PROVIDER_CONFIG="$(field provider.config)"
 export BS_QUALITY_PRIMARY BS_QUALITY_FALLBACK BS_QUALITY_PROVIDER_CONFIG
 cd "$GIT_ROOT" || exit 1
-
 # shellcheck source=quality-provider-policy.sh
 source "$SCRIPT_DIR/quality-provider-policy.sh"
 # shellcheck source=quality-review-plan.sh
@@ -47,21 +46,8 @@ mkdir -p "$REVIEW_OUT"
 git diff "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" > "$REVIEW_OUT/diff.txt"
 git diff --name-only "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" > "$REVIEW_OUT/files.txt"
 git log "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" --oneline > "$REVIEW_OUT/log.txt"
-PR_VALUE="$(node "$SCRIPT_DIR/quality-invocation.js" get "$MANIFEST" repo.pr)"
-[ -n "$PR_VALUE" ] || PR_VALUE=null
-cat > "$REVIEW_OUT/identity.json" <<EOF
-{
-  "schemaVersion": 1,
-  "invocationId": "$BS_QUALITY_INVOCATION_ID",
-  "repositoryRealpath": "$GIT_ROOT",
-  "repositoryKey": "$(node "$SCRIPT_DIR/quality-invocation.js" get "$MANIFEST" repo.key)",
-  "pr": $PR_VALUE,
-  "baseSha": "$BASE_SHA",
-  "diffBase": "$REVIEW_DIFF_BASE",
-  "headSha": "$REVIEWED_HEAD",
-  "round": $REVIEW_ROUND
-}
-EOF
+node "$SCRIPT_DIR/quality-invocation.js" review-identity "$MANIFEST" \
+  > "$REVIEW_OUT/identity.json" || exit 1
 
 structured_provider_exhausted() {
   local evidence="$1"
@@ -101,7 +87,9 @@ run_claude_review() {
 }
 
 run_codex_review() {
-  local schema prompt_file raw_file error_file rc pass pass_timeout
+  local bounded normalizer schema prompt_file raw_file normalized_file error_file rc pass pass_timeout
+  bounded="$SCRIPT_DIR/quality-run-bounded.sh"
+  normalizer="$SCRIPT_DIR/quality-normalize-codex-review.sh"
   schema="$SCRIPT_DIR/schemas/quality-review-output.schema.json"
   [ -f "$schema" ] || return 2
   command -v codex >/dev/null 2>&1 || return 2
@@ -113,6 +101,7 @@ run_codex_review() {
   pass=1
   while [ "$pass" -le "$QUALITY_REVIEW_PASSES" ]; do
     raw_file="$REVIEW_OUT/codex-${pass}.json"
+    normalized_file="$REVIEW_OUT/codex-${pass}.normalized.json"
     error_file="$REVIEW_OUT/codex-${pass}.stderr"
     prompt_file="$REVIEW_OUT/codex-${pass}.prompt"
     {
@@ -124,7 +113,7 @@ run_codex_review() {
       echo "Commit log:"; cat "$REVIEW_OUT/log.txt"
       echo "Diff:"; cat "$REVIEW_OUT/diff.txt"
     } > "$prompt_file"
-    bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$pass_timeout" -- \
+    bash "$bounded" --timeout "$pass_timeout" -- \
       codex exec --ephemeral -s read-only \
       -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
       --output-schema "$schema" -o "$raw_file" - \
@@ -139,14 +128,17 @@ run_codex_review() {
       grep -Eiq 'not authenticated|not logged in|login required|setup required' "$error_file" 2>/dev/null && return 2
       return 1
     fi
-    if ! jq -e '.findings | type == "array"' "$raw_file" >/dev/null 2>&1; then
+    if ! bash "$normalizer" "$raw_file" "$normalized_file"; then
       echo "INCONCLUSIVE: Codex output could not be parsed — human review required" >> "$REVIEW_OUT/codex.findings.txt"
       return 4
     fi
-    jq -r '
+    if ! jq -r '
       if (.findings | length) == 0 then "NO FINDINGS. Verdict: \(.verdict). \(.summary)"
       else .findings[] | "\(.severity // "WARNING"): \(.file // "unknown"):\(.line_start // 0) — \(.title // "finding")\n\(.body // "")\nFix: \(.recommendation // "")"
-      end' "$raw_file" >> "$REVIEW_OUT/codex.findings.txt"
+      end' "$normalized_file" >> "$REVIEW_OUT/codex.findings.txt"; then
+      echo "INCONCLUSIVE: normalized Codex findings could not be rendered — human review required" >> "$REVIEW_OUT/codex.findings.txt"
+      return 4
+    fi
     pass=$((pass + 1))
   done
 }

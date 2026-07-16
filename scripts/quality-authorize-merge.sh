@@ -20,16 +20,17 @@ node "$SCRIPT_DIR/quality-invocation.js" review-authorization "$MANIFEST" >/dev/
 PR="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" repo.pr)"
 EXPECTED_HEAD="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.currentHead)"
 ROOT="$(node "$SCRIPT_DIR/quality-invocation.js" locate "$MANIFEST")" || exit 1
+cd "$ROOT" || exit 1
 [ -n "$PR" ] || { echo "❌ MERGE BLOCKED: manifest has no PR identity." >&2; exit 1; }
 ACTUAL_HEAD="$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" || exit 1
-LOCAL_HEAD="$(git -C "$ROOT" rev-parse HEAD)"
+LOCAL_HEAD="$(git rev-parse HEAD)"
 [ "$ACTUAL_HEAD" = "$LOCAL_HEAD" ] || {
   echo "❌ MERGE BLOCKED: PR HEAD does not match reviewed HEAD." >&2
   exit 1
 }
 if [ "$LOCAL_HEAD" != "$EXPECTED_HEAD" ]; then
-  [ "$(git -C "$ROOT" rev-parse HEAD~1)" = "$EXPECTED_HEAD" ] &&
-    git -C "$ROOT" diff --quiet HEAD~1 HEAD || {
+  [ "$(git rev-parse HEAD~1)" = "$EXPECTED_HEAD" ] &&
+    git diff --quiet HEAD~1 HEAD || {
       echo "❌ MERGE BLOCKED: PR HEAD is not an empty stamp of reviewed HEAD." >&2
       exit 1
     }

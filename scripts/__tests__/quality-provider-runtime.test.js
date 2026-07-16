@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -14,6 +14,11 @@ const VALIDATOR = path.join(
   "quality-validate-review-trailers.sh",
 );
 const RUN_REVIEW = path.join(ROOT, "scripts", "quality-run-review.sh");
+const NORMALIZE_CODEX_REVIEW = path.join(
+  ROOT,
+  "scripts",
+  "quality-normalize-codex-review.sh",
+);
 
 describe("provider review runtime", () => {
   it.each([
@@ -94,6 +99,13 @@ if kill -0 "$child" 2>/dev/null; then exit 99; fi
     expect(source).toMatch(/--manifest is required/);
   });
 
+  it("requires the explicit manifest instead of ambient shell state", () => {
+    const source = readFileSync(LOAD_ROOT, "utf8");
+    expect(source).toMatch(/--manifest/);
+    expect(source).toMatch(/quality-invocation\.js" locate/);
+    expect(source).not.toMatch(/BS_QUALITY_ROOT_FILE|latest|find .*bs-quality/);
+  });
+
   it("accepts exact evidence, then rejects later code and contradictions", () => {
     const repo = mkdtempSync(path.join(tmpdir(), "review-evidence-"));
     const setup = spawnSync(
@@ -170,7 +182,7 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
     expect(
       spawnSync("bash", [VALIDATOR, "main"], { cwd: repo }).status,
     ).not.toBe(0);
-  });
+  }, 15000);
 
   it("passes scorer effort and exact round count to Codex mechanically", () => {
     const source = spawnSync("cat", [RUN_REVIEW], { encoding: "utf8" }).stdout;
@@ -182,5 +194,83 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
     expect(source).toMatch(/record_provider_exhaustion Codex/);
     expect(source).toMatch(/structured_provider_exhausted/);
     expect(source).not.toMatch(/provider_exhausted "\$raw_file"/);
+  });
+
+  it.each([
+    ["root", (review) => review],
+    ["legacy result envelope", (review) => ({ result: review })],
+  ])("normalizes %s Codex structured output", (_label, wrap) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-review-output-"));
+    const input = path.join(dir, "input.json");
+    const output = path.join(dir, "output.json");
+    const review = {
+      verdict: "approve",
+      summary: "No actionable findings.",
+      findings: [],
+    };
+    writeFileSync(input, JSON.stringify(wrap(review)));
+
+    const result = spawnSync("bash", [NORMALIZE_CODEX_REVIEW, input, output], {
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(readFileSync(output, "utf8"))).toEqual(review);
+  });
+
+  it.each([
+    ["missing fields", { verdict: "approve" }],
+    ["unknown verdict", { verdict: "maybe", summary: "invalid", findings: [] }],
+    [
+      "invalid finding item",
+      { verdict: "approve", summary: "invalid", findings: [false] },
+    ],
+    [
+      "invalid finding line",
+      {
+        verdict: "needs-attention",
+        summary: "invalid",
+        findings: [
+          {
+            severity: "high",
+            title: "bad line",
+            body: "line_start must be positive",
+            file: "file.js",
+            line_start: 0,
+            recommendation: "fix it",
+          },
+        ],
+      },
+    ],
+  ])("rejects malformed Codex output: %s", (_label, review) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-review-invalid-"));
+    const input = path.join(dir, "input.json");
+    const output = path.join(dir, "output.json");
+    writeFileSync(input, JSON.stringify(review));
+
+    expect(
+      spawnSync("bash", [NORMALIZE_CODEX_REVIEW, input, output]).status,
+    ).not.toBe(0);
+  });
+
+  it("pins the initial review diff to the branch merge-base", () => {
+    const source = readFileSync(RUN_REVIEW, "utf8");
+    expect(source).toMatch(/quality-invocation\.js" review-info/);
+    expect(source).toMatch(
+      /git diff "\$\{REVIEW_DIFF_BASE\}\.\.\$\{REVIEWED_HEAD\}"/,
+    );
+    expect(source).toMatch(/normalized Codex findings could not be rendered/);
+  });
+
+  it("runs Bash-only review entrypoints explicitly through Bash", () => {
+    const runner = readFileSync(RUN_REVIEW, "utf8");
+    const policy = readFileSync(
+      path.join(ROOT, "scripts", "quality-provider-policy.sh"),
+      "utf8",
+    );
+    expect(runner).toMatch(/^#!\/usr\/bin\/env bash/);
+    expect(runner).toMatch(/\$\{BASH_SOURCE\[0\]\}/);
+    expect(policy).toMatch(/BASH_VERSION/);
+    expect(policy).toMatch(/ZSH_VERSION/);
   });
 });

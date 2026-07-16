@@ -371,9 +371,28 @@ function advanceHead(manifest, root) {
 }
 
 function setRisk(manifest, options) {
+  if (manifest.risk?.resolved || manifest.reviews.length > 0) {
+    throw new Error("risk resolution is immutable once persisted");
+  }
   const tier = options.tier;
   if (!["low", "medium", "high", "critical"].includes(tier)) {
     throw new Error(`invalid resolved tier '${tier}'`);
+  }
+  const tierRank = { low: 0, medium: 1, high: 2, critical: 3 };
+  const requestedMinimum =
+    manifest.risk.requestedLevel === "98"
+      ? "critical"
+      : manifest.risk.requestedLevel === "95"
+        ? "high"
+        : ["low", "medium", "high", "critical"].includes(
+              manifest.risk.requestedLevel,
+            )
+          ? manifest.risk.requestedLevel
+          : "low";
+  if (tierRank[tier] < tierRank[requestedMinimum]) {
+    throw new Error(
+      `resolved tier ${tier} is below requested minimum ${requestedMinimum}`,
+    );
   }
   manifest.risk = {
     requestedLevel: manifest.risk.requestedLevel,
@@ -396,6 +415,9 @@ function setAgents(manifest, names) {
   }
   if (names.length < 2) {
     throw new Error("quality agent floor requires at least two agents");
+  }
+  if (manifest.agents.length > 0 || manifest.reviews.length > 0) {
+    throw new Error("quality agent selection is immutable once persisted");
   }
   manifest.agents = names;
 }
@@ -451,6 +473,30 @@ function reviewInfo(manifest) {
   };
 }
 
+function agentsSha256(manifest) {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(manifest.agents))
+    .digest("hex");
+}
+
+function reviewIdentity(manifest) {
+  const info = reviewInfo(manifest);
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    invocationId: manifest.invocationId,
+    repositoryRealpath: manifest.repo.realpath,
+    repositoryKey: manifest.repo.key,
+    pr: manifest.repo.pr,
+    baseSha: manifest.revisions.baseSha,
+    diffBase: info.from,
+    headSha: info.to,
+    round: info.round,
+    tier: manifest.risk.tier,
+    agentsSha256: agentsSha256(manifest),
+  };
+}
+
 function reviewedEvidence(manifest) {
   return manifest.reviews
     .filter((review) => review.status === "success")
@@ -480,6 +526,11 @@ function recordJudge(manifest, options) {
 
 function recordReview(manifest, options) {
   const expected = reviewInfo(manifest);
+  const boundExpected = {
+    ...expected,
+    tier: manifest.risk.tier,
+    agentsSha256: agentsSha256(manifest),
+  };
   if (
     options.from !== expected.from ||
     options.to !== expected.to ||
@@ -488,7 +539,7 @@ function recordReview(manifest, options) {
     throw new Error("review artifact identity does not match manifest");
   }
   verifyReviewArtifact(manifest, {
-    ...expected,
+    ...boundExpected,
     artifactDir: options["artifact-dir"],
     diffSha256: options["diff-sha"],
     provider: options.provider,
@@ -507,6 +558,8 @@ function recordReview(manifest, options) {
     ),
     artifactDir: path.resolve(options["artifact-dir"]),
     status: "success",
+    tier: boundExpected.tier,
+    agentsSha256: boundExpected.agentsSha256,
     completedAt: new Date().toISOString(),
   });
   manifest.provider = {
@@ -608,6 +661,8 @@ function verifyIdentityFile(manifest, review, identityFile) {
     diffBase: review.from,
     headSha: review.to,
     round: review.round,
+    tier: review.tier,
+    agentsSha256: review.agentsSha256,
   };
   for (const [key, value] of Object.entries(expected)) {
     if (identity[key] !== value) {
@@ -663,6 +718,24 @@ function verifyReviewArtifact(manifest, review) {
   if (sha256File(diffFile) !== review.diffSha256) {
     throw new Error("review diff hash mismatch");
   }
+  const canonicalDiff = execFileSync(
+    "git",
+    ["diff", `${review.from}..${review.to}`],
+    { cwd: manifest.repo.realpath },
+  );
+  const canonicalSha256 = crypto
+    .createHash("sha256")
+    .update(canonicalDiff)
+    .digest("hex");
+  if (canonicalSha256 !== review.diffSha256) {
+    throw new Error("review diff does not match canonical Git diff");
+  }
+  if (
+    review.tier !== manifest.risk.tier ||
+    review.agentsSha256 !== agentsSha256(manifest)
+  ) {
+    throw new Error("review risk/agent identity mismatch");
+  }
   verifyInventory(manifest, review, inventoryFile, artifactDir);
 }
 
@@ -699,6 +772,14 @@ function reviewCoverage(manifest) {
   };
 }
 
+function reviewTrailers(manifest) {
+  const authorization = reviewAuthorization(manifest);
+  return [
+    `Reviewed-By: quality (tier=${authorization.tier}, reviewer=${authorization.provider}, primary=${authorization.primary}, fallback=${authorization.fallback}, findings=${authorization.blockingCount}, head=${authorization.head}, base=${authorization.base})`,
+    `Reviewed-By: ${authorization.provider} (tier=${authorization.tier}, findings=${authorization.blockingCount}, head=${authorization.head}, base=${authorization.base})`,
+  ].join("\n");
+}
+
 function reviewAuthorization(manifest) {
   const authorization = reviewCoverage(manifest);
   const successful = manifest.reviews.filter(
@@ -729,30 +810,14 @@ function openManifestLock(lock) {
   try {
     return fs.openSync(lock, "wx", 0o600);
   } catch (error) {
-    if (error.code !== "EEXIST") throw error;
-  }
-  let owner;
-  try {
-    owner = parseJson(fs.readFileSync(lock, "utf8"), "quality manifest lock");
-  } catch {
-    throw new Error("quality manifest is locked by another process");
-  }
-  const localOwner =
-    owner?.hostname === os.hostname() && Number.isSafeInteger(owner?.pid);
-  let ownerAlive = true;
-  if (localOwner) {
-    try {
-      process.kill(owner.pid, 0);
-    } catch (error) {
-      if (error.code === "ESRCH") ownerAlive = false;
-      else throw error;
+    if (error.code === "EEXIST") {
+      throw new Error(
+        "quality manifest is locked; stale locks require explicit operator cleanup",
+        { cause: error },
+      );
     }
+    throw error;
   }
-  if (!localOwner || ownerAlive) {
-    throw new Error("quality manifest is locked by another process");
-  }
-  fs.unlinkSync(lock);
-  return fs.openSync(lock, "wx", 0o600);
 }
 
 function withManifestLock(file, mutation) {
@@ -821,6 +886,8 @@ const COMMANDS = {
   },
   "review-info": ({ manifest }) =>
     process.stdout.write(`${JSON.stringify(reviewInfo(manifest))}\n`),
+  "review-identity": ({ manifest }) =>
+    process.stdout.write(`${JSON.stringify(reviewIdentity(manifest))}\n`),
   "record-review": ({ manifestArg, rawArgs }) =>
     mutate(manifestArg, (locked) =>
       recordReview(locked, parseOptions(rawArgs)),
@@ -842,6 +909,8 @@ const COMMANDS = {
   },
   "review-authorization": ({ manifest }) =>
     process.stdout.write(`${JSON.stringify(reviewAuthorization(manifest))}\n`),
+  trailers: ({ manifest }) =>
+    process.stdout.write(`${reviewTrailers(manifest)}\n`),
 };
 
 function runAdvance(manifestArg, manifest) {
@@ -899,6 +968,8 @@ module.exports = {
   renewApproval,
   repoKey,
   reviewInfo,
+  reviewIdentity,
+  reviewTrailers,
   saveManifest,
   setAgents,
   setRisk,

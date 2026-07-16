@@ -126,17 +126,27 @@ Final authorization remains bound to the complete base/final-HEAD
 relationship. The manifest's contiguous review checkpoints must cover the
 whole change with no gaps; a changed, unreviewed HEAD cannot be stamped.
 
-Write provider-neutral and provider-specific `Reviewed-By:` trailers containing
-tier, findings count, reviewed head, and base. Then run:
+Read `options.merge` from the manifest. When it is false, finish after reporting
+the verified review result; do not invoke PR authorization. When it is true,
+generate the exact provider-neutral and provider-specific trailers:
 
 ```text
-Reviewed-By: quality (tier=<tier>, reviewer=<provider>, findings=0, head=<reviewed-head>, base=<base-sha>)
+Reviewed-By: quality (tier=<tier>, reviewer=<provider>, primary=<provider>, fallback=<provider-or-none>, findings=0, head=<reviewed-head>, base=<base-sha>)
 Reviewed-By: <provider> (tier=<tier>, findings=0, head=<reviewed-head>, base=<base-sha>)
 ```
 
 ```bash
+TRAILERS="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" trailers \
+  "<exact-manifest-path>")"
+git commit --allow-empty -m "chore: quality review stamp
+
+$TRAILERS"
+git push
 bash "$QUALITY_SCRIPTS_DIR/quality-authorize-merge.sh" \
   --manifest "<exact-manifest-path>"
+PR="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" field \
+  "<exact-manifest-path>" repo.pr)"
+gh pr merge "$PR" --squash
 ```
 
 Merge is forbidden when:
@@ -148,9 +158,9 @@ Merge is forbidden when:
 - CI is failing;
 - trailers are missing, malformed, or revision-stale.
 
-After green CI and valid evidence, push and merge through the normal quality
-merge path, then perform worktree-aware cleanup. Never use `--no-verify`,
-weaken critical review, or bypass the governor.
+After green CI and valid evidence, the merge invocation must execute the merge,
+then perform worktree-aware cleanup. Never use `--no-verify`, weaken critical
+review, or bypass the governor.
 
 ## References
 

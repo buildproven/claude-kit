@@ -10,7 +10,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { hostname, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -66,7 +66,6 @@ function create(root, extra = [], env = {}) {
 }
 
 function prepareCodexReview(root, manifestPath) {
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   const info = JSON.parse(
     execFileSync("node", [INVOCATION, "review-info", manifestPath], {
       cwd: root,
@@ -74,20 +73,14 @@ function prepareCodexReview(root, manifestPath) {
     }),
   );
   mkdirSync(info.artifactDir, { recursive: true });
-  const diff = git(root, ["diff", `${info.from}..${info.to}`]);
-  writeFileSync(path.join(info.artifactDir, "diff.txt"), `${diff}\n`);
+  writeFileSync(
+    path.join(info.artifactDir, "diff.txt"),
+    execFileSync("git", ["diff", `${info.from}..${info.to}`], { cwd: root }),
+  );
   writeFileSync(
     path.join(info.artifactDir, "identity.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      invocationId: manifest.invocationId,
-      repositoryRealpath: manifest.repo.realpath,
-      repositoryKey: manifest.repo.key,
-      pr: manifest.repo.pr,
-      baseSha: manifest.revisions.baseSha,
-      diffBase: info.from,
-      headSha: info.to,
-      round: info.round,
+    execFileSync("node", [INVOCATION, "review-identity", manifestPath], {
+      cwd: root,
     }),
   );
   writeFileSync(
@@ -260,7 +253,9 @@ wait
     });
     execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
     expect(
-      spawnSync("bash", [SELECT, "--manifest", manifest], { cwd: root }).status,
+      spawnSync("node", [INVOCATION, "approval-valid", manifest], {
+        cwd: root,
+      }).status,
     ).toBe(0);
 
     writeFileSync(path.join(root, "later.js"), "export const later = true;\n");
@@ -476,16 +471,12 @@ wait
     ).not.toBe(0);
   });
 
-  it("recovers a stale lock owned by a dead local process", () => {
+  it("fails closed on a stale lock until an operator explicitly cleans it", () => {
     const root = repo("stale-lock");
     const manifest = create(root);
     writeFileSync(
       `${manifest}.lock`,
-      JSON.stringify({
-        pid: 99999999,
-        hostname: hostname(),
-        acquiredAt: "2026-01-01T00:00:00.000Z",
-      }),
+      '{"pid":99999999,"hostname":"local","acquiredAt":"2026-01-01"}',
     );
     const result = spawnSync(
       "node",
@@ -504,7 +495,8 @@ wait
       ],
       { cwd: root, encoding: "utf8" },
     );
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/explicit operator cleanup/);
   });
 
   it("rejects changed origin identity and contains no shell-evaluable exports", () => {
@@ -538,19 +530,20 @@ wait
       { cwd: root },
     );
 
-    const state = JSON.parse(readFileSync(manifest, "utf8"));
-    const message = `chore: quality stamp
-
-Reviewed-By: quality (tier=high, reviewer=codex, primary=codex, fallback=none, findings=0, head=${second.to}, base=${state.revisions.baseSha})
-Reviewed-By: codex (tier=high, findings=0, head=${second.to}, base=${state.revisions.baseSha})`;
+    const trailers = execFileSync("node", [INVOCATION, "trailers", manifest], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim();
+    const message = `chore: quality stamp\n\n${trailers}`;
     git(root, ["commit", "--allow-empty", "-q", "-m", message]);
     const lifecycle = [];
     lifecycle.push("push");
     lifecycle.push("ci:success");
     const bin = fakeGh(root, git(root, ["rev-parse", "HEAD"]));
+    const caller = repo("authorization-caller");
     expect(
       spawnSync("bash", [AUTHORIZE, "--manifest", manifest], {
-        cwd: root,
+        cwd: caller,
         env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
         encoding: "utf8",
       }).status,
@@ -606,5 +599,102 @@ Reviewed-By: codex (tier=high, findings=0, head=${second.to}, base=${state.revis
     );
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/2 unresolved BLOCKING/);
+  });
+
+  it("rejects a caller-supplied diff and matching hash that omit the Git delta", () => {
+    const root = repo("partial-diff");
+    const manifest = create(root);
+    const info = JSON.parse(
+      execFileSync("node", [INVOCATION, "review-info", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    mkdirSync(info.artifactDir, { recursive: true });
+    writeFileSync(path.join(info.artifactDir, "diff.txt"), "");
+    writeFileSync(
+      path.join(info.artifactDir, "identity.json"),
+      execFileSync("node", [INVOCATION, "review-identity", manifest], {
+        cwd: root,
+      }),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "codex.findings.txt"),
+      "NO FINDINGS.\n",
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "codex-1.json"),
+      '{"verdict":"pass","summary":"clean","findings":[]}\n',
+    );
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "inventory",
+        manifest,
+        "--artifact-dir",
+        info.artifactDir,
+        "--provider",
+        "codex",
+      ],
+      { cwd: root },
+    );
+    const emptySha = createHash("sha256").update("").digest("hex");
+    const result = spawnSync(
+      "node",
+      [
+        INVOCATION,
+        "record-review",
+        manifest,
+        "--from",
+        info.from,
+        "--to",
+        info.to,
+        "--provider",
+        "codex",
+        "--primary",
+        "codex",
+        "--fallback",
+        "none",
+        "--artifact-dir",
+        info.artifactDir,
+        "--diff-sha",
+        emptySha,
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/canonical Git diff/);
+  });
+
+  it("freezes risk and agent state once persisted", () => {
+    const root = repo("risk-freeze");
+    const manifest = create(root);
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
+    execFileSync("bash", [SELECT, "--manifest", manifest], { cwd: root });
+    expect(
+      spawnSync(
+        "node",
+        [
+          INVOCATION,
+          "risk",
+          manifest,
+          "--tier",
+          "low",
+          "--agents",
+          "2",
+          "--codex-depth",
+          "low",
+          "--codex-rounds",
+          "1",
+        ],
+        { cwd: root },
+      ).status,
+    ).not.toBe(0);
+    expect(
+      spawnSync("node", [INVOCATION, "agents", manifest, "a", "b"], {
+        cwd: root,
+      }).status,
+    ).not.toBe(0);
   });
 });
