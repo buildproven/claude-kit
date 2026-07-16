@@ -22,6 +22,20 @@ const NORMALIZE_CODEX_REVIEW = path.join(
 const BOOTSTRAP = path.join(ROOT, "scripts", "quality-bootstrap.sh");
 const REFERENCE = path.join(ROOT, "skills", "quality", "reference.md");
 
+function isolatedQualityEnv(overrides = {}) {
+  const env = { ...process.env, ...overrides };
+  for (const name of [
+    "CLAUDE_KIT_ROOT",
+    "CLAUDE_PLUGIN_ROOT",
+    "CLAUDE_SETUP_ROOT",
+    "BS_QUALITY_RESET_CAMPAIGN",
+    "BS_QUALITY_TRUST_TARGET_SCRIPTS",
+  ]) {
+    delete env[name];
+  }
+  return env;
+}
+
 describe("provider review runtime", () => {
   it.each([
     ["low", "120", "Focused"],
@@ -73,10 +87,9 @@ git switch -q -c 'feature/quote"test'
       "setup",
       repo,
     ]);
-    const firstEnv = {
-      ...process.env,
+    const firstEnv = isolatedQualityEnv({
       CODEX_THREAD_ID: `campaign-first-${Date.now()}`,
-    };
+    });
     const first = spawnSync("bash", [BOOTSTRAP, "--target-dir", repo], {
       cwd: ROOT,
       encoding: "utf8",
@@ -98,10 +111,9 @@ git switch -q -c 'feature/quote"test'
     const second = spawnSync("bash", [BOOTSTRAP, "--target-dir", repo], {
       cwd: ROOT,
       encoding: "utf8",
-      env: {
-        ...process.env,
+      env: isolatedQualityEnv({
         CODEX_THREAD_ID: `campaign-second-${Date.now()}`,
-      },
+      }),
     });
     expect(second.status).toBe(0);
     expect(second.stdout).toContain("resuming existing campaign");
@@ -261,7 +273,7 @@ if kill -0 "$child" 2>/dev/null; then exit 99; fi
         LOAD_ROOT,
         ROOT,
       ],
-      { encoding: "utf8", cwd: ROOT },
+      { encoding: "utf8", cwd: ROOT, env: isolatedQualityEnv() },
     );
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("bs-quality-gitroot-codex-thread-42-");
@@ -304,7 +316,7 @@ if kill -0 "$child" 2>/dev/null; then exit 99; fi
         LOAD_ROOT,
         trusted,
       ],
-      { encoding: "utf8", cwd: ROOT },
+      { encoding: "utf8", cwd: ROOT, env: isolatedQualityEnv() },
     );
     expect(result.status).toBe(0);
     expect(result.stdout.trim().split("\n")).toEqual([
