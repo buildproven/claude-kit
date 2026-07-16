@@ -102,13 +102,23 @@ run_claude_review() {
 
 run_codex_review() {
   local bounded normalizer schema raw_file normalized_file error_file rc pass pass_timeout
+  local auth_output
   local review_selector review_selector_value
   bounded="$SCRIPT_DIR/quality-run-bounded.sh"
   normalizer="$SCRIPT_DIR/quality-normalize-codex-review.sh"
   schema="$SCRIPT_DIR/schemas/quality-review-output.schema.json"
   [ -f "$schema" ] || return 2
   command -v codex >/dev/null 2>&1 || return 2
-  codex login status 2>&1 | grep -q 'Logged in' || return 2
+  auth_output="$(bash "$bounded" --timeout 10 -- \
+    codex login status 2>&1)"
+  rc=$?
+  [ "$rc" -eq 124 ] && return 76
+  [ "$rc" -eq 0 ] || return 2
+  printf '%s' "$auth_output" | grep -q 'Logged in' || return 2
+  case "$QUALITY_REVIEW_PASSES" in
+    1|2) ;;
+    *) echo "quality: Codex review passes must be 1 or 2" >&2; return 64 ;;
+  esac
 
   : > "$REVIEW_OUT/codex.findings.txt"
   pass_timeout=$((QUALITY_REVIEW_TIMEOUT / QUALITY_REVIEW_PASSES))
@@ -129,18 +139,19 @@ run_codex_review() {
       || return 77
     bash "$bounded" --timeout "$pass_timeout" -- \
       codex exec --ephemeral -s read-only --json \
+      -C "$GIT_ROOT" \
       -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
       --output-schema "$schema" -o "$raw_file" review \
       "$review_selector" "$review_selector_value" \
       > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file"
     rc=$?
     if [ "$rc" -ne 0 ]; then
+      [ "$rc" -eq 124 ] && return 76
       if node "$SCRIPT_DIR/quality-provider-error.js" \
         "$REVIEW_OUT/codex-${pass}.progress"; then
         record_provider_exhaustion Codex
         return 75
       fi
-      [ "$rc" -eq 124 ] && return 76
       grep -Eiq 'not authenticated|not logged in|login required|setup required' "$error_file" 2>/dev/null && return 2
       return 1
     fi
@@ -172,11 +183,17 @@ echo "[quality] reviewer policy: primary=$QUALITY_PRIMARY fallback=$QUALITY_FALL
 run_provider "$QUALITY_PRIMARY"
 PROVIDER_RC=$?
 
-if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 2 ] || [ "$PROVIDER_RC" -eq 76 ]; } \
-   && [ "$QUALITY_FALLBACK" != none ]; then
-  echo "⚠️  [quality] $QUALITY_PRIMARY unavailable/exhausted/bounded; switching to $QUALITY_FALLBACK." >&2
+if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 2 ]; } && [ "$QUALITY_FALLBACK" != none ]; then
+  if [ "$PROVIDER_RC" -eq 75 ]; then
+    DETAIL="$(cat "$REVIEW_OUT/provider-exhausted" 2>/dev/null || true)"
+    echo "⚠️  [quality] $QUALITY_PRIMARY exhausted${DETAIL:+ — $DETAIL}; switching immediately to $QUALITY_FALLBACK." >&2
+  elif [ "$PROVIDER_RC" -eq 2 ]; then
+    echo "⚠️  [quality] $QUALITY_PRIMARY unavailable; switching immediately to $QUALITY_FALLBACK." >&2
+  fi
+  # Preserve failed-primary diagnostics. Findings from an earlier successful
+  # primary pass remain authoritative if a later pass triggers fallback.
   mkdir -p "$REVIEW_OUT/failed-primary"
-  for evidence in "$REVIEW_OUT"/*.findings.txt "$REVIEW_OUT"/*.stderr; do
+  for evidence in "$REVIEW_OUT"/*.stderr; do
     [ -e "$evidence" ] && mv "$evidence" "$REVIEW_OUT/failed-primary/"
   done
   REVIEW_PROVIDER="$QUALITY_FALLBACK"

@@ -232,12 +232,13 @@ function scoreHooks() {
   const settings = readJSON("config/settings.json");
   const hooks = settings?.hooks;
   if (!hooks) return result(0, "No hooks configured");
-  const required = ["PreToolUse", "PostToolUse", "PreCompact", "Notification"];
+  const required = ["PreToolUse", "PostToolUse", "Notification"];
   const missing = required.filter((name) => !hooks[name]);
   let score = required.length - missing.length;
   if (exists("scripts/block-push-main.sh")) score += 2;
   if (exists("scripts/block-destructive-paths.sh")) score += 2;
   if (exists(".husky/pre-commit")) score += 2;
+  if (hooks.SessionStart) score += 1;
   return result(score, missing[0] ? `Missing ${missing[0]} hook` : null, {
     missing,
   });
