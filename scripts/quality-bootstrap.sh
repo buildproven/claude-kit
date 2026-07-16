@@ -122,7 +122,8 @@ if [ -n "$MANIFEST_ARG" ]; then
     RESUME_GITHUB_REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
     RESUME_HEAD_REF="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.headRefName')" || exit 1
     RESUME_HEAD_REPOSITORY="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.headRepository.nameWithOwner')" || exit 1
-    RESUME_CROSS_REPOSITORY="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.isCrossRepository')" || exit 1
+    RESUME_CROSS_REPOSITORY="$(printf '%s' "$RESUME_PR_JSON" | jq -r '.isCrossRepository')" || exit 1
+    { [ "$RESUME_CROSS_REPOSITORY" = true ] || [ "$RESUME_CROSS_REPOSITORY" = false ]; } || exit 1
     ADVANCE_ARGS+=(--github-repo "$RESUME_GITHUB_REPOSITORY" \
       --head-ref "$RESUME_HEAD_REF" \
       --head-repository "$RESUME_HEAD_REPOSITORY" \
