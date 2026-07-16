@@ -625,7 +625,7 @@ wait
   it("retries an unconsumed provider attempt without spending the mandatory rereview round", () => {
     const root = repo("provider-retry-budget");
     const manifest = create(root, [], {
-      BS_QUALITY_MAX_REVIEW_ROUNDS: "2",
+      BS_QUALITY_MAX_REVIEW_ROUNDS: "3",
     });
     const firstHead = git(root, ["rev-parse", "HEAD"]);
 
@@ -675,6 +675,19 @@ wait
     expect(state.reviews).toHaveLength(2);
     expect(secondReview.from).toBe(firstReview.to);
     expect(secondReview.to).toBe(git(root, ["rev-parse", "HEAD"]));
+
+    writeFileSync(
+      path.join(root, "final-review-fix.js"),
+      "export const finalReviewFix = true;\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "fix: final review finding"]);
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    const thirdReview = prepareCodexReview(root, manifest);
+    state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.governor.roundsUsed).toBe(3);
+    expect(state.reviews).toHaveLength(3);
+    expect(thirdReview.from).toBe(secondReview.to);
   });
 
   it("does not authorize a changed HEAD with an unconsumed stale token", () => {

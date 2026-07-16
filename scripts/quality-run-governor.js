@@ -498,8 +498,8 @@ function mandatoryValidationMayExceedCommitCap(
 ) {
   if (
     !state._manifest ||
-    priorRounds !== 1 ||
-    state.rounds_used !== 2 ||
+    priorRounds < 1 ||
+    state.rounds_used !== priorRounds + 1 ||
     !result.commitTripped ||
     result.wallTripped ||
     result.roundTripped
@@ -513,8 +513,8 @@ function mandatoryValidationMayExceedCommitCap(
     );
     const reviewedHead = successful.at(-1)?.to;
     if (
-      successful.length !== 1 ||
-      successful[0].round !== 1 ||
+      successful.length !== priorRounds ||
+      successful.at(-1)?.round !== priorRounds ||
       !reviewedHead ||
       reviewedHead === manifest.revisions.currentHead
     ) {
@@ -667,7 +667,7 @@ function bumpRound(sentinelPath, cwd) {
   }
   if (decision.mandatoryOverride) {
     process.stdout.write(
-      `[quality] fix-commit cap exceeded; authorizing mandatory incremental review round 2 without permitting further remediation.\n`,
+      `[quality] fix-commit cap exceeded; authorizing bounded incremental review round ${decision.result.roundsUsed} without permitting further remediation.\n`,
     );
   }
   replaceAuthorization(
