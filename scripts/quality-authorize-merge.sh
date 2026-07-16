@@ -27,7 +27,7 @@ ACTUAL_HEAD="$(printf '%s' "$PR_JSON" | jq -r '.headRefOid')"
 ACTUAL_BASE_NAME="$(printf '%s' "$PR_JSON" | jq -r '.baseRefName')"
 ACTUAL_BASE_OID="$(printf '%s' "$PR_JSON" | jq -r '.baseRefOid')"
 EXPECTED_BASE_REF="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseRef)"
-EXPECTED_BASE_OID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseSha)"
+EXPECTED_BASE_OID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseHeadSha)"
 [ "$EXPECTED_BASE_REF" = "origin/$ACTUAL_BASE_NAME" ] &&
   [ "$EXPECTED_BASE_OID" = "$ACTUAL_BASE_OID" ] || {
     echo "❌ MERGE BLOCKED: PR base changed after review." >&2
@@ -49,6 +49,10 @@ gh pr checks "$PR" --required >/dev/null || {
   echo "❌ MERGE BLOCKED: required CI is not successful." >&2
   exit 1
 }
+git merge-base --is-ancestor "$EXPECTED_BASE_OID" "$EXPECTED_HEAD" || {
+  echo "❌ MERGE BLOCKED: reviewed branch is not up to date with the PR base." >&2
+  exit 1
+}
 TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"
 if [ "$TIER" = critical ]; then
   node "$SCRIPT_DIR/quality-invocation.js" approval-valid "$MANIFEST" || {
@@ -59,5 +63,21 @@ fi
 BASE_REF="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseRef)"
 bash "$SCRIPT_DIR/quality-validate-review-trailers.sh" \
   --manifest "$MANIFEST" --base "$BASE_REF" || exit 1
-gh pr merge "$PR" --squash --match-head-commit "$ACTUAL_HEAD"
+FINAL_PR_JSON="$(gh pr view "$PR" --json headRefOid,baseRefOid)" || exit 1
+[ "$(printf '%s' "$FINAL_PR_JSON" | jq -r '.headRefOid')" = "$ACTUAL_HEAD" ] &&
+  [ "$(printf '%s' "$FINAL_PR_JSON" | jq -r '.baseRefOid')" = "$EXPECTED_BASE_OID" ] || {
+    echo "❌ MERGE BLOCKED: PR identity changed immediately before merge." >&2
+    exit 1
+  }
+gh pr merge "$PR" --squash --match-head-commit "$ACTUAL_HEAD" || {
+  echo "❌ MERGE BLOCKED: GitHub rejected the exact-head merge." >&2
+  exit 1
+}
+MERGED_JSON="$(gh pr view "$PR" --json state,mergedAt,mergeCommit)" || exit 1
+[ "$(printf '%s' "$MERGED_JSON" | jq -r '.state')" = MERGED ] &&
+  [ "$(printf '%s' "$MERGED_JSON" | jq -r '.mergedAt // empty')" != "" ] &&
+  [ "$(printf '%s' "$MERGED_JSON" | jq -r '.mergeCommit.oid // empty')" != "" ] || {
+    echo "❌ MERGE BLOCKED: PR was queued or remains open after merge request." >&2
+    exit 1
+  }
 echo "[quality] merged exact reviewed revision $ACTUAL_HEAD"

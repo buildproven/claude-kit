@@ -328,6 +328,7 @@ function createManifest(options) {
     revisions: {
       baseRef,
       baseSha,
+      baseHeadSha: firstValue(options["base-head-sha"], baseSha),
       initialHead: head,
       currentHead: head,
     },
@@ -515,6 +516,18 @@ function recordJudge(manifest, options) {
     fs.readFileSync(path.resolve(options.artifact), "utf8"),
     "judge artifact",
   );
+  const context = judgeContext(manifest);
+  for (const key of [
+    "invocationId",
+    "repositoryKey",
+    "head",
+    "reviewCount",
+    "evidenceSha256",
+  ]) {
+    if (input[key] !== context[key]) {
+      throw new Error(`judge artifact ${key} identity mismatch`);
+    }
+  }
   if (!Array.isArray(input.findings)) {
     throw new Error("judge artifact findings must be an array");
   }
@@ -525,6 +538,11 @@ function recordJudge(manifest, options) {
     ) {
       throw new Error("judge findings require an id and valid disposition");
     }
+  }
+  const expectedIds = context.findings.map((finding) => finding.id).sort();
+  const actualIds = input.findings.map((finding) => finding.id).sort();
+  if (JSON.stringify(expectedIds) !== JSON.stringify(actualIds)) {
+    throw new Error("judge artifact does not classify every provider finding");
   }
   const blockingCount = input.findings.filter(
     (finding) => finding.disposition === "BLOCKING",
@@ -540,6 +558,8 @@ function recordJudge(manifest, options) {
   );
   atomicWrite(artifactPath, {
     schemaVersion: 1,
+    invocationId: context.invocationId,
+    repositoryKey: context.repositoryKey,
     head: authorization.head,
     reviewCount: manifest.reviews.filter(
       (review) => review.status === "success",
@@ -557,6 +577,60 @@ function recordJudge(manifest, options) {
     artifactPath,
     artifactSha256: sha256File(artifactPath),
     recordedAt: new Date().toISOString(),
+  };
+}
+
+function providerFindings(manifest) {
+  const findings = [];
+  for (const review of manifest.reviews.filter(
+    (item) => item.status === "success",
+  )) {
+    const inventory = parseJson(
+      fs.readFileSync(path.join(review.artifactDir, "artifact-inventory.json")),
+      "provider artifact inventory",
+    );
+    for (const item of inventory.files.filter((file) =>
+      file.name.endsWith(".json"),
+    )) {
+      const parsed = parseJson(
+        fs.readFileSync(path.join(review.artifactDir, item.name), "utf8"),
+        `provider result ${item.name}`,
+      );
+      const items = parsed.findings || parsed.result?.findings;
+      if (!Array.isArray(items)) continue;
+      items.forEach((finding, index) => {
+        findings.push({
+          id: crypto
+            .createHash("sha256")
+            .update(
+              `${review.inventorySha256}:${item.name}:${index}:${JSON.stringify(finding)}`,
+            )
+            .digest("hex"),
+          severity: finding.severity || "unknown",
+          title: finding.title || "provider finding",
+          source: `${item.name}#${index}`,
+        });
+      });
+    }
+  }
+  return findings;
+}
+
+function judgeContext(manifest) {
+  const authorization = reviewCoverage(manifest);
+  return {
+    schemaVersion: 1,
+    invocationId: manifest.invocationId,
+    repositoryKey: manifest.repo.key,
+    head: authorization.head,
+    reviewCount: manifest.reviews.filter(
+      (review) => review.status === "success",
+    ).length,
+    evidenceSha256: crypto
+      .createHash("sha256")
+      .update(reviewedEvidence(manifest))
+      .digest("hex"),
+    findings: providerFindings(manifest),
   };
 }
 
@@ -846,6 +920,9 @@ function reviewAuthorization(manifest) {
   if (
     sha256File(manifest.judge.artifactPath) !== manifest.judge.artifactSha256 ||
     judgeArtifact.head !== manifest.revisions.currentHead ||
+    judgeArtifact.invocationId !== manifest.invocationId ||
+    judgeArtifact.repositoryKey !== manifest.repo.key ||
+    judgeArtifact.reviewCount !== successful.length ||
     judgeArtifact.evidenceSha256 !== evidenceSha256 ||
     persistedBlockingCount !== manifest.judge.blockingCount
   ) {
@@ -962,6 +1039,8 @@ const COMMANDS = {
   },
   "review-authorization": ({ manifest }) =>
     process.stdout.write(`${JSON.stringify(reviewAuthorization(manifest))}\n`),
+  "judge-context": ({ manifest }) =>
+    process.stdout.write(`${JSON.stringify(judgeContext(manifest))}\n`),
   trailers: ({ manifest }) =>
     process.stdout.write(`${reviewTrailers(manifest)}\n`),
 };
@@ -1018,6 +1097,7 @@ module.exports = {
   parseJson,
   recordReview,
   recordJudge,
+  judgeContext,
   renewApproval,
   repoKey,
   reviewInfo,

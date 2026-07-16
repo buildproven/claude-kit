@@ -107,11 +107,15 @@ path. Round and fix-commit caps remain hard.
 
 Read only findings artifacts listed by the manifest. Verify artifact identity
 before synthesis. Classify findings as BLOCKING, WARNING, or SUPPRESSED.
-Persist the synthesis before stamping. The artifact must contain
-`{"findings":[{"id":"...","disposition":"BLOCKING|WARNING|SUPPRESSED","reason":"..."}]}`;
-the runtime derives the blocking count mechanically:
+Generate the identity-bound judge context, classify every listed provider
+finding as `BLOCKING`, `WARNING`, or `SUPPRESSED`, and preserve every `id`.
+The runtime rejects missing, extra, or stale finding IDs and derives the
+blocking count mechanically:
 
 ```bash
+node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" judge-context \
+  "<exact-manifest-path>" > "$JUDGE_ARTIFACT"
+# Add disposition and reason to every findings[] entry without changing identity.
 node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" judge \
   "<exact-manifest-path>" --artifact "$JUDGE_ARTIFACT"
 ```

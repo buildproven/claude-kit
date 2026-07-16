@@ -65,7 +65,7 @@ function create(root, extra = [], env = {}) {
   ).trim();
 }
 
-function prepareCodexReview(root, manifestPath) {
+function prepareCodexReview(root, manifestPath, providerFindings = []) {
   const info = JSON.parse(
     execFileSync("node", [INVOCATION, "review-info", manifestPath], {
       cwd: root,
@@ -85,11 +85,15 @@ function prepareCodexReview(root, manifestPath) {
   );
   writeFileSync(
     path.join(info.artifactDir, "codex.findings.txt"),
-    "NO FINDINGS.\n",
+    providerFindings.length === 0 ? "NO FINDINGS.\n" : "BLOCKING findings.\n",
   );
   writeFileSync(
     path.join(info.artifactDir, "codex-1.json"),
-    '{"result":{"findings":[],"verdict":"PASS"}}\n',
+    JSON.stringify({
+      verdict: providerFindings.length === 0 ? "pass" : "needs-attention",
+      summary: "fixture",
+      findings: providerFindings,
+    }),
   );
   execFileSync(
     "node",
@@ -133,9 +137,20 @@ function prepareCodexReview(root, manifestPath) {
   return info;
 }
 
-function recordJudgeArtifact(root, manifest, findings = []) {
+function recordJudgeArtifact(root, manifest, dispositions = []) {
   const artifact = path.join(root, "judge-input.json");
-  writeFileSync(artifact, JSON.stringify({ findings }));
+  const context = JSON.parse(
+    execFileSync("node", [INVOCATION, "judge-context", manifest], {
+      cwd: root,
+      encoding: "utf8",
+    }),
+  );
+  context.findings = context.findings.map((finding, index) => ({
+    ...finding,
+    disposition: dispositions[index] || "WARNING",
+    reason: "test classification",
+  }));
+  writeFileSync(artifact, JSON.stringify(context));
   execFileSync(
     "node",
     [INVOCATION, "judge", manifest, "--artifact", artifact],
@@ -150,7 +165,17 @@ function fakeGh(root, head, baseOid) {
   writeFileSync(
     gh,
     `#!/usr/bin/env bash
-if [ "$1 $2" = "pr view" ]; then printf '%s\\n' '{"headRefOid":"${head}","baseRefName":"main","baseRefOid":"${baseOid}"}'; exit 0; fi
+if [ "$1 $2" = "pr view" ]; then
+  args="$*"
+  if [[ "$args" == *"state,mergedAt,mergeCommit"* ]]; then
+    printf '%s\\n' '{"state":"MERGED","mergedAt":"2026-07-16T00:00:00Z","mergeCommit":{"oid":"merge"}}'
+  elif [[ "$args" == *"headRefOid,baseRefOid"* ]]; then
+    printf '%s\\n' '{"headRefOid":"${head}","baseRefOid":"${baseOid}"}'
+  else
+    printf '%s\\n' '{"headRefOid":"${head}","baseRefName":"main","baseRefOid":"${baseOid}"}'
+  fi
+  exit 0
+fi
 if [ "$1 $2" = "pr checks" ]; then exit 0; fi
 if [ "$1 $2" = "pr merge" ]; then exit 0; fi
 exit 1
@@ -594,11 +619,11 @@ wait
   it("blocks authorization when the persisted judge reports findings", () => {
     const root = repo("judge-block");
     const manifest = create(root);
-    prepareCodexReview(root, manifest);
-    recordJudgeArtifact(root, manifest, [
-      { id: "one", disposition: "BLOCKING", reason: "unresolved" },
-      { id: "two", disposition: "BLOCKING", reason: "unresolved" },
+    prepareCodexReview(root, manifest, [
+      { severity: "high", title: "one" },
+      { severity: "high", title: "two" },
     ]);
+    recordJudgeArtifact(root, manifest, ["BLOCKING", "BLOCKING"]);
     const result = spawnSync(
       "node",
       [INVOCATION, "review-authorization", manifest],
@@ -703,5 +728,27 @@ wait
         cwd: root,
       }).status,
     ).not.toBe(0);
+  });
+
+  it("rejects a judge artifact bound to another HEAD", () => {
+    const root = repo("stale-judge");
+    const manifest = create(root);
+    prepareCodexReview(root, manifest);
+    const artifact = path.join(root, "stale-judge.json");
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    context.head = "0".repeat(40);
+    writeFileSync(artifact, JSON.stringify(context));
+    const result = spawnSync(
+      "node",
+      [INVOCATION, "judge", manifest, "--artifact", artifact],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/head identity mismatch/);
   });
 });

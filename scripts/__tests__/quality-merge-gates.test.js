@@ -13,6 +13,10 @@ const RUN_REVIEW = readFileSync(
   path.join(ROOT, "scripts/quality-run-review.sh"),
   "utf8",
 );
+const AUTHORIZE = readFileSync(
+  path.join(ROOT, "scripts/quality-authorize-merge.sh"),
+  "utf8",
+);
 
 /**
  * On 2026-07-12 a review panel returned FAIL with 2 blocking findings; the skill
@@ -50,6 +54,13 @@ describe("quality merge gates", () => {
     expect(VALIDATOR).toMatch(/STAMP_HEAD.*CURRENT_PARENT/s);
     expect(VALIDATOR).toMatch(/STAMP_BASE.*CURRENT_BASE/s);
     expect(VALIDATOR).toMatch(/grep -Fxq "\$EXPECTED"/);
+  });
+
+  it("head-binds the merge and verifies terminal merged state", () => {
+    expect(AUTHORIZE).toMatch(/--match-head-commit "\$ACTUAL_HEAD"/);
+    expect(AUTHORIZE).toMatch(/gh pr merge[\s\S]*\|\| \{/);
+    expect(AUTHORIZE).toMatch(/\.state.*MERGED/s);
+    expect(AUTHORIZE).toMatch(/\.mergeCommit\.oid/);
   });
 
   it("persists and reloads the exact reviewed base across fenced shells", () => {

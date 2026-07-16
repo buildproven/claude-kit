@@ -259,6 +259,7 @@ done
 
 CREATE_ARGS=(create --repo "$GIT_ROOT" --base-ref "$BASE_REF" \
   --level "$LEVEL_ARG" --scope "$SCOPE_ARG")
+[ -n "${PR_BASE_OID:-}" ] && CREATE_ARGS+=(--base-head-sha "$PR_BASE_OID")
 [ "$ARGS_MERGE" = true ] && CREATE_ARGS+=(--merge)
 [ -n "${RES_PR:-}" ] && CREATE_ARGS+=(--pr "$RES_PR")
 [ "${BREAK_GLASS_APPROVED:-}" = true ] && CREATE_ARGS+=(--break-glass-approved)

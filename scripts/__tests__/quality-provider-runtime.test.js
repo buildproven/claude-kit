@@ -193,6 +193,8 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
     expect(source).toMatch(/codex exec --ephemeral -s read-only/);
     expect(source).toMatch(/record_provider_exhaustion Codex/);
     expect(source).toMatch(/structured_provider_exhausted/);
+    expect(source).toMatch(/provider_stderr_exhausted/);
+    expect(source).toMatch(/usage limit/);
     expect(source).not.toMatch(/provider_exhausted "\$raw_file"/);
   });
 
