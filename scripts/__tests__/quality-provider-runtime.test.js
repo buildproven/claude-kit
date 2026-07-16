@@ -238,7 +238,9 @@ Quality-Base: ${base}`;
     expect(source).toMatch(/-C "\$GIT_ROOT"/);
     expect(source).toMatch(/review_selector=--base/);
     expect(source).not.toMatch(/review_selector=--commit/);
-    expect(source).toMatch(/Prior reviewed findings and dispositions/);
+    expect(source).toMatch(/Prior reviewed findings requiring verification/);
+    expect(source).toMatch(/Automated gates already passed/);
+    expect(source).toMatch(/do not run commands or tests/);
     expect(source).toMatch(/cat "\$REVIEW_OUT\/diff\.txt"/);
     expect(source).not.toMatch(/\$review_selector_value" -/);
     expect(source).toMatch(/Codex review passes must be 1 or 2/);
@@ -249,9 +251,9 @@ Quality-Base: ${base}`;
     expect(source.indexOf('[ "$rc" -eq 124 ] && return 76')).toBeLessThan(
       source.indexOf("quality-provider-error.js"),
     );
-    expect(source).toContain(
-      'for evidence in "$REVIEW_OUT"/*.findings.txt "$REVIEW_OUT"/*.stderr; do',
-    );
+    expect(source).toMatch(/"\$REVIEW_OUT"\/codex-\*\.json/);
+    expect(source).toMatch(/"\$REVIEW_OUT"\/codex-\*\.progress/);
+    expect(source).toMatch(/"\$REVIEW_OUT"\/codex-\*\.prompt/);
     expect(source).not.toMatch(
       /PROVIDER_RC.*-eq 76.*QUALITY_FALLBACK|QUALITY_FALLBACK.*PROVIDER_RC.*-eq 76/,
     );

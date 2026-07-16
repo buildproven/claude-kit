@@ -46,7 +46,7 @@ if [ "$REVIEW_ROUND" -gt 1 ]; then
   [ -n "$QUALITY_REVIEW_TIMEOUT" ] || QUALITY_REVIEW_TIMEOUT=300
   QUALITY_REVIEW_PASSES=1
   QUALITY_REVIEW_DEPTH=high
-  QUALITY_REVIEW_FOCUS="Targeted verification only: prove each prior blocker is fixed and inspect the fix delta for regressions."
+  QUALITY_REVIEW_FOCUS="Targeted verification only: prove each prior blocker is fixed and inspect the fix delta for regressions. Automated gates already passed. Use only the supplied evidence; do not run commands or tests. Return the final structured verdict immediately after static analysis."
 else
   QUALITY_REVIEW_TIMEOUT="$(field risk.runtime.reviewSeconds)"
 fi
@@ -162,7 +162,7 @@ run_codex_review() {
       prompt_file="$REVIEW_OUT/codex-${pass}.prompt"
       {
         echo "$QUALITY_REVIEW_FOCUS"
-        echo "Prior reviewed findings and dispositions:"
+        echo "Prior reviewed findings requiring verification:"
         node "$SCRIPT_DIR/quality-invocation.js" prior-findings "$MANIFEST"
         echo "Review the complete supplied remediation delta only:"
         cat "$REVIEW_OUT/diff.txt"
@@ -224,7 +224,12 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 2 ]; } && [ "$QUALITY_FAL
   # Preserve failed-primary diagnostics. Findings from an earlier successful
   # primary pass remain authoritative if a later pass triggers fallback.
   mkdir -p "$REVIEW_OUT/failed-primary"
-  for evidence in "$REVIEW_OUT"/*.findings.txt "$REVIEW_OUT"/*.stderr; do
+  for evidence in \
+    "$REVIEW_OUT"/*.findings.txt \
+    "$REVIEW_OUT"/*.stderr \
+    "$REVIEW_OUT"/codex-*.json \
+    "$REVIEW_OUT"/codex-*.progress \
+    "$REVIEW_OUT"/codex-*.prompt; do
     [ -e "$evidence" ] && mv "$evidence" "$REVIEW_OUT/failed-primary/"
   done
   REVIEW_PROVIDER="$QUALITY_FALLBACK"
