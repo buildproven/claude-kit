@@ -741,6 +741,24 @@ function setAgents(manifest, names) {
 
 function bindPrRepositoryIdentity(manifest, options) {
   if (manifest.repo.pr === null) return;
+  const identityOptionNames = [
+    "github-repo",
+    "head-ref",
+    "head-repository",
+    "cross-repository",
+  ];
+  const supplied = identityOptionNames.some(
+    (name) => options[name] !== undefined,
+  );
+  const existingComplete =
+    manifest.repo.githubRepository &&
+    manifest.repo.headRefName &&
+    manifest.repo.headRepository &&
+    typeof manifest.repo.isCrossRepository === "boolean";
+  if (!supplied) {
+    if (existingComplete) return;
+    throw new Error("resumed PR repository identity is incomplete");
+  }
   const identity = {
     githubRepository: firstValue(
       options["github-repo"],
