@@ -189,5 +189,7 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
     );
     expect(source).toMatch(/model_reasoning_effort=.*QUALITY_REVIEW_DEPTH/);
     expect(source).toMatch(/codex exec --ephemeral -s read-only/);
+    expect(source).toMatch(/record_provider_exhaustion Codex/);
+    expect(source).toMatch(/try again at/);
   });
 });
