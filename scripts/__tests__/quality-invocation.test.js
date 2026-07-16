@@ -178,6 +178,11 @@ if [ "$1 $2" = "pr view" ]; then
 fi
 if [ "$1 $2" = "pr checks" ]; then exit 0; fi
 if [ "$1 $2" = "pr merge" ]; then exit 0; fi
+if [ "$1 $2" = "repo view" ]; then
+  if [[ "$*" == *"nameWithOwner"* ]]; then printf '%s\\n' 'owner/repo'; else printf '%s\\n' 'main'; fi
+  exit 0
+fi
+if [ "$1" = "api" ]; then printf '%s\\n' '[]'; exit 0; fi
 exit 1
 `,
   );

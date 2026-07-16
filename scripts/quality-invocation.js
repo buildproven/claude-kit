@@ -618,7 +618,7 @@ function providerFindings(manifest) {
       const text = fs
         .readFileSync(path.join(review.artifactDir, item.name), "utf8")
         .trim();
-      if (!text || text.startsWith("NO FINDINGS.")) continue;
+      if (!text || text === "NO FINDINGS.") continue;
       findings.push({
         id: crypto
           .createHash("sha256")

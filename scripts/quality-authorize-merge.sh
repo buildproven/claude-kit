@@ -58,6 +58,27 @@ git merge-base --is-ancestor "$EXPECTED_BASE_OID" "$EXPECTED_HEAD" || {
   echo "❌ MERGE BLOCKED: reviewed branch is not up to date with the PR base." >&2
   exit 1
 }
+REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
+DEFAULT_BRANCH="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)" || exit 1
+RULESET_IDS="$(gh api "repos/$REPOSITORY/rulesets?includes_parents=true" --jq '.[].id')" || exit 1
+for RULESET_ID in $RULESET_IDS; do
+  if gh api "repos/$REPOSITORY/rulesets/$RULESET_ID" |
+    jq -e --arg ref "refs/heads/$ACTUAL_BASE_NAME" --arg default "$DEFAULT_BRANCH" '
+      .enforcement == "active" and
+      any(.rules[]?; .type == "merge_queue") and
+      any(.conditions.ref_name.include[]?;
+        . as $pattern |
+        . == "~ALL" or
+        (. == "~DEFAULT_BRANCH" and $ref == ("refs/heads/" + $default)) or
+        . == $ref or
+        ($pattern | endswith("/*")) and ($ref | startswith($pattern[0:-1]))
+      ) and
+      ([.conditions.ref_name.exclude[]?] | index($ref) | not)
+    ' >/dev/null; then
+    echo "❌ MERGE BLOCKED: merge-queue branches require a queue-aware monitored merge path." >&2
+    exit 1
+  fi
+done
 TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"
 if [ "$TIER" = critical ]; then
   node "$SCRIPT_DIR/quality-invocation.js" approval-valid "$MANIFEST" || {
@@ -87,17 +108,7 @@ MERGED_JSON="$(gh pr view "$PR" --json state,mergedAt,mergeCommit)" || exit 1
 if ! { [ "$(printf '%s' "$MERGED_JSON" | jq -r '.state')" = MERGED ] &&
   [ "$(printf '%s' "$MERGED_JSON" | jq -r '.mergedAt // empty')" != "" ] &&
   [ "$(printf '%s' "$MERGED_JSON" | jq -r '.mergeCommit.oid // empty')" != "" ]; }; then
-  gh pr merge "$PR" --disable-auto >/dev/null 2>&1 || {
-    echo "❌ MERGE BLOCKED: PR queued without a verifiable rollback." >&2
-    exit 1
-  }
-  ROLLED_BACK="$(gh pr view "$PR" --json state,autoMergeRequest)" || exit 1
-  [ "$(printf '%s' "$ROLLED_BACK" | jq -r '.state')" = OPEN ] &&
-    [ "$(printf '%s' "$ROLLED_BACK" | jq -r '.autoMergeRequest // empty')" = "" ] || {
-    echo "❌ MERGE BLOCKED: queued merge could not be rolled back." >&2
-    exit 1
-  }
-  echo "❌ MERGE BLOCKED: GitHub queued instead of completing the merge; queue request was rolled back." >&2
+  echo "❌ MERGE BLOCKED: GitHub did not complete the exact-head merge synchronously." >&2
   exit 1
 fi
 echo "[quality] merged exact reviewed revision $ACTUAL_HEAD"
