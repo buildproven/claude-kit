@@ -246,6 +246,31 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
     ["missing fields", { verdict: "approve" }],
     ["unknown verdict", { verdict: "maybe", summary: "invalid", findings: [] }],
     [
+      "needs-attention without an actionable finding",
+      {
+        verdict: "needs-attention",
+        summary: "Manual review is required.",
+        findings: [],
+      },
+    ],
+    [
+      "approve with an actionable finding",
+      {
+        verdict: "approve",
+        summary: "Contradictory approval.",
+        findings: [
+          {
+            severity: "high",
+            title: "unexpected finding",
+            body: "An approval cannot carry a release-blocking finding.",
+            file: "file.js",
+            line_start: 1,
+            recommendation: "Use needs-attention.",
+          },
+        ],
+      },
+    ],
+    [
       "invalid finding item",
       { verdict: "approve", summary: "invalid", findings: [false] },
     ],
