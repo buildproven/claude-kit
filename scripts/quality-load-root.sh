@@ -91,3 +91,10 @@ if ! cd "$GIT_ROOT"; then
   echo "❌ cannot enter git root: $GIT_ROOT" >&2
   return 1 2>/dev/null || exit 1
 fi
+
+# Downstream skill blocks use these paths directly. Recompute and export them
+# here because each tool call starts a fresh shell; bootstrap's child-process
+# exports cannot survive into the next call.
+BS_QUALITY_ROOT_FILE="$(bs_quality_root_file "$GIT_ROOT")"
+BS_QUALITY_GOVERNOR_FILE="${BS_QUALITY_ROOT_FILE%.txt}-governor.json"
+export BS_QUALITY_ROOT_FILE BS_QUALITY_GOVERNOR_FILE

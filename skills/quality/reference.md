@@ -324,9 +324,13 @@ codex exec --ephemeral -s read-only \
   -c 'model_reasoning_effort="high"' --output-schema <schema> -
 ```
 
-The `--base` arg is the branch base on the first round and the last successfully
-reviewed SHA on later rounds. Claude uses the same tier timeout around each
-parallel reviewer and cancels sibling process groups on account exhaustion.
+The runner normalizes both current root-level Codex structured output and the
+legacy `{result: ...}` envelope before parsing findings. It pins the exact
+merge-base SHA before starting the first provider so a fetch in another linked
+worktree cannot move `origin/main` and inject reverse-diff findings. Later
+rounds review from the last successfully reviewed SHA. Claude uses the same tier
+timeout around each parallel reviewer and cancels sibling process groups on
+account exhaustion.
 
 ## Trailer Convention
 

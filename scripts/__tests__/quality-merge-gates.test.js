@@ -57,8 +57,11 @@ describe("quality merge gates", () => {
 
   it("persists and reloads the exact reviewed base across fenced shells", () => {
     expect(RUN_REVIEW).toMatch(/-reviewstate\.env/);
-    expect(RUN_REVIEW).toMatch(/REVIEWED_BASE=.*git merge-base/);
-    expect(RUN_REVIEW).toMatch(/RESOLVED_BASE='\$REVIEW_BASE'/);
+    expect(RUN_REVIEW).toMatch(
+      /REVIEW_BASE=.*git merge-base HEAD "\$REVIEW_BASE_REF"/,
+    );
+    expect(RUN_REVIEW).toMatch(/REVIEWED_BASE="\$REVIEW_BASE"/);
+    expect(RUN_REVIEW).toMatch(/RESOLVED_BASE='\$REVIEW_BASE_REF'/);
     expect(SKILL).toMatch(/BS_QUALITY_REVIEWSTATE_FILE/);
     expect(SKILL).toMatch(/\. "\$BS_QUALITY_REVIEWSTATE_FILE"/);
   });
