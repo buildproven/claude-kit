@@ -18,8 +18,12 @@ echo ""
 declare -A TRIGGER_MAP
 TRIGGER_MAP=(
   ["api-conventions"]="API,route,endpoint,REST"
+  ["codebase-design"]="architecture,refactor,interface,seam"
+  ["diagnosing-bugs"]="bug,regression,flaky,performance"
   ["error-handling"]="try/catch,error,catch,validation"
-  ["test-strategy"]="test,coverage,function,component"
+  ["frontend-design"]="product,marketing,redesign,generic"
+  ["test-strategy"]="test,behavior,interface,seam"
+  ["ui-reviewer"]="screenshot,product,marketing,accessibility"
   ["recover"]="crash,broken,hang,freeze"
   ["cleanup"]="slow,memory,disk,zombie,resource"
 )

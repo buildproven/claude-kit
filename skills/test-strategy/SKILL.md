@@ -1,18 +1,19 @@
 ---
 name: test-strategy
-description: Auto-invoke skill for test strategy and coverage guidance. Activates when writing functions, React components, API endpoints, hooks, or utility modules. Provides test pyramid guidance, required test patterns per code type, and coverage threshold enforcement (88%+ target).
+description: Auto-invoke skill for behavioral test strategy. Activates when changing functions, components, APIs, workflows, or shared modules. Chooses the highest useful public interface and seam, requires red-capable tests with independent expected values, and avoids implementation-coupled file-per-source coverage.
 context: fork
 user-invocable: false
 ---
 
-# Test Strategy Skill
+# Behavioral Test Strategy
 
 ## Current Project State
 
 - Test runner: !`node -e "try{const p=require('./package.json');console.log(Object.keys(p.devDependencies||{}).filter(d=>['jest','vitest','mocha','playwright','cypress'].some(t=>d.includes(t))).join(', ')||'none detected')}catch{console.log('no package.json')}" 2>/dev/null`
 - Test script: !`node -e "try{console.log(require('./package.json').scripts?.test||'none')}catch{console.log('none')}" 2>/dev/null`
 
-Proactively suggest test cases when writing new code. Target 88%+ coverage across projects.
+Test observable behavior through stable public interfaces. Coverage percentages
+and test-file counts are signals, not the goal.
 
 ## When This Activates
 
@@ -22,65 +23,62 @@ Proactively suggest test cases when writing new code. Target 88%+ coverage acros
 - Implementing a custom hook
 - Writing utility/helper functions
 
-## Test Pyramid (Priority Order)
+## Choose the seam first
 
-1. **Unit tests** (70%) - Fast, isolated, test one thing
-2. **Integration tests** (20%) - Test module boundaries and data flow
-3. **E2E tests** (10%) - Critical user paths only
+Before writing a test, name:
 
-## Required Test Patterns by Code Type
+- **Behavior** — what a user or caller can observe
+- **Public interface** — the supported way they exercise it
+- **Seam** — the highest stable interface where the behavior is deterministic
+- **Oracle** — the independent source of the expected result
 
-### React Component
+Prefer the highest seam that is still fast and deterministic:
 
-```
-- Renders without crashing (smoke test)
-- Renders correct output for given props
-- User interactions trigger expected behavior (click, type, submit)
-- Conditional rendering works (loading, error, empty states)
-- Accessibility: focusable, labeled, keyboard navigable
-```
+1. Existing integration/module interface
+2. HTTP/CLI/public package interface
+3. Browser flow for critical user behavior
+4. Unit-level seam only when the logic is genuinely isolated
 
-### API Endpoint / Route Handler
+Do not create a seam solely for mocking. One adapter is usually a hypothetical
+abstraction; introduce a seam when behavior actually varies or needs isolation.
 
-```
-- Happy path returns expected status + shape
-- Authentication: rejects unauthenticated requests (401)
-- Authorization: rejects unauthorized requests (403)
-- Validation: rejects malformed input (400) with clear error
-- Not found: returns 404 for missing resources
-- Error handling: returns 500 with safe error message (no stack traces)
-```
+## Red-capable evidence
 
-### Utility / Pure Function
+A useful test must:
 
-```
-- Normal inputs produce expected outputs
-- Boundary values (0, empty string, null, undefined, MAX_SAFE_INTEGER)
-- Invalid inputs throw or return error (not silent failure)
-- Type coercion edge cases if applicable
-```
+- fail on the behavior being added or fixed
+- fail for the intended reason, not setup/import errors
+- run deterministically and quickly enough for repeated use
+- survive internal refactors while the public behavior stays the same
+- use expected values from a spec, fixture, worked example, or known-good
+  system—not the same calculation as production code
 
-### Custom Hook
+For bugs, turn the minimized reproduction into the regression test whenever the
+correct seam exists.
 
-```
-- Returns expected initial state
-- State transitions work correctly
-- Cleanup runs on unmount
-- Re-renders with new deps produce correct state
-- Error states are handled
-```
+## Behavior checklist
 
-### Async Operations
+Choose only relevant cases:
 
-```
-- Resolves with expected data
-- Rejects/throws on failure with meaningful error
-- Loading states transition correctly
-- Cancellation/cleanup on unmount
-- Retry logic (if applicable)
-```
+- primary success path
+- boundary and empty states
+- validation/authentication/authorization failures
+- timeout, retry, cancellation, or partial failure
+- loading, empty, error, disabled, focus, and recovery states for UI
+- concurrency or idempotency where the interface permits repeats
+- accessibility behavior at the user-facing seam
 
-## Test File Location
+## Anti-patterns
+
+- one test file per source file as a blanket rule
+- testing private methods or internal collaborator calls
+- snapshots as the only assertion
+- “renders without crashing” as meaningful coverage
+- tautological expectations that duplicate production logic
+- mocking the module under test instead of exercising its interface
+- broad end-to-end tests when a faster public seam proves the same behavior
+
+## Placement and verification
 
 Match project conventions. Common patterns:
 
@@ -90,20 +88,12 @@ Match project conventions. Common patterns:
 
 Check existing tests in the project first and follow the same pattern.
 
-## Coverage Enforcement
+Report:
 
-- Target: 88%+ line coverage
-- New code should not decrease overall coverage
-- Critical paths (auth, payments, data mutations) require 95%+
-- Use `/* istanbul ignore next */` only for truly unreachable code, with a comment explaining why
+1. the chosen seam and why it is stable
+2. the exact red-capable command
+3. the behavioral cases added or updated
+4. focused-test and full-suite results
 
-## What to Suggest
-
-When you see new code being written, proactively suggest:
-
-1. The specific test file to create (path based on project conventions)
-2. Test cases organized by the patterns above
-3. Any mocks/fixtures needed
-4. Which testing library to use (match project: vitest, jest, testing-library, etc.)
-
-Keep suggestions concise - list test cases as bullet points, don't write full test implementations unless asked.
+Concepts in this skill are adapted from Matt Pocock's MIT-licensed `tdd` and
+`diagnosing-bugs` skills; see `NOTICE`.

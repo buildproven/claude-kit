@@ -1,112 +1,107 @@
 ---
 name: ui-reviewer
-description: Expert UI/UX design reviewer for SaaS applications. Analyzes screenshots or live apps to evaluate visual hierarchy, spacing, typography, color usage, accessibility, and modern design patterns. Use when user wants to review, critique, audit, or get feedback on their UI design, or when asking "is this design good?" or "how can I improve this UI?" Provides actionable redesign recommendations with specific improvements.
+description: Strict UI/UX reviewer for screenshots or live product and marketing interfaces. Scores product specificity, generic AI-pattern risk, hierarchy, typography, color, responsive states, interaction quality, and accessibility; provides concrete fixes and a 99/100 ship threshold.
 ---
 
 # UI Reviewer
 
-Analyze SaaS application interfaces and provide actionable design feedback.
+Review rendered interfaces, not intentions. The goal is a usable,
+product-specific design that does not read like an AI starter template.
 
 ## Review Process
 
 1. **Capture the UI** - Screenshot or navigate to the app
-2. **Analyze against criteria** - Score each dimension
-3. **Identify top issues** - Prioritize by impact
-4. **Provide specific fixes** - Actionable recommendations
+2. **Capture 320, 768, 1024, and 1440px when possible**
+3. **Analyze against the weighted rubric**
+4. **Run swap, squint, signature, and token tests**
+5. **Identify blocking issues and highest-leverage fixes**
+6. **Re-review after changes when strict/99 mode is requested**
 
-## Evaluation Criteria
+## 100-point rubric
 
-### Visual Hierarchy (Weight: High)
+### Product specificity and signature — 20
 
-- Clear focal points guiding user attention
-- Proper heading hierarchy (H1 > H2 > H3)
-- CTAs visually prominent
-- Secondary actions appropriately subdued
+- Interface clearly reflects its user, domain, job, and content
+- A specific visual/structural/interaction signature is identifiable
+- Swapping in another product's name would not leave the design intact
 
-### Spacing & Layout (Weight: High)
+### Anti-generic discipline — 20
 
-- Consistent padding/margins (8px grid system)
-- Adequate whitespace - not cramped
-- Logical content grouping
-- Responsive considerations
+- No unjustified AI-purple gradients, centered generic hero, bento/card spam,
+  decorative pills, glowing blobs, generic feature grids, or default icon spam
+- Layout and components follow information priority rather than a template
+- Realistic content exposes wrapping, density, empty, and overflow behavior
 
-### Typography (Weight: Medium)
+### Hierarchy and composition — 15
 
-- Max 2-3 font families
-- Clear size hierarchy (16px+ body text)
-- Adequate line-height (1.4-1.6)
-- Readable contrast
+- Focal point and reading order are immediate
+- Primary and secondary actions have correct visual weight
+- Spacing, density, grouping, and responsive reflow remain intentional
 
-### Color Usage (Weight: Medium)
+### Typography and color system — 15
 
-- Cohesive palette (2-3 primary + neutrals)
-- Meaningful color application (not decorative)
-- Sufficient contrast (WCAG AA: 4.5:1 text, 3:1 UI)
-- Consistent use of accent colors
+- Typeface, scale, weight, rhythm, and measure express the intended tone
+- Semantic tokens and accent usage are consistent
+- Contrast meets WCAG AA: 4.5:1 text and 3:1 large text/UI
 
-### Component Quality (Weight: Medium)
+### Interaction and completeness — 15
 
-- Modern, polished UI components
-- Consistent styling across elements
-- Appropriate use of shadows/borders
-- Interactive states visible (hover, focus, active)
+- Hover, focus, active, disabled, loading, empty, error, success, and recovery
+  states exist where relevant
+- Navigation and current location are clear
+- Motion communicates state and respects reduced-motion preferences
 
-### UX Patterns (Weight: High)
+### Accessibility and responsive behavior — 15
 
-- Intuitive navigation
-- Clear feedback for actions
-- Appropriate loading/empty states
-- Error handling visible
-- Mobile-friendly patterns
-
-### SaaS-Specific (Weight: Medium)
-
-- Clear value proposition above fold
-- Pricing clarity (if applicable)
-- Trust signals present
-- Onboarding flow quality
-- Dashboard information density
+- Keyboard operation, focus visibility, labels, semantic structure, and touch
+  targets are sound
+- No clipping, overflow, dead space, or hierarchy collapse at target widths
+- Critical tasks remain understandable without color alone
 
 ## Output Format
 
 ```
 ## UI Review: [App Name]
 
-### Overall Score: X/10
+### Score: X/100
+### Ship threshold: PASS | FAIL
+### Signature found: [specific element or "none"]
 
-### Strengths
-- [What's working well]
+### Blocking issues
+1. **[Issue]** — [viewport/component]
+   → Fix: [specific change]
 
-### Critical Issues (Fix First)
+### Genericity findings
 1. **[Issue]**: [Description]
    → Fix: [Specific recommendation]
 
-### Improvements (Nice to Have)
+### Other improvements
 1. **[Issue]**: [Description]
    → Fix: [Specific recommendation]
 
-### Quick Wins
-- [Small changes with big impact]
-
-### Redesign Recommendations
-[If significant issues, provide specific redesign direction]
+### Rubric
+| Dimension | Score |
+| --- | ---: |
+| Product specificity | /20 |
+| Anti-generic discipline | /20 |
+| Hierarchy/composition | /15 |
+| Typography/color | /15 |
+| Interaction/completeness | /15 |
+| Accessibility/responsive | /15 |
 ```
 
 ## Scoring Guide
 
-| Score | Meaning                                |
-| ----- | -------------------------------------- |
-| 9-10  | Production-ready, polished             |
-| 7-8   | Good, minor improvements needed        |
-| 5-6   | Functional but dated or inconsistent   |
-| 3-4   | Significant issues affecting usability |
-| 1-2   | Major redesign required                |
+- **99–100** — strict ship-ready: no blockers, clear signature, no material
+  genericity finding, all target widths and states verified
+- **95–98** — polished but at least one visible/default choice remains
+- **85–94** — solid implementation, insufficiently distinctive or incomplete
+- **<85** — meaningful redesign or UX work required
 
-## Common SaaS UI Issues
+Automatic FAIL regardless of score:
 
-**Navigation**: Overcrowded nav, unclear IA, missing breadcrumbs
-**Dashboards**: Too dense, no visual hierarchy, unclear metrics
-**Forms**: Poor validation, unclear labels, too long
-**Tables**: No sorting/filtering, poor mobile view, cramped
-**Empty States**: Missing or unhelpful
-**CTAs**: Weak contrast, unclear copy, competing buttons
+- broken primary journey
+- keyboard-inaccessible critical action
+- WCAG contrast failure on essential content/action
+- major viewport clipping/overflow
+- no identifiable product-specific signature in strict mode
