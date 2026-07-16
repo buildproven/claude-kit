@@ -321,7 +321,11 @@ function scoreQualityGates() {
   const missing = required.filter((name) => !scripts[name]);
   let score = required.length - missing.length;
   if (exists("skills/quality/SKILL.md")) score += 2;
-  if (exists("scripts/quality-codex-review.sh")) score += 2;
+  if (
+    exists("scripts/quality-provider-policy.sh") &&
+    exists("scripts/quality-run-bounded.sh")
+  )
+    score += 2;
   if (exists("scripts/quality-run-governor.js")) score += 2;
   return result(score, missing[0] ? `Missing ${missing[0]} gate` : null, {
     missing,

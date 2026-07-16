@@ -191,7 +191,7 @@ Don't reimplement what the platform ships. As of 2.1.210:
 
 Skills auto-invoke from natural language — you don't have to type a command.
 
-**Engineering** — `quality` (tier-aware review + Codex cross-review),
+**Engineering** — `quality` (tier-aware provider review + quota fallback),
 `test-strategy`, `error-handling`, `api-conventions`, `recover`, `cleanup`,
 `scrub`, `deps`, `status`, `workflow`, `healthcheck`
 

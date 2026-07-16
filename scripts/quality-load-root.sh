@@ -26,7 +26,9 @@
 
 bs_quality_root_file() {
   # $1 = resolved git root (absolute). Echoes the per-target sentinel path.
-  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-default}" key
+  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-default}}" key
+  sess="$(printf '%s' "$sess" | tr -cd '[:alnum:]_.-' | cut -c1-80)"
+  [ -n "$sess" ] || sess=default
   if command -v sha256sum >/dev/null 2>&1; then
     key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
   elif command -v shasum >/dev/null 2>&1; then
@@ -36,6 +38,11 @@ bs_quality_root_file() {
   fi
   printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
 }
+
+BS_QUALITY_SESSION_ID="${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-default}}"
+BS_QUALITY_SESSION_ID="$(printf '%s' "$BS_QUALITY_SESSION_ID" | tr -cd '[:alnum:]_.-' | cut -c1-80)"
+[ -n "$BS_QUALITY_SESSION_ID" ] || BS_QUALITY_SESSION_ID=default
+export BS_QUALITY_SESSION_ID
 
 # bs_quality_find_script — resolve a kit script across EVERY install layout.
 #

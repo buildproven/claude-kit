@@ -197,12 +197,11 @@ Every fix (bug, lint error, test failure, CI error) must answer these:
 
 3. **Open PR immediately** — even if not ready for review
 4. **Run /bs:quality --merge** — tier-aware review (2/4/6 agents) + Codex at medium+
-   - This stamps a `Reviewed-By: claude-quality` trailer (always) and `Reviewed-By: codex` (when Codex actually ran)
-   - **Policy:** `Reviewed-By: claude-quality` is required before merge. The local skill hard-blocks `gh pr merge` without it; CI currently only warns (advisory, not a hard fail). Verify manually if you bypassed the local skill.
-   - At high/critical, the local skill additionally requires exactly one of `Reviewed-By: codex` or a verified `Quality-Skip` trailer with matching HEAD and base SHAs (full SHAs, must match current HEAD and merge-base; stale or copied trailers are rejected)
+   - This stamps SHA-bound `Reviewed-By: quality` and the actual provider (`Reviewed-By: claude|codex`)
+   - **Policy:** both matching trailers are required before merge; stale HEAD/base evidence is rejected.
 5. **Wait for findings** — if findings, create new commit (do NOT amend)
 6. **Re-run /bs:quality --merge** until no findings
-7. **Merge** — only after `Reviewed-By: claude-quality` trailer appears
+7. **Merge** — only after matching `Reviewed-By: quality` and provider trailers appear
 
 **Why not amend?**: Amended commits hide the review history. Future readers can't see what issues were found and how they were fixed.
 

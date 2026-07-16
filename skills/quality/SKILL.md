@@ -286,7 +286,7 @@ limits). It never runs merely because the primary found a bug. Claude panels
 cancel sibling reviewers as soon as one reports exhaustion. Successful later
 rounds review only commits added since the prior review in this invocation.
 
-### Review Stamp + Quality-Skip Trailer
+### Review Stamp
 
 After all agents pass, stamp commit trailers — the **authoritative** record
 of what review ran (`.claude/quality-skip-log.json` is telemetry only):
@@ -305,7 +305,7 @@ TIER_LABEL="${TIER:-L${LEVEL}}"
 AGENT_COUNT=${#AGENTS[@]}
 FINDING_COUNT=${BLOCKING_COUNT:-0}
 
-echo "Reviewed-By: quality (tier=${TIER_LABEL}, reviewer=${REVIEW_PROVIDER}, primary=${QUALITY_PRIMARY}, fallback=${QUALITY_FALLBACK}, findings=${FINDING_COUNT})"
+echo "Reviewed-By: quality (tier=${TIER_LABEL}, reviewer=${REVIEW_PROVIDER}, primary=${QUALITY_PRIMARY}, fallback=${QUALITY_FALLBACK}, findings=${FINDING_COUNT}, head=${HEAD_SHA}, base=${BASE_SHA})"
 echo "Reviewed-By: ${REVIEW_PROVIDER} (tier=${TIER_LABEL}, findings=${FINDING_COUNT})"
 
 # MUST go through the sentinel below, not a bare shell var — bash vars do NOT
@@ -320,12 +320,11 @@ LEVEL='${LEVEL:-}'
 AGENT_COUNT='${AGENT_COUNT:-0}'
 BLOCKING_COUNT='${BLOCKING_COUNT:-0}'
 RESOLVED_BASE='${RESOLVED_BASE:-}'
-CODEX_MODE='${CODEX_MODE:-skip}'
-CODEX_VERDICT='${CODEX_VERDICT:-}'
-CODEX_SKIP_REASON='${CODEX_SKIP_REASON:-}'
 REVIEW_PROVIDER='${REVIEW_PROVIDER:-}'
 QUALITY_PRIMARY='${QUALITY_PRIMARY:-}'
 QUALITY_FALLBACK='${QUALITY_FALLBACK:-}'
+REVIEWED_HEAD='${HEAD_SHA:-}'
+REVIEWED_BASE='${BASE_SHA:-}'
 EOF
 ```
 
@@ -384,11 +383,12 @@ fi
 #    "quality passed but the last commit lacked the trailer" footgun). If the
 #    pipeline did NOT run this invocation, hard-block — auto-stamping then
 #    would forge review evidence.
-if ! git log "${BASE_REF}..HEAD" --format=%B | grep -q "Reviewed-By: quality"; then
+QUALITY_TRAILER=$(git log -1 --format=%B | git interpret-trailers --parse 2>/dev/null | grep -E '^Reviewed-By: quality( |$)' | head -1)
+if [ -z "$QUALITY_TRAILER" ]; then
   if [ "${QUALITY_PIPELINE_RAN:-false}" = true ]; then
     git commit --allow-empty -m "chore(quality): stamp review trailer
 
-Reviewed-By: quality (tier=${TIER_LABEL:-${TIER:-L${LEVEL}}}, reviewer=${REVIEW_PROVIDER}, primary=${QUALITY_PRIMARY}, fallback=${QUALITY_FALLBACK}, findings=${BLOCKING_COUNT:-0})
+Reviewed-By: quality (tier=${TIER_LABEL:-${TIER:-L${LEVEL}}}, reviewer=${REVIEW_PROVIDER}, primary=${QUALITY_PRIMARY}, fallback=${QUALITY_FALLBACK}, findings=${BLOCKING_COUNT:-0}, head=${REVIEWED_HEAD}, base=${REVIEWED_BASE})
 Reviewed-By: ${REVIEW_PROVIDER} (tier=${TIER_LABEL:-${TIER:-L${LEVEL}}}, findings=${BLOCKING_COUNT:-0})" \
       || { echo "❌ Failed to create auto-stamp commit — aborting merge"; exit 1; }
     git push || { echo "❌ Failed to push auto-stamp commit — aborting merge"; exit 1; }
@@ -398,6 +398,27 @@ Reviewed-By: ${REVIEW_PROVIDER} (tier=${TIER_LABEL:-${TIER:-L${LEVEL}}}, finding
     echo "   (including review agents) before --merge. Do NOT manually add this trailer."
     exit 1
   fi
+fi
+
+# 2. Bind evidence to the exact reviewed revision. The reviewed SHA may be
+#    HEAD (trailer baked into the reviewed commit) or HEAD~1 (dedicated stamp
+#    commit). Any later code commit invalidates the evidence.
+QUALITY_TRAILER=$(git log -1 --format=%B | git interpret-trailers --parse 2>/dev/null | grep -E '^Reviewed-By: quality( |$)' | head -1)
+STAMP_HEAD=$(printf '%s' "$QUALITY_TRAILER" | grep -oE 'head=[a-f0-9]+' | cut -d= -f2)
+STAMP_BASE=$(printf '%s' "$QUALITY_TRAILER" | grep -oE 'base=[a-f0-9]+' | cut -d= -f2)
+STAMP_PROVIDER=$(printf '%s' "$QUALITY_TRAILER" | grep -oE 'reviewer=(claude|codex)' | cut -d= -f2)
+CURRENT_HEAD=$(git rev-parse HEAD)
+CURRENT_PARENT=$(git rev-parse HEAD~1 2>/dev/null || true)
+CURRENT_BASE=$(git merge-base HEAD "$BASE_REF")
+if { [ "$STAMP_HEAD" != "$CURRENT_HEAD" ] && [ "$STAMP_HEAD" != "$CURRENT_PARENT" ]; } \
+   || [ "$STAMP_BASE" != "$CURRENT_BASE" ] || [ -z "$STAMP_PROVIDER" ]; then
+  echo "❌ MERGE BLOCKED: quality trailer is stale or malformed; re-run quality on current HEAD." >&2
+  exit 1
+fi
+if ! git log -1 --format=%B | git interpret-trailers --parse 2>/dev/null \
+  | grep -qE "^Reviewed-By: ${STAMP_PROVIDER}( |$)"; then
+  echo "❌ MERGE BLOCKED: quality reviewer=$STAMP_PROVIDER lacks matching provider evidence." >&2
+  exit 1
 fi
 
 ```
@@ -437,5 +458,7 @@ Sub-Review Mode" for the full acpx invocation, polling, and fallback.
 - `scripts/quality-risk-resolve.sh` — Step 0.5 risk scoring
 - `scripts/quality-select-agents.sh` — Step 1.8 panel construction
 - `scripts/quality-run-review.sh` — Step 1.8 blocking review subprocess
-- `scripts/quality-codex-review.sh` — Step 2.6 Codex polling loop
+- `scripts/quality-provider-policy.sh` — cross-CLI primary/fallback policy
+- `scripts/quality-review-plan.sh` — tier-equivalent provider depth
+- `scripts/quality-run-bounded.sh` — provider process-group timeout
 - `scripts/quality-merge-cleanup.sh` — Step 4 post-merge worktree teardown

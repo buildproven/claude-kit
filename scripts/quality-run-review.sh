@@ -6,6 +6,8 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=quality-provider-policy.sh
 source "$SCRIPT_DIR/quality-provider-policy.sh"
+# shellcheck source=quality-review-plan.sh
+source "$SCRIPT_DIR/quality-review-plan.sh"
 
 REVIEW_BASE=""
 for ref in origin/main origin/master main master; do
@@ -42,7 +44,9 @@ provider_exhausted() {
 run_claude_review() {
   local companion agents_file agents_csv rc
   companion="$(bs_quality_find_script claude-review-companion.sh)" || return 2
-  agents_file="${TMPDIR:-/tmp}/bs-quality-agents-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+  command -v claude >/dev/null 2>&1 || return 2
+  claude auth status --json 2>/dev/null | jq -e '.loggedIn == true' >/dev/null 2>&1 || return 2
+  agents_file="${TMPDIR:-/tmp}/bs-quality-agents-${BS_QUALITY_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-default}}}.txt"
   agents_csv="$(paste -sd, "$agents_file" 2>/dev/null | sed 's/,*$//')"
   [ -n "$agents_csv" ] || { echo "quality: Claude panel unresolved" >&2; return 1; }
   bash "$companion" \
@@ -51,13 +55,13 @@ run_claude_review() {
     --log-file "$REVIEW_OUT/log.txt" \
     --out-dir "$REVIEW_OUT" \
     --agents "$agents_csv" \
-    --timeout "${BS_QUALITY_REVIEW_TIMEOUT:-300}"
+    --timeout "$QUALITY_REVIEW_TIMEOUT"
   rc=$?
   return "$rc"
 }
 
 run_codex_review() {
-  local companion raw_file error_file rc
+  local companion bounded raw_file error_file rc
   companion=""
   for candidate in \
     "${CLAUDE_PLUGIN_ROOT:-}/scripts/codex-companion.mjs" \
@@ -66,17 +70,21 @@ run_codex_review() {
     [ -n "$candidate" ] && [ -f "$candidate" ] && { companion="$candidate"; break; }
   done
   [ -n "$companion" ] || return 2
+  bounded="$(bs_quality_find_script quality-run-bounded.sh)" || return 2
   command -v codex >/dev/null 2>&1 || return 2
+  codex login status 2>&1 | grep -q 'Logged in' || return 2
 
   raw_file="$REVIEW_OUT/codex.json"
   error_file="$REVIEW_OUT/codex.stderr"
-  node "$companion" adversarial-review --wait --json \
+  bash "$bounded" --timeout "$QUALITY_REVIEW_TIMEOUT" -- node "$companion" adversarial-review --wait --json \
     --base "$REVIEW_DIFF_BASE" --scope branch \
-    "Review only the supplied commit delta. Find bugs, security issues, data loss, races, and breaking changes. Return APPROVE or REQUEST_CHANGES with precise file:line findings." \
+    "Tier: $QUALITY_REVIEW_TIER. $QUALITY_REVIEW_FOCUS Review only the supplied commit delta. Return APPROVE or REQUEST_CHANGES with precise file:line findings." \
     >"$raw_file" 2>"$error_file"
   rc=$?
   if [ "$rc" -ne 0 ]; then
     if provider_exhausted "$raw_file" || provider_exhausted "$error_file"; then return 75; fi
+    [ "$rc" -eq 124 ] && return 76
+    grep -Eiq 'not authenticated|not logged in|login required|setup required' "$error_file" 2>/dev/null && return 2
     return 1
   fi
   if ! jq -e '.result and (.result.findings | type == "array")' "$raw_file" >/dev/null 2>&1; then
@@ -102,12 +110,14 @@ echo "[quality] reviewer policy: primary=$QUALITY_PRIMARY fallback=$QUALITY_FALL
 run_provider "$QUALITY_PRIMARY"
 PROVIDER_RC=$?
 
-if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 2 ]; } && [ "$QUALITY_FALLBACK" != none ]; then
+if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 2 ] || [ "$PROVIDER_RC" -eq 76 ]; } && [ "$QUALITY_FALLBACK" != none ]; then
   if [ "$PROVIDER_RC" -eq 75 ]; then
     DETAIL="$(cat "$REVIEW_OUT/provider-exhausted" 2>/dev/null || true)"
     echo "⚠️  [quality] $QUALITY_PRIMARY exhausted${DETAIL:+ — $DETAIL}; switching immediately to $QUALITY_FALLBACK." >&2
-  else
+  elif [ "$PROVIDER_RC" -eq 2 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY unavailable; switching immediately to $QUALITY_FALLBACK." >&2
+  else
+    echo "⚠️  [quality] $QUALITY_PRIMARY exceeded its ${QUALITY_REVIEW_TIMEOUT}s review budget and was cancelled; switching to $QUALITY_FALLBACK." >&2
   fi
   # Preserve failed-primary evidence without feeding its INCONCLUSIVE files
   # into synthesis after the fallback succeeds.
@@ -124,6 +134,7 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
   case "$PROVIDER_RC" in
     75) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER account quota exhausted and no usable fallback is configured." >&2 ;;
     2) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER CLI unavailable and no usable fallback is configured." >&2 ;;
+    76) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER exceeded its bounded review budget and no usable fallback is configured." >&2 ;;
     4) echo "❌ MERGE BLOCKED: every $REVIEW_PROVIDER review was inconclusive." >&2 ;;
     *) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER review runner failed (rc=$PROVIDER_RC)." >&2 ;;
   esac

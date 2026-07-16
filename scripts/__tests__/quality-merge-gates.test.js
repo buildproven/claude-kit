@@ -38,6 +38,14 @@ describe("quality merge gates", () => {
     expect(SKILL).not.toMatch(/requires a 'Reviewed-By: codex'/);
   });
 
+  it("binds neutral evidence to HEAD/HEAD~1 and merge-base", () => {
+    expect(SKILL).toMatch(/head=\$\{HEAD_SHA\}, base=\$\{BASE_SHA\}/);
+    expect(SKILL).toMatch(/git log -1 --format=%B/);
+    expect(SKILL).toMatch(/STAMP_HEAD.*CURRENT_PARENT/s);
+    expect(SKILL).toMatch(/STAMP_BASE.*CURRENT_BASE/s);
+    expect(SKILL).toMatch(/matching provider evidence/);
+  });
+
   it("BLOCKING_COUNT is not merely decorative in the trailer", () => {
     // It must be COMPARED, not just interpolated. Guard against a regression
     // that drops the check but keeps `findings=${BLOCKING_COUNT}` in the stamp.

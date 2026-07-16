@@ -115,7 +115,10 @@ fi
 # previous run's panel and review the wrong set — or, worse, mask an "agents
 # never selected" bug. Fresh run => empty sentinel => the companion block's
 # empty-check blocks correctly.
-rm -f "${TMPDIR:-/tmp}/bs-quality-agents-${CLAUDE_CODE_SESSION_ID:-default}.txt"
+QUALITY_SESSION_ID="${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-default}}"
+QUALITY_SESSION_ID="$(printf '%s' "$QUALITY_SESSION_ID" | tr -cd '[:alnum:]_.-' | cut -c1-80)"
+[ -n "$QUALITY_SESSION_ID" ] || QUALITY_SESSION_ID=default
+rm -f "${TMPDIR:-/tmp}/bs-quality-agents-${QUALITY_SESSION_ID}.txt"
 
 # --- resolve the target-resolver script --------------------------------------
 RESOLVER=""
