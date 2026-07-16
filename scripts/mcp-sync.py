@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -56,10 +57,27 @@ def add_codex(server: dict[str, object]) -> None:
     name = str(server["name"])
     transport = str(server.get("transport", "stdio"))
     if transport == "http":
-        args = ["codex", "mcp", "add", name, "--url", str(server["url"])]
+        # Codex documents configuration and OAuth as separate steps, but some
+        # CLI builds start an OAuth callback wait during `mcp add`. Write the
+        # supported config.toml form directly so unattended installs cannot
+        # stall waiting for a browser. `--login` remains the explicit auth step.
+        config_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+        config_path = config_home / "config.toml"
+        config_home.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "",
+            f"[mcp_servers.{json.dumps(name)}]",
+            f"url = {json.dumps(str(server['url']))}",
+        ]
         bearer = server.get("bearerTokenEnvVar")
         if bearer:
-            args.extend(["--bearer-token-env-var", str(bearer)])
+            lines.append(f"bearer_token_env_var = {json.dumps(str(bearer))}")
+        auth = server.get("auth")
+        if auth in {"oauth", "chatgpt"}:
+            lines.append(f"auth = {json.dumps(str(auth))}")
+        with config_path.open("a", encoding="utf8") as config:
+            config.write("\n".join(lines) + "\n")
+        return
     else:
         args = ["codex", "mcp", "add", name, "--", str(server["command"])]
         args.extend(str(value) for value in server.get("args", []))
