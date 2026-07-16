@@ -524,13 +524,18 @@ wait
     state.governor.authorizedAttempts[1].number = 2;
     writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
 
-    writeFileSync(
-      path.join(root, "retry-fix.js"),
-      "export const fixed = true;\n",
-    );
-    git(root, ["add", "."]);
-    git(root, ["commit", "-q", "-m", "fix: provider finding"]);
+    for (let index = 1; index <= 9; index += 1) {
+      writeFileSync(
+        path.join(root, `retry-fix-${index}.js`),
+        `export const fixed${index} = true;\n`,
+      );
+      git(root, ["add", "."]);
+      git(root, ["commit", "-q", "-m", `fix: provider finding ${index}`]);
+    }
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    expect(
+      spawnSync("node", [GOVERNOR, "check", manifest], { cwd: root }).status,
+    ).not.toBe(0);
     const secondReview = prepareCodexReview(root, manifest);
 
     state = JSON.parse(readFileSync(manifest, "utf8"));

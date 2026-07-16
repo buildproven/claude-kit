@@ -490,6 +490,52 @@ function reconcileManifestRounds(sentinelPath) {
   });
 }
 
+function mandatoryValidationMayExceedCommitCap(
+  state,
+  priorRounds,
+  result,
+  sentinelPath,
+) {
+  if (
+    !state._manifest ||
+    priorRounds !== 1 ||
+    state.rounds_used !== 2 ||
+    !result.commitTripped ||
+    result.wallTripped ||
+    result.roundTripped
+  ) {
+    return false;
+  }
+  try {
+    const manifest = loadManifest(sentinelPath).manifest;
+    const successful = manifest.reviews.filter(
+      (review) => review.status === "success",
+    );
+    const reviewedHead = successful.at(-1)?.to;
+    if (
+      successful.length !== 1 ||
+      successful[0].round !== 1 ||
+      !reviewedHead ||
+      reviewedHead === manifest.revisions.currentHead
+    ) {
+      return false;
+    }
+    execFileSync(
+      "git",
+      [
+        "merge-base",
+        "--is-ancestor",
+        reviewedHead,
+        manifest.revisions.currentHead,
+      ],
+      { cwd: manifest.repo.realpath, stdio: "ignore" },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * `bump-round` — called IMMEDIATELY BEFORE the review panel runs (SKILL.md
  * Step 2.0). Increments rounds_used, persists, then evaluates every budget.
@@ -574,7 +620,13 @@ function bumpRound(sentinelPath, cwd) {
     return 1;
   }
 
-  if (!result.ok) {
+  const mandatoryValidationOverride = mandatoryValidationMayExceedCommitCap(
+    state,
+    priorRounds,
+    result,
+    sentinelPath,
+  );
+  if (!result.ok && !mandatoryValidationOverride) {
     const wall = result.wallTripped
       ? `wall-clock ${result.elapsedSeconds}s >= ${result.maxWallSeconds}s `
       : "";
@@ -586,6 +638,11 @@ function bumpRound(sentinelPath, cwd) {
         `[quality] Stopping. Report outstanding findings and STOP.\n`,
     );
     return 1;
+  }
+  if (mandatoryValidationOverride) {
+    process.stdout.write(
+      `[quality] fix-commit cap exceeded; authorizing mandatory incremental review round 2 without permitting further remediation.\n`,
+    );
   }
   replaceAuthorization(state, authorizedHead, reusableAttempt);
   saveState(sentinelPath, state);
