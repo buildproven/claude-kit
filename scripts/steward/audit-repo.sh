@@ -29,12 +29,29 @@ fi
 
 checks_json="[]"
 failed=0
+run_npm_script() {
+  local script="$1"
+  local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+  if [ -f "$REPO/.nvmrc" ] && [ -s "$nvm_dir/nvm.sh" ]; then
+    local node_version
+    node_version=$(tr -d '[:space:]' < "$REPO/.nvmrc")
+    (
+      cd "$REPO" || exit 1
+      # shellcheck source=/dev/null
+      . "$nvm_dir/nvm.sh"
+      nvm exec --silent "$node_version" npm run "$script"
+    )
+  else
+    (cd "$REPO" && npm run "$script")
+  fi
+}
+
 if [ -f "$REPO/package.json" ]; then
   checks=()
   for script in lint typecheck type-check test build security:audit security:scan; do
     if node -e 'const p=require(process.argv[1]);process.exit(p.scripts&&p.scripts[process.argv[2]]?0:1)' "$REPO/package.json" "$script" 2>/dev/null; then
       log=$(mktemp "${TMPDIR:-/tmp}/steward-check.XXXXXX")
-      if (cd "$REPO" && npm run "$script") >"$log" 2>&1; then rc=0; else rc=$?; failed=$((failed + 1)); fi
+      if run_npm_script "$script" >"$log" 2>&1; then rc=0; else rc=$?; failed=$((failed + 1)); fi
       checks+=("{\"name\":\"$script\",\"exitCode\":$rc,\"log\":\"$log\"}")
     fi
   done
