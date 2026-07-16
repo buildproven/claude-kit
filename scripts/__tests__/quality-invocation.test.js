@@ -278,11 +278,7 @@ describe("quality invocation manifest", () => {
     writeFileSync(
       gh,
       `#!/usr/bin/env bash
-if [[ "$*" == *"--json number,baseRefName,baseRefOid,headRefOid"* ]]; then
-  printf '%s\\n' '{"number":7,"headRefOid":"${git(root, ["rev-parse", "HEAD"])}","baseRefName":"release","baseRefOid":"${base}"}'
-else
-  printf '%s\\n' '{"headRefName":"feature","baseRefName":"release"}'
-fi
+printf '%s\\n' '{"number":7,"headRefName":"feature","headRefOid":"${git(root, ["rev-parse", "HEAD"])}","baseRefName":"release","baseRefOid":"${base}"}'
 `,
     );
     chmodSync(gh, 0o755);
