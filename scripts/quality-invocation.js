@@ -1039,6 +1039,23 @@ function authorizeProviderAttempt(manifest, options) {
   ) {
     throw new Error("provider attempt governor is missing or invalid");
   }
+  const currentHead = manifest.revisions.currentHead;
+  const firstAttemptForHead = !governor.providerAttempts.some(
+    (attempt) => attempt.head === currentHead,
+  );
+  if (firstAttemptForHead) {
+    const phaseSeconds =
+      manifest.reviews.length === 0
+        ? (manifest.risk?.runtime?.reviewSeconds ??
+          governor.providerWindowSeconds)
+        : (manifest.risk?.runtime?.verificationSeconds ??
+          governor.reReviewReserveSeconds);
+    governor.providerDeadlineEpoch = Math.min(
+      now + phaseSeconds,
+      governor.campaignDeadlineEpoch,
+    );
+    governor.providerDeadlineHead = currentHead;
+  }
   const deadline = Math.min(
     governor.providerDeadlineEpoch,
     governor.campaignDeadlineEpoch,
@@ -1052,7 +1069,7 @@ function authorizeProviderAttempt(manifest, options) {
   const attempt = {
     number: governor.providerAttempts.length + 1,
     provider,
-    head: manifest.revisions.currentHead,
+    head: currentHead,
     startedAt: new Date().toISOString(),
   };
   governor.providerAttempts.push(attempt);
