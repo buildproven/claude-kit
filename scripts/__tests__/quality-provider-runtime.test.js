@@ -104,6 +104,21 @@ if kill -0 "$child" 2>/dev/null; then exit 99; fi
     expect(result.stdout).toContain("bs-quality-gitroot-codex-thread-42-");
   });
 
+  it("uses the target repository's quality scripts before an older home install", () => {
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `source "$1"; bs_quality_find_script quality-run-review.sh`,
+        "resolution",
+        LOAD_ROOT,
+      ],
+      { encoding: "utf8", cwd: ROOT },
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(RUN_REVIEW);
+  });
+
   it("accepts exact evidence, then rejects later code and contradictions", () => {
     const repo = mkdtempSync(path.join(tmpdir(), "review-evidence-"));
     const setup = spawnSync(

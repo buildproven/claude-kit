@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   readlinkSync,
   symlinkSync,
   unlinkSync,
@@ -32,6 +33,22 @@ function executable(file, body) {
 }
 
 describe("provider-native platform", () => {
+  it("classifies every Claude skill and keeps Ralph discoverable", () => {
+    const settings = JSON.parse(
+      readFileSync(path.join(ROOT, "config", "settings.json"), "utf8"),
+    );
+    const names = readdirSync(path.join(ROOT, "skills"), {
+      withFileTypes: true,
+    })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+    expect(Object.keys(settings.skillOverrides).sort()).toEqual(names);
+    expect(settings.skillOverrides.ralph).toBe("on");
+    expect(settings.hooks.PreCompact).toBeUndefined();
+    expect(settings.hooks.PostToolUse).toHaveLength(1);
+  });
+
   it("falls back immediately on a surfaced quota response", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "provider-native-"));
     const bin = path.join(dir, "bin");

@@ -89,7 +89,7 @@ The distributed `settings.json` wires bash scripts in `scripts/` to Claude Code 
 - **PreToolUse (Edit/Write/MultiEdit)** → `auto-branch-on-main.sh` (forces branching off main before edits)
 - **PostToolUse (Edit/Write/MultiEdit)** → `post-edit-lint.sh`
 - **Stop** → `stop-validation.sh`, `multi-session-cleanup.sh`
-- **SessionStart** → `session-start-context.sh`, `multi-session-guard.sh`
+- **SessionStart** → `multi-session-guard.sh`
 
 When changing any of these scripts: the hook invokes them as `$HOME/.claude/scripts/<name>` after symlink, so test via the symlinked path if you hit pathing issues. Timeouts in `settings.json` (ms) are not generous — a slow hook will silently time out.
 
