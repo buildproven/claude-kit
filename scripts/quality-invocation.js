@@ -742,15 +742,27 @@ function setAgents(manifest, names) {
 function bindPrRepositoryIdentity(manifest, options) {
   if (manifest.repo.pr === null) return;
   const identity = {
-    githubRepository: firstValue(options["github-repo"], null),
-    headRefName: firstValue(options["head-ref"], null),
-    headRepository: firstValue(options["head-repository"], null),
+    githubRepository: firstValue(
+      options["github-repo"],
+      manifest.repo.githubRepository,
+      null,
+    ),
+    headRefName: firstValue(
+      options["head-ref"],
+      manifest.repo.headRefName,
+      null,
+    ),
+    headRepository: firstValue(
+      options["head-repository"],
+      manifest.repo.headRepository,
+      null,
+    ),
     isCrossRepository:
       options["cross-repository"] === "true"
         ? true
         : options["cross-repository"] === "false"
           ? false
-          : null,
+          : firstValue(manifest.repo.isCrossRepository, null),
   };
   if (
     !identity.githubRepository ||
@@ -1579,8 +1591,15 @@ function verifyGateEvidence(manifest) {
 function reviewTrailers(manifest) {
   const authorization = reviewAuthorization(manifest);
   return [
-    `Reviewed-By: quality (tier=${authorization.tier}, reviewer=${authorization.provider}, primary=${authorization.primary}, fallback=${authorization.fallback}, findings=${authorization.blockingCount}, head=${authorization.head}, base=${authorization.base})`,
-    `Reviewed-By: ${authorization.provider} (tier=${authorization.tier}, findings=${authorization.blockingCount}, head=${authorization.head}, base=${authorization.base})`,
+    "Reviewed-By: quality",
+    `Reviewed-By: ${authorization.provider}`,
+    `Quality-Tier: ${authorization.tier}`,
+    `Quality-Reviewer: ${authorization.provider}`,
+    `Quality-Primary: ${authorization.primary}`,
+    `Quality-Fallback: ${authorization.fallback}`,
+    `Quality-Findings: ${authorization.blockingCount}`,
+    `Quality-Head: ${authorization.head}`,
+    `Quality-Base: ${authorization.base}`,
   ].join("\n");
 }
 

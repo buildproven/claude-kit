@@ -135,8 +135,15 @@ echo change >> file; git commit -qam change
 reviewed=$(git rev-parse HEAD)
 git commit -q --allow-empty -m "chore: stamp
 
-Reviewed-By: quality (tier=high, reviewer=codex, primary=codex, fallback=claude, findings=0, head=$reviewed, base=$base)
-Reviewed-By: codex (tier=high, findings=0, head=$reviewed, base=$base)"
+Reviewed-By: quality
+Reviewed-By: codex
+Quality-Tier: high
+Quality-Reviewer: codex
+Quality-Primary: codex
+Quality-Fallback: claude
+Quality-Findings: 0
+Quality-Head: $reviewed
+Quality-Base: $base"
 `,
         "setup",
         repo,
@@ -166,8 +173,15 @@ Reviewed-By: codex (tier=high, findings=0, head=$reviewed, base=$base)"
     }).stdout.trim();
     const malicious = `code-bearing stamp
 
-Reviewed-By: quality (tier=high, reviewer=codex, primary=codex, fallback=claude, findings=0, head=${reviewed}, base=${base})
-Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
+Reviewed-By: quality
+Reviewed-By: codex
+Quality-Tier: high
+Quality-Reviewer: codex
+Quality-Primary: codex
+Quality-Fallback: claude
+Quality-Findings: 0
+Quality-Head: ${reviewed}
+Quality-Base: ${base}`;
     spawnSync("bash", ["-c", "echo unreviewed >> file; git add file"], {
       cwd: repo,
     });
@@ -184,7 +198,7 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
     const message = spawnSync("git", ["log", "-1", "--format=%B"], {
       cwd: repo,
       encoding: "utf8",
-    }).stdout.replace("findings=0, head=", "findings=9, head=");
+    }).stdout.concat("\nQuality-Findings: 9\n");
     spawnSync(
       "git",
       ["commit", "--amend", "--allow-empty", "-q", "-m", message],
