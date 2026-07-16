@@ -6,9 +6,80 @@ const rootArg = process.argv.find((arg) => arg.startsWith("--root="));
 const budgetArg = process.argv.find((arg) =>
   arg.startsWith("--command-budget="),
 );
+const descriptionBudgetArg = process.argv.find((arg) =>
+  arg.startsWith("--description-budget="),
+);
+const instructionBudgetArg = process.argv.find((arg) =>
+  arg.startsWith("--instruction-budget="),
+);
+const instructionFileArg = process.argv.find((arg) =>
+  arg.startsWith("--instruction-file="),
+);
+const skillSourceArgs = process.argv
+  .filter((arg) => arg.startsWith("--skill-source="))
+  .map((arg) => path.resolve(arg.slice(15)));
+const skillAllowlistArgs = process.argv
+  .filter((arg) => arg.startsWith("--skill-allowlist="))
+  .map((arg) => path.resolve(arg.slice(18)));
 const json = process.argv.includes("--json");
 const root = path.resolve(rootArg ? rootArg.slice(7) : process.cwd());
+const defaultSkillSource = path.join(root, "skills");
+const defaultSkillAllowlist = path.join(root, "config", "codex-skills.json");
+const skillSources =
+  skillSourceArgs.length > 0
+    ? skillSourceArgs
+    : fs.existsSync(defaultSkillSource)
+      ? [defaultSkillSource]
+      : [];
+const skillAllowlists =
+  skillAllowlistArgs.length > 0
+    ? skillAllowlistArgs
+    : fs.existsSync(defaultSkillAllowlist)
+      ? [defaultSkillAllowlist]
+      : [];
 const budget = Number(budgetArg ? budgetArg.slice(17) : 24);
+const descriptionBudget = Number(
+  descriptionBudgetArg ? descriptionBudgetArg.slice(21) : 8000,
+);
+const instructionBudget = Number(
+  instructionBudgetArg ? instructionBudgetArg.slice(21) : 4096,
+);
+const instructionBudgetRequested = Boolean(
+  instructionBudgetArg || instructionFileArg,
+);
+const instructionFile = path.resolve(
+  instructionFileArg
+    ? instructionFileArg.slice(19)
+    : path.join(root, "config", "CLAUDE.md"),
+);
+
+function requireBudget(value, label) {
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative integer`);
+  }
+}
+
+requireBudget(budget, "Command budget");
+requireBudget(descriptionBudget, "Description budget");
+requireBudget(instructionBudget, "Instruction budget");
+
+function requireExplicitPath(file, kind) {
+  if (!fs.existsSync(file)) {
+    throw new Error(`${kind} not found: ${file}`);
+  }
+}
+
+for (const source of skillSources) {
+  requireExplicitPath(source, "Skill source");
+  if (!fs.statSync(source).isDirectory()) {
+    throw new Error(`Skill source is not a directory: ${source}`);
+  }
+}
+for (const allowlist of skillAllowlists) {
+  requireExplicitPath(allowlist, "Skill allowlist");
+}
+if (instructionBudgetRequested)
+  requireExplicitPath(instructionFile, "Instruction file");
 
 function dirsWith(file, parent) {
   const base = path.join(root, parent);
@@ -33,8 +104,107 @@ function commandNames() {
     .sort();
 }
 
+function frontmatterDescription(file) {
+  const lines = fs.readFileSync(file, "utf8").split(/\r?\n/);
+  if (lines[0] !== "---") return "";
+  for (let index = 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line === "---") return "";
+    const match = line.match(/^description:\s*(.*)$/);
+    if (!match) continue;
+    const value = match[1].trim();
+    if (!/^[>|](?:[+-]?[1-9]?|[1-9][+-]?)$/.test(value)) {
+      if (value.startsWith('"') && value.endsWith('"')) {
+        try {
+          return JSON.parse(value);
+        } catch {
+          return value.slice(1, -1);
+        }
+      }
+      if (value.startsWith("'") && value.endsWith("'")) {
+        return value.slice(1, -1).replace(/''/g, "'");
+      }
+      return value;
+    }
+    const folded = [];
+    for (let next = index + 1; next < lines.length; next += 1) {
+      if (!/^\s+/.test(lines[next])) break;
+      folded.push(lines[next].trim());
+    }
+    return folded.join(" ");
+  }
+  return "";
+}
+
+function allowedSkills() {
+  if (skillAllowlists.length === 0) return null;
+  const allowed = new Set();
+  for (const allowlist of skillAllowlists) {
+    let payload;
+    try {
+      payload = JSON.parse(fs.readFileSync(allowlist, "utf8"));
+    } catch (error) {
+      throw new Error(`Invalid skill allowlist JSON: ${allowlist}`, {
+        cause: error,
+      });
+    }
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      Array.isArray(payload) ||
+      !Array.isArray(payload.skills) ||
+      payload.skills.some(
+        (name) =>
+          typeof name !== "string" || name.length === 0 || name !== name.trim(),
+      )
+    ) {
+      throw new Error(
+        `Invalid skill allowlist schema: ${allowlist}; skills must be an array of non-empty strings`,
+      );
+    }
+    for (const name of payload.skills) allowed.add(name);
+  }
+  return allowed;
+}
+
+function skillMetadata() {
+  const allowed = allowedSkills();
+  const byName = new Map();
+  for (const source of skillSources) {
+    for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+      if (allowed && !allowed.has(entry.name)) continue;
+      const file = path.join(source, entry.name, "SKILL.md");
+      if (!fs.existsSync(file) || !fs.statSync(file).isFile()) continue;
+      byName.set(entry.name, {
+        name: entry.name,
+        description: frontmatterDescription(file),
+        file,
+      });
+    }
+  }
+  const unresolved = allowed
+    ? [...allowed].filter((name) => !byName.has(name))
+    : [];
+  if (unresolved.length > 0) {
+    throw new Error(
+      `Allowlisted skills not found in configured sources: ${unresolved.join(", ")}`,
+    );
+  }
+  return [...byName.values()].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+}
+
 const commands = commandNames();
 const skills = dirsWith("SKILL.md", "skills");
+const discoveredSkills = skillMetadata();
+const descriptionChars = discoveredSkills.reduce(
+  (total, skill) => total + skill.name.length + skill.description.length + 2,
+  0,
+);
+const instructionBytes = fs.existsSync(instructionFile)
+  ? fs.statSync(instructionFile).size
+  : null;
 const commandWithoutSkill = commands.filter((name) => !skills.includes(name));
 const thinCommands = commands.filter((name) => {
   const body = fs.readFileSync(
@@ -63,6 +233,16 @@ const report = {
   commandCount: commands.length,
   skillCount: skills.length,
   overBudget: commands.length > budget,
+  discoverySkillCount: discoveredSkills.length,
+  descriptionChars,
+  descriptionBudget,
+  descriptionsOverBudget: descriptionChars > descriptionBudget,
+  instructionFile,
+  instructionBytes,
+  instructionBudget,
+  instructionsOverBudget:
+    instructionBudgetRequested &&
+    (instructionBytes === null || instructionBytes > instructionBudget),
   commands,
   commandWithoutSkill,
   thinCommands,
@@ -76,6 +256,12 @@ if (json) {
     `Surface audit: ${commands.length} commands, ${skills.length} skills (budget ${budget})`,
   );
   console.log(`Command budget: ${report.overBudget ? "FAIL" : "PASS"}`);
+  console.log(
+    `Skill discovery: ${descriptionChars}/${descriptionBudget} chars across ${discoveredSkills.length} skills (${report.descriptionsOverBudget ? "FAIL" : "PASS"})`,
+  );
+  console.log(
+    `Instructions: ${instructionBytes}/${instructionBudget} bytes (${report.instructionsOverBudget ? "FAIL" : "PASS"})`,
+  );
   console.log(`Thin wrappers: ${thinCommands.length}`);
   console.log(
     `Commands without same-name skills: ${commandWithoutSkill.join(", ") || "none"}`,
@@ -86,4 +272,9 @@ if (json) {
   for (const file of report.providerHardcoding) console.log(`  ${file}`);
 }
 
-process.exitCode = report.overBudget ? 1 : 0;
+process.exitCode =
+  report.overBudget ||
+  report.descriptionsOverBudget ||
+  report.instructionsOverBudget
+    ? 1
+    : 0;

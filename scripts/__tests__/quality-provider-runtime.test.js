@@ -365,8 +365,18 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
       /while \[ "\$pass" -le "\$QUALITY_REVIEW_PASSES" \]/,
     );
     expect(source).toMatch(/model_reasoning_effort=.*QUALITY_REVIEW_DEPTH/);
-    expect(source).toMatch(/codex exec --ephemeral -s read-only/);
+    expect(source).toMatch(
+      /codex exec --ephemeral -s read-only[\s\\]*\n\s+-C "\$CODEX_REVIEW_ROOT"/,
+    );
+    expect(source).toMatch(/Codex review passes must be 1 or 2/);
+    expect(source).toMatch(
+      /Codex review passes must be 1 or 2" >&2; return 64/,
+    );
     expect(source).toMatch(/record_provider_exhaustion Codex/);
+    expect(source.indexOf('[ "$rc" -eq 124 ] && return 76')).toBeLessThan(
+      source.indexOf('provider_exhausted "$raw_file"'),
+    );
+    expect(source).toMatch(/for evidence in "\$REVIEW_OUT"\/\*\.stderr; do/);
     expect(source).toMatch(/try again at/);
     expect(source).toMatch(/REVIEW_MODE=verification/);
     expect(source).toMatch(/Prior findings to verify/);

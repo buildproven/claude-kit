@@ -199,6 +199,26 @@ else
   FAILURES=$((FAILURES + 1))
 fi
 
+# Keep Codex's managed native skill profile converged on upgrades as well as
+# fresh installs. The reconciler preserves unmanaged entries by design.
+CODEX_SKILL_SYNC="$REPO_ROOT/scripts/setup-codex-skills.sh"
+DEFAULT_CLAUDE_DIR="$HOME/.claude"
+if [[ "$CLAUDE_DIR" != "$DEFAULT_CLAUDE_DIR" && -z "${CODEX_AGENT_SKILLS_DIR:-}" ]]; then
+  warn "alternate Claude target: skipping Codex reconciliation without CODEX_AGENT_SKILLS_DIR"
+elif [[ "$MODE" == "check" ]]; then
+  if bash "$CODEX_SKILL_SYNC" --check; then
+    success "Codex native skill profile is current"
+  else
+    err "Codex native skill profile has drift"
+    FAILURES=$((FAILURES + 1))
+  fi
+elif bash "$CODEX_SKILL_SYNC"; then
+  success "Codex native skill profile reconciled"
+else
+  err "Codex native skill profile reconciliation failed"
+  FAILURES=$((FAILURES + 1))
+fi
+
 echo "------------------------------------------------------------"
 if [[ $FAILURES -eq 0 ]]; then
   success "claude-kit sync OK"
