@@ -35,7 +35,10 @@ def local_map(roots: list[str]) -> dict[str, str]:
         if not root.is_dir():
             continue
         for repo in root.iterdir():
-            if not (repo / ".git").exists():
+            # A linked worktree has a `.git` file. Fleet operations must map to
+            # the primary checkout (`.git` directory), never an ephemeral
+            # worktree that may disappear or already contain active changes.
+            if not (repo / ".git").is_dir():
                 continue
             try:
                 remote = subprocess.run(

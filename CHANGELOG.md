@@ -2,6 +2,13 @@
 
 All notable changes to claude-kit are documented here.
 
+## [4.0.1] - 2026-07-16
+
+### Fixed
+
+- Active-repository discovery now maps GitHub repositories only to primary
+  checkouts, never to ephemeral linked worktrees with the same remote.
+
 ## [4.0.0] - 2026-07-16
 
 ### Added

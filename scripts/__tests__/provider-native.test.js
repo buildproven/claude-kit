@@ -183,6 +183,84 @@ describe("provider-native platform", () => {
     ]);
   });
 
+  it("maps GitHub repos to primary checkouts, never linked worktrees", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "fleet-local-map-"));
+    const root = path.join(dir, "repos");
+    const primary = path.join(root, "primary");
+    const worktree = path.join(root, "primary-worktree");
+    mkdirSync(root);
+    execFileSync("git", ["init", "-q", "-b", "main", primary]);
+    execFileSync("git", [
+      "-C",
+      primary,
+      "config",
+      "user.email",
+      "test@example.com",
+    ]);
+    execFileSync("git", ["-C", primary, "config", "user.name", "Test"]);
+    writeFileSync(path.join(primary, "README.md"), "test\n");
+    execFileSync("git", ["-C", primary, "add", "README.md"]);
+    execFileSync("git", ["-C", primary, "commit", "-q", "-m", "init"]);
+    execFileSync("git", [
+      "-C",
+      primary,
+      "remote",
+      "add",
+      "origin",
+      "https://github.com/buildproven/active.git",
+    ]);
+    execFileSync("git", [
+      "-C",
+      primary,
+      "worktree",
+      "add",
+      "-q",
+      "-b",
+      "feature",
+      worktree,
+    ]);
+    const config = path.join(dir, "fleet.json");
+    const fixture = path.join(dir, "repos.json");
+    writeFileSync(
+      config,
+      JSON.stringify({
+        owners: ["buildproven"],
+        windowDays: 14,
+        minimumCommits: 1,
+        localRoots: [root],
+      }),
+    );
+    writeFileSync(
+      fixture,
+      JSON.stringify([
+        {
+          nameWithOwner: "buildproven/active",
+          commits: [{ author: { login: "brett" } }],
+          pullRequests: [],
+        },
+      ]),
+    );
+
+    const payload = JSON.parse(
+      execFileSync("python3", [
+        DISCOVER,
+        "--config",
+        config,
+        "--fixture",
+        fixture,
+      ]),
+    );
+    expect(payload.repositories[0].localPath).toBe(
+      execFileSync(
+        "python3",
+        ["-c", "import os,sys; print(os.path.realpath(sys.argv[1]))", primary],
+        {
+          encoding: "utf8",
+        },
+      ).trim(),
+    );
+  });
+
   it("syncs the same declarative MCP server into both clients", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "mcp-sync-"));
     const bin = path.join(dir, "bin");
