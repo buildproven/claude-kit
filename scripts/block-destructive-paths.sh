@@ -37,11 +37,28 @@ deny() {
 
 CMD_FLAT=$(printf '%s' "$COMMAND" | tr '\n' ' ' | tr -s ' ')
 
+has_recursive_force_rm() {
+  local candidate="$1"
+  local has_recursive=false
+  local has_force=false
+
+  if printf '%s' "$candidate" | grep -qE '(^|[[:space:]])(--recursive|-[a-zA-Z]*r[a-zA-Z]*)([[:space:]]|$)'; then
+    has_recursive=true
+  fi
+  if printf '%s' "$candidate" | grep -qE '(^|[[:space:]])(--force|-[a-zA-Z]*f[a-zA-Z]*)([[:space:]]|$)'; then
+    has_force=true
+  fi
+
+  [[ "$has_recursive" == "true" && "$has_force" == "true" ]]
+}
+
 # ---------------------------------------------------------------------------
 # Rule 1: `rm -rf` / `rm -fr` / `rm -r -f` with unsafe target.
 # ---------------------------------------------------------------------------
-if echo "$CMD_FLAT" | grep -qE '(^|[^a-zA-Z0-9_])rm[[:space:]]+(-[a-zA-Z]*[rf][a-zA-Z]*[[:space:]]+)+'; then
-  TARGETS=$(echo "$CMD_FLAT" | grep -oE 'rm[[:space:]]+(-[a-zA-Z]+[[:space:]]+)+[^;&|]*' | head -5)
+RM_COMMANDS=$(printf '%s' "$CMD_FLAT" | grep -oE '(^|[;&|][[:space:]]*)rm[[:space:]]+[^;&|]*' | head -5 || true)
+while IFS= read -r TARGETS; do
+  [[ -z "$TARGETS" ]] && continue
+  has_recursive_force_rm "$TARGETS" || continue
 
   # 1a. Variable/command substitution in target — cannot prove safety.
   if echo "$TARGETS" | grep -qE '\$|`'; then
@@ -81,21 +98,19 @@ if echo "$CMD_FLAT" | grep -qE '(^|[^a-zA-Z0-9_])rm[[:space:]]+(-[a-zA-Z]*[rf][a
   if echo "$TARGETS" | grep -qE '(^|[[:space:]])(\*|\.|\.\.)[[:space:]]*$'; then
     deny "rm -rf with bare *, . or .. — refuses to act on the whole current directory."
   fi
-fi
+done <<< "$RM_COMMANDS"
 
 # ---------------------------------------------------------------------------
 # Rule 2: `find … -delete` or `find … -exec rm` with dynamic/top-level root.
 # ---------------------------------------------------------------------------
 if echo "$CMD_FLAT" | grep -qE 'find[[:space:]].*(-delete|-exec[[:space:]]+rm)'; then
-  FIND_ROOT=$(echo "$CMD_FLAT" | sed -E 's/.*find[[:space:]]+([^[:space:]]+).*/\1/')
-  case "$FIND_ROOT" in
-    \$*|*\`*|*\$\(*)
-      deny "find ... -delete uses a dynamic root path."
-      ;;
-    /|~|/Users|/Users/*)
-      deny "find ... -delete rooted at a top-level personal directory."
-      ;;
-  esac
+  FIND_ROOT=$(echo "$CMD_FLAT" | sed -E 's/.*find[[:space:]]+([^[:space:]]+).*/\1/' | tr -d '"'"'"'')
+  if printf '%s' "$FIND_ROOT" | grep -qE '^\$|`|\$\('; then
+    deny "find ... -delete uses a dynamic root path."
+  fi
+  if printf '%s' "$FIND_ROOT" | grep -qE '^(/|~/?|\$HOME/?|\$\{HOME\}/?|/Users/?|/Users/[^/]+/?|/Users/[^/]+/(Projects|\.claude|\.ssh|\.aws|\.config)/?|/Users/[^/]+/Projects/(internal|products|personal|_archived)/?|/home/?|/home/[^/]+/?|/home/[^/]+/(Projects|\.claude|\.ssh|\.aws|\.config)/?)$'; then
+    deny "find ... -delete rooted at a top-level personal directory."
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -178,9 +193,8 @@ fi
 # They run at EXIT after the variable has already been resolved, and a
 # wrong assumption about $var silently destroys the parent dir at cleanup.
 # ---------------------------------------------------------------------------
-if echo "$CMD_FLAT" | grep -qE 'trap[[:space:]]+.*rm[[:space:]]+-[a-zA-Z]*[rf]'; then
+if echo "$CMD_FLAT" | grep -qE 'trap[[:space:]]+.*rm[[:space:]]+' && has_recursive_force_rm "$CMD_FLAT"; then
   deny "trap with embedded 'rm -rf' — extremely easy to resolve the wrong path at EXIT. Use an explicit cleanup function with literal paths."
 fi
 
 exit 0
-

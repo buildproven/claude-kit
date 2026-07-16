@@ -259,8 +259,23 @@ describe("block-destructive-paths hook", () => {
       expect(status).toBe(2);
     });
 
+    it("allows rm -f on a variable file target", () => {
+      const { status } = runHook('rm -f "$FILE"');
+      expect(status).toBe(0);
+    });
+
+    it("allows rm -r without force on a variable directory target", () => {
+      const { status } = runHook('rm -r "$DIR"');
+      expect(status).toBe(0);
+    });
+
     it("blocks rm -rf $HOME", () => {
       const { status } = runHook("rm -rf $HOME");
+      expect(status).toBe(2);
+    });
+
+    it("blocks long-form recursive forced removal", () => {
+      const { status } = runHook('rm --recursive --force "$HOME"');
       expect(status).toBe(2);
     });
 
@@ -274,11 +289,35 @@ describe("block-destructive-paths hook", () => {
       expect(status).toBe(2);
     });
 
+    it("allows a trap that removes one temporary file", () => {
+      const { status } = runHook(`trap 'rm -f "$TMPFILE"' EXIT`);
+      expect(status).toBe(0);
+    });
+
     it("allows rm -rf on a concrete per-project path", () => {
       const { status } = runHook(
         "rm -rf /Users/brett/Projects/internal/my-repo/dist",
       );
       expect(status).toBe(0);
+    });
+  });
+
+  describe("find deletion guards", () => {
+    it("blocks a quoted dynamic root", () => {
+      const { status } = runHook('find "$DIR" -type f -delete');
+      expect(status).toBe(2);
+    });
+
+    it("allows a concrete build directory under a user project", () => {
+      const { status } = runHook(
+        "find /Users/alice/Projects/repo/build -type f -delete",
+      );
+      expect(status).toBe(0);
+    });
+
+    it("blocks a top-level user directory", () => {
+      const { status } = runHook("find /Users/alice -type f -delete");
+      expect(status).toBe(2);
     });
   });
 });

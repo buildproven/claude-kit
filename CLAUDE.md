@@ -76,7 +76,7 @@ scripts/          Hooks, CI gates, utilities (bash + node + python)
 config/           Template CLAUDE.md + settings.json for distribution
 eslint-plugin-defensive/   Local ESLint plugin published via path import
 templates/        Starter files copied by /bs:new and related commands
-  .github/workflows/  quality, auto-release, stale-prs
+.github/workflows/  quality, auto-release, stale-prs
 ```
 
 `scripts/` is the only code surface with runtime logic worth testing. Commands, skills, and agents are prompt documents — they're "code" only in that Claude executes them, so keep them terse and concrete rather than trying to unit-test them.
