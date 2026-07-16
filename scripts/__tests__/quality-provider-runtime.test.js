@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -14,6 +14,11 @@ const VALIDATOR = path.join(
   "quality-validate-review-trailers.sh",
 );
 const RUN_REVIEW = path.join(ROOT, "scripts", "quality-run-review.sh");
+const NORMALIZE_CODEX_REVIEW = path.join(
+  ROOT,
+  "scripts",
+  "quality-normalize-codex-review.sh",
+);
 
 describe("provider review runtime", () => {
   it.each([
@@ -191,5 +196,48 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
     expect(source).toMatch(/codex exec --ephemeral -s read-only/);
     expect(source).toMatch(/record_provider_exhaustion Codex/);
     expect(source).toMatch(/try again at/);
+  });
+
+  it.each([
+    ["root", (review) => review],
+    ["legacy result envelope", (review) => ({ result: review })],
+  ])("normalizes %s Codex structured output", (_label, wrap) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-review-output-"));
+    const input = path.join(dir, "input.json");
+    const output = path.join(dir, "output.json");
+    const review = {
+      verdict: "approve",
+      summary: "No actionable findings.",
+      findings: [],
+    };
+    writeFileSync(input, JSON.stringify(wrap(review)));
+
+    const result = spawnSync("bash", [NORMALIZE_CODEX_REVIEW, input, output], {
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(readFileSync(output, "utf8"))).toEqual(review);
+  });
+
+  it("rejects malformed Codex structured output", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-review-invalid-"));
+    const input = path.join(dir, "input.json");
+    const output = path.join(dir, "output.json");
+    writeFileSync(input, JSON.stringify({ verdict: "approve" }));
+
+    expect(
+      spawnSync("bash", [NORMALIZE_CODEX_REVIEW, input, output]).status,
+    ).not.toBe(0);
+  });
+
+  it("pins the initial review diff to the branch merge-base", () => {
+    const source = readFileSync(RUN_REVIEW, "utf8");
+    expect(source).toMatch(
+      /REVIEW_BASE="\$\(git merge-base HEAD "\$REVIEW_BASE_REF"\)"/,
+    );
+    expect(source).toMatch(/REVIEW_DIFF_BASE="\$REVIEW_BASE"/);
+    expect(source).toMatch(/git diff "\$\{REVIEW_DIFF_BASE\}\.\.HEAD"/);
+    expect(source).toMatch(/REVIEWED_BASE="\$REVIEW_BASE"/);
   });
 });

@@ -9,13 +9,20 @@ source "$SCRIPT_DIR/quality-provider-policy.sh"
 # shellcheck source=quality-review-plan.sh
 source "$SCRIPT_DIR/quality-review-plan.sh"
 
-REVIEW_BASE=""
+REVIEW_BASE_REF=""
 for ref in origin/main origin/master main master; do
   if git rev-parse --verify --quiet "${ref}^{commit}" >/dev/null 2>&1; then
-    REVIEW_BASE="$ref"; break
+    REVIEW_BASE_REF="$ref"; break
   fi
 done
-[ -n "$REVIEW_BASE" ] || { echo "❌ MERGE BLOCKED: no base ref for review diff" >&2; exit 1; }
+[ -n "$REVIEW_BASE_REF" ] || { echo "❌ MERGE BLOCKED: no base ref for review diff" >&2; exit 1; }
+
+# Pin the branch point before any provider starts. Remote-tracking refs are
+# shared by linked worktrees and can move when another session fetches or
+# merges. Diffing against the live ref after that happens makes new main-only
+# commits appear as deletions in this branch.
+REVIEW_BASE="$(git merge-base HEAD "$REVIEW_BASE_REF")"
+[ -n "$REVIEW_BASE" ] || { echo "❌ MERGE BLOCKED: no merge-base for $REVIEW_BASE_REF" >&2; exit 1; }
 
 # First round reviews the branch. Later rounds review only commits made since
 # the last successful review, avoiding repeated spend on unchanged commits.
@@ -72,8 +79,9 @@ run_claude_review() {
 }
 
 run_codex_review() {
-  local bounded schema prompt_file raw_file error_file rc pass pass_timeout
+  local bounded normalizer schema prompt_file raw_file normalized_file error_file rc pass pass_timeout
   bounded="$(bs_quality_find_script quality-run-bounded.sh)" || return 2
+  normalizer="$(bs_quality_find_script quality-normalize-codex-review.sh)" || return 2
   schema="$SCRIPT_DIR/schemas/quality-review-output.schema.json"
   [ -f "$schema" ] || return 2
   command -v codex >/dev/null 2>&1 || return 2
@@ -85,6 +93,7 @@ run_codex_review() {
   pass=1
   while [ "$pass" -le "$QUALITY_REVIEW_PASSES" ]; do
     raw_file="$REVIEW_OUT/codex-${pass}.json"
+    normalized_file="$REVIEW_OUT/codex-${pass}.normalized.json"
     error_file="$REVIEW_OUT/codex-${pass}.stderr"
     prompt_file="$REVIEW_OUT/codex-${pass}.prompt"
     {
@@ -108,14 +117,14 @@ run_codex_review() {
       grep -Eiq 'not authenticated|not logged in|login required|setup required' "$error_file" 2>/dev/null && return 2
       return 1
     fi
-    if ! jq -e '.result and (.result.findings | type == "array")' "$raw_file" >/dev/null 2>&1; then
+    if ! bash "$normalizer" "$raw_file" "$normalized_file"; then
       echo "INCONCLUSIVE: Codex output could not be parsed — human review required" >> "$REVIEW_OUT/codex.findings.txt"
       return 4
     fi
     jq -r '
-      if (.result.findings | length) == 0 then "NO FINDINGS. Verdict: \(.result.verdict). \(.result.summary)"
-      else .result.findings[] | "\(.severity // "WARNING"): \(.file // "unknown"):\(.line_start // 0) — \(.title // "finding")\n\(.body // "")\nFix: \(.recommendation // "")"
-      end' "$raw_file" >> "$REVIEW_OUT/codex.findings.txt"
+      if (.findings | length) == 0 then "NO FINDINGS. Verdict: \(.verdict). \(.summary)"
+      else .findings[] | "\(.severity // "WARNING"): \(.file // "unknown"):\(.line_start // 0) — \(.title // "finding")\n\(.body // "")\nFix: \(.recommendation // "")"
+      end' "$normalized_file" >> "$REVIEW_OUT/codex.findings.txt"
     pass=$((pass + 1))
   done
 }
@@ -166,11 +175,11 @@ fi
 
 printf '%s\n' "$(git rev-parse HEAD)" > "$REVIEW_STATE_FILE"
 REVIEWED_HEAD="$(git rev-parse HEAD)"
-REVIEWED_BASE="$(git merge-base HEAD "$REVIEW_BASE")"
+REVIEWED_BASE="$REVIEW_BASE"
 cat > "${BS_QUALITY_ROOT_FILE%.txt}-reviewstate.env" <<EOF
 REVIEWED_HEAD='$REVIEWED_HEAD'
 REVIEWED_BASE='$REVIEWED_BASE'
-RESOLVED_BASE='$REVIEW_BASE'
+RESOLVED_BASE='$REVIEW_BASE_REF'
 REVIEW_PROVIDER='$REVIEW_PROVIDER'
 QUALITY_PRIMARY='$QUALITY_PRIMARY'
 QUALITY_FALLBACK='$QUALITY_FALLBACK'
@@ -178,5 +187,6 @@ EOF
 export REVIEW_OUT REVIEW_BASE REVIEW_DIFF_BASE REVIEW_PROVIDER QUALITY_PRIMARY QUALITY_FALLBACK
 echo "REVIEW_OUT=$REVIEW_OUT"
 echo "REVIEW_BASE=$REVIEW_BASE"
+echo "REVIEW_BASE_REF=$REVIEW_BASE_REF"
 echo "REVIEW_DIFF_BASE=$REVIEW_DIFF_BASE"
 echo "REVIEW_PROVIDER=$REVIEW_PROVIDER"
