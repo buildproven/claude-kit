@@ -517,10 +517,7 @@ function mandatoryValidationHasReservedBudget(
     ) {
       return false;
     }
-    if (
-      !Number.isInteger(manifest.governor.validationDeadlineEpoch) ||
-      Math.floor(Date.now() / 1000) >= manifest.governor.validationDeadlineEpoch
-    ) {
+    if (!validationDeadlineIsActive(manifest)) {
       return false;
     }
     execFileSync(
@@ -537,6 +534,11 @@ function mandatoryValidationHasReservedBudget(
   } catch {
     return false;
   }
+}
+
+function validationDeadlineIsActive(manifest) {
+  const deadline = manifest.governor.validationDeadlineEpoch;
+  return Number.isInteger(deadline) && Math.floor(Date.now() / 1000) < deadline;
 }
 
 function loadReconciledState(sentinelPath) {
