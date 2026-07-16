@@ -23,12 +23,20 @@ const skillAllowlistArgs = process.argv
   .map((arg) => path.resolve(arg.slice(18)));
 const json = process.argv.includes("--json");
 const root = path.resolve(rootArg ? rootArg.slice(7) : process.cwd());
+const defaultSkillSource = path.join(root, "skills");
+const defaultSkillAllowlist = path.join(root, "config", "codex-skills.json");
 const skillSources =
-  skillSourceArgs.length > 0 ? skillSourceArgs : [path.join(root, "skills")];
+  skillSourceArgs.length > 0
+    ? skillSourceArgs
+    : fs.existsSync(defaultSkillSource)
+      ? [defaultSkillSource]
+      : [];
 const skillAllowlists =
   skillAllowlistArgs.length > 0
     ? skillAllowlistArgs
-    : [path.join(root, "config", "codex-skills.json")];
+    : fs.existsSync(defaultSkillAllowlist)
+      ? [defaultSkillAllowlist]
+      : [];
 const budget = Number(budgetArg ? budgetArg.slice(17) : 24);
 const descriptionBudget = Number(
   descriptionBudgetArg ? descriptionBudgetArg.slice(21) : 8000,
@@ -116,6 +124,7 @@ function frontmatterDescription(file) {
 }
 
 function allowedSkills() {
+  if (skillAllowlists.length === 0) return null;
   const allowed = new Set();
   for (const allowlist of skillAllowlists) {
     let payload;
@@ -160,7 +169,9 @@ function skillMetadata() {
       });
     }
   }
-  const unresolved = [...allowed].filter((name) => !byName.has(name));
+  const unresolved = allowed
+    ? [...allowed].filter((name) => !byName.has(name))
+    : [];
   if (unresolved.length > 0) {
     throw new Error(
       `Allowlisted skills not found in configured sources: ${unresolved.join(", ")}`,

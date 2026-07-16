@@ -125,7 +125,7 @@ if kill -0 "$child" 2>/dev/null; then exit 99; fi
       "bash",
       [
         "-c",
-        `source "$1"; bs_quality_find_script quality-run-review.sh`,
+        `BS_QUALITY_USE_TARGET_SCRIPTS=true; source "$1"; bs_quality_find_script quality-run-review.sh`,
         "resolution",
         LOAD_ROOT,
       ],

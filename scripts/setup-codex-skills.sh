@@ -26,25 +26,56 @@ done
 MANIFEST="$TARGET/.buildproven-managed"
 LOCK_DIR="$TARGET/.buildproven-sync.lock"
 LOCK_HELD=false
+LOCK_TOKEN="$$-${RANDOM:-0}-$(date +%s)"
+
+validate_manifest() {
+  [ -f "$MANIFEST" ] || return 0
+  awk -F'|' '
+    NF != 2 || $1 !~ /^[a-z0-9]+(-[a-z0-9]+)*$/ || $2 == "" { exit 1 }
+  ' "$MANIFEST" || {
+    echo "Invalid managed Codex skill manifest: $MANIFEST" >&2
+    return 1
+  }
+}
 
 acquire_lock() {
   mkdir -p "$TARGET"
   if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    echo "Codex skill sync already in progress: $TARGET" >&2
-    exit 1
+    owner=""
+    [ -f "$LOCK_DIR/owner" ] && owner=$(cat "$LOCK_DIR/owner")
+    owner_pid=${owner%%|*}
+    if [ -n "$owner" ] && [ "$owner_pid" != "$owner" ] && \
+       case "$owner_pid" in *[!0-9]*|'') false ;; *) ! kill -0 "$owner_pid" 2>/dev/null ;; esac; then
+      rm -f "$LOCK_DIR/owner"
+      rmdir "$LOCK_DIR" 2>/dev/null || true
+      mkdir "$LOCK_DIR" 2>/dev/null || {
+        echo "Codex skill sync already in progress: $TARGET" >&2
+        exit 1
+      }
+    else
+      echo "Codex skill sync already in progress: $TARGET" >&2
+      exit 1
+    fi
   fi
+  printf '%s|%s\n' "$$" "$LOCK_TOKEN" > "$LOCK_DIR/owner"
   LOCK_HELD=true
+  trap release_lock EXIT
+  trap 'exit 130' INT TERM
 }
 
 release_lock() {
   if [ "$LOCK_HELD" = true ]; then
-    rmdir "$LOCK_DIR" 2>/dev/null || true
+    if [ "$(cat "$LOCK_DIR/owner" 2>/dev/null || true)" = "$$|$LOCK_TOKEN" ]; then
+      rm -f "$LOCK_DIR/owner"
+      rmdir "$LOCK_DIR" 2>/dev/null || true
+    fi
     LOCK_HELD=false
   fi
 }
 
 if [ "$MODE" = clean ]; then
   [ -d "$TARGET" ] || exit 0
+  validate_manifest
   acquire_lock
   if [ -f "$MANIFEST" ]; then
     while IFS='|' read -r name expected; do
@@ -80,6 +111,8 @@ if not isinstance(skills, list) or any(
     raise SystemExit(1)
 ' "$allowlist" || exit 1
 done
+
+validate_manifest
 
 acquire_lock
 EXPECTED=$(mktemp "${TMPDIR:-/tmp}/codex-skills.XXXXXX")
@@ -221,7 +254,9 @@ while IFS='|' read -r name expected; do
 done < "$EXPECTED"
 
 if [ "$MODE" = sync ] && [ "$DRIFT" -eq 0 ]; then
+  trap '' INT TERM
   mv "$EXPECTED" "$MANIFEST"
   COMMITTED=true
+  trap 'exit 130' INT TERM
 fi
 [ "$DRIFT" -eq 0 ]

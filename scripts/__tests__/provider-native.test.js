@@ -411,6 +411,48 @@ describe("provider-native platform", () => {
     expect(() => readlinkSync(path.join(target, "keep"))).toThrow();
   });
 
+  it("recovers a stale owned sync lock", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-skill-stale-lock-"));
+    const source = path.join(dir, "source");
+    const target = path.join(dir, "target");
+    const allowlist = path.join(dir, "allowlist.json");
+    const lock = path.join(target, ".buildproven-sync.lock");
+    mkdirSync(path.join(source, "keep"), { recursive: true });
+    mkdirSync(lock, { recursive: true });
+    writeFileSync(path.join(source, "keep", "SKILL.md"), "# keep\n");
+    writeFileSync(allowlist, '{"skills":["keep"]}\n');
+    writeFileSync(path.join(lock, "owner"), "99999999|stale\n");
+
+    expect(
+      spawnSync("bash", [
+        SKILL_SYNC,
+        "--source",
+        source,
+        "--allowlist",
+        allowlist,
+        "--target",
+        target,
+      ]).status,
+    ).toBe(0);
+    expect(readlinkSync(path.join(target, "keep"))).toBe(
+      path.join(source, "keep"),
+    );
+  });
+
+  it("rejects path traversal in the managed manifest", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-skill-manifest-"));
+    const target = path.join(dir, "target");
+    mkdirSync(target, { recursive: true });
+    writeFileSync(
+      path.join(target, ".buildproven-managed"),
+      "../victim|/tmp/victim\n",
+    );
+
+    expect(
+      spawnSync("bash", [SKILL_SYNC, "--clean", "--target", target]).status,
+    ).toBe(1);
+  });
+
   it("measures instruction and allowlisted skill discovery budgets", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "surface-budget-"));
     const skills = path.join(dir, "skills");
@@ -548,6 +590,15 @@ describe("provider-native platform", () => {
         "--json",
       ]).status,
     ).toBe(1);
+  });
+
+  it("treats absent implicit skill surfaces as empty", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "surface-generic-"));
+    const payload = JSON.parse(
+      execFileSync("node", [SURFACE, `--root=${dir}`, "--json"]),
+    );
+    expect(payload.discoverySkillCount).toBe(0);
+    expect(payload.descriptionChars).toBe(0);
   });
 
   it("fails closed when a surface budget is not a valid integer", () => {
