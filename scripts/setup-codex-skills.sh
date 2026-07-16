@@ -63,6 +63,30 @@ for source in "${SOURCES[@]}"; do
 done
 
 DRIFT=0
+expected_target_for() {
+  local wanted="$1"
+  awk -F'|' -v wanted="$wanted" '$1 == wanted { print $2; exit }' "$EXPECTED"
+}
+
+# Remove only links recorded in the previous managed manifest whose exact
+# targets still match. Never infer ownership from a filename.
+if [ -f "$MANIFEST" ]; then
+  while IFS='|' read -r old_name old_target; do
+    [ -n "$old_name" ] || continue
+    [ -z "$(expected_target_for "$old_name")" ] || continue
+    old_path="$TARGET/$old_name"
+    if [ -L "$old_path" ] && [ "$(readlink "$old_path")" = "$old_target" ]; then
+      if [ "$MODE" = check ]; then
+        echo "stale: $old_path"
+        DRIFT=1
+      else
+        rm "$old_path"
+        echo "removed stale managed Codex skill: $old_name"
+      fi
+    fi
+  done < "$MANIFEST"
+fi
+
 while IFS='|' read -r name expected; do
   path="$TARGET/$name"
   if [ -L "$path" ] && [ "$(readlink "$path")" = "$expected" ]; then continue; fi

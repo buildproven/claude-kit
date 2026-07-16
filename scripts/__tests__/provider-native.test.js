@@ -127,6 +127,90 @@ describe("provider-native platform", () => {
     ).toBe(1);
   });
 
+  it("removes only stale skills owned by the previous managed manifest", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-skill-prune-"));
+    const source = path.join(dir, "source");
+    const target = path.join(dir, "target");
+    mkdirSync(path.join(source, "keep"), { recursive: true });
+    mkdirSync(path.join(source, "drop"), { recursive: true });
+    mkdirSync(path.join(source, "unmanaged"), { recursive: true });
+    for (const name of ["keep", "drop", "unmanaged"]) {
+      writeFileSync(path.join(source, name, "SKILL.md"), `# ${name}\n`);
+    }
+    const allowlist = path.join(dir, "allowlist.json");
+    writeFileSync(allowlist, '{"skills":["keep","drop"]}\n');
+
+    execFileSync("bash", [
+      SKILL_SYNC,
+      "--source",
+      source,
+      "--allowlist",
+      allowlist,
+      "--target",
+      target,
+    ]);
+    symlinkSync(path.join(source, "unmanaged"), path.join(target, "unmanaged"));
+    writeFileSync(allowlist, '{"skills":["keep"]}\n');
+
+    execFileSync("bash", [
+      SKILL_SYNC,
+      "--source",
+      source,
+      "--allowlist",
+      allowlist,
+      "--target",
+      target,
+    ]);
+
+    expect(readlinkSync(path.join(target, "keep"))).toBe(
+      path.join(source, "keep"),
+    );
+    expect(() => readlinkSync(path.join(target, "drop"))).toThrow();
+    expect(readlinkSync(path.join(target, "unmanaged"))).toBe(
+      path.join(source, "unmanaged"),
+    );
+  });
+
+  it("measures instruction and allowlisted skill discovery budgets", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "surface-budget-"));
+    const skills = path.join(dir, "skills");
+    const config = path.join(dir, "config");
+    mkdirSync(path.join(skills, "keep"), { recursive: true });
+    mkdirSync(path.join(skills, "skip"), { recursive: true });
+    mkdirSync(config);
+    writeFileSync(
+      path.join(skills, "keep", "SKILL.md"),
+      "---\nname: keep\ndescription: Useful workflow\n---\n",
+    );
+    writeFileSync(
+      path.join(skills, "skip", "SKILL.md"),
+      "---\nname: skip\ndescription: Hidden workflow\n---\n",
+    );
+    const allowlist = path.join(config, "skills.json");
+    const instructions = path.join(config, "CLAUDE.md");
+    writeFileSync(allowlist, '{"skills":["keep"]}\n');
+    writeFileSync(instructions, "short\n");
+
+    const payload = JSON.parse(
+      execFileSync("node", [
+        SURFACE,
+        `--root=${dir}`,
+        `--skill-source=${skills}`,
+        `--skill-allowlist=${allowlist}`,
+        `--instruction-file=${instructions}`,
+        "--description-budget=100",
+        "--instruction-budget=100",
+        "--json",
+      ]),
+    );
+
+    expect(payload.discoverySkillCount).toBe(1);
+    expect(payload.descriptionChars).toBe("keep: Useful workflow".length);
+    expect(payload.instructionBytes).toBe(6);
+    expect(payload.descriptionsOverBudget).toBe(false);
+    expect(payload.instructionsOverBudget).toBe(false);
+  });
+
   it("discovers active non-bot repos and open-PR repos from fixtures", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "fleet-discovery-"));
     const config = path.join(dir, "fleet.json");
