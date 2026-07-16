@@ -10,6 +10,8 @@
 # Run this AFTER `gh pr merge` succeeds, from inside the worktree that was
 # just merged.
 set -u
+PRESERVE_BRANCH=false
+[ "${1:-}" = "--preserve-branch" ] && PRESERVE_BRANCH=true
 
 WORKTREE_PATH=$(git rev-parse --show-toplevel)
 FEATURE_BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -45,7 +47,7 @@ if ! git worktree remove "$WORKTREE_PATH"; then
   echo "   Resolve manually, then run: git worktree remove $WORKTREE_PATH && git branch -D $FEATURE_BRANCH"
   exit 1
 fi
-if ! git branch -D "$FEATURE_BRANCH"; then
+if [ "$PRESERVE_BRANCH" = false ] && ! git branch -D "$FEATURE_BRANCH"; then
   echo "❌ Could not delete branch $FEATURE_BRANCH — remove manually with: git branch -D $FEATURE_BRANCH"
   exit 1
 fi

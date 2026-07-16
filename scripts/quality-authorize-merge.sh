@@ -62,7 +62,11 @@ REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
 DEFAULT_BRANCH="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)" || exit 1
 RULESET_IDS="$(gh api "repos/$REPOSITORY/rulesets?includes_parents=true" --jq '.[].id')" || exit 1
 for RULESET_ID in $RULESET_IDS; do
-  if gh api "repos/$REPOSITORY/rulesets/$RULESET_ID" |
+  RULESET_JSON="$(gh api "repos/$REPOSITORY/rulesets/$RULESET_ID")" || {
+    echo "❌ MERGE BLOCKED: could not inspect repository ruleset $RULESET_ID." >&2
+    exit 1
+  }
+  if printf '%s' "$RULESET_JSON" |
     jq -e --arg ref "refs/heads/$ACTUAL_BASE_NAME" --arg default "$DEFAULT_BRANCH" '
       .enforcement == "active" and
       any(.rules[]?; .type == "merge_queue") and

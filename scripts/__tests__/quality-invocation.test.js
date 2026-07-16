@@ -66,6 +66,7 @@ function create(root, extra = [], env = {}) {
 }
 
 function prepareCodexReview(root, manifestPath, providerFindings = []) {
+  execFileSync("node", [GOVERNOR, "bump-round", manifestPath], { cwd: root });
   const info = JSON.parse(
     execFileSync("node", [INVOCATION, "review-info", manifestPath], {
       cwd: root,
@@ -134,6 +135,25 @@ function prepareCodexReview(root, manifestPath, providerFindings = []) {
     ],
     { cwd: root },
   );
+  for (const name of ["lint", "test", "security"]) {
+    const log = path.join(root, `${name}.gate.log`);
+    writeFileSync(log, `${name} passed\n`);
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "gate",
+        manifestPath,
+        "--name",
+        name,
+        "--command",
+        `test-${name}`,
+        "--log",
+        log,
+      ],
+      { cwd: root },
+    );
+  }
   return info;
 }
 
@@ -636,6 +656,7 @@ wait
   it("rejects a caller-supplied diff and matching hash that omit the Git delta", () => {
     const root = repo("partial-diff");
     const manifest = create(root);
+    execFileSync("node", [GOVERNOR, "bump-round", manifest], { cwd: root });
     const info = JSON.parse(
       execFileSync("node", [INVOCATION, "review-info", manifest], {
         cwd: root,

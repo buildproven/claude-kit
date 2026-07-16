@@ -64,8 +64,20 @@ invalidates approval.
 ## 3. Automated gates and formatting
 
 Run the repository's real lint, type, test, build, security, and
-consumer-workflow gates. Tests must exist and pass unless `--skip-tests` was
-explicitly selected for a config-only repository.
+consumer-workflow gates. Tests must exist and pass unless the manifest's
+`options.skipTests` is true for a config-only repository. Execute the mandatory
+categories through the evidence-recording runner:
+
+```bash
+bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
+  --manifest "<exact-manifest-path>" --name lint -- <real-lint-command>
+bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
+  --manifest "<exact-manifest-path>" --name test -- <real-test-command>
+bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
+  --manifest "<exact-manifest-path>" --name security -- <real-security-command>
+```
+
+Use `options.scope` to select changed, branch, or all-project gate commands.
 
 Formatting remediation must use:
 
@@ -150,6 +162,7 @@ $TRAILERS"
 git push
 bash "$QUALITY_SCRIPTS_DIR/quality-authorize-merge.sh" \
   --manifest "<exact-manifest-path>"
+bash "$QUALITY_SCRIPTS_DIR/quality-merge-cleanup.sh" --preserve-branch
 ```
 
 Merge is forbidden when:

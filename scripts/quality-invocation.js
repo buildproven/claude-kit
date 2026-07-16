@@ -245,6 +245,7 @@ function buildGovernor(head) {
       1,
     ),
     roundsUsed: 0,
+    authorizedAttempts: [],
     remediationStartedAtEpoch: null,
     findingsSeen: [],
     startCommitSha: head,
@@ -317,6 +318,7 @@ function createManifest(options) {
       merge: options.merge === true,
       level: firstValue(options.level, "auto"),
       scope: firstValue(options.scope, "branch"),
+      skipTests: options["skip-tests"] === true,
     },
     repo: {
       realpath: root,
@@ -341,6 +343,7 @@ function createManifest(options) {
     provider: buildProvider(options),
     reviews: [],
     governor: buildGovernor(head),
+    gates: [],
   };
   atomicWrite(manifestPath, manifest);
   return manifestPath;
@@ -653,6 +656,15 @@ function judgeContext(manifest) {
 
 function recordReview(manifest, options) {
   const expected = reviewInfo(manifest);
+  const authorizedAttempt = manifest.governor.authorizedAttempts.find(
+    (attempt) =>
+      attempt.number === expected.attempt &&
+      attempt.head === manifest.revisions.currentHead &&
+      attempt.consumedAt === null,
+  );
+  if (!authorizedAttempt) {
+    throw new Error("review attempt was not authorized by the governor");
+  }
   const boundExpected = {
     ...expected,
     tier: manifest.risk.tier,
@@ -688,6 +700,7 @@ function recordReview(manifest, options) {
     status: "success",
     tier: boundExpected.tier,
     agentsSha256: boundExpected.agentsSha256,
+    governorAttemptToken: authorizedAttempt.token,
     completedAt: new Date().toISOString(),
   });
   manifest.provider = {
@@ -696,6 +709,7 @@ function recordReview(manifest, options) {
     fallback: options.fallback,
     reviewer: options.provider,
   };
+  authorizedAttempt.consumedAt = new Date().toISOString();
 }
 
 function sha256File(file) {
@@ -879,6 +893,15 @@ function reviewCoverage(manifest) {
       throw new Error("review coverage is not contiguous");
     }
     verifyReviewArtifact(manifest, review);
+    const authorizedAttempt = manifest.governor.authorizedAttempts.find(
+      (attempt) =>
+        attempt.token === review.governorAttemptToken &&
+        attempt.head === review.to &&
+        attempt.consumedAt !== null,
+    );
+    if (!authorizedAttempt) {
+      throw new Error("review lacks an authorized governor attempt");
+    }
     expectedFrom = review.to;
   }
   if (expectedFrom !== manifest.revisions.currentHead) {
@@ -891,6 +914,7 @@ function reviewCoverage(manifest) {
   ) {
     throw new Error("review provider evidence is incomplete");
   }
+  verifyGateEvidence(manifest);
   return {
     base: manifest.revisions.baseSha,
     head: manifest.revisions.currentHead,
@@ -899,6 +923,45 @@ function reviewCoverage(manifest) {
     fallback: manifest.provider.fallback,
     tier: manifest.risk.tier,
   };
+}
+
+function recordGate(manifest, options) {
+  const name = options.name;
+  const command = options.command;
+  const log = path.resolve(options.log);
+  if (!name || !command || !fs.existsSync(log)) {
+    throw new Error("gate evidence requires --name, --command, and --log");
+  }
+  manifest.gates = manifest.gates.filter(
+    (gate) =>
+      gate.head !== manifest.revisions.currentHead || gate.name !== name,
+  );
+  manifest.gates.push({
+    name,
+    command,
+    head: manifest.revisions.currentHead,
+    status: "success",
+    log,
+    logSha256: sha256File(log),
+    completedAt: new Date().toISOString(),
+  });
+}
+
+function verifyGateEvidence(manifest) {
+  const current = manifest.gates.filter(
+    (gate) => gate.head === manifest.revisions.currentHead,
+  );
+  for (const required of ["lint", "test", "security"]) {
+    const gate = current.find((item) => item.name === required);
+    if (
+      !gate ||
+      gate.status !== "success" ||
+      !fs.existsSync(gate.log) ||
+      sha256File(gate.log) !== gate.logSha256
+    ) {
+      throw new Error(`required ${required} gate evidence is missing or stale`);
+    }
+  }
 }
 
 function reviewTrailers(manifest) {
@@ -1041,6 +1104,8 @@ const COMMANDS = {
     ),
   judge: ({ manifestArg, rawArgs }) =>
     mutate(manifestArg, (locked) => recordJudge(locked, parseOptions(rawArgs))),
+  gate: ({ manifestArg, rawArgs }) =>
+    mutate(manifestArg, (locked) => recordGate(locked, parseOptions(rawArgs))),
   inventory: ({ manifest, rawArgs }) => {
     const options = parseOptions(rawArgs);
     writeArtifactInventory(manifest, options["artifact-dir"], options.provider);
@@ -1114,6 +1179,7 @@ module.exports = {
   parseJson,
   recordReview,
   recordJudge,
+  recordGate,
   judgeContext,
   renewApproval,
   repoKey,

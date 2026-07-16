@@ -46,6 +46,7 @@
 "use strict";
 
 const fs = require("fs");
+const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 const { loadManifest, withManifestLock } = require("./quality-invocation");
 
@@ -248,6 +249,7 @@ function loadState(sentinelPath) {
         max_rereview_reserve_seconds: governor.reReviewReserveSeconds,
         max_review_rounds: governor.maxReviewRounds,
         rounds_used: governor.roundsUsed,
+        authorized_attempts: governor.authorizedAttempts || [],
         findings_seen: governor.findingsSeen,
         _manifest: true,
       };
@@ -262,6 +264,7 @@ function saveState(sentinelPath, state) {
   if (state._manifest) {
     withManifestLock(sentinelPath, (manifest) => {
       manifest.governor.roundsUsed = state.rounds_used;
+      manifest.governor.authorizedAttempts = state.authorized_attempts || [];
       manifest.governor.findingsSeen = state.findings_seen;
     });
     return;
@@ -435,7 +438,6 @@ function bumpRound(sentinelPath, cwd) {
     ? state.rounds_used
     : 0;
   state.rounds_used = priorRounds + 1;
-  saveState(sentinelPath, state);
 
   // A mandatory validation round has its own reserved allowance. The first
   // provider review and remediation cannot consume it and make the required
@@ -482,6 +484,21 @@ function bumpRound(sentinelPath, cwd) {
     );
     return 1;
   }
+  state.authorized_attempts = state.authorized_attempts || [];
+  const authorizedHead = state._manifest
+    ? loadManifest(sentinelPath).manifest.revisions.currentHead
+    : execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd,
+        encoding: "utf8",
+      }).trim();
+  state.authorized_attempts.push({
+    number: state.rounds_used,
+    token: crypto.randomUUID(),
+    head: authorizedHead,
+    authorizedAt: new Date().toISOString(),
+    consumedAt: null,
+  });
+  saveState(sentinelPath, state);
 
   process.stdout.write(
     `[quality] review round ${result.roundsUsed}/${result.maxReviewRounds} ` +

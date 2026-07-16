@@ -243,6 +243,7 @@ done
 
 LEVEL_ARG=auto
 SCOPE_ARG=branch
+SKIP_TESTS=false
 previous=""
 for argument in "$@"; do
   case "$previous" in
@@ -254,6 +255,7 @@ for argument in "$@"; do
     --level=*) LEVEL_ARG="${argument#*=}" ;;
     --scope) previous="--scope" ;;
     --scope=*) SCOPE_ARG="${argument#*=}" ;;
+    --skip-tests) SKIP_TESTS=true ;;
   esac
 done
 
@@ -261,6 +263,7 @@ CREATE_ARGS=(create --repo "$GIT_ROOT" --base-ref "$BASE_REF" \
   --level "$LEVEL_ARG" --scope "$SCOPE_ARG")
 [ -n "${PR_BASE_OID:-}" ] && CREATE_ARGS+=(--base-head-sha "$PR_BASE_OID")
 [ "$ARGS_MERGE" = true ] && CREATE_ARGS+=(--merge)
+[ "$SKIP_TESTS" = true ] && CREATE_ARGS+=(--skip-tests)
 [ -n "${RES_PR:-}" ] && CREATE_ARGS+=(--pr "$RES_PR")
 [ "${BREAK_GLASS_APPROVED:-}" = true ] && CREATE_ARGS+=(--break-glass-approved)
 BS_QUALITY_MANIFEST="$(node "$SCRIPT_DIR/quality-invocation.js" "${CREATE_ARGS[@]}")" || exit 1
