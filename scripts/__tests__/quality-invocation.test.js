@@ -145,6 +145,14 @@ function prepareCodexReview(root, manifestPath, providerFindings = []) {
       findings: providerFindings,
     }),
   );
+  writeFileSync(
+    path.join(info.artifactDir, "codex-1.normalized.json"),
+    JSON.stringify({
+      verdict: providerFindings.length === 0 ? "pass" : "needs-attention",
+      summary: "fixture",
+      findings: providerFindings,
+    }),
+  );
   execFileSync(
     "node",
     [

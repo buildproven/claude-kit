@@ -60,7 +60,7 @@ function parseNativeReview(raw, root = process.cwd()) {
   }
   if (
     findings.length === 0 &&
-    !/\b(no (actionable )?findings|looks good)\b/i.test(raw)
+    !/^(?:no (?:actionable )?findings|looks good)\.?$/i.test(String(raw).trim())
   ) {
     throw new Error("native Codex review has no recognizable verdict");
   }

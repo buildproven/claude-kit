@@ -1290,9 +1290,16 @@ function providerFindings(manifest) {
       fs.readFileSync(path.join(review.artifactDir, "artifact-inventory.json")),
       "provider artifact inventory",
     );
-    for (const item of inventory.files.filter((file) =>
+    const resultFiles = inventory.files.filter((file) =>
       file.name.endsWith(".json"),
-    )) {
+    );
+    const resultNames = new Set(resultFiles.map((file) => file.name));
+    for (const item of resultFiles.filter((file) => {
+      const rawPass = file.name.match(/^codex-(\d+)\.json$/);
+      return (
+        !rawPass || !resultNames.has(`codex-${rawPass[1]}.normalized.json`)
+      );
+    })) {
       let parsed;
       try {
         parsed = parseJson(

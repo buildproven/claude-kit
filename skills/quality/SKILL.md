@@ -142,9 +142,9 @@ or rate-limit handling is ordinary review content.
 Runtime is derived from both risk and actual diff workload. Risk controls
 depth; changed lines plus per-file overhead control the clock. Discovery scales
 from 5 minutes for micro changes to 15 minutes for huge changes. If and only if
-the discovery review requires a fix, one separate validation phase adds a
-workload-scaled 3–5 minute ceiling for affected gates and targeted verification.
-The absolute default maximum is therefore 8–20 minutes, with no recursive third
+the discovery review requires a fix, separate workload-scaled allowances reserve
+2–6 minutes for affected gates and 3–5 minutes for targeted verification. The
+absolute default maximum is therefore 10–26 minutes, with no recursive third
 round.
 
 One campaign permits exactly one discovery review, one batched fix commit, and

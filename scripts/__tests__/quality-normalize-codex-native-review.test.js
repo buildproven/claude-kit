@@ -45,6 +45,13 @@ Full review comments:
     );
   });
 
+  it.each([
+    "No findings could be determined because the review ended unexpectedly.",
+    "This path looks good, but another path could not be reviewed.",
+  ])("rejects qualified no-finding prose: %s", (prose) => {
+    expect(() => parseNativeReview(prose)).toThrow(/no recognizable verdict/);
+  });
+
   it("rejects malformed structured output even when its text says no findings", () => {
     expect(() =>
       parseNativeReview(

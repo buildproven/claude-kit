@@ -234,8 +234,9 @@ tracks governor state inside the explicit invocation manifest with:
   remediation commit, checked before every fix attempt and verification.
 - **Proportional phase caps** — changed lines plus 25 units per changed file
   select a micro/small/medium/large/huge band. Discovery scales from 300 to 900
-  seconds. A fix opens one 180–300 second validation phase for affected gates
-  and targeted verification, making the absolute default ceiling 8–20 minutes.
+  seconds. A fix reserves 120–360 seconds for affected gates and a separate
+  180–300 seconds for targeted verification, making the absolute default
+  ceiling 10–26 minutes.
 - **Two-review convergence** — one discovery review and one targeted
   verification are allowed. A blocker discovered by verification is reported
   as the terminal result; it cannot trigger another fix/review recursion.
