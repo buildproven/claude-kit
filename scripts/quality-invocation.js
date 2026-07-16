@@ -1286,6 +1286,7 @@ function providerFindings(manifest) {
   for (const review of manifest.reviews.filter(
     (item) => item.status === "success",
   )) {
+    const reviewFindingsStart = findings.length;
     const inventory = parseJson(
       fs.readFileSync(path.join(review.artifactDir, "artifact-inventory.json")),
       "provider artifact inventory",
@@ -1293,10 +1294,15 @@ function providerFindings(manifest) {
     for (const item of inventory.files.filter((file) =>
       file.name.endsWith(".json"),
     )) {
-      const parsed = parseJson(
-        fs.readFileSync(path.join(review.artifactDir, item.name), "utf8"),
-        `provider result ${item.name}`,
-      );
+      let parsed;
+      try {
+        parsed = parseJson(
+          fs.readFileSync(path.join(review.artifactDir, item.name), "utf8"),
+          `provider result ${item.name}`,
+        );
+      } catch {
+        continue;
+      }
       const items = parsed.findings || parsed.result?.findings;
       if (!Array.isArray(items)) continue;
       items.forEach((finding, index) => {
@@ -1314,14 +1320,14 @@ function providerFindings(manifest) {
         });
       });
     }
-    for (const item of inventory.files.filter(
-      (file) =>
-        review.provider === "claude" && file.name.endsWith(".findings.txt"),
+    if (findings.length > reviewFindingsStart) continue;
+    for (const item of inventory.files.filter((file) =>
+      file.name.endsWith(".findings.txt"),
     )) {
       const text = fs
         .readFileSync(path.join(review.artifactDir, item.name), "utf8")
         .trim();
-      if (!text || text === "NO FINDINGS.") continue;
+      if (!text || /^NO FINDINGS\./.test(text)) continue;
       findings.push({
         id: crypto
           .createHash("sha256")
@@ -1433,7 +1439,7 @@ function writeArtifactInventory(manifest, artifactDir, provider) {
       (name) =>
         name.endsWith(".findings.txt") ||
         name.endsWith(".result.json") ||
-        /^codex-\d+\.json$/.test(name),
+        /^codex-\d+(?:\.normalized)?\.json$/.test(name),
     )
     .sort();
   const findings = names.filter((name) => name.endsWith(".findings.txt"));
