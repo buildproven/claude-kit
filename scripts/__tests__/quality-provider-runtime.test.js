@@ -179,6 +179,54 @@ git switch -q -c 'feature/quote"test'
     expect(runner.indexOf(riskLoad)).toBeLessThan(runner.indexOf(planLoad));
   });
 
+  it("persists a populated proportional plan as valid shell state", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "quality-risk-state-"));
+    const rootFile = path.join(dir, "root.txt");
+    writeFileSync(rootFile, `${ROOT}\n`);
+    writeFileSync(
+      rootFile.replace(/\.txt$/, "-plan.json"),
+      JSON.stringify({
+        riskScore: 51,
+        changeNature: "logic",
+        workload: "medium",
+        diffStats: { files: 9, lines: 495 },
+        campaignSeconds: 600,
+        reviewSeconds: 210,
+        verificationSeconds: 120,
+        checkSeconds: 240,
+        reviewReserveSeconds: 150,
+        checkReserveSeconds: 390,
+        agents: 6,
+        reviewDepth: "high",
+        reviewPasses: 1,
+      }),
+    );
+    const resolver = path.join(ROOT, "scripts", "quality-risk-resolve.sh");
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `
+bs_quality_find_script() { return 1; }
+BS_QUALITY_ROOT_FILE="$1"
+LEVEL=auto
+source "$2"
+source "\${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env"
+printf '%s' "$TIER|$RISK_SCORE|$QUALITY_WORKLOAD|$QUALITY_DIFF_FILES|$QUALITY_DIFF_LINES|$QUALITY_CAMPAIGN_TIMEOUT|$QUALITY_REVIEW_TIMEOUT"
+`,
+        "risk-state",
+        rootFile,
+        resolver,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).not.toContain("parse error");
+    expect(result.stdout.trim().split("\n").at(-1)).toBe(
+      "high|51|medium|9|495|600|210",
+    );
+  });
+
   it("kills the provider tree when the wrapper itself is cancelled", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "bounded-cancel-"));
     const pidFile = path.join(dir, "child.pid");

@@ -70,21 +70,32 @@ fi
 # Fenced Bash blocks do not share variables. Persist the resolved knobs so the
 # later provider runner enforces the scorer's actual effort/round policy.
 if [ -n "${BS_QUALITY_ROOT_FILE:-}" ]; then
+  PERSISTED_SCORE_JSON="${SCORE_JSON:-}"
+  [ -n "$PERSISTED_SCORE_JSON" ] || PERSISTED_SCORE_JSON='{}'
+  QUALITY_WORKLOAD=$(printf '%s' "$PERSISTED_SCORE_JSON" | jq -r '.workload // "unknown"')
+  QUALITY_DIFF_FILES=$(printf '%s' "$PERSISTED_SCORE_JSON" | jq -r '.diffStats.files // 0')
+  QUALITY_DIFF_LINES=$(printf '%s' "$PERSISTED_SCORE_JSON" | jq -r '.diffStats.lines // 0')
+  QUALITY_CAMPAIGN_TIMEOUT=$(printf '%s' "$PERSISTED_SCORE_JSON" | jq -r '.campaignSeconds // 900')
+  QUALITY_REVIEW_TIMEOUT=$(printf '%s' "$PERSISTED_SCORE_JSON" | jq -r '.reviewSeconds // 300')
+  QUALITY_VERIFICATION_TIMEOUT=$(printf '%s' "$PERSISTED_SCORE_JSON" | jq -r '.verificationSeconds // 120')
+  QUALITY_CHECK_TIMEOUT=$(printf '%s' "$PERSISTED_SCORE_JSON" | jq -r '.checkSeconds // 300')
+  QUALITY_CHECK_RESERVE=$(printf '%s' "$PERSISTED_SCORE_JSON" | jq -r '.checkReserveSeconds // 300')
+  QUALITY_REVIEW_RESERVE=$(printf '%s' "$PERSISTED_SCORE_JSON" | jq -r '.reviewReserveSeconds // 120')
   cat > "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env" <<EOF
 TIER='${TIER:-}'
 RISK_SCORE='${RISK_SCORE:-}'
 AGENT_TARGET='${AGENT_TARGET:-}'
 CODEX_DEPTH='${CODEX_DEPTH:-}'
 CODEX_ROUNDS='${CODEX_ROUNDS:-}'
-QUALITY_WORKLOAD='$(printf '%s' "${SCORE_JSON:-{}}" | jq -r '.workload // "unknown"')'
-QUALITY_DIFF_FILES='$(printf '%s' "${SCORE_JSON:-{}}" | jq -r '.diffStats.files // 0')'
-QUALITY_DIFF_LINES='$(printf '%s' "${SCORE_JSON:-{}}" | jq -r '.diffStats.lines // 0')'
-QUALITY_CAMPAIGN_TIMEOUT='$(printf '%s' "${SCORE_JSON:-{}}" | jq -r '.campaignSeconds // 900')'
-QUALITY_REVIEW_TIMEOUT='$(printf '%s' "${SCORE_JSON:-{}}" | jq -r '.reviewSeconds // 300')'
-QUALITY_VERIFICATION_TIMEOUT='$(printf '%s' "${SCORE_JSON:-{}}" | jq -r '.verificationSeconds // 120')'
-QUALITY_CHECK_TIMEOUT='$(printf '%s' "${SCORE_JSON:-{}}" | jq -r '.checkSeconds // 300')'
-QUALITY_CHECK_RESERVE='$(printf '%s' "${SCORE_JSON:-{}}" | jq -r '.checkReserveSeconds // 300')'
-QUALITY_REVIEW_RESERVE='$(printf '%s' "${SCORE_JSON:-{}}" | jq -r '.reviewReserveSeconds // 120')'
+QUALITY_WORKLOAD='$QUALITY_WORKLOAD'
+QUALITY_DIFF_FILES='$QUALITY_DIFF_FILES'
+QUALITY_DIFF_LINES='$QUALITY_DIFF_LINES'
+QUALITY_CAMPAIGN_TIMEOUT='$QUALITY_CAMPAIGN_TIMEOUT'
+QUALITY_REVIEW_TIMEOUT='$QUALITY_REVIEW_TIMEOUT'
+QUALITY_VERIFICATION_TIMEOUT='$QUALITY_VERIFICATION_TIMEOUT'
+QUALITY_CHECK_TIMEOUT='$QUALITY_CHECK_TIMEOUT'
+QUALITY_CHECK_RESERVE='$QUALITY_CHECK_RESERVE'
+QUALITY_REVIEW_RESERVE='$QUALITY_REVIEW_RESERVE'
 LEVEL='${LEVEL:-}'
 EOF
 fi
