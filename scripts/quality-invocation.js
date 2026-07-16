@@ -374,6 +374,8 @@ function buildGovernor(head) {
       "max review rounds",
       1,
     ),
+    maxReviewRoundsExplicit:
+      process.env.BS_QUALITY_MAX_REVIEW_ROUNDS !== undefined,
     remediationSeconds: governorInteger(
       "BS_QUALITY_MAX_REMEDIATION_SECONDS",
       "900",
@@ -683,6 +685,16 @@ function setRisk(manifest, options) {
     codexRounds: parseInteger(options["codex-rounds"] || "1", "codex rounds"),
     level: options.level || manifest.options.level,
   };
+  if (
+    tier === "critical" &&
+    manifest.governor.maxReviewRoundsExplicit !== true &&
+    manifest.governor.maxReviewRounds < 3
+  ) {
+    // Critical reviews can surface release blockers during the mandatory
+    // validation round. Reserve one bounded final round so fixing those
+    // blockers does not force a stale authorization or an unbounded override.
+    manifest.governor.maxReviewRounds = 3;
+  }
   if (manifest.risk?.resolved) {
     if (JSON.stringify(manifest.risk) === JSON.stringify(resolved)) return;
     throw new Error("risk resolution is immutable once persisted");

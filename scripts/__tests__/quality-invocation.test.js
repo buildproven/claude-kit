@@ -1640,6 +1640,56 @@ exit 1
     ).not.toBe(0);
   });
 
+  it("reserves three bounded review rounds for critical risk by default", () => {
+    const root = repo("critical-rounds");
+    const manifest = create(root);
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "risk",
+        manifest,
+        "--tier",
+        "critical",
+        "--agents",
+        "6",
+        "--codex-depth",
+        "xhigh",
+        "--codex-rounds",
+        "1",
+      ],
+      { cwd: root },
+    );
+    expect(
+      JSON.parse(readFileSync(manifest, "utf8")).governor.maxReviewRounds,
+    ).toBe(3);
+
+    const explicitlyBounded = create(root, [], {
+      BS_QUALITY_MAX_REVIEW_ROUNDS: "2",
+    });
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "risk",
+        explicitlyBounded,
+        "--tier",
+        "critical",
+        "--agents",
+        "6",
+        "--codex-depth",
+        "xhigh",
+        "--codex-rounds",
+        "1",
+      ],
+      { cwd: root },
+    );
+    expect(
+      JSON.parse(readFileSync(explicitlyBounded, "utf8")).governor
+        .maxReviewRounds,
+    ).toBe(2);
+  });
+
   it("rejects a judge artifact bound to another HEAD", () => {
     const root = repo("stale-judge");
     const manifest = create(root);
