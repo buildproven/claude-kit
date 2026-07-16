@@ -119,11 +119,15 @@ run_codex_review() {
       < "$prompt_file" > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file"
     rc=$?
     if [ "$rc" -ne 0 ]; then
+      # The bounded runner's timeout is authoritative. Codex echoes the full
+      # review prompt (including the supplied diff) to stderr, so scanning a
+      # timed-out invocation for quota phrases can match source/test text and
+      # misclassify the timeout as account exhaustion.
+      [ "$rc" -eq 124 ] && return 76
       if provider_exhausted "$raw_file" || provider_exhausted "$error_file"; then
         record_provider_exhaustion Codex "$raw_file" "$error_file"
         return 75
       fi
-      [ "$rc" -eq 124 ] && return 76
       grep -Eiq 'not authenticated|not logged in|login required|setup required' "$error_file" 2>/dev/null && return 2
       return 1
     fi

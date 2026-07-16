@@ -250,6 +250,18 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
     );
   });
 
+  it("classifies a bounded Codex timeout before scanning echoed prompt text", () => {
+    const source = readFileSync(RUN_REVIEW, "utf8");
+    const timeoutClassification = '[ "$rc" -eq 124 ] && return 76';
+    const exhaustionScan =
+      'if provider_exhausted "$raw_file" || provider_exhausted "$error_file"; then';
+
+    expect(source.indexOf(timeoutClassification)).toBeGreaterThan(-1);
+    expect(source.indexOf(timeoutClassification)).toBeLessThan(
+      source.indexOf(exhaustionScan),
+    );
+  });
+
   it.each([
     ["root", (review) => review],
     ["legacy result envelope", (review) => ({ result: review })],
