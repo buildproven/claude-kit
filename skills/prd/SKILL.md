@@ -117,7 +117,24 @@ Carson's rule: _read the thing_. If the user replies in under 30 seconds, gently
 
 ## Phase 3 — Parent Tasks (PAUSE GATE)
 
-After PRD is approved, generate **up to 7 parent tasks** in dot notation. Always `0.0 = "Create feature branch <branch-name>"`. Output to `docs/prd/<feature-slug>-tasks.md`:
+After PRD is approved, generate **up to 7 parent tasks** in dot notation. Always
+`0.0 = "Create feature branch <branch-name>"`. Output to
+`docs/prd/<feature-slug>-tasks.md`.
+
+Parent tasks are **vertical tracer bullets**, not layers. Each task must deliver
+a narrow, complete, independently verifiable behavior through every layer it
+needs: schema, API, UI, and tests. A database-only task followed by API-only,
+frontend-only, and test-only tasks is forbidden because none is useful or
+verifiable alone.
+
+For every parent task include:
+
+- **Delivers** — the behavior a user or caller can observe
+- **Blocked by** — only tasks that genuinely prevent it from starting
+- **Verification** — the command or observable result proving the slice works
+
+This tracer-bullet and blocking-edge discipline is adapted from Matt Pocock's
+MIT-licensed `to-tickets` skill; see `NOTICE`.
 
 ```markdown
 # Tasks: <Feature Name>
@@ -125,12 +142,32 @@ After PRD is approved, generate **up to 7 parent tasks** in dot notation. Always
 > PRD: docs/prd/<feature-slug>.md
 
 - [ ] 0.0 Create feature branch `feat/<slug>`
-- [ ] 1.0 <Database / schema layer>
-- [ ] 2.0 <API / backend layer>
-- [ ] 3.0 <Frontend / UI layer>
-- [ ] 4.0 <Tests / QA>
-- [ ] 5.0 <Docs / release>
+- [ ] 1.0 Request a password-reset email
+  - Delivers: a user can submit an email and receive a safe, non-enumerating response
+  - Blocked by: 0.0
+  - Verification: integration test for known and unknown accounts
+- [ ] 2.0 Complete reset with a valid token
+  - Delivers: a user can set a new password once with an unexpired token
+  - Blocked by: 1.0
+  - Verification: browser test covers success, reuse, and expiry
+- [ ] 3.0 Recover from invalid or expired reset links
+  - Delivers: the user sees a clear recovery path instead of a dead end
+  - Blocked by: 2.0
+  - Verification: browser test confirms recovery CTA and keyboard access
 ```
+
+### Wide refactors: expand → migrate → contract
+
+A mechanical change with a large blast radius may not fit vertical slicing.
+Sequence it instead:
+
+1. **Expand** — add the new form beside the old while keeping CI green.
+2. **Migrate** — move callers in independently green batches, each blocked by
+   expand.
+3. **Contract** — remove the old form only after every migration batch passes.
+
+Make blocking edges explicit. Do not create a single task that knowingly leaves
+the repository broken between steps.
 
 **HARD STOP.** Show the parent list. Ask:
 
@@ -146,19 +183,18 @@ For each approved parent task, expand into atomic subtasks. Rules:
 
 - Each subtask is doable in a single agent session (≤ 30 min wall time)
 - Each subtask names the file(s) it touches
-- Every parent ends with a `Write tests` subtask
+- Tests are part of the slice, not a later horizontal phase
 - Last subtask under each parent: `Run test suite; if green, commit`
 
 Example:
 
 ```markdown
-- [ ] 2.0 API: password reset endpoint
-  - [ ] 2.1 Add POST /api/auth/reset-request route handler in `src/api/auth.ts`
-  - [ ] 2.2 Generate signed reset token (jwt, 15min ttl) in `src/lib/tokens.ts`
-  - [ ] 2.3 Send email via existing mailer in `src/lib/mailer.ts`
-  - [ ] 2.4 Rate-limit endpoint to 5/hour/email in `src/middleware/rate-limit.ts`
-  - [ ] 2.5 Write integration tests in `tests/auth/reset.test.ts`
-  - [ ] 2.6 Run test suite; if green, commit
+- [ ] 1.0 Request a password-reset email
+  - [ ] 1.1 Add the reset-request behavior at the existing auth seam
+  - [ ] 1.2 Render pending, success, rate-limit, and failure states in the form
+  - [ ] 1.3 Add an integration test through the public auth interface
+  - [ ] 1.4 Add a browser test for the complete request flow
+  - [ ] 1.5 Run the focused tests and full suite; if green, commit
 ```
 
 ## Phase 5 — Machine-Verifiable Acceptance Criteria

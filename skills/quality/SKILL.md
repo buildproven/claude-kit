@@ -128,10 +128,11 @@ checks concurrently where safe. Never grant a stage or fallback a fresh budget.
 
 ### Step 1.3: Hard Test Gate (BLOCKING)
 
-Tests must exist and pass — a hard blocker, not advisory (`--skip-tests` for
-config-only repos). Implementation (existence check, run+auto-fix loop,
-gap reporting) is in `reference.md` "Step 1.3" — the mechanics are
-mechanical plumbing, not one of this skill's must-survive gates.
+Behavioral test evidence must be reviewed and the suite must pass — a hard
+blocker, not advisory (`--skip-tests` for config-only repos). Implementation
+(test-delta signal, run+auto-fix loop, gap reporting) is in `reference.md`
+"Step 1.3" — the mechanics are mechanical plumbing, not one of this skill's
+must-survive gates.
 
 ### Step 1.5–1.7: Pattern Analysis, Coverage, Docs Sync
 

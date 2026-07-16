@@ -110,40 +110,27 @@ reviewed again. Bootstrap clears this state for every new invocation.
 
 ## Step 1.3: Hard Test Gate — Implementation
 
-Tests must exist and pass. This is a hard blocker, not advisory (skip with
-`--skip-tests` for config-only repos). SKILL.md Step 1.3 states the rule;
-the mechanics are here.
+Behavioral test evidence must be reviewed and the suite must pass. This is a
+hard blocker, not advisory (skip with `--skip-tests` for config-only repos).
+SKILL.md Step 1.3 states the rule; the mechanics are here.
 
-**1.3a — Test existence check.** For each changed source file, verify a
-corresponding test file exists at one of `${base}.test${ext}`,
-`${base}.spec${ext}`, `tests/$(basename ${base}).test${ext}`, or
-`__tests__/$(basename ${base}).test${ext}`. Exempt patterns (no test
-required): `*.config.*`, `*.d.ts`, `types.ts`, `index.ts` (re-exports only),
-migration files, seed files.
+**1.3a — Behavioral test evidence signal.** A source-file-to-test-file mapping
+is not a valid quality target: behavior often crosses several files and should
+be tested once at a stable public seam. Mechanically detect only the strongest
+gap signal—production behavior changed but no test changed—then hand it to the
+test reviewer to inspect existing coverage.
 
 ```bash
 source scripts/quality-load-root.sh
 
-CHANGED_SRC=$(git diff --name-only main...HEAD | grep -E '\.(ts|tsx|js|jsx)$' | grep -v -E '\.(test|spec|d)\.' | grep -v -E '(config|setup|types|index\.d)\.')
-MISSING_TESTS=""
+CHANGED_SRC=$(git diff --name-only main...HEAD | grep -E '\.(ts|tsx|js|jsx|py|rb|go)$' | grep -v -E '\.(test|spec)\.|(^|/)test_.*\.py$|_test\.(py|go)$' || true)
+CHANGED_TESTS=$(git diff --name-only main...HEAD | grep -E '(^|/)(test|tests|spec|__tests__)/|\.(test|spec)\.|(^|/)test_.*\.py$|_test\.(py|go)$' || true)
 
-for src in $CHANGED_SRC; do
-  base=$(echo "$src" | sed 's/\.\(ts\|tsx\|js\|jsx\)$//')
-  ext=$(echo "$src" | grep -oE '\.(ts|tsx|js|jsx)$')
-  found=false
-  for pattern in "${base}.test${ext}" "${base}.spec${ext}" "tests/$(basename ${base}).test${ext}" "__tests__/$(basename ${base}).test${ext}"; do
-    if [ -f "$pattern" ]; then found=true; break; fi
-  done
-  if [ "$found" = false ]; then
-    MISSING_TESTS="$MISSING_TESTS\n  - $src"
-  fi
-done
-
-if [ -n "$MISSING_TESTS" ]; then
-  echo "⚠️ Source files without tests:$MISSING_TESTS"
-  # Not a hard fail — surfaced as a coverage signal for the reviewers + human
-  # (there is no test-generator agent; pr-test-analyzer covers test quality).
-  TEST_GAPS="$MISSING_TESTS"
+if [ -n "$CHANGED_SRC" ] && [ -z "$CHANGED_TESTS" ]; then
+  echo "⚠️ Production behavior changed with no test delta."
+  echo "   This is a review signal, not proof of missing coverage: inspect existing"
+  echo "   tests at the public seam before requesting a new test."
+  TEST_GAPS="Production behavior changed with no test delta; verify existing behavioral coverage."
 fi
 ```
 

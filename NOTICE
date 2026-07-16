@@ -20,6 +20,31 @@ skills/frontend-design/data/*.csv
 The design-reference datasets are original buildproven work and are licensed
 under the repository's MIT License. They are not derived from Anthropic's skill.
 
+skills/frontend-design/SKILL.md and references/*.md
+---------------------------------------------------
+Intent framing, product-versus-marketing routing, signature/default checks,
+and preflight review concepts are adapted from Josh Thomas's
+`frontend-design-principles`:
+https://github.com/joshuadavidthomas/agent-skills/tree/main/frontend-design-principles
+
+Redesign-audit and variance/motion/density concepts are adapted from
+Leonxlnx's Taste Skill:
+https://github.com/Leonxlnx/taste-skill
+
+Both upstream works are MIT licensed. Their copyright and license notices are
+retained in `skills/frontend-design/LICENSE-JOSH-THOMAS.txt` and
+`skills/frontend-design/LICENSE-LEONXLNX.txt`.
+
+skills/diagnosing-bugs/SKILL.md, skills/codebase-design/SKILL.md,
+skills/test-strategy/SKILL.md, and skills/prd/SKILL.md
+-------------------------------------------------------
+Diagnosis-loop, deep-module/seam, behavioral-testing, tracer-bullet, blocking-
+edge, and expand-contract concepts are adapted from Matt Pocock's skills:
+https://github.com/mattpocock/skills
+
+The upstream work is MIT licensed. Its copyright and license notice is
+retained in `skills/diagnosing-bugs/LICENSE-MATT-POCOCK.txt`.
+
 The previously vendored Anthropic `webapp-testing` skill was removed in v3.2.0.
 Use Anthropic's maintained upstream version instead:
 https://github.com/anthropics/skills/tree/main/skills/webapp-testing
