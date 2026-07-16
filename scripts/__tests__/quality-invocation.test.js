@@ -618,27 +618,40 @@ wait
     const manifestPath = create(root, [], {
       BS_QUALITY_MAX_PROVIDER_SECONDS: "120",
     });
+    execFileSync(
+      "node",
+      [INVOCATION, "provider-attempt", manifestPath, "--provider", "codex"],
+      { cwd: root },
+    );
     const initial = JSON.parse(readFileSync(manifestPath, "utf8"));
     initial.governor.providerDeadlineEpoch = Math.floor(Date.now() / 1000) - 1;
+    initial.governor.campaignDeadlineEpoch =
+      Math.floor(Date.now() / 1000) + 600;
     writeFileSync(manifestPath, `${JSON.stringify(initial, null, 2)}\n`);
-
-    execFileSync("node", [INVOCATION, "advance", manifestPath], { cwd: root });
-    let current = JSON.parse(readFileSync(manifestPath, "utf8"));
-    expect(current.governor.providerDeadlineEpoch).toBe(
-      initial.governor.providerDeadlineEpoch,
-    );
 
     writeFileSync(path.join(root, "next-head.js"), "export const next = 1;\n");
     git(root, ["add", "."]);
     git(root, ["commit", "-q", "-m", "fix: advance provider window"]);
     execFileSync("node", [INVOCATION, "advance", manifestPath], { cwd: root });
+    let current = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(current.governor.providerDeadlineEpoch).toBe(
+      initial.governor.providerDeadlineEpoch,
+    );
+    expect(current.governor.campaignDeadlineEpoch).toBe(
+      initial.governor.campaignDeadlineEpoch,
+    );
+    const authorization = JSON.parse(
+      execFileSync(
+        "node",
+        [INVOCATION, "provider-attempt", manifestPath, "--provider", "codex"],
+        { cwd: root, encoding: "utf8" },
+      ),
+    );
     current = JSON.parse(readFileSync(manifestPath, "utf8"));
     expect(current.governor.providerDeadlineHead).toBe(
       git(root, ["rev-parse", "HEAD"]),
     );
-    expect(current.governor.providerDeadlineEpoch).toBeGreaterThan(
-      Math.floor(Date.now() / 1000),
-    );
+    expect(authorization.remainingSeconds).toBeGreaterThan(0);
     expect(current.governor.campaignDeadlineEpoch).toBeGreaterThan(
       current.governor.providerDeadlineEpoch,
     );

@@ -2010,19 +2010,6 @@ function runAdvance(manifestArg, manifest, rawArgs) {
       : unionRequiredGates(locked.requiredGates, discovered);
     locked.requiredGatesPolicyVersion = REQUIRED_GATES_POLICY_VERSION;
     locked[NEEDS_REQUIRED_GATES_MIGRATION] = false;
-    if (locked.governor.providerDeadlineHead !== locked.revisions.currentHead) {
-      const now = Math.floor(Date.now() / 1000);
-      const verificationWindow =
-        locked.risk?.runtime?.verificationSeconds ??
-        locked.governor.reReviewReserveSeconds;
-      const gateWindow =
-        (locked.risk?.runtime?.gateSeconds ?? 300) *
-        locked.requiredGates.length;
-      locked.governor.campaignDeadlineEpoch =
-        now + gateWindow + verificationWindow;
-      locked.governor.providerDeadlineEpoch = now + verificationWindow;
-      locked.governor.providerDeadlineHead = locked.revisions.currentHead;
-    }
   });
   process.stdout.write(`${updated.revisions.currentHead}\n`);
 }
