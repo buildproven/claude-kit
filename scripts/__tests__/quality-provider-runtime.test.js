@@ -170,6 +170,17 @@ git switch -q -c 'feature/quote"test'
     expect(result.stdout).toBe("xhigh|1");
   });
 
+  it("loads persisted risk state at the runner boundary", () => {
+    const plan = readFileSync(PLAN, "utf8");
+    const runner = readFileSync(RUN_REVIEW, "utf8");
+    const riskLoad = 'source "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env"';
+    const planLoad = 'source "$SCRIPT_DIR/quality-review-plan.sh"';
+
+    expect(plan).not.toContain("riskstate.env");
+    expect(runner).toContain(riskLoad);
+    expect(runner.indexOf(riskLoad)).toBeLessThan(runner.indexOf(planLoad));
+  });
+
   it("kills the provider tree when the wrapper itself is cancelled", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "bounded-cancel-"));
     const pidFile = path.join(dir, "child.pid");
@@ -389,6 +400,31 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
   it.each([
     ["missing fields", { verdict: "approve" }],
     ["unknown verdict", { verdict: "maybe", summary: "invalid", findings: [] }],
+    [
+      "needs-attention without an actionable finding",
+      {
+        verdict: "needs-attention",
+        summary: "Manual review is required.",
+        findings: [],
+      },
+    ],
+    [
+      "approve with an actionable finding",
+      {
+        verdict: "approve",
+        summary: "Contradictory approval.",
+        findings: [
+          {
+            severity: "high",
+            title: "unexpected finding",
+            body: "An approval cannot carry a release-blocking finding.",
+            file: "file.js",
+            line_start: 1,
+            recommendation: "Use needs-attention.",
+          },
+        ],
+      },
+    ],
     [
       "invalid finding item",
       { verdict: "approve", summary: "invalid", findings: [false] },
