@@ -44,6 +44,9 @@ BS_QUALITY_SESSION_ID="$(printf '%s' "$BS_QUALITY_SESSION_ID" | tr -cd '[:alnum:
 [ -n "$BS_QUALITY_SESSION_ID" ] || BS_QUALITY_SESSION_ID=default
 export BS_QUALITY_SESSION_ID
 
+BS_QUALITY_RUNTIME_ROOT="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+export BS_QUALITY_RUNTIME_ROOT
+
 # bs_quality_find_script — resolve a kit script across EVERY install layout.
 #
 # Why this exists (2026-07-10): the review runner was resolved by checking
@@ -59,10 +62,11 @@ export BS_QUALITY_SESSION_ID
 bs_quality_find_script() {
   local name="$1" c
   for c in \
+    "$BS_QUALITY_RUNTIME_ROOT/scripts/$name" \
     "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$name}" \
     "${CLAUDE_KIT_ROOT:+$CLAUDE_KIT_ROOT/scripts/$name}" \
-    "${BS_QUALITY_USE_TARGET_SCRIPTS:+$GIT_ROOT/scripts/$name}" \
-    "${BS_QUALITY_USE_TARGET_SCRIPTS:+$GIT_ROOT/core/scripts/$name}" \
+    "$([ "${BS_QUALITY_USE_TARGET_SCRIPTS:-}" = true ] && printf '%s' "$GIT_ROOT/scripts/$name")" \
+    "$([ "${BS_QUALITY_USE_TARGET_SCRIPTS:-}" = true ] && printf '%s' "$GIT_ROOT/core/scripts/$name")" \
     "$HOME/.claude/scripts/$name" \
     "$HOME/.claude/plugins/bs/scripts/$name"
   do

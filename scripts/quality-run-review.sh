@@ -96,6 +96,10 @@ run_codex_review() {
   [ -f "$schema" ] || return 2
   command -v codex >/dev/null 2>&1 || return 2
   codex login status 2>&1 | grep -q 'Logged in' || return 2
+  case "$QUALITY_REVIEW_PASSES" in
+    1|2) ;;
+    *) echo "quality: Codex review passes must be 1 or 2" >&2; return 2 ;;
+  esac
 
   : > "$REVIEW_OUT/codex.findings.txt"
   pid_file="$REVIEW_OUT/codex.pids"
@@ -104,6 +108,16 @@ run_codex_review() {
   # Independent passes share the tier's wall-clock budget, so run them
   # concurrently. Dividing the budget across sequential xhigh passes made a
   # critical review mechanically unable to finish even when Codex was healthy.
+  cleanup_codex_reviews() {
+    [ -f "$pid_file" ] || return 0
+    while IFS= read -r cleanup_pid; do
+      kill -TERM "$cleanup_pid" 2>/dev/null || true
+    done < "$pid_file"
+    while IFS= read -r cleanup_pid; do
+      wait "$cleanup_pid" 2>/dev/null || true
+    done < "$pid_file"
+  }
+  trap cleanup_codex_reviews INT TERM HUP
   pass=1
   while [ "$pass" -le "$QUALITY_REVIEW_PASSES" ]; do
     raw_file="$REVIEW_OUT/codex-${pass}.json"
@@ -129,7 +143,17 @@ run_codex_review() {
   while IFS= read -r pid; do
     wait "$pid"
     rc=$?
-    if [ "$rc" -ne 0 ]; then
+    if [ "$rc" -eq 0 ]; then
+      raw_file="$REVIEW_OUT/codex-${pass}.json"
+      normalized_file="$REVIEW_OUT/codex-${pass}.normalized.json"
+      if ! bash "$normalizer" "$raw_file" "$normalized_file" || ! jq -r '
+        if (.findings | length) == 0 then "NO FINDINGS. Verdict: \(.verdict). \(.summary)"
+        else .findings[] | "\(.severity // "WARNING"): \(.file // "unknown"):\(.line_start // 0) — \(.title // "finding")\n\(.body // "")\nFix: \(.recommendation // "")"
+        end' "$normalized_file" >> "$REVIEW_OUT/codex.findings.txt"; then
+        echo "INCONCLUSIVE: normalized Codex findings could not be rendered — human review required" >> "$REVIEW_OUT/codex.findings.txt"
+        overall_rc=4
+      fi
+    else
       # The bounded runner's timeout is authoritative. Codex echoes the full
       # review prompt (including the supplied diff) to stderr, so scanning a
       # timed-out invocation for quota phrases can match source/test text and
@@ -152,25 +176,8 @@ run_codex_review() {
     fi
     pass=$((pass + 1))
   done < "$pid_file"
+  trap - INT TERM HUP
   [ "$overall_rc" -ne 0 ] && return "$overall_rc"
-
-  pass=1
-  while [ "$pass" -le "$QUALITY_REVIEW_PASSES" ]; do
-    raw_file="$REVIEW_OUT/codex-${pass}.json"
-    normalized_file="$REVIEW_OUT/codex-${pass}.normalized.json"
-    if ! bash "$normalizer" "$raw_file" "$normalized_file"; then
-      echo "INCONCLUSIVE: Codex output could not be parsed — human review required" >> "$REVIEW_OUT/codex.findings.txt"
-      return 4
-    fi
-    if ! jq -r '
-      if (.findings | length) == 0 then "NO FINDINGS. Verdict: \(.verdict). \(.summary)"
-      else .findings[] | "\(.severity // "WARNING"): \(.file // "unknown"):\(.line_start // 0) — \(.title // "finding")\n\(.body // "")\nFix: \(.recommendation // "")"
-      end' "$normalized_file" >> "$REVIEW_OUT/codex.findings.txt"; then
-      echo "INCONCLUSIVE: normalized Codex findings could not be rendered — human review required" >> "$REVIEW_OUT/codex.findings.txt"
-      return 4
-    fi
-    pass=$((pass + 1))
-  done
 }
 
 run_provider() {
@@ -195,10 +202,10 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 2 ] || [ "$PROVIDER_RC" -
   else
     echo "⚠️  [quality] $QUALITY_PRIMARY exceeded its ${QUALITY_REVIEW_TIMEOUT}s review budget and was cancelled; switching to $QUALITY_FALLBACK." >&2
   fi
-  # Preserve failed-primary evidence without feeding its INCONCLUSIVE files
-  # into synthesis after the fallback succeeds.
+  # Preserve failed-primary diagnostics. Valid findings from any successful
+  # primary pass remain at the top level and must still participate in synthesis.
   mkdir -p "$REVIEW_OUT/failed-primary"
-  for evidence in "$REVIEW_OUT"/*.findings.txt "$REVIEW_OUT"/*.stderr; do
+  for evidence in "$REVIEW_OUT"/*.stderr; do
     [ -e "$evidence" ] && mv "$evidence" "$REVIEW_OUT/failed-primary/"
   done
   REVIEW_PROVIDER="$QUALITY_FALLBACK"

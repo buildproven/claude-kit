@@ -44,6 +44,9 @@ const descriptionBudget = Number(
 const instructionBudget = Number(
   instructionBudgetArg ? instructionBudgetArg.slice(21) : 4096,
 );
+const instructionBudgetRequested = Boolean(
+  instructionBudgetArg || instructionFileArg,
+);
 const instructionFile = path.resolve(
   instructionFileArg
     ? instructionFileArg.slice(19)
@@ -75,7 +78,7 @@ for (const source of skillSources) {
 for (const allowlist of skillAllowlists) {
   requireExplicitPath(allowlist, "Skill allowlist");
 }
-if (instructionFileArg)
+if (instructionBudgetRequested)
   requireExplicitPath(instructionFile, "Instruction file");
 
 function dirsWith(file, parent) {
@@ -191,7 +194,7 @@ const descriptionChars = discoveredSkills.reduce(
 );
 const instructionBytes = fs.existsSync(instructionFile)
   ? fs.statSync(instructionFile).size
-  : 0;
+  : null;
 const commandWithoutSkill = commands.filter((name) => !skills.includes(name));
 const thinCommands = commands.filter((name) => {
   const body = fs.readFileSync(
@@ -227,7 +230,9 @@ const report = {
   instructionFile,
   instructionBytes,
   instructionBudget,
-  instructionsOverBudget: instructionBytes > instructionBudget,
+  instructionsOverBudget:
+    instructionBudgetRequested &&
+    (instructionBytes === null || instructionBytes > instructionBudget),
   commands,
   commandWithoutSkill,
   thinCommands,

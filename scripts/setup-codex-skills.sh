@@ -27,6 +27,7 @@ MANIFEST="$TARGET/.buildproven-managed"
 LOCK_DIR="$TARGET/.buildproven-sync.lock"
 LOCK_HELD=false
 LOCK_TOKEN="$$-${RANDOM:-0}-$(date +%s)"
+LOCK_STALE_SECONDS=30
 
 validate_manifest() {
   [ -f "$MANIFEST" ] || return 0
@@ -44,8 +45,17 @@ acquire_lock() {
     owner=""
     [ -f "$LOCK_DIR/owner" ] && owner=$(cat "$LOCK_DIR/owner")
     owner_pid=${owner%%|*}
-    if [ -n "$owner" ] && [ "$owner_pid" != "$owner" ] && \
-       case "$owner_pid" in *[!0-9]*|'') false ;; *) ! kill -0 "$owner_pid" 2>/dev/null ;; esac; then
+    lock_age=$(python3 -c 'import os,sys,time; print(max(0, int(time.time()-os.stat(sys.argv[1]).st_mtime)))' "$LOCK_DIR" 2>/dev/null || echo 0)
+    stale_lock=false
+    if [ -z "$owner" ] && [ "$lock_age" -ge "$LOCK_STALE_SECONDS" ]; then
+      stale_lock=true
+    elif [ -n "$owner" ] && [ "$owner_pid" != "$owner" ]; then
+      case "$owner_pid" in
+        *[!0-9]*|'') ;;
+        *) kill -0 "$owner_pid" 2>/dev/null || stale_lock=true ;;
+      esac
+    fi
+    if [ "$stale_lock" = true ]; then
       rm -f "$LOCK_DIR/owner"
       rmdir "$LOCK_DIR" 2>/dev/null || true
       mkdir "$LOCK_DIR" 2>/dev/null || {
@@ -92,6 +102,9 @@ fi
 for source in "${SOURCES[@]}"; do
   [ -d "$source" ] || { echo "Codex skill source not found: $source" >&2; exit 1; }
 done
+for index in "${!SOURCES[@]}"; do
+  SOURCES[$index]="$(cd "${SOURCES[$index]}" && pwd -L)"
+done
 for allowlist in "${ALLOWLISTS[@]}"; do
   [ -f "$allowlist" ] || { echo "Codex skill allowlist not found: $allowlist" >&2; exit 1; }
   python3 -c '
@@ -103,11 +116,12 @@ except (OSError, json.JSONDecodeError) as error:
     print(f"Invalid Codex skill allowlist {sys.argv[1]}: {error}", file=sys.stderr)
     raise SystemExit(1)
 skills = payload.get("skills") if isinstance(payload, dict) else None
+import re
 if not isinstance(skills, list) or any(
-    not isinstance(name, str) or not name or name != name.strip()
+    not isinstance(name, str) or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name)
     for name in skills
 ):
-    print(f"Invalid Codex skill allowlist {sys.argv[1]}: skills must be canonical non-empty strings", file=sys.stderr)
+    print(f"Invalid Codex skill allowlist {sys.argv[1]}: skills must use lowercase kebab-case", file=sys.stderr)
     raise SystemExit(1)
 ' "$allowlist" || exit 1
 done
@@ -115,9 +129,9 @@ done
 validate_manifest
 
 acquire_lock
-EXPECTED=$(mktemp "${TMPDIR:-/tmp}/codex-skills.XXXXXX")
+EXPECTED=$(mktemp "$TARGET/.buildproven-manifest.XXXXXX")
 REQUESTED=$(mktemp "${TMPDIR:-/tmp}/codex-skills-requested.XXXXXX")
-NEXT_EXPECTED=$(mktemp "${TMPDIR:-/tmp}/codex-skills-next.XXXXXX")
+NEXT_EXPECTED=$(mktemp "$TARGET/.buildproven-manifest-next.XXXXXX")
 ORIGINAL=$(mktemp "${TMPDIR:-/tmp}/codex-skills-original.XXXXXX")
 CREATED=$(mktemp "${TMPDIR:-/tmp}/codex-skills-created.XXXXXX")
 BACKUP_DIR=$(mktemp -d "$TARGET/.buildproven-backup.XXXXXX")
@@ -167,7 +181,7 @@ for source in "${SOURCES[@]}"; do
     grep -Fqx "$name" "$REQUESTED" || continue
     awk -F'|' -v name="$name" '$1 != name' "$EXPECTED" > "$NEXT_EXPECTED"
     mv "$NEXT_EXPECTED" "$EXPECTED"
-    NEXT_EXPECTED=$(mktemp "${TMPDIR:-/tmp}/codex-skills-next.XXXXXX")
+    NEXT_EXPECTED=$(mktemp "$TARGET/.buildproven-manifest-next.XXXXXX")
     printf '%s|%s\n' "$name" "$skill" >> "$EXPECTED"
   done
 done
@@ -247,8 +261,8 @@ while IFS='|' read -r name expected; do
       DRIFT=1
       continue
     fi
-    ln -s "$expected" "$path"
     printf '%s|%s\n' "$name" "$expected" >> "$CREATED"
+    ln -s "$expected" "$path"
     echo "linked Codex skill: $name"
   fi
 done < "$EXPECTED"
