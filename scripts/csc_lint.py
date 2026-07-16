@@ -211,22 +211,73 @@ def _truthy(val: str | None) -> bool:
     return str(val).strip().lower() in ("true", "yes", "1")
 
 
+def _submodule_paths(root: Path) -> set[tuple[str, ...]]:
+    """Return repository-relative submodule paths from .gitmodules."""
+    gitmodules = root / ".gitmodules"
+    if not gitmodules.exists():
+        return set()
+    paths: set[tuple[str, ...]] = set()
+    for match in re.finditer(
+        r"(?m)^\s*path\s*=\s*(.+)$", gitmodules.read_text(errors="replace")
+    ):
+        raw_path = match.group(1).strip()
+        if len(raw_path) >= 2 and raw_path[0] == raw_path[-1] == '"':
+            raw_path = raw_path[1:-1]
+        path_parts = Path(raw_path).parts
+        if path_parts:
+            paths.add(path_parts)
+    return paths
+
+
+def _is_excluded_root(
+    directory: Path, root: Path, submodules: set[tuple[str, ...]]
+) -> bool:
+    relative = directory.relative_to(root).parts if directory != root else ()
+    return "node_modules" in directory.parts or any(
+        relative[: len(submodule)] == submodule for submodule in submodules
+    )
+
+
 def _find_command_files(root: Path) -> list[Path]:
+    submodules = _submodule_paths(root)
     out: list[Path] = []
     for d in root.rglob("commands"):
-        if "node_modules" in d.parts or not d.is_dir():
+        if not d.is_dir() or _is_excluded_root(d, root, submodules):
             continue
         out += [p for p in d.rglob("*.md") if p.name not in ("README.md",)]
     return out
 
 
 def _find_skill_files(root: Path) -> list[Path]:
+    submodules = _submodule_paths(root)
     out: list[Path] = []
     for d in root.rglob("skills"):
-        if "node_modules" in d.parts or not d.is_dir():
+        if not d.is_dir() or _is_excluded_root(d, root, submodules):
             continue
         out += list(d.rglob("SKILL.md"))
     return out
+
+
+def _find_dependency_skill_names(root: Path) -> set[str]:
+    """Return skill names provided by declared, initialized submodules.
+
+    Dependency files enforce their own contract in their own repository, so we
+    do not lint or count them here. Their exported skill names still participate
+    in R1/R3 resolution because overlay commands may legitimately delegate to
+    core skills.
+    """
+    names = set()
+    for submodule in _submodule_paths(root):
+        submodule_root = root.joinpath(*submodule)
+        if not submodule_root.is_dir():
+            continue
+        for skills_dir in submodule_root.rglob("skills"):
+            if not skills_dir.is_dir() or "node_modules" in skills_dir.parts:
+                continue
+            names.update(
+                item.parent.name for item in skills_dir.rglob("SKILL.md")
+            )
+    return names
 
 
 def lint(root: Path) -> Report:
@@ -283,6 +334,8 @@ def lint(root: Path) -> Report:
                 f"skill body invokes command(s) {cross_edges} — skills must never "
                 "call other /commands (recursion risk)",
             )
+
+    available_skills = set(skill_dirs) | _find_dependency_skill_names(root)
 
     # R5 skill cross-dir duplicates
     for name, paths in skill_dirs.items():
@@ -370,7 +423,7 @@ def lint(root: Path) -> Report:
         m = INVOKE_PROSE.search(body)
         target = m.group(1) if m else stem
 
-        if not m and target not in skill_dirs:
+        if not m and target not in available_skills:
             # No delegation prose AND no same-named skill: the command neither
             # delegates nor stands alone. That is a real contract break.
             rep.add(
@@ -383,7 +436,7 @@ def lint(root: Path) -> Report:
             )
 
         # R3: the skill it delegates to must exist.
-        if target and target not in skill_dirs:
+        if target and target not in available_skills:
             rep.add(
                 "R3",
                 "high",

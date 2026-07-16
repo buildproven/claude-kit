@@ -313,11 +313,61 @@ def test_r3_invoke_must_resolve(tmp_path: Path) -> None:
     assert any(v.rule == "R3" for v in rep.violations)
 
 
-def test_r5_duplicate_skill_dirs_flagged(tmp_path: Path) -> None:
+def test_r5_duplicate_skill_dirs_flagged_without_submodule_contract(
+    tmp_path: Path,
+) -> None:
     _mk(tmp_path, "skills/dev/SKILL.md", _skill("dev"))
     _mk(tmp_path, "core/skills/dev/SKILL.md", _skill("dev"))
     rep = csc_lint.lint(tmp_path)
     assert any(v.rule == "R5" for v in rep.violations)
+
+
+def test_declared_submodule_files_are_excluded(tmp_path: Path) -> None:
+    (tmp_path / ".gitmodules").write_text(
+        '[submodule "core"]\n\tpath = core\n\turl = https://example.invalid/core.git\n'
+    )
+    _mk(tmp_path, "skills/dev/SKILL.md", _skill("dev"))
+    _mk(tmp_path, "core/skills/dev/SKILL.md", _skill("dev"))
+    _mk(tmp_path, "core/commands/bs/ghost.md", _cmd("bs:ghost", invokes="nope"))
+    rep = csc_lint.lint(tmp_path)
+    assert rep.skills == 1
+    assert rep.commands == 0
+    assert not rep.violations
+
+
+def test_overlay_command_can_delegate_to_submodule_skill(tmp_path: Path) -> None:
+    (tmp_path / ".gitmodules").write_text(
+        '[submodule "core"]\n\tpath = core\n\turl = https://example.invalid/core.git\n'
+    )
+    _mk(
+        tmp_path,
+        "commands/bs/ship.md",
+        "---\nname: bs:ship\ndescription: x\n---\nInvoke the `quality` skill.\n",
+    )
+    _mk(tmp_path, "core/skills/quality/SKILL.md", _skill("quality"))
+    rep = csc_lint.lint(tmp_path)
+    assert rep.commands == 1
+    assert rep.skills == 0
+    assert not rep.violations
+
+
+def test_nested_submodule_exclusion_is_precise_and_handles_quotes(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".gitmodules").write_text(
+        '[submodule "core"]\n\tpath = "vendor/core#module"\n'
+        "\turl = https://example.invalid/core.git\n"
+    )
+    _mk(
+        tmp_path,
+        "vendor/commands/bs/local.md",
+        "---\nname: bs:local\ndescription: x\nstandalone: true\n---\nLocal.\n",
+    )
+    _mk(tmp_path, "vendor/core#module/skills/dev/SKILL.md", _skill("dev"))
+    rep = csc_lint.lint(tmp_path)
+    assert rep.commands == 1
+    assert rep.skills == 0
+    assert not rep.violations
 
 
 def test_standalone_skill_needs_no_unsupported_auto_invoke_field(
