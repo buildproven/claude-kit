@@ -1,140 +1,21 @@
 #!/usr/bin/env bash
-# quality-load-root.sh — restore the git root resolved by Step -1 of the
-# quality skill.
-#
-# WHY THIS EXISTS: each Bash tool call inside the quality skill starts a
-# FRESH shell — cwd and shell vars set in one fenced bash block do NOT
-# survive into the next block. Step -1 resolves the audit target (PR,
-# branch, worktree, or cwd) and writes it to a sentinel file so every later
-# step can recover it. Every downstream step must `source` this script (or
-# inline-recompute the identical hash) before doing anything else, or it
-# silently operates on the fork's raw harness cwd instead of the resolved
-# target (regression 2026-05-13).
-#
-# The sentinel filename is namespaced by session + a hash of the resolved
-# target root, so a session that runs /bs:quality against MORE THAN ONE
-# repo/worktree in sequence can't have a later run read an earlier run's
-# stale root (and silently gate/merge the WRONG repo).
-#
-# Usage: source this file. On success it leaves $GIT_ROOT set and the cwd
-# changed to it. On failure it prints an error and returns/exits 1 — the
-# caller does not need its own empty-string guard.
-#
-# Also defines bs_quality_root_file() (used by Step -1 to WRITE the sentinel,
-# and by callers of quality-find-script.sh) and bs_quality_find_script()
-# (resolves a kit script across every install layout).
+# Load and validate one explicit quality invocation manifest.
+set -u
 
-bs_quality_root_file() {
-  # $1 = resolved git root (absolute). Echoes the per-target sentinel path.
-  local root="$1" sess="${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-default}}" key
-  sess="$(printf '%s' "$sess" | tr -cd '[:alnum:]_.-' | cut -c1-80)"
-  [ -n "$sess" ] || sess=default
-  if command -v sha256sum >/dev/null 2>&1; then
-    key=$(printf '%s' "$root" | sha256sum | cut -c1-12)
-  elif command -v shasum >/dev/null 2>&1; then
-    key=$(printf '%s' "$root" | shasum -a 256 | cut -c1-12)
-  else
-    key=$(printf '%s' "$root" | cksum | tr -d ' ' | cut -c1-12)
-  fi
-  printf '%s/bs-quality-gitroot-%s-%s.txt' "${TMPDIR:-/tmp}" "$sess" "$key"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+MANIFEST=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --manifest) MANIFEST="${2:-}"; shift 2 ;;
+    --manifest=*) MANIFEST="${1#*=}"; shift ;;
+    *) echo "quality-load-root: unknown argument '$1'" >&2; exit 1 ;;
+  esac
+done
+[ -n "$MANIFEST" ] || {
+  echo "quality-load-root: --manifest is required" >&2
+  exit 1
 }
-
-bs_quality_campaign_file() {
-  # $1 = resolved git root; $2 = branch/ref identity.
-  # Campaign state must outlive a Claude/Codex session and a branch rebase, so
-  # key it by the clone's common git directory plus branch rather than by the
-  # session-scoped root sentinel or starting commit.
-  local root="$1" branch="$2" common_raw common_dir identity key
-  common_dir="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
-  if [ -z "$common_dir" ]; then
-    common_raw="$(git -C "$root" rev-parse --git-common-dir 2>/dev/null)"
-    case "$common_raw" in
-      /*) common_dir="$(cd "$common_raw" 2>/dev/null && pwd -P)" ;;
-      *) common_dir="$(cd "$root/$common_raw" 2>/dev/null && pwd -P)" ;;
-    esac
-  fi
-  [ -n "$common_dir" ] || common_dir="$root"
-  identity="${common_dir}"$'\n'"${branch}"
-  if command -v sha256sum >/dev/null 2>&1; then
-    key=$(printf '%s' "$identity" | sha256sum | cut -c1-20)
-  elif command -v shasum >/dev/null 2>&1; then
-    key=$(printf '%s' "$identity" | shasum -a 256 | cut -c1-20)
-  else
-    key=$(printf '%s' "$identity" | cksum | tr -d ' ' | cut -c1-20)
-  fi
-  printf '%s/bs-quality-campaign-%s.json' "${TMPDIR:-/tmp}" "$key"
-}
-
-BS_QUALITY_SESSION_ID="${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-default}}"
-BS_QUALITY_SESSION_ID="$(printf '%s' "$BS_QUALITY_SESSION_ID" | tr -cd '[:alnum:]_.-' | cut -c1-80)"
-[ -n "$BS_QUALITY_SESSION_ID" ] || BS_QUALITY_SESSION_ID=default
-export BS_QUALITY_SESSION_ID
-
-# bs_quality_find_script — resolve a trusted kit script across every install
-# layout. Target-local scripts come last unless an operator explicitly enables
-# BS_QUALITY_TRUST_TARGET_SCRIPTS for toolkit self-development.
-#
-# Why this exists (2026-07-10): the review runner was resolved by checking
-# exactly two hardcoded paths. On the primary install both missed —
-# ~/.claude/scripts may be symlinked somewhere that does not carry
-# claude-review-companion.sh — so `bash <missing>` returned 127 and the skill
-# printed "MERGE BLOCKED (rc=127)" after doing all the work. That was the
-# "runs everything, then never merges" stall. Never resolve a kit script by
-# guessing two paths again: call this, and fail loudly if it returns nothing.
-#
-# Echoes the resolved absolute path and returns 0, or returns 1 (silent) so
-# the caller owns the error message.
-bs_quality_find_script() {
-  local name="$1" c
-  local trusted_candidates=(
-    "${CLAUDE_SETUP_ROOT:+$CLAUDE_SETUP_ROOT/scripts/$name}" \
-    "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$name}" \
-    "${CLAUDE_KIT_ROOT:+$CLAUDE_KIT_ROOT/scripts/$name}" \
-    "$HOME/.claude/scripts/$name" \
-    "$HOME/.claude/plugins/bs/scripts/$name"
-  )
-  local target_candidates=(
-    "$GIT_ROOT/scripts/$name"
-    "$GIT_ROOT/core/scripts/$name"
-  )
-  if [ "${BS_QUALITY_TRUST_TARGET_SCRIPTS:-false}" = true ]; then
-    for c in "${target_candidates[@]}" "${trusted_candidates[@]}"; do
-      [ -n "$c" ] && [ -f "$c" ] && { printf '%s' "$c"; return 0; }
-    done
-    return 1
-  fi
-  for c in "${trusted_candidates[@]}"; do
-    [ -n "$c" ] && [ -f "$c" ] && { printf '%s' "$c"; return 0; }
-  done
-  return 1
-}
-
-CWD_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
-GIT_ROOT=""
-if [ -n "$CWD_ROOT" ]; then
-  GIT_ROOT="$(cat "$(bs_quality_root_file "$CWD_ROOT")" 2>/dev/null)"
-  # The sentinel stores the canonical target root; if present it wins, but it
-  # should equal CWD_ROOT. If absent, the cwd root IS the target (the fork is
-  # already sitting in it) — use it directly rather than guessing.
-  [ -n "$GIT_ROOT" ] || GIT_ROOT="$CWD_ROOT"
-fi
-# Empty-string guard: bash 3.2 (macOS default /bin/bash) treats `cd ""` as a
-# silent no-op, defeating a `cd ... || exit` check. Verify GIT_ROOT is
-# non-empty before attempting cd.
-if [ -z "$GIT_ROOT" ]; then
-  echo "❌ git root unresolved (no sentinel, not in a git repo)" >&2
-  return 1 2>/dev/null || exit 1
-fi
-if ! cd "$GIT_ROOT"; then
-  echo "❌ cannot enter git root: $GIT_ROOT" >&2
-  return 1 2>/dev/null || exit 1
-fi
-
-# Downstream skill blocks use these paths directly. Recompute and export them
-# here because each tool call starts a fresh shell; bootstrap's child-process
-# exports cannot survive into the next call.
-BS_QUALITY_ROOT_FILE="$(bs_quality_root_file "$GIT_ROOT")"
-BS_QUALITY_CAMPAIGN_BRANCH="$(git branch --show-current 2>/dev/null)"
-[ -n "$BS_QUALITY_CAMPAIGN_BRANCH" ] || BS_QUALITY_CAMPAIGN_BRANCH="DETACHED:$(git rev-parse HEAD 2>/dev/null)"
-BS_QUALITY_GOVERNOR_FILE="$(bs_quality_campaign_file "$GIT_ROOT" "$BS_QUALITY_CAMPAIGN_BRANCH")"
-export BS_QUALITY_ROOT_FILE BS_QUALITY_GOVERNOR_FILE
+ROOT="$(node "$SCRIPT_DIR/quality-invocation.js" locate "$MANIFEST")" || exit 1
+cd "$ROOT" || exit 1
+node "$SCRIPT_DIR/quality-invocation.js" validate "$MANIFEST" >/dev/null || exit 1
+printf '{"manifest":"%s","status":"validated"}\n' "$MANIFEST"

@@ -1,101 +1,60 @@
 ---
 name: bs:quality
-description: Autonomous quality loop with configurable thoroughness (95% or 98%). Runs lint, tests, build, security scans, and specialized quality agents. Auto-fixes issues and creates PRs.
-argument-hint: "[--level 95|98] [--scope changed|branch|all] [--merge] [--audit] [--deep] [--preflight] [--parallel] [--deploy] [--target-dir <path>]"
+description: Autonomous quality loop with configurable thoroughness. Runs checks, revision-bound review, remediation, CI, and optional merge.
+argument-hint: "[--level auto|95|98] [--scope branch] [--merge] [--pr <number>] [--manifest <path>] [--target-dir <path>]"
 tags: [quality, ci, review]
 category: quality
 ---
 
-**Invocation args:** `$ARGUMENTS`
-
-## Step 0 — Loop guard (CHECK THIS FIRST)
-
-**If `$ARGUMENTS` already contains `--args-file`, the args have already been
-persisted by a prior pass of this wrapper. Do NOT run Step 1 or Step 2's
-persistence again — that re-runs the whole wrapper preamble and loops forever.
-Instead, invoke the `quality` skill directly with the existing `$ARGUMENTS`
-verbatim, then stop processing this wrapper.**
-
-This fires when the Skill re-enters `/bs:quality` carrying the transformed args
-(e.g. `--args-file /tmp/…/args.txt --merge 558`). Without this guard the model
-dutifully writes a _second_ args file and calls Skill again — the infinite
-wrapper recursion observed 2026-07-14.
-
-## Step 1 — Persist args so the forked skill can read them (REQUIRED)
-
-_(Skip this and Step 2's re-invocation if Step 0's guard fired.)_
-
-The `quality` skill runs in a forked Claude context that does NOT
-inherit this turn's `$ARGUMENTS`. To bridge that gap, **before
-invoking the Skill tool**, write the args to a tempfile and pass its
-path to the skill via `--args-file`. The skill's Step -1 reads this
-file when `$@` is empty.
-
-Run this `Bash` call first, exactly as written. The portable
-`mktemp -d` pattern works on both BSD (macOS) and GNU mktemp — a flat
-`mktemp` with a `.txt` template suffix silently fails to expand on BSD,
-producing collisions under concurrent quality invocations.
+Run bootstrap in this wrapper before forking:
 
 ```bash
-# Portable mktemp: create a unique dir, write args.txt inside.
-QUALITY_ARGS_DIR=$(mktemp -d -t bs-quality-args 2>/dev/null \
-  || mktemp -d "${TMPDIR:-/tmp}/bs-quality-args.XXXXXX")
-QUALITY_ARGS_FILE="$QUALITY_ARGS_DIR/args.txt"
-printf '%s\n' "$ARGUMENTS" > "$QUALITY_ARGS_FILE"
-echo "QUALITY_ARGS_FILE=$QUALITY_ARGS_FILE"
-echo "QUALITY_ARGS=$ARGUMENTS"
+BOOTSTRAP=""
+for candidate in \
+  "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-bootstrap.sh" \
+  "${CLAUDE_KIT_ROOT:-}/scripts/quality-bootstrap.sh" \
+  "$HOME/.claude/scripts/quality-bootstrap.sh" \
+  "./scripts/quality-bootstrap.sh"; do
+  [ -n "$candidate" ] && [ -f "$candidate" ] && {
+    BOOTSTRAP="$candidate"
+    break
+  }
+done
+[ -n "$BOOTSTRAP" ] || {
+  echo "quality-bootstrap.sh not found" >&2
+  exit 1
+}
+WRAPPER="$(dirname "$BOOTSTRAP")/quality-wrapper.js"
+[ -f "$WRAPPER" ] || {
+  echo "quality-wrapper.js not found" >&2
+  exit 1
+}
+node "$WRAPPER" "$BOOTSTRAP" <<'BS_QUALITY_REQUEST'
+{"argv": ["<each invocation argument as one JSON string token>"]}
+BS_QUALITY_REQUEST
 ```
 
-Capture the printed `QUALITY_ARGS_FILE` path — you'll pass it to the
-skill in the next step. The skill is responsible for deleting the
-file once it has read the args (Step -1 of the skill).
+Construct the JSON array directly from the parsed slash-command arguments; do
+not interpolate the raw argument string into shell. JSON escaping preserves
+spaces, quotes, and metacharacters as inert argument data.
 
-If the skill fails to consume the file (e.g. version skew between
-slash command and skill), stale dirs may accumulate under `$TMPDIR`.
-The slash command does not try to clean them up — that's the skill's
-responsibility. The OS will eventually reclaim them on reboot (macOS
-clears `$TMPDIR` periodically; Linux distros clear `/tmp` per their
-`tmpfiles.d` policy), so no user-level cron is needed.
+Capture the exact `BS_QUALITY_MANIFEST=` path from bootstrap output. Invoke the
+`quality` skill exactly once with only:
 
-The skill also writes a sentinel file `${TMPDIR:-/tmp}/bs-quality-gitroot-<session>-<hash-of-root>.txt`
-containing the resolved git root. This is read at the top of every
-downstream bash block in the skill so the working directory survives
-across separate Bash tool invocations. Without it, `--target-dir` is
-silently dropped beyond Step -1 (regression fixed 2026-05-14). The
-filename is namespaced by session **and** a hash of the target root so a
-single session running quality against multiple repos can't read a stale
-sibling run's root and gate the wrong repo (fixed 2026-06-16).
+```text
+--manifest <captured-exact-path>
+```
 
-## Step 2 — Invoke the quality skill
+Do not pass the original arguments into the fork, create an args tempfile,
+duplicate argument channels, or re-enter this wrapper. Bootstrap preserves the
+`BS_QUALITY_HEADLESS=1` recursion guard. PR selection is explicit:
+`--pr <number>`; ambiguous positional forms such as `--merge 1` are invalid.
 
-Call the `Skill` tool with:
+For a safe continuation, pass the exact manifest printed by the earlier run:
 
-- `skill="quality"`
-- `args="--args-file <QUALITY_ARGS_FILE> $ARGUMENTS"`
+```text
+/bs:quality --manifest /exact/path/to/invocation.json
+```
 
-(Substitute the actual path you captured in Step 1 for `<QUALITY_ARGS_FILE>`.)
-
-The duplicated args (both in the file AND in the args string) are
-intentional: belt-and-suspenders so the skill picks them up via
-whichever channel survives the fork. The file is the reliable path
-(persisted to disk); the args string is the fast path (works if/when
-the runtime ever propagates `args` to the fork's `$@`).
-
-If `$ARGUMENTS` is empty (no flags passed), still call the skill —
-it has a sensible default (audit cwd, no merge).
-
-**Security note:** the tempfile contains only flag-style args
-(PR numbers, branch names, `--target-dir` paths). Do not pass
-tokens or secrets in `$ARGUMENTS` — they'd land on disk in `$TMPDIR`.
-
-## Flag notes
-
-- `--target-dir <path>` (alias `--target`): run the quality loop
-  against the repo at `<path>` instead of the current working
-  directory. Use when invoking from a forked agent context where the
-  agent's `cwd` is a harness scratch directory rather than the
-  worktree.
-- `--args-file <path>` (added 2026-05-12): fallback channel for the
-  slash-command wrapper to pass args to the forked skill. Set by
-  this command automatically — operators rarely need to use it
-  directly.
+There is deliberately no "latest invocation" lookup or session-state glob.
+`BS_QUALITY_HEADLESS=1` remains the recursion guard for provider children.

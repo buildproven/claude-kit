@@ -2,6 +2,34 @@
 
 ## Target Resolution (Step -1)
 
+### Invocation manifest and isolation
+
+Bootstrap creates one schema-versioned JSON manifest and prints its exact path.
+Every later entrypoint requires `--manifest <that-path>` and validates the
+repository realpath, PR, base SHA, and expected HEAD before reading or writing
+state. There is no session sentinel, active-state glob, mtime lookup, or
+`latest` pointer.
+
+The state directory is:
+
+```text
+$TMPDIR/bs-quality/<repo-hash>/pr-<number|none>/<base-sha>/<invocation-id>/
+```
+
+Provider artifacts add `reviews/<head-sha>/round-N/`. Safe resumption is
+explicit and accepts only a descendant HEAD. Each successful checkpoint
+records its exact `from..to` range and diff hash, allowing fix rounds to review
+only `previousReviewedHead..currentHead` while final evidence remains bound to
+the complete base/final-HEAD relationship.
+
+Break-glass approval is a signed outer-wrapper capability bound to repository
+key, PR, HEAD, invocation ID, approver, issue time, and expiry. The manifest
+pins the wrapper verification key before attachment and re-verifies the exact
+artifact; artifact-supplied keys are rejected. Approval travels only through
+the outer `BREAK_GLASS_APPROVED=true` environment channel, not command argv.
+Nested autonomous quality processes have no approval-mint command. HEAD
+changes and expiry fail closed.
+
 **Bug fixed 2026-05-11**: when invoked as `/bs:quality --merge` with PR
 context in the natural-language args (e.g. `#410`, `codex/foo`, or a
 worktree path), prior versions ignored those references and audited
@@ -48,7 +76,8 @@ reviewed again. Bootstrap clears this state for every new invocation.
 - **2026-05-11**: target resolution ignored PR/branch args in favor of
   operator cwd (see above) — fixed by the resolver + priority order.
 - **2026-05-12**: `Skill(args=...)` did not propagate into a forked skill's
-  `$@` — fixed by the `--args-file` bridge in `quality-bootstrap.sh`.
+  `$@`. The temporary args-file bridge was removed in July 2026 in favor of
+  direct arguments plus the structured invocation manifest.
 - **2026-05-13**: cwd and shell vars set in one fenced bash block do not
   survive into the next — every step must restore `$GIT_ROOT` via the
   sentinel dance in `quality-load-root.sh`, or silently operate on the
@@ -121,7 +150,9 @@ gap signal—production behavior changed but no test changed—then hand it to t
 test reviewer to inspect existing coverage.
 
 ```bash
-source scripts/quality-load-root.sh
+bash "$HOME/.claude/scripts/quality-load-root.sh" --manifest "<exact-manifest-path>"
+GIT_ROOT="$(node "$HOME/.claude/scripts/quality-invocation.js" field "<exact-manifest-path>" repo.realpath)"
+cd "$GIT_ROOT"
 
 CHANGED_SRC=$(git diff --name-only main...HEAD | grep -E '\.(ts|tsx|js|jsx|py|rb|go)$' | grep -v -E '\.(test|spec)\.|(^|/)test_.*\.py$|_test\.(py|go)$' || true)
 CHANGED_TESTS=$(git diff --name-only main...HEAD | grep -E '(^|/)(test|tests|spec|__tests__)/|\.(test|spec)\.|(^|/)test_.*\.py$|_test\.(py|go)$' || true)
@@ -137,21 +168,23 @@ fi
 **1.3b — Run tests (hard gate).**
 
 ```bash
-source scripts/quality-load-root.sh
-BOUNDED="$(bs_quality_find_script quality-run-bounded.sh)" || exit 1
+bash "$HOME/.claude/scripts/quality-load-root.sh" --manifest "<exact-manifest-path>"
+GIT_ROOT="$(node "$HOME/.claude/scripts/quality-invocation.js" field "<exact-manifest-path>" repo.realpath)"
+cd "$GIT_ROOT"
 
-bash "$BOUNDED" --governor "$BS_QUALITY_GOVERNOR_FILE" \
-  --cap 300 --reserve 300 -- npm test 2>&1
+npm test 2>&1
 TEST_EXIT=$?
 
 if [ $TEST_EXIT -ne 0 ]; then
-  echo "❌ Tests failed — diagnose and batch-fix the root cause once"
-  # Do not rerun an unchanged deterministic failure. Apply the fix, then:
-  bash "$BOUNDED" --governor "$BS_QUALITY_GOVERNOR_FILE" \
-    --cap 300 --reserve 120 -- npm test 2>&1
-  TEST_EXIT=$?
+  echo "❌ Tests failed — attempting auto-fix (up to 3 attempts)"
+  for attempt in 1 2 3; do
+    echo "Fix attempt $attempt/3..."
+    npm test 2>&1
+    TEST_EXIT=$?
+    if [ $TEST_EXIT -eq 0 ]; then break; fi
+  done
   if [ $TEST_EXIT -ne 0 ]; then
-    echo "❌ HARD FAIL: Tests still failing after the verified fix attempt"
+    echo "❌ HARD FAIL: Tests still failing after 3 fix attempts"
     echo "Cannot proceed to review agents with broken tests."
     exit 1
   fi
@@ -171,37 +204,23 @@ auto-fix loop, re-run `npm test` to verify they pass before continuing.
 | Flag                  | Default | Description                                                                                 |
 | --------------------- | ------- | ------------------------------------------------------------------------------------------- |
 | `--level N`           | auto    | Quality level: `auto` (read tier from harness-config.json), `95`, or `98`                   |
-| `--scope S`           | branch  | Scope: changed, branch, all                                                                 |
+| `--scope S`           | branch  | Revision-bound branch scope; other values fail fast                                         |
 | `--merge`             | false   | Auto-merge PR after quality                                                                 |
-| `--skip-ci`           | false   | Bypass CI checks                                                                            |
-| `--skip-rebase`       | false   | Skip auto-rebase                                                                            |
-| `--status`            | false   | Show quality history and exit                                                               |
-| `--verbose`           | false   | Show trends with `--status`                                                                 |
-| `--audit`             | false   | Read-only assessment                                                                        |
-| `--deep`              | false   | 6-agent deep review (with `--audit`)                                                        |
-| `--dry-run`           | false   | Preview without modifying                                                                   |
-| `--fix`               | false   | Auto-fix common issues (with `--audit`)                                                     |
-| `--json`              | false   | Machine-readable output                                                                     |
-| `--coverage-diff`     | false   | Show per-file coverage changes                                                              |
-| `--skip-docs`         | false   | Skip doc sync check                                                                         |
-| `--teams`             | false   | Use agent teams (tmux visibility)                                                           |
-| `--no-teams`          | -       | Force Task subagents (default)                                                              |
 | `--skip-tests`        | false   | Skip hard test gate (config-only repos)                                                     |
-| `--preflight`         | false   | Quick readiness check (<10 sec)                                                             |
+| `--pr <number>`       | -       | Bind to one open PR                                                                         |
+| `--manifest <path>`   | -       | Resume one exact persisted invocation; accepts no other flags                               |
 | `--target-dir <path>` | -       | Run against this repo (use when invoking from a forked/agent context with no inherited cwd) |
 
 ### Environment Variables
 
-| Variable                          | Default | Description                                                                                                                                  |
-| --------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BS_QUALITY_PRIMARY`              | config  | Per-run primary override: `claude` or `codex`.                                                                                               |
-| `BS_QUALITY_FALLBACK`             | config  | Per-run fallback override: `claude`, `codex`, or `none`.                                                                                     |
-| `BS_QUALITY_REVIEW_TIMEOUT`       | tier    | Override the mechanically selected provider wall-clock cap.                                                                                  |
-| `BS_QUALITY_TARGET_DIR`           | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd.                                           |
-| `BS_QUALITY_TRUST_TARGET_SCRIPTS` | false   | Explicit toolkit-development mode: allow the audited checkout's quality scripts to enforce their own review. Never enable for untrusted PRs. |
-| `BS_QUALITY_RESET_CAMPAIGN`       | false   | Explicitly discard the same branch's existing deadline/round state. Never set autonomously after findings or timeout.                        |
-| `BS_QUALITY_MAX_FIX_COMMITS`      | 4       | Run-governor cap: max fix commits across the whole invocation before autonomous halt (see below).                                            |
-| `BS_QUALITY_MAX_WALL_SECONDS`     | 900     | Absolute local wall-clock deadline for the whole invocation, including fallback and synchronous CI.                                          |
+| Variable                              | Default | Description                                                                                        |
+| ------------------------------------- | ------- | -------------------------------------------------------------------------------------------------- |
+| `BS_QUALITY_PRIMARY`                  | config  | Per-run primary override: `claude` or `codex`.                                                     |
+| `BS_QUALITY_FALLBACK`                 | config  | Per-run fallback override: `claude`, `codex`, or `none`.                                           |
+| `BS_QUALITY_TARGET_DIR`               | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd. |
+| `BS_QUALITY_MAX_FIX_COMMITS`          | 1       | Explicit override for the default one-commit batched-remediation cap.                              |
+| `BS_QUALITY_MAX_REMEDIATION_SECONDS`  | planned | Batched-fix allowance remaining after proportional discovery and verification reserves.            |
+| `BS_QUALITY_REREVIEW_RESERVE_SECONDS` | planned | Workload-scaled allowance for one targeted validation review after fixes.                          |
 
 ### Run Governor (runaway-loop guardrails)
 
@@ -209,15 +228,18 @@ Two PRs run in one night (#529: 128min/6 commits, #532: 167min/13 commits)
 completed with no circuit breaker — `CODEX_ROUNDS` only bounds the inner Codex
 adversarial loop, not the outer cycle of BLOCKING-finding → auto-fix →
 re-review across the whole invocation. `scripts/quality-run-governor.js`
-tracks a per-invocation sentinel (`$TMPDIR/bs-quality-gitroot-*-governor.json`,
-alongside the Step -1 git-root sentinel) with:
+tracks governor state inside the explicit invocation manifest with:
 
-- **Fix-commit cap** (`BS_QUALITY_MAX_FIX_COMMITS`, default 4) — commits made
-  since the run started, checked before every fix attempt and every Codex
-  re-verification round.
-- **Absolute deadline** (`BS_QUALITY_MAX_WALL_SECONDS`, default 900 = 15 min) —
-  persisted as `deadline_epoch`; every blocking subprocess is clamped to the
-  remaining time. Fallback and synchronous CI share the same allowance.
+- **Fix-commit cap** (`BS_QUALITY_MAX_FIX_COMMITS`, default 1) — one batched
+  remediation commit, checked before every fix attempt and verification.
+- **Proportional phase caps** — changed lines plus 25 units per changed file
+  select a micro/small/medium/large/huge band. Discovery scales from 300 to 900
+  seconds. A fix reserves 120–360 seconds for affected gates and a separate
+  180–300 seconds for targeted verification, making the absolute default
+  ceiling 10–26 minutes.
+- **Two-review convergence** — one discovery review and one targeted
+  verification are allowed. A blocker discovered by verification is reported
+  as the terminal result; it cannot trigger another fix/review recursion.
 - **Repeated-pattern detection** — findings are recorded round-over-round;
   if a round's findings mostly repeat a shape seen in an earlier round (e.g.
   the same on-disk-vs-loaded-job gap at 4 different call sites), the skill is
@@ -251,30 +273,12 @@ If the pipeline did NOT run in this invocation (e.g. operator passed
 `--merge` alone with no prior quality work), the gate hard-blocks instead
 of auto-stamping — auto-stamping then would be forging review evidence.
 
-## Scope Options
+## Scope
 
-### `--scope changed` (Quick)
-
-- Time: 2-5 min
-- Checks uncommitted changes only
-- Runs lint, type-check, tests on changed files
-- Skips quality agents — automated checks sufficient
-- Auto-commits with smart message
-
-### `--scope branch` (Default)
-
-- Typical local time: 5-15 min; hard default deadline: 15 min
-- All files changed in branch vs main
-- Full quality agents on changed files
-- Creates PR after quality passes
-
-### `--scope all` (Full Project)
-
-- Uses the same 15-minute default deadline; raise it explicitly for repositories
-  whose deterministic full-project checks cannot complete inside that bound
-- Every file in the project
-- Full quality agents on entire codebase
-- For major refactors, pre-release audits
+`branch` is the only executable scope: the manifest binds the merge-base and
+HEAD, gates run from committed policy, and review covers that exact range.
+`changed` and `all` fail at bootstrap until they have distinct, testable
+execution semantics.
 
 ## Quality Levels
 
@@ -282,20 +286,15 @@ of auto-stamping — auto-stamping then would be forging review evidence.
 
 When `harness-config.json` exists in the repo root, the skill reads the resolved risk tier and mechanically selects provider-equivalent depth:
 
-| Tier       | Provider-equivalent depth  | Time cap |
-| ---------- | -------------------------- | -------- |
-| `low`      | focused regression         | ≤2 min   |
-| `medium`   | broad correctness/security | ≤5 min   |
-| `high`     | deep adversarial           | ≤8 min   |
-| `critical` | release-veto discovery     | ≤10 min  |
+| Tier       | Provider-equivalent depth  | Minimum review |
+| ---------- | -------------------------- | -------------- |
+| `low`      | focused regression         | 75s            |
+| `medium`   | broad correctness/security | 120s           |
+| `high`     | deep adversarial           | 180s           |
+| `critical` | release-veto + break-glass | 240s           |
 
-If no `harness-config.json` is present, `--level auto` falls back to L95.
-
-Manifest risk is semantic, not path-only. The scorer compares parsed
-base-versus-HEAD `package.json` values: metadata stays low; development tooling
-and engines are medium; runtime dependencies, exports, bins, and workspaces are
-high; install lifecycle hooks, overrides/resolutions, non-registry dependency
-sources, and unreadable/structural manifest changes are critical.
+Workload can raise these limits, but the complete default campaign remains
+bounded at 5–15 minutes.
 
 ### Level 95 (Ship-Ready, no tier classification)
 
@@ -312,19 +311,20 @@ sources, and unreadable/structural manifest changes are critical.
 
 ## Provider Invocation
 
-Codex uses `codex exec` directly with a structured output schema and the
-scorer-selected `model_reasoning_effort`; this avoids ambient-effort drift.
-Critical discovery is one xhigh pass. A second outer round is one high-effort
-targeted verification of persisted findings against the fix delta.
-`quality-run-bounded.sh` places each command in a process group and clamps it to
-both its stage cap and the run's absolute remaining time:
+Codex uses the native `codex exec review` surface with the scorer-selected
+`model_reasoning_effort`; this avoids ambient-effort drift and avoids pasting
+the repository diff into a generic prompt. Current Codex versions return
+native priority-marked review text even when `--output-schema` is supplied, so
+the runner normalizes that format into the same strict internal finding schema.
+`quality-run-bounded.sh` places it in a process group and enforces the tier cap:
 
 ```
-codex exec --ephemeral -s read-only \
-  -c 'model_reasoning_effort="high"' --output-schema <schema> -
+codex exec --ephemeral -s read-only --json \
+  -c 'model_reasoning_effort="high"' --output-schema <schema> \
+  review --base origin/main
 ```
 
-The runner normalizes both current root-level Codex structured output and the
+The runner normalizes native review text, root-level structured output, and the
 legacy `{result: ...}` envelope before parsing findings. It pins the exact
 merge-base SHA before starting the first provider so a fetch in another linked
 worktree cannot move `origin/main` and inject reverse-diff findings. Later
@@ -372,14 +372,14 @@ Uses agent teams instead of Task subagents. Provides:
 - Cross-reviewer communication
 - Coordinated retry on failures
 
-Best for `--level 98` or `--scope all` (10+ min runs). Task subagents are faster for quick runs.
+Best for a separate advisory workflow; the revision-bound quality engine does
+not expose `--teams`.
 
 ## Merge Flow (`--merge`)
 
 1. Push branch, create PR
-2. Enable required-check-gated auto-merge via `gh pr merge --auto --squash`
-3. If auto-merge is unavailable, bounded-watch CI using the same governor;
-   return `LOCAL_PASS_CI_PENDING` when the deadline is spent
+2. Wait for CI (unless `--skip-ci`)
+3. Auto-merge via `gh pr merge --squash`
 4. Manually verify the deployed system using your normal deployment tooling
 
 ## Next-Step Suggestions (CS-046)
@@ -402,7 +402,9 @@ main loop. Requires acpx >= 0.5.3 (commands are agent-scoped, `acpx claude
 2. **Create sessions, then fire prompts concurrently**:
 
 ```bash
-source scripts/quality-load-root.sh   # GIT_ROOT resolved, cwd restored
+bash "$HOME/.claude/scripts/quality-load-root.sh" --manifest "<exact-manifest-path>"
+GIT_ROOT="$(node "$HOME/.claude/scripts/quality-invocation.js" field "<exact-manifest-path>" repo.realpath)"
+cd "$GIT_ROOT"
 
 TIMESTAMP=$(date +%s)
 for kind in security coverage perf; do
@@ -480,14 +482,12 @@ sites were all downstream of the panel. `bump-round` (called immediately
 before every review panel, see SKILL.md Step 2.0) closes that gap: it is the
 governor call that actually terminates the outer fix -> re-review loop, by
 incrementing `rounds_used` and exiting non-zero at `max_review_rounds`
-(default 3). Before that fix, the round cap was a sentence of prose — and
+(default 2). Before that fix, the round cap was a sentence of prose — and
 since the MODEL orchestrates this loop, prose is not a cap.
 
 A further 2026-07-15 finding showed a foreground Codex review could outlive the
-governor entirely. `quality-run-bounded.sh` now owns the process-group kill and
-clamps every stage to the absolute remaining run budget. Timeout does not
-trigger fallback; only immediate unavailability or typed account exhaustion
-does.
+governor entirely. `quality-run-bounded.sh` now owns a hard tier deadline and
+kills the provider process group before a typed timeout can trigger fallback.
 
 **Never make the governor check silently optional.** Every call site fails
 CLOSED when the governor script or its sentinel file is missing or

@@ -3,11 +3,12 @@
 /**
  * Quality Run Governor
  *
- * /bs:quality has an outer BLOCKING-findings -> batch-fix -> targeted
- * verification loop. Earlier versions also had repeated inner Codex passes,
- * but neither mechanism imposed an absolute deadline on the subprocess that
- * was already running. Two PRs in one night ran 128min/6 commits and
- * 167min/13 commits with no circuit breaker (2026-07-03 incident).
+ * /bs:quality has two nested autonomous loops: the BLOCKING-findings
+ * auto-fix loop (Step 2.5, up to 3 attempts) and the Codex re-verification
+ * loop (Step 2.6, CODEX_ROUNDS). CODEX_ROUNDS only bounds the inner Codex
+ * loop — nothing bounded the OUTER cycle of fix -> re-review across a whole
+ * invocation. Two PRs in one night ran 128min/6 commits and 167min/13
+ * commits with no circuit breaker (2026-07-03 incident).
  *
  * This module is the run-wide governor every fix/round loop in SKILL.md
  * checks before doing another round of work. It tracks, against a
@@ -15,7 +16,7 @@
  *
  *   - review-round count (panels run since the run started)
  *   - fix-commit count (commits made since the run started)
- *   - an absolute wall-clock deadline shared by every blocking stage
+ *   - wall-clock elapsed since the run started
  *   - repeated-finding-shape detection (same root-cause shape recurring
  *     across rounds, independent of which file it shows up in — see
  *     findingShapeKey), so a run doing N narrow variants of the same fix at
@@ -25,19 +26,18 @@
  * WHY THE ROUND COUNTER EXISTS (2026-07-10):
  * The original governor bounded commits and wall-clock but had NO round
  * dimension, and — more importantly — was never called on the review leg. Its
- * three call sites were all downstream of the panel (before a provider round,
- * mid-provider poll, before a fix attempt). The outer review cap existed only
- * as a sentence of English prose in
+ * three call sites were all downstream of the panel (before a Codex round,
+ * mid-Codex-poll, before a fix attempt). The "up to 3 attempts" cap on the
+ * outer fix -> re-review cycle existed only as a sentence of English prose in
  * SKILL.md. Since the MODEL orchestrates that loop, an unenforced sentence is
  * not a cap. Consequences:
  *
  *   - 20min elapsed + 0 fix commits => `check` returned ok:true
- *   - a `check` passing just before the limit could start a fresh full provider
- *     allowance, and timeout fallback could start another
+ *   - a `check` passing at 29:59 could be followed by a 10min review panel and
+ *     a 25min Codex poll => ~65min past a nominal "30min cap"
  *
- * `bump-round` bounds review count; `remaining` clamps each process to the
- * shared `deadline_epoch`. Both fail closed. The model cannot argue with a
- * non-zero exit code.
+ * `bump-round` is therefore called immediately BEFORE the review panel and
+ * fails CLOSED at the cap. The model cannot argue with a non-zero exit code.
  *
  * Pure functions exported for unit testing — see
  *   scripts/__tests__/quality-run-governor.test.js
@@ -46,7 +46,9 @@
 "use strict";
 
 const fs = require("fs");
+const crypto = require("crypto");
 const { execFileSync } = require("child_process");
+const { loadManifest, withManifestLock } = require("./quality-invocation");
 
 /**
  * Derive a coarse "shape" key for a finding so near-duplicate findings
@@ -232,13 +234,39 @@ function resolveCommitCount(cwd, state) {
 function loadState(sentinelPath) {
   try {
     const raw = fs.readFileSync(sentinelPath, "utf8");
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (parsed.schemaVersion === 1 && parsed.governor) {
+      const governor = parsed.governor;
+      return {
+        // The workload plan is an end-to-end campaign bound. Provider,
+        // orchestration, and remediation time all consume the same clock.
+        start_epoch: governor.startedAtEpoch,
+        start_commit_sha: governor.startCommitSha,
+        max_fix_commits: governor.maxFixCommits,
+        max_wall_seconds: governor.campaignSeconds,
+        max_rereview_reserve_seconds: governor.reReviewReserveSeconds,
+        max_review_rounds: governor.maxReviewRounds,
+        rounds_used: governor.roundsUsed,
+        authorized_attempts: governor.authorizedAttempts || [],
+        findings_seen: governor.findingsSeen,
+        _manifest: true,
+      };
+    }
+    return parsed;
   } catch {
     return null;
   }
 }
 
 function saveState(sentinelPath, state) {
+  if (state._manifest) {
+    withManifestLock(sentinelPath, (manifest) => {
+      manifest.governor.roundsUsed = state.rounds_used;
+      manifest.governor.authorizedAttempts = state.authorized_attempts || [];
+      manifest.governor.findingsSeen = state.findings_seen;
+    });
+    return;
+  }
   fs.writeFileSync(sentinelPath, JSON.stringify(state, null, 2) + "\n");
 }
 
@@ -319,7 +347,6 @@ function evaluateBudget(state, { nowEpoch, commitCount }) {
   );
   const requiredFields = [
     "start_epoch",
-    "deadline_epoch",
     "max_fix_commits",
     "max_wall_seconds",
     "max_review_rounds",
@@ -359,24 +386,7 @@ function evaluateBudget(state, { nowEpoch, commitCount }) {
   // straddles an upgrade degrades to "no rounds consumed yet" instead of
   // halting. Every NEW sentinel writes it explicitly (see SKILL.md Step -1).
   const roundsUsed = Number.isFinite(state.rounds_used) ? state.rounds_used : 0;
-  const deadlineConsistent =
-    state.deadline_epoch === state.start_epoch + state.max_wall_seconds;
-  if (!deadlineConsistent) {
-    return {
-      ok: false,
-      configInvalid: true,
-      elapsedSeconds,
-      commitsUsed,
-      roundsUsed,
-      maxWallSeconds: state.max_wall_seconds,
-      maxFixCommits: state.max_fix_commits,
-      maxReviewRounds: state.max_review_rounds,
-      wallTripped: true,
-      commitTripped: false,
-      roundTripped: false,
-    };
-  }
-  const wallTripped = nowEpoch >= state.deadline_epoch;
+  const wallTripped = elapsedSeconds >= state.max_wall_seconds;
   const commitTripped = commitsUsed >= state.max_fix_commits;
   // `rounds_used` is incremented BEFORE evaluation (bump-round), so it is the
   // 1-based index of the round about to run. A cap of 2 must therefore permit
@@ -398,27 +408,233 @@ function evaluateBudget(state, { nowEpoch, commitCount }) {
   };
 }
 
-function remainingBudget(
+function reviewHead(state, sentinelPath, cwd) {
+  if (state._manifest) {
+    return loadManifest(sentinelPath).manifest.revisions.currentHead;
+  }
+  return execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd,
+    encoding: "utf8",
+  }).trim();
+}
+
+function reusableAuthorization(state, round, head) {
+  return [...state.authorized_attempts]
+    .reverse()
+    .find(
+      (attempt) =>
+        attempt.number === round &&
+        attempt.head === head &&
+        attempt.consumedAt === null &&
+        !attempt.invalidatedAt,
+    );
+}
+
+function replaceAuthorization(state, head, reusableAttempt) {
+  const authorizedAt = new Date().toISOString();
+  for (const attempt of state.authorized_attempts) {
+    if (
+      attempt.consumedAt === null &&
+      !attempt.invalidatedAt &&
+      (attempt.head !== head ||
+        attempt.number !== state.rounds_used ||
+        attempt === reusableAttempt)
+    ) {
+      attempt.invalidatedAt = authorizedAt;
+      attempt.invalidationReason =
+        attempt === reusableAttempt
+          ? "replaced for provider retry"
+          : "stale after review identity changed";
+    }
+  }
+  state.authorized_attempts.push({
+    number: state.rounds_used,
+    token: crypto.randomUUID(),
+    head,
+    authorizedAt,
+    consumedAt: null,
+    ...(reusableAttempt ? { retryOf: reusableAttempt.token } : {}),
+  });
+}
+
+function reconcileManifestRounds(sentinelPath) {
+  withManifestLock(sentinelPath, (manifest) => {
+    const successful = manifest.reviews.filter(
+      (review) => review.status === "success",
+    );
+    const rounds = [...new Set(successful.map((review) => review.round))].sort(
+      (left, right) => left - right,
+    );
+    rounds.forEach((round, index) => {
+      if (round !== index + 1) {
+        throw new Error("successful review rounds are not contiguous");
+      }
+    });
+    for (const review of successful) {
+      const authorization = manifest.governor.authorizedAttempts.find(
+        (attempt) =>
+          attempt.token === review.governorAttemptToken &&
+          attempt.head === review.to &&
+          attempt.consumedAt !== null &&
+          !attempt.invalidatedAt,
+      );
+      if (!authorization) {
+        throw new Error(
+          `successful review round ${review.round} lacks consumed governor authorization`,
+        );
+      }
+    }
+    manifest.governor.roundsUsed = rounds.length;
+  });
+}
+
+function mandatoryValidationHasReservedBudget(
   state,
-  { nowEpoch, reserveSeconds = 0, capSeconds = Number.MAX_SAFE_INTEGER },
+  priorRounds,
+  result,
+  sentinelPath,
 ) {
-  const valid =
-    state &&
-    Number.isFinite(state.start_epoch) &&
-    Number.isFinite(state.deadline_epoch) &&
-    Number.isFinite(state.max_wall_seconds) &&
-    state.deadline_epoch === state.start_epoch + state.max_wall_seconds &&
-    Number.isFinite(nowEpoch) &&
-    Number.isFinite(reserveSeconds) &&
-    reserveSeconds >= 0 &&
-    Number.isFinite(capSeconds) &&
-    capSeconds > 0;
-  if (!valid) return { ok: false, seconds: 0, configInvalid: true };
-  const seconds = Math.max(
-    0,
-    Math.min(capSeconds, state.deadline_epoch - nowEpoch - reserveSeconds),
+  if (
+    !state._manifest ||
+    priorRounds < 1 ||
+    state.rounds_used !== priorRounds + 1 ||
+    (!result.commitTripped && !result.wallTripped) ||
+    result.roundTripped
+  ) {
+    return false;
+  }
+  try {
+    const manifest = loadManifest(sentinelPath).manifest;
+    const successful = manifest.reviews.filter(
+      (review) => review.status === "success",
+    );
+    const reviewedHead = successful.at(-1)?.to;
+    if (
+      successful.length !== priorRounds ||
+      successful.at(-1)?.round !== priorRounds ||
+      !reviewedHead ||
+      reviewedHead === manifest.revisions.currentHead
+    ) {
+      return false;
+    }
+    if (!validationDeadlineIsActive(manifest)) {
+      return false;
+    }
+    execFileSync(
+      "git",
+      [
+        "merge-base",
+        "--is-ancestor",
+        reviewedHead,
+        manifest.revisions.currentHead,
+      ],
+      { cwd: manifest.repo.realpath, stdio: "ignore" },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function validationDeadlineIsActive(manifest) {
+  const deadline = manifest.governor.validationDeadlineEpoch;
+  return Number.isInteger(deadline) && Math.floor(Date.now() / 1000) < deadline;
+}
+
+function loadReconciledState(sentinelPath) {
+  let state = loadState(sentinelPath);
+  if (!state) {
+    return {
+      error: `[quality] governor sentinel unreadable at ${sentinelPath} — failing CLOSED. The review loop cannot be bounded without it, and an unbounded loop is the exact failure this governor exists to prevent.\n`,
+    };
+  }
+  if (!state._manifest) return { state };
+  try {
+    reconcileManifestRounds(sentinelPath);
+    state = loadState(sentinelPath);
+    return state
+      ? { state }
+      : {
+          error: `[quality] governor sentinel unreadable after reconciliation at ${sentinelPath} — failing CLOSED.\n`,
+        };
+  } catch (error) {
+    return {
+      error: `[quality] governor review reconciliation failed CLOSED: ${error.message}\n`,
+    };
+  }
+}
+
+function prepareReviewAttempt(sentinelPath, requestedCwd) {
+  const loaded = loadReconciledState(sentinelPath);
+  if (loaded.error) return loaded;
+  const { state } = loaded;
+  const priorRounds = Number.isFinite(state.rounds_used)
+    ? state.rounds_used
+    : 0;
+  const cwd = state._manifest
+    ? loadManifest(sentinelPath).manifest.repo.realpath
+    : requestedCwd;
+  state.authorized_attempts = state.authorized_attempts || [];
+  const authorizedHead = reviewHead(state, sentinelPath, cwd);
+  const nextRound = priorRounds + 1;
+  const reusableAttempt = reusableAuthorization(
+    state,
+    state._manifest ? nextRound : priorRounds,
+    authorizedHead,
   );
-  return { ok: seconds > 0, seconds, configInvalid: false };
+  state.rounds_used = reusableAttempt ? reusableAttempt.number : nextRound;
+  return {
+    state,
+    priorRounds,
+    cwd,
+    authorizedHead,
+    reusableAttempt,
+    retryingRound: Boolean(reusableAttempt),
+  };
+}
+
+function reviewBudgetDecision(context, sentinelPath) {
+  const { state, priorRounds, cwd } = context;
+  const result = evaluateBudget(state, {
+    nowEpoch: Math.floor(Date.now() / 1000),
+    commitCount: resolveCommitCount(cwd, state),
+  });
+  if (result.configInvalid) {
+    return {
+      result,
+      error: `[quality] governor sentinel missing required fields at ${sentinelPath} — failing CLOSED (halting), not silently passing.\n`,
+    };
+  }
+  if (result.roundTripped) {
+    return {
+      result,
+      error:
+        `[quality] ROUND BUDGET EXHAUSTED: review round ${result.roundsUsed} would exceed the cap of ${result.maxReviewRounds}.\n` +
+        `[quality] Stopping the fix -> re-review loop. Report the outstanding findings and STOP — do not run another panel.\n` +
+        `[quality] Override deliberately with BS_QUALITY_MAX_REVIEW_ROUNDS if a repo genuinely needs more.\n`,
+    };
+  }
+  const mandatoryOverride = mandatoryValidationHasReservedBudget(
+    state,
+    priorRounds,
+    result,
+    sentinelPath,
+  );
+  if (result.ok || mandatoryOverride) {
+    return { result, mandatoryOverride };
+  }
+  const wall = result.wallTripped
+    ? `wall-clock ${result.elapsedSeconds}s >= ${result.maxWallSeconds}s `
+    : "";
+  const commits = result.commitTripped
+    ? `fix-commits ${result.commitsUsed} >= ${result.maxFixCommits}`
+    : "";
+  return {
+    result,
+    error:
+      `[quality] BUDGET EXHAUSTED before review round ${result.roundsUsed}: ${wall}${commits}\n` +
+      `[quality] Stopping. Report outstanding findings and STOP.\n`,
+  };
 }
 
 /**
@@ -437,80 +653,91 @@ function remainingBudget(
  * no breaker, because it reads as protection that isn't there.
  */
 function bumpRound(sentinelPath, cwd) {
-  const state = loadState(sentinelPath);
-  if (!state) {
-    process.stderr.write(
-      `[quality] governor sentinel unreadable at ${sentinelPath} — failing CLOSED. The review loop cannot be bounded without it, and an unbounded loop is the exact failure this governor exists to prevent.\n`,
-    );
+  const context = prepareReviewAttempt(sentinelPath, cwd);
+  if (context.error) {
+    process.stderr.write(context.error);
     return 1;
   }
-
-  const priorRounds = Number.isFinite(state.rounds_used)
-    ? state.rounds_used
-    : 0;
-  state.rounds_used = priorRounds + 1;
-  saveState(sentinelPath, state);
-
-  const result = evaluateBudget(state, {
-    nowEpoch: Math.floor(Date.now() / 1000),
-    commitCount: resolveCommitCount(cwd, state),
-  });
-
-  if (result.configInvalid) {
-    process.stderr.write(
-      `[quality] governor sentinel missing required fields at ${sentinelPath} — failing CLOSED (halting), not silently passing.\n`,
-    );
+  const decision = reviewBudgetDecision(context, sentinelPath);
+  if (decision.error) {
+    process.stderr.write(decision.error);
     return 1;
   }
-
-  if (result.roundTripped) {
-    process.stderr.write(
-      `[quality] ROUND BUDGET EXHAUSTED: review round ${result.roundsUsed} would exceed the cap of ${result.maxReviewRounds}.\n` +
-        `[quality] Stopping the fix -> re-review loop. Report the outstanding findings and STOP — do not run another panel.\n` +
-        `[quality] Override deliberately with BS_QUALITY_MAX_REVIEW_ROUNDS if a repo genuinely needs more.\n`,
+  if (decision.mandatoryOverride) {
+    process.stdout.write(
+      `[quality] campaign cap reached; authorizing reserved incremental validation round ${decision.result.roundsUsed} without permitting further remediation.\n`,
     );
-    return 1;
   }
-
-  if (!result.ok) {
-    const wall = result.wallTripped
-      ? `wall-clock ${result.elapsedSeconds}s >= ${result.maxWallSeconds}s `
-      : "";
-    const commits = result.commitTripped
-      ? `fix-commits ${result.commitsUsed} >= ${result.maxFixCommits}`
-      : "";
-    process.stderr.write(
-      `[quality] BUDGET EXHAUSTED before review round ${result.roundsUsed}: ${wall}${commits}\n` +
-        `[quality] Stopping. Report outstanding findings and STOP.\n`,
-    );
-    return 1;
-  }
+  replaceAuthorization(
+    context.state,
+    context.authorizedHead,
+    context.reusableAttempt,
+  );
+  saveState(sentinelPath, context.state);
 
   process.stdout.write(
-    `[quality] review round ${result.roundsUsed}/${result.maxReviewRounds} ` +
-      `(elapsed ${result.elapsedSeconds}s/${result.maxWallSeconds}s, ` +
-      `fix-commits ${result.commitsUsed}/${result.maxFixCommits})\n`,
+    `[quality] ${context.retryingRound ? "retrying" : "review"} round ${decision.result.roundsUsed}/${decision.result.maxReviewRounds} ` +
+      `(elapsed ${decision.result.elapsedSeconds}s/${decision.result.maxWallSeconds}s, ` +
+      `fix-commits ${decision.result.commitsUsed}/${decision.result.maxFixCommits})\n`,
   );
   return 0;
 }
 
-function printRemaining(sentinelPath, args) {
-  const reserveIndex = args.indexOf("--reserve");
-  const capIndex = args.indexOf("--cap");
-  const reserveSeconds = reserveIndex >= 0 ? Number(args[reserveIndex + 1]) : 0;
-  const capSeconds =
-    capIndex >= 0 ? Number(args[capIndex + 1]) : Number.MAX_SAFE_INTEGER;
+function startRemediationClock(sentinelPath) {
+  try {
+    const loaded = loadManifest(sentinelPath);
+    if (
+      loaded.manifest.schemaVersion !== 1 ||
+      !loaded.manifest.governor ||
+      loaded.manifest.governor.remediationStartedAtEpoch !== null
+    ) {
+      return;
+    }
+    withManifestLock(sentinelPath, (manifest) => {
+      if (manifest.governor.remediationStartedAtEpoch === null) {
+        manifest.governor.remediationStartedAtEpoch = Math.floor(
+          Date.now() / 1000,
+        );
+      }
+    });
+  } catch {
+    // Legacy governor sentinels are not invocation manifests.
+  }
+}
+
+function remainingBudget(
+  state,
+  { nowEpoch, reserveSeconds = 0, capSeconds = Number.MAX_SAFE_INTEGER },
+) {
+  const valid =
+    state &&
+    Number.isFinite(state.start_epoch) &&
+    Number.isFinite(state.deadline_epoch) &&
+    Number.isFinite(state.max_wall_seconds) &&
+    state.deadline_epoch === state.start_epoch + state.max_wall_seconds &&
+    Number.isFinite(nowEpoch) &&
+    Number.isFinite(reserveSeconds) &&
+    reserveSeconds >= 0 &&
+    Number.isFinite(capSeconds) &&
+    capSeconds > 0;
+  if (!valid) return { ok: false, seconds: 0 };
+  const seconds = Math.max(
+    0,
+    Math.min(capSeconds, state.deadline_epoch - nowEpoch - reserveSeconds),
+  );
+  return { ok: seconds > 0, seconds };
+}
+
+function printRemaining(sentinelPath, rest) {
+  const reserveIndex = rest.indexOf("--reserve");
+  const capIndex = rest.indexOf("--cap");
   const result = remainingBudget(loadState(sentinelPath), {
     nowEpoch: Math.floor(Date.now() / 1000),
-    reserveSeconds,
-    capSeconds,
+    reserveSeconds: reserveIndex >= 0 ? Number(rest[reserveIndex + 1]) : 0,
+    capSeconds:
+      capIndex >= 0 ? Number(rest[capIndex + 1]) : Number.MAX_SAFE_INTEGER,
   });
   process.stdout.write(`${result.seconds}\n`);
-  if (result.configInvalid) {
-    process.stderr.write(
-      `[quality] governor deadline unreadable or inconsistent at ${sentinelPath} — failing CLOSED.\n`,
-    );
-  }
   return result.ok ? 0 : 1;
 }
 
@@ -518,7 +745,7 @@ function main() {
   const [, , cmd, sentinelPath, ...rest] = process.argv;
   if (!cmd || !sentinelPath) {
     process.stderr.write(
-      "usage: quality-run-governor.js <check|bump-round|record-finding|status|remaining> <sentinel-path> [args]\n",
+      "usage: quality-run-governor.js <check|bump-round|remaining|record-finding|status> <sentinel-path> [args]\n",
     );
     process.exit(2);
   }
@@ -526,6 +753,7 @@ function main() {
   const cwd = process.env.QUALITY_CWD || process.cwd();
 
   if (cmd === "check") {
+    startRemediationClock(sentinelPath);
     const state = loadState(sentinelPath);
     const result = evaluateBudget(state, {
       nowEpoch: Math.floor(Date.now() / 1000),
@@ -542,6 +770,10 @@ function main() {
 
   if (cmd === "bump-round") {
     process.exit(bumpRound(sentinelPath, cwd));
+  }
+
+  if (cmd === "remaining") {
+    process.exit(printRemaining(sentinelPath, rest));
   }
 
   if (cmd === "record-finding") {
@@ -567,9 +799,7 @@ function main() {
     const pattern = detectRepeatedPattern(priorFindings, currentFindings);
     state.findings_seen = priorFindings.concat(currentFindings);
     state.last_findings = currentFindings;
-    state.last_findings_round = Number.isFinite(state.rounds_used)
-      ? state.rounds_used
-      : 0;
+    state.last_findings_round = state.rounds_used;
     saveState(sentinelPath, state);
     process.stdout.write(JSON.stringify(pattern) + "\n");
     process.exit(0);
@@ -595,10 +825,6 @@ function main() {
         `review-rounds ${result.roundsUsed}/${result.maxReviewRounds}\n`,
     );
     process.exit(0);
-  }
-
-  if (cmd === "remaining") {
-    process.exit(printRemaining(sentinelPath, rest));
   }
 
   process.stderr.write(`unknown command: ${cmd}\n`);

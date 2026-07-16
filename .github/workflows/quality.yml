@@ -51,6 +51,8 @@ jobs:
         with:
           node-version: "24.18.0"
           cache: npm
+      - name: Install zsh for shell-isolation regressions
+        run: sudo apt-get update && sudo apt-get install --yes zsh
       - run: npm ci
       - name: Run tests
         run: npm test

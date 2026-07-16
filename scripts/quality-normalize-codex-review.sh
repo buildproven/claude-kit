@@ -9,7 +9,7 @@ OUTPUT="${2:-}"
   exit 2
 }
 
-jq -e '
+if jq -e '
   def valid_finding:
     type == "object"
     and ((keys_unsorted - [
@@ -39,4 +39,9 @@ jq -e '
         or (.verdict == "needs-attention" and (.findings | length) > 0)
       )
     )
-' "$INPUT" > "$OUTPUT"
+' "$INPUT" > "$OUTPUT" 2>/dev/null; then
+  exit 0
+fi
+
+node "$(dirname "$0")/quality-normalize-codex-native-review.js" \
+  "$INPUT" "$OUTPUT" "${GIT_ROOT:-$(pwd)}"

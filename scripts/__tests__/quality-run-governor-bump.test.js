@@ -62,6 +62,9 @@ describe("bumpRound — the round cap that stops runaway review loops", () => {
   it("increments across successive rounds rather than resetting", () => {
     const p = sentinel(healthy());
     bumpRound(p, process.cwd());
+    const afterFirst = JSON.parse(fs.readFileSync(p, "utf8"));
+    afterFirst.authorized_attempts[0].consumedAt = new Date().toISOString();
+    fs.writeFileSync(p, JSON.stringify(afterFirst));
     bumpRound(p, process.cwd());
     expect(JSON.parse(fs.readFileSync(p, "utf8")).rounds_used).toBe(2);
   });

@@ -4,9 +4,8 @@
 # initialize the run-governor sentinel.
 #
 # This is invoked (not sourced) as: bash quality-bootstrap.sh "$@"
-# It prints machine-readable lines to stdout for the caller to eval/read:
-#   BS_QUALITY_ROOT_FILE=<path>
-#   BS_QUALITY_GOVERNOR_FILE=<path>
+# It prints machine-readable lines to stdout for the wrapper to read:
+#   BS_QUALITY_MANIFEST=<path>
 #   GIT_ROOT=<path>
 # and exits non-zero (with a human-readable error already on stdout/stderr)
 # if target resolution fails.
@@ -20,87 +19,31 @@
 # reads its output; the resolution LOGIC is unchanged.
 set -u
 
-# --- args-file bridge (bug fixed 2026-05-12) --------------------------------
-# The /bs:quality slash command writes the user's $ARGUMENTS to a tempfile
-# and passes the path here as --args-file <path>. This is the reliable
-# channel for getting args into a forked Skill execution; the runtime does
-# not propagate `Skill(args=...)` to the fork's $@ on its own.
-#
-# We extract --args-file from $@ and, if found, REPLACE $@ with the file
-# contents (preserving any other args that were passed alongside).
-# The file is removed once read, so concurrent quality invocations
-# don't pile up stale state.
-ARGS_FILE=""
-REMAINING_ARGS=()
-prev_arg=""
-for arg in "$@"; do
-  case "$prev_arg" in
-    --args-file)
-      ARGS_FILE="$arg"
-      prev_arg=""
-      continue
-      ;;
-  esac
-  case "$arg" in
-    --args-file)
-      prev_arg="--args-file"
-      continue
-      ;;
-    --args-file=*)
-      ARGS_FILE="${arg#*=}"
-      continue
-      ;;
-  esac
-  REMAINING_ARGS+=("$arg")
-  prev_arg=""
-done
-
-if [ -n "$ARGS_FILE" ] && [ -f "$ARGS_FILE" ]; then
-  # Read the file, strip trailing newline, split on whitespace into args.
-  # Use a subshell + xargs to safely tokenize without eval.
-  FILE_ARGS=()
-  while IFS= read -r tok; do
-    [ -n "$tok" ] && FILE_ARGS+=("$tok")
-  done < <(xargs -n1 < "$ARGS_FILE" 2>/dev/null)
-  # Defensive: only unlink files inside the expected mktemp -d directory.
-  # The slash command writes to `<tmpdir>/bs-quality-args.XXXXXX/args.txt`.
-  # If a caller passes an unexpected path (e.g. a config file by mistake),
-  # leave it alone rather than deleting it.
-  case "$ARGS_FILE" in
-    */bs-quality-args.*/args.txt|*/bs-quality-args-*.txt)
-      rm -f "$ARGS_FILE"
-      # Also try to rmdir the parent (only succeeds if empty — which it
-      # will be, since args.txt was the only file inside).
-      ARGS_PARENT=$(dirname "$ARGS_FILE")
-      case "$ARGS_PARENT" in
-        */bs-quality-args.*)
-          rmdir "$ARGS_PARENT" 2>/dev/null || true
-          ;;
-      esac
-      ;;
-    *)
-      echo "[quality] WARNING: --args-file path does not match the expected" >&2
-      echo "  bs-quality-args.*/args.txt pattern; leaving it in place: $ARGS_FILE" >&2
-      ;;
-  esac
-  # Use file args ONLY if the caller didn't already pass concrete args
-  # alongside --args-file (belt-and-suspenders mode). The file is the
-  # fallback; explicit args win.
-  if [ "${#REMAINING_ARGS[@]}" -gt 0 ]; then
-    set -- "${REMAINING_ARGS[@]}"
-  elif [ "${#FILE_ARGS[@]}" -gt 0 ]; then
-    set -- "${FILE_ARGS[@]}"
-  else
-    set --
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+MANIFEST_ARG=""
+BOOTSTRAP_ARGS=()
+previous=""
+for argument in "$@"; do
+  if [ "$previous" = "--manifest" ]; then
+    MANIFEST_ARG="$argument"
+    previous=""
+    continue
   fi
-fi
+  case "$argument" in
+    --manifest) previous="--manifest" ;;
+    --manifest=*) MANIFEST_ARG="${argument#*=}" ;;
+    *) BOOTSTRAP_ARGS+=("$argument") ;;
+  esac
+done
+[ -z "$previous" ] || {
+  echo "❌ --manifest requires a path" >&2
+  exit 1
+}
+set -- ${BOOTSTRAP_ARGS[@]+"${BOOTSTRAP_ARGS[@]}"}
 
-# --- Recursion guard (2026-06-04 wrapper-recursion incident) -----------------
-# The synchronous review leg runs each review agent as a blocking `claude -p`
-# subprocess with BS_QUALITY_HEADLESS=1 exported. If one of those review
-# children — via a hook, an agent, or a stray /goal — ever re-enters
-# /bs:quality, we would recurse (fork → review child → fork …). Hard-refuse
-# when we detect we are already inside a headless review child.
+# Headless review children must never resume or create a quality invocation.
+# Keep this before the resume fast path so an inherited manifest cannot bypass
+# the recursion guard.
 if [ "${BS_QUALITY_HEADLESS:-}" = "1" ]; then
   echo "❌ /bs:quality refused: already running inside a headless review child" >&2
   echo "   (BS_QUALITY_HEADLESS=1). Review subprocesses must not re-enter the" >&2
@@ -108,17 +51,92 @@ if [ "${BS_QUALITY_HEADLESS:-}" = "1" ]; then
   exit 1
 fi
 
-# Clear any STALE review-panel sentinel from a prior run in this session before
-# the pipeline starts. The sentinel is session-namespaced, not run-namespaced,
-# so without this a run that SKIPS agent selection (e.g. --scope changed, which
-# skips agent-panel construction) could let the companion block read a
-# previous run's panel and review the wrong set — or, worse, mask an "agents
-# never selected" bug. Fresh run => empty sentinel => the companion block's
-# empty-check blocks correctly.
-QUALITY_SESSION_ID="${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-default}}"
-QUALITY_SESSION_ID="$(printf '%s' "$QUALITY_SESSION_ID" | tr -cd '[:alnum:]_.-' | cut -c1-80)"
-[ -n "$QUALITY_SESSION_ID" ] || QUALITY_SESSION_ID=default
-rm -f "${TMPDIR:-/tmp}/bs-quality-agents-${QUALITY_SESSION_ID}.txt"
+# Validate the complete invocation before target resolution or any GitHub
+# operation. Every token must belong to the supported grammar; a bare value
+# after a boolean flag (for example `--merge 1`) must never be reinterpreted as
+# target context.
+if [ -n "$MANIFEST_ARG" ] && [ "${#BOOTSTRAP_ARGS[@]}" -ne 0 ]; then
+  echo "❌ quality resume accepts only --manifest <path>" >&2
+  exit 1
+fi
+for ((argument_index = 0; argument_index < ${#BOOTSTRAP_ARGS[@]}; argument_index += 1)); do
+  argument="${BOOTSTRAP_ARGS[$argument_index]}"
+  case "$argument" in
+    --merge|--merge=true|--skip-tests) ;;
+    --merge=*)
+      echo "❌ --merge accepts only the bare flag or --merge=true" >&2
+      exit 1
+      ;;
+    --level|--scope|--target-dir|--target|--worktree|--pr|--pull|--pull-request|--branch|--head|--head-ref)
+      argument_index=$((argument_index + 1))
+      [ "$argument_index" -lt "${#BOOTSTRAP_ARGS[@]}" ] &&
+        [ -n "${BOOTSTRAP_ARGS[$argument_index]}" ] &&
+        [[ "${BOOTSTRAP_ARGS[$argument_index]}" != --* ]] || {
+        echo "❌ $argument requires a value" >&2
+        exit 1
+      }
+      ;;
+    --level=*|--scope=*|--target-dir=*|--target=*|--worktree=*|--pr=*|--pull=*|--pull-request=*|--branch=*|--head=*|--head-ref=*)
+      [ -n "${argument#*=}" ] || {
+        echo "❌ ${argument%%=*} requires a value" >&2
+        exit 1
+      }
+      ;;
+    \#*)
+      [[ "$argument" =~ ^\#[1-9][0-9]*$ ]] || {
+        echo "❌ unexpected quality argument: $argument" >&2
+        exit 1
+      }
+      ;;
+    /*|~/*|./*|../*) ;;
+    */*)
+      [[ "$argument" =~ ^[A-Za-z][A-Za-z0-9_.-]*/[A-Za-z0-9_./-]+$ ]] || {
+        echo "❌ unexpected quality argument: $argument" >&2
+        exit 1
+      }
+      ;;
+    *)
+      echo "❌ unexpected quality argument: $argument" >&2
+      exit 1
+      ;;
+  esac
+done
+
+# Safe resumption is explicit: the caller must pass the exact manifest path.
+# Never discover an active invocation through a session ID, glob, pointer, or
+# mtime. A resumed manifest may advance only to a descendant HEAD; the helper
+# validates repository realpath, base SHA, and the resulting exact HEAD.
+if [ -n "$MANIFEST_ARG" ]; then
+  [ -f "$MANIFEST_ARG" ] || {
+    echo "❌ quality invocation manifest not found: $MANIFEST_ARG" >&2
+    exit 1
+  }
+  RESUME_ROOT="$(node -e 'const q=require(process.argv[1]); process.stdout.write(q.loadManifest(process.argv[2]).manifest.repo.realpath)' \
+    "$SCRIPT_DIR/quality-invocation.js" "$MANIFEST_ARG")" || exit 1
+  cd "$RESUME_ROOT" || exit 1
+  RESUME_PR="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" repo.pr)"
+  ADVANCE_ARGS=(advance "$MANIFEST_ARG")
+  if [ -n "$RESUME_PR" ] && [ "$RESUME_PR" != null ]; then
+    RESUME_PR_JSON="$(gh pr view "$RESUME_PR" \
+      --json headRefName,headRepository,isCrossRepository 2>/dev/null)" || exit 1
+    RESUME_GITHUB_REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
+    RESUME_HEAD_REF="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.headRefName')" || exit 1
+    RESUME_HEAD_REPOSITORY="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.headRepository.nameWithOwner')" || exit 1
+    RESUME_CROSS_REPOSITORY="$(printf '%s' "$RESUME_PR_JSON" | jq -r '.isCrossRepository')" || exit 1
+    { [ "$RESUME_CROSS_REPOSITORY" = true ] || [ "$RESUME_CROSS_REPOSITORY" = false ]; } || exit 1
+    ADVANCE_ARGS+=(--github-repo "$RESUME_GITHUB_REPOSITORY" \
+      --head-ref "$RESUME_HEAD_REF" \
+      --head-repository "$RESUME_HEAD_REPOSITORY" \
+      --cross-repository "$RESUME_CROSS_REPOSITORY")
+  fi
+  node "$SCRIPT_DIR/quality-invocation.js" "${ADVANCE_ARGS[@]}" >/dev/null || exit 1
+  INVOCATION_ID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" invocationId)"
+  HEAD_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" revisions.currentHead)"
+  echo "BS_QUALITY_MANIFEST=$MANIFEST_ARG"
+  echo "GIT_ROOT=$RESUME_ROOT"
+  echo "[quality] resumed invocation $INVOCATION_ID at $HEAD_SHA"
+  exit 0
+fi
 
 # --- resolve the target-resolver script --------------------------------------
 RESOLVER=""
@@ -170,6 +188,7 @@ else
     RES_KIND=$(echo "$RESOLUTION_JSON" | jq -r '.resolution // ""' 2>/dev/null)
     RES_PATH=$(echo "$RESOLUTION_JSON" | jq -r '.targetPath // ""' 2>/dev/null)
     RES_BRANCH=$(echo "$RESOLUTION_JSON" | jq -r '.targetBranch // ""' 2>/dev/null)
+    RES_PR=$(echo "$RESOLUTION_JSON" | jq -r '.targetPr // ""' 2>/dev/null)
     RES_REASON=$(echo "$RESOLUTION_JSON" | jq -r '.reason // ""' 2>/dev/null)
     RES_WARNINGS=$(echo "$RESOLUTION_JSON" | jq -r '.warnings[]?' 2>/dev/null)
 
@@ -245,93 +264,101 @@ if [ "$ARGS_MERGE" = true ]; then
   fi
 fi
 
-# --- persist resolved git root for downstream bash blocks --------------------
-# See quality-load-root.sh for why this sentinel dance exists (each Bash tool
-# call is a fresh shell) and why it's hashed per-target (multi-repo sessions).
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=quality-load-root.sh
-source "$SCRIPT_DIR/quality-load-root.sh" 2>/dev/null || true  # defines bs_quality_root_file/bs_quality_find_script; cd is re-done below anyway
-BS_QUALITY_ROOT_FILE=$(bs_quality_root_file "$GIT_ROOT")
-if ! printf '%s\n' "$GIT_ROOT" > "$BS_QUALITY_ROOT_FILE" 2>/dev/null; then
-  echo "❌ /bs:quality could not write git-root sentinel to $BS_QUALITY_ROOT_FILE"
-  echo "   Check that \$TMPDIR is writable: ${TMPDIR:-/tmp}"
-  exit 1
+# A PR-targeted invocation must always bind to the PR's actual base identity,
+# even when it is review-only. Falling back to origin/main for non-merge runs
+# produces the wrong diff and a manifest that cannot safely resume or merge.
+PR_JSON=""
+if [ -n "${RES_PR:-}" ]; then
+  PR_JSON="$(gh pr view "$RES_PR" \
+    --json number,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,isCrossRepository 2>/dev/null)"
+elif [ "$ARGS_MERGE" = true ]; then
+  PR_JSON="$(gh pr view \
+    --json number,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,isCrossRepository 2>/dev/null)"
 fi
-
-# --- run-governor init (2026-07-03: runaway-loop guardrails) -----------------
-# Incident: two PRs in one night (#529: 128min/6 commits, #532: 167min/13
-# commits) ran to completion with no circuit breaker. CODEX_ROUNDS only bounds
-# the inner Codex adversarial loop; nothing bounded the OUTER cycle of
-# BLOCKING-finding -> auto-fix -> re-review across the whole invocation.
-# See reference.md "Run Governor" for the full incident writeup.
-#
-# max_review_rounds is enforced by `bump-round` immediately before the review
-# panel — this is what actually terminates the outer fix -> re-review loop.
-BS_QUALITY_MAX_REVIEW_ROUNDS="${BS_QUALITY_MAX_REVIEW_ROUNDS:-3}"
-BS_QUALITY_MAX_FIX_COMMITS="${BS_QUALITY_MAX_FIX_COMMITS:-4}"
-BS_QUALITY_MAX_WALL_SECONDS="${BS_QUALITY_MAX_WALL_SECONDS:-900}"
-GOVERNOR_BRANCH=$(git branch --show-current 2>/dev/null || echo DETACHED)
-[ -n "$GOVERNOR_BRANCH" ] || GOVERNOR_BRANCH="DETACHED:$(git rev-parse HEAD 2>/dev/null)"
-BS_QUALITY_GOVERNOR_FILE=$(bs_quality_campaign_file "$GIT_ROOT" "$GOVERNOR_BRANCH")
-GOVERNOR_NOW=$(date +%s)
-if [ -f "$BS_QUALITY_GOVERNOR_FILE" ] &&
-   [ "${BS_QUALITY_RESET_CAMPAIGN:-false}" != true ]; then
-  EXISTING_BRANCH=$(jq -r '.branch // ""' "$BS_QUALITY_GOVERNOR_FILE" 2>/dev/null)
-  EXISTING_DEADLINE=$(jq -r '.deadline_epoch // 0' "$BS_QUALITY_GOVERNOR_FILE" 2>/dev/null)
-  if [ "$EXISTING_BRANCH" = "$GOVERNOR_BRANCH" ]; then
-    if [ "$GOVERNOR_NOW" -ge "$EXISTING_DEADLINE" ]; then
-      echo "❌ QUALITY CAMPAIGN DEADLINE EXHAUSTED for $GOVERNOR_BRANCH." >&2
-      echo "   The same PR/branch cannot reset its clock by reinvoking /bs:quality." >&2
-      echo "   Stop and report remaining findings. A deliberate new campaign requires" >&2
-      echo "   BS_QUALITY_RESET_CAMPAIGN=true." >&2
+if [ "$ARGS_MERGE" = true ]; then
+  [ -n "$PR_JSON" ] || {
+    echo "❌ /bs:quality --merge requires an open PR for the target branch." >&2
+    exit 1
+  }
+fi
+if [ -n "$PR_JSON" ]; then
+  RES_PR="$(printf '%s' "$PR_JSON" | jq -r '.number')"
+  PR_BASE_NAME="$(printf '%s' "$PR_JSON" | jq -r '.baseRefName')"
+  PR_BASE_OID="$(printf '%s' "$PR_JSON" | jq -r '.baseRefOid')"
+  PR_HEAD_NAME="$(printf '%s' "$PR_JSON" | jq -r '.headRefName')"
+  PR_HEAD_OID="$(printf '%s' "$PR_JSON" | jq -r '.headRefOid')"
+  PR_HEAD_REPOSITORY="$(printf '%s' "$PR_JSON" | jq -r '.headRepository.nameWithOwner')"
+  PR_IS_CROSS_REPOSITORY="$(printf '%s' "$PR_JSON" | jq -r '.isCrossRepository')"
+  [ -n "$PR_BASE_NAME" ] && [ "$PR_BASE_NAME" != null ] &&
+    [ -n "$PR_BASE_OID" ] && [ "$PR_BASE_OID" != null ] &&
+    [ -n "$PR_HEAD_NAME" ] && [ "$PR_HEAD_NAME" != null ] &&
+    [ -n "$PR_HEAD_REPOSITORY" ] && [ "$PR_HEAD_REPOSITORY" != null ] &&
+    { [ "$PR_IS_CROSS_REPOSITORY" = true ] || [ "$PR_IS_CROSS_REPOSITORY" = false ]; } || {
+      echo "❌ /bs:quality could not resolve the PR base identity." >&2
       exit 1
-    fi
-    echo "BS_QUALITY_ROOT_FILE=$BS_QUALITY_ROOT_FILE"
-    echo "BS_QUALITY_GOVERNOR_FILE=$BS_QUALITY_GOVERNOR_FILE"
-    echo "GIT_ROOT=$GIT_ROOT"
-    echo "[quality] audit target resolved: $GIT_ROOT"
-    node "$SCRIPT_DIR/quality-run-governor.js" status "$BS_QUALITY_GOVERNOR_FILE"
-    echo "[quality] resuming existing campaign for $GOVERNOR_BRANCH"
-    exit 0
-  fi
+    }
+  [ "$PR_HEAD_OID" = "$(git rev-parse HEAD)" ] || {
+    echo "❌ /bs:quality PR HEAD does not match the target worktree." >&2
+    exit 1
+  }
 fi
 
-# A genuinely new branch campaign starts with a full-branch review.
-rm -f "${BS_QUALITY_GOVERNOR_FILE%.json}-last-reviewed.sha"
-GOVERNOR_START_EPOCH=$(date +%s)
-GOVERNOR_DEADLINE_EPOCH=$((GOVERNOR_START_EPOCH + BS_QUALITY_MAX_WALL_SECONDS))
-# Baseline the run by HEAD SHA, not by total commit count. The governor counts
-# fix-commits as `<start_commit_sha>..HEAD`, which is immune to rebases and to
-# the cwd/checkout the later `check` runs from. The old total-count delta
-# tripped falsely under `--merge <PR>` (baseline in the PR worktree, check from
-# a differently-based HEAD → bogus cross-baseline delta; 2026-07-14). We still
-# record start_commit_count for legacy readers / diagnostics.
-GOVERNOR_START_COMMIT_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
-GOVERNOR_START_COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo 0)
-jq -n \
-  --argjson start_epoch "$GOVERNOR_START_EPOCH" \
-  --argjson deadline_epoch "$GOVERNOR_DEADLINE_EPOCH" \
-  --arg branch "$GOVERNOR_BRANCH" \
-  --arg start_commit_sha "$GOVERNOR_START_COMMIT_SHA" \
-  --argjson start_commit_count "$GOVERNOR_START_COMMIT_COUNT" \
-  --argjson max_fix_commits "$BS_QUALITY_MAX_FIX_COMMITS" \
-  --argjson max_wall_seconds "$BS_QUALITY_MAX_WALL_SECONDS" \
-  --argjson max_review_rounds "$BS_QUALITY_MAX_REVIEW_ROUNDS" \
-  '{
-    start_epoch: $start_epoch,
-    deadline_epoch: $deadline_epoch,
-    branch: $branch,
-    start_commit_sha: $start_commit_sha,
-    start_commit_count: $start_commit_count,
-    max_fix_commits: $max_fix_commits,
-    max_wall_seconds: $max_wall_seconds,
-    max_review_rounds: $max_review_rounds,
-    rounds_used: 0,
-    findings_seen: []
-  }' > "$BS_QUALITY_GOVERNOR_FILE"
+BASE_REF=""
+if [ -n "${PR_BASE_NAME:-}" ]; then
+  git fetch origin "$PR_BASE_NAME" -q || exit 1
+  BASE_REF="origin/$PR_BASE_NAME"
+  [ "$(git rev-parse "$BASE_REF")" = "$PR_BASE_OID" ] || {
+    echo "❌ /bs:quality PR base changed during bootstrap." >&2
+    exit 1
+  }
+fi
+for candidate in ${BASE_REF:+"$BASE_REF"} origin/main origin/master main master; do
+  if git rev-parse --verify --quiet "${candidate}^{commit}" >/dev/null 2>&1; then
+    BASE_REF="$candidate"
+    break
+  fi
+done
+[ -n "$BASE_REF" ] || {
+  echo "❌ /bs:quality could not resolve a base ref" >&2
+  exit 1
+}
 
-echo "BS_QUALITY_ROOT_FILE=$BS_QUALITY_ROOT_FILE"
-echo "BS_QUALITY_GOVERNOR_FILE=$BS_QUALITY_GOVERNOR_FILE"
+LEVEL_ARG=auto
+SCOPE_ARG=branch
+SKIP_TESTS=false
+previous=""
+for argument in "$@"; do
+  case "$previous" in
+    --level) LEVEL_ARG="$argument"; previous=""; continue ;;
+    --scope) SCOPE_ARG="$argument"; previous=""; continue ;;
+  esac
+  case "$argument" in
+    --level) previous="--level" ;;
+    --level=*) LEVEL_ARG="${argument#*=}" ;;
+    --scope) previous="--scope" ;;
+    --scope=*) SCOPE_ARG="${argument#*=}" ;;
+    --skip-tests) SKIP_TESTS=true ;;
+  esac
+done
+
+CREATE_ARGS=(create --repo "$GIT_ROOT" --base-ref "$BASE_REF" \
+  --level "$LEVEL_ARG" --scope "$SCOPE_ARG")
+[ -n "${PR_BASE_OID:-}" ] && CREATE_ARGS+=(--base-head-sha "$PR_BASE_OID")
+[ "$ARGS_MERGE" = true ] && CREATE_ARGS+=(--merge)
+[ "$SKIP_TESTS" = true ] && CREATE_ARGS+=(--skip-tests)
+[ -n "${RES_PR:-}" ] && CREATE_ARGS+=(--pr "$RES_PR")
+if [ -n "${RES_PR:-}" ]; then
+  GITHUB_REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
+  CREATE_ARGS+=(--github-repo "$GITHUB_REPOSITORY" --head-ref "$PR_HEAD_NAME" \
+    --head-repository "$PR_HEAD_REPOSITORY" \
+    --cross-repository "$PR_IS_CROSS_REPOSITORY")
+fi
+BS_QUALITY_MANIFEST="$(node "$SCRIPT_DIR/quality-invocation.js" "${CREATE_ARGS[@]}")" || exit 1
+INVOCATION_ID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$BS_QUALITY_MANIFEST" invocationId)"
+BASE_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$BS_QUALITY_MANIFEST" revisions.baseSha)"
+HEAD_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$BS_QUALITY_MANIFEST" revisions.currentHead)"
+
+echo "BS_QUALITY_MANIFEST=$BS_QUALITY_MANIFEST"
 echo "GIT_ROOT=$GIT_ROOT"
 echo "[quality] audit target resolved: $GIT_ROOT"
-echo "[quality] governor: cap=${BS_QUALITY_MAX_REVIEW_ROUNDS} review-rounds, ${BS_QUALITY_MAX_FIX_COMMITS} fix-commits, ${BS_QUALITY_MAX_WALL_SECONDS}s wall-clock"
+echo "[quality] invocation: $INVOCATION_ID base=$BASE_SHA head=$HEAD_SHA"

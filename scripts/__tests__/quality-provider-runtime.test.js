@@ -1,5 +1,5 @@
-import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -19,15 +19,13 @@ const NORMALIZE_CODEX_REVIEW = path.join(
   "scripts",
   "quality-normalize-codex-review.sh",
 );
-const BOOTSTRAP = path.join(ROOT, "scripts", "quality-bootstrap.sh");
-const REFERENCE = path.join(ROOT, "skills", "quality", "reference.md");
 
 describe("provider review runtime", () => {
   it.each([
     ["low", "120", "Focused"],
-    ["medium", "300", "Broad"],
-    ["high", "480", "Deep adversarial"],
-    ["critical", "600", "release-veto"],
+    ["medium", "480", "Broad"],
+    ["high", "900", "Deep adversarial"],
+    ["critical", "900", "release-veto"],
   ])("maps %s to a mechanical review plan", (tier, timeout, focus) => {
     const result = spawnSync(
       "bash",
@@ -45,73 +43,6 @@ describe("provider review runtime", () => {
     expect(result.stdout).toContain(focus);
   });
 
-  it("documents and initializes one 15-minute absolute default deadline", () => {
-    const bootstrap = readFileSync(BOOTSTRAP, "utf8");
-    const reference = readFileSync(REFERENCE, "utf8");
-    expect(bootstrap).toContain(
-      'BS_QUALITY_MAX_WALL_SECONDS="${BS_QUALITY_MAX_WALL_SECONDS:-900}"',
-    );
-    expect(bootstrap).toContain(
-      '--argjson deadline_epoch "$GOVERNOR_DEADLINE_EPOCH"',
-    );
-    expect(reference).toMatch(/default 900 = 15 min/);
-    expect(reference).not.toMatch(/default 1800 = 30 min/);
-  });
-
-  it("reinvocation across sessions and rebases resumes the same branch campaign", () => {
-    const repo = mkdtempSync(path.join(tmpdir(), "quality-campaign-"));
-    spawnSync("bash", [
-      "-c",
-      `
-git init -q -b main "$1"
-cd "$1"
-git config user.name test
-git config user.email test@example.com
-echo base > file
-git add file
-git commit -q -m base
-git switch -q -c 'feature/quote"test'
-`,
-      "setup",
-      repo,
-    ]);
-    const firstEnv = {
-      ...process.env,
-      CODEX_THREAD_ID: `campaign-first-${Date.now()}`,
-    };
-    const first = spawnSync("bash", [BOOTSTRAP, "--target-dir", repo], {
-      cwd: ROOT,
-      encoding: "utf8",
-      env: firstEnv,
-    });
-    expect(first.status).toBe(0);
-    const governor = first.stdout.match(
-      /^BS_QUALITY_GOVERNOR_FILE=(.+)$/m,
-    )?.[1];
-    expect(governor).toBeTruthy();
-    const state = JSON.parse(readFileSync(governor, "utf8"));
-    state.rounds_used = 1;
-    writeFileSync(governor, JSON.stringify(state));
-    execFileSync("git", ["commit", "--allow-empty", "-m", "pre-rebase"], {
-      cwd: repo,
-    });
-    execFileSync("git", ["rebase", "--root", "--force-rebase"], { cwd: repo });
-
-    const second = spawnSync("bash", [BOOTSTRAP, "--target-dir", repo], {
-      cwd: ROOT,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        CODEX_THREAD_ID: `campaign-second-${Date.now()}`,
-      },
-    });
-    expect(second.status).toBe(0);
-    expect(second.stdout).toContain("resuming existing campaign");
-    const resumed = JSON.parse(readFileSync(governor, "utf8"));
-    expect(resumed.start_epoch).toBe(state.start_epoch);
-    expect(resumed.rounds_used).toBe(1);
-  });
-
   it("kills a hanging provider process group at the wall-clock cap", () => {
     const started = Date.now();
     const result = spawnSync(
@@ -123,62 +54,49 @@ git switch -q -c 'feature/quote"test'
     expect(Date.now() - started).toBeLessThan(4000);
   });
 
-  it("clamps a stage to the governor's shared remaining budget", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "quality-deadline-"));
-    const governor = path.join(dir, "governor.json");
-    const start = Math.floor(Date.now() / 1000);
-    writeFileSync(
-      governor,
-      JSON.stringify({
-        start_epoch: start,
-        deadline_epoch: start + 1,
-        max_wall_seconds: 1,
-      }),
-    );
-    const started = Date.now();
-    const result = spawnSync(
-      "bash",
-      [
-        BOUNDED,
-        "--governor",
-        governor,
-        "--cap",
-        "20",
-        "--",
-        "bash",
-        "-c",
-        "sleep 20",
-      ],
-      { encoding: "utf8", timeout: 5000 },
-    );
-    expect(result.status).toBe(124);
-    expect(Date.now() - started).toBeLessThan(4000);
-  });
-
-  it("honors a single scorer-selected xhigh discovery pass", () => {
+  it("honors scorer-selected independent Codex rounds", () => {
     const result = spawnSync(
       "bash",
       [
         "-c",
-        `TIER=critical CODEX_DEPTH=xhigh CODEX_ROUNDS=1; source "$1"; printf '%s|%s' "$QUALITY_REVIEW_DEPTH" "$QUALITY_REVIEW_PASSES"`,
+        `TIER=critical CODEX_DEPTH=xhigh CODEX_ROUNDS=2; source "$1"; printf '%s|%s' "$QUALITY_REVIEW_DEPTH" "$QUALITY_REVIEW_PASSES"`,
         "plan",
         PLAN,
       ],
       { encoding: "utf8" },
     );
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe("xhigh|1");
+    expect(result.stdout).toBe("xhigh|2");
   });
 
   it("loads persisted risk state at the runner boundary", () => {
     const plan = readFileSync(PLAN, "utf8");
     const runner = readFileSync(RUN_REVIEW, "utf8");
-    const riskLoad = 'source "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env"';
+    const riskLoad = 'TIER="$(field risk.tier)"';
     const planLoad = 'source "$SCRIPT_DIR/quality-review-plan.sh"';
 
     expect(plan).not.toContain("riskstate.env");
+    expect(runner).not.toContain("riskstate.env");
     expect(runner).toContain(riskLoad);
     expect(runner.indexOf(riskLoad)).toBeLessThan(runner.indexOf(planLoad));
+  });
+
+  it("gives mandatory fix validation its persisted provider allowance", () => {
+    const runner = readFileSync(RUN_REVIEW, "utf8");
+    const invocation = readFileSync(
+      path.join(ROOT, "scripts", "quality-invocation.js"),
+      "utf8",
+    );
+
+    expect(runner).toContain(
+      'QUALITY_REVIEW_TIMEOUT="$(field risk.runtime.validationSeconds)"',
+    );
+    expect(runner).toContain(
+      '[ -n "$QUALITY_REVIEW_TIMEOUT" ] || QUALITY_REVIEW_TIMEOUT=300',
+    );
+    expect(invocation).toMatch(
+      /manifest\.reviews\.length === 0[\s\S]*risk\?\.runtime\?\.reviewSeconds[\s\S]*risk\?\.runtime\?\.validationSeconds \?\? 300/,
+    );
   });
 
   it("kills the provider tree when the wrapper itself is cancelled", () => {
@@ -205,80 +123,17 @@ if kill -0 "$child" 2>/dev/null; then exit 99; fi
     expect(result.status).toBe(0);
   });
 
-  it("names state by Codex thread when no Claude session exists", () => {
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        `unset CLAUDE_CODE_SESSION_ID; CODEX_THREAD_ID=codex-thread-42; source "$1"; bs_quality_root_file "$2"`,
-        "state",
-        LOAD_ROOT,
-        ROOT,
-      ],
-      { encoding: "utf8", cwd: ROOT },
-    );
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("bs-quality-gitroot-codex-thread-42-");
+  it("does not name active state by Claude or Codex session IDs", () => {
+    const source = spawnSync("cat", [LOAD_ROOT], { encoding: "utf8" }).stdout;
+    expect(source).not.toMatch(/CLAUDE_CODE_SESSION_ID|CODEX_THREAD_ID/);
+    expect(source).toMatch(/--manifest is required/);
   });
 
-  it.each(["bash", "zsh"])(
-    "restores root and governor state in a fresh %s shell",
-    (shell) => {
-      const result = spawnSync(
-        shell,
-        [
-          "-c",
-          `source "$1"; printf '%s|%s|%s' "$GIT_ROOT" "$BS_QUALITY_ROOT_FILE" "$BS_QUALITY_GOVERNOR_FILE"`,
-          "state",
-          LOAD_ROOT,
-        ],
-        { encoding: "utf8", cwd: ROOT },
-      );
-      if (result.error?.code === "ENOENT") return;
-      expect(result.status).toBe(0);
-      const [gitRoot, rootFile, governorFile] = result.stdout.split("|");
-      expect(gitRoot).toBe(ROOT);
-      expect(rootFile).toContain("bs-quality-gitroot-");
-      expect(governorFile).toContain("bs-quality-campaign-");
-      expect(governorFile).toMatch(/\.json$/);
-    },
-  );
-
-  it("uses target scripts only in explicit trusted-development mode", () => {
-    const trusted = mkdtempSync(path.join(tmpdir(), "trusted-kit-"));
-    const trustedScripts = path.join(trusted, "scripts");
-    spawnSync("mkdir", ["-p", trustedScripts]);
-    writeFileSync(path.join(trustedScripts, "risk-score.js"), "trusted\n");
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        `CLAUDE_KIT_ROOT="$2"; source "$1"; bs_quality_find_script risk-score.js; printf '\\n'; BS_QUALITY_TRUST_TARGET_SCRIPTS=true; bs_quality_find_script risk-score.js`,
-        "resolution",
-        LOAD_ROOT,
-        trusted,
-      ],
-      { encoding: "utf8", cwd: ROOT },
-    );
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim().split("\n")).toEqual([
-      path.join(trustedScripts, "risk-score.js"),
-      path.join(ROOT, "scripts", "risk-score.js"),
-    ]);
-
-    const emptyHome = mkdtempSync(path.join(tmpdir(), "empty-home-"));
-    const untrusted = spawnSync(
-      "bash",
-      [
-        "-c",
-        `unset CLAUDE_SETUP_ROOT CLAUDE_PLUGIN_ROOT CLAUDE_KIT_ROOT BS_QUALITY_TRUST_TARGET_SCRIPTS; HOME="$2"; source "$1"; bs_quality_find_script risk-score.js`,
-        "resolution",
-        LOAD_ROOT,
-        emptyHome,
-      ],
-      { encoding: "utf8", cwd: ROOT },
-    );
-    expect(untrusted.status).not.toBe(0);
+  it("requires the explicit manifest instead of ambient shell state", () => {
+    const source = readFileSync(LOAD_ROOT, "utf8");
+    expect(source).toMatch(/--manifest/);
+    expect(source).toMatch(/quality-invocation\.js" locate/);
+    expect(source).not.toMatch(/BS_QUALITY_ROOT_FILE|latest|find .*bs-quality/);
   });
 
   it("accepts exact evidence, then rejects later code and contradictions", () => {
@@ -299,8 +154,15 @@ echo change >> file; git commit -qam change
 reviewed=$(git rev-parse HEAD)
 git commit -q --allow-empty -m "chore: stamp
 
-Reviewed-By: quality (tier=high, reviewer=codex, primary=codex, fallback=claude, findings=0, head=$reviewed, base=$base)
-Reviewed-By: codex (tier=high, findings=0, head=$reviewed, base=$base)"
+Reviewed-By: quality
+Reviewed-By: codex
+Quality-Tier: high
+Quality-Reviewer: codex
+Quality-Primary: codex
+Quality-Fallback: claude
+Quality-Findings: 0
+Quality-Head: $reviewed
+Quality-Base: $base"
 `,
         "setup",
         repo,
@@ -330,8 +192,15 @@ Reviewed-By: codex (tier=high, findings=0, head=$reviewed, base=$base)"
     }).stdout.trim();
     const malicious = `code-bearing stamp
 
-Reviewed-By: quality (tier=high, reviewer=codex, primary=codex, fallback=claude, findings=0, head=${reviewed}, base=${base})
-Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
+Reviewed-By: quality
+Reviewed-By: codex
+Quality-Tier: high
+Quality-Reviewer: codex
+Quality-Primary: codex
+Quality-Fallback: claude
+Quality-Findings: 0
+Quality-Head: ${reviewed}
+Quality-Base: ${base}`;
     spawnSync("bash", ["-c", "echo unreviewed >> file; git add file"], {
       cwd: repo,
     });
@@ -348,7 +217,7 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
     const message = spawnSync("git", ["log", "-1", "--format=%B"], {
       cwd: repo,
       encoding: "utf8",
-    }).stdout.replace("findings=0, head=", "findings=9, head=");
+    }).stdout.concat("\nQuality-Findings: 9\n");
     spawnSync(
       "git",
       ["commit", "--amend", "--allow-empty", "-q", "-m", message],
@@ -365,21 +234,26 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
       /while \[ "\$pass" -le "\$QUALITY_REVIEW_PASSES" \]/,
     );
     expect(source).toMatch(/model_reasoning_effort=.*QUALITY_REVIEW_DEPTH/);
-    expect(source).toMatch(
-      /codex exec --ephemeral -s read-only[\s\\]*\n\s+-C "\$CODEX_REVIEW_ROOT"/,
-    );
+    expect(source).toMatch(/codex exec --ephemeral -s read-only --json/);
+    expect(source).toMatch(/-C "\$GIT_ROOT"/);
+    expect(source).toMatch(/review_selector=--base/);
+    expect(source).not.toMatch(/review_selector=--commit/);
+    expect(source).toMatch(/Prior reviewed findings requiring verification/);
+    expect(source).toMatch(/Automated gates already passed/);
+    expect(source).toMatch(/do not run commands or tests/);
+    expect(source).toMatch(/cat "\$REVIEW_OUT\/diff\.txt"/);
+    expect(source).not.toMatch(/\$review_selector_value" -/);
     expect(source).toMatch(/Codex review passes must be 1 or 2/);
-    expect(source).toMatch(
-      /Codex review passes must be 1 or 2" >&2; return 64/,
-    );
     expect(source).toMatch(/record_provider_exhaustion Codex/);
+    expect(source).toMatch(/quality-provider-error\.js/);
+    expect(source).not.toMatch(/provider_stderr_exhausted/);
+    expect(source).not.toMatch(/provider_exhausted "\$raw_file"/);
     expect(source.indexOf('[ "$rc" -eq 124 ] && return 76')).toBeLessThan(
-      source.indexOf('provider_exhausted "$raw_file"'),
+      source.indexOf("quality-provider-error.js"),
     );
-    expect(source).toMatch(/for evidence in "\$REVIEW_OUT"\/\*\.stderr; do/);
-    expect(source).toMatch(/try again at/);
-    expect(source).toMatch(/REVIEW_MODE=verification/);
-    expect(source).toMatch(/Prior findings to verify/);
+    expect(source).toMatch(/"\$REVIEW_OUT"\/codex-\*\.json/);
+    expect(source).toMatch(/"\$REVIEW_OUT"\/codex-\*\.progress/);
+    expect(source).toMatch(/"\$REVIEW_OUT"\/codex-\*\.prompt/);
     expect(source).not.toMatch(
       /PROVIDER_RC.*-eq 76.*QUALITY_FALLBACK|QUALITY_FALLBACK.*PROVIDER_RC.*-eq 76/,
     );
@@ -469,176 +343,22 @@ Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
 
   it("pins the initial review diff to the branch merge-base", () => {
     const source = readFileSync(RUN_REVIEW, "utf8");
+    expect(source).toMatch(/quality-invocation\.js" review-info/);
     expect(source).toMatch(
-      /REVIEW_BASE="\$\(git merge-base HEAD "\$REVIEW_BASE_REF"\)"/,
+      /git diff "\$\{REVIEW_DIFF_BASE\}\.\.\$\{REVIEWED_HEAD\}"/,
     );
-    expect(source).toMatch(/REVIEW_DIFF_BASE="\$REVIEW_BASE"/);
-    expect(source).toMatch(/git diff "\$\{REVIEW_DIFF_BASE\}\.\.HEAD"/);
-    expect(source).toMatch(/REVIEWED_BASE="\$REVIEW_BASE"/);
     expect(source).toMatch(/normalized Codex findings could not be rendered/);
   });
 
-  it("keeps sourced review scripts compatible with Bash and zsh", () => {
+  it("runs Bash-only review entrypoints explicitly through Bash", () => {
     const runner = readFileSync(RUN_REVIEW, "utf8");
     const policy = readFileSync(
       path.join(ROOT, "scripts", "quality-provider-policy.sh"),
       "utf8",
     );
-    for (const source of [runner, policy]) {
-      expect(source).toMatch(/BASH_VERSION/);
-      expect(source).toMatch(/ZSH_VERSION/);
-      expect(source).toMatch(/\$\{\(%\):-%x\}/);
-    }
+    expect(runner).toMatch(/^#!\/usr\/bin\/env bash/);
+    expect(runner).toMatch(/\$\{BASH_SOURCE\[0\]\}/);
+    expect(policy).toMatch(/BASH_VERSION/);
+    expect(policy).toMatch(/ZSH_VERSION/);
   });
-
-  it("runs one xhigh discovery pass, then one high targeted verification", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "quality-rounds-"));
-    const repo = path.join(dir, "repo");
-    const bin = path.join(dir, "bin");
-    const prompt = path.join(dir, "prompt.txt");
-    const argsLog = path.join(dir, "args.txt");
-    const setup = spawnSync(
-      "bash",
-      [
-        "-c",
-        `
-mkdir -p "$1" "$2"
-git init -q -b main "$1"
-cd "$1"
-git config user.name test
-git config user.email test@example.com
-echo base > file.js
-git add file.js
-git commit -q -m base
-git switch -q -c feature
-echo broken >> file.js
-git commit -qam feature
-`,
-        "setup",
-        repo,
-        bin,
-      ],
-      { encoding: "utf8" },
-    );
-    expect(setup.status).toBe(0);
-
-    const fakeCodex = path.join(bin, "codex");
-    writeFileSync(
-      fakeCodex,
-      `#!/usr/bin/env bash
-if [ "$1" = "login" ]; then
-  echo "Logged in using ChatGPT"
-  exit 0
-fi
-printf '%s\\n' "$*" >> "$FAKE_CODEX_ARGS"
-cat > "$FAKE_CODEX_PROMPT"
-out=""
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "-o" ]; then out="$2"; shift 2; continue; fi
-  shift
-done
-printf '%s\\n' '{"verdict":"approve","summary":"verified","findings":[]}' > "$out"
-`,
-    );
-    chmodSync(fakeCodex, 0o755);
-
-    const rootFile = path.join(dir, "root.txt");
-    const governor = path.join(dir, "governor.json");
-    const baseline = spawnSync("git", ["rev-parse", "HEAD"], {
-      cwd: repo,
-      encoding: "utf8",
-    }).stdout.trim();
-    const start = Math.floor(Date.now() / 1000);
-    writeFileSync(rootFile, `${repo}\n`);
-    writeFileSync(
-      governor,
-      JSON.stringify({
-        start_epoch: start,
-        deadline_epoch: start + 600,
-        start_commit_sha: baseline,
-        start_commit_count: 2,
-        max_fix_commits: 4,
-        max_wall_seconds: 600,
-        max_review_rounds: 2,
-        rounds_used: 1,
-        findings_seen: [],
-      }),
-    );
-    writeFileSync(
-      rootFile.replace(/\.txt$/, "-riskstate.env"),
-      "TIER='critical'\nCODEX_DEPTH='xhigh'\nCODEX_ROUNDS='1'\nLEVEL='auto'\n",
-    );
-
-    const runReview = () =>
-      spawnSync(
-        "bash",
-        [
-          "-c",
-          `
-bs_quality_find_script() { printf '%s/scripts/%s\\n' "$KIT_ROOT" "$1"; }
-source "$KIT_ROOT/scripts/quality-run-review.sh"
-`,
-        ],
-        {
-          cwd: repo,
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            PATH: `${bin}:${process.env.PATH}`,
-            KIT_ROOT: ROOT,
-            BS_QUALITY_PRIMARY: "codex",
-            BS_QUALITY_FALLBACK: "none",
-            BS_QUALITY_ROOT_FILE: rootFile,
-            BS_QUALITY_GOVERNOR_FILE: governor,
-            FAKE_CODEX_PROMPT: prompt,
-            FAKE_CODEX_ARGS: argsLog,
-          },
-        },
-      );
-
-    const discovery = runReview();
-    expect(discovery.status, discovery.stderr + discovery.stdout).toBe(0);
-    expect(readFileSync(prompt, "utf8")).toContain("Review mode: discovery");
-    expect(readFileSync(argsLog, "utf8")).toContain(
-      'model_reasoning_effort="xhigh"',
-    );
-
-    const findings = JSON.stringify([
-      { file: "file.js", summary: "broken behavior" },
-    ]);
-    expect(
-      spawnSync("node", [
-        path.join(ROOT, "scripts", "quality-run-governor.js"),
-        "record-finding",
-        governor,
-        findings,
-      ]).status,
-    ).toBe(0);
-    spawnSync("bash", ["-c", "echo fixed >> file.js; git commit -qam fix"], {
-      cwd: repo,
-    });
-    expect(
-      spawnSync(
-        "node",
-        [
-          path.join(ROOT, "scripts", "quality-run-governor.js"),
-          "bump-round",
-          governor,
-        ],
-        { cwd: repo },
-      ).status,
-    ).toBe(0);
-
-    const verification = runReview();
-    expect(verification.status, verification.stderr + verification.stdout).toBe(
-      0,
-    );
-    const verificationPrompt = readFileSync(prompt, "utf8");
-    expect(verificationPrompt).toContain("Review mode: verification");
-    expect(verificationPrompt).toContain("broken behavior");
-    expect(verificationPrompt).toContain("+fixed");
-    const invocations = readFileSync(argsLog, "utf8").trim().split("\n");
-    expect(invocations).toHaveLength(2);
-    expect(invocations[1]).toContain('model_reasoning_effort="high"');
-  }, 10_000);
 });

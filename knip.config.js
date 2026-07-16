@@ -22,5 +22,9 @@ module.exports = {
     "license-checker",
     "prettier",
     "vitest",
+    // Shell-boundary regression fixtures exercise both parent shells and
+    // resolve the real Git binary through `which`.
+    "which",
+    "zsh",
   ],
 };
