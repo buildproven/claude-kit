@@ -807,27 +807,8 @@ function setAgents(manifest, names) {
   manifest.agents = names;
 }
 
-function bindPrRepositoryIdentity(manifest, options) {
-  if (manifest.repo.pr === null) return;
-  const identityOptionNames = [
-    "github-repo",
-    "head-ref",
-    "head-repository",
-    "cross-repository",
-  ];
-  const supplied = identityOptionNames.some(
-    (name) => options[name] !== undefined,
-  );
-  const existingComplete =
-    manifest.repo.githubRepository &&
-    manifest.repo.headRefName &&
-    manifest.repo.headRepository &&
-    typeof manifest.repo.isCrossRepository === "boolean";
-  if (!supplied) {
-    if (existingComplete) return;
-    throw new Error("resumed PR repository identity is incomplete");
-  }
-  const identity = {
+function prIdentityOptions(manifest, options) {
+  return {
     githubRepository: firstValue(
       options["github-repo"],
       manifest.repo.githubRepository,
@@ -850,14 +831,36 @@ function bindPrRepositoryIdentity(manifest, options) {
           ? false
           : firstValue(manifest.repo.isCrossRepository, null),
   };
-  if (
-    !identity.githubRepository ||
-    !identity.headRefName ||
-    !identity.headRepository ||
-    identity.isCrossRepository === null ||
-    identity.isCrossRepository !==
-      (identity.githubRepository !== identity.headRepository)
-  ) {
+}
+
+function prIdentityComplete(identity) {
+  return Boolean(
+    identity.githubRepository &&
+    identity.headRefName &&
+    identity.headRepository &&
+    typeof identity.isCrossRepository === "boolean" &&
+    identity.isCrossRepository ===
+      (identity.githubRepository !== identity.headRepository),
+  );
+}
+
+function bindPrRepositoryIdentity(manifest, options) {
+  if (manifest.repo.pr === null) return;
+  const identityOptionNames = [
+    "github-repo",
+    "head-ref",
+    "head-repository",
+    "cross-repository",
+  ];
+  const supplied = identityOptionNames.some(
+    (name) => options[name] !== undefined,
+  );
+  if (!supplied) {
+    if (prIdentityComplete(manifest.repo)) return;
+    throw new Error("resumed PR repository identity is incomplete");
+  }
+  const identity = prIdentityOptions(manifest, options);
+  if (!prIdentityComplete(identity)) {
     throw new Error("resumed PR repository identity is incomplete");
   }
   for (const [key, value] of Object.entries(identity)) {
