@@ -3,6 +3,8 @@
     "backlog",
     "deps",
     "dev",
+    "diagnosing-bugs",
+    "codebase-design",
     "hotfix",
     "new",
     "prd",

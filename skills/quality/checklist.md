@@ -6,7 +6,7 @@ Review depth scales with the resolved risk tier (see `reference.md` §Quality Le
 
 | Gate                                    | low | medium | high | critical |
 | --------------------------------------- | --- | ------ | ---- | -------- |
-| Tests pass + exist                      | ✓   | ✓      | ✓    | ✓        |
+| Behavioral test evidence + suite passes | ✓   | ✓      | ✓    | ✓        |
 | ESLint / TypeScript / build clean       | ✓   | ✓      | ✓    | ✓        |
 | Defensive pattern analysis              | ✓   | ✓      | ✓    | ✓        |
 | code-reviewer + silent-failure-hunter   | ✓   | ✓      | ✓    | ✓        |
@@ -19,7 +19,7 @@ Review depth scales with the resolved risk tier (see `reference.md` §Quality Le
 ## Level 95 Exit Criteria (legacy, full panel)
 
 - [ ] **Tests pass**: `npm test` exits 0 (HARD GATE — blocks everything)
-- [ ] **Tests exist**: Every changed source file has a corresponding `.test.*` or `.spec.*` (exempt: config, types, migrations)
+- [ ] **Behavior is tested**: Changed behavior has evidence at the highest useful public seam; file-per-source tests are not required
 - [ ] **Changed tests pass**: Any tests added during fixes must pass before continuing
 - [ ] ESLint: 0 errors, 0 warnings
 - [ ] TypeScript: strict mode, no `any`, 0 errors
@@ -153,7 +153,8 @@ Score starts at 100, deductions:
 
 ### Minimum Test Requirements
 
-- Each code file should have corresponding test file
-- Tests should cover main functionality + at least 2 edge cases
-- Error paths must be tested (invalid input, network failures)
-- Test descriptions should explain the scenario, not repeat code
+- Changed behavior is exercised through a public interface
+- The test would fail if the behavior regressed
+- Expected values come from an independent source of truth
+- Relevant failure/recovery paths are covered
+- Test descriptions explain the scenario, not the implementation

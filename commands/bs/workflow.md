@@ -43,9 +43,29 @@ This is the canonical pattern for parallel agent fan-outs — without it, the qu
 ### Larger ambiguous task
 
 ```bash
-/bs:plan
+/bs:prd my-feature
 /bs:dev implementation-step
 /bs:quality
+```
+
+The PRD decomposes work into independently verifiable vertical slices with
+explicit blocking edges. Wide mechanical refactors use expand → migrate →
+contract so the branch stays green.
+
+### Bug diagnosis
+
+```bash
+/bs:dev login-timeout --fix
+# diagnosing-bugs establishes one red-capable reproduction command first
+/bs:quality
+```
+
+### UI work
+
+```bash
+# frontend-design routes product vs marketing vs redesign
+# ui-reviewer renders/reviews toward the strict 99/100 threshold
+/bs:quality --level 98
 ```
 
 ### Autonomous backlog work
@@ -75,7 +95,8 @@ This is the canonical pattern for parallel agent fan-outs — without it, the qu
 | `/bs:dev`     | Start feature work              |
 | `/bs:test`    | Tight test feedback loop        |
 | `/bs:quality` | Quality gate before PR or merge |
-| `/bs:plan`    | Structure bigger work           |
+| `/bs:plan`    | Lightweight multi-repo planning |
+| `/bs:prd`     | Strict PRD + vertical slices    |
 | `/bs:ralph`   | Autonomous backlog execution    |
 | `/bs:backlog` | Prioritization                  |
 | `/bs:help`    | Full command lookup             |

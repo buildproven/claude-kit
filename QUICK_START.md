@@ -48,6 +48,8 @@ git push
 
 - `/bs:dev` - Start development work
 - `/bs:quality` - Autonomous quality loop (95% or 98%)
+- Natural-language `diagnosing-bugs` and `codebase-design` skills for
+  evidence-first fixes and deep-module refactors
 - `/bs:help` - See all commands
 - And 30+ more!
 
