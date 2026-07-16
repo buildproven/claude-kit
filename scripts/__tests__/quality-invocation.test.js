@@ -2060,7 +2060,7 @@ exit 1
     const root = repo("future-gate-policy");
     const manifestPath = create(root);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    manifest.requiredGatesPolicyVersion = 2;
+    manifest.requiredGatesPolicyVersion = 3;
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     for (const command of ["validate", "advance"]) {
       const result = spawnSync("node", [INVOCATION, command, manifestPath], {
@@ -2105,7 +2105,7 @@ exit 1
 
     execFileSync("node", [INVOCATION, "advance", manifestPath], { cwd: root });
     const migrated = JSON.parse(readFileSync(manifestPath, "utf8"));
-    expect(migrated.requiredGatesPolicyVersion).toBe(1);
+    expect(migrated.requiredGatesPolicyVersion).toBe(2);
     expect(migrated.requiredGates.map((gate) => gate.name)).toEqual([
       "lint",
       "test",

@@ -8,7 +8,7 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 
 const SCHEMA_VERSION = 1;
-const REQUIRED_GATES_POLICY_VERSION = 1;
+const REQUIRED_GATES_POLICY_VERSION = 2;
 const NEEDS_REQUIRED_GATES_MIGRATION = Symbol("needs-required-gates-migration");
 
 function parseJson(raw, label) {
@@ -89,7 +89,10 @@ function normalizeManifestCollections(manifest) {
   manifest.governor.providerDeadlineEpoch ??=
     manifest.governor.startedAtEpoch + 3600;
   manifest.governor.providerAttempts ??= [];
-  if (manifest.requiredGatesPolicyVersion === undefined) {
+  if (
+    manifest.requiredGatesPolicyVersion === undefined ||
+    manifest.requiredGatesPolicyVersion === 1
+  ) {
     Object.defineProperty(manifest, NEEDS_REQUIRED_GATES_MIGRATION, {
       value: true,
       writable: true,
