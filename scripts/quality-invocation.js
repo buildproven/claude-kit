@@ -2009,6 +2009,10 @@ const COMMANDS = {
     process.stdout.write(`${JSON.stringify(reviewAuthorization(manifest))}\n`),
   "judge-context": ({ manifest }) =>
     process.stdout.write(`${JSON.stringify(judgeContext(manifest))}\n`),
+  "prior-findings": ({ manifest }) =>
+    process.stdout.write(
+      `${JSON.stringify({ findings: providerFindings(manifest) })}\n`,
+    ),
   trailers: ({ manifest }) =>
     process.stdout.write(`${reviewTrailers(manifest)}\n`),
 };

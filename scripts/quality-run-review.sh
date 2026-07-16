@@ -61,7 +61,7 @@ node "$SCRIPT_DIR/quality-invocation.js" review-identity "$MANIFEST" \
 PRIOR_FINDINGS_FILE=""
 if [ "$REVIEW_ROUND" -gt 1 ]; then
   PRIOR_FINDINGS_FILE="$REVIEW_OUT/prior-findings.json"
-  node "$SCRIPT_DIR/quality-invocation.js" judge-context "$MANIFEST" \
+  node "$SCRIPT_DIR/quality-invocation.js" prior-findings "$MANIFEST" \
     > "$PRIOR_FINDINGS_FILE" || exit 1
 fi
 
@@ -157,7 +157,7 @@ run_codex_review() {
       {
         echo "$QUALITY_REVIEW_FOCUS"
         echo "Prior reviewed findings and dispositions:"
-        node "$SCRIPT_DIR/quality-invocation.js" judge-context "$MANIFEST"
+        node "$SCRIPT_DIR/quality-invocation.js" prior-findings "$MANIFEST"
         echo "Review the complete supplied remediation delta only:"
         cat "$REVIEW_OUT/diff.txt"
       } > "$prompt_file"
