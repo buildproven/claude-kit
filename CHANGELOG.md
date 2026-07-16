@@ -2,6 +2,29 @@
 
 All notable changes to claude-kit are documented here.
 
+## [4.0.0] - 2026-07-16
+
+### Added
+
+- Native Codex Agent Skills installation from a curated allowlist, with drift
+  checking and the same canonical instructions used by Claude Code.
+- A provider-neutral runner and shared policy for Codex-primary, Claude-primary,
+  explicit fallback, typed quota/authentication/timeout failures, and bounded runs.
+- Active-repository fleet discovery and convergence auditing, plus isolated
+  worktree repair mode through the repository's normal PR quality workflow.
+- Declarative MCP parity tooling for Claude Code and Codex, including forced
+  convergence and separate OAuth login.
+- A command/skill surface audit with an explicit public command budget.
+
+### Changed
+
+- Overnight loop engineering now uses the shared provider policy instead of
+  hardcoding Claude Code.
+- Twelve redundant command wrappers were removed. Their durable skills remain
+  available where they are useful; internal implementation skills are hidden from
+  user menus with `user-invocable: false`.
+- Steward state moved out of the repository into the XDG state directory.
+
 ## [3.2.0] - 2026-07-15
 
 ### Changed

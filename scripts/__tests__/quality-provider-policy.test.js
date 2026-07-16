@@ -19,10 +19,13 @@ function resolvePolicy(env = {}) {
 }
 
 describe("quality provider policy", () => {
-  it("keeps the public backwards-compatible default", () => {
+  it("defaults to the invoking provider with no fallback", () => {
     expect(
-      resolvePolicy({ HOME: mkdtempSync(path.join(tmpdir(), "qpp-")) }),
-    ).toBe("claude/codex");
+      resolvePolicy({
+        HOME: mkdtempSync(path.join(tmpdir(), "qpp-")),
+        CODEX_THREAD_ID: "test-thread",
+      }),
+    ).toBe("codex/none");
   });
 
   it("reads a preference shared by Claude Code and Codex", () => {

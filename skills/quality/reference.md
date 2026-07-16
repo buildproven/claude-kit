@@ -30,8 +30,9 @@ exists for a resolved PR/branch, one is materialized in a sibling directory
 
 ## Reviewer Provider Policy
 
-Both Claude Code and Codex read `~/.claude/quality-providers.json`. Configure it
-with `scripts/quality-provider-config.sh --primary codex --fallback claude`
+Claude Code and Codex read the shared workflow policy at
+`${XDG_CONFIG_HOME:-~/.config}/buildproven/agent-providers.json`. Configure it
+with `scripts/provider-config.sh --primary codex --fallback claude`
 (or reverse the providers). `BS_QUALITY_PRIMARY`, `BS_QUALITY_FALLBACK`, and
 `BS_QUALITY_PROVIDER_CONFIG` are per-run overrides. The fallback runs only for
 typed account exhaustion (HTTP 429, weekly/rate/usage limit, exhausted quota)

@@ -2,6 +2,7 @@
 name: healthcheck
 description: Session start health check — verify MCP servers, repo sync status, and local agent gateway. Use when starting a session that involves social media, multi-repo work, or Docker operations.
 model: haiku
+user-invocable: false
 ---
 
 # Health Check

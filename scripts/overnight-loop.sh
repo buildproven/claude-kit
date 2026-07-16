@@ -11,7 +11,6 @@ if [ -n "${OVERNIGHT_LOOP_ENV_FILE:-}" ]; then
 fi
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-CLAUDE_BIN="${CLAUDE_BIN:-$HOME/.local/bin/claude}"
 CCUSAGE_BIN="${CCUSAGE_BIN:-ccusage}"
 CURL_BIN="${CURL_BIN:-curl}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
@@ -24,6 +23,8 @@ MAX_HOURS=8
 TARGET_DIR="$(pwd)"
 LINEAR_PROJECT=""
 DRY_RUN=0
+PROVIDER=""
+PROVIDER_FALLBACK=""
 
 die() { echo "$*" >&2; exit 2; }
 while [ $# -gt 0 ]; do
@@ -32,6 +33,8 @@ while [ $# -gt 0 ]; do
     --max-hours) [ $# -ge 2 ] || die "--max-hours requires a value"; MAX_HOURS="$2"; shift 2 ;;
     --target-dir) [ $# -ge 2 ] || die "--target-dir requires a value"; TARGET_DIR="$2"; shift 2 ;;
     --linear-project) [ $# -ge 2 ] || die "--linear-project requires a value"; LINEAR_PROJECT="$2"; shift 2 ;;
+    --provider) [ $# -ge 2 ] || die "--provider requires a value"; PROVIDER="$2"; shift 2 ;;
+    --fallback) [ $# -ge 2 ] || die "--fallback requires a value"; PROVIDER_FALLBACK="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     *) die "unknown arg: $1" ;;
   esac
@@ -201,7 +204,7 @@ cleanup_lock() { rmdir "$LOCK_DIR" 2>/dev/null || true; }
 
 main() {
   [ -n "${LINEAR_API_KEY:-}" ] || { log "FATAL: LINEAR_API_KEY is required"; return 1; }
-  [ -x "$CLAUDE_BIN" ] || { log "FATAL: claude CLI not executable at $CLAUDE_BIN"; return 1; }
+  [ -x "$SCRIPT_DIR/provider-run.sh" ] || { log "FATAL: provider runner missing"; return 1; }
   [ -f "$RUN_WITH_DEADLINE" ] || { log "FATAL: deadline helper missing at $RUN_WITH_DEADLINE"; return 1; }
   command -v git >/dev/null 2>&1 || { log "FATAL: git not on PATH"; return 1; }
   command -v shasum >/dev/null 2>&1 || { log "FATAL: shasum not on PATH"; return 1; }
@@ -240,10 +243,14 @@ main() {
     iteration_log="$LOG_DIR/overnight-loop-${current_issue}-${START_EPOCH}-${attempts}.log"
     log "Attempt $attempts: exact Linear item $current_issue (${remaining}s wall budget left)"
 
-    "$PYTHON_BIN" "$RUN_WITH_DEADLINE" --timeout-seconds "$remaining" -- \
-      "$CLAUDE_BIN" -p "/bs:ralph --until 'item:$current_issue' --target-dir '$TARGET_DIR'" \
-      --dangerously-skip-permissions 2>&1 | tee -a "$LOG_FILE" "$iteration_log" >/dev/null
+    prompt_file="$LOG_DIR/overnight-loop-${current_issue}-${START_EPOCH}-${attempts}.prompt"
+    printf '%s\n' "Run the ralph workflow until exactly item:$current_issue in target directory $TARGET_DIR. Use the repository's quality merge gate and stop after this exact item is merged." > "$prompt_file"
+    provider_args=(--prompt-file "$prompt_file" --target-dir "$TARGET_DIR" --timeout "$remaining")
+    [ -z "$PROVIDER" ] || provider_args+=(--provider "$PROVIDER")
+    [ -z "$PROVIDER_FALLBACK" ] || provider_args+=(--fallback "$PROVIDER_FALLBACK")
+    "$SCRIPT_DIR/provider-run.sh" "${provider_args[@]}" 2>&1 | tee -a "$LOG_FILE" "$iteration_log" >/dev/null
     run_rc=${PIPESTATUS[0]}
+    rm -f "$prompt_file"
     main_after=$(main_tip)
     [ -n "$main_after" ] || { finish "git-unreadable" 1; return $?; }
     issue_state=$(linear_issue_state "$current_issue") || { finish "linear-unreachable" 1; return $?; }
@@ -261,7 +268,7 @@ main() {
       finish "inconsistent-receipt" 1; return $?
     fi
     if [ "$run_rc" -eq 124 ]; then finish "agent-deadline" 1; return $?; fi
-    if [ "$run_rc" -ne 0 ] && grep -Eiq '(usage limit|rate limit|quota exceeded|resets at|capacity)' "$iteration_log"; then
+    if [ "$run_rc" -eq 75 ]; then
       if sleep_until_reset; then continue; fi
       finish "limit-reset-past-deadline" 0; return $?
     fi

@@ -1,6 +1,7 @@
 ---
 name: recover
 description: Crash and state recovery skill. Auto-invokes when Claude Code crashes, loses context, encounters broken state, won't start, hangs, freezes, hits stale locks, or has incomplete git operations. Guides through diagnosis, recovery, and context restoration.
+user-invocable: false
 ---
 
 # Recovery Skill

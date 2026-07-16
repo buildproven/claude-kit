@@ -108,7 +108,7 @@ After all tables, render the Skills section.
 ```
 ## Skills (<count> total)
 
-Invoked naturally — Claude picks the right skill from context.
+Invoked naturally — Claude Code or Codex picks the right skill from context.
 
 **Full reference**: `/bs:help --full`
 **Workflow guide**: `/bs:workflow`

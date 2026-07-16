@@ -28,6 +28,10 @@ function fixture() {
   mkdirSync(target);
   mkdirSync(bin);
   copyFileSync(deadline, join(setup, "scripts/run-with-deadline.py"));
+  for (const name of ["provider-run.sh", "provider-policy.sh"]) {
+    copyFileSync(join(repo, "scripts", name), join(setup, "scripts", name));
+    chmodSync(join(setup, "scripts", name), 0o755);
+  }
   execFileSync("git", ["init", "-b", "main"], { cwd: target });
   execFileSync("git", ["config", "user.email", "test@example.com"], {
     cwd: target,
@@ -83,7 +87,6 @@ describe("overnight loop", () => {
         env: {
           ...process.env,
           SETUP_REPO: fx.setup,
-          CLAUDE_BIN: join(fx.bin, "claude"),
           CURL_BIN: join(fx.bin, "curl"),
           LINEAR_API_KEY: "test-token",
           TMPDIR: fx.root,

@@ -1,6 +1,7 @@
 ---
 name: cleanup
 description: System resource cleanup skill. Auto-invokes on slow system, out of memory, disk space issues, zombie processes, high swap usage, or resource exhaustion. Provides quick diagnostics and delegates to /bs:cleanup for actions.
+user-invocable: false
 ---
 
 # Cleanup Skill

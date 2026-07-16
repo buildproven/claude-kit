@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BuildProven agent provider policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["primary", "fallback"],
+  "properties": {
+    "primary": {
+      "enum": ["auto", "codex", "claude"]
+    },
+    "fallback": {
+      "enum": ["none", "codex", "claude"]
+    }
+  }
+}

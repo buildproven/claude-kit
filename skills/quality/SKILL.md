@@ -86,8 +86,9 @@ resolution beyond Step -1.
 Read `reference.md` for flag definitions. Key flags: `--level` (auto|95|98),
 `--scope` (changed|branch|all), `--merge`, `--deploy`, `--preflight`,
 `--audit`, `--teams`, `--verify [N]` (adversarial verification, see Step 2.6).
-Reviewer selection is shared across both CLIs via
-`~/.claude/quality-providers.json` (`primary` + `fallback`). Handle
+Reviewer selection is shared across both CLIs via the user provider policy at
+`${XDG_CONFIG_HOME:-~/.config}/buildproven/agent-providers.json`
+(`primary` + `fallback`). Handle
 early exits: `--status`, `--preflight` (<10s), `--audit` (read-only).
 
 ### Step 0.5: Risk Scoring → Review Depth (`--level auto`)

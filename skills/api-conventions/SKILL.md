@@ -1,6 +1,7 @@
 ---
 name: api-conventions
 description: Auto-invoke skill for consistent API design conventions. Activates when writing API routes, HTTP handlers, response objects, or REST endpoints. Enforces RESTful naming, consistent response shapes, proper status codes, Zod validation at boundaries, pagination, and rate limiting patterns.
+user-invocable: false
 ---
 
 # API Design Conventions Skill

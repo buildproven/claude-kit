@@ -1,0 +1,12 @@
+{
+  "owners": ["your-github-user-or-org"],
+  "windowDays": 14,
+  "minimumCommits": 2,
+  "localRoots": [
+    "~/Projects/internal",
+    "~/Projects/products",
+    "~/Projects/personal"
+  ],
+  "include": [],
+  "exclude": []
+}

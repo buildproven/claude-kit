@@ -3,6 +3,7 @@ name: verify-claim
 title: "Verify Claim"
 description: Enforce research rigor — extract factual claims from drafts, verify each against primary sources, mark unverifiable as [unverified] before output. Use before writing any research, strategy, or competitive-analysis memo.
 context: fork
+user-invocable: false
 # Runs unattended (forked, no user in the loop). AskUserQuestion here would
 # block forever with nobody to answer it — remove the tool, don't just ask it
 # nicely not to. https://code.claude.com/docs/en/skills
