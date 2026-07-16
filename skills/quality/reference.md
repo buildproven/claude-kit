@@ -314,13 +314,13 @@ If no `harness-config.json` is present, `--level auto` falls back to L95.
 
 ## Provider Invocation
 
-Codex uses the canonical companion (not `codex:rescue`, which is for
-hand-offs). `quality-run-bounded.sh` places it in a process group and enforces
-the tier wall-clock cap:
+Codex uses `codex exec` directly with a structured output schema and the
+scorer-selected `model_reasoning_effort`; this avoids ambient-effort drift.
+`quality-run-bounded.sh` places it in a process group and enforces the tier cap:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" \
-  adversarial-review --wait --base <resolved-base> --scope branch [focus text]
+codex exec --ephemeral -s read-only \
+  -c 'model_reasoning_effort="high"' --output-schema <schema> -
 ```
 
 The `--base` arg is the branch base on the first round and the last successfully

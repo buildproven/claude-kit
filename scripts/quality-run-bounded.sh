@@ -25,6 +25,8 @@ cleanup_provider() {
   local status="${1:-130}"
   trap - INT TERM HUP EXIT
   kill -TERM "-${CHILD_PID}" 2>/dev/null || kill -TERM "$CHILD_PID" 2>/dev/null || true
+  sleep 1
+  kill -KILL "-${CHILD_PID}" 2>/dev/null || kill -KILL "$CHILD_PID" 2>/dev/null || true
   kill -TERM "-${WATCHDOG_PID}" 2>/dev/null || kill "$WATCHDOG_PID" 2>/dev/null || true
   wait "$CHILD_PID" 2>/dev/null || true
   wait "$WATCHDOG_PID" 2>/dev/null || true

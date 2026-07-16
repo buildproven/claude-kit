@@ -21,6 +21,10 @@ if { [ "$STAMP_HEAD" != "$CURRENT_HEAD" ] && [ "$STAMP_HEAD" != "$CURRENT_PARENT
   echo "quality trailer is stale or malformed" >&2
   exit 1
 fi
+if [ "$STAMP_HEAD" = "$CURRENT_PARENT" ] && ! git diff --quiet HEAD~1 HEAD; then
+  echo "stamp commit changes the reviewed tree" >&2
+  exit 1
+fi
 
 EXPECTED="Reviewed-By: ${STAMP_PROVIDER} (tier=${STAMP_TIER}, findings=${STAMP_FINDINGS}, head=${STAMP_HEAD}, base=${STAMP_BASE})"
 printf '%s\n' "$PARSED" | grep -Fxq "$EXPECTED" || {

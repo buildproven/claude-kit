@@ -61,16 +61,10 @@ run_claude_review() {
 }
 
 run_codex_review() {
-  local companion bounded raw_file error_file rc pass pass_timeout
-  companion=""
-  for candidate in \
-    "${CLAUDE_PLUGIN_ROOT:-}/scripts/codex-companion.mjs" \
-    "$HOME/.claude/plugins/marketplaces/openai-codex/plugins/codex/scripts/codex-companion.mjs" \
-    "$HOME/.claude/scripts/codex-companion.mjs"; do
-    [ -n "$candidate" ] && [ -f "$candidate" ] && { companion="$candidate"; break; }
-  done
-  [ -n "$companion" ] || return 2
+  local bounded schema prompt_file raw_file error_file rc pass pass_timeout
   bounded="$(bs_quality_find_script quality-run-bounded.sh)" || return 2
+  schema="$SCRIPT_DIR/schemas/quality-review-output.schema.json"
+  [ -f "$schema" ] || return 2
   command -v codex >/dev/null 2>&1 || return 2
   codex login status 2>&1 | grep -q 'Logged in' || return 2
 
@@ -81,10 +75,18 @@ run_codex_review() {
   while [ "$pass" -le "$QUALITY_REVIEW_PASSES" ]; do
     raw_file="$REVIEW_OUT/codex-${pass}.json"
     error_file="$REVIEW_OUT/codex-${pass}.stderr"
-    bash "$bounded" --timeout "$pass_timeout" -- node "$companion" adversarial-review --wait --json \
-      --base "$REVIEW_DIFF_BASE" --scope branch \
-      "Independent pass $pass/$QUALITY_REVIEW_PASSES. Tier: $QUALITY_REVIEW_TIER; depth: $QUALITY_REVIEW_DEPTH. $QUALITY_REVIEW_FOCUS Review only the supplied commit delta. Return APPROVE or REQUEST_CHANGES with precise file:line findings." \
-      >"$raw_file" 2>"$error_file"
+    prompt_file="$REVIEW_OUT/codex-${pass}.prompt"
+    {
+      echo "Independent code-review pass $pass/$QUALITY_REVIEW_PASSES. Tier: $QUALITY_REVIEW_TIER. $QUALITY_REVIEW_FOCUS"
+      echo "Review ONLY the supplied commit delta. Return structured findings with precise file:line evidence."
+      echo "Changed files:"; cat "$REVIEW_OUT/files.txt"
+      echo "Commit log:"; cat "$REVIEW_OUT/log.txt"
+      echo "Diff:"; cat "$REVIEW_OUT/diff.txt"
+    } > "$prompt_file"
+    bash "$bounded" --timeout "$pass_timeout" -- codex exec --ephemeral -s read-only \
+      -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
+      --output-schema "$schema" -o "$raw_file" - \
+      < "$prompt_file" > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file"
     rc=$?
     if [ "$rc" -ne 0 ]; then
       if provider_exhausted "$raw_file" || provider_exhausted "$error_file"; then return 75; fi

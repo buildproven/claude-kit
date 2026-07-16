@@ -13,6 +13,7 @@ const VALIDATOR = path.join(
   "scripts",
   "quality-validate-review-trailers.sh",
 );
+const RUN_REVIEW = path.join(ROOT, "scripts", "quality-run-review.sh");
 
 describe("provider review runtime", () => {
   it.each([
@@ -67,7 +68,7 @@ describe("provider review runtime", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "bounded-cancel-"));
     const pidFile = path.join(dir, "child.pid");
     const script = `
-"$1" --timeout 20 -- bash -c 'echo $$ > "$1"; sleep 20 & wait' child "$2" &
+"$1" --timeout 20 -- bash -c 'trap "" TERM; echo $$ > "$1"; while :; do sleep 1; done' child "$2" &
 wrapper=$!
 while [ ! -s "$2" ]; do sleep 0.05; done
 child=$(cat "$2")
@@ -141,7 +142,32 @@ Reviewed-By: codex (tier=high, findings=0, head=$reviewed, base=$base)"
       spawnSync("bash", [VALIDATOR, "main"], { cwd: repo }).status,
     ).not.toBe(0);
 
+    spawnSync("git", ["reset", "--hard", "HEAD~2"], { cwd: repo });
+    const reviewed = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).stdout.trim();
+    const base = spawnSync("git", ["merge-base", "HEAD", "main"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).stdout.trim();
+    const malicious = `code-bearing stamp
+
+Reviewed-By: quality (tier=high, reviewer=codex, primary=codex, fallback=claude, findings=0, head=${reviewed}, base=${base})
+Reviewed-By: codex (tier=high, findings=0, head=${reviewed}, base=${base})`;
+    spawnSync("bash", ["-c", "echo unreviewed >> file; git add file"], {
+      cwd: repo,
+    });
+    spawnSync("git", ["commit", "-q", "-m", malicious], { cwd: repo });
+    expect(
+      spawnSync("bash", [VALIDATOR, "main"], { cwd: repo }).status,
+    ).not.toBe(0);
+
     spawnSync("git", ["reset", "--hard", "HEAD~1"], { cwd: repo });
+    const correct = malicious.replace("code-bearing stamp", "empty stamp");
+    spawnSync("git", ["commit", "--allow-empty", "-q", "-m", correct], {
+      cwd: repo,
+    });
     const message = spawnSync("git", ["log", "-1", "--format=%B"], {
       cwd: repo,
       encoding: "utf8",
@@ -154,5 +180,14 @@ Reviewed-By: codex (tier=high, findings=0, head=$reviewed, base=$base)"
     expect(
       spawnSync("bash", [VALIDATOR, "main"], { cwd: repo }).status,
     ).not.toBe(0);
+  });
+
+  it("passes scorer effort and exact round count to Codex mechanically", () => {
+    const source = spawnSync("cat", [RUN_REVIEW], { encoding: "utf8" }).stdout;
+    expect(source).toMatch(
+      /while \[ "\$pass" -le "\$QUALITY_REVIEW_PASSES" \]/,
+    );
+    expect(source).toMatch(/model_reasoning_effort=.*QUALITY_REVIEW_DEPTH/);
+    expect(source).toMatch(/codex exec --ephemeral -s read-only/);
   });
 });
