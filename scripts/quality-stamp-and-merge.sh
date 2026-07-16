@@ -16,7 +16,21 @@ bash "$SCRIPT_DIR/quality-assert-clean.sh" \
 node "$SCRIPT_DIR/quality-invocation.js" review-authorization "$MANIFEST" >/dev/null
 REVIEWED_HEAD="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.currentHead)"
 STAMP_HEAD="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" merge.stampHead)"
+PR="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" repo.pr)"
+EXPECTED_REPOSITORY="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" repo.githubRepository)"
+EXPECTED_HEAD_REF="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" repo.headRefName)"
 LOCAL_HEAD="$(git rev-parse HEAD)"
+
+# Prove remote identity and server-side merge freshness before creating a stamp
+# or pushing anything. A failed authorization prerequisite must be non-mutating.
+PREFLIGHT_OUTPUT="$(bash "$SCRIPT_DIR/quality-authorize-merge.sh" \
+  --manifest "$MANIFEST" --preflight)"
+printf '%s\n' "$PREFLIGHT_OUTPUT"
+if printf '%s\n' "$PREFLIGHT_OUTPUT" |
+  grep -Fxq 'BS_QUALITY_ALREADY_MERGED=true'; then
+  bash "$SCRIPT_DIR/quality-merge-cleanup.sh" --preserve-branch
+  exit 0
+fi
 
 if [ -n "$STAMP_HEAD" ]; then
   [ "$LOCAL_HEAD" = "$STAMP_HEAD" ] || {
@@ -42,11 +56,15 @@ fi
     exit 1
   }
 
-git push
-
-PR="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" repo.pr)"
 [ -n "$PR" ] || { echo "❌ MERGE BLOCKED: manifest has no PR identity." >&2; exit 1; }
-PR_HEAD="$(gh pr view "$PR" --json headRefOid --jq .headRefOid)"
+[ -n "$EXPECTED_REPOSITORY" ] && [ -n "$EXPECTED_HEAD_REF" ] || {
+  echo "❌ MERGE BLOCKED: manifest lacks persisted GitHub repository/head identity." >&2
+  exit 1
+}
+git push origin "$STAMP_HEAD:refs/heads/$EXPECTED_HEAD_REF"
+
+PR_HEAD="$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
+  --json headRefOid --jq .headRefOid)"
 [ "$PR_HEAD" = "$STAMP_HEAD" ] || {
   echo "❌ MERGE BLOCKED: pushed PR HEAD does not match persisted stamp $STAMP_HEAD." >&2
   exit 1
@@ -69,7 +87,8 @@ bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CI_TIMEOUT" -- \
       echo "❌ MERGE BLOCKED: required CI failed on stamp $STAMP_HEAD." >&2
     exit 1
   }
-[ "$(gh pr view "$PR" --json headRefOid --jq .headRefOid)" = "$STAMP_HEAD" ] || {
+[ "$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
+  --json headRefOid --jq .headRefOid)" = "$STAMP_HEAD" ] || {
   echo "❌ MERGE BLOCKED: PR HEAD changed while waiting for stamp CI." >&2
   exit 1
 }

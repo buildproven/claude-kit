@@ -5,9 +5,11 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 MANIFEST=""
+PREFLIGHT=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --manifest) MANIFEST="${2:-}"; shift 2 ;;
+    --preflight) PREFLIGHT=true; shift ;;
     *) echo "quality-authorize-merge: unknown argument '$1'" >&2; exit 1 ;;
   esac
 done
@@ -24,14 +26,49 @@ MERGE_REQUESTED="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" op
 }
 PR="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" repo.pr)"
 EXPECTED_HEAD="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.currentHead)"
+EXPECTED_REPOSITORY="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" repo.githubRepository)"
+EXPECTED_HEAD_REF="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" repo.headRefName)"
+STAMP_HEAD="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" merge.stampHead)"
+EXPECTED_REMOTE_HEAD="${STAMP_HEAD:-$EXPECTED_HEAD}"
 ROOT="$(node "$SCRIPT_DIR/quality-invocation.js" locate "$MANIFEST")" || exit 1
 cd "$ROOT" || exit 1
 bash "$SCRIPT_DIR/quality-assert-clean.sh" \
   --manifest "$MANIFEST" --phase "merge authorization" || exit 1
 [ -n "$PR" ] || { echo "❌ MERGE BLOCKED: manifest has no PR identity." >&2; exit 1; }
-PR_JSON="$(gh pr view "$PR" --json headRefOid,baseRefName)" || exit 1
+[ -n "$EXPECTED_REPOSITORY" ] && [ -n "$EXPECTED_HEAD_REF" ] || {
+  echo "❌ MERGE BLOCKED: manifest lacks persisted GitHub repository/head identity." >&2
+  exit 1
+}
+ACTUAL_REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
+[ "$ACTUAL_REPOSITORY" = "$EXPECTED_REPOSITORY" ] || {
+  echo "❌ MERGE BLOCKED: GitHub repository identity changed." >&2
+  exit 1
+}
+PR_JSON="$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
+  --json state,mergedAt,mergeCommit,headRefName,headRefOid,baseRefName)" || exit 1
+ACTUAL_STATE="$(printf '%s' "$PR_JSON" | jq -r '.state')"
 ACTUAL_HEAD="$(printf '%s' "$PR_JSON" | jq -r '.headRefOid')"
+ACTUAL_HEAD_REF="$(printf '%s' "$PR_JSON" | jq -r '.headRefName')"
 ACTUAL_BASE_NAME="$(printf '%s' "$PR_JSON" | jq -r '.baseRefName')"
+[ "$ACTUAL_HEAD_REF" = "$EXPECTED_HEAD_REF" ] || {
+  echo "❌ MERGE BLOCKED: PR head branch identity changed." >&2
+  exit 1
+}
+if [ "$ACTUAL_STATE" = MERGED ]; then
+  [ -n "$STAMP_HEAD" ] && [ "$ACTUAL_HEAD" = "$STAMP_HEAD" ] &&
+    [ "$(printf '%s' "$PR_JSON" | jq -r '.mergedAt // empty')" != "" ] &&
+    [ "$(printf '%s' "$PR_JSON" | jq -r '.mergeCommit.oid // empty')" != "" ] || {
+      echo "❌ MERGE BLOCKED: merged PR does not match the persisted expected head." >&2
+      exit 1
+  }
+  echo "[quality] PR already merged at exact persisted stamp $STAMP_HEAD"
+  [ "$PREFLIGHT" = false ] || echo "BS_QUALITY_ALREADY_MERGED=true"
+  exit 0
+fi
+[ "$ACTUAL_STATE" = OPEN ] || {
+  echo "❌ MERGE BLOCKED: PR is not open or safely merged (state=$ACTUAL_STATE)." >&2
+  exit 1
+}
 ACTUAL_BASE_OID="$(git ls-remote origin "refs/heads/$ACTUAL_BASE_NAME" | awk '{print $1}')"
 EXPECTED_BASE_REF="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseRef)"
 EXPECTED_BASE_OID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseHeadSha)"
@@ -45,22 +82,28 @@ LOCAL_HEAD="$(git rev-parse HEAD)"
   echo "❌ MERGE BLOCKED: PR HEAD does not match reviewed HEAD." >&2
   exit 1
 }
-STAMP_HEAD="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" merge.stampHead)"
-[ -n "$STAMP_HEAD" ] && [ "$LOCAL_HEAD" = "$STAMP_HEAD" ] &&
-  [ "$(git rev-parse HEAD~1)" = "$EXPECTED_HEAD" ] &&
-  git diff --quiet HEAD~1 HEAD || {
-    echo "❌ MERGE BLOCKED: PR HEAD is not the persisted empty stamp of reviewed HEAD." >&2
+if [ "$PREFLIGHT" = true ]; then
+  [ "$LOCAL_HEAD" = "$EXPECTED_REMOTE_HEAD" ] || {
+    echo "❌ MERGE BLOCKED: preflight HEAD does not match the expected PR head." >&2
     exit 1
   }
-gh pr checks "$PR" --required >/dev/null || {
-  echo "❌ MERGE BLOCKED: required CI is not successful." >&2
-  exit 1
-}
+else
+  [ -n "$STAMP_HEAD" ] && [ "$LOCAL_HEAD" = "$STAMP_HEAD" ] &&
+    [ "$(git rev-parse HEAD~1)" = "$EXPECTED_HEAD" ] &&
+    git diff --quiet HEAD~1 HEAD || {
+      echo "❌ MERGE BLOCKED: PR HEAD is not the persisted empty stamp of reviewed HEAD." >&2
+      exit 1
+    }
+  gh pr checks "$PR" --repo "$EXPECTED_REPOSITORY" --required >/dev/null || {
+    echo "❌ MERGE BLOCKED: required CI is not successful." >&2
+    exit 1
+  }
+fi
 git merge-base --is-ancestor "$EXPECTED_BASE_OID" "$EXPECTED_HEAD" || {
   echo "❌ MERGE BLOCKED: reviewed branch is not up to date with the PR base." >&2
   exit 1
 }
-REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
+REPOSITORY="$EXPECTED_REPOSITORY"
 ATOMIC_BASE_FRESHNESS=false
 ENCODED_BASE_NAME="$(jq -rn --arg value "$ACTUAL_BASE_NAME" '$value | @uri')" || exit 1
 if [ "$(gh api "repos/$REPOSITORY/branches/$ENCODED_BASE_NAME/protection/required_status_checks" \
@@ -94,6 +137,10 @@ fi
   echo "   Enable strict required-status checks or use a supported merge queue." >&2
   exit 1
 }
+[ "$PREFLIGHT" = false ] || {
+  echo "[quality] non-mutating merge authorization preflight passed"
+  exit 0
+}
 TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"
 if [ "$TIER" = critical ]; then
   node "$SCRIPT_DIR/quality-invocation.js" approval-valid "$MANIFEST" || {
@@ -104,7 +151,12 @@ fi
 BASE_REF="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseRef)"
 bash "$SCRIPT_DIR/quality-validate-review-trailers.sh" \
   --manifest "$MANIFEST" --base "$BASE_REF" || exit 1
-FINAL_PR_JSON="$(gh pr view "$PR" --json headRefOid,baseRefName)" || exit 1
+FINAL_PR_JSON="$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
+  --json headRefName,headRefOid,baseRefName)" || exit 1
+[ "$(printf '%s' "$FINAL_PR_JSON" | jq -r '.headRefName')" = "$EXPECTED_HEAD_REF" ] || {
+  echo "❌ MERGE BLOCKED: PR head branch changed immediately before merge." >&2
+  exit 1
+}
 [ "$(printf '%s' "$FINAL_PR_JSON" | jq -r '.baseRefName')" = "$ACTUAL_BASE_NAME" ] || {
   echo "❌ MERGE BLOCKED: PR target branch changed immediately before merge." >&2
   exit 1
@@ -115,15 +167,22 @@ FINAL_BASE_OID="$(git ls-remote origin "refs/heads/$ACTUAL_BASE_NAME" | awk '{pr
     echo "❌ MERGE BLOCKED: PR identity changed immediately before merge." >&2
     exit 1
   }
-gh pr merge "$PR" --squash --match-head-commit "$ACTUAL_HEAD" || {
-  echo "❌ MERGE BLOCKED: GitHub rejected the exact-head merge." >&2
-  exit 1
-}
-MERGED_JSON="$(gh pr view "$PR" --json state,mergedAt,mergeCommit)" || exit 1
-if ! { [ "$(printf '%s' "$MERGED_JSON" | jq -r '.state')" = MERGED ] &&
+MERGE_RC=0
+gh pr merge "$PR" --repo "$EXPECTED_REPOSITORY" --squash \
+  --match-head-commit "$ACTUAL_HEAD" || MERGE_RC=$?
+MERGED_JSON="$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
+  --json state,mergedAt,mergeCommit,headRefName,headRefOid)" || exit 1
+if { [ "$(printf '%s' "$MERGED_JSON" | jq -r '.state')" = MERGED ] &&
   [ "$(printf '%s' "$MERGED_JSON" | jq -r '.mergedAt // empty')" != "" ] &&
-  [ "$(printf '%s' "$MERGED_JSON" | jq -r '.mergeCommit.oid // empty')" != "" ]; }; then
-  echo "❌ MERGE BLOCKED: GitHub did not complete the exact-head merge synchronously." >&2
-  exit 1
+  [ "$(printf '%s' "$MERGED_JSON" | jq -r '.mergeCommit.oid // empty')" != "" ] &&
+  [ "$(printf '%s' "$MERGED_JSON" | jq -r '.headRefName')" = "$EXPECTED_HEAD_REF" ] &&
+  [ "$(printf '%s' "$MERGED_JSON" | jq -r '.headRefOid')" = "$ACTUAL_HEAD" ]; }; then
+  echo "[quality] merged exact reviewed revision $ACTUAL_HEAD"
+  exit 0
 fi
-echo "[quality] merged exact reviewed revision $ACTUAL_HEAD"
+if [ "$MERGE_RC" -ne 0 ]; then
+  echo "❌ MERGE BLOCKED: GitHub rejected the exact-head merge and the PR is not merged at that head." >&2
+else
+  echo "❌ MERGE BLOCKED: GitHub did not complete the exact-head merge synchronously." >&2
+fi
+exit 1

@@ -64,9 +64,25 @@ describe("quality merge gates", () => {
 
   it("head-binds the merge and verifies terminal merged state", () => {
     expect(AUTHORIZE).toMatch(/--match-head-commit "\$ACTUAL_HEAD"/);
-    expect(AUTHORIZE).toMatch(/gh pr merge[\s\S]*\|\| \{/);
+    expect(AUTHORIZE).toMatch(/MERGE_RC=0/);
+    expect(AUTHORIZE).toMatch(/gh pr merge[\s\S]*MERGE_RC=\$\?/);
+    expect(AUTHORIZE).toMatch(/gh pr view[\s\S]*state,mergedAt,mergeCommit/);
     expect(AUTHORIZE).toMatch(/\.state.*MERGED/s);
     expect(AUTHORIZE).toMatch(/\.mergeCommit\.oid/);
+  });
+
+  it("preflights without mutation and pushes one exact persisted remote ref", () => {
+    expect(STAMP_AND_MERGE).toMatch(/--manifest "\$MANIFEST" --preflight/);
+    expect(STAMP_AND_MERGE.indexOf("--preflight")).toBeLessThan(
+      STAMP_AND_MERGE.indexOf("git commit"),
+    );
+    expect(STAMP_AND_MERGE).toMatch(
+      /git push origin "\$STAMP_HEAD:refs\/heads\/\$EXPECTED_HEAD_REF"/,
+    );
+    expect(STAMP_AND_MERGE).not.toMatch(/^git push\s*$/m);
+    expect(AUTHORIZE).toMatch(/repo\.githubRepository/);
+    expect(AUTHORIZE).toMatch(/repo\.headRefName/);
+    expect(AUTHORIZE).toMatch(/--repo "\$EXPECTED_REPOSITORY"/);
   });
 
   it("delegates concrete ruleset applicability to GitHub", () => {
@@ -85,7 +101,7 @@ describe("quality merge gates", () => {
     );
     expect(
       STAMP_AND_MERGE.indexOf("quality-wait-required-checks.sh"),
-    ).toBeLessThan(STAMP_AND_MERGE.indexOf("quality-authorize-merge.sh"));
+    ).toBeLessThan(STAMP_AND_MERGE.lastIndexOf("quality-authorize-merge.sh"));
     expect(AUTHORIZE).toMatch(/persisted empty stamp/);
   });
 
