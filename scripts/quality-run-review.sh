@@ -31,9 +31,6 @@ bash "$SCRIPT_DIR/quality-assert-clean.sh" \
   --manifest "$MANIFEST" --phase "blocking review" || exit 1
 # shellcheck source=quality-provider-policy.sh
 source "$SCRIPT_DIR/quality-provider-policy.sh"
-[ -f "${BS_QUALITY_ROOT_FILE:-/nonexistent}" ] \
-  && [ -f "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env" ] \
-  && source "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env"
 # shellcheck source=quality-review-plan.sh
 source "$SCRIPT_DIR/quality-review-plan.sh"
 
@@ -61,6 +58,12 @@ git diff --name-only "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" > "$REVIEW_OUT/file
 git log "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" --oneline > "$REVIEW_OUT/log.txt"
 node "$SCRIPT_DIR/quality-invocation.js" review-identity "$MANIFEST" \
   > "$REVIEW_OUT/identity.json" || exit 1
+PRIOR_FINDINGS_FILE=""
+if [ "$REVIEW_ROUND" -gt 1 ]; then
+  PRIOR_FINDINGS_FILE="$REVIEW_OUT/prior-findings.json"
+  node "$SCRIPT_DIR/quality-invocation.js" judge-context "$MANIFEST" \
+    > "$PRIOR_FINDINGS_FILE" || exit 1
+fi
 
 record_provider_exhaustion() {
   printf '%s provider exhausted (structured error metadata)\n' "$1" > "$REVIEW_OUT/provider-exhausted"
@@ -81,6 +84,7 @@ authorize_provider_attempt() {
 
 run_claude_review() {
   local agents_csv rc attempt_timeout
+  local companion_args=()
   command -v claude >/dev/null 2>&1 || return 2
   claude auth status --json 2>/dev/null | jq -e '.loggedIn == true' >/dev/null 2>&1 || return 2
   agents_csv="$(node "$SCRIPT_DIR/quality-invocation.js" get "$MANIFEST" agents \
@@ -88,7 +92,7 @@ run_claude_review() {
   [ -n "$agents_csv" ] || { echo "quality: Claude panel unresolved" >&2; return 1; }
   attempt_timeout="$(authorize_provider_attempt claude "$QUALITY_REVIEW_TIMEOUT")" \
     || return 77
-  bash "$SCRIPT_DIR/claude-review-companion.sh" \
+  companion_args=(
     --diff-file "$REVIEW_OUT/diff.txt" \
     --files-file "$REVIEW_OUT/files.txt" \
     --log-file "$REVIEW_OUT/log.txt" \
@@ -96,13 +100,19 @@ run_claude_review() {
     --out-dir "$REVIEW_OUT" \
     --agents "$agents_csv" \
     --timeout "$attempt_timeout"
+  )
+  if [ "$REVIEW_ROUND" -gt 1 ]; then
+    companion_args+=(--review-mode verification \
+      --prior-findings-file "$PRIOR_FINDINGS_FILE")
+  fi
+  bash "$SCRIPT_DIR/claude-review-companion.sh" "${companion_args[@]}"
   rc=$?
   return "$rc"
 }
 
 run_codex_review() {
   local bounded normalizer schema raw_file normalized_file error_file rc pass pass_timeout
-  local auth_output
+  local auth_output prompt_file
   local review_selector review_selector_value
   bounded="$SCRIPT_DIR/quality-run-bounded.sh"
   normalizer="$SCRIPT_DIR/quality-normalize-codex-review.sh"
@@ -128,22 +138,37 @@ run_codex_review() {
     raw_file="$REVIEW_OUT/codex-${pass}.json"
     normalized_file="$REVIEW_OUT/codex-${pass}.normalized.json"
     error_file="$REVIEW_OUT/codex-${pass}.stderr"
-    if [ "$REVIEW_ROUND" -gt 1 ]; then
-      review_selector=--commit
-      review_selector_value="$REVIEWED_HEAD"
-    else
+    if [ "$REVIEW_ROUND" -eq 1 ]; then
       review_selector=--base
       review_selector_value="$RESOLVED_BASE"
     fi
     pass_timeout="$(authorize_provider_attempt codex "$pass_timeout")" \
       || return 77
-    bash "$bounded" --timeout "$pass_timeout" -- \
-      codex exec --ephemeral -s read-only --json \
-      -C "$GIT_ROOT" \
-      -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
-      --output-schema "$schema" -o "$raw_file" review \
-      "$review_selector" "$review_selector_value" \
-      > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file"
+    if [ "$REVIEW_ROUND" -eq 1 ]; then
+      bash "$bounded" --timeout "$pass_timeout" -- \
+        codex exec --ephemeral -s read-only --json \
+        -C "$GIT_ROOT" \
+        -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
+        --output-schema "$schema" -o "$raw_file" review \
+        "$review_selector" "$review_selector_value" \
+        > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file"
+    else
+      prompt_file="$REVIEW_OUT/codex-${pass}.prompt"
+      {
+        echo "$QUALITY_REVIEW_FOCUS"
+        echo "Prior reviewed findings and dispositions:"
+        node "$SCRIPT_DIR/quality-invocation.js" judge-context "$MANIFEST"
+        echo "Review the complete supplied remediation delta only:"
+        cat "$REVIEW_OUT/diff.txt"
+      } > "$prompt_file"
+      bash "$bounded" --timeout "$pass_timeout" -- \
+        codex exec --ephemeral -s read-only --json \
+        -C "$GIT_ROOT" \
+        -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
+        --output-schema "$schema" -o "$raw_file" - \
+        < "$prompt_file" \
+        > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file"
+    fi
     rc=$?
     if [ "$rc" -ne 0 ]; then
       [ "$rc" -eq 124 ] && return 76
@@ -193,7 +218,7 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 2 ]; } && [ "$QUALITY_FAL
   # Preserve failed-primary diagnostics. Findings from an earlier successful
   # primary pass remain authoritative if a later pass triggers fallback.
   mkdir -p "$REVIEW_OUT/failed-primary"
-  for evidence in "$REVIEW_OUT"/*.stderr; do
+  for evidence in "$REVIEW_OUT"/*.findings.txt "$REVIEW_OUT"/*.stderr; do
     [ -e "$evidence" ] && mv "$evidence" "$REVIEW_OUT/failed-primary/"
   done
   REVIEW_PROVIDER="$QUALITY_FALLBACK"

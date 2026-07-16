@@ -16,6 +16,10 @@ done
 bash "$SCRIPT_DIR/quality-load-root.sh" --manifest "$MANIFEST" >/dev/null || exit 1
 field() { node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" "$1"; }
 GIT_ROOT="$(field repo.realpath)"
+if [ "$(field risk.resolved)" = true ]; then
+  echo "🧭 Risk: preserving persisted invocation contract for resumed HEAD $(field revisions.currentHead)"
+  exit 0
+fi
 LEVEL="$(field risk.level)"
 [ -n "$LEVEL" ] || LEVEL="$(field options.level)"
 RESOLVED_BASE="$(field revisions.baseRef)"

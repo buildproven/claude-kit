@@ -61,6 +61,16 @@ function repo(label) {
   git(root, ["config", "user.name", "Quality Test"]);
   git(root, ["config", "user.email", "quality@example.com"]);
   writeFileSync(path.join(root, "file.js"), "export const value = 1;\n");
+  writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify({
+      scripts: {
+        lint: "true",
+        test: "true",
+        "security:audit": "true",
+      },
+    }),
+  );
   git(root, ["add", "."]);
   git(root, ["commit", "-q", "-m", "base"]);
   git(root, ["remote", "add", "origin", root]);
@@ -976,15 +986,14 @@ wait
 
   it("uses configured formatter patterns and skips unsupported TOML", () => {
     const root = repo("format");
-    writeFileSync(
-      path.join(root, "package.json"),
-      JSON.stringify({
-        "lint-staged": {
-          "**/*.{js,json,md,yml,yaml}": ["prettier --write"],
-          "**/*.ts": ["eslint --fix"],
-        },
-      }),
+    const packageJson = JSON.parse(
+      readFileSync(path.join(root, "package.json"), "utf8"),
     );
+    packageJson["lint-staged"] = {
+      "**/*.{js,json,md,yml,yaml}": ["prettier --write"],
+      "**/*.ts": ["eslint --fix"],
+    };
+    writeFileSync(path.join(root, "package.json"), JSON.stringify(packageJson));
     git(root, ["add", "package.json"]);
     git(root, ["commit", "-q", "-m", "config"]);
     const manifest = create(root);
@@ -1212,6 +1221,25 @@ exit 99
     const second = prepareCodexReview(root, manifest);
     expect(second.from).toBe(first.to);
     recordJudgeArtifact(root, manifest);
+
+    const predecessorBin = fakeGh(root, first.to);
+    const remediationPreflight = spawnSync(
+      "bash",
+      [AUTHORIZE, "--manifest", manifest, "--preflight"],
+      {
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: `${predecessorBin}:${process.env.PATH}`,
+          QUALITY_TEST_STRICT_PROTECTION: "true",
+        },
+        encoding: "utf8",
+      },
+    );
+    expect(remediationPreflight.status, remediationPreflight.stderr).toBe(0);
+    expect(remediationPreflight.stdout).toContain(
+      `BS_QUALITY_PR_HEAD=${first.to}`,
+    );
 
     const trailers = execFileSync("node", [INVOCATION, "trailers", manifest], {
       cwd: root,
@@ -1497,91 +1525,19 @@ exit 1
     );
   }, 40_000);
 
-  it("maps cross-repository PR heads to one exact remote before stamping", () => {
-    const root = repo("cross-repo-remote");
-    const baseRemote = mkdtempSync(path.join(tmpdir(), "quality-base-remote-"));
-    const forkRemote = mkdtempSync(path.join(tmpdir(), "quality-fork-remote-"));
-    git(baseRemote, ["init", "--bare", "-q"]);
-    git(forkRemote, ["init", "--bare", "-q"]);
-    git(root, ["remote", "set-url", "origin", baseRemote]);
-    git(root, ["push", "-q", "origin", "main"]);
-    git(root, ["push", "-q", "origin", "feature"]);
-
-    const manifest = create(root, [
-      "--level",
-      "95",
-      "--pr",
-      "1",
-      "--merge",
-      "--head-repository",
-      "fork/repo",
-      "--cross-repository",
-      "true",
-    ]);
-    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
-    execFileSync("bash", [SELECT, "--manifest", manifest], { cwd: root });
-    prepareCodexReview(root, manifest);
-    recordJudgeArtifact(root, manifest);
-
-    const harness = mkdtempSync(path.join(tmpdir(), "quality-cross-gh-"));
-    const bin = path.join(harness, "bin");
-    mkdirSync(bin);
-    const log = path.join(harness, "gh.log");
-    const gh = path.join(bin, "gh");
-    writeFileSync(
-      gh,
-      `#!/usr/bin/env bash
-echo "$*" >> ${JSON.stringify(log)}
-if [ "$1 $2" = "repo view" ]; then
-  case "\${3:-}" in
-    ${JSON.stringify(baseRemote)}) printf '%s\\n' 'owner/repo' ;;
-    ${JSON.stringify(forkRemote)}) printf '%s\\n' 'fork/repo' ;;
-    *) printf '%s\\n' 'owner/repo' ;;
-  esac
-  exit 0
-fi
-if [ "$1 $2" = "pr view" ]; then
-  head="$(${JSON.stringify(execFileSync("which", ["git"], { encoding: "utf8" }).trim())} rev-parse HEAD)"
-  printf '{"state":"OPEN","mergedAt":null,"mergeCommit":null,"headRefName":"feature","headRefOid":"%s","baseRefName":"main"}\\n' "$head"
-  exit 0
-fi
-if [ "$1" = api ]; then
-  [[ "$2" == *"required_status_checks"* ]] && exit 1
-  printf '%s\\n' '[{"type":"merge_queue","parameters":{"grouping_strategy":"ALLGREEN"}}]'
-  exit 0
-fi
-exit 1
-`,
-    );
-    chmodSync(gh, 0o755);
-    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
-    const reviewedHead = git(root, ["rev-parse", "HEAD"]);
-
-    const missingFork = spawnSync(
-      "bash",
-      [STAMP_AND_MERGE, "--manifest", manifest],
-      { cwd: root, env, encoding: "utf8" },
-    );
-    expect(missingFork.status).not.toBe(0);
-    expect(missingFork.stderr).toMatch(
-      /no local remote maps to PR head repository/,
-    );
-    expect(git(root, ["rev-parse", "HEAD"])).toBe(reviewedHead);
-    expect(JSON.parse(readFileSync(manifest, "utf8")).merge.stampHead).toBe(
-      undefined,
-    );
-
-    git(root, ["remote", "add", "fork", forkRemote]);
-    const mappedFork = spawnSync(
-      "bash",
-      [STAMP_AND_MERGE, "--manifest", manifest],
-      { cwd: root, env, encoding: "utf8" },
-    );
-    expect(mappedFork.status).not.toBe(0);
-    expect(mappedFork.stderr).toMatch(/queue-aware monitored merge path/);
-    expect(readFileSync(log, "utf8")).toContain(`repo view ${forkRemote}`);
-    expect(git(root, ["rev-parse", "HEAD"])).toBe(reviewedHead);
-  }, 20_000);
+  it("rejects cross-repository PRs before creating unusable state", () => {
+    const root = repo("cross-repo");
+    expect(() =>
+      create(root, [
+        "--pr",
+        "1",
+        "--head-repository",
+        "fork/repo",
+        "--cross-repository",
+        "true",
+      ]),
+    ).toThrow(/trusted CI evidence ingestion.*not yet supported/);
+  });
 
   it("fails authorization when inventoried findings are replaced", () => {
     const root = repo("artifact-tamper");
@@ -1694,6 +1650,19 @@ exit 1
     expect(() =>
       execFileSync("bash", [SELECT, "--manifest", manifest], { cwd: root }),
     ).not.toThrow();
+    const persistedRisk = JSON.parse(readFileSync(manifest, "utf8")).risk;
+    writeFileSync(path.join(root, "fix.js"), "export const fixed = true;\n");
+    git(root, ["add", "fix.js"]);
+    git(root, ["commit", "-q", "-m", "fix"]);
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    const resumedRisk = execFileSync("bash", [RISK, "--manifest", manifest], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(resumedRisk).toMatch(/preserving persisted invocation contract/);
+    expect(JSON.parse(readFileSync(manifest, "utf8")).risk).toEqual(
+      persistedRisk,
+    );
     expect(
       spawnSync(
         "node",
@@ -1718,6 +1687,28 @@ exit 1
         cwd: root,
       }).status,
     ).not.toBe(0);
+  });
+
+  it("fails early when required repository gate scripts are missing", () => {
+    const root = repo("missing-baselines");
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ scripts: { test: "true" } }),
+    );
+    git(root, ["add", "package.json"]);
+    git(root, ["commit", "-q", "-m", "test-only package"]);
+    expect(() => create(root)).toThrow(
+      /executable repository scripts for: lint, security/,
+    );
+
+    writeFileSync(path.join(root, "package.json"), JSON.stringify({}));
+    git(root, ["commit", "-qam", "remove tests"]);
+    expect(() => create(root)).toThrow(
+      /executable repository scripts for: lint, security, test/,
+    );
+    expect(() => create(root, ["--skip-tests"])).toThrow(
+      /executable repository scripts for: lint, security/,
+    );
   });
 
   it("caps critical campaigns at discovery plus one verification", () => {
@@ -1911,10 +1902,10 @@ exit 1
         scripts: {
           lint: "eslint .",
           test: "node --test",
+          "security:audit": "npm audit --audit-level high",
           build: "node build.js",
           "type-check:all": "tsc --noEmit",
           "test:consumer-workflow": "node consumer.js",
-          "security:audit": "npm audit",
         },
       }),
     );
@@ -2029,6 +2020,43 @@ exit 1
     unlinkSync(marker);
   });
 
+  it("kills the complete gate process group when its budget expires", () => {
+    const root = repo("gate-process-group");
+    const marker = path.join(tmpdir(), `quality-late-gate-${process.pid}`);
+    const gateScript = path.join(root, "gate-hang.sh");
+    writeFileSync(
+      gateScript,
+      '#!/usr/bin/env bash\n(sleep 3; printf late > "$QUALITY_GATE_MARKER") &\nwait\n',
+    );
+    chmodSync(gateScript, 0o755);
+    const packageFile = path.join(root, "package.json");
+    const packageJson = JSON.parse(readFileSync(packageFile, "utf8"));
+    packageJson.scripts.build = "bash gate-hang.sh";
+    writeFileSync(packageFile, JSON.stringify(packageJson));
+    git(root, ["add", "gate-hang.sh", "package.json"]);
+    git(root, ["commit", "-q", "-m", "add hanging gate"]);
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.risk.runtime = { gateSeconds: 1 };
+    manifest.governor.campaignDeadlineEpoch =
+      Math.floor(Date.now() / 1000) + 30;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const result = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
+      {
+        cwd: root,
+        env: { ...process.env, QUALITY_GATE_MARKER: marker },
+        encoding: "utf8",
+      },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/exceeded its proportional 1s budget/);
+    execFileSync("sleep", ["4"]);
+    expect(existsSync(marker)).toBe(false);
+  }, 10_000);
+
   it("discovers committed gates on every advance and unions them monotonically", () => {
     const root = repo("monotonic-gates");
     const packageFile = path.join(root, "package.json");
@@ -2098,23 +2126,13 @@ exit 1
     }
   });
 
-  it("refuses to execute cross-repository PR scripts on the operator host", () => {
-    const root = repo("cross-repository-gates");
-    const manifest = create(root, [
-      "--pr",
-      "1",
-      "--head-repository",
-      "fork/repo",
-      "--cross-repository",
-      "true",
-    ]);
-    const result = spawnSync(
-      "bash",
-      [RUN_GATE, "--manifest", manifest, "--name", "lint"],
-      { cwd: root, encoding: "utf8" },
-    );
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toMatch(/isolated CI.*host execution is forbidden/);
+  it("rejects scope modes the revision-bound engine cannot execute", () => {
+    const root = repo("unsupported-scope");
+    for (const scope of ["changed", "all"]) {
+      expect(() => create(root, ["--scope", scope])).toThrow(
+        /only revision-bound branch scope is supported/,
+      );
+    }
   });
 
   it("migrates legacy required gates only during an explicit locked resume", () => {
@@ -2125,6 +2143,7 @@ exit 1
         scripts: {
           lint: "eslint .",
           test: "node --test",
+          "security:audit": "npm audit",
           build: "node build.js",
           "type-check": "tsc --noEmit",
           "test:consumer": "node consumer.js",

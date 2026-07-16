@@ -72,10 +72,11 @@ describe("provider review runtime", () => {
   it("loads persisted risk state at the runner boundary", () => {
     const plan = readFileSync(PLAN, "utf8");
     const runner = readFileSync(RUN_REVIEW, "utf8");
-    const riskLoad = 'source "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env"';
+    const riskLoad = 'TIER="$(field risk.tier)"';
     const planLoad = 'source "$SCRIPT_DIR/quality-review-plan.sh"';
 
     expect(plan).not.toContain("riskstate.env");
+    expect(runner).not.toContain("riskstate.env");
     expect(runner).toContain(riskLoad);
     expect(runner.indexOf(riskLoad)).toBeLessThan(runner.indexOf(planLoad));
   });
@@ -218,7 +219,9 @@ Quality-Base: ${base}`;
     expect(source).toMatch(/codex exec --ephemeral -s read-only --json/);
     expect(source).toMatch(/-C "\$GIT_ROOT"/);
     expect(source).toMatch(/review_selector=--base/);
-    expect(source).toMatch(/review_selector=--commit/);
+    expect(source).not.toMatch(/review_selector=--commit/);
+    expect(source).toMatch(/Prior reviewed findings and dispositions/);
+    expect(source).toMatch(/cat "\$REVIEW_OUT\/diff\.txt"/);
     expect(source).not.toMatch(/\$review_selector_value" -/);
     expect(source).toMatch(/Codex review passes must be 1 or 2/);
     expect(source).toMatch(/record_provider_exhaustion Codex/);
@@ -228,7 +231,9 @@ Quality-Base: ${base}`;
     expect(source.indexOf('[ "$rc" -eq 124 ] && return 76')).toBeLessThan(
       source.indexOf("quality-provider-error.js"),
     );
-    expect(source).toMatch(/for evidence in "\$REVIEW_OUT"\/\*\.stderr; do/);
+    expect(source).toContain(
+      'for evidence in "$REVIEW_OUT"/*.findings.txt "$REVIEW_OUT"/*.stderr; do',
+    );
     expect(source).not.toMatch(
       /PROVIDER_RC.*-eq 76.*QUALITY_FALLBACK|QUALITY_FALLBACK.*PROVIDER_RC.*-eq 76/,
     );

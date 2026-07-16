@@ -91,7 +91,8 @@ bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
 
 The runner resolves commands only from the revision-bound `requiredGates`
 policy and executes and records each result atomically. It rejects caller
-commands and refuses to execute fork-controlled scripts on the operator host.
+commands. Cross-repository PRs fail during bootstrap until trusted CI-evidence
+ingestion exists; never run fork-controlled scripts on the operator host.
 
 When `options.skipTests` is true, record the config-only decision explicitly
 instead of inventing a passing test command:
@@ -102,7 +103,9 @@ bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
   --reason "config-only repository has no executable test suite"
 ```
 
-Use `options.scope` to select changed, branch, or all-project gate commands.
+The revision-bound engine supports `options.scope=branch` only. Unsupported
+`changed` and `all` values fail during manifest creation instead of silently
+behaving like branch scope.
 
 Formatting remediation must use:
 

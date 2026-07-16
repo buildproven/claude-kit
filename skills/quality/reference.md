@@ -204,23 +204,11 @@ auto-fix loop, re-run `npm test` to verify they pass before continuing.
 | Flag                  | Default | Description                                                                                 |
 | --------------------- | ------- | ------------------------------------------------------------------------------------------- |
 | `--level N`           | auto    | Quality level: `auto` (read tier from harness-config.json), `95`, or `98`                   |
-| `--scope S`           | branch  | Scope: changed, branch, all                                                                 |
+| `--scope S`           | branch  | Revision-bound branch scope; other values fail fast                                         |
 | `--merge`             | false   | Auto-merge PR after quality                                                                 |
-| `--skip-ci`           | false   | Bypass CI checks                                                                            |
-| `--skip-rebase`       | false   | Skip auto-rebase                                                                            |
-| `--status`            | false   | Show quality history and exit                                                               |
-| `--verbose`           | false   | Show trends with `--status`                                                                 |
-| `--audit`             | false   | Read-only assessment                                                                        |
-| `--deep`              | false   | 6-agent deep review (with `--audit`)                                                        |
-| `--dry-run`           | false   | Preview without modifying                                                                   |
-| `--fix`               | false   | Auto-fix common issues (with `--audit`)                                                     |
-| `--json`              | false   | Machine-readable output                                                                     |
-| `--coverage-diff`     | false   | Show per-file coverage changes                                                              |
-| `--skip-docs`         | false   | Skip doc sync check                                                                         |
-| `--teams`             | false   | Use agent teams (tmux visibility)                                                           |
-| `--no-teams`          | -       | Force Task subagents (default)                                                              |
 | `--skip-tests`        | false   | Skip hard test gate (config-only repos)                                                     |
-| `--preflight`         | false   | Quick readiness check (<10 sec)                                                             |
+| `--pr <number>`       | -       | Bind to one open PR                                                                         |
+| `--manifest <path>`   | -       | Resume one exact persisted invocation; accepts no other flags                               |
 | `--target-dir <path>` | -       | Run against this repo (use when invoking from a forked/agent context with no inherited cwd) |
 
 ### Environment Variables
@@ -229,9 +217,8 @@ auto-fix loop, re-run `npm test` to verify they pass before continuing.
 | ------------------------------------- | ------- | -------------------------------------------------------------------------------------------------- |
 | `BS_QUALITY_PRIMARY`                  | config  | Per-run primary override: `claude` or `codex`.                                                     |
 | `BS_QUALITY_FALLBACK`                 | config  | Per-run fallback override: `claude`, `codex`, or `none`.                                           |
-| `BS_QUALITY_REVIEW_TIMEOUT`           | tier    | Override the mechanically selected provider wall-clock cap.                                        |
 | `BS_QUALITY_TARGET_DIR`               | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd. |
-| `BS_QUALITY_MAX_FIX_COMMITS`          | 4       | Run-governor cap: max fix commits across the whole invocation before autonomous halt (see below).  |
+| `BS_QUALITY_MAX_FIX_COMMITS`          | 1       | Explicit override for the default one-commit batched-remediation cap.                              |
 | `BS_QUALITY_MAX_REMEDIATION_SECONDS`  | planned | Batched-fix allowance remaining after proportional discovery and verification reserves.            |
 | `BS_QUALITY_REREVIEW_RESERVE_SECONDS` | planned | Workload-scaled allowance for one targeted validation review after fixes.                          |
 
@@ -241,8 +228,7 @@ Two PRs run in one night (#529: 128min/6 commits, #532: 167min/13 commits)
 completed with no circuit breaker — `CODEX_ROUNDS` only bounds the inner Codex
 adversarial loop, not the outer cycle of BLOCKING-finding → auto-fix →
 re-review across the whole invocation. `scripts/quality-run-governor.js`
-tracks a per-invocation sentinel (`$TMPDIR/bs-quality-gitroot-*-governor.json`,
-alongside the Step -1 git-root sentinel) with:
+tracks governor state inside the explicit invocation manifest with:
 
 - **Fix-commit cap** (`BS_QUALITY_MAX_FIX_COMMITS`, default 1) — one batched
   remediation commit, checked before every fix attempt and verification.
@@ -286,29 +272,12 @@ If the pipeline did NOT run in this invocation (e.g. operator passed
 `--merge` alone with no prior quality work), the gate hard-blocks instead
 of auto-stamping — auto-stamping then would be forging review evidence.
 
-## Scope Options
+## Scope
 
-### `--scope changed` (Quick)
-
-- Time: 2-5 min
-- Checks uncommitted changes only
-- Runs lint, type-check, tests on changed files
-- Skips quality agents — automated checks sufficient
-- Auto-commits with smart message
-
-### `--scope branch` (Default)
-
-- Time: 30-60 min
-- All files changed in branch vs main
-- Full quality agents on changed files
-- Creates PR after quality passes
-
-### `--scope all` (Full Project)
-
-- Time: 45-90 min
-- Every file in the project
-- Full quality agents on entire codebase
-- For major refactors, pre-release audits
+`branch` is the only executable scope: the manifest binds the merge-base and
+HEAD, gates run from committed policy, and review covers that exact range.
+`changed` and `all` fail at bootstrap until they have distinct, testable
+execution semantics.
 
 ## Quality Levels
 
@@ -341,19 +310,20 @@ bounded at 5–15 minutes.
 
 ## Provider Invocation
 
-Codex uses the native `codex exec review` surface with a structured output
-schema and the scorer-selected `model_reasoning_effort`; this avoids
-ambient-effort drift and avoids pasting the repository diff into a generic
-prompt.
+Codex uses the native `codex exec review` surface with the scorer-selected
+`model_reasoning_effort`; this avoids ambient-effort drift and avoids pasting
+the repository diff into a generic prompt. Current Codex versions return
+native priority-marked review text even when `--output-schema` is supplied, so
+the runner normalizes that format into the same strict internal finding schema.
 `quality-run-bounded.sh` places it in a process group and enforces the tier cap:
 
 ```
 codex exec --ephemeral -s read-only --json \
   -c 'model_reasoning_effort="high"' --output-schema <schema> \
-  review --base origin/main -
+  review --base origin/main
 ```
 
-The runner normalizes both current root-level Codex structured output and the
+The runner normalizes native review text, root-level structured output, and the
 legacy `{result: ...}` envelope before parsing findings. It pins the exact
 merge-base SHA before starting the first provider so a fetch in another linked
 worktree cannot move `origin/main` and inject reverse-diff findings. Later
@@ -401,7 +371,8 @@ Uses agent teams instead of Task subagents. Provides:
 - Cross-reviewer communication
 - Coordinated retry on failures
 
-Best for `--level 98` or `--scope all` (10+ min runs). Task subagents are faster for quick runs.
+Best for a separate advisory workflow; the revision-bound quality engine does
+not expose `--teams`.
 
 ## Merge Flow (`--merge`)
 

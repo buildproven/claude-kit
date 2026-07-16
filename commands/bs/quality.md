@@ -1,7 +1,7 @@
 ---
 name: bs:quality
 description: Autonomous quality loop with configurable thoroughness. Runs checks, revision-bound review, remediation, CI, and optional merge.
-argument-hint: "[--level auto|95|98] [--scope changed|branch|all] [--merge] [--pr <number>] [--manifest <path>] [--target-dir <path>]"
+argument-hint: "[--level auto|95|98] [--scope branch] [--merge] [--pr <number>] [--manifest <path>] [--target-dir <path>]"
 tags: [quality, ci, review]
 category: quality
 ---

@@ -264,16 +264,17 @@ function baselineGate(name, scripts, candidates, manager, allowSkip = false) {
   const script = candidates.find((candidate) =>
     Object.hasOwn(scripts, candidate),
   );
-  return script
-    ? scriptGate(name, script, manager, allowSkip)
-    : {
+  if (script) return scriptGate(name, script, manager, allowSkip);
+  return allowSkip
+    ? {
         name,
         source: "baseline-policy",
         command: `external:${name}`,
         executable: null,
         args: [],
         allowSkip,
-      };
+      }
+    : null;
 }
 
 function discoverRequiredGates(
@@ -299,7 +300,21 @@ function discoverRequiredGates(
       options["skip-tests"] === true,
     ),
     baselineGate("security", scripts, ["security:audit", "security"], manager),
-  ];
+  ].filter(Boolean);
+  const missing = ["lint", "security"].filter(
+    (name) => !required.some((gate) => gate.name === name),
+  );
+  if (
+    options["skip-tests"] !== true &&
+    !required.some((gate) => gate.name === "test")
+  ) {
+    missing.push("test");
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `quality requires executable repository scripts for: ${missing.join(", ")}`,
+    );
+  }
   if (typeof scripts.build === "string") {
     required.push(scriptGate("build", "build", manager));
   }
@@ -454,6 +469,16 @@ function parseOptions(args) {
   return options;
 }
 
+function executableScope(options) {
+  const scope = firstValue(options.scope, "branch");
+  if (scope !== "branch") {
+    throw new Error(
+      `quality scope '${scope}' is not executable; only revision-bound branch scope is supported`,
+    );
+  }
+  return scope;
+}
+
 function createManifest(options) {
   const root = canonicalRoot(firstValue(options.repo, process.cwd()));
   const baseRef = firstValue(options["base-ref"], "origin/main");
@@ -484,6 +509,7 @@ function createManifest(options) {
       : crossRepositoryValue === "false"
         ? false
         : null;
+  const scope = executableScope(options);
   if (
     pr !== null &&
     (!githubRepository ||
@@ -500,6 +526,11 @@ function createManifest(options) {
     isCrossRepository !== (githubRepository !== headRepository)
   ) {
     throw new Error("PR cross-repository identity is inconsistent");
+  }
+  if (isCrossRepository === true) {
+    throw new Error(
+      "cross-repository quality requires trusted CI evidence ingestion and is not yet supported",
+    );
   }
   if (options.manifest !== undefined) {
     throw new Error("create does not accept a custom manifest path");
@@ -525,7 +556,7 @@ function createManifest(options) {
     options: {
       merge: options.merge === true,
       level: firstValue(options.level, "auto"),
-      scope: firstValue(options.scope, "branch"),
+      scope,
       skipTests: options["skip-tests"] === true,
     },
     repo: {
@@ -1664,16 +1695,27 @@ function executeGate(manifest, required, name, log) {
     throw new Error(`campaign budget is exhausted before gate '${name}'`);
   }
   const timeoutSeconds = Math.min(gateSeconds, campaignRemaining);
-  const result = spawnSync(required.executable, required.args, {
-    cwd: manifest.repo.realpath,
-    encoding: "utf8",
-    env: process.env,
-    maxBuffer: 64 * 1024 * 1024,
-    timeout: timeoutSeconds * 1000,
-  });
+  const boundedRunner = path.join(__dirname, "quality-run-bounded.sh");
+  const result = spawnSync(
+    "bash",
+    [
+      boundedRunner,
+      "--timeout",
+      String(timeoutSeconds),
+      "--",
+      required.executable,
+      ...required.args,
+    ],
+    {
+      cwd: manifest.repo.realpath,
+      encoding: "utf8",
+      env: process.env,
+      maxBuffer: 64 * 1024 * 1024,
+    },
+  );
   const output = `${result.stdout || ""}${result.stderr || ""}`;
   fs.writeFileSync(log, output, { mode: 0o600 });
-  if (result.error?.code === "ETIMEDOUT") {
+  if (result.status === 124) {
     throw new Error(
       `gate '${name}' exceeded its proportional ${timeoutSeconds}s budget`,
     );

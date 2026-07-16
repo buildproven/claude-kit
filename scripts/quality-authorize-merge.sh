@@ -96,7 +96,14 @@ if [ "$PREFLIGHT" = true ]; then
       }
     fi
   else
-    [ "$LOCAL_HEAD" = "$EXPECTED_HEAD" ] && [ "$ACTUAL_HEAD" = "$EXPECTED_HEAD" ] || {
+    REVIEW_HISTORY="$(node "$SCRIPT_DIR/quality-invocation.js" \
+      get "$MANIFEST" reviews)" || exit 1
+    REMOTE_PREDECESSOR="$(printf '%s' "$REVIEW_HISTORY" | jq -r \
+      '[.[] | select(.status == "success")][-2].to // empty')"
+    [ "$LOCAL_HEAD" = "$EXPECTED_HEAD" ] &&
+      { [ "$ACTUAL_HEAD" = "$EXPECTED_HEAD" ] ||
+        { [ -n "$REMOTE_PREDECESSOR" ] &&
+          [ "$ACTUAL_HEAD" = "$REMOTE_PREDECESSOR" ]; }; } || {
       echo "❌ MERGE BLOCKED: preflight HEAD does not match the reviewed PR head." >&2
       exit 1
     }
