@@ -22,10 +22,10 @@ EXPECTED_HEAD="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revi
 ROOT="$(node "$SCRIPT_DIR/quality-invocation.js" locate "$MANIFEST")" || exit 1
 cd "$ROOT" || exit 1
 [ -n "$PR" ] || { echo "❌ MERGE BLOCKED: manifest has no PR identity." >&2; exit 1; }
-PR_JSON="$(gh pr view "$PR" --json headRefOid,baseRefName,baseRefOid)" || exit 1
+PR_JSON="$(gh pr view "$PR" --json headRefOid,baseRefName)" || exit 1
 ACTUAL_HEAD="$(printf '%s' "$PR_JSON" | jq -r '.headRefOid')"
 ACTUAL_BASE_NAME="$(printf '%s' "$PR_JSON" | jq -r '.baseRefName')"
-ACTUAL_BASE_OID="$(printf '%s' "$PR_JSON" | jq -r '.baseRefOid')"
+ACTUAL_BASE_OID="$(git ls-remote origin "refs/heads/$ACTUAL_BASE_NAME" | awk '{print $1}')"
 EXPECTED_BASE_REF="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseRef)"
 EXPECTED_BASE_OID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseHeadSha)"
 [ "$EXPECTED_BASE_REF" = "origin/$ACTUAL_BASE_NAME" ] &&
@@ -63,9 +63,14 @@ fi
 BASE_REF="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseRef)"
 bash "$SCRIPT_DIR/quality-validate-review-trailers.sh" \
   --manifest "$MANIFEST" --base "$BASE_REF" || exit 1
-FINAL_PR_JSON="$(gh pr view "$PR" --json headRefOid,baseRefOid)" || exit 1
+FINAL_PR_JSON="$(gh pr view "$PR" --json headRefOid,baseRefName)" || exit 1
+[ "$(printf '%s' "$FINAL_PR_JSON" | jq -r '.baseRefName')" = "$ACTUAL_BASE_NAME" ] || {
+  echo "❌ MERGE BLOCKED: PR target branch changed immediately before merge." >&2
+  exit 1
+}
+FINAL_BASE_OID="$(git ls-remote origin "refs/heads/$ACTUAL_BASE_NAME" | awk '{print $1}')"
 [ "$(printf '%s' "$FINAL_PR_JSON" | jq -r '.headRefOid')" = "$ACTUAL_HEAD" ] &&
-  [ "$(printf '%s' "$FINAL_PR_JSON" | jq -r '.baseRefOid')" = "$EXPECTED_BASE_OID" ] || {
+  [ "$FINAL_BASE_OID" = "$EXPECTED_BASE_OID" ] || {
     echo "❌ MERGE BLOCKED: PR identity changed immediately before merge." >&2
     exit 1
   }

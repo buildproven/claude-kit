@@ -158,7 +158,7 @@ function recordJudgeArtifact(root, manifest, dispositions = []) {
   );
 }
 
-function fakeGh(root, head, baseOid) {
+function fakeGh(root, head) {
   const bin = path.join(root, "fake-bin");
   mkdirSync(bin);
   const gh = path.join(bin, "gh");
@@ -170,9 +170,9 @@ if [ "$1 $2" = "pr view" ]; then
   if [[ "$args" == *"state,mergedAt,mergeCommit"* ]]; then
     printf '%s\\n' '{"state":"MERGED","mergedAt":"2026-07-16T00:00:00Z","mergeCommit":{"oid":"merge"}}'
   elif [[ "$args" == *"headRefOid,baseRefOid"* ]]; then
-    printf '%s\\n' '{"headRefOid":"${head}","baseRefOid":"${baseOid}"}'
+    printf '%s\\n' '{"headRefOid":"${head}","baseRefName":"main"}'
   else
-    printf '%s\\n' '{"headRefOid":"${head}","baseRefName":"main","baseRefOid":"${baseOid}"}'
+    printf '%s\\n' '{"headRefOid":"${head}","baseRefName":"main"}'
   fi
   exit 0
 fi
@@ -571,12 +571,7 @@ wait
     const lifecycle = [];
     lifecycle.push("push");
     lifecycle.push("ci:success");
-    const state = JSON.parse(readFileSync(manifest, "utf8"));
-    const bin = fakeGh(
-      root,
-      git(root, ["rev-parse", "HEAD"]),
-      state.revisions.baseSha,
-    );
+    const bin = fakeGh(root, git(root, ["rev-parse", "HEAD"]));
     const caller = repo("authorization-caller");
     expect(
       spawnSync("bash", [AUTHORIZE, "--manifest", manifest], {
