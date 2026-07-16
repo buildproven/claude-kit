@@ -114,7 +114,12 @@ function create(root, extra = [], env = {}) {
   ).trim();
 }
 
-function prepareCodexReview(root, manifestPath, providerFindings = []) {
+function prepareCodexReview(
+  root,
+  manifestPath,
+  providerFindings = [],
+  findingsText = null,
+) {
   execFileSync("node", [GOVERNOR, "bump-round", manifestPath], { cwd: root });
   const info = JSON.parse(
     execFileSync("node", [INVOCATION, "review-info", manifestPath], {
@@ -135,7 +140,10 @@ function prepareCodexReview(root, manifestPath, providerFindings = []) {
   );
   writeFileSync(
     path.join(info.artifactDir, "codex.findings.txt"),
-    providerFindings.length === 0 ? "NO FINDINGS.\n" : "BLOCKING findings.\n",
+    findingsText ??
+      (providerFindings.length === 0
+        ? "NO FINDINGS.\n"
+        : "BLOCKING findings.\n"),
   );
   writeFileSync(
     path.join(info.artifactDir, "codex-1.json"),
@@ -1042,6 +1050,26 @@ wait
     expect(plan.args).toContain("--ignore-unknown");
   });
 
+  it("uses declared and modern Bun package-manager signals for formatting", () => {
+    const root = repo("format-bun");
+    const packageFile = path.join(root, "package.json");
+    const packageJson = JSON.parse(readFileSync(packageFile, "utf8"));
+    packageJson.packageManager = "bun@1.2.0";
+    writeFileSync(packageFile, JSON.stringify(packageJson));
+    writeFileSync(path.join(root, "bun.lock"), "");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "config"]);
+    const manifest = create(root);
+    const plan = JSON.parse(
+      execFileSync(
+        "node",
+        [FORMAT, "--manifest", manifest, "--dry-run", "--", "file.js"],
+        { cwd: root, encoding: "utf8" },
+      ),
+    );
+    expect(plan.manager).toBe("bun");
+  });
+
   it("does not let verification extend an expired campaign clock", () => {
     const root = repo("reserve");
     const manifest = create(root, [], {
@@ -1252,6 +1280,11 @@ exit 99
         validationState.risk.runtime.gateSeconds +
         validationState.risk.runtime.validationSeconds,
     );
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    expect(
+      JSON.parse(readFileSync(manifest, "utf8")).governor
+        .validationDeadlineEpoch,
+    ).toBe(validationState.governor.validationDeadlineEpoch);
     validationState.governor.startedAtEpoch =
       Math.floor(Date.now() / 1000) - 2000;
     validationState.governor.campaignSeconds = 900;
@@ -1932,6 +1965,25 @@ exit 1
         { cwd: root },
       ),
     ).not.toThrow();
+  });
+
+  it("treats trailing text after a clean sentinel as blocking evidence", () => {
+    const root = repo("contradictory-clean-sentinel");
+    const manifest = create(root);
+    prepareCodexReview(
+      root,
+      manifest,
+      [],
+      "NO FINDINGS.\nBLOCKING: incomplete review evidence\n",
+    );
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toHaveLength(1);
+    expect(context.findings[0].severity).toBe("blocking");
   });
 
   it("exposes persisted judge dispositions to targeted verification", () => {

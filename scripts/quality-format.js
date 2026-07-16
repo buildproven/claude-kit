@@ -6,10 +6,17 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 const { loadManifest, validateIdentity } = require("./quality-invocation");
 
-function packageManager(root) {
+function packageManager(root, pkg = {}) {
+  const declared = String(pkg.packageManager || "").split("@")[0];
+  if (["npm", "pnpm", "yarn", "bun"].includes(declared)) return declared;
   if (fs.existsSync(path.join(root, "pnpm-lock.yaml"))) return "pnpm";
   if (fs.existsSync(path.join(root, "yarn.lock"))) return "yarn";
-  if (fs.existsSync(path.join(root, "bun.lockb"))) return "bun";
+  if (
+    fs.existsSync(path.join(root, "bun.lock")) ||
+    fs.existsSync(path.join(root, "bun.lockb"))
+  ) {
+    return "bun";
+  }
   return "npm";
 }
 
@@ -49,7 +56,7 @@ function resolveFormatPlan(root, files) {
       });
     }
   }
-  const manager = packageManager(root);
+  const manager = packageManager(root, pkg);
   const extensions = configuredExtensions(pkg);
   const selected =
     extensions.size === 0
