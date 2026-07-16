@@ -69,6 +69,19 @@ describe("quality merge gates", () => {
     expect(AUTHORIZE).toMatch(/\.mergeCommit\.oid/);
   });
 
+  it("persists one exact empty stamp and waits boundedly for its CI", () => {
+    expect(STAMP_AND_MERGE).toMatch(/merge\.stampHead/);
+    expect(STAMP_AND_MERGE).toMatch(/record-stamp/);
+    expect(STAMP_AND_MERGE).toMatch(/quality-run-bounded\.sh/);
+    expect(STAMP_AND_MERGE).toMatch(
+      /gh pr checks "\$PR" --required --watch --interval 10/,
+    );
+    expect(STAMP_AND_MERGE.indexOf("gh pr checks")).toBeLessThan(
+      STAMP_AND_MERGE.indexOf("quality-authorize-merge.sh"),
+    );
+    expect(AUTHORIZE).toMatch(/persisted empty stamp/);
+  });
+
   it("persists and reloads the exact reviewed base across fenced shells", () => {
     expect(RUN_REVIEW).toMatch(/quality-invocation\.js" record-review/);
     expect(RUN_REVIEW).toMatch(/--from "\$REVIEW_DIFF_BASE"/);

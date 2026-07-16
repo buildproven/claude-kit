@@ -77,6 +77,15 @@ bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
   --manifest "<exact-manifest-path>" --name security -- <real-security-command>
 ```
 
+When `options.skipTests` is true, record the config-only decision explicitly
+instead of inventing a passing test command:
+
+```bash
+bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
+  --manifest "<exact-manifest-path>" --name test --skip \
+  --reason "config-only repository has no executable test suite"
+```
+
 Use `options.scope` to select changed, branch, or all-project gate commands.
 
 Formatting remediation must use:

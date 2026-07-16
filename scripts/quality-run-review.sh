@@ -27,6 +27,8 @@ BS_QUALITY_FALLBACK="$(field provider.fallbackOverride)"
 BS_QUALITY_PROVIDER_CONFIG="$(field provider.config)"
 export BS_QUALITY_PRIMARY BS_QUALITY_FALLBACK BS_QUALITY_PROVIDER_CONFIG
 cd "$GIT_ROOT" || exit 1
+bash "$SCRIPT_DIR/quality-assert-clean.sh" \
+  --manifest "$MANIFEST" --phase "blocking review" || exit 1
 # shellcheck source=quality-provider-policy.sh
 source "$SCRIPT_DIR/quality-provider-policy.sh"
 [ -f "${BS_QUALITY_ROOT_FILE:-/nonexistent}" ] \

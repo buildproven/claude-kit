@@ -26,6 +26,8 @@ PR="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" repo.pr)"
 EXPECTED_HEAD="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.currentHead)"
 ROOT="$(node "$SCRIPT_DIR/quality-invocation.js" locate "$MANIFEST")" || exit 1
 cd "$ROOT" || exit 1
+bash "$SCRIPT_DIR/quality-assert-clean.sh" \
+  --manifest "$MANIFEST" --phase "merge authorization" || exit 1
 [ -n "$PR" ] || { echo "❌ MERGE BLOCKED: manifest has no PR identity." >&2; exit 1; }
 PR_JSON="$(gh pr view "$PR" --json headRefOid,baseRefName)" || exit 1
 ACTUAL_HEAD="$(printf '%s' "$PR_JSON" | jq -r '.headRefOid')"
@@ -43,13 +45,13 @@ LOCAL_HEAD="$(git rev-parse HEAD)"
   echo "❌ MERGE BLOCKED: PR HEAD does not match reviewed HEAD." >&2
   exit 1
 }
-if [ "$LOCAL_HEAD" != "$EXPECTED_HEAD" ]; then
+STAMP_HEAD="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" merge.stampHead)"
+[ -n "$STAMP_HEAD" ] && [ "$LOCAL_HEAD" = "$STAMP_HEAD" ] &&
   [ "$(git rev-parse HEAD~1)" = "$EXPECTED_HEAD" ] &&
-    git diff --quiet HEAD~1 HEAD || {
-      echo "❌ MERGE BLOCKED: PR HEAD is not an empty stamp of reviewed HEAD." >&2
-      exit 1
-    }
-fi
+  git diff --quiet HEAD~1 HEAD || {
+    echo "❌ MERGE BLOCKED: PR HEAD is not the persisted empty stamp of reviewed HEAD." >&2
+    exit 1
+  }
 gh pr checks "$PR" --required >/dev/null || {
   echo "❌ MERGE BLOCKED: required CI is not successful." >&2
   exit 1
@@ -60,6 +62,12 @@ git merge-base --is-ancestor "$EXPECTED_BASE_OID" "$EXPECTED_HEAD" || {
 }
 REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
 DEFAULT_BRANCH="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)" || exit 1
+ATOMIC_BASE_FRESHNESS=false
+ENCODED_BASE_NAME="$(jq -rn --arg value "$ACTUAL_BASE_NAME" '$value | @uri')" || exit 1
+if [ "$(gh api "repos/$REPOSITORY/branches/$ENCODED_BASE_NAME/protection/required_status_checks" \
+  --jq '.strict' 2>/dev/null || true)" = true ]; then
+  ATOMIC_BASE_FRESHNESS=true
+fi
 RULESET_IDS="$(gh api "repos/$REPOSITORY/rulesets?includes_parents=true" --jq '.[].id')" || exit 1
 for RULESET_ID in $RULESET_IDS; do
   RULESET_JSON="$(gh api "repos/$REPOSITORY/rulesets/$RULESET_ID")" || {
@@ -82,7 +90,30 @@ for RULESET_ID in $RULESET_IDS; do
     echo "❌ MERGE BLOCKED: merge-queue branches require a queue-aware monitored merge path." >&2
     exit 1
   fi
+  if printf '%s' "$RULESET_JSON" |
+    jq -e --arg ref "refs/heads/$ACTUAL_BASE_NAME" --arg default "$DEFAULT_BRANCH" '
+      .enforcement == "active" and
+      any(.rules[]?;
+        .type == "required_status_checks" and
+        .parameters.strict_required_status_checks_policy == true
+      ) and
+      any(.conditions.ref_name.include[]?;
+        . as $pattern |
+        . == "~ALL" or
+        (. == "~DEFAULT_BRANCH" and $ref == ("refs/heads/" + $default)) or
+        . == $ref or
+        ($pattern | endswith("/*")) and ($ref | startswith($pattern[0:-1]))
+      ) and
+      ([.conditions.ref_name.exclude[]?] | index($ref) | not)
+    ' >/dev/null; then
+    ATOMIC_BASE_FRESHNESS=true
+  fi
 done
+[ "$ATOMIC_BASE_FRESHNESS" = true ] || {
+  echo "❌ MERGE BLOCKED: the PR base lacks server-enforced strict freshness." >&2
+  echo "   Enable strict required-status checks or use a supported merge queue." >&2
+  exit 1
+}
 TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"
 if [ "$TIER" = critical ]; then
   node "$SCRIPT_DIR/quality-invocation.js" approval-valid "$MANIFEST" || {

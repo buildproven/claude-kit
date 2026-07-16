@@ -19,6 +19,18 @@ function parseJson(raw, label) {
   }
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicalJson(value[key])]),
+    );
+  }
+  return value;
+}
+
 function git(cwd, args) {
   return execFileSync("git", args, {
     cwd,
@@ -67,6 +79,7 @@ function atomicWrite(file, value) {
 function normalizeManifestCollections(manifest) {
   manifest.reviews ??= [];
   manifest.gates ??= [];
+  manifest.merge ??= {};
   manifest.governor ??= {};
   manifest.governor.authorizedAttempts ??= [];
 }
@@ -272,7 +285,7 @@ function parseOptions(args) {
     const equals = token.indexOf("=");
     const name = equals === -1 ? token : token.slice(0, equals);
     const inlineValue = equals === -1 ? null : token.slice(equals + 1);
-    if (["--merge", "--break-glass-approved"].includes(name)) {
+    if (["--merge", "--break-glass-approved", "--skip-tests"].includes(name)) {
       if (inlineValue !== null && !["true", "false"].includes(inlineValue)) {
         throw new Error(`${name} accepts only true or false`);
       }
@@ -389,10 +402,28 @@ function advanceHead(manifest, root) {
   return true;
 }
 
-function setRisk(manifest, options) {
-  if (manifest.risk?.resolved || manifest.reviews.length > 0) {
-    throw new Error("risk resolution is immutable once persisted");
+function recordStamp(manifest, root, options) {
+  const stampHead = options.head;
+  if (!stampHead) throw new Error("record-stamp requires --head");
+  const actualHead = git(root, ["rev-parse", "HEAD"]);
+  if (actualHead !== stampHead) {
+    throw new Error(
+      `quality stamp identity mismatch: expected local HEAD ${stampHead}, got ${actualHead}`,
+    );
   }
+  if (!isEmptyStampCommit(root, manifest.revisions.currentHead)) {
+    throw new Error("quality stamp must be an empty child of reviewed HEAD");
+  }
+  if (manifest.merge.stampHead && manifest.merge.stampHead !== stampHead) {
+    throw new Error(
+      `quality stamp is immutable: expected ${manifest.merge.stampHead}, got ${stampHead}`,
+    );
+  }
+  manifest.merge.stampHead = stampHead;
+  manifest.merge.stampedAt ??= new Date().toISOString();
+}
+
+function setRisk(manifest, options) {
   const tier = options.tier;
   if (!["low", "medium", "high", "critical"].includes(tier)) {
     throw new Error(`invalid resolved tier '${tier}'`);
@@ -413,7 +444,7 @@ function setRisk(manifest, options) {
       `resolved tier ${tier} is below requested minimum ${requestedMinimum}`,
     );
   }
-  manifest.risk = {
+  const resolved = {
     requestedLevel: manifest.risk.requestedLevel,
     resolved: true,
     tier,
@@ -426,6 +457,14 @@ function setRisk(manifest, options) {
     codexRounds: parseInteger(options["codex-rounds"] || "1", "codex rounds"),
     level: options.level || manifest.options.level,
   };
+  if (manifest.risk?.resolved) {
+    if (JSON.stringify(manifest.risk) === JSON.stringify(resolved)) return;
+    throw new Error("risk resolution is immutable once persisted");
+  }
+  if (manifest.reviews.length > 0) {
+    throw new Error("risk resolution is immutable once persisted");
+  }
+  manifest.risk = resolved;
 }
 
 function setAgents(manifest, names) {
@@ -434,6 +473,12 @@ function setAgents(manifest, names) {
   }
   if (names.length < 2) {
     throw new Error("quality agent floor requires at least two agents");
+  }
+  if (
+    manifest.agents.length > 0 &&
+    JSON.stringify(manifest.agents) === JSON.stringify(names)
+  ) {
+    return;
   }
   if (manifest.agents.length > 0 || manifest.reviews.length > 0) {
     throw new Error("quality agent selection is immutable once persisted");
@@ -556,11 +601,36 @@ function recordJudge(manifest, options) {
     ) {
       throw new Error("judge findings require an id and valid disposition");
     }
+    if (
+      ["WARNING", "SUPPRESSED"].includes(finding.disposition) &&
+      (typeof finding.reason !== "string" || finding.reason.trim() === "")
+    ) {
+      throw new Error("WARNING and SUPPRESSED judge findings require a reason");
+    }
   }
   const expectedIds = context.findings.map((finding) => finding.id).sort();
   const actualIds = input.findings.map((finding) => finding.id).sort();
   if (JSON.stringify(expectedIds) !== JSON.stringify(actualIds)) {
     throw new Error("judge artifact does not classify every provider finding");
+  }
+  const immutableFinding = (finding) => {
+    const immutable = { ...finding };
+    delete immutable.disposition;
+    delete immutable.reason;
+    return immutable;
+  };
+  const expectedById = new Map(
+    context.findings.map((finding) => [finding.id, immutableFinding(finding)]),
+  );
+  for (const finding of input.findings) {
+    if (
+      JSON.stringify(canonicalJson(immutableFinding(finding))) !==
+      JSON.stringify(canonicalJson(expectedById.get(finding.id)))
+    ) {
+      throw new Error(
+        `judge finding ${finding.id} changed immutable provider payload`,
+      );
+    }
   }
   const blockingCount = input.findings.filter(
     (finding) => finding.disposition === "BLOCKING",
@@ -618,6 +688,7 @@ function providerFindings(manifest) {
       if (!Array.isArray(items)) continue;
       items.forEach((finding, index) => {
         findings.push({
+          ...finding,
           id: crypto
             .createHash("sha256")
             .update(
@@ -645,6 +716,7 @@ function providerFindings(manifest) {
           .digest("hex"),
         severity: "blocking",
         title: text.split("\n")[0],
+        body: text,
         source: item.name,
       });
     }
@@ -948,6 +1020,19 @@ function recordGate(manifest, options) {
   if (!name || !command || !fs.existsSync(log)) {
     throw new Error("gate evidence requires --name, --command, and --log");
   }
+  const status = options.status || "success";
+  const reason = options.reason?.trim() || null;
+  if (!["success", "skipped"].includes(status)) {
+    throw new Error(`invalid gate evidence status '${status}'`);
+  }
+  if (
+    status === "skipped" &&
+    (name !== "test" || manifest.options.skipTests !== true || !reason)
+  ) {
+    throw new Error(
+      "test gate skipping requires --skip-tests and an explicit skip reason",
+    );
+  }
   manifest.gates = manifest.gates.filter(
     (gate) =>
       gate.head !== manifest.revisions.currentHead || gate.name !== name,
@@ -956,27 +1041,44 @@ function recordGate(manifest, options) {
     name,
     command,
     head: manifest.revisions.currentHead,
-    status: "success",
+    status,
+    reason,
     log,
     logSha256: sha256File(log),
     completedAt: new Date().toISOString(),
   });
 }
 
+function validGateArtifact(gate) {
+  return Boolean(
+    gate && fs.existsSync(gate.log) && sha256File(gate.log) === gate.logSha256,
+  );
+}
+
+function validTestGate(manifest, gate) {
+  if (!validGateArtifact(gate)) return false;
+  if (gate.status === "success") return true;
+  return Boolean(
+    manifest.options.skipTests === true &&
+    gate.status === "skipped" &&
+    typeof gate.reason === "string" &&
+    gate.reason.trim() !== "",
+  );
+}
+
 function verifyGateEvidence(manifest) {
   const current = manifest.gates.filter(
     (gate) => gate.head === manifest.revisions.currentHead,
   );
-  for (const required of ["lint", "test", "security"]) {
+  for (const required of ["lint", "security"]) {
     const gate = current.find((item) => item.name === required);
-    if (
-      !gate ||
-      gate.status !== "success" ||
-      !fs.existsSync(gate.log) ||
-      sha256File(gate.log) !== gate.logSha256
-    ) {
+    if (gate?.status !== "success" || !validGateArtifact(gate)) {
       throw new Error(`required ${required} gate evidence is missing or stale`);
     }
+  }
+  const testGate = current.find((item) => item.name === "test");
+  if (!validTestGate(manifest, testGate)) {
+    throw new Error("required test gate evidence is missing or stale");
   }
 }
 
@@ -1122,6 +1224,10 @@ const COMMANDS = {
     mutate(manifestArg, (locked) => recordJudge(locked, parseOptions(rawArgs))),
   gate: ({ manifestArg, rawArgs }) =>
     mutate(manifestArg, (locked) => recordGate(locked, parseOptions(rawArgs))),
+  "record-stamp": ({ manifestArg, rawArgs }) =>
+    mutate(manifestArg, (locked) =>
+      recordStamp(locked, locked.repo.realpath, parseOptions(rawArgs)),
+    ),
   inventory: ({ manifest, rawArgs }) => {
     const options = parseOptions(rawArgs);
     writeArtifactInventory(manifest, options["artifact-dir"], options.provider);
@@ -1196,6 +1302,7 @@ module.exports = {
   recordReview,
   recordJudge,
   recordGate,
+  recordStamp,
   judgeContext,
   renewApproval,
   repoKey,

@@ -204,20 +204,35 @@ if [ "$ARGS_MERGE" = true ]; then
     echo "   Move uncommitted changes there with: git stash; cd <worktree>; git stash pop"
     exit 1
   fi
-  if [ -n "${RES_PR:-}" ]; then
-    PR_JSON="$(gh pr view "$RES_PR" \
-      --json number,baseRefName,headRefOid 2>/dev/null)"
-  else
-    PR_JSON="$(gh pr view \
-      --json number,baseRefName,headRefOid 2>/dev/null)"
-  fi
+fi
+
+# A PR-targeted invocation must always bind to the PR's actual base identity,
+# even when it is review-only. Falling back to origin/main for non-merge runs
+# produces the wrong diff and a manifest that cannot safely resume or merge.
+PR_JSON=""
+if [ -n "${RES_PR:-}" ]; then
+  PR_JSON="$(gh pr view "$RES_PR" \
+    --json number,baseRefName,baseRefOid,headRefOid 2>/dev/null)"
+elif [ "$ARGS_MERGE" = true ]; then
+  PR_JSON="$(gh pr view \
+    --json number,baseRefName,baseRefOid,headRefOid 2>/dev/null)"
+fi
+if [ "$ARGS_MERGE" = true ]; then
   [ -n "$PR_JSON" ] || {
     echo "❌ /bs:quality --merge requires an open PR for the target branch." >&2
     exit 1
   }
+fi
+if [ -n "$PR_JSON" ]; then
   RES_PR="$(printf '%s' "$PR_JSON" | jq -r '.number')"
   PR_BASE_NAME="$(printf '%s' "$PR_JSON" | jq -r '.baseRefName')"
+  PR_BASE_OID="$(printf '%s' "$PR_JSON" | jq -r '.baseRefOid')"
   PR_HEAD_OID="$(printf '%s' "$PR_JSON" | jq -r '.headRefOid')"
+  [ -n "$PR_BASE_NAME" ] && [ "$PR_BASE_NAME" != null ] &&
+    [ -n "$PR_BASE_OID" ] && [ "$PR_BASE_OID" != null ] || {
+      echo "❌ /bs:quality could not resolve the PR base identity." >&2
+      exit 1
+    }
   [ "$PR_HEAD_OID" = "$(git rev-parse HEAD)" ] || {
     echo "❌ /bs:quality PR HEAD does not match the target worktree." >&2
     exit 1
@@ -228,7 +243,10 @@ BASE_REF=""
 if [ -n "${PR_BASE_NAME:-}" ]; then
   git fetch origin "$PR_BASE_NAME" -q || exit 1
   BASE_REF="origin/$PR_BASE_NAME"
-  PR_BASE_OID="$(git rev-parse "$BASE_REF")"
+  [ "$(git rev-parse "$BASE_REF")" = "$PR_BASE_OID" ] || {
+    echo "❌ /bs:quality PR base changed during bootstrap." >&2
+    exit 1
+  }
 fi
 for candidate in ${BASE_REF:+"$BASE_REF"} origin/main origin/master main master; do
   if git rev-parse --verify --quiet "${candidate}^{commit}" >/dev/null 2>&1; then

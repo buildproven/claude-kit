@@ -8,6 +8,7 @@ import {
   realpathSync,
   readFileSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,6 +25,13 @@ const FORMAT = path.join(ROOT, "scripts", "quality-format.js");
 const GOVERNOR = path.join(ROOT, "scripts", "quality-run-governor.js");
 const WRAPPER = path.join(ROOT, "scripts", "quality-wrapper.js");
 const AUTHORIZE = path.join(ROOT, "scripts", "quality-authorize-merge.sh");
+const RUN_GATE = path.join(ROOT, "scripts", "quality-run-gate.sh");
+const RUN_REVIEW = path.join(ROOT, "scripts", "quality-run-review.sh");
+const STAMP_AND_MERGE = path.join(
+  ROOT,
+  "scripts",
+  "quality-stamp-and-merge.sh",
+);
 
 function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -136,7 +144,7 @@ function prepareCodexReview(root, manifestPath, providerFindings = []) {
     { cwd: root },
   );
   for (const name of ["lint", "test", "security"]) {
-    const log = path.join(root, `${name}.gate.log`);
+    const log = path.join(path.dirname(manifestPath), `${name}.gate.log`);
     writeFileSync(log, `${name} passed\n`);
     execFileSync(
       "node",
@@ -158,7 +166,7 @@ function prepareCodexReview(root, manifestPath, providerFindings = []) {
 }
 
 function recordJudgeArtifact(root, manifest, dispositions = []) {
-  const artifact = path.join(root, "judge-input.json");
+  const artifact = path.join(path.dirname(manifest), "judge-input.json");
   const context = JSON.parse(
     execFileSync("node", [INVOCATION, "judge-context", manifest], {
       cwd: root,
@@ -179,9 +187,9 @@ function recordJudgeArtifact(root, manifest, dispositions = []) {
 }
 
 function fakeGh(root, head) {
-  const bin = path.join(root, "fake-bin");
-  mkdirSync(bin);
+  const bin = mkdtempSync(path.join(tmpdir(), "quality-gh-"));
   const gh = path.join(bin, "gh");
+  const base = git(root, ["rev-parse", "origin/main"]);
   writeFileSync(
     gh,
     `#!/usr/bin/env bash
@@ -189,8 +197,8 @@ if [ "$1 $2" = "pr view" ]; then
   args="$*"
   if [[ "$args" == *"state,mergedAt,mergeCommit"* ]]; then
     printf '%s\\n' '{"state":"MERGED","mergedAt":"2026-07-16T00:00:00Z","mergeCommit":{"oid":"merge"}}'
-  elif [[ "$args" == *"headRefOid,baseRefOid"* ]]; then
-    printf '%s\\n' '{"headRefOid":"${head}","baseRefName":"main"}'
+  elif [[ "$args" == *"baseRefOid"* ]]; then
+    printf '%s\\n' '{"headRefOid":"${head}","baseRefName":"main","baseRefOid":"${base}"}'
   else
     printf '%s\\n' '{"headRefOid":"${head}","baseRefName":"main"}'
   fi
@@ -202,7 +210,17 @@ if [ "$1 $2" = "repo view" ]; then
   if [[ "$*" == *"nameWithOwner"* ]]; then printf '%s\\n' 'owner/repo'; else printf '%s\\n' 'main'; fi
   exit 0
 fi
-if [ "$1" = "api" ]; then printf '%s\\n' '[]'; exit 0; fi
+if [ "$1" = "api" ]; then
+  if [[ "$2" == *"protection/required_status_checks"* ]]; then
+    if [ "\${QUALITY_TEST_STRICT_PROTECTION:-}" = true ]; then
+      printf '%s\\n' 'true'
+      exit 0
+    fi
+    exit 1
+  fi
+  printf '%s\\n' '[]'
+  exit 0
+fi
 exit 1
 `,
   );
@@ -235,6 +253,44 @@ describe("quality invocation manifest", () => {
     expect(manifest.revisions.currentHead).toBe(
       git(root, ["rev-parse", "HEAD"]),
     );
+  });
+
+  it("binds a non-merge PR bootstrap to the PR base branch and base SHA", () => {
+    const root = repo("pr-bootstrap");
+    const base = git(root, ["rev-parse", "origin/main"]);
+    git(root, ["branch", "release", base]);
+    const bin = mkdtempSync(path.join(tmpdir(), "quality-bootstrap-gh-"));
+    const gh = path.join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+if [[ "$*" == *"headRefName,baseRefName"* ]]; then
+  printf '%s\\n' '{"headRefName":"feature","baseRefName":"release"}'
+else
+  printf '%s\\n' '{"number":7,"headRefOid":"${git(root, ["rev-parse", "HEAD"])}","baseRefName":"release","baseRefOid":"${base}"}'
+fi
+`,
+    );
+    chmodSync(gh, 0o755);
+    const result = spawnSync(
+      "bash",
+      [BOOTSTRAP, "--pr", "7", "--level", "auto"],
+      {
+        cwd: root,
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        encoding: "utf8",
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const manifestPath = result.stdout
+      .split("\n")
+      .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
+      ?.slice("BS_QUALITY_MANIFEST=".length);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifest.options.merge).toBe(false);
+    expect(manifest.repo.pr).toBe(7);
+    expect(manifest.revisions.baseRef).toBe("origin/release");
+    expect(manifest.revisions.baseHeadSha).toBe(base);
   });
 
   it("survives a zsh parent and separate Bash processes", () => {
@@ -595,15 +651,37 @@ wait
     }).trim();
     const message = `chore: quality stamp\n\n${trailers}`;
     git(root, ["commit", "--allow-empty", "-q", "-m", message]);
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "record-stamp",
+        manifest,
+        "--head",
+        git(root, ["rev-parse", "HEAD"]),
+      ],
+      { cwd: root },
+    );
     const lifecycle = [];
     lifecycle.push("push");
     lifecycle.push("ci:success");
     const bin = fakeGh(root, git(root, ["rev-parse", "HEAD"]));
     const caller = repo("authorization-caller");
+    const unprotected = spawnSync("bash", [AUTHORIZE, "--manifest", manifest], {
+      cwd: caller,
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      encoding: "utf8",
+    });
+    expect(unprotected.status).not.toBe(0);
+    expect(unprotected.stderr).toMatch(/server-enforced strict freshness/);
     expect(
       spawnSync("bash", [AUTHORIZE, "--manifest", manifest], {
         cwd: caller,
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          QUALITY_TEST_STRICT_PROTECTION: "true",
+        },
         encoding: "utf8",
       }).status,
     ).toBe(0);
@@ -621,6 +699,118 @@ wait
       }).status,
     ).not.toBe(0);
   }, 15_000);
+
+  it("rejects a dirty working tree before gates, review, and stamp", () => {
+    const root = repo("dirty-preflight");
+    const manifest = create(root, ["--level", "95", "--pr", "1", "--merge"]);
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
+    execFileSync("bash", [SELECT, "--manifest", manifest], { cwd: root });
+    writeFileSync(path.join(root, "dirty.txt"), "unreviewed\n");
+
+    for (const invocation of [
+      [
+        "bash",
+        [RUN_GATE, "--manifest", manifest, "--name", "lint", "--", "true"],
+      ],
+      ["bash", [RUN_REVIEW, "--manifest", manifest]],
+      ["bash", [STAMP_AND_MERGE, "--manifest", manifest]],
+    ]) {
+      const result = spawnSync(invocation[0], invocation[1], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(/dirty working tree/);
+    }
+  });
+
+  it("persists one empty stamp and waits for its CI before authorization", () => {
+    const root = repo("stamp-retry");
+    const remote = mkdtempSync(path.join(tmpdir(), "quality-remote-"));
+    git(remote, ["init", "--bare", "-q"]);
+    git(root, ["remote", "set-url", "origin", remote]);
+    git(root, ["push", "-q", "origin", "main"]);
+    git(root, ["push", "-q", "-u", "origin", "feature"]);
+
+    const manifest = create(root, ["--level", "95", "--pr", "1", "--merge"]);
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
+    execFileSync("bash", [SELECT, "--manifest", manifest], { cwd: root });
+    prepareCodexReview(root, manifest);
+    recordJudgeArtifact(root, manifest);
+
+    const harness = mkdtempSync(path.join(tmpdir(), "quality-stamp-harness-"));
+    const bin = path.join(harness, "bin");
+    mkdirSync(bin);
+    const log = path.join(harness, "gh-order.log");
+    const fail = path.join(harness, "fail-ci");
+    writeFileSync(fail, "fail\n");
+    const gh = path.join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+echo "$*" >> ${JSON.stringify(log)}
+if [ "$1 $2" = "pr view" ]; then
+  head="$(git rev-parse HEAD)"
+  if [[ "$*" == *"--jq .headRefOid"* ]]; then printf '%s\\n' "$head"
+  elif [[ "$*" == *"state,mergedAt,mergeCommit"* ]]; then
+    printf '%s\\n' '{"state":"MERGED","mergedAt":"2026-07-16T00:00:00Z","mergeCommit":{"oid":"merge"}}'
+  else printf '{"headRefOid":"%s","baseRefName":"main"}\\n' "$head"; fi
+  exit 0
+fi
+if [ "$1 $2" = "pr checks" ]; then [ ! -f ${JSON.stringify(fail)} ]; exit $?; fi
+if [ "$1 $2" = "pr merge" ]; then exit 0; fi
+if [ "$1 $2" = "repo view" ]; then
+  if [[ "$*" == *"nameWithOwner"* ]]; then printf '%s\\n' 'owner/repo'; else printf '%s\\n' 'main'; fi
+  exit 0
+fi
+if [ "$1" = "api" ]; then
+  if [[ "$2" == *"protection/required_status_checks"* ]]; then
+    printf '%s\\n' 'true'
+  else
+    printf '%s\\n' '[]'
+  fi
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(gh, 0o755);
+    const env = {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      QUALITY_STAMP_CI_TIMEOUT: "5",
+    };
+
+    const first = spawnSync("bash", [STAMP_AND_MERGE, "--manifest", manifest], {
+      cwd: root,
+      env,
+      encoding: "utf8",
+    });
+    expect(first.status).not.toBe(0);
+    const afterFirst = JSON.parse(readFileSync(manifest, "utf8"));
+    const stampHead = afterFirst.merge.stampHead;
+    expect(stampHead).toBe(git(root, ["rev-parse", "HEAD"]));
+    expect(
+      git(root, [
+        "rev-list",
+        "--count",
+        `${afterFirst.revisions.currentHead}..HEAD`,
+      ]),
+    ).toBe("1");
+
+    unlinkSync(fail);
+    const second = spawnSync(
+      "bash",
+      [STAMP_AND_MERGE, "--manifest", manifest],
+      { cwd: root, env, encoding: "utf8" },
+    );
+    expect(second.status, second.stderr).toBe(0);
+    expect(git(root, ["rev-parse", "HEAD"])).toBe(stampHead);
+    const calls = readFileSync(log, "utf8");
+    expect(calls.indexOf("pr checks 1 --required --watch")).toBeLessThan(
+      calls.indexOf("pr merge 1"),
+    );
+  }, 20_000);
 
   it("fails authorization when inventoried findings are replaced", () => {
     const root = repo("artifact-tamper");
@@ -727,6 +917,12 @@ wait
     const manifest = create(root);
     execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
     execFileSync("bash", [SELECT, "--manifest", manifest], { cwd: root });
+    expect(() =>
+      execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root }),
+    ).not.toThrow();
+    expect(() =>
+      execFileSync("bash", [SELECT, "--manifest", manifest], { cwd: root }),
+    ).not.toThrow();
     expect(
       spawnSync(
         "node",
@@ -773,5 +969,144 @@ wait
     );
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/head identity mismatch/);
+  });
+
+  it("parses skip-tests booleans and requires explicit skip evidence", () => {
+    const root = repo("skip-tests");
+    const manifest = create(root, ["--skip-tests"]);
+    const falseManifest = create(root, ["--skip-tests=false"]);
+    expect(JSON.parse(readFileSync(manifest, "utf8")).options.skipTests).toBe(
+      true,
+    );
+    expect(
+      JSON.parse(readFileSync(falseManifest, "utf8")).options.skipTests,
+    ).toBe(false);
+
+    execFileSync(
+      "bash",
+      [
+        RUN_GATE,
+        "--manifest",
+        manifest,
+        "--name",
+        "test",
+        "--skip",
+        "--reason",
+        "config-only fixture has no executable tests",
+      ],
+      { cwd: root },
+    );
+    expect(
+      JSON.parse(readFileSync(manifest, "utf8")).gates.find(
+        (gate) => gate.name === "test",
+      ),
+    ).toMatchObject({
+      status: "skipped",
+      reason: "config-only fixture has no executable tests",
+    });
+
+    prepareCodexReview(root, manifest);
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "gate",
+        manifest,
+        "--name",
+        "test",
+        "--status",
+        "skipped",
+        "--reason",
+        "config-only fixture has no executable tests",
+        "--command",
+        "skip-tests",
+        "--log",
+        path.join(path.dirname(manifest), "test.gate.log"),
+      ],
+      { cwd: root },
+    );
+    recordJudgeArtifact(root, manifest, []);
+    expect(() =>
+      execFileSync("node", [INVOCATION, "review-authorization", manifest], {
+        cwd: root,
+      }),
+    ).not.toThrow();
+
+    const missingReason = spawnSync(
+      "node",
+      [
+        INVOCATION,
+        "gate",
+        falseManifest,
+        "--name",
+        "test",
+        "--status",
+        "skipped",
+        "--command",
+        "skip-tests",
+        "--log",
+        path.join(path.dirname(manifest), "test.gate.log"),
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(missingReason.status).not.toBe(0);
+    expect(missingReason.stderr).toMatch(/requires --skip-tests.*reason/);
+  });
+
+  it("preserves immutable provider finding payload through judging", () => {
+    const root = repo("judge-payload");
+    const manifest = create(root);
+    prepareCodexReview(root, manifest, [
+      {
+        severity: "medium",
+        title: "HTTP retry policy",
+        body: "status === 429 must retain quota metadata",
+        recommendation: "Preserve Retry-After and quota headers",
+        evidence: { file: "src/http.js", line: 42 },
+      },
+    ]);
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings[0]).toMatchObject({
+      body: "status === 429 must retain quota metadata",
+      recommendation: "Preserve Retry-After and quota headers",
+      evidence: { file: "src/http.js", line: 42 },
+    });
+
+    const artifact = path.join(root, "judge-payload.json");
+    context.findings[0].disposition = "WARNING";
+    writeFileSync(artifact, JSON.stringify(context));
+    let result = spawnSync(
+      "node",
+      [INVOCATION, "judge", manifest, "--artifact", artifact],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/require a reason/);
+
+    context.findings[0].reason = "Useful but not merge-blocking";
+    context.findings[0].body = "mutated payload";
+    writeFileSync(artifact, JSON.stringify(context));
+    result = spawnSync(
+      "node",
+      [INVOCATION, "judge", manifest, "--artifact", artifact],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/changed immutable provider payload/);
+
+    context.findings[0].body = "status === 429 must retain quota metadata";
+    writeFileSync(artifact, JSON.stringify(context));
+    expect(() =>
+      execFileSync(
+        "node",
+        [INVOCATION, "judge", manifest, "--artifact", artifact],
+        { cwd: root },
+      ),
+    ).not.toThrow();
   });
 });
