@@ -5,6 +5,14 @@ import { describe, expect, it } from "vitest";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const SKILL = readFileSync(path.join(ROOT, "skills/quality/SKILL.md"), "utf8");
+const VALIDATOR = readFileSync(
+  path.join(ROOT, "scripts/quality-validate-review-trailers.sh"),
+  "utf8",
+);
+const RUN_REVIEW = readFileSync(
+  path.join(ROOT, "scripts/quality-run-review.sh"),
+  "utf8",
+);
 
 /**
  * On 2026-07-12 a review panel returned FAIL with 2 blocking findings; the skill
@@ -41,9 +49,18 @@ describe("quality merge gates", () => {
   it("binds neutral evidence to HEAD/HEAD~1 and merge-base", () => {
     expect(SKILL).toMatch(/head=\$\{HEAD_SHA\}, base=\$\{BASE_SHA\}/);
     expect(SKILL).toMatch(/git log -1 --format=%B/);
-    expect(SKILL).toMatch(/STAMP_HEAD.*CURRENT_PARENT/s);
-    expect(SKILL).toMatch(/STAMP_BASE.*CURRENT_BASE/s);
-    expect(SKILL).toMatch(/matching provider evidence/);
+    expect(SKILL).toMatch(/quality-validate-review-trailers\.sh/);
+    expect(VALIDATOR).toMatch(/STAMP_HEAD.*CURRENT_PARENT/s);
+    expect(VALIDATOR).toMatch(/STAMP_BASE.*CURRENT_BASE/s);
+    expect(VALIDATOR).toMatch(/grep -Fxq "\$EXPECTED"/);
+  });
+
+  it("persists and reloads the exact reviewed base across fenced shells", () => {
+    expect(RUN_REVIEW).toMatch(/-reviewstate\.env/);
+    expect(RUN_REVIEW).toMatch(/REVIEWED_BASE=.*git merge-base/);
+    expect(RUN_REVIEW).toMatch(/RESOLVED_BASE='\$REVIEW_BASE'/);
+    expect(SKILL).toMatch(/BS_QUALITY_REVIEWSTATE_FILE/);
+    expect(SKILL).toMatch(/\. "\$BS_QUALITY_REVIEWSTATE_FILE"/);
   });
 
   it("BLOCKING_COUNT is not merely decorative in the trailer", () => {

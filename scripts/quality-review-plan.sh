@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Mechanical provider-equivalent review depth. Claude realizes depth through
 # its selected agent panel; Codex realizes it through a tier-specific scope.
+[ -f "${BS_QUALITY_ROOT_FILE:-/nonexistent}" ] && [ -f "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env" ] && . "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env"
 QUALITY_REVIEW_TIER="${TIER:-${QUALITY_REVIEW_TIER:-medium}}"
 case "$QUALITY_REVIEW_TIER" in
   low) QUALITY_REVIEW_TIMEOUT=120; QUALITY_REVIEW_FOCUS="Focused regression review of changed behavior only." ;;
@@ -10,4 +11,7 @@ case "$QUALITY_REVIEW_TIER" in
   *) echo "quality: invalid review tier '$QUALITY_REVIEW_TIER'" >&2; return 1 2>/dev/null || exit 1 ;;
 esac
 QUALITY_REVIEW_TIMEOUT="${BS_QUALITY_REVIEW_TIMEOUT:-$QUALITY_REVIEW_TIMEOUT}"
-export QUALITY_REVIEW_TIER QUALITY_REVIEW_TIMEOUT QUALITY_REVIEW_FOCUS
+QUALITY_REVIEW_DEPTH="${CODEX_DEPTH:-$QUALITY_REVIEW_TIER}"
+QUALITY_REVIEW_PASSES="${CODEX_ROUNDS:-1}"
+[ "$QUALITY_REVIEW_PASSES" -ge 1 ] 2>/dev/null || QUALITY_REVIEW_PASSES=1
+export QUALITY_REVIEW_TIER QUALITY_REVIEW_TIMEOUT QUALITY_REVIEW_FOCUS QUALITY_REVIEW_DEPTH QUALITY_REVIEW_PASSES

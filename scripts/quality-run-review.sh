@@ -61,7 +61,7 @@ run_claude_review() {
 }
 
 run_codex_review() {
-  local companion bounded raw_file error_file rc
+  local companion bounded raw_file error_file rc pass pass_timeout
   companion=""
   for candidate in \
     "${CLAUDE_PLUGIN_ROOT:-}/scripts/codex-companion.mjs" \
@@ -74,27 +74,34 @@ run_codex_review() {
   command -v codex >/dev/null 2>&1 || return 2
   codex login status 2>&1 | grep -q 'Logged in' || return 2
 
-  raw_file="$REVIEW_OUT/codex.json"
-  error_file="$REVIEW_OUT/codex.stderr"
-  bash "$bounded" --timeout "$QUALITY_REVIEW_TIMEOUT" -- node "$companion" adversarial-review --wait --json \
-    --base "$REVIEW_DIFF_BASE" --scope branch \
-    "Tier: $QUALITY_REVIEW_TIER. $QUALITY_REVIEW_FOCUS Review only the supplied commit delta. Return APPROVE or REQUEST_CHANGES with precise file:line findings." \
-    >"$raw_file" 2>"$error_file"
-  rc=$?
-  if [ "$rc" -ne 0 ]; then
-    if provider_exhausted "$raw_file" || provider_exhausted "$error_file"; then return 75; fi
-    [ "$rc" -eq 124 ] && return 76
-    grep -Eiq 'not authenticated|not logged in|login required|setup required' "$error_file" 2>/dev/null && return 2
-    return 1
-  fi
-  if ! jq -e '.result and (.result.findings | type == "array")' "$raw_file" >/dev/null 2>&1; then
-    echo "INCONCLUSIVE: Codex output could not be parsed — human review required" > "$REVIEW_OUT/codex.findings.txt"
-    return 4
-  fi
-  jq -r '
-    if (.result.findings | length) == 0 then "NO FINDINGS. Verdict: \(.result.verdict). \(.result.summary)"
-    else .result.findings[] | "\(.severity // "WARNING"): \(.file // "unknown"):\(.line_start // 0) — \(.title // "finding")\n\(.body // "")\nFix: \(.recommendation // "")"
-    end' "$raw_file" > "$REVIEW_OUT/codex.findings.txt"
+  : > "$REVIEW_OUT/codex.findings.txt"
+  pass_timeout=$((QUALITY_REVIEW_TIMEOUT / QUALITY_REVIEW_PASSES))
+  [ "$pass_timeout" -ge 30 ] || pass_timeout=30
+  pass=1
+  while [ "$pass" -le "$QUALITY_REVIEW_PASSES" ]; do
+    raw_file="$REVIEW_OUT/codex-${pass}.json"
+    error_file="$REVIEW_OUT/codex-${pass}.stderr"
+    bash "$bounded" --timeout "$pass_timeout" -- node "$companion" adversarial-review --wait --json \
+      --base "$REVIEW_DIFF_BASE" --scope branch \
+      "Independent pass $pass/$QUALITY_REVIEW_PASSES. Tier: $QUALITY_REVIEW_TIER; depth: $QUALITY_REVIEW_DEPTH. $QUALITY_REVIEW_FOCUS Review only the supplied commit delta. Return APPROVE or REQUEST_CHANGES with precise file:line findings." \
+      >"$raw_file" 2>"$error_file"
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      if provider_exhausted "$raw_file" || provider_exhausted "$error_file"; then return 75; fi
+      [ "$rc" -eq 124 ] && return 76
+      grep -Eiq 'not authenticated|not logged in|login required|setup required' "$error_file" 2>/dev/null && return 2
+      return 1
+    fi
+    if ! jq -e '.result and (.result.findings | type == "array")' "$raw_file" >/dev/null 2>&1; then
+      echo "INCONCLUSIVE: Codex output could not be parsed — human review required" >> "$REVIEW_OUT/codex.findings.txt"
+      return 4
+    fi
+    jq -r '
+      if (.result.findings | length) == 0 then "NO FINDINGS. Verdict: \(.result.verdict). \(.result.summary)"
+      else .result.findings[] | "\(.severity // "WARNING"): \(.file // "unknown"):\(.line_start // 0) — \(.title // "finding")\n\(.body // "")\nFix: \(.recommendation // "")"
+      end' "$raw_file" >> "$REVIEW_OUT/codex.findings.txt"
+    pass=$((pass + 1))
+  done
 }
 
 run_provider() {
@@ -142,6 +149,16 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
 fi
 
 printf '%s\n' "$(git rev-parse HEAD)" > "$REVIEW_STATE_FILE"
+REVIEWED_HEAD="$(git rev-parse HEAD)"
+REVIEWED_BASE="$(git merge-base HEAD "$REVIEW_BASE")"
+cat > "${BS_QUALITY_ROOT_FILE%.txt}-reviewstate.env" <<EOF
+REVIEWED_HEAD='$REVIEWED_HEAD'
+REVIEWED_BASE='$REVIEWED_BASE'
+RESOLVED_BASE='$REVIEW_BASE'
+REVIEW_PROVIDER='$REVIEW_PROVIDER'
+QUALITY_PRIMARY='$QUALITY_PRIMARY'
+QUALITY_FALLBACK='$QUALITY_FALLBACK'
+EOF
 export REVIEW_OUT REVIEW_BASE REVIEW_DIFF_BASE REVIEW_PROVIDER QUALITY_PRIMARY QUALITY_FALLBACK
 echo "REVIEW_OUT=$REVIEW_OUT"
 echo "REVIEW_BASE=$REVIEW_BASE"

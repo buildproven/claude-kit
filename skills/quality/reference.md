@@ -331,7 +331,7 @@ parallel reviewer and cancels sibling process groups on account exhaustion.
 
 ```
 Reviewed-By: quality (tier=high, reviewer=codex, primary=codex, fallback=claude, findings=0, head=<SHA>, base=<SHA>)
-Reviewed-By: codex (tier=high, findings=0)
+Reviewed-By: codex (tier=high, findings=0, head=<SHA>, base=<SHA>)
 ```
 
 - `Reviewed-By: quality` is the provider-neutral authorization record.

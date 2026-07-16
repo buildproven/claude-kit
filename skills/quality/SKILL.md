@@ -299,14 +299,18 @@ for c in "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-load-root.sh" \
   [ -n "$c" ] && [ -f "$c" ] && { source "$c"; break; }
 done
 
-HEAD_SHA=$(git rev-parse HEAD)
-BASE_SHA=$(git merge-base HEAD "$RESOLVED_BASE")
+BS_QUALITY_REVIEWSTATE_FILE="${BS_QUALITY_ROOT_FILE%.txt}-reviewstate.env"
+[ -f "$BS_QUALITY_REVIEWSTATE_FILE" ] || { echo "❌ MERGE BLOCKED: review evidence state missing." >&2; exit 1; }
+. "$BS_QUALITY_REVIEWSTATE_FILE"
+[ -f "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env" ] && . "${BS_QUALITY_ROOT_FILE%.txt}-riskstate.env"
+HEAD_SHA="$REVIEWED_HEAD"
+BASE_SHA="$REVIEWED_BASE"
 TIER_LABEL="${TIER:-L${LEVEL}}"
 AGENT_COUNT=${#AGENTS[@]}
 FINDING_COUNT=${BLOCKING_COUNT:-0}
 
 echo "Reviewed-By: quality (tier=${TIER_LABEL}, reviewer=${REVIEW_PROVIDER}, primary=${QUALITY_PRIMARY}, fallback=${QUALITY_FALLBACK}, findings=${FINDING_COUNT}, head=${HEAD_SHA}, base=${BASE_SHA})"
-echo "Reviewed-By: ${REVIEW_PROVIDER} (tier=${TIER_LABEL}, findings=${FINDING_COUNT})"
+echo "Reviewed-By: ${REVIEW_PROVIDER} (tier=${TIER_LABEL}, findings=${FINDING_COUNT}, head=${HEAD_SHA}, base=${BASE_SHA})"
 
 # MUST go through the sentinel below, not a bare shell var — bash vars do NOT
 # survive between fenced blocks, so Step 4 (a different block) needs this to
@@ -389,7 +393,7 @@ if [ -z "$QUALITY_TRAILER" ]; then
     git commit --allow-empty -m "chore(quality): stamp review trailer
 
 Reviewed-By: quality (tier=${TIER_LABEL:-${TIER:-L${LEVEL}}}, reviewer=${REVIEW_PROVIDER}, primary=${QUALITY_PRIMARY}, fallback=${QUALITY_FALLBACK}, findings=${BLOCKING_COUNT:-0}, head=${REVIEWED_HEAD}, base=${REVIEWED_BASE})
-Reviewed-By: ${REVIEW_PROVIDER} (tier=${TIER_LABEL:-${TIER:-L${LEVEL}}}, findings=${BLOCKING_COUNT:-0})" \
+Reviewed-By: ${REVIEW_PROVIDER} (tier=${TIER_LABEL:-${TIER:-L${LEVEL}}}, findings=${BLOCKING_COUNT:-0}, head=${REVIEWED_HEAD}, base=${REVIEWED_BASE})" \
       || { echo "❌ Failed to create auto-stamp commit — aborting merge"; exit 1; }
     git push || { echo "❌ Failed to push auto-stamp commit — aborting merge"; exit 1; }
   else
@@ -400,26 +404,16 @@ Reviewed-By: ${REVIEW_PROVIDER} (tier=${TIER_LABEL:-${TIER:-L${LEVEL}}}, finding
   fi
 fi
 
-# 2. Bind evidence to the exact reviewed revision. The reviewed SHA may be
-#    HEAD (trailer baked into the reviewed commit) or HEAD~1 (dedicated stamp
-#    commit). Any later code commit invalidates the evidence.
-QUALITY_TRAILER=$(git log -1 --format=%B | git interpret-trailers --parse 2>/dev/null | grep -E '^Reviewed-By: quality( |$)' | head -1)
-STAMP_HEAD=$(printf '%s' "$QUALITY_TRAILER" | grep -oE 'head=[a-f0-9]+' | cut -d= -f2)
-STAMP_BASE=$(printf '%s' "$QUALITY_TRAILER" | grep -oE 'base=[a-f0-9]+' | cut -d= -f2)
-STAMP_PROVIDER=$(printf '%s' "$QUALITY_TRAILER" | grep -oE 'reviewer=(claude|codex)' | cut -d= -f2)
-CURRENT_HEAD=$(git rev-parse HEAD)
-CURRENT_PARENT=$(git rev-parse HEAD~1 2>/dev/null || true)
-CURRENT_BASE=$(git merge-base HEAD "$BASE_REF")
-if { [ "$STAMP_HEAD" != "$CURRENT_HEAD" ] && [ "$STAMP_HEAD" != "$CURRENT_PARENT" ]; } \
-   || [ "$STAMP_BASE" != "$CURRENT_BASE" ] || [ -z "$STAMP_PROVIDER" ]; then
-  echo "❌ MERGE BLOCKED: quality trailer is stale or malformed; re-run quality on current HEAD." >&2
+# 2. Bind evidence to the exact reviewed revision and require the provider
+#    trailer to match every authorization field. Executable validator tests
+#    cover valid stamps, stale HEADs, and contradictory provider evidence.
+VALIDATOR="$(bs_quality_find_script quality-validate-review-trailers.sh)" || {
+  echo "❌ MERGE BLOCKED: review-evidence validator missing." >&2; exit 1;
+}
+bash "$VALIDATOR" "$BASE_REF" || {
+  echo "❌ MERGE BLOCKED: quality review evidence is stale, malformed, or contradictory." >&2
   exit 1
-fi
-if ! git log -1 --format=%B | git interpret-trailers --parse 2>/dev/null \
-  | grep -qE "^Reviewed-By: ${STAMP_PROVIDER}( |$)"; then
-  echo "❌ MERGE BLOCKED: quality reviewer=$STAMP_PROVIDER lacks matching provider evidence." >&2
-  exit 1
-fi
+}
 
 ```
 
@@ -461,4 +455,5 @@ Sub-Review Mode" for the full acpx invocation, polling, and fallback.
 - `scripts/quality-provider-policy.sh` — cross-CLI primary/fallback policy
 - `scripts/quality-review-plan.sh` — tier-equivalent provider depth
 - `scripts/quality-run-bounded.sh` — provider process-group timeout
+- `scripts/quality-validate-review-trailers.sh` — SHA/provider evidence gate
 - `scripts/quality-merge-cleanup.sh` — Step 4 post-merge worktree teardown
