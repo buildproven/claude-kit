@@ -39,7 +39,6 @@ LOG_DIR="$STATE_ROOT/gates/$HEAD"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/$NAME.log"
 cd "$ROOT" || exit 1
-PLAN="$(node "$SCRIPT_DIR/quality-invocation.js" gate-plan "$MANIFEST" --name "$NAME")" || exit 1
 if [ "$SKIP" = true ]; then
   node "$SCRIPT_DIR/quality-invocation.js" gate-run "$MANIFEST" \
     --name "$NAME" --skip --reason "$REASON" || exit 1

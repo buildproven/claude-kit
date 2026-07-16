@@ -136,9 +136,17 @@ Provider exhaustion is classified only from a non-zero provider exit plus
 structured API/CLI metadata. Generated review text mentioning HTTP 429, quota,
 or rate-limit handling is ordinary review content.
 
-The governor reserves a separate allowance for the mandatory validation
-re-review, so initial provider overhead cannot consume the required success
-path. Round and fix-commit caps remain hard.
+Runtime is derived from both risk and actual diff workload. Risk controls
+depth; changed lines plus per-file overhead control the clock. Default
+campaigns scale from 5 minutes for micro changes to 15 minutes for huge
+changes, with smaller independent limits for gates, discovery review, and
+verification.
+
+One campaign permits exactly one discovery review, one batched fix commit, and
+one targeted verification review. A verification finding is a terminal
+blocked result for that campaign: report it with evidence and stop. Do not fix
+it and recursively start a third review. A new invocation may address the
+reported blocker with a fresh, explicitly budgeted campaign.
 
 ## 5. Judge and remediation
 
@@ -161,6 +169,8 @@ node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" judge \
 - Before a fix, run governor `check` against the same manifest.
 - Advance/resume the manifest after committing, rerun all affected automated
   gates, then run the incremental review.
+- If the incremental verification finds a blocker, stop and report it. Never
+  mutate the reviewed HEAD after the second review in the same campaign.
 - An inconclusive or malformed provider response blocks merge.
 
 ## 6. Review evidence and merge

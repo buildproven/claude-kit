@@ -215,11 +215,13 @@ Quality-Base: ${base}`;
       /while \[ "\$pass" -le "\$QUALITY_REVIEW_PASSES" \]/,
     );
     expect(source).toMatch(/model_reasoning_effort=.*QUALITY_REVIEW_DEPTH/);
-    expect(source).toMatch(/codex exec --ephemeral -s read-only/);
+    expect(source).toMatch(/codex exec --ephemeral -s read-only --json/);
+    expect(source).toMatch(/review_selector=--base/);
+    expect(source).toMatch(/review_selector=--commit/);
+    expect(source).not.toMatch(/\$review_selector_value" -/);
     expect(source).toMatch(/record_provider_exhaustion Codex/);
-    expect(source).toMatch(/structured_provider_exhausted/);
-    expect(source).toMatch(/provider_stderr_exhausted/);
-    expect(source).toMatch(/usage limit/);
+    expect(source).toMatch(/quality-provider-error\.js/);
+    expect(source).not.toMatch(/provider_stderr_exhausted/);
     expect(source).not.toMatch(/provider_exhausted "\$raw_file"/);
   });
 
