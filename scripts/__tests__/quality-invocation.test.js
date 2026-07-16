@@ -1239,6 +1239,13 @@ exit 99
       JSON.parse(readFileSync(manifest, "utf8")).governor
         .validationDeadlineEpoch,
     ).toBeGreaterThan(Math.floor(Date.now() / 1000));
+    const validationState = JSON.parse(readFileSync(manifest, "utf8"));
+    validationState.governor.startedAtEpoch =
+      Math.floor(Date.now() / 1000) - 2000;
+    validationState.governor.campaignSeconds = 900;
+    validationState.governor.campaignDeadlineEpoch =
+      validationState.governor.startedAtEpoch + 900;
+    writeFileSync(manifest, `${JSON.stringify(validationState, null, 2)}\n`);
     const second = prepareCodexReview(root, manifest);
     expect(second.from).toBe(first.to);
     recordJudgeArtifact(root, manifest);
