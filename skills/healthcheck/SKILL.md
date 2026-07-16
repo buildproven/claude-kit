@@ -1,6 +1,5 @@
 ---
 name: healthcheck
-auto_invoke: true
 description: Session start health check — verify MCP servers, repo sync status, and local agent gateway. Use when starting a session that involves social media, multi-repo work, or Docker operations.
 model: haiku
 ---

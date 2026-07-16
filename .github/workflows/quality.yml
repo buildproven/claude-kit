@@ -17,7 +17,6 @@ jobs:
   lint-and-format:
     timeout-minutes: 10
     runs-on: ubuntu-latest
-    if: github.actor != 'dependabot[bot]'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v6
@@ -46,7 +45,6 @@ jobs:
   test:
     timeout-minutes: 10
     runs-on: ubuntu-latest
-    if: github.actor != 'dependabot[bot]'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v6
@@ -60,7 +58,6 @@ jobs:
   security:
     timeout-minutes: 10
     runs-on: ubuntu-latest
-    if: github.actor != 'dependabot[bot]'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v6
@@ -70,7 +67,6 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-          cache: pip
       - run: npm ci
       - name: Install Semgrep
         run: python -m pip install semgrep==1.168.0

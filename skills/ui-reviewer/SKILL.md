@@ -1,6 +1,5 @@
 ---
 name: ui-reviewer
-auto_invoke: true
 description: Expert UI/UX design reviewer for SaaS applications. Analyzes screenshots or live apps to evaluate visual hierarchy, spacing, typography, color usage, accessibility, and modern design patterns. Use when user wants to review, critique, audit, or get feedback on their UI design, or when asking "is this design good?" or "how can I improve this UI?" Provides actionable redesign recommendations with specific improvements.
 ---
 

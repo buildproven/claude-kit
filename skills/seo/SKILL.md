@@ -1,6 +1,5 @@
 ---
 name: seo
-auto_invoke: true
 description: SEO keyword research, SERP analysis, backlink checks, and competitor intelligence using DataForSEO API.
 ---
 

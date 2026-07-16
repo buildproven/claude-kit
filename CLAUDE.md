@@ -58,7 +58,7 @@ npm run license:check       # MIT/ISC/BSD/Apache/MPL only
 npm run check:commands      # scripts/check-command-readme.sh
 ```
 
-Node 20+ (`engines.node`, pinned via Volta to 20.11.1). Python tooling (ruff/black/mypy) is configured in `pyproject.toml` for the handful of Python scripts in `scripts/` — but there is no `pytest` suite wired up despite `tests/` existing.
+Node 20.19+ or 22.12+ (`engines.node`, pinned via Volta to 22.12.0). Python tooling (ruff/black/mypy) is configured in `pyproject.toml` for the handful of Python scripts in `scripts/` — but there is no `pytest` suite wired up despite `tests/` existing.
 
 ## Architecture
 

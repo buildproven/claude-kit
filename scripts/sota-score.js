@@ -253,7 +253,7 @@ function scoreSkillDesign() {
     const frontmatter = content.match(/^---\n([\s\S]*?)\n---/)?.[1] || "";
     const words = content.trim().split(/\s+/).length;
     if ((words * 13) / 10 > 5_000) oversized.push(path.relative(ROOT, file));
-    if (/^(?:invokes|auto_invoke):\s*false\s*$/m.test(frontmatter))
+    if (/^(?:invokes|auto_invoke):/m.test(frontmatter))
       inert.push(path.relative(ROOT, file));
     if (/^context:\s*fork\s*$/m.test(content)) forked += 1;
   }

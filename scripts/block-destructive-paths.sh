@@ -12,12 +12,26 @@ set -euo pipefail
 
 INPUT=$(cat)
 
-if command -v jq &>/dev/null; then
-  COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
-else
-  COMMAND=$(printf '%s' "$INPUT" \
-    | grep -o '"command"[[:space:]]*:[[:space:]]*"[^"]*"' \
-    | head -1 | sed 's/.*"command"[[:space:]]*:[[:space:]]*"//; s/"$//')
+# Node is the kit's required runtime. A regex cannot safely decode JSON strings:
+# escaped quotes truncated the exact `rm -rf "$(dirname "$VAR")"` incident form.
+if ! command -v node &>/dev/null; then
+  echo "Blocked: cannot inspect Bash command because the required Node runtime is unavailable." >&2
+  exit 2
+fi
+if ! COMMAND=$(printf '%s' "$INPUT" | node -e '
+  let raw = "";
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => { raw += chunk; });
+  process.stdin.on("end", () => {
+    try {
+      const command = JSON.parse(raw)?.tool_input?.command;
+      if (command !== undefined && typeof command !== "string") process.exit(1);
+      process.stdout.write(command || "");
+    } catch { process.exit(1); }
+  });
+'); then
+  echo "Blocked: cannot inspect Bash command because the hook payload is invalid JSON." >&2
+  exit 2
 fi
 
 [ -z "$COMMAND" ] && exit 0
@@ -42,7 +56,7 @@ has_recursive_force_rm() {
   local has_recursive=false
   local has_force=false
 
-  if printf '%s' "$candidate" | grep -qE '(^|[[:space:]])(--recursive|-[a-zA-Z]*r[a-zA-Z]*)([[:space:]]|$)'; then
+  if printf '%s' "$candidate" | grep -qE '(^|[[:space:]])(--recursive|-[a-zA-Z]*[rR][a-zA-Z]*)([[:space:]]|$)'; then
     has_recursive=true
   fi
   if printf '%s' "$candidate" | grep -qE '(^|[[:space:]])(--force|-[a-zA-Z]*f[a-zA-Z]*)([[:space:]]|$)'; then
@@ -55,7 +69,7 @@ has_recursive_force_rm() {
 # ---------------------------------------------------------------------------
 # Rule 1: `rm -rf` / `rm -fr` / `rm -r -f` with unsafe target.
 # ---------------------------------------------------------------------------
-RM_COMMANDS=$(printf '%s' "$CMD_FLAT" | grep -oE '(^|[;&|][[:space:]]*)rm[[:space:]]+[^;&|]*' | head -5 || true)
+RM_COMMANDS=$(printf '%s' "$CMD_FLAT" | grep -oE '(^|[;&|][[:space:]]*)((sudo|command|env)[[:space:]]+)*([^[:space:];|]*/)?rm[[:space:]]+[^;&|]*' | head -5 || true)
 while IFS= read -r TARGETS; do
   [[ -z "$TARGETS" ]] && continue
   has_recursive_force_rm "$TARGETS" || continue
@@ -83,14 +97,18 @@ while IFS= read -r TARGETS; do
   #   /Users/<user>/Projects/_archived, /Users/<user>/Projects/_archived/
   #   /Users/<user>/.claude, /Users/<user>/.claude/
   #   /Users/<user>/.ssh, /Users/<user>/.aws, /Users/<user>/.config
+  #   Linux equivalents rooted at /home/<user>
+  # A trailing /* is also blocked: deleting every child is equivalent to
+  # deleting the protected directory for data-loss purposes.
   BOUNDARY='([[:space:]]|$|"|'"'"')'
   # SC2016 disabled intentionally: this is a grep -E regex, not a template.
   # The literal `\$HOME` MUST reach grep un-expanded so it matches the string
   # "$HOME" in a user's command. Expanding it (double quotes) would resolve to
   # /Users/<me> and silently stop catching `rm -rf $HOME` — a security regression.
   # shellcheck disable=SC2016
-  BLOCKED_LITERALS='(/|~/?|\$HOME/?|/Users/?|/Users/[^/[:space:]"'"'"']+/?|/Users/[^/[:space:]"'"'"']+/Projects/?|/Users/[^/[:space:]"'"'"']+/Projects/(internal|products|personal|_archived)/?|/Users/[^/[:space:]"'"'"']+/\.(claude|ssh|aws|config)/?)'
-  if echo "$TARGETS" | grep -qE "(^|[[:space:]]|\"|'\''')${BLOCKED_LITERALS}${BOUNDARY}"; then
+  TARGETS_MATCH=$(printf '%s' "$TARGETS" | tr -d '"'"'"'' | sed -E 's#/+#/#g')
+  BLOCKED_LITERALS='(/\*?|~/?\*?|~/Projects/?\*?|~/Projects/(internal|products|personal|_archived)/?\*?|~/\.(claude|ssh|aws|config)/?\*?|\$HOME/?\*?|/(Users|home)/?\*?|/(Users|home)/[^/[:space:]]+/?\*?|/(Users|home)/[^/[:space:]]+/Projects/?\*?|/(Users|home)/[^/[:space:]]+/Projects/(internal|products|personal|_archived)/?\*?|/(Users|home)/[^/[:space:]]+/\.(claude|ssh|aws|config)/?\*?)'
+  if echo "$TARGETS_MATCH" | grep -qE "(^|[[:space:]])${BLOCKED_LITERALS}${BOUNDARY}"; then
     deny "rm -rf target is a top-level personal directory. Wiping \$HOME, /Users, ~/Projects, ~/Projects/internal, ~/.claude, ~/.ssh, ~/.aws, or ~/.config is refused. Concrete per-project paths under these are allowed."
   fi
 

@@ -4,7 +4,7 @@
 # =============================================================================
 # The kit is consumed via symlinks: ~/.claude/<dir> -> <repo>/<dir>. Hooks in
 # config/settings.json resolve through $HOME/.claude/scripts/..., so `scripts`
-# is load-bearing — if it is not linked, all 14 hooks silently no-op.
+# is load-bearing — if it is not linked, every hook silently no-ops.
 #
 # Modes:
 #   --check    verify every expected link; exit 1 if any are missing/broken

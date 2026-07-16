@@ -227,6 +227,10 @@ fallback_llm_analysis() {
 # Main
 main() {
   if ! check_semgrep; then
+    if [[ "$CI_MODE" == "true" ]]; then
+      echo -e "${RED}Error: Semgrep is required in CI and was not found.${NC}"
+      return 1
+    fi
     fallback_llm_analysis
     return $?
   fi

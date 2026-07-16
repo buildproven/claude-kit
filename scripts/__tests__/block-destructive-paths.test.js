@@ -16,6 +16,14 @@ function runHook(command) {
   };
 }
 
+function runPayload(payload) {
+  const result = spawnSync("bash", [HOOK], {
+    input: payload,
+    encoding: "utf8",
+  });
+  return { status: result.status, stderr: result.stderr || "" };
+}
+
 describe("block-destructive-paths hook", () => {
   describe("Rule 4: redirect truncate vs append", () => {
     // The core behavior this PR introduces: truncating redirects (`>`) to
@@ -280,8 +288,42 @@ describe("block-destructive-paths hook", () => {
     });
 
     it("blocks rm -rf ~/Projects/internal", () => {
-      const { status } = runHook("rm -rf /Users/brett/Projects/internal");
+      const { status } = runHook("rm -rf ~/Projects/internal");
       expect(status).toBe(2);
+    });
+
+    it("blocks rm -rf on a Linux home directory", () => {
+      const { status } = runHook("rm -rf /home/alice");
+      expect(status).toBe(2);
+    });
+
+    it("blocks deleting the contents of the filesystem root", () => {
+      const { status } = runHook("rm -rf /*");
+      expect(status).toBe(2);
+    });
+
+    it("blocks deleting every child of a protected Projects root", () => {
+      const { status } = runHook("rm -rf ~/Projects/*");
+      expect(status).toBe(2);
+    });
+
+    it("blocks uppercase recursive flags", () => {
+      const { status } = runHook('rm -Rf "$HOME"');
+      expect(status).toBe(2);
+    });
+
+    it.each(["/bin/rm", "command rm", "env rm", "sudo rm"])(
+      "blocks a protected target through %s",
+      (invocation) => {
+        const { status } = runHook(`${invocation} -rf "$HOME"`);
+        expect(status).toBe(2);
+      },
+    );
+
+    it("fails closed on malformed hook JSON", () => {
+      const { status, stderr } = runPayload('{"tool_input":{"command":"rm');
+      expect(status).toBe(2);
+      expect(stderr).toMatch(/invalid JSON/);
     });
 
     it("blocks trap with embedded rm -rf", () => {

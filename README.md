@@ -10,7 +10,7 @@ file taints a mixed changeset.
 That is not a prompt saying "please be thorough". It is
 [`risk-score.js`](scripts/risk-score.js) (537 lines), a
 [run governor](scripts/quality-run-governor.js) that caps runaway review loops and
-fails _closed_, and a target resolver — **402 tests with over 85% line and 75%
+fails _closed_, and a target resolver — **411 tests with over 85% line and 75%
 branch coverage**.
 
 Plus autonomous backlog execution, multi-LLM strategy panels, fleet auditing, and 14

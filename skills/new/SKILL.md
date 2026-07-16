@@ -34,7 +34,7 @@ my-project/
 ├── .gitignore               # Sensible defaults
 ├── .claudeignore            # Context optimization for Claude Code
 ├── .gitleaks.toml           # Secret scanning config (qa-architect Pro)
-├── .nvmrc                   # Node version (20.11.1)
+├── .nvmrc                   # Node version (22.12.0)
 ├── eslint.config.cjs        # ESLint config (qa-architect)
 ├── CLAUDE.md                # Minimal project guide
 ├── BACKLOG.md               # Value-scored backlog
