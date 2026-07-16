@@ -22,9 +22,10 @@ records its exact `from..to` range and diff hash, allowing fix rounds to review
 only `previousReviewedHead..currentHead` while final evidence remains bound to
 the complete base/final-HEAD relationship.
 
-Break-glass approval is persisted with repository key, PR, HEAD, actor, source,
-and timestamp. It is available to every subprocess and becomes invalid when
-HEAD changes.
+Break-glass approval is a signed outer-wrapper capability bound to repository
+key, PR, HEAD, invocation ID, approver, issue time, and expiry. The manifest
+stores and re-verifies the exact artifact; nested autonomous quality processes
+have no approval-mint command. HEAD changes and expiry fail closed.
 
 **Bug fixed 2026-05-11**: when invoked as `/bs:quality --merge` with PR
 context in the natural-language args (e.g. `#410`, `codex/foo`, or a

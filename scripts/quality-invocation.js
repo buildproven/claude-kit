@@ -83,6 +83,11 @@ function normalizeManifestCollections(manifest) {
   manifest.merge.invalidatedStamps ??= [];
   manifest.governor ??= {};
   manifest.governor.authorizedAttempts ??= [];
+  manifest.requiredGates ??= [
+    { name: "lint", source: "baseline-policy", allowSkip: false },
+    { name: "test", source: "baseline-policy", allowSkip: false },
+    { name: "security", source: "baseline-policy", allowSkip: false },
+  ];
 }
 
 function loadManifest(file) {
@@ -193,25 +198,58 @@ function firstValue(...values) {
   return values.find((value) => value !== undefined && value !== "");
 }
 
-function buildApproval(options, identity) {
-  const approved =
-    options["break-glass-approved"] === true ||
-    process.env.BREAK_GLASS_APPROVED === "true";
-  if (!approved) return { approved: false };
-  return {
-    approved: true,
-    repoKey: identity.repoKey,
-    pr: identity.pr,
-    head: identity.head,
-    actor: firstValue(
-      options["approval-actor"],
-      process.env.BREAK_GLASS_APPROVER,
-      process.env.USER,
-      "unknown",
-    ),
-    source: firstValue(options["approval-source"], "outer-invocation"),
-    at: identity.now,
-  };
+function discoverRequiredGates(root, options) {
+  const packageFile = path.join(root, "package.json");
+  let scripts = {};
+  if (fs.existsSync(packageFile)) {
+    const packageJson = parseJson(
+      fs.readFileSync(packageFile, "utf8"),
+      "package.json",
+    );
+    scripts = packageJson.scripts || {};
+  }
+  const required = [
+    { name: "lint", source: "baseline-policy", allowSkip: false },
+    {
+      name: "test",
+      source: "baseline-policy",
+      allowSkip: options["skip-tests"] === true,
+    },
+    { name: "security", source: "baseline-policy", allowSkip: false },
+  ];
+  if (typeof scripts.build === "string") {
+    required.push({
+      name: "build",
+      source: "package-script:build",
+      allowSkip: false,
+    });
+  }
+  const typeScript = ["type-check:all", "type-check", "typecheck"].find(
+    (name) => typeof scripts[name] === "string",
+  );
+  if (typeScript) {
+    required.push({
+      name: "type",
+      source: `package-script:${typeScript}`,
+      allowSkip: false,
+    });
+  }
+  const consumerScript = Object.keys(scripts).find((name) =>
+    /^test:consumer(?:$|[-:])/.test(name),
+  );
+  const consumerFixture = fs.existsSync(
+    path.join(root, "tests", "consumer-workflow-integration.test.js"),
+  );
+  if (consumerScript || consumerFixture) {
+    required.push({
+      name: "consumer",
+      source: consumerScript
+        ? `package-script:${consumerScript}`
+        : "fixture:tests/consumer-workflow-integration.test.js",
+      allowSkip: false,
+    });
+  }
+  return required;
 }
 
 function buildProvider(options) {
@@ -375,7 +413,9 @@ function createManifest(options) {
       initialHead: head,
       currentHead: head,
     },
-    approval: buildApproval(options, { repoKey: key, pr, head, now }),
+    approval: { approved: false },
+    approvalChallengeSha256:
+      process.env.BS_QUALITY_APPROVAL_CHALLENGE_SHA256 || null,
     risk: {
       requestedLevel: firstValue(options.level, "auto"),
       resolved: false,
@@ -384,6 +424,7 @@ function createManifest(options) {
     provider: buildProvider(options),
     reviews: [],
     governor: buildGovernor(head),
+    requiredGates: discoverRequiredGates(root, options),
     gates: [],
   };
   atomicWrite(manifestPath, manifest);
@@ -517,31 +558,134 @@ function setAgents(manifest, names) {
   manifest.agents = names;
 }
 
-function approvalValid(manifest) {
-  const approval = manifest.approval;
+function approvalRecordValid(manifest, approval) {
+  const expected = {
+    repoKey: manifest.repo.key,
+    pr: manifest.repo.pr,
+    head: manifest.revisions.currentHead,
+    invocationId: manifest.invocationId,
+  };
+  const identityMatches = Object.entries(expected).every(
+    ([key, value]) => approval?.[key] === value,
+  );
   return Boolean(
     approval?.approved === true &&
-    approval.repoKey === manifest.repo.key &&
-    approval.pr === manifest.repo.pr &&
-    approval.head === manifest.revisions.currentHead,
+    identityMatches &&
+    typeof approval.approver === "string" &&
+    approval.approver.trim() !== "" &&
+    Date.parse(approval.expiresAt) > Date.now() &&
+    approval.artifactPath &&
+    fs.existsSync(approval.artifactPath) &&
+    sha256File(approval.artifactPath) === approval.artifactSha256,
   );
 }
 
-function renewApproval(manifest, options) {
-  const now = new Date().toISOString();
-  manifest.approval = buildApproval(
-    {
-      "break-glass-approved": true,
-      "approval-actor": options["approval-actor"],
-      "approval-source": options["approval-source"] || "resumed-invocation",
-    },
-    {
-      repoKey: manifest.repo.key,
-      pr: manifest.repo.pr,
-      head: manifest.revisions.currentHead,
-      now,
-    },
+function capabilitySignatureValid(artifact) {
+  return crypto.verify(
+    null,
+    Buffer.from(JSON.stringify(canonicalJson(artifact.payload))),
+    artifact.publicKey,
+    Buffer.from(artifact.signature || "", "base64"),
   );
+}
+
+function approvalValid(manifest) {
+  const approval = manifest.approval;
+  if (!approvalRecordValid(manifest, approval)) return false;
+  try {
+    const artifact = parseJson(
+      fs.readFileSync(approval.artifactPath, "utf8"),
+      "approval capability",
+    );
+    const payload = artifact.payload;
+    const identityMatches =
+      payload?.repoKey === manifest.repo.key &&
+      payload?.pr === manifest.repo.pr &&
+      payload?.head === manifest.revisions.currentHead &&
+      payload?.invocationId === manifest.invocationId &&
+      payload?.approver === approval.approver &&
+      payload?.expiresAt === approval.expiresAt;
+    return identityMatches && capabilitySignatureValid(artifact);
+  } catch {
+    return false;
+  }
+}
+
+function validateApprovalPayload(payload) {
+  const issuedAt = Date.parse(payload?.issuedAt);
+  const expiresAt = Date.parse(payload?.expiresAt);
+  const validApprover =
+    typeof payload?.approver === "string" && payload.approver.trim() !== "";
+  const validTimes =
+    Number.isFinite(issuedAt) &&
+    Number.isFinite(expiresAt) &&
+    issuedAt <= Date.now() + 300_000 &&
+    expiresAt > Date.now() &&
+    expiresAt - issuedAt <= 86_400_000;
+  if (!validApprover || !validTimes) {
+    throw new Error("approval capability approver/expiry is invalid");
+  }
+}
+
+function attachApproval(manifest, options) {
+  if (!options.artifact) {
+    throw new Error("approval attachment requires --artifact");
+  }
+  const artifactPath = path.resolve(options.artifact);
+  const stat = fs.lstatSync(artifactPath);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error("approval capability must be a regular file");
+  }
+  const artifact = parseJson(
+    fs.readFileSync(artifactPath, "utf8"),
+    "approval capability",
+  );
+  const payload = artifact.payload;
+  const requiredIdentity = {
+    repoKey: manifest.repo.key,
+    pr: manifest.repo.pr,
+    head: manifest.revisions.currentHead,
+    invocationId: manifest.invocationId,
+  };
+  if (
+    !manifest.approvalChallengeSha256 ||
+    typeof payload?.challenge !== "string" ||
+    crypto.createHash("sha256").update(payload.challenge).digest("hex") !==
+      manifest.approvalChallengeSha256
+  ) {
+    throw new Error("approval capability outer-wrapper challenge mismatch");
+  }
+  for (const [key, value] of Object.entries(requiredIdentity)) {
+    if (payload?.[key] !== value) {
+      throw new Error(`approval capability ${key} identity mismatch`);
+    }
+  }
+  validateApprovalPayload(payload);
+  if (!capabilitySignatureValid(artifact)) {
+    throw new Error("approval capability signature is invalid");
+  }
+  manifest.approval = {
+    approved: true,
+    ...requiredIdentity,
+    approver: payload.approver,
+    issuedAt: payload.issuedAt,
+    expiresAt: payload.expiresAt,
+    source: "outer-wrapper-capability",
+    artifactPath,
+    artifactSha256: sha256File(artifactPath),
+  };
+  manifest.approvalChallengeSha256 = null;
+}
+
+function armApprovalChallenge(manifest, options) {
+  const challenge = options.challenge;
+  if (!/^[0-9a-f]{64}$/.test(challenge || "")) {
+    throw new Error("approval challenge must be a SHA-256 digest");
+  }
+  if (approvalValid(manifest)) {
+    throw new Error("cannot replace a currently valid approval capability");
+  }
+  manifest.approvalChallengeSha256 = challenge;
 }
 
 function reviewInfo(manifest) {
@@ -1058,7 +1202,10 @@ function recordGate(manifest, options) {
   }
   if (
     status === "skipped" &&
-    (name !== "test" || manifest.options.skipTests !== true || !reason)
+    (name !== "test" ||
+      manifest.requiredGates.find((required) => required.name === "test")
+        ?.allowSkip !== true ||
+      !reason)
   ) {
     throw new Error(
       "test gate skipping requires --skip-tests and an explicit skip reason",
@@ -1090,7 +1237,8 @@ function validTestGate(manifest, gate) {
   if (!validGateArtifact(gate)) return false;
   if (gate.status === "success") return true;
   return Boolean(
-    manifest.options.skipTests === true &&
+    manifest.requiredGates.find((required) => required.name === "test")
+      ?.allowSkip === true &&
     gate.status === "skipped" &&
     typeof gate.reason === "string" &&
     gate.reason.trim() !== "",
@@ -1101,15 +1249,17 @@ function verifyGateEvidence(manifest) {
   const current = manifest.gates.filter(
     (gate) => gate.head === manifest.revisions.currentHead,
   );
-  for (const required of ["lint", "security"]) {
-    const gate = current.find((item) => item.name === required);
-    if (gate?.status !== "success" || !validGateArtifact(gate)) {
-      throw new Error(`required ${required} gate evidence is missing or stale`);
+  for (const required of manifest.requiredGates) {
+    const gate = current.find((item) => item.name === required.name);
+    const valid =
+      required.name === "test"
+        ? validTestGate(manifest, gate)
+        : gate?.status === "success" && validGateArtifact(gate);
+    if (!valid) {
+      throw new Error(
+        `required ${required.name} gate evidence is missing or stale`,
+      );
     }
-  }
-  const testGate = current.find((item) => item.name === "test");
-  if (!validTestGate(manifest, testGate)) {
-    throw new Error("required test gate evidence is missing or stale");
   }
 }
 
@@ -1236,13 +1386,10 @@ const COMMANDS = {
   "approval-valid": ({ manifest }) => {
     process.exitCode = approvalValid(manifest) ? 0 : 1;
   },
-  approve: ({ manifestArg, rawArgs }) => {
-    const options = parseOptions(rawArgs);
-    withManifestLock(manifestArg, (locked) => {
-      validateIdentity(locked, locked.repo.realpath);
-      renewApproval(locked, options);
-    });
-  },
+  "approval-attach": ({ manifestArg, rawArgs }) =>
+    mutate(manifestArg, (locked) =>
+      attachApproval(locked, parseOptions(rawArgs)),
+    ),
   "review-info": ({ manifest }) =>
     process.stdout.write(`${JSON.stringify(reviewInfo(manifest))}\n`),
   "review-identity": ({ manifest }) =>
@@ -1285,6 +1432,8 @@ function runAdvance(manifestArg, manifest) {
     validateIdentity(locked, manifest.repo.realpath, { requireHead: false });
     advanceHead(locked, manifest.repo.realpath);
     validateIdentity(locked, manifest.repo.realpath);
+    const challenge = process.env.BS_QUALITY_APPROVAL_CHALLENGE_SHA256;
+    if (challenge) armApprovalChallenge(locked, { challenge });
   });
   process.stdout.write(`${updated.revisions.currentHead}\n`);
 }
@@ -1324,6 +1473,8 @@ module.exports = {
   SCHEMA_VERSION,
   advanceHead,
   approvalValid,
+  armApprovalChallenge,
+  attachApproval,
   atomicWrite,
   canonicalRoot,
   createManifest,
@@ -1335,7 +1486,6 @@ module.exports = {
   recordGate,
   recordStamp,
   judgeContext,
-  renewApproval,
   repoKey,
   reviewInfo,
   reviewIdentity,

@@ -105,11 +105,6 @@ if [ -n "$MANIFEST_ARG" ]; then
   RESUME_ROOT="$(node -e 'const q=require(process.argv[1]); process.stdout.write(q.loadManifest(process.argv[2]).manifest.repo.realpath)' \
     "$SCRIPT_DIR/quality-invocation.js" "$MANIFEST_ARG")" || exit 1
   cd "$RESUME_ROOT" || exit 1
-  if [ "${BREAK_GLASS_APPROVED:-}" = true ]; then
-    node "$SCRIPT_DIR/quality-invocation.js" approve "$MANIFEST_ARG" \
-      --approval-actor "${BREAK_GLASS_APPROVER:-${USER:-unknown}}" \
-      --approval-source resumed-outer-invocation || exit 1
-  fi
   INVOCATION_ID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" invocationId)"
   HEAD_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" revisions.currentHead)"
   echo "BS_QUALITY_MANIFEST=$MANIFEST_ARG"

@@ -398,10 +398,37 @@ wait
 
   it("persists break-glass approval from the outer invocation and scopes it to HEAD", () => {
     const root = repo("approval");
-    const manifest = create(root, ["--pr", "1", "--level", "98"], {
+    const directManifest = create(root, ["--level", "98"], {
       BREAK_GLASS_APPROVED: "true",
-      BREAK_GLASS_APPROVER: "brett",
     });
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", directManifest], {
+        cwd: root,
+      }).status,
+    ).not.toBe(0);
+    expect(
+      spawnSync("node", [INVOCATION, "approve", directManifest], {
+        cwd: root,
+      }).status,
+    ).not.toBe(0);
+
+    const wrapped = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+      cwd: root,
+      input: JSON.stringify({
+        argv: ["--target-dir", root, "--level", "98"],
+      }),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BREAK_GLASS_APPROVED: "true",
+        BREAK_GLASS_APPROVER: "brett",
+      },
+    });
+    expect(wrapped.status, wrapped.stderr).toBe(0);
+    const manifest = wrapped.stdout
+      .split("\n")
+      .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
+      ?.slice("BS_QUALITY_MANIFEST=".length);
     execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
     expect(
       spawnSync("node", [INVOCATION, "approval-valid", manifest], {
@@ -419,23 +446,29 @@ wait
       spawnSync("bash", [SELECT, "--manifest", manifest], { cwd: root }).status,
     ).not.toBe(0);
 
-    execFileSync(
-      "node",
-      [
-        INVOCATION,
-        "approve",
-        manifest,
-        "--approval-actor",
-        "brett",
-        "--approval-source",
-        "resumed-outer-invocation",
-      ],
-      { cwd: root },
-    );
+    const resumed = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+      cwd: root,
+      input: JSON.stringify({ argv: ["--manifest", manifest] }),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BREAK_GLASS_APPROVED: "true",
+        BREAK_GLASS_APPROVER: "brett",
+      },
+    });
+    expect(resumed.status, resumed.stderr).toBe(0);
     expect(
       spawnSync("bash", [SELECT, "--manifest", manifest], { cwd: root }).status,
     ).toBe(0);
-  }, 15_000);
+    const renewed = JSON.parse(readFileSync(manifest, "utf8")).approval;
+    expect(renewed).toMatchObject({
+      approved: true,
+      invocationId: JSON.parse(readFileSync(manifest, "utf8")).invocationId,
+      approver: "brett",
+      head: git(root, ["rev-parse", "HEAD"]),
+    });
+    expect(Date.parse(renewed.expiresAt)).toBeGreaterThan(Date.now());
+  }, 120_000);
 
   it("excludes provider time from the remediation budget", () => {
     const root = repo("provider-budget");
@@ -1368,5 +1401,71 @@ exit 1
         { cwd: root },
       ),
     ).not.toThrow();
+  });
+
+  it("persists applicable required gates and requires current-head evidence", () => {
+    const root = repo("required-gates");
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: {
+          lint: "eslint .",
+          test: "node --test",
+          build: "node build.js",
+          "type-check:all": "tsc --noEmit",
+          "test:consumer-workflow": "node consumer.js",
+          "security:audit": "npm audit",
+        },
+      }),
+    );
+    git(root, ["add", "package.json"]);
+    git(root, ["commit", "-q", "-m", "add applicable gates"]);
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.map((gate) => gate.name)).toEqual([
+      "lint",
+      "test",
+      "security",
+      "build",
+      "type",
+      "consumer",
+    ]);
+
+    prepareCodexReview(root, manifest);
+    expect(
+      spawnSync("node", [INVOCATION, "review-authorization", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }).stderr,
+    ).toMatch(/required build gate evidence is missing or stale/);
+
+    for (const name of ["build", "type", "consumer"]) {
+      const log = path.join(path.dirname(manifest), `${name}.gate.log`);
+      writeFileSync(log, `${name} passed\n`);
+      execFileSync(
+        "node",
+        [
+          INVOCATION,
+          "gate",
+          manifest,
+          "--name",
+          name,
+          "--command",
+          `test-${name}`,
+          "--log",
+          log,
+        ],
+        { cwd: root },
+      );
+    }
+    recordJudgeArtifact(root, manifest);
+    expect(() =>
+      execFileSync("node", [INVOCATION, "review-authorization", manifest], {
+        cwd: root,
+      }),
+    ).not.toThrow();
+    expect(JSON.parse(readFileSync(manifest, "utf8")).requiredGates).toEqual(
+      required,
+    );
   });
 });
