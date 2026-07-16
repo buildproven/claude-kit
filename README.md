@@ -24,7 +24,7 @@ one substantially modified skill retains its upstream Apache-2.0 license.
 | Dir         | Contents                                                           |
 | ----------- | ------------------------------------------------------------------ |
 | `commands/` | 17 curated `/bs:*`, `/gh:*`, and `/cc:*` entry points              |
-| `skills/`   | 33 skills — quality, autonomous workflow, strategy, domain         |
+| `skills/`   | 35 skills — quality, autonomous workflow, strategy, design, domain |
 | `agents/`   | 14 specialist agents                                               |
 | `scripts/`  | Hooks, lint, quality governor, provider-neutral review companions  |
 | `config/`   | Instructions, provider policy, Codex skills, fleet and MCP schemas |
@@ -196,11 +196,12 @@ Codex from a curated allowlist. Internal implementation skills use
 `user-invocable: false` so the user-facing surface stays small.
 
 **Engineering** — `quality` (tier-aware provider review + quota fallback),
-`test-strategy`, `error-handling`, `api-conventions`, `recover`, `cleanup`,
-`scrub`, `deps`, `status`, `workflow`, `healthcheck`
+`diagnosing-bugs`, `codebase-design`, `test-strategy`, `error-handling`,
+`api-conventions`, `recover`, `cleanup`, `scrub`, `deps`, `status`, `workflow`,
+`healthcheck`
 
-**Build quality** — `frontend-design` (Apache 2.0), `ui-reviewer`,
-`visualise`
+**Build quality** — `frontend-design` (Apache 2.0 + attributed MIT-derived
+guidance), `ui-reviewer`, `visualise`
 
 **Autonomous & strategy** — `ralph`, `strategy`, `review`, `prd`, `backlog`,
 `sota`, `steward`, `triage`, `patterns`, `recover-quality`, `verify-claim`
@@ -260,4 +261,5 @@ guidance and original datasets; its attribution and modification notice are in
 ## License
 
 MIT, except `skills/frontend-design/SKILL.md`, which is a substantially modified
-Apache-2.0 work. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Apache-2.0 work with additional MIT-licensed adaptations. See
+[LICENSE](LICENSE), [NOTICE](NOTICE), and the license files in that skill.

@@ -1,29 +1,59 @@
 ---
 name: frontend-design
 context: fork
-description: Create distinctive, production-grade frontend interfaces with high design quality. Use this skill when the user asks to build web components, pages, or applications. Generates creative, polished code that avoids generic AI aesthetics.
+description: Create distinctive production-grade product UI, marketing pages, and redesigns. Use when building or styling frontend components, pages, or applications; routes by interface type and iterates rendered output to avoid generic AI aesthetics.
 license: Complete terms in LICENSE.txt
 ---
 
 > Derived from Anthropic's Apache-2.0 `frontend-design` skill and substantially
 > modified by buildproven. Changes include expanded production guidance, the
-> AI-ism denylist, mandatory self-review, and original design-reference datasets.
-> See `LICENSE.txt` and the repository `NOTICE` for provenance and license scope.
+> AI-ism denylist, product/marketing routing, intent and preflight checks,
+> redesign auditing, and original design-reference datasets. See the license
+> files in this directory and the repository `NOTICE` for provenance.
 
 This skill guides creation of distinctive, production-grade frontend interfaces that avoid generic "AI slop" aesthetics. Implement real working code with exceptional attention to aesthetic details and creative choices.
 
 The user provides frontend requirements: a component, page, application, or interface to build. They may include context about the purpose, audience, or technical constraints.
 
+## Route before designing
+
+Classify the work first:
+
+- **Product UI** — dashboards, admin, settings, internal tools, SaaS
+  applications, tables/forms/lists, or anything people repeatedly work in.
+  Read `references/product-ui.md`.
+- **Marketing UI** — landing pages, portfolios, launches, editorial pages, or
+  anything whose first impression carries the job. Read
+  `references/marketing-ui.md`.
+- **Redesign** — an existing interface must improve without losing working
+  behavior or brand equity. Read `references/redesign.md` plus the relevant
+  product/marketing guide.
+
+Do not apply marketing-page spectacle to a daily-use product interface.
+
 ## Design Thinking
 
-Before coding, understand the context and commit to a BOLD aesthetic direction:
+Before coding, produce a compact design read:
 
-- **Purpose**: What problem does this interface solve? Who uses it?
-- **Tone**: Pick an extreme: brutally minimal, maximalist chaos, retro-futuristic, organic/natural, luxury/refined, playful/toy-like, editorial/magazine, brutalist/raw, art deco/geometric, soft/pastel, industrial/utilitarian, etc. There are so many flavors to choose from. Use these for inspiration but design one that is true to the aesthetic direction.
-- **Constraints**: Technical requirements (framework, performance, accessibility).
-- **Differentiation**: What makes this UNFORGETTABLE? What's the one thing someone will remember?
+- **Human and job**: Who is using it, what are they trying to accomplish, and
+  what happened immediately before/after?
+- **Domain**: At least five concepts, materials, objects, or metaphors from the
+  product's actual world.
+- **Color world**: At least five colors that naturally exist in that domain.
+- **Signature**: One visual, structural, or interaction idea that could only
+  belong to this product.
+- **Defaults rejected**: Name three likely AI/template defaults and the
+  intentional replacement for each.
+- **Dials**: Set `VARIANCE`, `MOTION`, and `DENSITY` from 1–10 to keep the
+  direction coherent.
 
-**CRITICAL**: Choose a clear conceptual direction and execute it with precision. Bold maximalism and refined minimalism both work - the key is intentionality, not intensity.
+If the direction is not already locked, outline three genuinely different
+directions and recommend one. If the user asked for immediate execution, choose
+the strongest direction and proceed rather than blocking on approval.
+
+These intent, signature, and preflight concepts are adapted from Josh Thomas's
+MIT-licensed `frontend-design-principles`; the redesign/dial concepts are
+adapted from Leonxlnx's MIT-licensed Taste Skill. See `NOTICE`.
 
 Then implement working code (HTML/CSS/JS, React, Vue, etc.) that is:
 
@@ -66,7 +96,19 @@ Also avoid: stock-style abstract 3D blobs or floating UI screenshots as the only
 
 ### Mandatory self-review before delivering
 
-Before showing the user anything, scan your own output against the denylist. For each item you find, replace it with an intentional alternative — then close with a short note listing which AI-isms you steered away from and what you did instead. Quick gate:
+Before showing the user anything, render the real UI and scan it against the
+denylist. For each item you find, replace it with an intentional alternative.
+Then run:
+
+- **Swap test** — if the typeface or layout were replaced by the usual default,
+  would the design materially change?
+- **Squint test** — does hierarchy remain legible when details blur?
+- **Signature test** — can you point to the exact component(s) carrying the
+  product-specific signature?
+- **Token test** — do the design-token names and values belong to this product,
+  or could they be pasted into anything?
+
+Quick AI-ism gate:
 
 - Primary color violet/indigo, or a purple-to-blue gradient? → palette tied to the brand or content instead.
 - Gradient text on any headline? → make it solid; let type and scale carry the impact.
@@ -76,6 +118,20 @@ Before showing the user anything, scan your own output against the denylist. For
 - Every block wrapped in a rounded, shadowed card? → strip the containers that aren't earning their place.
 - Feature section as three identical icon-title-text columns? → break the pattern.
 - Type relying on a single default font at default weights? → introduce a real type system.
+
+### Render → review → revise
+
+When browser or screenshot tooling is available:
+
+1. Capture the implemented UI at 320, 768, 1024, and 1440px.
+2. Invoke `ui-reviewer` in strict mode against the captures.
+3. Fix every blocking issue and highest-impact genericity finding.
+4. Re-render and re-review until the score is at least 99/100, or report the
+   concrete blocker that prevents it.
+
+The score is a forcing function, not a claim that taste is objectively
+measurable. A 99 requires zero blocking accessibility/functionality issues and
+clear evidence of product-specific design.
 
 Interpret creatively and make unexpected choices that feel genuinely designed for the context. No design should be the same. Vary between light and dark themes, different fonts, different aesthetics. NEVER converge on common choices (Space Grotesk, for example) across generations.
 

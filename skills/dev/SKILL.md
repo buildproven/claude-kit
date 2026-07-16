@@ -261,6 +261,10 @@ Please describe:
 - Any error messages
 ```
 
+Then invoke the `diagnosing-bugs` skill. Do not propose or implement a fix
+until there is one red-capable command that reproduces the user's exact
+symptom, unless the skill's documented blocked path applies.
+
 **For refactoring:**
 
 ```markdown
@@ -272,6 +276,10 @@ Please describe:
 - Target improvements
 - Must preserve behavior?
 ```
+
+Then load the `codebase-design` skill and name the interface/seam being
+improved. Refactors must deepen a real module or remove accidental complexity;
+do not introduce pass-through abstractions.
 
 **For experiments:**
 
@@ -368,7 +376,11 @@ Proceed with parallel execution? [y/n]
 
 ### Step 5.5: TDD — Write Failing Tests First (--tdd flag only)
 
-Write failing tests from spec/acceptance criteria before any implementation. Verify RED state (must fail for right reason — not import errors). Implement until GREEN.
+Name the public interface and test seam first. Write one behavioral test from
+the spec/acceptance criteria, verify RED for the intended reason (not an import
+or setup error), implement the smallest vertical slice until GREEN, then
+repeat. Expected values must come from the spec, a worked example, or another
+independent oracle—not from recomputing the implementation.
 
 ### Step 6: Explore Before Implementing (Medium/Complex)
 
@@ -386,7 +398,12 @@ Use TodoWrite to track tasks. Read files before editing. Follow project conventi
 
 ### Step 7.5: Auto-Generate Tests (--with-tests flag only)
 
-Default: tests generated during `/bs:quality`. With `--with-tests`: spawn subagent to generate tests for changed code files lacking `.test.*`/`.spec.*`. Skip config files, `.d.ts`, files that already have tests. Run tests to verify they pass.
+Default: test quality is reviewed during `/bs:quality`. With `--with-tests`,
+spawn a subagent to identify changed behavior and the highest existing public
+seam that observes it. Add or update the smallest behavioral tests at that
+seam. Do not create one test file per changed source file or test private
+implementation details merely to satisfy a file-count heuristic. Run the
+focused tests, then the full suite.
 
 ### Step 8: Completion Signal
 
