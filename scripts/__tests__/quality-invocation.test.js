@@ -1068,6 +1068,7 @@ wait
       ),
     );
     expect(plan.manager).toBe("bun");
+    expect(plan.args.slice(0, 2)).toEqual(["x", "prettier"]);
   });
 
   it("does not let verification extend an expired campaign clock", () => {
@@ -1984,6 +1985,24 @@ exit 1
     );
     expect(context.findings).toHaveLength(1);
     expect(context.findings[0].severity).toBe("blocking");
+  });
+
+  it("accepts the runner's complete single-line clean Codex result", () => {
+    const root = repo("generated-clean-sentinel");
+    const manifest = create(root);
+    prepareCodexReview(
+      root,
+      manifest,
+      [],
+      "NO FINDINGS. Verdict: approve. Static review is clean.\n",
+    );
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toEqual([]);
   });
 
   it("exposes persisted judge dispositions to targeted verification", () => {

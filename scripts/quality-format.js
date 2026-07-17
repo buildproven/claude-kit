@@ -75,7 +75,16 @@ function resolveFormatPlan(root, files) {
           "--",
           ...selected,
         ]
-      : ["exec", "prettier", "--write", "--ignore-unknown", "--", ...selected];
+      : manager === "bun"
+        ? ["x", "prettier", "--write", "--ignore-unknown", "--", ...selected]
+        : [
+            "exec",
+            "prettier",
+            "--write",
+            "--ignore-unknown",
+            "--",
+            ...selected,
+          ];
   return { manager, args, files: selected };
 }
 

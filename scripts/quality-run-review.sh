@@ -224,6 +224,11 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 2 ]; } && [ "$QUALITY_FAL
   # Preserve failed-primary diagnostics. Findings from an earlier successful
   # primary pass remain authoritative if a later pass triggers fallback.
   mkdir -p "$REVIEW_OUT/failed-primary"
+  for evidence in "$REVIEW_OUT"/*.findings.txt; do
+    [ -e "$evidence" ] || continue
+    grep -q '^INCONCLUSIVE:' "$evidence" &&
+      mv "$evidence" "$REVIEW_OUT/failed-primary/"
+  done
   for evidence in \
     "$REVIEW_OUT"/*.stderr \
     "$REVIEW_OUT"/codex.findings.txt \

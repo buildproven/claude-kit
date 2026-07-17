@@ -1336,7 +1336,13 @@ function providerFindings(manifest) {
       const text = fs
         .readFileSync(path.join(review.artifactDir, item.name), "utf8")
         .trim();
-      if (!text || text === "NO FINDINGS.") continue;
+      const cleanLines = text.split(/\r?\n/);
+      const isClean = cleanLines.every(
+        (line) =>
+          line === "NO FINDINGS." ||
+          /^NO FINDINGS\. Verdict: (?:approve|pass)\. [^\r\n]+$/.test(line),
+      );
+      if (!text || isClean) continue;
       findings.push({
         id: crypto
           .createHash("sha256")
