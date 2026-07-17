@@ -254,6 +254,7 @@ Quality-Base: ${base}`;
     expect(source).toMatch(/"\$REVIEW_OUT"\/codex-\*\.json/);
     expect(source).toMatch(/"\$REVIEW_OUT"\/codex-\*\.progress/);
     expect(source).toMatch(/"\$REVIEW_OUT"\/codex-\*\.prompt/);
+    expect(source).toMatch(/grep -q '\^INCONCLUSIVE:'/);
     expect(source).not.toMatch(
       /PROVIDER_RC.*-eq 76.*QUALITY_FALLBACK|QUALITY_FALLBACK.*PROVIDER_RC.*-eq 76/,
     );
