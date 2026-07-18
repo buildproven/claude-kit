@@ -354,9 +354,18 @@ describe("score — base resolution is deterministic and fails closed", () => {
   it("FAILS CLOSED (score 100) when no durable base resolves — never a low HEAD~1 score", () => {
     // The starknet bug: a fresh worktree without origin/main used to diff only
     // HEAD~1 and score small. Now it must score maximum, not minimum.
-    const r = score({
-      gitRunner: runnerWith({ hasOriginMain: false, hasUpstream: false }),
-    });
+    // Clear GITHUB_BASE_REF: CI sets it, and it would resolve a base and mask
+    // the truly-unresolved path this test exercises.
+    const prev = process.env.GITHUB_BASE_REF;
+    delete process.env.GITHUB_BASE_REF;
+    let r;
+    try {
+      r = score({
+        gitRunner: runnerWith({ hasOriginMain: false, hasUpstream: false }),
+      });
+    } finally {
+      if (prev !== undefined) process.env.GITHUB_BASE_REF = prev;
+    }
     expect(r.riskScore).toBe(100);
     expect(r.baseUnresolved).toBe(true);
     expect(r.reasons.join(" ")).toMatch(/base unresolved/i);
