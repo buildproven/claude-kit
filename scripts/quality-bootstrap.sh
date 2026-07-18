@@ -51,6 +51,24 @@ if [ "${BS_QUALITY_HEADLESS:-}" = "1" ]; then
   exit 1
 fi
 
+# A campaign is already active in this process tree. Legitimate continuations
+# carry --manifest (the resume fast path) and are allowed through; a *fresh*
+# invocation with no manifest means a fix-round agent (or any descendant the
+# skill spawned) is trying to launch a second, nested campaign. Refuse it — one
+# campaign owns the deadline and the merge gate; a nested fresh run would burn
+# tokens under a second clock the governor cannot see. This marker is exported
+# below so every descendant process inherits it, closing the gap that
+# BS_QUALITY_HEADLESS (set only on the two review legs) did not cover.
+if [ "${BS_QUALITY_ACTIVE:-}" = "1" ] && [ -z "$MANIFEST_ARG" ]; then
+  echo "❌ /bs:quality refused: a quality campaign is already active in this" >&2
+  echo "   process tree (BS_QUALITY_ACTIVE=1) and no --manifest was given." >&2
+  echo "   A fix-round or spawned agent must not start a second campaign. To" >&2
+  echo "   continue the existing run, resume it with its --manifest path." >&2
+  exit 1
+fi
+# Mark this process tree as owning an active campaign so descendants inherit it.
+export BS_QUALITY_ACTIVE=1
+
 # Validate the complete invocation before target resolution or any GitHub
 # operation. Every token must belong to the supported grammar; a bare value
 # after a boolean flag (for example `--merge 1`) must never be reinterpreted as
@@ -179,9 +197,30 @@ else
     | awk '/^worktree / {p=$2} /^branch refs\/heads\/main$/ {print p; exit}')
   CWD_INPUT=$(pwd)
 
+  RESOLVER_STDERR=$(mktemp 2>/dev/null || echo "/tmp/quality-resolver-stderr.$$")
   RESOLUTION_JSON=$(QUALITY_CWD="$CWD_INPUT" \
                     QUALITY_PRIMARY_CHECKOUT="$PRIMARY_CHECKOUT" \
-                    node "$RESOLVER" --cli "$@" 2>/dev/null) || RESOLUTION_JSON=""
+                    node "$RESOLVER" --cli "$@" 2>"$RESOLVER_STDERR")
+  RESOLVER_RC=$?
+
+  # Distinguish a resolver *crash* (non-zero exit) from a clean empty/ok:false
+  # result. A crash must never silently degrade to auditing the cwd when the
+  # caller explicitly named a target (PR #NNN, a branch, or --target-dir): that
+  # is how the "audited the wrong repo" class of bug happens. Only fall through
+  # to cwd resolution when the caller passed no target token at all.
+  if [ "$RESOLVER_RC" -ne 0 ]; then
+    if printf '%s\n' "$@" | grep -Eq '(^|[[:space:]])(#[0-9]+|--target-dir|--pr|--branch)([[:space:]]|=|$)'; then
+      echo "❌ /bs:quality target resolver crashed (exit $RESOLVER_RC) while a target was requested."
+      echo "   Refusing to fall back to the current directory — that could audit the wrong repo."
+      [ -s "$RESOLVER_STDERR" ] && { echo "   Resolver error:"; sed 's/^/     /' "$RESOLVER_STDERR"; }
+      rm -f "$RESOLVER_STDERR"
+      exit 1
+    fi
+    # No explicit target requested — surface the error but allow cwd resolution.
+    [ -s "$RESOLVER_STDERR" ] && { echo "[quality] target resolver error (continuing with cwd):"; sed 's/^/  /' "$RESOLVER_STDERR"; }
+    RESOLUTION_JSON=""
+  fi
+  rm -f "$RESOLVER_STDERR"
 
   if [ -n "$RESOLUTION_JSON" ]; then
     RES_OK=$(echo "$RESOLUTION_JSON" | jq -r '.ok // false' 2>/dev/null)
