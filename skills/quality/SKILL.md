@@ -232,10 +232,11 @@ write failure never changes the campaign outcome (it warns and exits 0); a
 missing or unreadable manifest is a hard failure worth surfacing.
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-telemetry.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
+QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-telemetry.js" ] && { cd "$candidate" && pwd -P; break; }; done || true)"
 if [ -n "$QUALITY_SCRIPTS_DIR" ]; then
   node "$QUALITY_SCRIPTS_DIR/quality-telemetry.js" \
-    record "<exact-manifest-path>"
+    record "<exact-manifest-path>" \
+    || echo "[quality] telemetry: manifest unreadable — campaign verdict stands" >&2
 else
   echo "[quality] telemetry: recorder unresolved — skipping (campaign outcome stands)" >&2
 fi
