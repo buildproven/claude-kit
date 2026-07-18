@@ -58,7 +58,15 @@ function readManifest(manifestPath) {
   if (stat.isSymbolicLink()) {
     throw new Error("quality manifest must not be a symlink");
   }
-  const manifest = JSON.parse(fs.readFileSync(resolved, "utf8"));
+  const raw = fs.readFileSync(resolved, "utf8");
+  let manifest;
+  try {
+    manifest = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`quality manifest is not valid JSON: ${error.message}`, {
+      cause: error,
+    });
+  }
   if (manifest.schemaVersion !== 1) {
     throw new Error(
       `unsupported quality manifest schema ${manifest.schemaVersion}`,

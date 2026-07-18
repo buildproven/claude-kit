@@ -209,4 +209,10 @@ describe("recordCampaign (idempotent append)", () => {
   it("returns 1 on an unreadable manifest", () => {
     expect(recordCampaign(path.join(repoDir, "missing.json"))).toBe(1);
   });
+
+  it("returns 1 on a manifest that is not valid JSON", () => {
+    const bad = path.join(repoDir, ".state", "bad.json");
+    fs.writeFileSync(bad, "{ not json");
+    expect(recordCampaign(bad)).toBe(1);
+  });
 });
