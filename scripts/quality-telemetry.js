@@ -18,9 +18,13 @@
  *   1. $BS_QUALITY_TELEMETRY_FILE if set (an overlay can pin a committed path)
  *   2. else <target-repo>/data/quality-telemetry.jsonl
  * The target repo is the manifest's own repo.realpath, so each repo accrues
- * its own history and a fleet aggregator (claude-setup weekly-improve) can read
- * across repos. claude-setup, being a repo quality runs on, gets its committed
- * data/quality-telemetry.jsonl populated naturally with no overlay coupling.
+ * its own history and a fleet aggregator can read across repos.
+ *
+ * The default path (case 2) is intentionally git-ignored in this public repo
+ * (see .gitignore) and stays local-only: a per-campaign log carries branch
+ * names and commit SHAs that must not land in public history. Committed,
+ * fleet-visible history is opt-in via $BS_QUALITY_TELEMETRY_FILE pointing at a
+ * tracked path — the mechanism an overlay uses to aggregate across repos.
  *
  * IDEMPOTENT: keyed on invocationId. A campaign that records twice (a merge
  * path plus a terminal-report path, or a resumed run) appends exactly once.
@@ -135,19 +139,30 @@ function coveredFiles(manifest, execFileSync) {
 /**
  * Derive the campaign verdict from persisted state alone — no model judgment.
  *
- *  - "merged"       : merge requested and the judge cleared it (0 blocking) —
- *                     the actual GitHub merge is async/CI-owned, so this is
- *                     "authorized to merge", the strongest signal we own locally.
+ *  - "authorized"   : merge requested and the judge cleared it (0 blocking).
+ *                     This is "authorized to merge", NOT "merged" — the actual
+ *                     GitHub merge is async/CI-owned and can still abort after
+ *                     the judge clears (red CI, stale trailers, push failure).
+ *                     Deliberately named for what the manifest actually knows,
+ *                     so the escaped-defect / cost-per-bug reports never count
+ *                     an authorized-but-unmerged campaign as a shipped merge.
  *  - "passed"       : review completed, judge recorded, 0 blocking, no merge asked.
  *  - "blocked"      : judge recorded a blocking count > 0.
- *  - "incomplete"   : no judge artifact (campaign stopped before synthesis —
- *                     budget exhaustion, error, or a still-running record call).
+ *  - "incomplete"   : no judge artifact, or a judge bound to a head other than
+ *                     the one being recorded (campaign stopped before synthesis
+ *                     — budget exhaustion, error, a still-running record call,
+ *                     or commits landed after the judge without a re-judge).
+ *                     A stale judge describes a DIFFERENT head than the recorded
+ *                     `head` column, so its blocking count cannot be trusted for
+ *                     the current revision — mirrors the staleness contract in
+ *                     quality-invocation.js review-authorization.
  */
 function deriveVerdict(manifest) {
   const judge = manifest.judge;
   if (!judge || !Number.isFinite(judge.blockingCount)) return "incomplete";
+  if (judge.head !== manifest.revisions?.currentHead) return "incomplete";
   if (judge.blockingCount > 0) return "blocked";
-  return manifest.options?.merge === true ? "merged" : "passed";
+  return manifest.options?.merge === true ? "authorized" : "passed";
 }
 
 /**

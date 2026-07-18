@@ -269,7 +269,7 @@ appends one JSON line per finished campaign, summarizing the invocation manifest
 — no model judgment. Fields: invocation id, repo/PR/branch, base/head SHAs,
 resolved risk tier + score, duration (from `governor.startedAtEpoch`), successful
 review rounds, agents run, judge blocking count, merge-requested flag, a derived
-verdict (`merged` / `passed` / `blocked` / `incomplete`), and the covered file
+verdict (`authorized` / `passed` / `blocked` / `incomplete`), and the covered file
 list (`baseSha..head`). Recording is **idempotent on invocation id** (a run that
 both merges and reports records once) and **fail-soft on write** (a bad log path
 warns but never blocks the campaign's real outcome). A missing/unreadable

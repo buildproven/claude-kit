@@ -32,7 +32,7 @@ function baseManifest(overrides = {}) {
       { status: "failed", round: 1 },
     ],
     governor: { startedAtEpoch: 1000 },
-    judge: { blockingCount: 0 },
+    judge: { blockingCount: 0, head: "bbb" },
     ...overrides,
   };
 }
@@ -72,25 +72,39 @@ describe("successfulReviewCount", () => {
 });
 
 describe("deriveVerdict", () => {
-  it("merged when merge requested and judge clears it", () => {
+  it("authorized (not merged) when merge requested and judge clears it", () => {
     const m = baseManifest({
       options: { merge: true },
-      judge: { blockingCount: 0 },
+      judge: { blockingCount: 0, head: "bbb" },
     });
-    expect(deriveVerdict(m)).toBe("merged");
+    // "authorized" is deliberate: the judge cleared the merge, but the actual
+    // GitHub merge can still abort (red CI, stale trailers). We never claim
+    // "merged" from manifest state the merge step doesn't update.
+    expect(deriveVerdict(m)).toBe("authorized");
   });
   it("passed when clean but no merge asked", () => {
     expect(deriveVerdict(baseManifest())).toBe("passed");
   });
   it("blocked when blocking findings remain", () => {
-    expect(deriveVerdict(baseManifest({ judge: { blockingCount: 3 } }))).toBe(
-      "blocked",
-    );
+    expect(
+      deriveVerdict(baseManifest({ judge: { blockingCount: 3, head: "bbb" } })),
+    ).toBe("blocked");
   });
   it("incomplete when no judge artifact", () => {
     expect(deriveVerdict(baseManifest({ judge: undefined }))).toBe(
       "incomplete",
     );
+  });
+  it("incomplete when the judge is bound to a stale head", () => {
+    // Judge recorded against an old head, then commits landed and moved
+    // currentHead without a re-judge — the last commits went unreviewed, so
+    // the stale blocking count cannot be trusted for the recorded head.
+    const m = baseManifest({
+      options: { merge: true },
+      revisions: { baseSha: "aaa", currentHead: "ccc" },
+      judge: { blockingCount: 0, head: "bbb" },
+    });
+    expect(deriveVerdict(m)).toBe("incomplete");
   });
 });
 
