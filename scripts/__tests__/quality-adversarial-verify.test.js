@@ -207,4 +207,67 @@ describe("adversarial verification", () => {
     ]);
     expect(code).toBe(2);
   });
+
+  // --- Wave 1.4: bound the pass so it can't blow the campaign budget ---------
+
+  const many = (n) =>
+    Array.from({ length: n }, (_, k) => ({ ...FINDING, summary: `f${k}` }));
+
+  it("caps verification at --max-findings; the surplus SURVIVES unverified", () => {
+    const fx = fixture(many(10));
+    const { code, out } = runCapturingStderr([
+      "--findings",
+      fx.findings,
+      "--diff",
+      fx.diff,
+      "--out",
+      fx.out,
+      "--voters",
+      "3",
+      "--max-findings",
+      "4",
+      "--dry-run",
+    ]);
+    expect(code).toBe(0);
+    // Every finding still appears in the verdicts (nothing silently dropped),
+    // and the cap is announced, not hidden.
+    expect(verdicts(fx)).toHaveLength(10);
+    expect(out).toMatch(/exceed the --max-findings cap of 4/);
+    // The 6 uncapped findings survive with no real votes cast.
+    const capped = verdicts(fx).filter(
+      (v) => v.verified.stands === 0 && v.verified.refuted === 0,
+    );
+    expect(capped.length).toBe(6);
+    expect(capped.every((v) => v.verified.survives)).toBe(true);
+  });
+
+  it("stops verifying once the governor deadline is past; remaining findings SURVIVE", () => {
+    const fx = fixture(many(3));
+    const { code } = runCapturingStderr([
+      "--findings",
+      fx.findings,
+      "--diff",
+      fx.diff,
+      "--out",
+      fx.out,
+      "--voters",
+      "3",
+      "--deadline-epoch",
+      "1", // 1970 — already long past
+      "--dry-run",
+    ]);
+    expect(code).toBe(0);
+    const vs = verdicts(fx);
+    expect(vs).toHaveLength(3);
+    // A past deadline means no finding gets verified; all survive, tagged.
+    expect(vs.every((v) => v.verified.survives)).toBe(true);
+    expect(vs.every((v) => v.verified.unverified === "deadline")).toBe(true);
+  });
+
+  it("rejects a non-numeric --max-findings and --deadline-epoch", () => {
+    const fx = fixture([FINDING]);
+    const base = ["--findings", fx.findings, "--diff", fx.diff, "--out", fx.out];
+    expect(run([...base, "--max-findings", "some"]).code).toBe(2);
+    expect(run([...base, "--deadline-epoch", "soon"]).code).toBe(2);
+  });
 });
