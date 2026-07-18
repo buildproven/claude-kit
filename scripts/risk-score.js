@@ -29,6 +29,17 @@
 const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+// Shared, single-sourced change-nature primitives (see risk-change-nature.js).
+// Formerly duplicated here and in scripts/risk-policy-gate.js — extracted to end
+// the drift. This file keeps only its own `fileIsMechanical` (which legitimately
+// differs from the setup gate's dep-bump/generated-path variant) and injects it.
+const {
+  patchIsCommentWhitespaceOnly,
+  patchIsAdditiveOnly,
+  isTestPath,
+  isForcedLogic,
+  classifyChangeNature: classifyChangeNatureShared,
+} = require("./risk-change-nature");
 
 // ---------------------------------------------------------------------------
 // Built-in defaults (overridable via harness-config.json: scorePolicy)
@@ -192,74 +203,16 @@ function resolveBase(gitRunner, baseArg) {
 // Change-nature classification (mechanical vs logic)
 // ---------------------------------------------------------------------------
 
-function isCommentWhitespaceSafeLang(file) {
-  return /\.(js|jsx|ts|tsx|mjs|cjs|css|scss|md)$/.test(file);
-}
+// The 9 shared predicates (isCommentWhitespaceSafeLang, isDirectiveComment,
+// isWholeLineInertComment, patchIsCommentWhitespaceOnly, patchIsAdditiveOnly,
+// isTestPath, isExecutablePromptSurface, isForcedLogic, classifyChangeNature)
+// now live in ./risk-change-nature.js and are imported above. Only the pieces
+// unique to the numeric scorer remain local.
 
-function isDirectiveComment(content) {
-  return /@ts-(nocheck|ignore|expect-error)|eslint-(disable|enable)|istanbul ignore|c8 ignore|prettier-ignore|v8 ignore|@preserve|@license|webpack|sourceMappingURL/.test(
-    content,
-  );
-}
-
-function isWholeLineInertComment(content, file) {
-  if (/\.md$/.test(file)) return /^<!--.*-->$/.test(content);
-  if (/\.css$/.test(file)) return /^\/\*.*\*\/$/.test(content);
-  if (/\.(js|jsx|ts|tsx|mjs|cjs|scss)$/.test(file)) {
-    if (content.startsWith("//")) return true;
-    return /^\/\*.*\*\/$/.test(content);
-  }
-  return false;
-}
-
-function patchIsCommentWhitespaceOnly(file, patch) {
-  if (!isCommentWhitespaceSafeLang(file) || !patch) return false;
-  let sawChange = false;
-  for (const line of patch.split("\n")) {
-    if (/^[+-]{3}\s/.test(line)) continue;
-    if (line[0] !== "+" && line[0] !== "-") continue;
-    const content = line.slice(1).trim();
-    if (content === "") continue;
-    if (!isWholeLineInertComment(content, file)) return false;
-    if (isDirectiveComment(content)) return false;
-    sawChange = true;
-  }
-  return sawChange;
-}
-
-function patchIsAdditiveOnly(patch) {
-  if (!patch) return false;
-  let sawAdd = false;
-  for (const line of patch.split("\n")) {
-    if (/^[+-]{3}\s/.test(line)) continue;
-    if (line[0] === "-") return false;
-    if (line[0] === "+") sawAdd = true;
-  }
-  return sawAdd;
-}
-
-function isTestPath(file) {
-  return (
-    /(^|\/)(__tests__|tests?)\//.test(file) ||
-    /\.(test|spec)\.[jt]sx?$/.test(file)
-  );
-}
-
-function isExecutablePromptSurface(file) {
-  const base = file.split("/").pop();
-  if (base === "CLAUDE.md" || base === "AGENTS.md") return true;
-  return /(^|\/)(commands|skills|agents)\//.test(file);
-}
-
-// A file's change can never be "mechanical" under these conditions.
-function isForcedLogic(file, status, isBinary) {
-  if (["D", "R", "C", "T"].includes(status)) return true;
-  if (isBinary) return true;
-  if (/(^|\/)\.github\/workflows\//.test(file)) return true;
-  if (isExecutablePromptSurface(file)) return true;
-  return false;
-}
-
+// This scorer's mechanical sub-rule set: test additions + inert comment edits,
+// never a floor file. (The setup gate's variant additionally treats dep-version
+// bumps and generated-file refreshes as mechanical — that is why the sub-rule
+// is injected into the shared classifier rather than living in it.)
 function fileIsMechanical(file, status, patch, floorPaths) {
   if (matchesPattern(file, floorPaths)) return false; // floor files are never mechanical
   const testRuleAllowed = isTestPath(file);
@@ -271,17 +224,16 @@ function fileIsMechanical(file, status, patch, floorPaths) {
 }
 
 /**
- * Classify the whole changeset. Mechanical requires EVERY file mechanical and
- * no forced-logic condition. One logic file taints the whole set.
+ * Classify the whole changeset using this scorer's native call convention
+ * (descriptors + a floorPaths array), delegating the drift-prone control flow to
+ * the shared classifier and injecting this file's matcher + fileIsMechanical.
  */
 function classifyChangeNature(descriptors, floorPaths) {
-  if (!Array.isArray(descriptors) || descriptors.length === 0) return "logic";
-  for (const d of descriptors) {
-    if (isForcedLogic(d.file, d.status, d.isBinary)) return "logic";
-    if (!fileIsMechanical(d.file, d.status, d.patch, floorPaths))
-      return "logic";
-  }
-  return "mechanical";
+  return classifyChangeNatureShared(descriptors, {
+    floorPaths,
+    matchesPattern,
+    fileIsMechanical,
+  });
 }
 
 // ---------------------------------------------------------------------------
