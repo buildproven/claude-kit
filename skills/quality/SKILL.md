@@ -222,6 +222,38 @@ After green CI and valid evidence, the merge invocation must execute the merge,
 then perform worktree-aware cleanup. Never use `--no-verify`, weaken critical
 review, or bypass the governor.
 
+## 7. Campaign telemetry (terminal — always run)
+
+Record exactly one telemetry line at the end of the campaign, on **every** exit
+path: after a merge, after a no-merge report, and after a blocked/incomplete
+stop. It summarizes the manifest — no model judgment — and is idempotent on
+invocation id, so a run that both merges and reports records once. A telemetry
+write failure never changes the campaign outcome (it warns and exits 0); a
+missing or unreadable manifest is a hard failure worth surfacing.
+
+```bash
+QUALITY_SCRIPTS_DIR=""
+for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do
+  [ -f "$candidate/quality-telemetry.js" ] || continue
+  QUALITY_SCRIPTS_DIR="$(cd "$candidate" && pwd -P)" || {
+    echo "[quality] telemetry: found recorder at $candidate but cannot resolve it — campaign verdict stands" >&2
+    QUALITY_SCRIPTS_DIR=""
+  }
+  break
+done
+if [ -n "$QUALITY_SCRIPTS_DIR" ]; then
+  node "$QUALITY_SCRIPTS_DIR/quality-telemetry.js" \
+    record "<exact-manifest-path>" \
+    || echo "[quality] telemetry: recorder exited $? (see above) — campaign verdict stands" >&2
+else
+  echo "[quality] telemetry: recorder unresolved — skipping (campaign outcome stands)" >&2
+fi
+```
+
+The line lands in `$BS_QUALITY_TELEMETRY_FILE` when set, else the target repo's
+`data/quality-telemetry.jsonl`. The monthly quality-value report derives
+escaped-defect rate, finding precision, and cost-per-caught-bug from these lines.
+
 ## References
 
 - `reference.md` — flags, target resolution, manifest schema, budgets, history

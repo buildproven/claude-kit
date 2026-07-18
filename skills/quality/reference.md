@@ -213,14 +213,15 @@ auto-fix loop, re-run `npm test` to verify they pass before continuing.
 
 ### Environment Variables
 
-| Variable                              | Default | Description                                                                                        |
-| ------------------------------------- | ------- | -------------------------------------------------------------------------------------------------- |
-| `BS_QUALITY_PRIMARY`                  | config  | Per-run primary override: `claude` or `codex`.                                                     |
-| `BS_QUALITY_FALLBACK`                 | config  | Per-run fallback override: `claude`, `codex`, or `none`.                                           |
-| `BS_QUALITY_TARGET_DIR`               | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd. |
-| `BS_QUALITY_MAX_FIX_COMMITS`          | 1       | Explicit override for the default one-commit batched-remediation cap.                              |
-| `BS_QUALITY_MAX_REMEDIATION_SECONDS`  | planned | Batched-fix allowance remaining after proportional discovery and verification reserves.            |
-| `BS_QUALITY_REREVIEW_RESERVE_SECONDS` | planned | Workload-scaled allowance for one targeted validation review after fixes.                          |
+| Variable                              | Default | Description                                                                                          |
+| ------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------- |
+| `BS_QUALITY_PRIMARY`                  | config  | Per-run primary override: `claude` or `codex`.                                                       |
+| `BS_QUALITY_FALLBACK`                 | config  | Per-run fallback override: `claude`, `codex`, or `none`.                                             |
+| `BS_QUALITY_TARGET_DIR`               | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd.   |
+| `BS_QUALITY_MAX_FIX_COMMITS`          | 1       | Explicit override for the default one-commit batched-remediation cap.                                |
+| `BS_QUALITY_MAX_REMEDIATION_SECONDS`  | planned | Batched-fix allowance remaining after proportional discovery and verification reserves.              |
+| `BS_QUALITY_REREVIEW_RESERVE_SECONDS` | planned | Workload-scaled allowance for one targeted validation review after fixes.                            |
+| `BS_QUALITY_TELEMETRY_FILE`           | -       | Absolute path for the campaign telemetry log. Default: `<target-repo>/data/quality-telemetry.jsonl`. |
 
 ### Run Governor (runaway-loop guardrails)
 
@@ -260,6 +261,21 @@ running in an isolated worktree) exports this env var, every forked
 `/bs:quality` invocation in that scope auto-targets the right repo without
 needing `--target-dir` on each call. Prevents the "forked skill silently
 scanned the agent's cwd" failure mode.
+
+### Campaign telemetry (closed-loop value measurement)
+
+At the terminal step (SKILL.md Step 7), `scripts/quality-telemetry.js record`
+appends one JSON line per finished campaign, summarizing the invocation manifest
+— no model judgment. Fields: invocation id, repo/PR/branch, base/head SHAs,
+resolved risk tier + score, duration (from `governor.startedAtEpoch`), successful
+review rounds, agents run, judge blocking count, merge-requested flag, a derived
+verdict (`authorized` / `passed` / `blocked` / `incomplete`), and the covered file
+list (`baseSha..head`). Recording is **idempotent on invocation id** (a run that
+both merges and reports records once) and **fail-soft on write** (a bad log path
+warns but never blocks the campaign's real outcome). A missing/unreadable
+manifest is a hard failure. The log feeds the fleet escaped-defect tagger and the
+monthly quality-value report (escaped-defect rate, finding precision, cost per
+caught bug) — see the overlay's `weekly-improve.sh`.
 
 ### Auto-stamped review trailer
 
