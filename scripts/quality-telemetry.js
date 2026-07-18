@@ -175,6 +175,11 @@ function orNull(value) {
  * count low (a bare `?? null` per column otherwise reads as N conditionals to
  * the complexity linter). Risk fields are recorded only once resolved, so an
  * unresolved campaign never logs a stale requested tier as if it were final.
+ *
+ * The absolute repo realpath is DELIBERATELY NOT recorded: it is a host path
+ * (`/Users/<name>/...`) that would leak into any committed telemetry log —
+ * unacceptable in a public repo. `repoKey` + `githubRepository` identify the
+ * repo without exposing the operator's filesystem.
  */
 function identityFields(manifest) {
   const repo = manifest.repo || {};
@@ -183,7 +188,6 @@ function identityFields(manifest) {
   const resolved = risk.resolved === true;
   return {
     repoKey: orNull(repo.key),
-    repoPath: orNull(repo.realpath),
     githubRepository: orNull(repo.githubRepository),
     pr: orNull(repo.pr),
     branch: orNull(repo.headRefName),

@@ -48,6 +48,13 @@ BACKLOG.md.ralph-next-backup
 .claude/ralph-next/quality-*.json
 .claude/ralph-next/evidence/
 
+# Quality telemetry — the recorder defaults to <repo>/data/*.jsonl when quality
+# runs on THIS repo. In a public repo those must never be committed (an overlay
+# that WANTS committed history sets BS_QUALITY_TELEMETRY_FILE to a tracked path).
+data/quality-telemetry.jsonl
+data/quality-escapes.jsonl
+data/quality-value-report.md
+
 # Claude Code statsig cache
 statsig/
 config/social-credentials.env

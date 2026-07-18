@@ -115,6 +115,16 @@ describe("buildRecord", () => {
     });
   });
 
+  it("never records the absolute repo path (no host-path leak — BUI-351)", () => {
+    const rec = buildRecord(baseManifest(), {
+      execFileSync: NO_FILES,
+      nowIso: NOW,
+    });
+    expect(rec).not.toHaveProperty("repoPath");
+    // No value in the record should contain the manifest's filesystem realpath.
+    expect(JSON.stringify(rec)).not.toContain("/tmp/target-repo");
+  });
+
   it("clamps negative durations to 0 and records covered files", () => {
     const rec = buildRecord(
       baseManifest({ governor: { startedAtEpoch: 300 } }),
