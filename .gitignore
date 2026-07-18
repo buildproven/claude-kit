@@ -71,3 +71,8 @@ reports/
 
 # License files (never commit actual licenses)
 data/licenses/*.json
+
+# SOTA assessment artifacts (generated, machine-local)
+.claude/sota-history.json
+data/sota-history.json
+data/sota-report.md

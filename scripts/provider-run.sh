@@ -57,7 +57,7 @@ run_one() {
     codex)
       command -v codex >/dev/null 2>&1 || return 74
       if python3 "$DEADLINE" --timeout-seconds "$TIMEOUT_SECONDS" -- \
-        codex exec --ephemeral -C "$TARGET_DIR" -s "$SANDBOX" -a never - \
+        codex exec --ephemeral -C "$TARGET_DIR" -s "$SANDBOX" - \
         < "$PROMPT_FILE" > "$stdout_file" 2> "$stderr_file"; then
         rc=0
       else
