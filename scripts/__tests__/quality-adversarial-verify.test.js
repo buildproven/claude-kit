@@ -266,7 +266,14 @@ describe("adversarial verification", () => {
 
   it("rejects a non-numeric --max-findings and --deadline-epoch", () => {
     const fx = fixture([FINDING]);
-    const base = ["--findings", fx.findings, "--diff", fx.diff, "--out", fx.out];
+    const base = [
+      "--findings",
+      fx.findings,
+      "--diff",
+      fx.diff,
+      "--out",
+      fx.out,
+    ];
     expect(run([...base, "--max-findings", "some"]).code).toBe(2);
     expect(run([...base, "--deadline-epoch", "soon"]).code).toBe(2);
   });

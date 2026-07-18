@@ -49,7 +49,7 @@ Do not pass the original arguments into the fork, create an args tempfile,
 duplicate argument channels, or re-enter this wrapper. Bootstrap enforces two
 recursion guards: it refuses when `BS_QUALITY_HEADLESS=1` (a read-only review
 child) and, once a campaign starts, exports `BS_QUALITY_ACTIVE=1` so any
-descendant that tries to launch a *fresh* campaign (no `--manifest`) is refused
+descendant that tries to launch a _fresh_ campaign (no `--manifest`) is refused
 — only a `--manifest` resume of the same campaign is allowed through. PR
 selection is explicit: `--pr <number>`; ambiguous positional forms such as
 `--merge 1` are invalid.

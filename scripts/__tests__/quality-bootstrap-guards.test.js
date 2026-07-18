@@ -23,7 +23,9 @@ function run(args, { env } = {}) {
       encoding: "utf8",
       stdio: ["ignore", "pipe", fs.openSync(errFile, "w")],
     });
-    const stderr = fs.existsSync(errFile) ? fs.readFileSync(errFile, "utf8") : "";
+    const stderr = fs.existsSync(errFile)
+      ? fs.readFileSync(errFile, "utf8")
+      : "";
     return { code: 0, stdout, stderr };
   } catch (e) {
     const stderr = fs.existsSync(errFile)

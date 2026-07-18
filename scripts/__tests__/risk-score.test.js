@@ -317,7 +317,9 @@ describe("score — base resolution is deterministic and fails closed", () => {
   function runnerWith({ hasOriginMain, hasUpstream }) {
     return (args) => {
       const a = args.join(" ");
-      if (a.startsWith("rev-parse --abbrev-ref --symbolic-full-name @{upstream}")) {
+      if (
+        a.startsWith("rev-parse --abbrev-ref --symbolic-full-name @{upstream}")
+      ) {
         if (hasUpstream) return "origin/feature-base";
         throw new Error("no upstream");
       }
@@ -336,7 +338,9 @@ describe("score — base resolution is deterministic and fails closed", () => {
   }
 
   it("scores identically whether origin/main or an upstream is the resolvable base", () => {
-    const viaOriginMain = score({ gitRunner: runnerWith({ hasOriginMain: true }) });
+    const viaOriginMain = score({
+      gitRunner: runnerWith({ hasOriginMain: true }),
+    });
     const viaUpstream = score({ gitRunner: runnerWith({ hasUpstream: true }) });
     expect(viaOriginMain.riskScore).toBe(viaUpstream.riskScore);
     expect(viaOriginMain.baseUnresolved).toBeUndefined();
@@ -347,7 +351,9 @@ describe("score — base resolution is deterministic and fails closed", () => {
       base: "origin/main",
       gitRunner: runnerWith({ hasOriginMain: true }),
     });
-    const discovered = score({ gitRunner: runnerWith({ hasOriginMain: true }) });
+    const discovered = score({
+      gitRunner: runnerWith({ hasOriginMain: true }),
+    });
     expect(explicit.riskScore).toBe(discovered.riskScore);
   });
 
