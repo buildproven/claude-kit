@@ -4,15 +4,21 @@
 
 set -euo pipefail
 
-# Early exit if not in a git repo
+# Early exit if not in a git repo, or if there's no work tree to diff
+# (e.g. a bare repo used as a worktree hub) -- `git diff` without --cached
+# hard-fails there, and that failure would otherwise kill this script
+# under `set -e` since it happens inside a command substitution.
 if ! git rev-parse --git-dir &>/dev/null; then
+  exit 0
+fi
+if [ "$(git rev-parse --is-bare-repository 2>/dev/null)" = "true" ]; then
   exit 0
 fi
 
 ISSUES=()
 
 # Check both staged (--cached) and unstaged diffs — Claude edits are typically unstaged
-DIFF_OUTPUT=$(git diff --cached 2>/dev/null; git diff 2>/dev/null)
+DIFF_OUTPUT="$(git diff --cached 2>/dev/null || true)"$'\n'"$(git diff 2>/dev/null || true)"
 
 # Check for leftover console.logs
 if echo "$DIFF_OUTPUT" | grep -E '^\+.*\bconsole\.log\b' | grep -q .; then
@@ -25,7 +31,7 @@ if echo "$DIFF_OUTPUT" | grep -E '^\+.*\b(TODO|FIXME|HACK|XXX)\b' | grep -q .; t
 fi
 
 # Check for 'any' type in TypeScript changes
-TS_DIFF=$(git diff --cached -- '*.ts' '*.tsx' 2>/dev/null; git diff -- '*.ts' '*.tsx' 2>/dev/null)
+TS_DIFF="$(git diff --cached -- '*.ts' '*.tsx' 2>/dev/null || true)"$'\n'"$(git diff -- '*.ts' '*.tsx' 2>/dev/null || true)"
 if echo "$TS_DIFF" | grep -E '^\+.*: any\b' | grep -q .; then
   ISSUES+=("TypeScript 'any' type found in changes")
 fi
