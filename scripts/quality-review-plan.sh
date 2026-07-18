@@ -3,6 +3,7 @@
 # its selected agent panel; Codex realizes it through a tier-specific scope.
 # The caller must first load the explicit invocation manifest.
 QUALITY_REVIEW_TIER="${TIER:-${QUALITY_REVIEW_TIER:-medium}}"
+PLANNED_REVIEW_TIMEOUT="${QUALITY_REVIEW_TIMEOUT:-}"
 case "$QUALITY_REVIEW_TIER" in
   low) QUALITY_REVIEW_TIMEOUT=120; QUALITY_REVIEW_FOCUS="Focused regression review of changed behavior only." ;;
   medium|95) QUALITY_REVIEW_TIMEOUT=480; QUALITY_REVIEW_FOCUS="Broad correctness, security, type-safety, and silent-failure review." ;;
@@ -10,6 +11,7 @@ case "$QUALITY_REVIEW_TIER" in
   critical) QUALITY_REVIEW_TIMEOUT=900; QUALITY_REVIEW_FOCUS="Critical release-veto review. Assume the change is unsafe; require concrete evidence before approval. Check security, data loss, supply chain, deployment, rollback, and break-glass behavior." ;;
   *) echo "quality: invalid review tier '$QUALITY_REVIEW_TIER'" >&2; return 1 2>/dev/null || exit 1 ;;
 esac
+QUALITY_REVIEW_TIMEOUT="${PLANNED_REVIEW_TIMEOUT:-$QUALITY_REVIEW_TIMEOUT}"
 QUALITY_REVIEW_TIMEOUT="${BS_QUALITY_REVIEW_TIMEOUT:-$QUALITY_REVIEW_TIMEOUT}"
 QUALITY_REVIEW_DEPTH="${CODEX_DEPTH:-$QUALITY_REVIEW_TIER}"
 case "$QUALITY_REVIEW_DEPTH" in skip) QUALITY_REVIEW_DEPTH=low ;; esac

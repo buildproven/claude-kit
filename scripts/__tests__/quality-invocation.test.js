@@ -1278,8 +1278,8 @@ exit 99
       validationState.governor.validationDeadlineEpoch,
     ).toBeGreaterThanOrEqual(
       advanceStarted +
-        validationState.risk.runtime.gateSeconds +
-        validationState.risk.runtime.validationSeconds,
+        validationState.risk.runtime.checkReserveSeconds +
+        validationState.risk.runtime.reviewReserveSeconds,
     );
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
     expect(
@@ -2209,7 +2209,7 @@ exit 1
     git(root, ["commit", "-q", "-m", "add hanging gate"]);
     const manifestPath = create(root);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    manifest.risk.runtime = { gateSeconds: 1 };
+    manifest.risk.runtime = { checkSeconds: 1 };
     manifest.governor.campaignDeadlineEpoch =
       Math.floor(Date.now() / 1000) + 30;
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);

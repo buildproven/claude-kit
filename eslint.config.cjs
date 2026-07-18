@@ -165,6 +165,12 @@ configs.push({
       vi: "readonly",
     },
   },
+  rules: {
+    // Tests load the script-under-test from a path stored in a constant
+    // (e.g. `require(INVOCATION)`); the dynamic path is fixture wiring, not
+    // untrusted input.
+    "security/detect-non-literal-require": "off",
+  },
 });
 
 // Import verification (eslint-plugin-n)
