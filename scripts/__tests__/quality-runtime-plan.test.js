@@ -1,34 +1,50 @@
 const { planRuntime, workloadUnits } = require("../quality-runtime-plan");
+const { execFileSync } = require("node:child_process");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+const PLANNER = path.join(__dirname, "..", "quality-runtime-plan.js");
 
 describe("quality runtime planning", () => {
-  const plan = (riskScore, files, lines) =>
-    planRuntime({ riskScore, diffStats: { files, lines } });
+  const plan = (riskScore, files, lines, mode = "discovery") =>
+    planRuntime({ riskScore, diffStats: { files, lines }, mode });
 
-  it("scales bounded campaign and review time with actual workload", () => {
-    const plans = [
-      plan(10, 1, 5),
-      plan(10, 4, 120),
-      plan(10, 12, 700),
-      plan(10, 30, 3000),
-      plan(10, 80, 9000),
-    ];
-    expect(plans.map((item) => item.campaignSeconds)).toEqual([
-      300, 420, 600, 780, 900,
-    ]);
-    expect(plans.map((item) => item.reviewSeconds)).toEqual([
-      75, 120, 210, 330, 720,
-    ]);
+  it("increases campaign and review budgets with actual change size", () => {
+    const micro = plan(10, 1, 5);
+    const small = plan(10, 4, 120);
+    const medium = plan(10, 12, 700);
+    const large = plan(10, 30, 3000);
+    const huge = plan(10, 80, 9000);
+
+    expect([
+      micro.campaignSeconds,
+      small.campaignSeconds,
+      medium.campaignSeconds,
+      large.campaignSeconds,
+      huge.campaignSeconds,
+    ]).toEqual([300, 420, 600, 780, 900]);
+    expect([
+      micro.reviewSeconds,
+      small.reviewSeconds,
+      medium.reviewSeconds,
+      large.reviewSeconds,
+      huge.reviewSeconds,
+    ]).toEqual([75, 120, 210, 330, 480]);
   });
 
-  it("charges scattered changes per file", () => {
+  it("adds per-file overhead so scattered changes cost more than one file", () => {
     expect(workloadUnits({ files: 20, lines: 20 })).toBeGreaterThan(
       workloadUnits({ files: 1, lines: 20 }),
     );
     expect(plan(10, 20, 20).workload).not.toBe(plan(10, 1, 20).workload);
   });
 
-  it("keeps tiny critical work deep without granting a huge-change clock", () => {
+  it("keeps tiny critical changes deep without granting a huge-change clock", () => {
+    const low = plan(10, 1, 5);
     const critical = plan(90, 1, 5);
+
+    expect(low.workload).toBe("micro");
     expect(critical.workload).toBe("micro");
     expect(critical.reviewSeconds).toBe(240);
     expect(critical.campaignSeconds).toBe(600);
@@ -37,22 +53,21 @@ describe("quality runtime planning", () => {
     );
   });
 
-  it("allows exactly one targeted verification after one batched fix", () => {
-    const result = plan(100, 500, 100000);
-    expect(result.campaignSeconds).toBe(900);
-    expect(result.maxReviewRounds).toBe(2);
-    expect(result.maxFixCommits).toBe(1);
-    expect(result.verificationSeconds).toBe(120);
-    expect(result.validationSeconds).toBe(300);
+  it("makes targeted verification cheaper than discovery for the same delta", () => {
+    const discovery = plan(70, 8, 350);
+    const verification = plan(70, 8, 350, "verification");
+
+    expect(verification.reviewSeconds).toBeLessThan(discovery.reviewSeconds);
+    expect(verification.reviewSeconds).toBe(120);
+    expect(verification.reviewDepth).toBe("high");
+    expect(verification.reviewPasses).toBe(1);
   });
 
-  it("scales the single validation phase from three to five minutes", () => {
-    expect(plan(10, 1, 5).validationSeconds).toBe(180);
-    expect(plan(10, 4, 120).validationSeconds).toBe(240);
-    expect(plan(10, 80, 9000).validationSeconds).toBe(300);
+  it("caps every default campaign at 15 minutes", () => {
+    expect(plan(100, 500, 100000).campaignSeconds).toBe(900);
   });
 
-  it("lets requested quality raise depth without erasing size scaling", () => {
+  it("lets explicit quality levels raise depth without erasing size scaling", () => {
     const level95 = planRuntime({
       riskScore: 5,
       minimumRisk: 50,
@@ -63,9 +78,64 @@ describe("quality runtime planning", () => {
       minimumRisk: 75,
       diffStats: { files: 1, lines: 5 },
     });
+
     expect(level95.tier).toBe("high");
     expect(level95.campaignSeconds).toBe(540);
     expect(level98.tier).toBe("critical");
     expect(level98.campaignSeconds).toBe(600);
+  });
+
+  it("plans real git diffs at the same public CLI seam", () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "quality-plan-"));
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "test"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "test@example.com"], {
+      cwd: repo,
+    });
+    fs.writeFileSync(path.join(repo, "README.md"), "base\n");
+    execFileSync("git", ["add", "README.md"], { cwd: repo });
+    execFileSync("git", ["commit", "-q", "-m", "base"], { cwd: repo });
+    execFileSync("git", ["switch", "-q", "-c", "feature"], { cwd: repo });
+
+    fs.appendFileSync(path.join(repo, "README.md"), "tiny docs edit\n");
+    execFileSync("git", ["commit", "-qam", "docs"], { cwd: repo });
+    const micro = JSON.parse(
+      execFileSync("node", [PLANNER, "--base", "main", "--json"], {
+        cwd: repo,
+        encoding: "utf8",
+      }),
+    );
+    expect(micro.workload).toBe("micro");
+    expect(micro.campaignSeconds).toBe(300);
+
+    fs.mkdirSync(path.join(repo, ".github", "workflows"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repo, ".github", "workflows", "quality.yml"),
+      "name: quality\n",
+    );
+    execFileSync("git", ["add", ".github/workflows/quality.yml"], {
+      cwd: repo,
+    });
+    execFileSync("git", ["commit", "-q", "-m", "ci"], { cwd: repo });
+    const critical = JSON.parse(
+      execFileSync("node", [PLANNER, "--base", "main", "--json"], {
+        cwd: repo,
+        encoding: "utf8",
+      }),
+    );
+    expect(critical.tier).toBe("critical");
+    expect(critical.campaignSeconds).toBe(600);
+
+    fs.writeFileSync(path.join(repo, "large.md"), "line\n".repeat(6000));
+    execFileSync("git", ["add", "large.md"], { cwd: repo });
+    execFileSync("git", ["commit", "-q", "-m", "large docs"], { cwd: repo });
+    const huge = JSON.parse(
+      execFileSync("node", [PLANNER, "--base", "main", "--json"], {
+        cwd: repo,
+        encoding: "utf8",
+      }),
+    );
+    expect(huge.workload).toBe("huge");
+    expect(huge.campaignSeconds).toBe(900);
   });
 });

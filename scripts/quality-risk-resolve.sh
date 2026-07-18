@@ -57,10 +57,9 @@ node "$SCRIPT_DIR/quality-invocation.js" risk "$MANIFEST" \
   --campaign-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.campaignSeconds')" \
   --review-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.reviewSeconds')" \
   --verification-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.verificationSeconds')" \
-  --gate-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.gateSeconds')" \
-  --validation-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.validationSeconds')" \
-  --max-review-rounds "$(printf '%s' "$PLAN_JSON" | jq -r '.maxReviewRounds')" \
-  --max-fix-commits "$(printf '%s' "$PLAN_JSON" | jq -r '.maxFixCommits')" \
+  --check-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.checkSeconds')" \
+  --review-reserve-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.reviewReserveSeconds')" \
+  --check-reserve-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.checkReserveSeconds')" \
   --level "$LEVEL" || exit 1
 
 echo "🧭 Risk: ${RISK_SCORE}/100 (${NATURE}), $(printf '%s' "$PLAN_JSON" | jq -r '"\(.workload): \(.diffStats.files) files/\(.diffStats.lines) lines"') → ${AGENT_TARGET} agents, Codex ${CODEX_DEPTH}×${CODEX_ROUNDS} [${TIER}], $(printf '%s' "$PLAN_JSON" | jq -r '.campaignSeconds')s campaign"

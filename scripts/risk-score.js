@@ -146,19 +146,46 @@ function defaultGitRunner(args) {
   }).trim();
 }
 
+// Resolve the base ref the diff is scored against. Determinism matters: the
+// same change MUST score the same regardless of which refs happen to be fetched
+// locally. The old last-resort of `HEAD~1` was the bug — in a freshly
+// materialized worktree without origin/main fetched, it silently diffed only
+// the last commit, so a large branch scored like a one-line change (observed:
+// 35 vs 87 for the same diff). When no durable base can be found we do NOT
+// quietly fall back to a one-commit diff; we return { unresolved: true } and let
+// the caller fail CLOSED (score maximum risk) instead of a misleadingly low one.
 function resolveBase(gitRunner, baseArg) {
-  if (baseArg) return baseArg;
+  if (baseArg) return { ref: baseArg };
   if (process.env.GITHUB_BASE_REF)
-    return `origin/${process.env.GITHUB_BASE_REF}`;
+    return { ref: `origin/${process.env.GITHUB_BASE_REF}` };
+  // Prefer the tracked upstream of the current branch — the true PR base — over
+  // guessing origin/main, and try to fetch a known remote base if it is missing
+  // locally so a fresh worktree scores the same as a full checkout.
+  try {
+    const upstream = gitRunner([
+      "rev-parse",
+      "--abbrev-ref",
+      "--symbolic-full-name",
+      "@{upstream}",
+    ]);
+    if (upstream) {
+      gitRunner(["rev-parse", "--verify", "--quiet", `${upstream}^{commit}`]);
+      return { ref: upstream };
+    }
+  } catch {
+    /* no upstream configured — fall through */
+  }
   for (const ref of ["origin/main", "origin/master", "main", "master"]) {
     try {
       gitRunner(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
-      return ref;
+      return { ref };
     } catch {
       /* try next */
     }
   }
-  return "HEAD~1"; // last resort: previous commit
+  // No durable base. Do not silently diff HEAD~1 — that is the non-determinism
+  // that let a big change score small. Signal it; the caller fails closed.
+  return { unresolved: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -759,7 +786,28 @@ function score({
   repoRoot = null,
 } = {}) {
   const cfg = config || loadConfig(repoRoot);
-  const resolvedBase = resolveBase(gitRunner, base);
+  const resolved = resolveBase(gitRunner, base);
+
+  // Fail CLOSED when no durable base could be found. Scoring a change against an
+  // unknown base can only produce a misleadingly LOW number (a truncated diff),
+  // which would under-provision review and skip break-glass. Instead score
+  // maximum risk with an explicit reason so the operator sees why.
+  if (resolved.unresolved) {
+    const knobs = scoreToKnobs(100, cfg);
+    return {
+      riskScore: 100,
+      changeNature: "unknown",
+      diffStats: { files: 0, lines: 0 },
+      reasons: [
+        "risk base unresolved (no --base, no GITHUB_BASE_REF, no upstream, no origin/main) — scoring maximum risk fail-closed; pass --base or fetch the base ref for an accurate score",
+      ],
+      knobs,
+      base: null,
+      baseUnresolved: true,
+    };
+  }
+
+  const resolvedBase = resolved.ref;
   const { descriptors, diffStats } = collectDescriptors(
     resolvedBase,
     gitRunner,

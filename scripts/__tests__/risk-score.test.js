@@ -1,4 +1,5 @@
 const {
+  score,
   computeScore,
   classifyChangeNature,
   scoreToKnobs,
@@ -302,6 +303,98 @@ describe("computeScore — trivial change goes low (but never zero handling)", (
     const r = scoreOf([d("lib/widget.js", "M", "+if (a) b()", 5)]);
     expect(r.riskScore).toBeGreaterThan(20);
     expect(r.riskScore).toBeLessThan(DEFAULTS.base.securityFloor);
+  });
+});
+
+// ─── base resolution determinism (BUI-340 / 2.7) ─────────────────────────────
+
+describe("score — base resolution is deterministic and fails closed", () => {
+  // A gitRunner where origin/main IS present locally: the same diff must score
+  // against the merge-base, identically to the CI (GITHUB_BASE_REF) path.
+  const NAME_STATUS = "M\tlib/widget.js";
+  const NUMSTAT = "40\t0\tlib/widget.js";
+
+  function runnerWith({ hasOriginMain, hasUpstream }) {
+    return (args) => {
+      const a = args.join(" ");
+      if (
+        a.startsWith("rev-parse --abbrev-ref --symbolic-full-name @{upstream}")
+      ) {
+        if (hasUpstream) return "origin/feature-base";
+        throw new Error("no upstream");
+      }
+      if (a.startsWith("rev-parse --verify --quiet")) {
+        const ok =
+          (hasOriginMain && a.includes("origin/main")) ||
+          (hasUpstream && a.includes("origin/feature-base"));
+        if (ok) return "abc123";
+        throw new Error("unknown ref");
+      }
+      if (a.startsWith("merge-base")) return "base00";
+      if (a.includes("--name-status")) return NAME_STATUS;
+      if (a.includes("--numstat")) return NUMSTAT;
+      return "";
+    };
+  }
+
+  it("scores identically whether origin/main or an upstream is the resolvable base", () => {
+    const viaOriginMain = score({
+      gitRunner: runnerWith({ hasOriginMain: true }),
+    });
+    const viaUpstream = score({ gitRunner: runnerWith({ hasUpstream: true }) });
+    expect(viaOriginMain.riskScore).toBe(viaUpstream.riskScore);
+    expect(viaOriginMain.baseUnresolved).toBeUndefined();
+  });
+
+  it("scores identically to an explicit --base (the pipeline path)", () => {
+    const explicit = score({
+      base: "origin/main",
+      gitRunner: runnerWith({ hasOriginMain: true }),
+    });
+    const discovered = score({
+      gitRunner: runnerWith({ hasOriginMain: true }),
+    });
+    expect(explicit.riskScore).toBe(discovered.riskScore);
+  });
+
+  it("FAILS CLOSED (score 100) when no durable base resolves — never a low HEAD~1 score", () => {
+    // The starknet bug: a fresh worktree without origin/main used to diff only
+    // HEAD~1 and score small. Now it must score maximum, not minimum.
+    // Clear GITHUB_BASE_REF: CI sets it, and it would resolve a base and mask
+    // the truly-unresolved path this test exercises.
+    const prev = process.env.GITHUB_BASE_REF;
+    delete process.env.GITHUB_BASE_REF;
+    let r;
+    try {
+      r = score({
+        gitRunner: runnerWith({ hasOriginMain: false, hasUpstream: false }),
+      });
+    } finally {
+      if (prev !== undefined) process.env.GITHUB_BASE_REF = prev;
+    }
+    expect(r.riskScore).toBe(100);
+    expect(r.baseUnresolved).toBe(true);
+    expect(r.reasons.join(" ")).toMatch(/base unresolved/i);
+    // diffStats must keep the { files, lines } shape the CLI/GITHUB_OUTPUT
+    // consumer reads — not undefined fields that print as "diffFiles=undefined".
+    expect(r.diffStats).toHaveProperty("files");
+    expect(r.diffStats).toHaveProperty("lines");
+    expect(r.knobs).toHaveProperty("agents");
+  });
+
+  it("honors GITHUB_BASE_REF for the CI path", () => {
+    const prev = process.env.GITHUB_BASE_REF;
+    process.env.GITHUB_BASE_REF = "main";
+    try {
+      const r = score({
+        gitRunner: runnerWith({ hasOriginMain: false, hasUpstream: false }),
+      });
+      // GITHUB_BASE_REF resolves a base, so it does NOT fail closed.
+      expect(r.baseUnresolved).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env.GITHUB_BASE_REF;
+      else process.env.GITHUB_BASE_REF = prev;
+    }
   });
 });
 

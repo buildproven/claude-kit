@@ -42,7 +42,7 @@ if [ "$REVIEW_ROUND" -gt 1 ]; then
   # timeout; using it here made large reviews time out before they could
   # validate otherwise-complete remediation. Legacy manifests predate the
   # persisted validation allowance and use the bounded default.
-  QUALITY_REVIEW_TIMEOUT="$(field risk.runtime.validationSeconds)"
+  QUALITY_REVIEW_TIMEOUT="$(field risk.runtime.reviewReserveSeconds)"
   [ -n "$QUALITY_REVIEW_TIMEOUT" ] || QUALITY_REVIEW_TIMEOUT=300
   QUALITY_REVIEW_PASSES=1
   QUALITY_REVIEW_DEPTH=high

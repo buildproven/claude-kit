@@ -46,9 +46,13 @@ Capture the exact `BS_QUALITY_MANIFEST=` path from bootstrap output. Invoke the
 ```
 
 Do not pass the original arguments into the fork, create an args tempfile,
-duplicate argument channels, or re-enter this wrapper. Bootstrap preserves the
-`BS_QUALITY_HEADLESS=1` recursion guard. PR selection is explicit:
-`--pr <number>`; ambiguous positional forms such as `--merge 1` are invalid.
+duplicate argument channels, or re-enter this wrapper. Bootstrap enforces two
+recursion guards: it refuses when `BS_QUALITY_HEADLESS=1` (a read-only review
+child) and, once a campaign starts, exports `BS_QUALITY_ACTIVE=1` so any
+descendant that tries to launch a _fresh_ campaign (no `--manifest`) is refused
+— only a `--manifest` resume of the same campaign is allowed through. PR
+selection is explicit: `--pr <number>`; ambiguous positional forms such as
+`--merge 1` are invalid.
 
 For a safe continuation, pass the exact manifest printed by the earlier run:
 

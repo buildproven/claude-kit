@@ -737,16 +737,21 @@ function buildRuntimePlan(manifest, options) {
       "verification seconds",
       { minimum: 1 },
     ),
-    gateSeconds: parseInteger(
-      options["gate-seconds"] || "300",
-      "gate seconds",
+    checkSeconds: parseInteger(
+      options["check-seconds"] || "300",
+      "check seconds",
       {
         minimum: 1,
       },
     ),
-    validationSeconds: parseInteger(
-      options["validation-seconds"] || "300",
-      "validation seconds",
+    reviewReserveSeconds: parseInteger(
+      options["review-reserve-seconds"] || "300",
+      "review reserve seconds",
+      { minimum: 1 },
+    ),
+    checkReserveSeconds: parseInteger(
+      options["check-reserve-seconds"] || "300",
+      "check reserve seconds",
       { minimum: 1 },
     ),
   };
@@ -1074,7 +1079,7 @@ function providerPhaseSeconds(manifest) {
   return manifest.reviews.length === 0
     ? (manifest.risk?.runtime?.reviewSeconds ??
         manifest.governor.providerWindowSeconds)
-    : (manifest.risk?.runtime?.validationSeconds ?? 300);
+    : (manifest.risk?.runtime?.reviewReserveSeconds ?? 300);
 }
 
 function authorizeProviderAttempt(manifest, options) {
@@ -1758,7 +1763,7 @@ function recordSkippedGate(manifest, required, name, log, options) {
 }
 
 function executeGate(manifest, required, name, log) {
-  const gateSeconds = manifest.risk?.runtime?.gateSeconds ?? 300;
+  const gateSeconds = manifest.risk?.runtime?.checkSeconds ?? 300;
   const phaseDeadline =
     manifest.reviews.length > 0 &&
     Number.isInteger(manifest.governor?.validationDeadlineEpoch)
@@ -2097,8 +2102,8 @@ function runAdvance(manifestArg, manifest, rawArgs) {
     ) {
       locked.governor.validationDeadlineEpoch =
         Math.floor(Date.now() / 1000) +
-        (locked.risk?.runtime?.gateSeconds ?? 300) +
-        (locked.risk?.runtime?.validationSeconds ?? 300);
+        (locked.risk?.runtime?.checkReserveSeconds ?? 300) +
+        (locked.risk?.runtime?.reviewReserveSeconds ?? 300);
     }
   });
   process.stdout.write(`${updated.revisions.currentHead}\n`);

@@ -89,13 +89,13 @@ describe("provider review runtime", () => {
     );
 
     expect(runner).toContain(
-      'QUALITY_REVIEW_TIMEOUT="$(field risk.runtime.validationSeconds)"',
+      'QUALITY_REVIEW_TIMEOUT="$(field risk.runtime.reviewReserveSeconds)"',
     );
     expect(runner).toContain(
       '[ -n "$QUALITY_REVIEW_TIMEOUT" ] || QUALITY_REVIEW_TIMEOUT=300',
     );
     expect(invocation).toMatch(
-      /manifest\.reviews\.length === 0[\s\S]*risk\?\.runtime\?\.reviewSeconds[\s\S]*risk\?\.runtime\?\.validationSeconds \?\? 300/,
+      /manifest\.reviews\.length === 0[\s\S]*risk\?\.runtime\?\.reviewSeconds[\s\S]*risk\?\.runtime\?\.reviewReserveSeconds \?\? 300/,
     );
   });
 
