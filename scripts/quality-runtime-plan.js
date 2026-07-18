@@ -190,9 +190,15 @@ function main() {
     reasons: scored.reasons,
     base: scored.base,
   };
-  if (args.json || !process.env.GITHUB_OUTPUT) {
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  }
+  // Always emit the plan as JSON on stdout. The sole production consumer,
+  // quality-risk-resolve.sh, captures this stdout and feeds every field into
+  // `quality-invocation.js risk`. Gating output on GITHUB_OUTPUT (as a prior
+  // revision did) silently produced empty stdout under GitHub Actions — where
+  // GITHUB_OUTPUT is always set — so the resolver read an empty tier and threw
+  // `invalid resolved tier ''`, failing risk resolution in CI only. This script
+  // is a CLI invoked by a shell script, not a GitHub Actions step that writes
+  // to $GITHUB_OUTPUT, so there is nothing to gate on.
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
 if (require.main === module) main();
