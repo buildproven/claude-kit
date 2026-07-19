@@ -43,7 +43,12 @@ describe("loadConfig — per-repo harness-config.json", () => {
     const cfg = loadConfig(repoWith({ scorePolicy: { maxScore: 42 } }));
     expect(cfg.maxScore).toBe(42);
     // Untouched keys must survive the merge, not be replaced wholesale.
-    expect(cfg.securityFloor).toEqual(DEFAULTS.securityFloor);
+    expect(cfg.securityFloor).toEqual(
+      expect.arrayContaining([
+        ...DEFAULTS.securityFloor,
+        ...DEFAULTS.humanFloor,
+      ]),
+    );
   });
 
   it("ignores a config with no scorePolicy block", () => {

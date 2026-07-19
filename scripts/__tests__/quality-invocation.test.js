@@ -1800,6 +1800,40 @@ exit 1
     ).toBe(before.revisions.currentHead);
   });
 
+  it("rejects an underpowered persisted critical contract at the 75 boundary", () => {
+    const root = repo("critical-boundary-escalation");
+    const manifest = create(root);
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    state.risk = {
+      ...state.risk,
+      resolved: true,
+      tier: "critical",
+      score: 75,
+      agentTarget: 2,
+      codexDepth: "low",
+      codexRounds: 0,
+    };
+    writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
+
+    mkdirSync(path.join(root, "server"), { recursive: true });
+    writeFileSync(
+      path.join(root, "server", "large.js"),
+      `${Array.from({ length: 450 }, (_, index) => `export const v${index} = ${index};`).join("\n")}\n`,
+    );
+    git(root, ["add", "server/large.js"]);
+    git(root, ["commit", "-q", "-m", "fix: add large server remediation"]);
+
+    const result = spawnSync("node", [INVOCATION, "advance", manifest], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(
+      /stronger review.*now critical\/6\/xhigh.*fresh invocation/i,
+    );
+  });
+
   it("fails early when required repository gate scripts are missing", () => {
     const root = repo("missing-baselines");
     writeFileSync(

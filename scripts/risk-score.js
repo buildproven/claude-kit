@@ -41,6 +41,8 @@ const {
   classifyChangeNature: classifyChangeNatureShared,
 } = require("./risk-change-nature");
 
+const CRITICAL_RISK_SCORE = 75;
+
 // ---------------------------------------------------------------------------
 // Built-in defaults (overridable via harness-config.json: scorePolicy)
 // ---------------------------------------------------------------------------
@@ -79,9 +81,26 @@ const DEFAULTS = {
     "**/*-keys/**",
     "**/*_key/**",
     "**/*_keys/**",
+    "**/key*/**",
+    "**/*-key*/**",
+    "**/*_key*/**",
     "**/*keystore*/**",
     "**/*keyring*/**",
     "**/*keychain*/**",
+    "**/key.*",
+    "**/keys.*",
+    "**/key-*.*",
+    "**/key_*.*",
+    "**/*-key*.*",
+    "**/*_key*.*",
+    "**/*apikey*.*",
+    "**/*privatekey*.*",
+    "**/*secretkey*.*",
+    "**/*accesskey*.*",
+    "**/*signingkey*.*",
+    "**/*keystore*.*",
+    "**/*keyring*.*",
+    "**/*keychain*.*",
     "**/middleware.*",
     "**/*.pem",
     "**/*.key",
@@ -89,6 +108,10 @@ const DEFAULTS = {
     "**/*.pfx",
     "**/*.jks",
     "**/*.keystore",
+    "**/*.ppk",
+    "**/*.pk8",
+    "**/*.kdb",
+    "**/*.kdbx",
     "**/id_rsa*",
     "**/id_dsa*",
     "**/id_ecdsa*",
@@ -139,15 +162,36 @@ const DEFAULTS = {
     "**/*-keys/**",
     "**/*_key/**",
     "**/*_keys/**",
+    "**/key*/**",
+    "**/*-key*/**",
+    "**/*_key*/**",
     "**/*keystore*/**",
     "**/*keyring*/**",
     "**/*keychain*/**",
+    "**/key.*",
+    "**/keys.*",
+    "**/key-*.*",
+    "**/key_*.*",
+    "**/*-key*.*",
+    "**/*_key*.*",
+    "**/*apikey*.*",
+    "**/*privatekey*.*",
+    "**/*secretkey*.*",
+    "**/*accesskey*.*",
+    "**/*signingkey*.*",
+    "**/*keystore*.*",
+    "**/*keyring*.*",
+    "**/*keychain*.*",
     "**/*.pem",
     "**/*.key",
     "**/*.p12",
     "**/*.pfx",
     "**/*.jks",
     "**/*.keystore",
+    "**/*.ppk",
+    "**/*.pk8",
+    "**/*.kdb",
+    "**/*.kdbx",
     "**/id_rsa*",
     "**/id_dsa*",
     "**/id_ecdsa*",
@@ -187,7 +231,12 @@ const DEFAULTS = {
   curve: [
     { maxScore: 20, agents: 2, codex: "skip", codexRounds: 0 },
     { maxScore: 50, agents: 4, codex: "high", codexRounds: 1 },
-    { maxScore: 75, agents: 6, codex: "high", codexRounds: 1 },
+    {
+      maxScore: CRITICAL_RISK_SCORE - 1,
+      agents: 6,
+      codex: "high",
+      codexRounds: 1,
+    },
     { maxScore: 100, agents: 6, codex: "xhigh", codexRounds: 1 },
   ],
   // Score ≥ this always runs Codex even if the band says skip.
@@ -253,7 +302,10 @@ function additiveFloorPatterns(defaultPatterns, configuredPatterns) {
 }
 
 function effectiveSecurityFloor(cfg = DEFAULTS) {
-  return additiveFloorPatterns(DEFAULTS.securityFloor, cfg?.securityFloor);
+  return additiveFloorPatterns(
+    [...DEFAULTS.securityFloor, ...DEFAULTS.humanFloor],
+    cfg?.securityFloor,
+  );
 }
 
 function matchesSecurityFloor(file, cfg = DEFAULTS) {
@@ -825,7 +877,7 @@ function scoreToKnobs(score, cfg) {
     codexRounds = 1;
   }
   let agents = band.agents;
-  if (score >= DEFAULTS.base.securityFloor) {
+  if (score >= CRITICAL_RISK_SCORE) {
     const baseline =
       DEFAULTS.curve.find((candidate) => score <= candidate.maxScore) ||
       DEFAULTS.curve[DEFAULTS.curve.length - 1];
@@ -1014,4 +1066,5 @@ module.exports = {
   loadConfig,
   deepMerge,
   DEFAULTS,
+  CRITICAL_RISK_SCORE,
 };

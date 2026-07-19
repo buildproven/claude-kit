@@ -607,7 +607,7 @@ function strongerReviewForCurrentHead(manifest, root) {
     gitRunner: (args) => git(root, args),
   });
   const tierForScore = (score) => {
-    if (score >= 75) return "critical";
+    if (score >= riskScore.CRITICAL_RISK_SCORE) return "critical";
     if (score >= 50) return "high";
     if (score >= 20) return "medium";
     return "low";

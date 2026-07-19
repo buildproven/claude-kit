@@ -95,6 +95,15 @@ describe("touchesHumanFloor", () => {
     ["keyring/config.json", "keyring directory"],
     ["keychain/config.json", "keychain directory"],
     ["harness-config.json", "self-authored risk policy"],
+    ["src/api-key.txt", "compound API key filename"],
+    ["config/key.yaml", "standalone key filename"],
+    ["src/keystore.yaml", "keystore filename"],
+    ["src/keyring.ts", "keyring filename"],
+    ["src/keychain.json", "keychain filename"],
+    ["src/server.ppk", "PuTTY private key"],
+    ["src/server.pk8", "PKCS#8 private key"],
+    ["key-material/config.json", "compound key directory"],
+    ["key_store/config.json", "underscored key directory"],
   ];
   for (const [file, why] of evasions) {
     it(`catches evasion: ${file} (${why})`, () => {

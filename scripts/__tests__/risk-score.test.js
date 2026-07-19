@@ -162,6 +162,17 @@ describe("computeScore — security floor never beaten by mechanical", () => {
     "certs/store.pfx",
     "config/app.jks",
     "config/store.keystore",
+    "src/auth.ts",
+    "src/oauth.ts",
+    "src/api-key.txt",
+    "config/key.yaml",
+    "src/keystore.yaml",
+    "src/keyring.ts",
+    "src/keychain.json",
+    "src/server.ppk",
+    "src/server.pk8",
+    "key-material/config.json",
+    "key_store/config.json",
   ])("sensitive directory path %s stays at the security floor", (file) => {
     const r = scoreOf([d(file, "M", "+// note", 1)]);
     expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
@@ -470,17 +481,20 @@ describe("scoreToKnobs — Moderate curve", () => {
     });
     expect(scoreToKnobs(80, cfg).codex).not.toBe("skip");
   });
-  it("reviewed config cannot weaken critical security review depth", () => {
-    const cfg = deepMerge(DEFAULTS, {
-      curve: [{ maxScore: 100, agents: 2, codex: "skip", codexRounds: 0 }],
-      codexForceFloor: 101,
-    });
-    expect(scoreToKnobs(DEFAULTS.base.securityFloor, cfg)).toEqual({
-      agents: 6,
-      codex: "xhigh",
-      codexRounds: 1,
-    });
-  });
+  it.each([75, 76, 80, 84, 85])(
+    "reviewed config cannot weaken critical review depth at score %i",
+    (score) => {
+      const cfg = deepMerge(DEFAULTS, {
+        curve: [{ maxScore: 100, agents: 2, codex: "skip", codexRounds: 0 }],
+        codexForceFloor: 101,
+      });
+      expect(scoreToKnobs(score, cfg)).toEqual({
+        agents: 6,
+        codex: "xhigh",
+        codexRounds: 1,
+      });
+    },
+  );
 });
 
 // ─── config override merge ───────────────────────────────────────────────────

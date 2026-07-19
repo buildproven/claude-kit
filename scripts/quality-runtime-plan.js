@@ -9,7 +9,12 @@
  * clock, while still giving a broad low-risk diff enough time to be read.
  */
 
-const { score, scoreToKnobs, DEFAULTS } = require("./risk-score");
+const {
+  score,
+  scoreToKnobs,
+  DEFAULTS,
+  CRITICAL_RISK_SCORE,
+} = require("./risk-score");
 
 const WORKLOAD_BANDS = [
   {
@@ -72,7 +77,7 @@ const RISK_FLOORS = {
 };
 
 function riskTier(riskScore) {
-  if (riskScore >= 75) return "critical";
+  if (riskScore >= CRITICAL_RISK_SCORE) return "critical";
   if (riskScore >= 50) return "high";
   if (riskScore >= 20) return "medium";
   return "low";
