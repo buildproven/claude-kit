@@ -120,6 +120,26 @@ describe("quality merge gates", () => {
     expect(AUTHORIZE).toMatch(/persisted empty stamp/);
   });
 
+  it("falls back to the secondary provider on a bounded-budget timeout (rc 76)", () => {
+    // A primary that merely ran slow used to block the merge outright: the
+    // fallback branch gated on rc 75 (quota) and rc 2 (CLI missing) only, so
+    // rc 76 fell through to "MERGE BLOCKED ... no usable fallback is
+    // configured" even with fallback=claude set. The fallback exists for
+    // precisely this case, so 76 must be inside the branch condition.
+    const branch = RUN_REVIEW.slice(
+      RUN_REVIEW.indexOf('if { [ "$PROVIDER_RC" -eq 75 ]'),
+      RUN_REVIEW.indexOf('[ "$QUALITY_FALLBACK" != none ]; then'),
+    );
+    expect(branch).toMatch(/PROVIDER_RC" -eq 76/);
+
+    // The blocked message must not assert a missing fallback without checking,
+    // or a failed fallback run reads as a configuration error.
+    expect(RUN_REVIEW).toMatch(/if \[ "\$QUALITY_FALLBACK" = none \]/);
+    expect(RUN_REVIEW).not.toMatch(
+      /bounded review budget and no usable fallback is configured/,
+    );
+  });
+
   it("persists and reloads the exact reviewed base across fenced shells", () => {
     expect(RUN_REVIEW).toMatch(/quality-invocation\.js" record-review/);
     expect(RUN_REVIEW).toMatch(/--from "\$REVIEW_DIFF_BASE"/);
