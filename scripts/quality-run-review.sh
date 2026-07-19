@@ -214,12 +214,22 @@ echo "[quality] reviewer policy: primary=$QUALITY_PRIMARY fallback=$QUALITY_FALL
 run_provider "$QUALITY_PRIMARY"
 PROVIDER_RC=$?
 
-if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 2 ]; } && [ "$QUALITY_FALLBACK" != none ]; then
+# 76 (bounded-budget timeout) belongs here alongside 75 and 2: all three mean
+# the primary produced no usable findings, which is exactly what a fallback is
+# configured for. Excluding it made a primary that merely ran slow block the
+# merge outright while reporting "no usable fallback is configured" — even with
+# fallback=claude set. The fallback attempt cannot overrun the invocation, since
+# authorize_provider_attempt caps it against the absolute deadline and returns
+# 77 when there is no budget left to give.
+if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 2 ] || [ "$PROVIDER_RC" -eq 76 ]; } &&
+  [ "$QUALITY_FALLBACK" != none ]; then
   if [ "$PROVIDER_RC" -eq 75 ]; then
     DETAIL="$(cat "$REVIEW_OUT/provider-exhausted" 2>/dev/null || true)"
     echo "⚠️  [quality] $QUALITY_PRIMARY exhausted${DETAIL:+ — $DETAIL}; switching immediately to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 2 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY unavailable; switching immediately to $QUALITY_FALLBACK." >&2
+  elif [ "$PROVIDER_RC" -eq 76 ]; then
+    echo "⚠️  [quality] $QUALITY_PRIMARY exceeded its bounded review budget; switching to $QUALITY_FALLBACK." >&2
   fi
   # Preserve failed-primary diagnostics. Findings from an earlier successful
   # primary pass remain authoritative if a later pass triggers fallback.
@@ -243,10 +253,20 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 2 ]; } && [ "$QUALITY_FAL
 fi
 
 if [ "$PROVIDER_RC" -ne 0 ]; then
+  # Only claim the fallback is missing when it actually is. When a fallback ran
+  # and also failed, saying "no usable fallback is configured" sends the reader
+  # to check their config instead of the second provider's evidence.
+  if [ "$QUALITY_FALLBACK" = none ]; then
+    FALLBACK_NOTE="and no fallback is configured"
+  elif [ "$REVIEW_PROVIDER" = "$QUALITY_FALLBACK" ]; then
+    FALLBACK_NOTE="after falling back from $QUALITY_PRIMARY"
+  else
+    FALLBACK_NOTE="and the $QUALITY_FALLBACK fallback did not run"
+  fi
   case "$PROVIDER_RC" in
-    75) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER account quota exhausted and no usable fallback is configured." >&2 ;;
-    2) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER CLI unavailable and no usable fallback is configured." >&2 ;;
-    76) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER exceeded its bounded review budget and no usable fallback is configured." >&2 ;;
+    75) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER account quota exhausted $FALLBACK_NOTE." >&2 ;;
+    2) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER CLI unavailable $FALLBACK_NOTE." >&2 ;;
+    76) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER exceeded its bounded review budget $FALLBACK_NOTE." >&2 ;;
     77) echo "❌ MERGE BLOCKED: the invocation-wide provider attempt cap or absolute deadline is exhausted." >&2 ;;
     4) echo "❌ MERGE BLOCKED: every $REVIEW_PROVIDER review was inconclusive." >&2 ;;
     *) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER review runner failed (rc=$PROVIDER_RC)." >&2 ;;
