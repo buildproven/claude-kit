@@ -66,6 +66,45 @@ const DEFAULTS = {
     "**/*.key",
     "**/.env*",
   ],
+  // The ALWAYS-HUMAN subset of the security floor. Even on a repo that cannot be
+  // server-side enforced (private, no Pro) — where critical tier otherwise
+  // accepts clean review + green gates in lieu of a human break-glass — a change
+  // touching these paths STILL requires a human capability. Rationale (research
+  // 2026-07: agent security PRs get heightened human scrutiny, median review
+  // 3.92h vs 0.11h): secrets, credentials, keys, auth, licensing, deploy, and
+  // webhooks are where an autonomous miss is unrecoverable. Deliberately NARROWER
+  // than securityFloor: workflows/husky/install.sh are your own config and go
+  // through the autonomous path on unprotectable repos. Overridable via
+  // scorePolicy.humanFloor.
+  // Matched CASE-INSENSITIVELY (see touchesHumanFloor) so AUTH/, .PEM, .Env
+  // cannot evade by casing. Token-broad on purpose: a floor that misses id_rsa,
+  // .p12, oauth, or password is not a floor (Codex + security-auditor review).
+  humanFloor: [
+    "**/auth/**",
+    "**/*auth*", // oauth, authn, authz, auth-config …
+    "**/licensing*.*",
+    "**/license*.*",
+    "**/*secret*",
+    "**/*credential*",
+    "**/*password*",
+    "**/*passwd*",
+    "**/*token*",
+    "**/deploy/**",
+    "**/deploy*.*",
+    "**/*deploy-*.*",
+    "**/webhook*.*",
+    "**/*.pem",
+    "**/*.key",
+    "**/*.p12",
+    "**/*.pfx",
+    "**/*.jks",
+    "**/*.keystore",
+    "**/id_rsa*",
+    "**/id_dsa*",
+    "**/id_ecdsa*",
+    "**/id_ed25519*",
+    "**/.env*",
+  ],
   // High-sensitivity (non-floor) source paths.
   high: ["**/api/**", "**/server/**", "**/db/**", "**/payments/**"],
   // Low-sensitivity paths.
@@ -818,6 +857,27 @@ function main() {
 
 if (require.main === module) main();
 
+/**
+ * True when ANY changed file matches the always-human security subset
+ * (`humanFloor`). Such a change requires a human break-glass capability even on
+ * an unprotectable repo where critical tier otherwise auto-approves on clean
+ * review. `files` is repo-relative paths; `cfg` is the effective scoring config.
+ */
+function touchesHumanFloor(files, cfg = DEFAULTS) {
+  // Case-INSENSITIVE, normalized matching: an attacker/agent must not evade the
+  // floor by casing (AUTH/, .PEM), a leading ./, or backslash separators. We
+  // lowercase both the path and the patterns and normalize separators before
+  // matching, rather than changing the shared matchesPattern (which tier scoring
+  // also uses) — keeping this hardening local to the human floor.
+  const rawPatterns = (cfg && cfg.humanFloor) || DEFAULTS.humanFloor;
+  const patterns = rawPatterns.map((p) => p.toLowerCase());
+  const normalize = (file) =>
+    String(file).replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+  return (files || []).some((file) =>
+    matchesPattern(normalize(file), patterns),
+  );
+}
+
 module.exports = {
   score,
   computeScore,
@@ -828,6 +888,7 @@ module.exports = {
   globToRegExp,
   fileIsMechanical,
   isForcedLogic,
+  touchesHumanFloor,
   loadConfig,
   deepMerge,
   DEFAULTS,

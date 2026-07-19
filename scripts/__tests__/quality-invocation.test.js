@@ -547,9 +547,20 @@ wait
     git(root, ["commit", "-q", "-m", "fix"]);
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
     const state = JSON.parse(readFileSync(manifest, "utf8"));
+    // Advancing HEAD invalidates the HEAD-bound approval.
     expect(state.approval.approved).toBe(false);
+    // Phase 0 contract: select-agents no longer HARD-BLOCKS critical when the
+    // approval is absent — it defers so the full critical review runs, and the
+    // human-capability decision moves to quality-authorize-merge.sh (which knows
+    // repo enforceability). So select-agents succeeds even with approval void…
     expect(
       spawnSync("bash", [SELECT, "--manifest", manifest], { cwd: root }).status,
+    ).toBe(0);
+    // …but the invalidated approval must remain invalid, which is what keeps the
+    // authoritative merge gate correct until re-approval.
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", manifest], { cwd: root })
+        .status,
     ).not.toBe(0);
 
     const resumed = spawnSync("node", [WRAPPER, BOOTSTRAP], {
@@ -2357,5 +2368,94 @@ exit 1
     expect(
       JSON.parse(readFileSync(manifestPath, "utf8")).requiredGates,
     ).toEqual(migrated.requiredGates);
+  });
+});
+
+describe("human-floor-check command (Phase 0 autonomy relaxation)", () => {
+  // Build a repo whose feature branch changes exactly `changedFile`.
+  // Exit-code contract: 0 = VERIFIED CLEAR (autonomous OK); 10 = touches floor;
+  // any other code (error) = human required. Only rc 0 unlocks autonomy.
+  function repoChanging(label, changedFile) {
+    const root = mkdtempSync(path.join(tmpdir(), `hfloor-${label}-`));
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.name", "Quality Test"]);
+    git(root, ["config", "user.email", "quality@example.com"]);
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: { lint: "true", test: "true", "security:audit": "true" },
+      }),
+    );
+    const target = path.join(root, changedFile);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, "base\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "base"]);
+    git(root, ["remote", "add", "origin", root]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "-c", "feature"]);
+    writeFileSync(target, "changed\n");
+    git(root, ["commit", "-qam", "change"]);
+    return { root, manifest: create(root) };
+  }
+
+  const rc = (root, manifest) =>
+    spawnSync("node", [INVOCATION, "human-floor-check", manifest], {
+      cwd: root,
+    }).status;
+
+  it("exits 0 (verified clear) for an ordinary script", () => {
+    const { root, manifest } = repoChanging("clear", "scripts/util.sh");
+    expect(rc(root, manifest)).toBe(0);
+  });
+
+  it("exits 10 for a key file", () => {
+    const { root, manifest } = repoChanging("pem", "keys/server.pem");
+    expect(rc(root, manifest)).toBe(10);
+  });
+
+  it("exits 10 for an uppercase-cased key (case-insensitive)", () => {
+    const { root, manifest } = repoChanging("upper", "Keys/Server.PEM");
+    expect(rc(root, manifest)).toBe(10);
+  });
+
+  it("exits 10 for an auth dir change", () => {
+    const { root, manifest } = repoChanging("auth", "src/auth/session.js");
+    expect(rc(root, manifest)).toBe(10);
+  });
+
+  it("exits 10 when a sensitive file is RENAMED out of a floor path", () => {
+    // auth/login.js -> login.js. --no-renames must surface the old auth/ path.
+    const root = mkdtempSync(path.join(tmpdir(), "hfloor-rename-"));
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.name", "Quality Test"]);
+    git(root, ["config", "user.email", "quality@example.com"]);
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: { lint: "true", test: "true", "security:audit": "true" },
+      }),
+    );
+    mkdirSync(path.join(root, "auth"), { recursive: true });
+    writeFileSync(path.join(root, "auth/login.js"), "export const x = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "base"]);
+    git(root, ["remote", "add", "origin", root]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "-c", "feature"]);
+    git(root, ["mv", "auth/login.js", "login.js"]);
+    git(root, ["commit", "-qam", "move auth out"]);
+    const manifest = create(root);
+    expect(rc(root, manifest)).toBe(10);
+  });
+
+  it("FAILS CLOSED (not 0) when the check errors — error must not unlock autonomy", () => {
+    // Tampered manifest (currentHead ≠ real HEAD) makes the loader throw →
+    // top-level exit 1. Autonomy is reachable ONLY on exit 0.
+    const { root, manifest } = repoChanging("err", "scripts/util.sh");
+    const m = JSON.parse(readFileSync(manifest, "utf8"));
+    m.revisions.currentHead = m.revisions.baseSha;
+    writeFileSync(manifest, `${JSON.stringify(m, null, 2)}\n`);
+    expect(rc(root, manifest)).not.toBe(0);
   });
 });

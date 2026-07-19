@@ -6,6 +6,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync, spawnSync } = require("child_process");
+const riskScore = require("./risk-score.js");
 
 const SCHEMA_VERSION = 1;
 const REQUIRED_GATES_POLICY_VERSION = 2;
@@ -2008,6 +2009,41 @@ function mutate(manifestArg, operation) {
   });
 }
 
+// Repo-relative files changed across the reviewed base..head, quoted-path safe.
+function reviewedChangedFiles(manifest) {
+  const root = manifest.repo.realpath;
+  const range = `${manifest.revisions.baseSha}..${manifest.revisions.currentHead}`;
+  // -z NUL-delimits and -c core.quotepath=false keeps non-ASCII paths literal,
+  // so a file with an accented/space name cannot slip past the matcher.
+  // --no-renames represents a rename as delete(old)+add(new) so BOTH paths are
+  // surfaced; without it git collapses a rename to the destination only, letting
+  // `auth/x.js -> src/x.js` hide the sensitive origin from the floor matcher
+  // (Codex + security-auditor review: rename-hides-path exploit).
+  const out = git(root, [
+    "-c",
+    "core.quotepath=false",
+    "diff",
+    "--name-only",
+    "--no-renames",
+    "-z",
+    range,
+  ]);
+  return out.split("\0").filter(Boolean);
+}
+
+// True when the reviewed change touches the always-human security floor.
+// An EMPTY changed-file set fails closed (returns true → human required): the
+// relaxation must never proceed having verified nothing. base==head, a bad
+// range, or a zero-file diff all mean "could not prove clear", which is NOT
+// "clear". A git error inside reviewedChangedFiles throws → top-level exit 1,
+// which the caller also treats as human-required.
+function humanFloorCheck(manifest) {
+  const cfg = riskScore.loadConfig(manifest.repo.realpath);
+  const files = reviewedChangedFiles(manifest);
+  if (files.length === 0) return true;
+  return riskScore.touchesHumanFloor(files, cfg);
+}
+
 const COMMANDS = {
   validate: ({ manifest }) =>
     process.stdout.write(`${manifest.invocationId}\n`),
@@ -2017,6 +2053,14 @@ const COMMANDS = {
     mutate(manifestArg, (locked) => setAgents(locked, rawArgs)),
   "approval-valid": ({ manifest }) => {
     process.exitCode = approvalValid(manifest) ? 0 : 1;
+  },
+  "human-floor-check": ({ manifest }) => {
+    // Contract designed so the AUTONOMOUS path is reachable ONLY by an explicit
+    // verified-clear result; every other outcome requires a human.
+    //   0  = verified clear of the human floor (autonomous critical permitted)
+    //   10 = touches the always-human floor (human capability required)
+    //   1  = error (top-level catch) → human required (fail closed)
+    process.exitCode = humanFloorCheck(manifest) ? 10 : 0;
   },
   "provider-attempt": ({ manifestArg, rawArgs }) => {
     let result;
