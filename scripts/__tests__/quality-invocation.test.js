@@ -55,6 +55,14 @@ function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
+function withoutAmbientGitHubIdentity(overrides = {}) {
+  const env = { ...process.env, ...overrides };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("GITHUB_")) delete env[key];
+  }
+  return env;
+}
+
 function repo(label) {
   const root = mkdtempSync(path.join(tmpdir(), `quality-${label}-`));
   git(root, ["init", "-q", "-b", "main"]);
@@ -613,11 +621,10 @@ exit 1
         ],
       }),
       encoding: "utf8",
-      env: {
-        ...process.env,
+      env: withoutAmbientGitHubIdentity({
         BREAK_GLASS_APPROVER: "brett",
         PATH: `${bin}:${process.env.PATH}`,
-      },
+      }),
     });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("PR: 14");
