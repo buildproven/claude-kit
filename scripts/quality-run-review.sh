@@ -125,6 +125,13 @@ run_codex_review() {
   schema="$SCRIPT_DIR/schemas/quality-review-output.schema.json"
   [ -f "$schema" ] || return 2
   command -v codex >/dev/null 2>&1 || return 2
+  # Probe the codex models-cache (BUI-352). exit 1 means an incompatible codex
+  # version owns $CODEX_HOME and codex will stall its whole clock on an
+  # unparseable cache — treat codex as UNAVAILABLE (return 2) so the runner
+  # fails over to the fallback provider immediately instead of after a timeout.
+  if ! bash "$SCRIPT_DIR/quality-codex-cache-guard.sh"; then
+    return 2
+  fi
   auth_output="$(bash "$bounded" --timeout 10 -- \
     codex login status 2>&1)"
   rc=$?
