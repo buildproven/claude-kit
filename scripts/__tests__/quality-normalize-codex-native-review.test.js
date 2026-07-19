@@ -39,6 +39,19 @@ Full review comments:
     expect(parseNativeReview("No findings.").verdict).toBe("approve");
   });
 
+  // BUI-359: Codex's real clean verdict is multi-sentence prose, not the literal
+  // string "no findings". The old whole-string anchor rejected these as
+  // INCONCLUSIVE and falsely blocked merges.
+  it.each([
+    "The patch validly raises Vitest's global test and hook timeouts without affecting production behavior or test selection. No actionable correctness issue was found in the changed configuration.",
+    "I reviewed the diff end to end. No issues found.",
+    "Change is straightforward. LGTM.",
+    "Reviewed the timeout config change; it looks good.",
+    "No security concerns in the modified handler.",
+  ])("approves clean prose verdicts: %s", (prose) => {
+    expect(parseNativeReview(prose).verdict).toBe("approve");
+  });
+
   it("rejects unrecognized prose instead of inventing approval", () => {
     expect(() => parseNativeReview("Review ended unexpectedly.")).toThrow(
       /no recognizable verdict/,
