@@ -2375,7 +2375,7 @@ describe("human-floor-check command (Phase 0 autonomy relaxation)", () => {
   // Build a repo whose feature branch changes exactly `changedFile`.
   // Exit-code contract: 0 = VERIFIED CLEAR (autonomous OK); 10 = touches floor;
   // any other code (error) = human required. Only rc 0 unlocks autonomy.
-  function repoChanging(label, changedFile) {
+  function repoChanging(label, changedFile, scorePolicy = null) {
     const root = mkdtempSync(path.join(tmpdir(), `hfloor-${label}-`));
     git(root, ["init", "-q", "-b", "main"]);
     git(root, ["config", "user.name", "Quality Test"]);
@@ -2395,7 +2395,14 @@ describe("human-floor-check command (Phase 0 autonomy relaxation)", () => {
     git(root, ["fetch", "-q", "origin", "main"]);
     git(root, ["switch", "-q", "-c", "feature"]);
     writeFileSync(target, "changed\n");
-    git(root, ["commit", "-qam", "change"]);
+    if (scorePolicy) {
+      writeFileSync(
+        path.join(root, "harness-config.json"),
+        JSON.stringify({ scorePolicy }),
+      );
+    }
+    git(root, ["add", "."]);
+    git(root, ["commit", "-qm", "change"]);
     return { root, manifest: create(root) };
   }
 
@@ -2423,6 +2430,31 @@ describe("human-floor-check command (Phase 0 autonomy relaxation)", () => {
     const { root, manifest } = repoChanging("auth", "src/auth/session.js");
     expect(rc(root, manifest)).toBe(10);
   });
+
+  it("exits 10 when the reviewed commit tries to erase the built-in floor", () => {
+    const { root, manifest } = repoChanging("self-disarm", "keys/server.pem", {
+      humanFloor: [],
+    });
+    expect(rc(root, manifest)).toBe(10);
+  });
+
+  const sensitiveDirectories = [
+    "secrets/aws.json",
+    "credentials/cloud.json",
+    "passwords/admin.txt",
+    "tokens/api.json",
+    "webhooks/receive.js",
+    "license/policy.js",
+    "licensing/policy.js",
+    "deployments/ship.sh",
+  ];
+  for (const changedFile of sensitiveDirectories) {
+    it(`exits 10 for sensitive directory path ${changedFile}`, () => {
+      const label = changedFile.replace(/[^a-z]/gi, "-");
+      const { root, manifest } = repoChanging(label, changedFile);
+      expect(rc(root, manifest)).toBe(10);
+    });
+  }
 
   it("exits 10 when a sensitive file is RENAMED out of a floor path", () => {
     // auth/login.js -> login.js. --no-renames must surface the old auth/ path.

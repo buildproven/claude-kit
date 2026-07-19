@@ -141,6 +141,19 @@ describe("computeScore — security floor never beaten by mechanical", () => {
     const r = scoreOf([d(".github/workflows/quality.yml", "M", "+# note", 1)]);
     expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
   });
+  it.each([
+    "secrets/aws.json",
+    "credentials/cloud.json",
+    "passwords/admin.txt",
+    "tokens/api.json",
+    "webhooks/receive.js",
+    "license/policy.js",
+    "licensing/policy.js",
+    "deployments/ship.sh",
+  ])("sensitive directory path %s stays at the security floor", (file) => {
+    const r = scoreOf([d(file, "M", "+// note", 1)]);
+    expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
+  });
 });
 
 describe("computeScore — package manifests use semantic field risk", () => {

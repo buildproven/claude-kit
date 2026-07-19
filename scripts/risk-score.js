@@ -53,14 +53,32 @@ const DEFAULTS = {
     "**/.husky/**",
     "**/*.husky/**",
     "**/auth/**",
+    "**/*auth*/**",
     "**/licensing*.*",
     "**/license*.*",
+    "**/*licens*/**",
     "**/*secret*",
+    "**/*secret*/**",
     "**/*credential*",
+    "**/*credential*/**",
+    "**/*password*",
+    "**/*password*/**",
+    "**/*passwd*",
+    "**/*passwd*/**",
+    "**/*token*",
+    "**/*token*/**",
     "**/deploy*.*",
     "**/*deploy-*.*",
+    "**/*deploy*/**",
     "**/install.sh",
     "**/webhook*.*",
+    "**/*webhook*/**",
+    "**/key/**",
+    "**/keys/**",
+    "**/*-key/**",
+    "**/*-keys/**",
+    "**/*_key/**",
+    "**/*_keys/**",
     "**/middleware.*",
     "**/*.pem",
     "**/*.key",
@@ -74,25 +92,41 @@ const DEFAULTS = {
   // 3.92h vs 0.11h): secrets, credentials, keys, auth, licensing, deploy, and
   // webhooks are where an autonomous miss is unrecoverable. Deliberately NARROWER
   // than securityFloor: workflows/husky/install.sh are your own config and go
-  // through the autonomous path on unprotectable repos. Overridable via
-  // scorePolicy.humanFloor.
+  // through the autonomous path on unprotectable repos. Repositories may EXTEND
+  // this list via scorePolicy.humanFloor, but cannot remove the built-in minimum:
+  // policy from the reviewed revision must never be able to authorize itself.
   // Matched CASE-INSENSITIVELY (see touchesHumanFloor) so AUTH/, .PEM, .Env
   // cannot evade by casing. Token-broad on purpose: a floor that misses id_rsa,
   // .p12, oauth, or password is not a floor (Codex + security-auditor review).
   humanFloor: [
     "**/auth/**",
     "**/*auth*", // oauth, authn, authz, auth-config …
+    "**/*auth*/**",
     "**/licensing*.*",
     "**/license*.*",
+    "**/*licens*/**",
     "**/*secret*",
+    "**/*secret*/**",
     "**/*credential*",
+    "**/*credential*/**",
     "**/*password*",
+    "**/*password*/**",
     "**/*passwd*",
+    "**/*passwd*/**",
     "**/*token*",
+    "**/*token*/**",
     "**/deploy/**",
     "**/deploy*.*",
     "**/*deploy-*.*",
+    "**/*deploy*/**",
     "**/webhook*.*",
+    "**/*webhook*/**",
+    "**/key/**",
+    "**/keys/**",
+    "**/*-key/**",
+    "**/*-keys/**",
+    "**/*_key/**",
+    "**/*_keys/**",
     "**/*.pem",
     "**/*.key",
     "**/*.p12",
@@ -869,8 +903,16 @@ function touchesHumanFloor(files, cfg = DEFAULTS) {
   // lowercase both the path and the patterns and normalize separators before
   // matching, rather than changing the shared matchesPattern (which tier scoring
   // also uses) — keeping this hardening local to the human floor.
-  const rawPatterns = (cfg && cfg.humanFloor) || DEFAULTS.humanFloor;
-  const patterns = rawPatterns.map((p) => p.toLowerCase());
+  // The built-in list is an immutable security minimum. Configuration comes
+  // from the reviewed checkout, so treating cfg.humanFloor as a replacement
+  // would let a PR commit `humanFloor: []` and authorize its own sensitive diff.
+  // Repository policy can only add stricter patterns.
+  const configuredPatterns = Array.isArray(cfg?.humanFloor)
+    ? cfg.humanFloor
+    : [];
+  const patterns = [
+    ...new Set([...DEFAULTS.humanFloor, ...configuredPatterns]),
+  ].map((pattern) => pattern.toLowerCase());
   const normalize = (file) =>
     String(file).replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
   return (files || []).some((file) =>

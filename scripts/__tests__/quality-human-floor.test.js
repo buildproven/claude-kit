@@ -49,10 +49,16 @@ describe("touchesHumanFloor", () => {
     );
   });
 
-  it("honors a scorePolicy.humanFloor override via cfg", () => {
+  it("treats a scorePolicy.humanFloor override as additive only", () => {
     const cfg = { humanFloor: ["**/only-this.js"] };
-    expect(touchesHumanFloor(["keys/server.pem"], cfg)).toBe(false);
+    expect(touchesHumanFloor(["keys/server.pem"], cfg)).toBe(true);
     expect(touchesHumanFloor(["a/only-this.js"], cfg)).toBe(true);
+  });
+
+  it("cannot be disabled with an empty scorePolicy.humanFloor", () => {
+    expect(touchesHumanFloor(["keys/server.pem"], { humanFloor: [] })).toBe(
+      true,
+    );
   });
 
   it("empty file list never touches the human floor", () => {
@@ -76,6 +82,14 @@ describe("touchesHumanFloor", () => {
     ["certs/client.p12", "p12 keystore"],
     ["certs/store.pfx", "pfx keystore"],
     ["config/app.jks", "java keystore"],
+    ["secrets/aws.json", "secrets directory"],
+    ["credentials/cloud.json", "credentials directory"],
+    ["passwords/admin.txt", "passwords directory"],
+    ["tokens/api.json", "tokens directory"],
+    ["webhooks/receive.js", "webhooks directory"],
+    ["license/policy.js", "license directory"],
+    ["licensing/policy.js", "licensing directory"],
+    ["deployments/ship.sh", "deployments directory"],
   ];
   for (const [file, why] of evasions) {
     it(`catches evasion: ${file} (${why})`, () => {
