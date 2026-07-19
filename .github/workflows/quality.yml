@@ -65,6 +65,12 @@ jobs:
       # recur silently.
       - name: Skill size (compaction re-attach budget)
         run: bash scripts/check-skill-size.sh
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Plugin manifest validation
+        run: |
+          claude plugin validate .claude-plugin/plugin.json
+          claude plugin validate .claude-plugin/marketplace.json
 
       # --- tests (was: test) ---
       - name: Run tests
