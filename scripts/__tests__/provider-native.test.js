@@ -34,6 +34,21 @@ function executable(file, body) {
 }
 
 describe("provider-native platform", () => {
+  it("invokes codex exec without the removed -a/--ask-for-approval flag", () => {
+    const source = readFileSync(PROVIDER_RUN, "utf8");
+    const invocation = source
+      .split("\n")
+      .find((line) => line.includes("codex exec --ephemeral"));
+    expect(invocation).toBeTruthy();
+    // `codex exec` dropped -a/--ask-for-approval; approvals are governed by -s
+    // <sandbox>. Passing -a makes codex exit rc=2 ("unexpected argument"),
+    // which is not in provider-run's 74/75/76 fallback set, so the whole run
+    // hard-fails instead of degrading to the fallback provider.
+    expect(invocation).not.toMatch(/\s-a\s/);
+    expect(invocation).not.toMatch(/--ask-for-approval/);
+    expect(invocation).toMatch(/-s "\$SANDBOX"/);
+  });
+
   it("classifies every Claude skill and keeps Ralph discoverable", () => {
     const settings = JSON.parse(
       readFileSync(path.join(ROOT, "config", "settings.json"), "utf8"),
