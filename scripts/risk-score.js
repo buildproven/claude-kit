@@ -79,10 +79,22 @@ const DEFAULTS = {
     "**/*-keys/**",
     "**/*_key/**",
     "**/*_keys/**",
+    "**/*keystore*/**",
+    "**/*keyring*/**",
+    "**/*keychain*/**",
     "**/middleware.*",
     "**/*.pem",
     "**/*.key",
+    "**/*.p12",
+    "**/*.pfx",
+    "**/*.jks",
+    "**/*.keystore",
+    "**/id_rsa*",
+    "**/id_dsa*",
+    "**/id_ecdsa*",
+    "**/id_ed25519*",
     "**/.env*",
+    "**/harness-config.json",
   ],
   // The ALWAYS-HUMAN subset of the security floor. Even on a repo that cannot be
   // server-side enforced (private, no Pro) — where critical tier otherwise
@@ -127,6 +139,9 @@ const DEFAULTS = {
     "**/*-keys/**",
     "**/*_key/**",
     "**/*_keys/**",
+    "**/*keystore*/**",
+    "**/*keyring*/**",
+    "**/*keychain*/**",
     "**/*.pem",
     "**/*.key",
     "**/*.p12",
@@ -138,6 +153,7 @@ const DEFAULTS = {
     "**/id_ecdsa*",
     "**/id_ed25519*",
     "**/.env*",
+    "**/harness-config.json",
   ],
   // High-sensitivity (non-floor) source paths.
   high: ["**/api/**", "**/server/**", "**/db/**", "**/payments/**"],
@@ -219,6 +235,39 @@ function matchesPattern(filepath, patterns) {
   return false;
 }
 
+function normalizeFloorPath(file) {
+  return String(file).replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+}
+
+function additiveFloorPatterns(defaultPatterns, configuredPatterns) {
+  const configured = Array.isArray(configuredPatterns)
+    ? configuredPatterns
+    : [];
+  return [
+    ...new Set(
+      [...defaultPatterns, ...configured].map((pattern) =>
+        pattern.toLowerCase(),
+      ),
+    ),
+  ];
+}
+
+function effectiveSecurityFloor(cfg = DEFAULTS) {
+  return additiveFloorPatterns(DEFAULTS.securityFloor, cfg?.securityFloor);
+}
+
+function matchesSecurityFloor(file, cfg = DEFAULTS) {
+  return matchesPattern(normalizeFloorPath(file), effectiveSecurityFloor(cfg));
+}
+
+function securityFloorScore(cfg = DEFAULTS) {
+  const configured = Number(cfg?.base?.securityFloor);
+  return Math.max(
+    DEFAULTS.base.securityFloor,
+    Number.isFinite(configured) ? configured : DEFAULTS.base.securityFloor,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // git helpers (injectable runner for tests)
 // ---------------------------------------------------------------------------
@@ -287,7 +336,13 @@ function resolveBase(gitRunner, baseArg) {
 // bumps and generated-file refreshes as mechanical — that is why the sub-rule
 // is injected into the shared classifier rather than living in it.)
 function fileIsMechanical(file, status, patch, floorPaths) {
-  if (matchesPattern(file, floorPaths)) return false; // floor files are never mechanical
+  if (
+    matchesPattern(
+      normalizeFloorPath(file),
+      additiveFloorPatterns(DEFAULTS.securityFloor, floorPaths),
+    )
+  )
+    return false; // floor files are never mechanical
   const testRuleAllowed = isTestPath(file);
   return (
     (testRuleAllowed && status === "A") ||
@@ -302,8 +357,12 @@ function fileIsMechanical(file, status, patch, floorPaths) {
  * the shared classifier and injecting this file's matcher + fileIsMechanical.
  */
 function classifyChangeNature(descriptors, floorPaths) {
-  return classifyChangeNatureShared(descriptors, {
-    floorPaths,
+  const normalizedDescriptors = descriptors.map((descriptor) => ({
+    ...descriptor,
+    file: normalizeFloorPath(descriptor.file),
+  }));
+  return classifyChangeNatureShared(normalizedDescriptors, {
+    floorPaths: additiveFloorPatterns(DEFAULTS.securityFloor, floorPaths),
     matchesPattern,
     fileIsMechanical,
   });
@@ -446,7 +505,7 @@ function safeGit(gitRunner, args) {
 // ---------------------------------------------------------------------------
 
 function pathBase(file, cfg) {
-  if (matchesPattern(file, cfg.securityFloor)) return cfg.base.securityFloor;
+  if (matchesSecurityFloor(file, cfg)) return securityFloorScore(cfg);
   if (matchesPattern(file, cfg.high)) return cfg.base.high;
   if (matchesPattern(file, cfg.low)) return cfg.base.low;
   return cfg.base.medium;
@@ -680,7 +739,7 @@ function manifestRisk(descriptor, cfg = DEFAULTS) {
 function descriptorBaseRisk(descriptor, cfg) {
   if (
     matchesPattern(descriptor.file, ["**/package.json"]) &&
-    !matchesPattern(descriptor.file, cfg.securityFloor)
+    !matchesSecurityFloor(descriptor.file, cfg)
   ) {
     return manifestRisk(descriptor, cfg);
   }
@@ -710,12 +769,15 @@ function computeScore(descriptors, diffStats, cfg) {
     }
   }
   const touchesFloor = descriptors.some((d) =>
-    matchesPattern(d.file, cfg.securityFloor),
+    matchesSecurityFloor(d.file, cfg),
   );
   reasons.push(`path base ${base} (most-sensitive: ${topFile || "n/a"})`);
   if (topReason) reasons.push(topReason);
 
-  const changeNature = classifyChangeNature(descriptors, cfg.securityFloor);
+  const changeNature = classifyChangeNature(
+    descriptors,
+    effectiveSecurityFloor(cfg),
+  );
   let score = base;
 
   // Mechanical downgrade — never on a floor touch, bounded, capped by size.
@@ -742,9 +804,10 @@ function computeScore(descriptors, diffStats, cfg) {
   }
 
   // Security floor pin.
-  if (touchesFloor && score < cfg.base.securityFloor) {
-    score = cfg.base.securityFloor;
-    reasons.push(`pinned to security floor ${cfg.base.securityFloor}`);
+  const floorScore = securityFloorScore(cfg);
+  if (touchesFloor && score < floorScore) {
+    score = floorScore;
+    reasons.push(`pinned to security floor ${floorScore}`);
   }
 
   score = Math.max(0, Math.min(100, score));
@@ -761,7 +824,19 @@ function scoreToKnobs(score, cfg) {
     codex = "high";
     codexRounds = 1;
   }
-  return { agents: band.agents, codex, codexRounds };
+  let agents = band.agents;
+  if (score >= DEFAULTS.base.securityFloor) {
+    const baseline =
+      DEFAULTS.curve.find((candidate) => score <= candidate.maxScore) ||
+      DEFAULTS.curve[DEFAULTS.curve.length - 1];
+    const codexRank = { skip: 0, high: 1, xhigh: 2 };
+    agents = Math.max(agents, baseline.agents);
+    if ((codexRank[codex] ?? -1) < codexRank[baseline.codex]) {
+      codex = baseline.codex;
+    }
+    codexRounds = Math.max(codexRounds, baseline.codexRounds);
+  }
+  return { agents, codex, codexRounds };
 }
 
 // ---------------------------------------------------------------------------
@@ -786,17 +861,28 @@ function deepMerge(base, override) {
   return out;
 }
 
-function loadConfig(repoRoot) {
-  let cfg = DEFAULTS;
+function parseConfigJson(raw, file) {
   try {
-    const p = path.join(repoRoot || process.cwd(), "harness-config.json");
-    if (fs.existsSync(p)) {
-      const repoCfg = JSON.parse(fs.readFileSync(p, "utf8"));
-      if (repoCfg.scorePolicy) cfg = deepMerge(DEFAULTS, repoCfg.scorePolicy);
-    }
-  } catch {
-    /* defaults */
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`invalid risk policy JSON at ${file}: ${error.message}`, {
+      cause: error,
+    });
   }
+}
+
+function loadConfig(repoRoot) {
+  const p = path.join(repoRoot || process.cwd(), "harness-config.json");
+  if (!fs.existsSync(p)) return DEFAULTS;
+  const repoCfg = parseConfigJson(fs.readFileSync(p, "utf8"), p);
+  if (!repoCfg.scorePolicy) return DEFAULTS;
+  const cfg = deepMerge(DEFAULTS, repoCfg.scorePolicy);
+  cfg.securityFloor = effectiveSecurityFloor(cfg);
+  cfg.humanFloor = additiveFloorPatterns(DEFAULTS.humanFloor, cfg.humanFloor);
+  cfg.base = {
+    ...cfg.base,
+    securityFloor: securityFloorScore(cfg),
+  };
   return cfg;
 }
 
@@ -907,16 +993,9 @@ function touchesHumanFloor(files, cfg = DEFAULTS) {
   // from the reviewed checkout, so treating cfg.humanFloor as a replacement
   // would let a PR commit `humanFloor: []` and authorize its own sensitive diff.
   // Repository policy can only add stricter patterns.
-  const configuredPatterns = Array.isArray(cfg?.humanFloor)
-    ? cfg.humanFloor
-    : [];
-  const patterns = [
-    ...new Set([...DEFAULTS.humanFloor, ...configuredPatterns]),
-  ].map((pattern) => pattern.toLowerCase());
-  const normalize = (file) =>
-    String(file).replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+  const patterns = additiveFloorPatterns(DEFAULTS.humanFloor, cfg?.humanFloor);
   return (files || []).some((file) =>
-    matchesPattern(normalize(file), patterns),
+    matchesPattern(normalizeFloorPath(file), patterns),
   );
 }
 
@@ -930,6 +1009,7 @@ module.exports = {
   globToRegExp,
   fileIsMechanical,
   isForcedLogic,
+  matchesSecurityFloor,
   touchesHumanFloor,
   loadConfig,
   deepMerge,

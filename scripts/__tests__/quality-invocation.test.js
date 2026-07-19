@@ -1774,6 +1774,32 @@ exit 1
     ).not.toBe(0);
   });
 
+  it("rejects a resumed HEAD whose complete diff requires stronger review", () => {
+    const root = repo("risk-escalation");
+    const manifest = create(root);
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
+    execFileSync("bash", [SELECT, "--manifest", manifest], { cwd: root });
+    const before = JSON.parse(readFileSync(manifest, "utf8"));
+
+    mkdirSync(path.join(root, "auth"), { recursive: true });
+    writeFileSync(
+      path.join(root, "auth/session.js"),
+      "export const session = true;\n",
+    );
+    git(root, ["add", "auth/session.js"]);
+    git(root, ["commit", "-q", "-m", "fix: add auth remediation"]);
+
+    const result = spawnSync("node", [INVOCATION, "advance", manifest], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/stronger review.*fresh invocation/i);
+    expect(
+      JSON.parse(readFileSync(manifest, "utf8")).revisions.currentHead,
+    ).toBe(before.revisions.currentHead);
+  });
+
   it("fails early when required repository gate scripts are missing", () => {
     const root = repo("missing-baselines");
     writeFileSync(
@@ -2447,6 +2473,10 @@ describe("human-floor-check command (Phase 0 autonomy relaxation)", () => {
     "license/policy.js",
     "licensing/policy.js",
     "deployments/ship.sh",
+    "keystore/config.json",
+    "keystores/config.json",
+    "keyring/config.json",
+    "keychain/config.json",
   ];
   for (const changedFile of sensitiveDirectories) {
     it(`exits 10 for sensitive directory path ${changedFile}`, () => {
@@ -2488,6 +2518,15 @@ describe("human-floor-check command (Phase 0 autonomy relaxation)", () => {
     const m = JSON.parse(readFileSync(manifest, "utf8"));
     m.revisions.currentHead = m.revisions.baseSha;
     writeFileSync(manifest, `${JSON.stringify(m, null, 2)}\n`);
+    expect(rc(root, manifest)).not.toBe(0);
+  });
+
+  it("FAILS CLOSED when harness-config.json is malformed", () => {
+    const { root, manifest } = repoChanging(
+      "malformed-policy",
+      "scripts/util.sh",
+    );
+    writeFileSync(path.join(root, "harness-config.json"), "{ not json");
     expect(rc(root, manifest)).not.toBe(0);
   });
 });

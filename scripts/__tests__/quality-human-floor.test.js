@@ -90,6 +90,11 @@ describe("touchesHumanFloor", () => {
     ["license/policy.js", "license directory"],
     ["licensing/policy.js", "licensing directory"],
     ["deployments/ship.sh", "deployments directory"],
+    ["keystore/config.json", "keystore directory"],
+    ["keystores/config.json", "keystores directory"],
+    ["keyring/config.json", "keyring directory"],
+    ["keychain/config.json", "keychain directory"],
+    ["harness-config.json", "self-authored risk policy"],
   ];
   for (const [file, why] of evasions) {
     it(`catches evasion: ${file} (${why})`, () => {

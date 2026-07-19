@@ -50,11 +50,27 @@ describe("loadConfig — per-repo harness-config.json", () => {
     expect(loadConfig(repoWith({ somethingElse: true }))).toBe(DEFAULTS);
   });
 
-  it("falls back to defaults on malformed JSON rather than throwing", () => {
-    // A broken config in someone's repo must not crash the quality gate.
+  it("fails closed on malformed JSON", () => {
     const dir = repoWith(null);
     fs.writeFileSync(path.join(dir, "harness-config.json"), "{ not json");
-    expect(loadConfig(dir)).toBe(DEFAULTS);
+    expect(() => loadConfig(dir)).toThrow();
+  });
+
+  it("cannot remove or lower the built-in security floor", () => {
+    const cfg = loadConfig(
+      repoWith({
+        scorePolicy: {
+          securityFloor: [],
+          base: { securityFloor: 0 },
+          curve: [{ maxScore: 100, agents: 2, codex: "skip", codexRounds: 0 }],
+          codexForceFloor: 101,
+        },
+      }),
+    );
+    expect(cfg.securityFloor).toEqual(
+      expect.arrayContaining(DEFAULTS.securityFloor),
+    );
+    expect(cfg.base.securityFloor).toBe(DEFAULTS.base.securityFloor);
   });
 });
 

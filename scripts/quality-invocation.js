@@ -599,6 +599,31 @@ function createManifest(options) {
   return manifestPath;
 }
 
+function strongerReviewForCurrentHead(manifest, root) {
+  if (manifest.risk?.resolved !== true) return null;
+  const rescored = riskScore.score({
+    base: manifest.revisions.baseRef,
+    repoRoot: root,
+    gitRunner: (args) => git(root, args),
+  });
+  const tierForScore = (score) => {
+    if (score >= 75) return "critical";
+    if (score >= 50) return "high";
+    if (score >= 20) return "medium";
+    return "low";
+  };
+  const tierRank = { low: 0, medium: 1, high: 2, critical: 3 };
+  const codexRank = { skip: 0, low: 0, medium: 1, high: 2, xhigh: 3 };
+  const nextTier = tierForScore(rescored.riskScore);
+  const stronger =
+    tierRank[nextTier] > tierRank[manifest.risk.tier] ||
+    rescored.knobs.agents > manifest.risk.agentTarget ||
+    (codexRank[rescored.knobs.codex] ?? -1) >
+      (codexRank[manifest.risk.codexDepth] ?? -1) ||
+    rescored.knobs.codexRounds > manifest.risk.codexRounds;
+  return stronger ? { ...rescored.knobs, tier: nextTier } : null;
+}
+
 function advanceHead(manifest, root) {
   const nextHead = git(root, ["rev-parse", "HEAD"]);
   const priorHead = manifest.revisions.currentHead;
@@ -617,6 +642,14 @@ function advanceHead(manifest, root) {
   } catch {
     throw new Error(
       `quality resume refused: ${priorHead} is not an ancestor of ${nextHead}`,
+    );
+  }
+  const stronger = strongerReviewForCurrentHead(manifest, root);
+  if (stronger) {
+    throw new Error(
+      `quality resume requires stronger review at HEAD ${nextHead} ` +
+        `(was ${manifest.risk.tier}/${manifest.risk.agentTarget}/${manifest.risk.codexDepth}, ` +
+        `now ${stronger.tier}/${stronger.agents}/${stronger.codex}); start a fresh invocation`,
     );
   }
   if (

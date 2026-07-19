@@ -150,8 +150,29 @@ describe("computeScore — security floor never beaten by mechanical", () => {
     "license/policy.js",
     "licensing/policy.js",
     "deployments/ship.sh",
+    "keystore/config.json",
+    "keystores/config.json",
+    "keyring/config.json",
+    "keychain/config.json",
+    "AUTH/session.js",
+    "Secrets/aws.json",
+    "server.PEM",
+    ".ENV",
+    "certs/client.p12",
+    "certs/store.pfx",
+    "config/app.jks",
+    "config/store.keystore",
   ])("sensitive directory path %s stays at the security floor", (file) => {
     const r = scoreOf([d(file, "M", "+// note", 1)]);
+    expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
+  });
+
+  it("a reviewed config cannot erase the immutable security floor", () => {
+    const cfg = deepMerge(DEFAULTS, {
+      securityFloor: [],
+      base: { securityFloor: 0 },
+    });
+    const r = scoreOf([d("secrets/aws.json", "M", "+x", 1)], cfg);
     expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
   });
 });
@@ -448,6 +469,17 @@ describe("scoreToKnobs — Moderate curve", () => {
       curve: [{ maxScore: 100, agents: 2, codex: "skip", codexRounds: 0 }],
     });
     expect(scoreToKnobs(80, cfg).codex).not.toBe("skip");
+  });
+  it("reviewed config cannot weaken critical security review depth", () => {
+    const cfg = deepMerge(DEFAULTS, {
+      curve: [{ maxScore: 100, agents: 2, codex: "skip", codexRounds: 0 }],
+      codexForceFloor: 101,
+    });
+    expect(scoreToKnobs(DEFAULTS.base.securityFloor, cfg)).toEqual({
+      agents: 6,
+      codex: "xhigh",
+      codexRounds: 1,
+    });
   });
 });
 
