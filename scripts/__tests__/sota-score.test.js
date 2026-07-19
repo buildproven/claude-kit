@@ -1,6 +1,7 @@
 const {
   CURRENT_BASELINE,
   compareVersions,
+  overallScore,
   scoreRepository,
   scoreSettingsValidity,
 } = require("../sota-score");
@@ -62,5 +63,45 @@ describe("SOTA rubric 3.0 scorer", () => {
     expect(compareVersions("2.1.210", "2.1.207")).toBe(1);
     expect(compareVersions("2.1.210", "2.1.210")).toBe(0);
     expect(compareVersions("2.1.99", "2.1.210")).toBe(-1);
+  });
+
+  describe("overallScore", () => {
+    it("excludes N/A categories from the mean instead of scoring them zero", () => {
+      // The real 2026-07-18 amendment: distribution is N/A for a private
+      // overlay that is never published. Averaging across all 15 keys read
+      // 8.2; the true mean of the 14 applicable categories is 8.8.
+      const scores = {
+        settings_validity: 9,
+        permission_posture: 9,
+        native_first: 9,
+        distribution: null,
+        agent_orchestration: 8,
+        claude_md: 10,
+        bounded_autonomy: 9,
+        hooks: 9,
+        skill_design: 8,
+        model_config: 8,
+        quality_gates: 9,
+        security: 9,
+        git_workflow: 10,
+        observability: 7,
+        currency: 9,
+      };
+
+      expect(overallScore(scores)).toBe(8.8);
+    });
+
+    it("does not let a null category deflate the average", () => {
+      expect(overallScore({ a: 10, b: 10, c: null })).toBe(10);
+    });
+
+    it("returns null rather than NaN when nothing is applicable", () => {
+      expect(overallScore({ a: null, b: undefined })).toBeNull();
+      expect(overallScore({})).toBeNull();
+    });
+
+    it("ignores non-finite values that would poison the mean", () => {
+      expect(overallScore({ a: 8, b: NaN, c: Infinity })).toBe(8);
+    });
   });
 });

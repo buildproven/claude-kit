@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
@@ -118,6 +119,334 @@ describe("quality merge gates", () => {
       STAMP_AND_MERGE.indexOf("quality-wait-required-checks.sh"),
     ).toBeLessThan(STAMP_AND_MERGE.lastIndexOf("quality-authorize-merge.sh"));
     expect(AUTHORIZE).toMatch(/persisted empty stamp/);
+  });
+
+  it("requires explicit opt-in to merge on an unprotectable base", () => {
+    // Private repos without GitHub Pro get HTTP 403 on the protection API, so
+    // ATOMIC_BASE_FRESHNESS can never become true and --merge is unsatisfiable
+    // there, pushing operators to --admin (which skips EVERY gate, not just
+    // this one). The escape hatch must be opt-in and off by default.
+    expect(AUTHORIZE).toMatch(/BS_QUALITY_ALLOW_UNPROTECTABLE_BASE:-false/);
+    expect(AUTHORIZE).toMatch(/ATOMIC_BASE_FRESHNESS=unprotectable/);
+    expect(AUTHORIZE).toMatch(
+      /case "\$ATOMIC_BASE_FRESHNESS" in\s*\n\s*true \| unprotectable\)/,
+    );
+  });
+
+  describe("unprotectable-base classification", () => {
+    const PLAN_LIMIT =
+      "Upgrade to GitHub Pro or make this repository public to enable this feature.";
+    const classify = (args) => {
+      // The body travels as a FILE, never argv: command substitution and shell
+      // arguments strip NUL bytes, which would normalize a malformed response
+      // into a well-formed authorized one before the classifier sees it.
+      const bodyFile = path.join(
+        mkdtempSync(path.join(tmpdir(), "protectability-")),
+        "body.json",
+      );
+      writeFileSync(bodyFile, args.body ?? "");
+      try {
+        execFileSync(
+          "bash",
+          [
+            path.join(ROOT, "scripts/quality-base-protectability.sh"),
+            "--private",
+            args.private,
+            "--rc",
+            String(args.rc),
+            "--body-file",
+            bodyFile,
+          ],
+          { stdio: "pipe" },
+        );
+        return "unprotectable";
+      } catch {
+        return "blocked";
+      }
+    };
+
+    it("accepts only a proven plan limit on a private repo", () => {
+      expect(
+        classify({
+          private: "true",
+          rc: 1,
+          body: `{"message":"${PLAN_LIMIT}","status":"403"}`,
+        }),
+      ).toBe("unprotectable");
+    });
+
+    it("rejects a SUCCESSFUL response that merely quotes the upgrade text", () => {
+      // A substring search over the body would authorize here. The request has
+      // to have failed for a plan limit to be the explanation.
+      expect(
+        classify({
+          private: "true",
+          rc: 0,
+          body: `{"required_status_checks":{"contexts":["${PLAN_LIMIT}"]}}`,
+        }),
+      ).toBe("blocked");
+    });
+
+    it("rejects a rate-limit 403 that embeds the plan-limit sentence", () => {
+      // Throttling also returns 403, so comparing .message in full — not as a
+      // substring — is what keeps a retryable failure from becoming an approval.
+      expect(
+        classify({
+          private: "true",
+          rc: 1,
+          body: `{"message":"API rate limit exceeded. ${PLAN_LIMIT}","status":"403"}`,
+        }),
+      ).toBe("blocked");
+    });
+
+    it("rejects 404, unparseable output, and unknown privacy", () => {
+      expect(
+        classify({
+          private: "true",
+          rc: 1,
+          body: '{"message":"Not Found","status":"404"}',
+        }),
+      ).toBe("blocked");
+      expect(
+        classify({ private: "true", rc: 1, body: "gh: connection refused" }),
+      ).toBe("blocked");
+      expect(
+        classify({
+          private: "unknown",
+          rc: 1,
+          body: `{"message":"${PLAN_LIMIT}","status":"403"}`,
+        }),
+      ).toBe("blocked");
+    });
+
+    it("rejects public repos, which can always be protected", () => {
+      expect(
+        classify({
+          private: "false",
+          rc: 1,
+          body: `{"message":"${PLAN_LIMIT}","status":"403"}`,
+        }),
+      ).toBe("blocked");
+    });
+
+    it("rejects duplicate keys hidden behind JSON unicode escapes", () => {
+      // Counting raw `"message":` occurrences in the text cannot see this: the
+      // escaped key reads as zero occurrences, while any parser resolves it to
+      // a second `message` that overwrites the rate-limit value with the
+      // plan-limit one.
+      const escaped =
+        `{"message":"rate limited",` +
+        `"m\\u0065ssage":"${PLAN_LIMIT}",` +
+        `"status":"429","s\\u0074atus":"403"}`;
+      expect(classify({ private: "true", rc: 1, body: escaped })).toBe(
+        "blocked",
+      );
+    });
+
+    it("rejects duplicate keys whose first value is a non-empty container", () => {
+      // `jq --stream` emits paths for LEAVES, so a duplicate whose first value
+      // is a non-empty object or array never produces a depth-1 key path and
+      // slipped through the stream-based counter entirely. Only walking the
+      // tokens and counting member names as they appear catches these.
+      const cases = [
+        `{"message":{"x":1},"message":"${PLAN_LIMIT}","status":403}`,
+        `{"status":{"x":1},"status":403,"message":"${PLAN_LIMIT}"}`,
+        `{"message":[1,2],"message":"${PLAN_LIMIT}","status":403}`,
+        `{"message":{"a":{"b":[1,{"c":2}]}},"message":"${PLAN_LIMIT}","status":403}`,
+        `{"m\\u0065ssage":{"a":[1]},"message":"${PLAN_LIMIT}","status":403}`,
+      ];
+      for (const body of cases) {
+        expect(classify({ private: "true", rc: 1, body })).toBe("blocked");
+      }
+    });
+
+    it("rejects duplicate keys at any depth, not just the top level", () => {
+      // These do not change how message/status resolve, but "exactly one
+      // unambiguous JSON object" has to hold for the whole document — an
+      // ambiguous body is not the response GitHub sends.
+      const nested = [
+        `{"message":"${PLAN_LIMIT}","status":403,"details":{"reason":"a","reason":"b"}}`,
+        `{"message":"${PLAN_LIMIT}","status":403,"metadata":[{"status":429,"status":403}]}`,
+        `{"message":"${PLAN_LIMIT}","status":403,"d":{"reason":"a","r\\u0065ason":"b"}}`,
+      ];
+      for (const body of nested) {
+        expect(classify({ private: "true", rc: 1, body })).toBe("blocked");
+      }
+    });
+
+    it("compares the status value, not its string coercion", () => {
+      // `String([403])` is "403", so a coercing check accepted {"status":[403]}
+      // as a genuine 403 response.
+      const wrapped = [
+        `{"message":"${PLAN_LIMIT}","status":[403]}`,
+        `{"message":"${PLAN_LIMIT}","status":[403,403]}`,
+        `{"message":"${PLAN_LIMIT}","status":{}}`,
+        `{"message":"${PLAN_LIMIT}","status":"403 "}`,
+        `{"message":["${PLAN_LIMIT}"],"status":403}`,
+      ];
+      for (const body of wrapped) {
+        expect(classify({ private: "true", rc: 1, body })).toBe("blocked");
+      }
+    });
+
+    it("rejects bodies that are not valid UTF-8", () => {
+      // Buffer.toString("utf8") rewrites invalid sequences to U+FFFD, which
+      // would launder a body that is not valid UTF-8 JSON into one that parses.
+      const bodyFile = path.join(
+        mkdtempSync(path.join(tmpdir(), "protectability-")),
+        "body.json",
+      );
+      writeFileSync(
+        bodyFile,
+        Buffer.concat([
+          Buffer.from(`{"message":"${PLAN_LIMIT}","status":403,"x":"`, "utf8"),
+          Buffer.from([0xff]),
+          Buffer.from('"}', "utf8"),
+        ]),
+      );
+      let verdict = "unprotectable";
+      try {
+        execFileSync(
+          "bash",
+          [
+            path.join(ROOT, "scripts/quality-base-protectability.sh"),
+            "--private",
+            "true",
+            "--rc",
+            "1",
+            "--body-file",
+            bodyFile,
+          ],
+          { stdio: "pipe" },
+        );
+      } catch {
+        verdict = "blocked";
+      }
+      expect(verdict).toBe("blocked");
+    });
+
+    it("fails closed on deeply nested input without crashing", () => {
+      // Unbounded recursion raised an uncaught RangeError at ~5k nested
+      // arrays. A depth limit turns that into an ordinary rejection.
+      const body = "[".repeat(6000) + "]".repeat(6000);
+      expect(classify({ private: "true", rc: 1, body })).toBe("blocked");
+    });
+
+    it("accepts GitHub's real response shape and formatting variants", () => {
+      // The genuine body carries documentation_url alongside message/status,
+      // and the status may be numeric. Extra non-conflicting fields are not
+      // ambiguity, so tightening must not reject the real thing.
+      expect(
+        classify({
+          private: "true",
+          rc: 1,
+          body: `{"message":"${PLAN_LIMIT}","documentation_url":"https://docs.github.com/rest/branches/branch-protection#get-branch-protection","status":"403"}`,
+        }),
+      ).toBe("unprotectable");
+      expect(
+        classify({
+          private: "true",
+          rc: 1,
+          body: `{\n  "message" : "${PLAN_LIMIT}" ,\n  "status" : 403\n}`,
+        }),
+      ).toBe("unprotectable");
+    });
+
+    it("rejects a plan-limit object smuggled into a larger response", () => {
+      // Recovering a JSON fragment with sed/grep would accept every one of
+      // these. The whole body has to be exactly one JSON object, so noise
+      // around a genuine-looking object is unobserved, not unprotectable.
+      const valid = `{"message":"${PLAN_LIMIT}","status":"403"}`;
+      const smuggled = [
+        `prefix ${valid}`,
+        `${valid} suffix`,
+        `gh: transport failure\n${valid}`,
+        `{"message":"rate limited","status":"403"}\nnoise ${valid}`,
+        `${valid}${valid}`,
+      ];
+      for (const body of smuggled) {
+        expect(classify({ private: "true", rc: 1, body })).toBe("blocked");
+      }
+    });
+
+    it("rejects a concatenated object that contributes no competing fields", () => {
+      // jq streams multiple JSON values, so validating shape, status, and
+      // message as separate invocations accepted `{}` + a valid object: the
+      // empty object satisfied a per-value `type == "object"` test and emitted
+      // nothing for .status/.message, letting the second object answer for the
+      // whole body. Only a slurped `length == 1` check catches this, and the
+      // two-valid-objects case above passed for an unrelated reason.
+      const valid = `{"message":"${PLAN_LIMIT}","status":"403"}`;
+      expect(classify({ private: "true", rc: 1, body: `{}${valid}` })).toBe(
+        "blocked",
+      );
+      expect(classify({ private: "true", rc: 1, body: `${valid}{}` })).toBe(
+        "blocked",
+      );
+    });
+
+    it("rejects a body containing NUL bytes", () => {
+      // Passing the body through a shell variable would silently strip NULs,
+      // normalizing a malformed raw response into a well-formed authorized one.
+      // The classifier reads a file and rejects NULs outright.
+      const valid = `{"message":"${PLAN_LIMIT}","status":"403"}`;
+      expect(classify({ private: "true", rc: 1, body: `\0${valid}` })).toBe(
+        "blocked",
+      );
+      expect(classify({ private: "true", rc: 1, body: `${valid}\0` })).toBe(
+        "blocked",
+      );
+    });
+
+    it("rejects duplicate message/status keys", () => {
+      // jq keeps the LAST occurrence, so a body that leads with a rate-limit
+      // message and repeats the key with the plan-limit text would otherwise
+      // parse as a genuine plan limit.
+      expect(
+        classify({
+          private: "true",
+          rc: 1,
+          body: `{"message":"rate limited","message":"${PLAN_LIMIT}","status":429,"status":403}`,
+        }),
+      ).toBe("blocked");
+    });
+
+    it("requires the observed status to be 403", () => {
+      // A body carrying the plan-limit message under any other status is not a
+      // plan limit; bind the classification to the status GitHub reported.
+      expect(
+        classify({
+          private: "true",
+          rc: 1,
+          body: `{"message":"${PLAN_LIMIT}","status":"500"}`,
+        }),
+      ).toBe("blocked");
+      expect(
+        classify({
+          private: "true",
+          rc: 1,
+          body: `{"message":"${PLAN_LIMIT}"}`,
+        }),
+      ).toBe("blocked");
+    });
+  });
+
+  it("states the unprotectable path is weaker, not an equivalent guarantee", () => {
+    // GitHub exposes no base-SHA precondition on merge, so no client-side check
+    // reconstructs atomic base freshness. The code must not claim it does.
+    expect(AUTHORIZE).toMatch(/NON-ATOMIC base freshness/);
+    expect(AUTHORIZE).toMatch(/base may advance before the merge lands/);
+    expect(AUTHORIZE).toMatch(/not a reproduction of the strong one/);
+  });
+
+  it("fails closed if the pre-merge base re-read cannot be completed", () => {
+    // `git ls-remote | awk` reports awk's status, not git's, and this script
+    // does not set pipefail — a failed lookup with partial parseable output
+    // would have read as a successful re-read. Capture before piping.
+    expect(AUTHORIZE).toMatch(/FINAL_BASE_LS="\$\(git ls-remote/);
+    expect(AUTHORIZE).toMatch(/could not re-read the base ref/);
+    expect(AUTHORIZE).toMatch(/base ref lookup returned no OID/);
+    expect(AUTHORIZE).toMatch(/-n "\$FINAL_BASE_OID"/);
   });
 
   it("falls back to the secondary provider on a bounded-budget timeout (rc 76)", () => {
