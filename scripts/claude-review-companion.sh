@@ -97,7 +97,8 @@ fi
 mkdir -p "$OUT_DIR" 2>/dev/null || { echo "claude-review-companion: cannot create OUT_DIR $OUT_DIR" >&2; exit 1; }
 CANCEL_FILE="$OUT_DIR/provider-cancel"
 EXHAUSTED_FILE="$OUT_DIR/provider-exhausted"
-rm -f "$CANCEL_FILE" "$EXHAUSTED_FILE"
+FAILURE_FILE="$OUT_DIR/provider-failure.json"
+rm -f "$CANCEL_FILE" "$EXHAUSTED_FILE" "$FAILURE_FILE"
 
 # --- MODEL guard: never pin a [1m] variant (Extra Usage billing gate) --------
 MODEL_ARGS=()
@@ -218,6 +219,20 @@ structured_exhaustion_file() {
   ' "$evidence" >/dev/null 2>&1
 }
 
+record_structured_exhaustion() {
+  local evidence="$1" failure_json reset_at temporary
+  failure_json="$(node "$SCRIPT_DIR/quality-provider-error.js" describe "$evidence")" ||
+    return 1
+  reset_at="$(printf '%s' "$failure_json" |
+    jq -r '.resetAt // "time unavailable"')"
+  temporary="${FAILURE_FILE}.$$.$RANDOM.tmp"
+  printf '%s' "$failure_json" |
+    jq '. + {provider: "claude"}' > "$temporary" || return 1
+  mv "$temporary" "$FAILURE_FILE"
+  printf 'Claude provider exhausted (structured error metadata; reset %s)\n' \
+    "$reset_at" > "$EXHAUSTED_FILE"
+}
+
 run_agent() {
   local agent="$1" sysfile out raw result rc stderr_file error_json
   out="$OUT_DIR/${agent##*:}.findings.txt"
@@ -265,13 +280,13 @@ run_agent() {
     error_json="$OUT_DIR/${agent##*:}.error-metadata.json"
     if printf '%s' "$raw" | jq -e . > "$error_json" 2>/dev/null \
        && structured_exhaustion_file "$error_json"; then
-      printf 'Claude provider exhausted (structured error metadata)\n' > "$EXHAUSTED_FILE"
+      record_structured_exhaustion "$error_json" || return 3
       : > "$CANCEL_FILE"
       echo "INCONCLUSIVE: Claude provider exhausted" > "$out"
       return 75
     fi
     if structured_exhaustion_file "$stderr_file"; then
-      printf 'Claude provider exhausted (structured error metadata)\n' > "$EXHAUSTED_FILE"
+      record_structured_exhaustion "$stderr_file" || return 3
       : > "$CANCEL_FILE"
       echo "INCONCLUSIVE: Claude provider exhausted" > "$out"
       return 75

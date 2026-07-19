@@ -45,6 +45,52 @@ function approvalRequested() {
   return process.env.BREAK_GLASS_APPROVED === "true";
 }
 
+function assertOuterApprovalContext() {
+  if (
+    process.env.BS_QUALITY_HEADLESS === "1" ||
+    process.env.BS_QUALITY_ACTIVE === "1"
+  ) {
+    throw new Error(
+      "quality approval is accepted only from the outer quality invocation",
+    );
+  }
+}
+
+function parseApprovalCommand(argv) {
+  if (argv[0] !== "approve") {
+    return { argv, explicit: false, expectedHead: null, expectedPr: null };
+  }
+  const forwarded = [];
+  let expectedHead = null;
+  let expectedPr = null;
+  for (let index = 1; index < argv.length; index += 1) {
+    const value = argv[index];
+    if (value === "--head") {
+      expectedHead = argv[++index];
+    } else if (value.startsWith("--head=")) {
+      expectedHead = value.slice("--head=".length);
+    } else {
+      forwarded.push(value);
+      if (value === "--pr") expectedPr = argv[index + 1];
+      else if (value.startsWith("--pr="))
+        expectedPr = value.slice("--pr=".length);
+    }
+  }
+  if (!/^[0-9]+$/.test(expectedPr || "")) {
+    throw new Error("quality approve requires --pr <number>");
+  }
+  if (!/^[0-9a-f]{40}$/.test(expectedHead || "")) {
+    throw new Error("quality approve requires --head <exact-40-character-sha>");
+  }
+  assertOuterApprovalContext();
+  return {
+    argv: forwarded,
+    explicit: true,
+    expectedHead,
+    expectedPr: Number(expectedPr),
+  };
+}
+
 function childEnvironment() {
   const environment = { ...process.env };
   delete environment.BREAK_GLASS_APPROVED;
@@ -57,10 +103,13 @@ function childEnvironment() {
 
 function issueApprovalCapability(
   manifestPath,
-  invocationScript,
-  challenge,
-  publicKey,
-  privateKey,
+  {
+    invocationScript,
+    challenge,
+    publicKey,
+    privateKey,
+    expectedIdentity = null,
+  },
 ) {
   const manifest = parseJson(
     fs.readFileSync(manifestPath, "utf8"),
@@ -73,6 +122,15 @@ function issueApprovalCapability(
     );
   }
   const issuedAt = new Date();
+  if (
+    expectedIdentity &&
+    (manifest.repo.pr !== expectedIdentity.pr ||
+      manifest.revisions.currentHead !== expectedIdentity.head)
+  ) {
+    throw new Error(
+      `approval identity mismatch: expected PR ${expectedIdentity.pr} at ${expectedIdentity.head}`,
+    );
+  }
   const payload = {
     schemaVersion: 1,
     repoKey: manifest.repo.key,
@@ -119,48 +177,86 @@ function issueApprovalCapability(
     });
     invocation.attachApproval(locked, { artifact: artifactPath });
   });
+  return payload;
+}
+
+function approvalMaterial(wantsApproval) {
+  if (!wantsApproval) {
+    return { challenge: null, keyPair: null, publicKey: null };
+  }
+  const keyPair = crypto.generateKeyPairSync("ed25519");
+  return {
+    challenge: crypto.randomBytes(32).toString("hex"),
+    keyPair,
+    publicKey: keyPair.publicKey
+      .export({ type: "spki", format: "der" })
+      .toString("base64"),
+  };
+}
+
+function manifestPathFromBootstrap(stdout) {
+  const manifestPath = String(stdout || "")
+    .split("\n")
+    .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
+    ?.slice("BS_QUALITY_MANIFEST=".length);
+  if (!manifestPath)
+    throw new Error("bootstrap did not return a manifest path");
+  return manifestPath;
+}
+
+function printExplicitApproval(approval) {
+  process.stdout.write(
+    [
+      "[quality] break-glass approval created",
+      `Repository key: ${approval.repoKey}`,
+      `PR: ${approval.pr}`,
+      `HEAD: ${approval.head}`,
+      `Invocation: ${approval.invocationId}`,
+      `Approver: ${approval.approver}`,
+      `Expires: ${approval.expiresAt}`,
+      "",
+    ].join("\n"),
+  );
 }
 
 function main() {
   const bootstrap = process.argv[2];
   if (!bootstrap) throw new Error("bootstrap path is required");
-  const argv = parseRequest(fs.readFileSync(0, "utf8"));
-  const wantsApproval = approvalRequested();
-  const challenge = wantsApproval
-    ? crypto.randomBytes(32).toString("hex")
-    : null;
-  const keyPair = wantsApproval ? crypto.generateKeyPairSync("ed25519") : null;
-  const publicKey = keyPair
-    ? keyPair.publicKey
-        .export({ type: "spki", format: "der" })
-        .toString("base64")
-    : null;
+  const request = parseApprovalCommand(
+    parseRequest(fs.readFileSync(0, "utf8")),
+  );
+  const argv = request.argv;
+  const environmentApproval = approvalRequested();
+  if (environmentApproval) assertOuterApprovalContext();
+  const wantsApproval = request.explicit || environmentApproval;
+  const { challenge, keyPair, publicKey } = approvalMaterial(wantsApproval);
   const result = spawnSync("bash", [bootstrap, ...argv], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     env: childEnvironment(),
   });
   if (result.status === 0 && wantsApproval) {
-    const manifestPath = (result.stdout || "")
-      .split("\n")
-      .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
-      ?.slice("BS_QUALITY_MANIFEST=".length);
-    if (!manifestPath)
-      throw new Error("bootstrap did not return a manifest path");
-    issueApprovalCapability(
-      manifestPath,
-      path.join(path.dirname(bootstrap), "quality-invocation.js"),
+    const manifestPath = manifestPathFromBootstrap(result.stdout);
+    const approval = issueApprovalCapability(manifestPath, {
+      invocationScript: path.join(
+        path.dirname(bootstrap),
+        "quality-invocation.js",
+      ),
       challenge,
       publicKey,
-      keyPair.privateKey,
-    );
+      privateKey: keyPair.privateKey,
+      expectedIdentity: request.explicit
+        ? { pr: request.expectedPr, head: request.expectedHead }
+        : null,
+    });
+    if (request.explicit) printExplicitApproval(approval);
   }
   process.stdout.write(result.stdout || "");
   process.stderr.write(result.stderr || "");
   process.exit(result.status ?? 1);
 }
 
-module.exports = { parseRequest };
+module.exports = { parseApprovalCommand, parseRequest };
 
 if (require.main === module) {
   try {

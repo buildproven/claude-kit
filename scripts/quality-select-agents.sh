@@ -34,6 +34,8 @@ AGENTS=("${PANEL[@]:0:$N}")
 if [ "$TIER" = critical ]; then
   if ! node "$SCRIPT_DIR/quality-invocation.js" approval-valid "$MANIFEST"; then
     echo "❌ MERGE BLOCKED: critical tier requires break-glass approval bound to this exact repository, PR, and HEAD." >&2
+    node "$SCRIPT_DIR/quality-terminal-status.js" \
+      --manifest "$MANIFEST" --category break-glass || true
     exit 1
   fi
   echo "[quality] Break-glass approval verified for exact HEAD $HEAD_SHA"

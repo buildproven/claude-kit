@@ -64,10 +64,11 @@ selection. Critical review requires a signed break-glass capability created by
 the outer wrapper and bound to repository, PR, HEAD, invocation, approver, and
 expiry identity. The wrapper pins its verification key into the invocation
 before attachment; artifacts cannot supply or replace their own trust key.
-Approval is accepted only from the outer `BREAK_GLASS_APPROVED=true`
-environment channel, never from quality argv. Nested quality processes cannot
-mint approval for an existing invocation. A changed HEAD or expired/replaced
-capability invalidates approval.
+Approval is accepted only from the outer wrapper, either through
+`/bs:quality approve --pr <number> --head <exact-sha>` or the backward-compatible
+outer `BREAK_GLASS_APPROVED=true` environment channel. Nested quality processes
+cannot mint approval for an existing invocation. A changed HEAD or
+expired/replaced capability invalidates approval.
 
 ## 3. Automated gates and formatting
 
@@ -146,6 +147,13 @@ Provider exhaustion is classified only from a non-zero provider exit plus
 structured API/CLI metadata. Generated review text mentioning HTTP 429, quota,
 or rate-limit handling is ordinary review content.
 
+Typed exhaustion preserves a structured provider reset time when one is
+supplied. A terminal failure prints repository-gate state, provider checkpoint,
+break-glass state, GitHub CI state, and the exact safe
+`/bs:quality --manifest <path>` retry. Parser failures, provider exhaustion,
+provider availability, timeouts, code findings, and CI failures remain distinct
+fail-closed diagnoses.
+
 Runtime is derived from both risk and actual diff workload. Risk controls
 depth; changed lines plus per-file overhead control the clock. Discovery scales
 from 5 minutes for micro changes to 15 minutes for huge changes. If and only if
@@ -187,6 +195,15 @@ node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" judge \
 - If the incremental verification finds a blocker, stop and report it. Never
   mutate the reviewed HEAD after the second review in the same campaign.
 - An inconclusive or malformed provider response blocks merge.
+
+Before a terminal stop for remaining code findings, print the separated
+diagnosis:
+
+```bash
+QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-terminal-status.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
+node "$QUALITY_SCRIPTS_DIR/quality-terminal-status.js" \
+  --manifest "<exact-manifest-path>" --category code-findings
+```
 
 ## 6. Review evidence and merge
 
@@ -250,9 +267,12 @@ else
 fi
 ```
 
-The line lands in `$BS_QUALITY_TELEMETRY_FILE` when set, else the target repo's
-`data/quality-telemetry.jsonl`. The monthly quality-value report derives
-escaped-defect rate, finding precision, and cost-per-caught-bug from these lines.
+The line lands in `$BS_QUALITY_TELEMETRY_FILE` when set, else in the operator
+state directory at
+`$XDG_STATE_HOME/claude-kit/quality-telemetry/<repo-key>.jsonl` (falling back to
+`~/.local/state`). It never dirties the audited repository by default. The
+monthly quality-value report derives escaped-defect rate, finding precision,
+and cost-per-caught-bug from these lines.
 
 ## References
 
