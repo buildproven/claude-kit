@@ -62,9 +62,12 @@ Claude Code and Codex read the shared workflow policy at
 `${XDG_CONFIG_HOME:-~/.config}/buildproven/agent-providers.json`. Configure it
 with `scripts/provider-config.sh --primary codex --fallback claude`
 (or reverse the providers). `BS_QUALITY_PRIMARY`, `BS_QUALITY_FALLBACK`, and
-`BS_QUALITY_PROVIDER_CONFIG` are per-run overrides. The fallback runs only for
-typed account exhaustion (HTTP 429, weekly/rate/usage limit, exhausted quota)
-or an unavailable CLI—not when the primary reports code findings.
+`BS_QUALITY_PROVIDER_CONFIG` are per-run overrides. The fallback runs for typed
+account exhaustion (HTTP 429, weekly/rate/usage limit, exhausted quota), an
+unavailable CLI, or — when `BS_QUALITY_FALLBACK_ON_TIMEOUT=1` (the default) — a
+primary that exhausts its bounded review clock without converging (a degraded
+primary shouldn't block a merge while a healthy fallback is idle). It does NOT
+run when the primary reports code findings.
 
 Claude panels share a cancellation sentinel: the first exhausted reviewer
 causes sibling process groups to terminate. A successful review records HEAD;
@@ -213,15 +216,16 @@ auto-fix loop, re-run `npm test` to verify they pass before continuing.
 
 ### Environment Variables
 
-| Variable                              | Default | Description                                                                                          |
-| ------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------- |
-| `BS_QUALITY_PRIMARY`                  | config  | Per-run primary override: `claude` or `codex`.                                                       |
-| `BS_QUALITY_FALLBACK`                 | config  | Per-run fallback override: `claude`, `codex`, or `none`.                                             |
-| `BS_QUALITY_TARGET_DIR`               | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd.   |
-| `BS_QUALITY_MAX_FIX_COMMITS`          | 1       | Explicit override for the default one-commit batched-remediation cap.                                |
-| `BS_QUALITY_MAX_REMEDIATION_SECONDS`  | planned | Batched-fix allowance remaining after proportional discovery and verification reserves.              |
-| `BS_QUALITY_REREVIEW_RESERVE_SECONDS` | planned | Workload-scaled allowance for one targeted validation review after fixes.                            |
-| `BS_QUALITY_TELEMETRY_FILE`           | -       | Absolute path for the campaign telemetry log. Default: `<target-repo>/data/quality-telemetry.jsonl`. |
+| Variable                              | Default | Description                                                                                                                                                              |
+| ------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `BS_QUALITY_PRIMARY`                  | config  | Per-run primary override: `claude` or `codex`.                                                                                                                           |
+| `BS_QUALITY_FALLBACK`                 | config  | Per-run fallback override: `claude`, `codex`, or `none`.                                                                                                                 |
+| `BS_QUALITY_FALLBACK_ON_TIMEOUT`      | `1`     | On `1`, a primary that times out without converging (rc=76) fails over to the fallback (runs once). `0` restores #104's strict single-clock bound (timeout hard-blocks). |
+| `BS_QUALITY_TARGET_DIR`               | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd.                                                                       |
+| `BS_QUALITY_MAX_FIX_COMMITS`          | 1       | Explicit override for the default one-commit batched-remediation cap.                                                                                                    |
+| `BS_QUALITY_MAX_REMEDIATION_SECONDS`  | planned | Batched-fix allowance remaining after proportional discovery and verification reserves.                                                                                  |
+| `BS_QUALITY_REREVIEW_RESERVE_SECONDS` | planned | Workload-scaled allowance for one targeted validation review after fixes.                                                                                                |
+| `BS_QUALITY_TELEMETRY_FILE`           | -       | Absolute path for the campaign telemetry log. Default: `<target-repo>/data/quality-telemetry.jsonl`.                                                                     |
 
 ### Run Governor (runaway-loop guardrails)
 

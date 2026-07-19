@@ -209,27 +209,43 @@ run_provider() {
   esac
 }
 
+# Should a primary that exhausts its bounded review clock without converging
+# (rc=76, from a 124 timeout) fail over to the fallback? Two competing goals:
+#   - #104 bounded total review time: DON'T fall back on timeout — a second full
+#     review doubles the clock, and on a genuinely huge diff the fallback times
+#     out too, so you burn both clocks and still block.
+#   - Resilience: a DEGRADED primary (e.g. a broken codex models-cache stalling
+#     model resolution) times out on diffs the fallback reviews in seconds — here
+#     blocking every merge while a healthy fallback sits idle is the wrong call.
+# It's therefore configurable. Default TRUE: in practice a stalled primary
+# blocking merges outright is worse than an occasional bounded double-review,
+# and the fallback runs exactly ONCE (a fallback rc=76 hard-blocks below — no
+# loop, so the total is at most two review clocks, never unbounded). Set
+# BS_QUALITY_FALLBACK_ON_TIMEOUT=0 to restore the strict single-clock bound.
+FALLBACK_ON_TIMEOUT="${BS_QUALITY_FALLBACK_ON_TIMEOUT:-1}"
+
 REVIEW_PROVIDER="$QUALITY_PRIMARY"
-echo "[quality] reviewer policy: primary=$QUALITY_PRIMARY fallback=$QUALITY_FALLBACK" >&2
+echo "[quality] reviewer policy: primary=$QUALITY_PRIMARY fallback=$QUALITY_FALLBACK (fallback-on-timeout=$FALLBACK_ON_TIMEOUT)" >&2
 run_provider "$QUALITY_PRIMARY"
 PROVIDER_RC=$?
 
-# 76 (bounded-budget timeout) belongs here alongside 75 and 2: all three mean
-# the primary produced no usable findings, which is exactly what a fallback is
-# configured for. Excluding it made a primary that merely ran slow block the
-# merge outright while reporting "no usable fallback is configured" — even with
-# fallback=claude set. The fallback attempt cannot overrun the invocation, since
-# authorize_provider_attempt caps it against the absolute deadline and returns
-# 77 when there is no budget left to give.
-if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 2 ] || [ "$PROVIDER_RC" -eq 76 ]; } &&
-  [ "$QUALITY_FALLBACK" != none ]; then
+# rc=76 (bounded-budget timeout without converging) fails over to the fallback
+# WHEN CONFIGURED — see the FALLBACK_ON_TIMEOUT rationale above. The fallback
+# attempt cannot overrun the invocation: authorize_provider_attempt caps it
+# against the absolute deadline and returns 77 when no budget remains.
+timeout_should_fall_back() {
+  [ "$PROVIDER_RC" -eq 76 ] && [ "$FALLBACK_ON_TIMEOUT" = 1 ]
+}
+
+if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 2 ] || timeout_should_fall_back; } \
+   && [ "$QUALITY_FALLBACK" != none ]; then
   if [ "$PROVIDER_RC" -eq 75 ]; then
     DETAIL="$(cat "$REVIEW_OUT/provider-exhausted" 2>/dev/null || true)"
     echo "⚠️  [quality] $QUALITY_PRIMARY exhausted${DETAIL:+ — $DETAIL}; switching immediately to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 2 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY unavailable; switching immediately to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 76 ]; then
-    echo "⚠️  [quality] $QUALITY_PRIMARY exceeded its bounded review budget; switching to $QUALITY_FALLBACK." >&2
+    echo "⚠️  [quality] $QUALITY_PRIMARY exceeded its review budget without converging; failing over to $QUALITY_FALLBACK (BS_QUALITY_FALLBACK_ON_TIMEOUT=0 to disable)." >&2
   fi
   # Preserve failed-primary diagnostics. Findings from an earlier successful
   # primary pass remain authoritative if a later pass triggers fallback.
@@ -266,7 +282,7 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
   case "$PROVIDER_RC" in
     75) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER account quota exhausted $FALLBACK_NOTE." >&2 ;;
     2) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER CLI unavailable $FALLBACK_NOTE." >&2 ;;
-    76) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER exceeded its bounded review budget $FALLBACK_NOTE." >&2 ;;
+    76) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER exceeded its bounded review budget without converging $FALLBACK_NOTE." >&2 ;;
     77) echo "❌ MERGE BLOCKED: the invocation-wide provider attempt cap or absolute deadline is exhausted." >&2 ;;
     4) echo "❌ MERGE BLOCKED: every $REVIEW_PROVIDER review was inconclusive." >&2 ;;
     *) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER review runner failed (rc=$PROVIDER_RC)." >&2 ;;
