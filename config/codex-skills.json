@@ -15,6 +15,11 @@
     "steward",
     "triage",
     "frontend-design",
-    "agent-browser"
+    "agent-browser",
+    "api-conventions",
+    "error-handling",
+    "test-strategy",
+    "verify-claim",
+    "patterns"
   ]
 }
