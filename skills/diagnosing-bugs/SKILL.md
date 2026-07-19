@@ -1,6 +1,6 @@
 ---
 name: diagnosing-bugs
-description: Disciplined diagnosis loop for hard bugs, regressions, flaky behavior, and performance failures. Use before implementing a fix: create a tight red-capable command, minimize the reproduction, test ranked falsifiable hypotheses, then lock the fix with behavioral evidence.
+description: "Disciplined diagnosis loop for hard bugs, regressions, flaky behavior, and performance failures. Use before implementing a fix: create a tight red-capable command, minimize the reproduction, test ranked falsifiable hypotheses, then lock the fix with behavioral evidence."
 ---
 
 # Diagnosing Bugs
