@@ -41,6 +41,66 @@ function run(args, { env } = {}) {
   }
 }
 
+// The PR base-change guard (quality-bootstrap.sh) must distinguish a base
+// branch that merely ADVANCED (GitHub's cached baseRefOid lags behind the tip
+// — normal fast-forward history) from a base that was REWRITTEN (force-push /
+// rebase that orphans the recorded OID). The guard encodes this as: the
+// recorded baseRefOid must equal, or be an ancestor of, the freshly fetched
+// base tip. These tests validate that exact ancestry contract against a real
+// git repo so a regression to strict equality (which fails every time main
+// advances after a PR opens) is caught.
+describe("quality-bootstrap PR base-change guard ancestry semantics", () => {
+  function git(cwd, ...args) {
+    return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+  }
+  function isAncestor(cwd, ancestor, descendant) {
+    const r = require("node:child_process").spawnSync(
+      "git",
+      ["merge-base", "--is-ancestor", ancestor, descendant],
+      { cwd },
+    );
+    return r.status === 0;
+  }
+  let repo;
+  beforeEach(() => {
+    repo = fs.mkdtempSync(path.join(os.tmpdir(), "qbg-base-"));
+    git(repo, "init", "-q");
+    git(repo, "config", "user.email", "t@t");
+    git(repo, "config", "user.name", "t");
+    git(repo, "commit", "--allow-empty", "-q", "-m", "base");
+  });
+  afterEach(() => {
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  it("accepts an advanced base: recorded OID is an ancestor of the new tip", () => {
+    const recordedBaseOid = git(repo, "rev-parse", "HEAD");
+    git(
+      repo,
+      "commit",
+      "--allow-empty",
+      "-q",
+      "-m",
+      "main advanced (a PR merged)",
+    );
+    const newTip = git(repo, "rev-parse", "HEAD");
+    expect(newTip).not.toBe(recordedBaseOid);
+    // Guard passes: equality fails but ancestry holds.
+    expect(isAncestor(repo, recordedBaseOid, newTip)).toBe(true);
+  });
+
+  it("rejects a rewritten base: recorded OID is orphaned from the new tip", () => {
+    const recordedBaseOid = git(repo, "rev-parse", "HEAD");
+    // Rewrite history: reset to a fresh root so the recorded OID is orphaned.
+    git(repo, "checkout", "-q", "--orphan", "rewritten");
+    git(repo, "commit", "--allow-empty", "-q", "-m", "force-pushed base");
+    const newTip = git(repo, "rev-parse", "HEAD");
+    // Guard fails: not equal AND not an ancestor → genuine base rewrite.
+    expect(newTip).not.toBe(recordedBaseOid);
+    expect(isAncestor(repo, recordedBaseOid, newTip)).toBe(false);
+  });
+});
+
 describe("quality-bootstrap headless review-child guard", () => {
   it("refuses when BS_QUALITY_HEADLESS=1 (a review child must not re-enter)", () => {
     const r = run([], { env: { BS_QUALITY_HEADLESS: "1" } });

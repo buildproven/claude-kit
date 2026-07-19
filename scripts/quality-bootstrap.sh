@@ -346,10 +346,21 @@ BASE_REF=""
 if [ -n "${PR_BASE_NAME:-}" ]; then
   git fetch origin "$PR_BASE_NAME" -q || exit 1
   BASE_REF="origin/$PR_BASE_NAME"
-  [ "$(git rev-parse "$BASE_REF")" = "$PR_BASE_OID" ] || {
-    echo "❌ /bs:quality PR base changed during bootstrap." >&2
+  # The PR's base branch may legitimately advance between GitHub caching the
+  # PR's baseRefOid and this bootstrap running (any merge into main after the
+  # PR opened moves the tip forward while GitHub's baseRefOid lags). That is
+  # normal fast-forward history, not a base change that invalidates the review.
+  # The real hazard this guard defends against is a base *rewrite* (force-push
+  # / rebase of main) that orphans the recorded base OID from the branch's
+  # history. Detect that precisely: the cached baseRefOid must still be an
+  # ancestor of — or equal to — the freshly fetched base tip. Ancestry holds
+  # when main merely advanced; it fails only when the base was rewritten.
+  BASE_TIP="$(git rev-parse "$BASE_REF")"
+  if [ "$BASE_TIP" != "$PR_BASE_OID" ] &&
+    ! git merge-base --is-ancestor "$PR_BASE_OID" "$BASE_TIP" 2>/dev/null; then
+    echo "❌ /bs:quality PR base was rewritten during bootstrap (recorded base $PR_BASE_OID is not an ancestor of $BASE_REF tip $BASE_TIP)." >&2
     exit 1
-  }
+  fi
 fi
 for candidate in ${BASE_REF:+"$BASE_REF"} origin/main origin/master main master; do
   if git rev-parse --verify --quiet "${candidate}^{commit}" >/dev/null 2>&1; then
