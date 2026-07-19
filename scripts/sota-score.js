@@ -424,6 +424,23 @@ function scoreCurrency() {
   });
 }
 
+// A null score means "not applicable to this repo" — e.g. distribution, which is
+// meaningless for a private single-user overlay that is never published. Coercing
+// N/A to 0 would punish a correct answer, and dividing by the unfiltered length
+// would silently deflate every other category (the real 8.79 read as 8.2).
+// Exclude non-numeric scores from the mean; never coerce them.
+function overallScore(scores) {
+  const values = Object.values(scores).filter(
+    (value) => typeof value === "number" && Number.isFinite(value),
+  );
+  if (!values.length) return null;
+  return (
+    Math.round(
+      (values.reduce((sum, value) => sum + value, 0) / values.length) * 10,
+    ) / 10
+  );
+}
+
 async function scoreRepository({ schema, schemaError } = {}) {
   let liveSchema = schema;
   let liveSchemaError = schemaError;
@@ -454,11 +471,7 @@ async function scoreRepository({ schema, schemaError } = {}) {
   const scores = Object.fromEntries(
     Object.entries(categories).map(([name, value]) => [name, value.score]),
   );
-  const values = Object.values(scores);
-  const overall =
-    Math.round(
-      (values.reduce((sum, value) => sum + value, 0) / values.length) * 10,
-    ) / 10;
+  const overall = overallScore(scores);
   return {
     date: new Date().toISOString().split("T")[0],
     rubricVersion: "3.0",
@@ -480,6 +493,7 @@ async function main() {
 module.exports = {
   CURRENT_BASELINE,
   compareVersions,
+  overallScore,
   scoreRepository,
   scoreSettingsValidity,
 };
