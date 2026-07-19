@@ -55,8 +55,16 @@ fi
 
 case "$(uname -s)" in
   Darwin)
+    # Pass text as ARGUMENTS, never interpolated into AppleScript source.
+    # Building the script from the message is an injection hole: escaping only
+    # `"` leaves `\` untouched, so a message containing \" yields \\" — AppleScript
+    # reads \\ as a literal backslash, the quote then closes the string, and the
+    # remainder executes (`do shell script` and friends). MSG can carry a model's
+    # last-assistant-message, so that text is untrusted by definition.
     command -v osascript >/dev/null 2>&1 &&
-      osascript -e "display notification \"${MSG//\"/\\\"}\" with title \"${TITLE//\"/\\\"}\"" 2>/dev/null
+      osascript -e 'on run argv
+display notification (item 1 of argv) with title (item 2 of argv)
+end run' "$MSG" "$TITLE" 2>/dev/null
     ;;
   Linux)
     # Covers WSL too, where notify-send may or may not be wired to the host.
