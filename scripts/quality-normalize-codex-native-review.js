@@ -58,10 +58,35 @@ function parseNativeReview(raw, root = process.cwd()) {
       recommendation: "Address the described review finding.",
     });
   }
-  if (
-    findings.length === 0 &&
-    !/^(?:no (?:actionable )?findings|looks good)\.?$/i.test(String(raw).trim())
-  ) {
+  // Zero structured findings can mean either "clean review" or "the review
+  // never completed". Codex's native output for a clean review is prose, e.g.
+  // "No actionable correctness issue was found in the changed configuration." —
+  // not the literal string "no findings". Anchoring `^...$` against the WHOLE
+  // transcript (the old test) rejected every prose approval as INCONCLUSIVE and
+  // falsely blocked merges (BUI-359).
+  //
+  // Decide clean-vs-inconclusive per sentence with only simple, linear-time
+  // regexes (variable-gap patterns like `\bno\b.*noun` backtrack and trip
+  // security/detect-unsafe-regex). A sentence is an affirmative clean verdict
+  // when it contains BOTH a negation and a finding-noun ("no issues", "no
+  // actionable correctness issue found") or an explicit "looks good"/"lgtm", and
+  // is NOT itself a completeness qualifier ("could not be reviewed", "ended
+  // unexpectedly", "another path") — a qualified/partial "no findings" stays
+  // inconclusive, not an approval.
+  const NEGATION = /\b(?:no|not|n[o']?t|without)\b/i;
+  const NOUN =
+    /\b(?:findings?|issues?|concerns?|problems?|bugs?|(?:correctness|security)\s+(?:issue|problem|concern)s?)\b/i;
+  const CLEAN_PHRASE =
+    /\b(?:looks good|lgtm|no changes? (?:needed|required))\b/i;
+  const INCOMPLETE =
+    /\b(?:could ?n[o']?t be reviewed|ended unexpectedly|was (?:truncated|interrupted|incomplete)|another (?:path|file))\b/i;
+  const sentences = String(raw).split(/[.\n!?]+/);
+  const cleanVerdict = sentences.some((sentence) => {
+    if (INCOMPLETE.test(sentence)) return false;
+    if (CLEAN_PHRASE.test(sentence)) return true;
+    return NEGATION.test(sentence) && NOUN.test(sentence);
+  });
+  if (findings.length === 0 && !cleanVerdict) {
     throw new Error("native Codex review has no recognizable verdict");
   }
   const summary =
