@@ -23,16 +23,20 @@ const repoWith = (config) => {
 };
 
 /** Fake `git` so the score can be driven from a known diff without a real repo. */
-const gitRunner = (files) => (args) => {
-  const cmd = args.join(" ");
-  if (cmd.includes("merge-base")) return "BASE";
-  if (cmd.includes("--numstat"))
-    return `${files.map((f) => `${f.added}\t${f.deleted}\t${f.path}`).join("\0")}\0`;
-  if (cmd.includes("--name-status"))
-    return `${files.map((f) => `${f.status || "M"}\0${f.path}`).join("\0")}\0`;
-  if (cmd.includes("diff")) return files.map((f) => f.patch || "").join("\n");
-  return "";
-};
+const gitRunner =
+  (files, subjects = ["feat: change"]) =>
+  (args) => {
+    const cmd = args.join(" ");
+    if (cmd.includes("merge-base")) return "BASE";
+    if (cmd.startsWith("log ") && cmd.includes("--format=%s"))
+      return subjects.join("\n");
+    if (cmd.includes("--numstat"))
+      return `${files.map((f) => `${f.added}\t${f.deleted}\t${f.path}`).join("\0")}\0`;
+    if (cmd.includes("--name-status"))
+      return `${files.map((f) => `${f.status || "M"}\0${f.path}`).join("\0")}\0`;
+    if (cmd.includes("diff")) return files.map((f) => f.patch || "").join("\n");
+    return "";
+  };
 
 describe("loadConfig — per-repo harness-config.json", () => {
   it("returns the defaults when no config file exists", () => {
@@ -274,5 +278,101 @@ describe("score — the end-to-end entry point", () => {
     expect(
       score({ base: "main", gitRunner: runGit, config: DEFAULTS }).riskScore,
     ).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
+  });
+});
+
+describe("score — task-type risk routing", () => {
+  const sourceChange = [
+    {
+      path: "src/widget.js",
+      status: "M",
+      added: 2,
+      deleted: 1,
+      patch: "-old()\n+newThing()",
+    },
+  ];
+
+  it.each([
+    ["fix: correct widget state", "bugfix"],
+    ["revert: restore stable widget", "bugfix"],
+    ["perf: remove quadratic scan", "performance"],
+    ["feat: add widget state", "feature"],
+    ["chore: refresh metadata", "chore"],
+  ])("classifies %s as %s", (subject, expected) => {
+    const result = score({
+      base: "BASE",
+      gitRunner: gitRunner(sourceChange, [subject]),
+      config: DEFAULTS,
+    });
+    expect(result.taskType).toBe(expected);
+  });
+
+  it("routes bug fixes and performance work through the high-review floor", () => {
+    for (const subject of [
+      "fix: correct widget state",
+      "perf: remove quadratic scan",
+    ]) {
+      const result = score({
+        base: "BASE",
+        gitRunner: gitRunner(sourceChange, [subject]),
+        config: DEFAULTS,
+      });
+      expect(result.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.high);
+      expect(result.knobs.agents).toBeGreaterThanOrEqual(6);
+      expect(result.reasons).toContain(
+        `task type ${result.taskType} → high-review floor ${DEFAULTS.base.high}`,
+      );
+    }
+  });
+
+  it("infers docs and CI from an all-specialized diff without trusting the commit subject", () => {
+    const docs = score({
+      base: "BASE",
+      gitRunner: gitRunner(
+        [
+          {
+            path: "docs/guide.md",
+            status: "M",
+            added: 2,
+            deleted: 0,
+            patch: "+words",
+          },
+        ],
+        ["update guide"],
+      ),
+      config: DEFAULTS,
+    });
+    const ci = score({
+      base: "BASE",
+      gitRunner: gitRunner(
+        [
+          {
+            path: ".github/workflows/quality.yml",
+            status: "M",
+            added: 1,
+            deleted: 1,
+            patch: "-old\n+new",
+          },
+        ],
+        ["adjust checks"],
+      ),
+      config: DEFAULTS,
+    });
+
+    expect(docs.taskType).toBe("docs");
+    expect(ci.taskType).toBe("ci");
+    expect(ci.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
+  });
+
+  it("uses the strictest task type across a mixed commit range", () => {
+    const result = score({
+      base: "BASE",
+      gitRunner: gitRunner(sourceChange, [
+        "feat: add widget state",
+        "perf: remove quadratic scan",
+      ]),
+      config: DEFAULTS,
+    });
+    expect(result.taskType).toBe("performance");
   });
 });

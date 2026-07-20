@@ -23,7 +23,7 @@
  *     non-sensitive base, never below the security floor; magnitude only raises.
  *
  * Output (JSON to stdout, or GITHUB_OUTPUT lines when that env is set):
- *   { riskScore, changeNature, diffStats, reasons, knobs }
+ *   { riskScore, taskType, changeNature, diffStats, reasons, knobs }
  */
 
 const { execFileSync } = require("child_process");
@@ -496,6 +496,121 @@ function collectDescriptors(base, gitRunner) {
   return {
     descriptors,
     diffStats: { files: descriptors.length, lines: totalLines },
+    mergeBase,
+  };
+}
+
+const TASK_TYPE_RANK = {
+  unknown: 0,
+  chore: 1,
+  docs: 2,
+  build: 3,
+  ci: 4,
+  feature: 5,
+  bugfix: 6,
+  performance: 7,
+};
+const TASK_TYPES = new Set(Object.keys(TASK_TYPE_RANK));
+
+function conventionalTaskType(subject) {
+  const head = String(subject || "")
+    .split(":", 1)[0]
+    .trim()
+    .toLowerCase()
+    .replace(/!$/, "")
+    .replace(/\([^)]*\)$/, "");
+  if (head === "perf") return "performance";
+  if (head === "fix" || head === "revert") return "bugfix";
+  if (head === "feat") return "feature";
+  if (head === "ci") return "ci";
+  if (head === "build") return "build";
+  if (head === "docs") return "docs";
+  if (["chore", "style", "test"].includes(head)) return "chore";
+  return "unknown";
+}
+
+function pathTaskType(file) {
+  const normalized = normalizeFloorPath(file);
+  if (
+    normalized.startsWith(".github/workflows/") ||
+    normalized.startsWith(".circleci/") ||
+    normalized === ".gitlab-ci.yml"
+  ) {
+    return "ci";
+  }
+  if (
+    normalized === "dockerfile" ||
+    normalized.endsWith("/dockerfile") ||
+    normalized === "makefile" ||
+    normalized.endsWith("/makefile") ||
+    normalized.startsWith("build/") ||
+    normalized.startsWith("scripts/build")
+  ) {
+    return "build";
+  }
+  if (
+    normalized.endsWith(".md") ||
+    normalized.startsWith("docs/") ||
+    normalized === "license" ||
+    normalized.startsWith("changelog")
+  ) {
+    return "docs";
+  }
+  return "unknown";
+}
+
+function strictestTaskType(types) {
+  return types.reduce(
+    (strictest, candidate) =>
+      TASK_TYPE_RANK[candidate] > TASK_TYPE_RANK[strictest]
+        ? candidate
+        : strictest,
+    "unknown",
+  );
+}
+
+function classifyTaskType(descriptors, subjects = []) {
+  const fromCommits = strictestTaskType(
+    subjects.map((subject) => conventionalTaskType(subject)),
+  );
+  if (fromCommits !== "unknown") return fromCommits;
+  if (descriptors.length === 0) return "unknown";
+  const fromPaths = descriptors.map((descriptor) =>
+    pathTaskType(descriptor.file),
+  );
+  if (fromPaths.some((type) => type === "unknown")) return "unknown";
+  return strictestTaskType(fromPaths);
+}
+
+function collectCommitSubjects(mergeBase, gitRunner) {
+  return safeGit(gitRunner, [
+    "log",
+    "--no-merges",
+    "--format=%s",
+    `${mergeBase}..HEAD`,
+  ])
+    .split("\n")
+    .map((subject) => subject.trim())
+    .filter(Boolean);
+}
+
+function applyTaskTypeFloor(scored, taskType, cfg) {
+  const floors = {
+    feature: cfg.base.medium,
+    bugfix: cfg.base.high,
+    performance: cfg.base.high,
+  };
+  const floor = floors[taskType];
+  if (!Number.isFinite(floor) || scored.riskScore >= floor) return scored;
+  return {
+    ...scored,
+    riskScore: floor,
+    reasons: [
+      ...scored.reasons,
+      `task type ${taskType} → ${
+        taskType === "feature" ? "standard" : "high-review"
+      } floor ${floor}`,
+    ],
   };
 }
 
@@ -1135,6 +1250,7 @@ function score({
   gitRunner = defaultGitRunner,
   config = null,
   repoRoot = null,
+  taskType: persistedTaskType = null,
 } = {}) {
   const cfg = validateScoreConfig(config || loadConfig(repoRoot));
   const resolved = resolveBase(gitRunner, base);
@@ -1147,6 +1263,7 @@ function score({
     const knobs = scoreToKnobs(100, cfg);
     return {
       riskScore: 100,
+      taskType: "unknown",
       changeNature: "unknown",
       diffStats: { files: 0, lines: 0 },
       reasons: [
@@ -1159,21 +1276,26 @@ function score({
   }
 
   const resolvedBase = resolved.ref;
-  const { descriptors, diffStats } = collectDescriptors(
+  const { descriptors, diffStats, mergeBase } = collectDescriptors(
     resolvedBase,
     gitRunner,
   );
-  const { riskScore, changeNature, reasons } = computeScore(
-    descriptors,
-    diffStats,
+  if (persistedTaskType !== null && !TASK_TYPES.has(persistedTaskType)) {
+    throw new Error(`invalid persisted task type '${persistedTaskType}'`);
+  }
+  const taskType =
+    persistedTaskType ||
+    classifyTaskType(descriptors, collectCommitSubjects(mergeBase, gitRunner));
+  const scored = applyTaskTypeFloor(
+    computeScore(descriptors, diffStats, cfg),
+    taskType,
     cfg,
   );
-  const knobs = scoreToKnobs(riskScore, cfg);
+  const knobs = scoreToKnobs(scored.riskScore, cfg);
   return {
-    riskScore,
-    changeNature,
+    ...scored,
+    taskType,
     diffStats,
-    reasons,
     knobs,
     base: resolvedBase,
   };
@@ -1200,6 +1322,7 @@ function main() {
   if (gh) {
     const lines = [
       `riskScore=${result.riskScore}`,
+      `taskType=${result.taskType}`,
       `changeNature=${result.changeNature}`,
       `diffFiles=${result.diffStats.files}`,
       `diffLines=${result.diffStats.lines}`,
@@ -1246,6 +1369,7 @@ module.exports = {
   computeScore,
   classifyChangeNature,
   scoreToKnobs,
+  classifyTaskType,
   manifestRisk,
   matchesPattern,
   globToRegExp,

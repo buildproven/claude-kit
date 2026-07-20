@@ -737,6 +737,7 @@ function strongerReviewForCurrentHead(manifest, root) {
     repoRoot: root,
     gitRunner: (args) => git(root, args),
     config,
+    taskType: manifest.risk.taskType || "unknown",
   });
   const minimumScore = {
     medium: 20,
@@ -990,10 +991,26 @@ function setRisk(manifest, options) {
       `resolved tier ${tier} is below requested minimum ${requestedMinimum}`,
     );
   }
+  const taskType = options["task-type"] || "unknown";
+  if (
+    ![
+      "unknown",
+      "chore",
+      "docs",
+      "build",
+      "ci",
+      "feature",
+      "bugfix",
+      "performance",
+    ].includes(taskType)
+  ) {
+    throw new Error(`invalid resolved task type '${taskType}'`);
+  }
   const resolved = {
     requestedLevel: manifest.risk.requestedLevel,
     resolved: true,
     tier,
+    taskType,
     score:
       options.score === undefined || options.score === ""
         ? null

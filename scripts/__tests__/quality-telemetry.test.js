@@ -25,7 +25,13 @@ function baseManifest(overrides = {}) {
       headRefName: "feat/x",
     },
     revisions: { baseSha: "aaa", currentHead: "bbb" },
-    risk: { resolved: true, tier: "medium", score: 61, requestedLevel: "auto" },
+    risk: {
+      resolved: true,
+      taskType: "feature",
+      tier: "medium",
+      score: 61,
+      requestedLevel: "auto",
+    },
     agents: [{ name: "code-reviewer" }, { name: "security-auditor" }],
     reviews: [
       { status: "success", round: 1 },
@@ -120,6 +126,7 @@ describe("buildRecord", () => {
       telemetrySchemaVersion: 1,
       invocationId: "11111111-1111-4111-8111-111111111111",
       repoKey: "target-repo",
+      taskType: "feature",
       riskTier: "medium",
       riskScore: 61,
       durationSeconds: 0, // start 1000 > now 600 → clamps to 0
@@ -160,6 +167,7 @@ describe("buildRecord", () => {
     );
     expect(rec.riskTier).toBeNull();
     expect(rec.riskScore).toBeNull();
+    expect(rec.taskType).toBeNull();
   });
 });
 
