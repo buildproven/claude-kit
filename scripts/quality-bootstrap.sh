@@ -250,17 +250,22 @@ else
 
     if [ "$RES_KIND" = "pr" ] || [ "$RES_KIND" = "branch" ]; then
       if [ -z "$RES_PATH" ] && [ -n "$RES_BRANCH" ]; then
-        # No local worktree for the branch — materialize one in a sibling dir.
+        # No local worktree for the branch. The shared manager owns canonical
+        # root resolution, collision handling, and idempotent materialization.
+        WORKTREE_MANAGER="$SCRIPT_DIR/worktree-manager.js"
+        [ -f "$WORKTREE_MANAGER" ] || {
+          echo "❌ Could not materialize '$RES_BRANCH': worktree-manager.js is unavailable."
+          exit 1
+        }
         REPO_ROOT_FOR_WT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-        REPO_NAME=$(basename "$REPO_ROOT_FOR_WT")
-        SLUG=$(echo "$RES_BRANCH" | tr '/' '-' )
-        RES_PATH="${REPO_ROOT_FOR_WT%/*}/${REPO_NAME}-${SLUG}"
-        if [ ! -d "$RES_PATH" ]; then
-          git fetch origin "$RES_BRANCH" 2>/dev/null || true
-          git worktree add "$RES_PATH" "$RES_BRANCH" 2>/dev/null \
-            || git worktree add -B "$RES_BRANCH" "$RES_PATH" "origin/$RES_BRANCH" \
-            || { echo "❌ Could not materialize worktree for $RES_BRANCH at $RES_PATH"; exit 1; }
-        fi
+        git -C "$REPO_ROOT_FOR_WT" fetch origin "$RES_BRANCH" >/dev/null 2>&1 || true
+        WT_CREATE_JSON=$(node "$WORKTREE_MANAGER" create \
+          --repo "$REPO_ROOT_FOR_WT" \
+          --branch "$RES_BRANCH" \
+          --base "origin/$RES_BRANCH" \
+          --creator "bs:quality" \
+          --purpose "quality-target-materialization") || exit 1
+        RES_PATH=$(printf '%s' "$WT_CREATE_JSON" | jq -er '.worktreePath') || exit 1
       fi
     fi
 
@@ -293,11 +298,13 @@ done
 
 if [ "$ARGS_MERGE" = true ]; then
   CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-  PRIMARY=$(git worktree list --porcelain | awk '/^worktree / {p=$2} /^branch refs\/heads\/main$/ {print p; exit}')
+  PRIMARY=$(node "$SCRIPT_DIR/worktree-manager.js" resolve \
+    --repo "$GIT_ROOT" --branch "$CURRENT_BRANCH" 2>/dev/null |
+    jq -r '.repoRoot // empty')
   if [ "$CURRENT_BRANCH" = "main" ] && [ -n "$PRIMARY" ] && [ "$GIT_ROOT" = "$PRIMARY" ]; then
     echo "❌ /bs:quality --merge cannot run from the primary checkout on main."
     echo "   Create a worktree first:"
-    echo "     git worktree add ../$(basename "$GIT_ROOT")-worktrees/<slug> -b <type>/<slug> main"
+    echo "     node $SCRIPT_DIR/worktree-manager.js create --repo \"$GIT_ROOT\" --branch <type>/<slug>"
     echo "   Move uncommitted changes there with: git stash; cd <worktree>; git stash pop"
     exit 1
   fi
@@ -396,6 +403,25 @@ BS_QUALITY_MANIFEST="$(node "$SCRIPT_DIR/quality-invocation.js" "${CREATE_ARGS[@
 INVOCATION_ID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$BS_QUALITY_MANIFEST" invocationId)"
 BASE_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$BS_QUALITY_MANIFEST" revisions.baseSha)"
 HEAD_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$BS_QUALITY_MANIFEST" revisions.currentHead)"
+
+# A merge campaign owns its linked worktree until terminal cleanup. Git's
+# native lock carries the exact invocation identity; manager metadata carries
+# the same identity plus workflow/purpose for crash reconciliation.
+if [ "$ARGS_MERGE" = true ] && [ "$CURRENT_BRANCH" != "main" ] && [ "$CURRENT_BRANCH" != "master" ]; then
+  LOCK_ARGS=(lock \
+    --repo "$GIT_ROOT" \
+    --branch "$CURRENT_BRANCH" \
+    --reason "bs:quality/$INVOCATION_ID" \
+    --creator "bs:quality" \
+    --purpose "verified-merge" \
+    --invocation "$INVOCATION_ID")
+  PRIOR_LOCK=$(node "$SCRIPT_DIR/worktree-manager.js" status \
+    --repo "$GIT_ROOT" --skip-pr-check 2>/dev/null |
+    jq -r --arg branch "$CURRENT_BRANCH" \
+      '.worktrees[] | select(.branch == $branch) | .lockReason // empty')
+  [ -z "$PRIOR_LOCK" ] || LOCK_ARGS+=(--takeover-owner "$PRIOR_LOCK")
+  node "$SCRIPT_DIR/worktree-manager.js" "${LOCK_ARGS[@]}" >/dev/null || exit 1
+fi
 
 echo "BS_QUALITY_MANIFEST=$BS_QUALITY_MANIFEST"
 echo "GIT_ROOT=$GIT_ROOT"

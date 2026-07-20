@@ -47,7 +47,7 @@ PREFLIGHT_OUTPUT="$(bash "$SCRIPT_DIR/quality-authorize-merge.sh" \
 printf '%s\n' "$PREFLIGHT_OUTPUT"
 if printf '%s\n' "$PREFLIGHT_OUTPUT" |
   grep -Fxq 'BS_QUALITY_ALREADY_MERGED=true'; then
-  bash "$SCRIPT_DIR/quality-merge-cleanup.sh" --preserve-branch
+  bash "$SCRIPT_DIR/quality-merge-cleanup.sh" --manifest "$MANIFEST"
   exit 0
 fi
 PREFLIGHT_PR_HEAD="$(printf '%s\n' "$PREFLIGHT_OUTPUT" |
@@ -150,4 +150,4 @@ fi
   exit 1
 }
 bash "$SCRIPT_DIR/quality-authorize-merge.sh" --manifest "$MANIFEST"
-bash "$SCRIPT_DIR/quality-merge-cleanup.sh" --preserve-branch
+bash "$SCRIPT_DIR/quality-merge-cleanup.sh" --manifest "$MANIFEST"

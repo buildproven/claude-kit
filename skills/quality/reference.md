@@ -53,8 +53,9 @@ resolution (in `scripts/quality-bootstrap.sh`, calling
 The parsing + resolution logic is pure and unit-tested at
 `scripts/__tests__/quality-target-resolution.test.js`; the bootstrap script
 calls it as a subprocess and acts on the JSON result. If no local worktree
-exists for a resolved PR/branch, one is materialized in a sibling directory
-(`git worktree add`), so repeat invocations reuse it deterministically.
+exists for a resolved PR/branch, `scripts/worktree-manager.js` materializes it
+under the canonical sibling `.worktrees/<repo-name>/<branch-slug>` container,
+so repeat invocations reuse it deterministically.
 
 ## Reviewer Provider Policy
 

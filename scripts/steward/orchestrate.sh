@@ -57,10 +57,18 @@ for repo in "${repos[@]}"; do
   }
 
   slug="steward-$(date +%Y%m%d-%H%M%S)"
-  worktree="$(dirname "$repo")/$(basename "$repo")-$slug"
   branch="codex/$slug"
   default_branch=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["defaultBranch"])' "$audit_file")
-  git -C "$repo" worktree add -b "$branch" "$worktree" "origin/$default_branch"
+  invocation="bs:steward/$(basename "$repo")/$slug"
+  create_json=$(node "$KIT_ROOT/scripts/worktree-manager.js" create \
+    --repo "$repo" \
+    --branch "$branch" \
+    --base "origin/$default_branch" \
+    --creator "bs:steward" \
+    --purpose "fleet-repair" \
+    --invocation "$invocation" \
+    --lock-reason "$invocation")
+  worktree=$(printf '%s' "$create_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["worktreePath"])')
   prompt="$STATE_DIR/$(basename "$repo")-$slug.prompt"
   cat > "$prompt" <<EOF
 Repair the exact fleet-steward audit failures recorded in $audit_file for repository $worktree.

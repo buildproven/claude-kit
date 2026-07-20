@@ -1,54 +1,98 @@
 #!/usr/bin/env bash
-# quality-merge-cleanup.sh — Step 4 post-merge worktree cleanup for the
-# quality skill.
-#
-# Leaves the operator on the primary checkout's main, merged worktree
-# removed, local branch deleted, stale refs pruned. Failures here MUST
-# surface (CLAUDE.md "zero silent failures") — a partial cleanup is worse
-# than a noisy one because it leaks state into the next session.
-#
-# Run this AFTER `gh pr merge` succeeds, from inside the worktree that was
-# just merged.
+# Post-merge cleanup. A completed merge stays successful even when cleanup
+# cannot finish; every incomplete path prints one exact recovery command.
 set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PRESERVE_BRANCH=false
-[ "${1:-}" = "--preserve-branch" ] && PRESERVE_BRANCH=true
+MANIFEST=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --preserve-branch) PRESERVE_BRANCH=true; shift ;;
+    --manifest) MANIFEST="${2:-}"; shift 2 ;;
+    *) echo "[quality] merge succeeded; cleanup incomplete: unknown cleanup argument '$1'." >&2; exit 0 ;;
+  esac
+done
 
-WORKTREE_PATH=$(git rev-parse --show-toplevel)
-FEATURE_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-PRIMARY_CHECKOUT=$(git worktree list --porcelain | awk '/^worktree / {p=$2} /^branch refs\/heads\/main$/ {print p; exit}')
+WORKTREE_PATH="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+FEATURE_BRANCH="$(git branch --show-current 2>/dev/null || true)"
+MANAGER="$SCRIPT_DIR/worktree-manager.js"
+if [ -z "$WORKTREE_PATH" ] || [ -z "$FEATURE_BRANCH" ] || [ ! -f "$MANAGER" ]; then
+  echo "[quality] merge succeeded; cleanup incomplete: target or worktree manager unavailable." >&2
+  exit 0
+fi
 
+PLAN="$(node "$MANAGER" resolve --repo "$WORKTREE_PATH" --branch "$FEATURE_BRANCH" 2>/dev/null || true)"
+PRIMARY_CHECKOUT="$(printf '%s' "$PLAN" | jq -r '.repoRoot // empty' 2>/dev/null)"
 if [ -z "$PRIMARY_CHECKOUT" ]; then
-  echo "[quality] Could not locate primary checkout (no worktree has main checked out)."
-  echo "         Skipping cleanup — operator must remove worktree + branch manually:"
-  echo "           git worktree remove $WORKTREE_PATH"
-  echo "           git branch -D $FEATURE_BRANCH"
+  echo "[quality] merge succeeded; cleanup incomplete: primary checkout could not be resolved." >&2
+  echo "  Recovery: node \"$MANAGER\" reconcile --repo \"$WORKTREE_PATH\" --apply" >&2
   exit 0
 fi
 
 if [ "$PRIMARY_CHECKOUT" = "$WORKTREE_PATH" ]; then
-  # Running directly in the primary checkout (against project policy, but
-  # supported for backwards compatibility).
-  git checkout main || { echo "❌ Could not checkout main in primary — aborting cleanup"; exit 1; }
-  git pull --ff-only || { echo "❌ git pull --ff-only failed — investigate before retrying"; exit 1; }
-  git branch -D "$FEATURE_BRANCH" || \
-    echo "[quality] Could not delete branch $FEATURE_BRANCH — remove manually."
+  echo "[quality] merge succeeded; cleanup incomplete: merge ran in the primary checkout." >&2
+  echo "  Recovery: inspect \"$PRIMARY_CHECKOUT\" and move future work to a linked worktree." >&2
   exit 0
 fi
 
-# We ran in a linked worktree. Tear it down in the right order: checkout main
-# FIRST (so the branch is no longer "in use" by the worktree we are about to
-# remove), then remove the worktree, then delete the branch.
-cd "$PRIMARY_CHECKOUT" || { echo "❌ Could not cd to $PRIMARY_CHECKOUT — aborting cleanup"; exit 1; }
-git checkout main || { echo "❌ Could not checkout main in $PRIMARY_CHECKOUT (likely uncommitted changes there) — aborting cleanup"; exit 1; }
-git pull --ff-only || { echo "❌ git pull --ff-only failed — investigate before retrying"; exit 1; }
+INVOCATION_ID=""
+if [ -n "$MANIFEST" ] && [ -f "$MANIFEST" ]; then
+  INVOCATION_ID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" invocationId 2>/dev/null || true)"
+fi
 
-if ! git worktree remove "$WORKTREE_PATH"; then
-  echo "❌ Could not remove worktree $WORKTREE_PATH (likely uncommitted changes inside)."
-  echo "   Resolve manually, then run: git worktree remove $WORKTREE_PATH && git branch -D $FEATURE_BRANCH"
-  exit 1
+# Leave the worktree before asking Git to remove its exact registered path.
+cd "$PRIMARY_CHECKOUT" || {
+  echo "[quality] merge succeeded; cleanup incomplete: cannot enter $PRIMARY_CHECKOUT." >&2
+  echo "  Recovery: node \"$MANAGER\" reconcile --repo \"$WORKTREE_PATH\" --apply" >&2
+  exit 0
+}
+
+DEFAULT_BRANCH="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')"
+[ -n "$DEFAULT_BRANCH" ] || DEFAULT_BRANCH=main
+if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+  echo "[quality] merge succeeded; cleanup incomplete: primary checkout is dirty; it was not changed." >&2
+  echo "  Recovery: node \"$MANAGER\" reconcile --repo \"$PRIMARY_CHECKOUT\" --apply" >&2
+  exit 0
 fi
-if [ "$PRESERVE_BRANCH" = false ] && ! git branch -D "$FEATURE_BRANCH"; then
-  echo "❌ Could not delete branch $FEATURE_BRANCH — remove manually with: git branch -D $FEATURE_BRANCH"
-  exit 1
+git fetch origin "$DEFAULT_BRANCH" -q || {
+  echo "[quality] merge succeeded; cleanup incomplete: could not fetch origin/$DEFAULT_BRANCH." >&2
+  echo "  Recovery: node \"$MANAGER\" reconcile --repo \"$PRIMARY_CHECKOUT\" --apply" >&2
+  exit 0
+}
+if [ "$(git branch --show-current)" = "$DEFAULT_BRANCH" ]; then
+  git merge --ff-only "origin/$DEFAULT_BRANCH" >/dev/null || {
+    echo "[quality] merge succeeded; cleanup incomplete: primary $DEFAULT_BRANCH did not fast-forward." >&2
+    echo "  Recovery: node \"$MANAGER\" reconcile --repo \"$PRIMARY_CHECKOUT\" --apply" >&2
+    exit 0
+  }
 fi
-git worktree prune -v
+
+if [ -n "$INVOCATION_ID" ]; then
+  node "$MANAGER" unlock \
+    --repo "$PRIMARY_CHECKOUT" \
+    --branch "$FEATURE_BRANCH" \
+    --owner "bs:quality/$INVOCATION_ID" \
+    --terminal >/dev/null 2>&1 || {
+    echo "[quality] merge succeeded; cleanup incomplete: worktree ownership could not be released." >&2
+    echo "  Recovery: node \"$MANAGER\" unlock --repo \"$PRIMARY_CHECKOUT\" --branch \"$FEATURE_BRANCH\" --owner \"bs:quality/$INVOCATION_ID\" --terminal" >&2
+    exit 0
+  }
+fi
+
+REMOVE_ARGS=(remove --repo "$PRIMARY_CHECKOUT" --branch "$FEATURE_BRANCH" --allow-unknown)
+[ "$PRESERVE_BRANCH" = false ] && REMOVE_ARGS+=(--delete-branch)
+REMOVE_JSON="$(node "$MANAGER" "${REMOVE_ARGS[@]}" 2>&1)"
+REMOVE_RC=$?
+if [ "$REMOVE_RC" -ne 0 ]; then
+  echo "[quality] merge succeeded; cleanup incomplete: $REMOVE_JSON" >&2
+  echo "  Recovery: node \"$MANAGER\" reconcile --repo \"$PRIMARY_CHECKOUT\" --apply" >&2
+  exit 0
+fi
+
+echo "[quality] merge cleanup complete."
+echo "  primary: $PRIMARY_CHECKOUT ($DEFAULT_BRANCH)"
+echo "  removed: $WORKTREE_PATH"
+echo "  remaining worktrees:"
+git worktree list
+exit 0

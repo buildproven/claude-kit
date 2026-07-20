@@ -58,25 +58,25 @@ echo "📂 Working directory: $GIT_ROOT"
 **Critical:** Before creating any feature branch, clean up stale branches to prevent working from wrong state.
 
 ```bash
-# Ensure we're on main and up to date
-git checkout main && git pull && git fetch --prune
+# Refresh remote lifecycle evidence without checking out, editing, or
+# fast-forwarding the inspection-only primary checkout.
+git fetch --prune
 
-# Delete branches already merged to main (excludes current branch)
-git branch --merged main | grep -v 'main' | xargs -r git branch -d
-
-# Delete branches whose remote tracking is gone (deleted on remote)
-git branch -vv | grep ': gone]' | awk '{print $1}' | xargs -r git branch -D
-
-# Prune stale worktrees (auto-cleanup for --wt)
-git worktree prune 2>/dev/null
-# Remove worktree dirs whose branches are gone
-for wt in $(git worktree list --porcelain | grep '^worktree ' | awk '{print $2}'); do
-  [ "$wt" = "$GIT_ROOT" ] && continue
-  wt_branch=$(git -C "$wt" branch --show-current 2>/dev/null)
-  if [ -n "$wt_branch" ] && ! git show-ref --verify --quiet "refs/heads/$wt_branch" 2>/dev/null; then
-    git worktree remove --force "$wt" 2>/dev/null && echo "🧹 Removed stale worktree: $wt"
-  fi
-done
+# Resolve the one shared lifecycle implementation. It may prune missing
+# registrations here, but it never removes active, dirty, locked, open-PR,
+# unpushed, or inconclusive worktrees.
+WORKTREE_MANAGER=$(for candidate in \
+  "${CLAUDE_PLUGIN_ROOT:-}/scripts/worktree-manager.js" \
+  "${CLAUDE_KIT_ROOT:-}/scripts/worktree-manager.js" \
+  "$HOME/.claude/scripts/worktree-manager.js" \
+  "$GIT_ROOT/scripts/worktree-manager.js"; do
+  [ -f "$candidate" ] && { printf '%s\n' "$candidate"; break; }
+done)
+[ -n "$WORKTREE_MANAGER" ] || {
+  echo "❌ worktree-manager.js is required; run the kit sync/install workflow."
+  exit 1
+}
+node "$WORKTREE_MANAGER" reconcile --repo "$GIT_ROOT" --repair-stale >/dev/null
 
 # Ensure repo auto-deletes PR branches on merge
 gh api repos/:owner/:repo --jq '.delete_branch_on_merge' | grep -q true || gh api repos/:owner/:repo -X PATCH -f delete_branch_on_merge=true > /dev/null
@@ -195,29 +195,22 @@ BRANCH_NAME="${TYPE}/${NAME}"
 ### Step 2: Create Branch
 
 ```bash
-# Get current branch for safety check
-CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-
-# Ensure we're on main/master
-if [[ "$CURRENT_BRANCH" != "main" && "$CURRENT_BRANCH" != "master" ]]; then
-  echo "⚠️  Currently on: $CURRENT_BRANCH"
-  echo "Switch to main first? (y/n)"
-  # If user says yes: git checkout main && git pull
-fi
-
-# --wt flag: create a git worktree for isolated parallel work
-if [[ "$@" == *"--wt"* ]]; then
-  WORKTREE_DIR="../$(basename $GIT_ROOT)-wt-${NAME}"
-  git worktree add "$WORKTREE_DIR" -b $BRANCH_NAME
-  cd "$WORKTREE_DIR"
-  echo "✅ Created worktree: $WORKTREE_DIR (branch: $BRANCH_NAME)"
-  echo "📂 Working directory changed to: $(pwd)"
-else
-  git checkout -b $BRANCH_NAME
-  echo "✅ Created branch: $BRANCH_NAME"
-  # WORKTREE_DIR is set — auto-cleanup after PR merge/quality pass
-  # When work is done: git worktree remove "$WORKTREE_DIR"
-fi
+# Always create a canonical linked worktree. `--wt` remains accepted as a
+# backward-compatible no-op; isolation is now the default and only mode.
+INVOCATION_ID="bs:dev/${BRANCH_NAME}/$(date -u +%Y%m%dT%H%M%SZ)-$$"
+CREATE_JSON=$(node "$WORKTREE_MANAGER" create \
+  --repo "$GIT_ROOT" \
+  --branch "$BRANCH_NAME" \
+  --creator "bs:dev" \
+  --purpose "$NAME" \
+  --invocation "$INVOCATION_ID" \
+  --lock-reason "$INVOCATION_ID")
+WORKTREE_DIR=$(printf '%s' "$CREATE_JSON" | jq -er '.worktreePath')
+cd "$WORKTREE_DIR"
+echo "✅ Created worktree: $WORKTREE_DIR (branch: $BRANCH_NAME)"
+echo "📂 Working directory changed to: $(pwd)"
+# /bs:quality takes ownership during merge. Otherwise release this exact
+# invocation with worktree-manager unlock before explicit cleanup.
 
 # Initialize HUD state for live dashboard display (CS-061).
 # Optional: if the script can't be resolved, skip the HUD rather than failing.
@@ -470,23 +463,25 @@ spawning agents. Honor `--max` (default 4) and warn if the user requested more t
 
 **9.3 — Spawn agents (parallel by default)**
 
-For each item, spawn a background `Agent` with `isolation: "worktree"`:
+For each item, pre-create and lock its canonical target with
+`worktree-manager create`, then spawn a background `Agent` whose prompt names
+that exact target:
 
 ```javascript
 // For i = 0 .. ITEM_COUNT-1, spawn in batches of MAX_PARALLEL
 Task({
   subagent_type: "Agent",
-  isolation: "worktree",
-  prompt: `Implement the following task in this worktree:
+  prompt: `Implement the following task in this already-created worktree:
 
 TASK: ${items[i]}
 BRANCH: feature/${slugs[i]}
+TARGET_DIR: ${worktreePaths[i]}
 
-1. Create branch feature/${slugs[i]} from main.
+1. cd to TARGET_DIR; do not create another branch or worktree.
 2. Infer requirements from the task description.
 3. Assess complexity (Simple/Medium/Complex), explore if needed.
 4. Implement with TodoWrite tracking.
-5. Run /bs:quality --merge to test, PR, and (if --merge flag was passed) merge.
+5. Run /bs:quality --merge --target-dir TARGET_DIR.
 6. Report back: branch name, PR URL, status (passed/failed/blocked).`,
 });
 ```
@@ -571,17 +566,19 @@ Parse tasks → conflict analysis → show plan → spawn background agents (eac
 
 ### Implementation
 
-Each spawned agent executes in an isolated worktree via `isolation: "worktree"`:
+Each spawned agent uses a target pre-created by `worktree-manager`. Do not use
+harness-native worktree creation because its directory policy is outside this
+repository's lifecycle contract:
 
 ```javascript
-// Spawn each task as an isolated worktree agent
+// Resolve/create each target through worktree-manager before spawning.
 Task(subagent_type: "general-purpose",
-     isolation: "worktree",  // ← each agent gets own copy of repo, no conflicts
      run_in_background: true,
-     prompt: `You are working in an isolated git worktree. Implement: ${task}
+     prompt: `Work only in this canonical linked worktree: ${worktreePath}
+     Implement: ${task}
 
      Workflow:
-     1. Create branch: feature/<task-name>
+     1. cd to ${worktreePath}; use its existing feature branch
      2. Gather requirements (infer from task description)
      3. Assess complexity using Sequential Thinking
      4. Explore codebase if needed (use Task + Explore agent)

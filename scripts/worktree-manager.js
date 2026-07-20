@@ -1,0 +1,1290 @@
+#!/usr/bin/env node
+
+"use strict";
+
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const path = require("node:path");
+const { spawnSync } = require("node:child_process");
+
+const SCHEMA_VERSION = 1;
+const DEFAULT_CONTAINER = ".worktrees";
+const DEFAULT_GRACE_HOURS = 24;
+const DEFAULT_RECENT_MINUTES = 30;
+
+class ManagerError extends Error {
+  constructor(message, code = "WORKTREE_ERROR", details = {}) {
+    super(message);
+    this.name = "ManagerError";
+    this.code = code;
+    this.details = details;
+  }
+}
+
+function run(command, args, options = {}) {
+  const result = spawnSync(command, args, {
+    cwd: options.cwd,
+    encoding: "utf8",
+    env: options.env || process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error) {
+    throw new ManagerError(
+      `Could not run ${command}: ${result.error.message}`,
+      "COMMAND_FAILED",
+    );
+  }
+  if (result.status !== 0 && !options.allowFailure) {
+    const detail = (result.stderr || result.stdout || "").trim();
+    throw new ManagerError(
+      `${command} ${args.join(" ")} failed${detail ? `: ${detail}` : ""}`,
+      "COMMAND_FAILED",
+      { command, args, status: result.status },
+    );
+  }
+  return {
+    status: result.status,
+    stdout: (result.stdout || "").trim(),
+    stderr: (result.stderr || "").trim(),
+  };
+}
+
+function git(repo, args, options = {}) {
+  return run("git", ["-C", repo, ...args], options);
+}
+
+function realpathExisting(value, label) {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    throw new ManagerError(`${label} does not exist: ${value}`, "NOT_FOUND");
+  }
+}
+
+function commonDir(repo) {
+  const output = git(repo, [
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-common-dir",
+  ]).stdout;
+  return realpathExisting(output, "Git common directory");
+}
+
+function sameCommonDir(candidate, expected) {
+  try {
+    return commonDir(candidate) === expected;
+  } catch {
+    return false;
+  }
+}
+
+function primaryRoot(repoInput) {
+  const callerRoot = git(repoInput, ["rev-parse", "--show-toplevel"]).stdout;
+  const common = commonDir(callerRoot);
+  const configured = run(
+    "git",
+    ["--git-dir", common, "config", "--path", "--get", "core.worktree"],
+    { allowFailure: true },
+  ).stdout;
+  const candidates = [];
+  if (configured) {
+    candidates.push(path.resolve(common, configured));
+  }
+  if (path.basename(common) === ".git") {
+    candidates.push(path.dirname(common));
+  }
+  const porcelain = git(callerRoot, ["worktree", "list", "--porcelain"], {
+    allowFailure: true,
+  }).stdout;
+  for (const record of parseWorktrees(porcelain)) {
+    if (!record.bare) candidates.push(record.path);
+  }
+  candidates.push(callerRoot);
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate) && sameCommonDir(candidate, common)) {
+      const dotGit = path.join(candidate, ".git");
+      if (
+        path.basename(common) === ".git" &&
+        fs.statSync(dotGit).isDirectory()
+      ) {
+        return fs.realpathSync(candidate);
+      }
+      if (
+        configured &&
+        path.resolve(common, configured) === path.resolve(candidate)
+      ) {
+        return fs.realpathSync(candidate);
+      }
+    }
+  }
+  throw new ManagerError(
+    `Could not locate the primary checkout for ${repoInput}. Run repair with an explicit --primary path.`,
+    "PRIMARY_NOT_FOUND",
+    { callerRoot, commonDir: common },
+  );
+}
+
+function validateBranch(branch) {
+  if (!branch || branch.includes("\0")) {
+    throw new ManagerError(
+      "A non-empty branch name is required.",
+      "INVALID_BRANCH",
+    );
+  }
+  if (/%(?:2e|2f|5c)/i.test(branch)) {
+    throw new ManagerError(
+      `Encoded traversal or separator sequence is not allowed in a branch name: ${branch}`,
+      "INVALID_BRANCH",
+    );
+  }
+  const checked = run("git", ["check-ref-format", "--branch", branch], {
+    allowFailure: true,
+  });
+  if (checked.status !== 0) {
+    throw new ManagerError(`Invalid branch name: ${branch}`, "INVALID_BRANCH");
+  }
+  return branch;
+}
+
+function slugBranch(branch) {
+  validateBranch(branch);
+  const slug = branch
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/%2f|%5c/gi, "-")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  if (!slug || slug === "." || slug === "..") {
+    throw new ManagerError(
+      `Branch does not produce a safe worktree slug: ${branch}`,
+      "INVALID_SLUG",
+    );
+  }
+  return slug.slice(0, 120).replace(/-$/g, "");
+}
+
+function stableHash(value) {
+  return crypto.createHash("sha256").update(value).digest("hex").slice(0, 8);
+}
+
+function parseWorktrees(output) {
+  const records = [];
+  let current = null;
+  for (const line of `${output || ""}\n`.split("\n")) {
+    if (line.startsWith("worktree ")) {
+      if (current) records.push(current);
+      current = {
+        path: line.slice(9),
+        head: null,
+        branch: null,
+        detached: false,
+        bare: false,
+        locked: false,
+        lockReason: null,
+        prunable: false,
+      };
+    } else if (!current) {
+      continue;
+    } else if (line.startsWith("HEAD ")) {
+      current.head = line.slice(5);
+    } else if (line.startsWith("branch refs/heads/")) {
+      current.branch = line.slice("branch refs/heads/".length);
+    } else if (line === "detached") {
+      current.detached = true;
+    } else if (line === "bare") {
+      current.bare = true;
+    } else if (line === "locked" || line.startsWith("locked ")) {
+      current.locked = true;
+      current.lockReason = line.slice("locked".length).trim() || null;
+    } else if (line === "prunable" || line.startsWith("prunable ")) {
+      current.prunable = true;
+    } else if (line === "" && current) {
+      records.push(current);
+      current = null;
+    }
+  }
+  return records;
+}
+
+function registeredWorktrees(repoRoot) {
+  return parseWorktrees(
+    git(repoRoot, ["worktree", "list", "--porcelain", "-z"]).stdout.replaceAll(
+      "\0",
+      "\n",
+    ),
+  );
+}
+
+function linkedWorktrees(repoRoot) {
+  const common = commonDir(repoRoot);
+  return registeredWorktrees(repoRoot).filter(
+    (record) =>
+      record.path !== repoRoot && record.path !== common && !record.bare,
+  );
+}
+
+function config(repoRoot) {
+  const defaults = {
+    rootStrategy: "sibling-container",
+    containerName: DEFAULT_CONTAINER,
+  };
+  const candidates = [
+    path.join(repoRoot, ".claude", "config.json"),
+    path.join(repoRoot, ".codex", "config.json"),
+  ];
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate)) continue;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(candidate, "utf8"));
+      const supplied = parsed.worktrees || {};
+      if (
+        supplied.rootStrategy &&
+        supplied.rootStrategy !== "sibling-container"
+      ) {
+        throw new ManagerError(
+          `Unsupported worktree rootStrategy in ${candidate}: ${supplied.rootStrategy}`,
+          "INVALID_CONFIG",
+        );
+      }
+      if (
+        supplied.containerName &&
+        !/^\.[A-Za-z0-9][A-Za-z0-9._-]*$/.test(supplied.containerName)
+      ) {
+        throw new ManagerError(
+          `Unsafe worktree containerName in ${candidate}`,
+          "INVALID_CONFIG",
+        );
+      }
+      return { ...defaults, ...supplied, source: candidate };
+    } catch (error) {
+      if (error instanceof ManagerError) throw error;
+      throw new ManagerError(
+        `Could not parse worktree configuration ${candidate}: ${error.message}`,
+        "INVALID_CONFIG",
+      );
+    }
+  }
+  return { ...defaults, source: null };
+}
+
+function metadataDir(repoRoot) {
+  return path.join(commonDir(repoRoot), "worktree-manager");
+}
+
+function metadataPath(repoRoot, branch) {
+  return path.join(metadataDir(repoRoot), `${stableHash(branch)}.json`);
+}
+
+function readMetadata(repoRoot, branch) {
+  const file = metadataPath(repoRoot, branch);
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function writeMetadata(repoRoot, branch, patch) {
+  const dir = metadataDir(repoRoot);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const file = metadataPath(repoRoot, branch);
+  const previous = readMetadata(repoRoot, branch) || {};
+  const next = {
+    schemaVersion: SCHEMA_VERSION,
+    branch,
+    createdAt: previous.createdAt || new Date().toISOString(),
+    ...previous,
+    ...patch,
+    updatedAt: new Date().toISOString(),
+  };
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  fs.renameSync(temporary, file);
+  return next;
+}
+
+function ensureInside(root, candidate) {
+  const relative = path.relative(root, candidate);
+  if (
+    relative === "" ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new ManagerError(
+      `Resolved worktree path escapes or equals its canonical root: ${candidate}`,
+      "UNSAFE_PATH",
+    );
+  }
+}
+
+function resolvePlan(options) {
+  const repoRoot = primaryRoot(options.repo || process.cwd());
+  const branch = validateBranch(options.branch || options.slug);
+  const settings = config(repoRoot);
+  const repoName = path.basename(repoRoot);
+  const worktreeRoot = path.resolve(
+    path.dirname(repoRoot),
+    settings.containerName,
+    repoName,
+  );
+  const baseSlug = slugBranch(branch);
+  const worktrees = registeredWorktrees(repoRoot);
+  const conflicting = worktrees.find(
+    (record) =>
+      record.branch &&
+      record.branch !== branch &&
+      path.dirname(record.path) === worktreeRoot &&
+      path.basename(record.path) === baseSlug,
+  );
+  const recordMetadata = fs.existsSync(metadataDir(repoRoot))
+    ? fs
+        .readdirSync(metadataDir(repoRoot))
+        .filter((name) => name.endsWith(".json"))
+        .map((name) => {
+          try {
+            return JSON.parse(
+              fs.readFileSync(path.join(metadataDir(repoRoot), name), "utf8"),
+            );
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean)
+    : [];
+  const metadataConflict = recordMetadata.find(
+    (record) => record.branch !== branch && record.slug === baseSlug,
+  );
+  const slug =
+    conflicting || metadataConflict
+      ? `${baseSlug}-${stableHash(branch)}`
+      : baseSlug;
+  const worktreePath = path.join(worktreeRoot, slug);
+  ensureInside(worktreeRoot, worktreePath);
+  return {
+    repoRoot,
+    repoName,
+    branch,
+    slug,
+    worktreeRoot,
+    worktreePath,
+    baseRef: options.base || null,
+    config: settings,
+  };
+}
+
+function defaultBranch(repoRoot) {
+  const remoteHead = git(
+    repoRoot,
+    ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    { allowFailure: true },
+  ).stdout;
+  if (remoteHead.startsWith("origin/")) return remoteHead.slice(7);
+  for (const candidate of ["main", "master"]) {
+    if (
+      git(
+        repoRoot,
+        ["show-ref", "--verify", "--quiet", `refs/heads/${candidate}`],
+        {
+          allowFailure: true,
+        },
+      ).status === 0
+    ) {
+      return candidate;
+    }
+  }
+  throw new ManagerError(
+    "Could not determine the repository default branch.",
+    "BASE_NOT_FOUND",
+  );
+}
+
+function resolveBase(repoRoot, requested) {
+  const candidates = requested
+    ? [requested]
+    : [`origin/${defaultBranch(repoRoot)}`, defaultBranch(repoRoot)];
+  for (const candidate of candidates) {
+    if (
+      git(
+        repoRoot,
+        ["rev-parse", "--verify", "--quiet", `${candidate}^{commit}`],
+        {
+          allowFailure: true,
+        },
+      ).status === 0
+    ) {
+      return candidate;
+    }
+  }
+  throw new ManagerError(
+    `Base ref is not a commit: ${requested || candidates.join(" or ")}`,
+    "BASE_NOT_FOUND",
+  );
+}
+
+function withCreationLock(worktreeRoot, slug, callback) {
+  fs.mkdirSync(worktreeRoot, { recursive: true });
+  const lock = path.join(worktreeRoot, `.${slug}.create-lock`);
+  try {
+    fs.mkdirSync(lock);
+  } catch (error) {
+    if (error.code === "EEXIST") {
+      throw new ManagerError(
+        `Another process is creating the '${slug}' worktree. Retry after it finishes.`,
+        "CREATE_BUSY",
+      );
+    }
+    throw error;
+  }
+  try {
+    return callback();
+  } finally {
+    fs.rmdirSync(lock);
+  }
+}
+
+function create(options) {
+  const plan = resolvePlan(options);
+  return withCreationLock(plan.worktreeRoot, plan.slug, () => {
+    const existing = registeredWorktrees(plan.repoRoot);
+    const forBranch = existing.find((record) => record.branch === plan.branch);
+    if (forBranch) {
+      if (!fs.existsSync(forBranch.path)) {
+        throw new ManagerError(
+          `Branch '${plan.branch}' has stale worktree registration at ${forBranch.path}. Run reconcile --repair-stale before retrying.`,
+          "STALE_REGISTRATION",
+          { worktreePath: forBranch.path },
+        );
+      }
+      const metadata = writeMetadata(plan.repoRoot, plan.branch, {
+        creator: options.creator || null,
+        purpose: options.purpose || null,
+        invocation: options.invocation || null,
+        worktreePath: forBranch.path,
+        slug: path.basename(forBranch.path),
+        state: "active",
+      });
+      return { ...plan, worktreePath: forBranch.path, reused: true, metadata };
+    }
+    if (fs.existsSync(plan.worktreePath)) {
+      throw new ManagerError(
+        `Canonical path is occupied but not registered for '${plan.branch}': ${plan.worktreePath}`,
+        "PATH_OCCUPIED",
+      );
+    }
+    const baseRef = resolveBase(plan.repoRoot, options.base);
+    const branchExists =
+      git(
+        plan.repoRoot,
+        ["show-ref", "--verify", "--quiet", `refs/heads/${plan.branch}`],
+        { allowFailure: true },
+      ).status === 0;
+    const args = ["worktree", "add"];
+    if (!branchExists) args.push("-b", plan.branch);
+    args.push(plan.worktreePath, branchExists ? plan.branch : baseRef);
+    git(plan.repoRoot, args);
+    const metadata = writeMetadata(plan.repoRoot, plan.branch, {
+      creator: options.creator || null,
+      purpose: options.purpose || null,
+      invocation: options.invocation || null,
+      worktreePath: plan.worktreePath,
+      slug: plan.slug,
+      baseRef,
+      state: "active",
+      prNumber: options.pr ? Number(options.pr) : null,
+    });
+    if (options.lockReason) {
+      lock({
+        ...options,
+        repo: plan.repoRoot,
+        branch: plan.branch,
+        reason: options.lockReason,
+      });
+    }
+    return { ...plan, baseRef, reused: false, metadata };
+  });
+}
+
+function recordFor(options) {
+  const repoRoot = primaryRoot(options.repo || process.cwd());
+  const records = registeredWorktrees(repoRoot);
+  let record = null;
+  if (options.branch) {
+    record = records.find((candidate) => candidate.branch === options.branch);
+  } else if (options.path) {
+    const exact = realpathExisting(options.path, "Worktree path");
+    record = records.find(
+      (candidate) =>
+        fs.existsSync(candidate.path) &&
+        fs.realpathSync(candidate.path) === exact,
+    );
+  }
+  if (!record) {
+    throw new ManagerError(
+      `No registered worktree found for ${options.branch || options.path || "request"}.`,
+      "WORKTREE_NOT_FOUND",
+    );
+  }
+  return { repoRoot, record };
+}
+
+function lock(options) {
+  const { repoRoot, record } = recordFor(options);
+  const reason = options.reason || options.owner || options.invocation;
+  if (!reason) {
+    throw new ManagerError(
+      "lock requires --reason, --owner, or --invocation.",
+      "OWNER_REQUIRED",
+    );
+  }
+  if (record.locked && record.lockReason !== reason) {
+    if (!options.takeoverOwner || options.takeoverOwner !== record.lockReason) {
+      throw new ManagerError(
+        `Worktree is already locked by '${record.lockReason || "unknown"}'. Exact ownership handoff requires --takeover-owner '${record.lockReason || "<lock reason>"}'.`,
+        "LOCKED",
+      );
+    }
+    git(repoRoot, ["worktree", "unlock", record.path]);
+    git(repoRoot, ["worktree", "lock", "--reason", reason, record.path]);
+  }
+  if (!record.locked) {
+    git(repoRoot, ["worktree", "lock", "--reason", reason, record.path]);
+  }
+  const metadata = writeMetadata(
+    repoRoot,
+    record.branch || `detached-${record.head}`,
+    {
+      worktreePath: record.path,
+      creator: options.creator || null,
+      purpose: options.purpose || null,
+      invocation: options.invocation || null,
+      lockReason: reason,
+      state: "active",
+    },
+  );
+  return { repoRoot, ...record, locked: true, lockReason: reason, metadata };
+}
+
+function unlock(options) {
+  const { repoRoot, record } = recordFor(options);
+  if (!record.locked) return { repoRoot, ...record, unlocked: false };
+  const metadata = record.branch ? readMetadata(repoRoot, record.branch) : null;
+  const expected = metadata?.lockReason || record.lockReason;
+  if (!options.owner || options.owner !== expected) {
+    throw new ManagerError(
+      `Unlock refused. Supply the exact ownership identity with --owner '${expected || "<lock reason>"}'.`,
+      "OWNER_MISMATCH",
+    );
+  }
+  git(repoRoot, ["worktree", "unlock", record.path]);
+  if (record.branch) {
+    writeMetadata(repoRoot, record.branch, {
+      lockReason: null,
+      state: options.terminal ? "terminal" : "unlocked",
+    });
+  }
+  return { repoRoot, ...record, locked: false, unlocked: true };
+}
+
+function dirty(record) {
+  if (!fs.existsSync(record.path)) return null;
+  return git(record.path, ["status", "--porcelain"], {
+    allowFailure: true,
+  }).stdout;
+}
+
+function upstreamState(repoRoot, branch) {
+  if (!branch) return { upstream: null, ahead: null, unpushed: true };
+  const upstream = git(
+    repoRoot,
+    ["for-each-ref", "--format=%(upstream:short)", `refs/heads/${branch}`],
+    { allowFailure: true },
+  ).stdout;
+  const remote =
+    upstream ||
+    (git(
+      repoRoot,
+      ["show-ref", "--verify", "--quiet", `refs/remotes/origin/${branch}`],
+      { allowFailure: true },
+    ).status === 0
+      ? `origin/${branch}`
+      : null);
+  if (remote) {
+    const ahead = Number(
+      git(repoRoot, ["rev-list", "--count", `${remote}..${branch}`], {
+        allowFailure: true,
+      }).stdout || "0",
+    );
+    const base = defaultBranch(repoRoot);
+    const localMerged =
+      git(
+        repoRoot,
+        ["merge-base", "--is-ancestor", branch, `refs/heads/${base}`],
+        { allowFailure: true },
+      ).status === 0 ||
+      git(
+        repoRoot,
+        ["merge-base", "--is-ancestor", branch, `refs/remotes/origin/${base}`],
+        { allowFailure: true },
+      ).status === 0;
+    return { upstream: remote, ahead, unpushed: ahead > 0, localMerged };
+  }
+  const base = defaultBranch(repoRoot);
+  const merged =
+    git(
+      repoRoot,
+      ["merge-base", "--is-ancestor", branch, `refs/heads/${base}`],
+      { allowFailure: true },
+    ).status === 0 ||
+    git(
+      repoRoot,
+      ["merge-base", "--is-ancestor", branch, `refs/remotes/origin/${base}`],
+      { allowFailure: true },
+    ).status === 0;
+  return {
+    upstream: null,
+    ahead: null,
+    unpushed: !merged,
+    localMerged: merged,
+  };
+}
+
+function lookupPr(repoRoot, branch) {
+  if (
+    !branch ||
+    run("gh", ["--version"], { allowFailure: true }).status !== 0
+  ) {
+    return { available: false, state: "UNKNOWN", number: null };
+  }
+  const result = run(
+    "gh",
+    [
+      "pr",
+      "list",
+      "--repo",
+      git(repoRoot, ["config", "--get", "remote.origin.url"], {
+        allowFailure: true,
+      }).stdout,
+      "--head",
+      branch,
+      "--state",
+      "all",
+      "--limit",
+      "1",
+      "--json",
+      "number,state,mergedAt,closedAt,headRefName",
+    ],
+    { cwd: repoRoot, allowFailure: true },
+  );
+  if (result.status !== 0) {
+    return { available: false, state: "UNKNOWN", number: null };
+  }
+  try {
+    const [pr] = JSON.parse(result.stdout || "[]");
+    if (!pr) return { available: true, state: "NONE", number: null };
+    return {
+      available: true,
+      state: pr.mergedAt ? "MERGED" : pr.state,
+      number: pr.number,
+      mergedAt: pr.mergedAt,
+      closedAt: pr.closedAt,
+    };
+  } catch {
+    return { available: false, state: "UNKNOWN", number: null };
+  }
+}
+
+const ACTIVITY_EXCLUDES = new Set([".git", ".next", "dist", "node_modules"]);
+
+function latestFileMtime(directory) {
+  let latest = null;
+  const pending = [directory];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (ACTIVITY_EXCLUDES.has(entry.name)) continue;
+      const candidate = path.join(current, entry.name);
+      let stat;
+      try {
+        stat = fs.lstatSync(candidate);
+      } catch {
+        continue;
+      }
+      if (stat.isSymbolicLink()) continue;
+      if (stat.isDirectory()) pending.push(candidate);
+      if (stat.isFile() && (latest === null || stat.mtimeMs > latest)) {
+        latest = stat.mtimeMs;
+      }
+    }
+  }
+  return latest;
+}
+
+function activityAgeMinutes(repoRoot, record) {
+  const metadata = record.branch ? readMetadata(repoRoot, record.branch) : null;
+  const candidates = [metadata?.updatedAt, metadata?.createdAt]
+    .filter(Boolean)
+    .map((value) => Date.parse(value))
+    .filter(Number.isFinite);
+  if (fs.existsSync(record.path)) {
+    try {
+      const fileMtime = latestFileMtime(record.path);
+      if (fileMtime !== null) candidates.push(fileMtime);
+      const index = git(record.path, ["rev-parse", "--git-path", "index"], {
+        allowFailure: true,
+      }).stdout;
+      if (index && fs.existsSync(index))
+        candidates.push(fs.statSync(index).mtimeMs);
+    } catch {
+      // State classification remains conservative when activity cannot be read.
+    }
+  }
+  if (candidates.length === 0) return null;
+  return Math.max(0, (Date.now() - Math.max(...candidates)) / 60000);
+}
+
+function classify(repoRoot, record, options = {}) {
+  if (!fs.existsSync(record.path)) {
+    return {
+      ...record,
+      classification: "stale/missing path",
+      removable: false,
+      reason: "registered path is missing",
+    };
+  }
+  if (record.locked) {
+    return {
+      ...record,
+      classification: "active and locked",
+      removable: false,
+      reason: record.lockReason || "Git worktree lock",
+    };
+  }
+  const changes = dirty(record);
+  if (changes) {
+    return {
+      ...record,
+      classification: "dirty",
+      removable: false,
+      reason: "uncommitted changes",
+    };
+  }
+  if (!record.branch) {
+    return {
+      ...record,
+      classification: "unknown/inconclusive",
+      removable: false,
+      reason: "detached HEAD",
+    };
+  }
+  const push = upstreamState(repoRoot, record.branch);
+  if (push.unpushed) {
+    return {
+      ...record,
+      ...push,
+      classification: "clean with unpushed commits",
+      removable: false,
+      reason: "branch contains commits absent from its remote",
+    };
+  }
+  const pr =
+    options.prLookup === false
+      ? { available: false, state: "UNKNOWN", number: null }
+      : lookupPr(repoRoot, record.branch);
+  if (pr.state === "OPEN") {
+    return {
+      ...record,
+      ...push,
+      pr,
+      classification: "clean with open PR",
+      removable: false,
+      reason: `PR #${pr.number} is open`,
+    };
+  }
+  if (pr.state === "CLOSED") {
+    return {
+      ...record,
+      ...push,
+      pr,
+      classification: "clean with closed/unmerged PR",
+      removable: false,
+      reason: `PR #${pr.number} closed without merge`,
+    };
+  }
+  const ageMinutes = activityAgeMinutes(repoRoot, record);
+  const recentMinutes = Number(options.recentMinutes || DEFAULT_RECENT_MINUTES);
+  if (ageMinutes !== null && ageMinutes < recentMinutes) {
+    return {
+      ...record,
+      ...push,
+      pr,
+      ageMinutes,
+      classification: "recently active but otherwise removable",
+      removable: false,
+      reason: `activity within ${recentMinutes} minutes (<${recentMinutes} min)`,
+    };
+  }
+  if (pr.state === "MERGED") {
+    const mergedAgeHours = pr.mergedAt
+      ? (Date.now() - Date.parse(pr.mergedAt)) / 3600000
+      : null;
+    const graceHours = Number(options.graceHours || DEFAULT_GRACE_HOURS);
+    return {
+      ...record,
+      ...push,
+      pr,
+      mergedAgeHours,
+      classification: "clean with merged PR",
+      removable: mergedAgeHours === null || mergedAgeHours >= graceHours,
+      reason:
+        mergedAgeHours !== null && mergedAgeHours < graceHours
+          ? `merged PR grace period (${graceHours}h)`
+          : `PR #${pr.number} merged`,
+    };
+  }
+  if (push.localMerged) {
+    return {
+      ...record,
+      ...push,
+      pr,
+      classification: "clean local-only branch merged into the default branch",
+      removable: true,
+      reason: "local branch is contained in the default branch",
+    };
+  }
+  return {
+    ...record,
+    ...push,
+    pr,
+    classification: "unknown/inconclusive",
+    removable: false,
+    reason: pr.available
+      ? "no PR and branch lifecycle is inconclusive"
+      : "PR state unavailable",
+  };
+}
+
+function status(options) {
+  const repoRoot = primaryRoot(options.repo || process.cwd());
+  const records = linkedWorktrees(repoRoot).map((record) => ({
+    ...classify(repoRoot, record, options),
+    metadata: record.branch ? readMetadata(repoRoot, record.branch) : null,
+  }));
+  return { repoRoot, worktrees: records };
+}
+
+function remove(options) {
+  const { repoRoot, record } = recordFor(options);
+  if (record.path === repoRoot) {
+    throw new ManagerError(
+      "The primary checkout cannot be removed.",
+      "PRIMARY_REMOVE_REFUSED",
+    );
+  }
+  if (record.locked) {
+    const metadata = record.branch
+      ? readMetadata(repoRoot, record.branch)
+      : null;
+    const expected = metadata?.lockReason || record.lockReason;
+    if (!options.recover || !options.owner || options.owner !== expected) {
+      throw new ManagerError(
+        `Locked worktree removal refused. Recovery requires --recover and exact --owner '${expected || "<lock reason>"}'.`,
+        "LOCKED",
+      );
+    }
+    git(repoRoot, ["worktree", "unlock", record.path]);
+  }
+  if (dirty(record)) {
+    throw new ManagerError(
+      `Dirty worktree removal refused: ${record.path}`,
+      "DIRTY",
+    );
+  }
+  if (record.branch) {
+    const push = upstreamState(repoRoot, record.branch);
+    if (push.unpushed) {
+      throw new ManagerError(
+        `Worktree removal refused: '${record.branch}' has unpushed commits.`,
+        "UNPUSHED",
+      );
+    }
+    const pr = options.skipPrCheck
+      ? { state: "UNKNOWN", available: false }
+      : lookupPr(repoRoot, record.branch);
+    if (pr.state === "OPEN") {
+      throw new ManagerError(
+        `Worktree removal refused: PR #${pr.number} is open.`,
+        "OPEN_PR",
+      );
+    }
+    if (!options.allowClosed && pr.state === "CLOSED") {
+      throw new ManagerError(
+        `Worktree removal refused: PR #${pr.number} was closed without merge. Use --allow-closed after explicit review.`,
+        "CLOSED_PR",
+      );
+    }
+    if (!options.allowUnknown && !pr.available && !push.localMerged) {
+      throw new ManagerError(
+        "Worktree removal refused because PR state is unavailable.",
+        "UNKNOWN",
+      );
+    }
+  }
+  git(repoRoot, ["worktree", "remove", record.path]);
+  git(repoRoot, ["worktree", "prune", "--expire", "now"]);
+  let branchDeleted = false;
+  if (options.deleteBranch && record.branch) {
+    const deletion = git(repoRoot, ["branch", "-d", record.branch], {
+      allowFailure: true,
+    });
+    branchDeleted = deletion.status === 0;
+  }
+  if (record.branch) {
+    writeMetadata(repoRoot, record.branch, {
+      state: "removed",
+      removedAt: new Date().toISOString(),
+      lockReason: null,
+    });
+  }
+  const container = path.dirname(record.path);
+  try {
+    if (fs.readdirSync(container).length === 0) fs.rmdirSync(container);
+  } catch {
+    // Non-empty or already absent is expected.
+  }
+  return {
+    repoRoot,
+    removedPath: record.path,
+    branch: record.branch,
+    branchDeleted,
+    recoverableAs: record.branch,
+  };
+}
+
+function reconcile(options) {
+  const repoRoot = primaryRoot(options.repo || process.cwd());
+  const before = linkedWorktrees(repoRoot);
+  const results = [];
+  for (const record of before) {
+    const state = classify(repoRoot, record, options);
+    if (state.classification === "stale/missing path") {
+      if (options.apply || options.repairStale) {
+        git(repoRoot, ["worktree", "prune", "--expire", "now"]);
+        results.push({ ...state, action: "pruned stale metadata" });
+      } else {
+        results.push({ ...state, action: "report" });
+      }
+      continue;
+    }
+    if (options.apply && state.removable) {
+      try {
+        const removed = remove({
+          repo: repoRoot,
+          path: record.path,
+          deleteBranch: Boolean(options.deleteBranch),
+          allowUnknown: false,
+        });
+        results.push({ ...state, action: "removed", removal: removed });
+      } catch (error) {
+        results.push({
+          ...state,
+          action: "skipped",
+          error: error.message,
+          errorCode: error.code,
+        });
+      }
+    } else {
+      results.push({ ...state, action: "report" });
+    }
+  }
+  return {
+    repoRoot,
+    applied: Boolean(options.apply),
+    summary: results.reduce((counts, result) => {
+      counts[result.action] = (counts[result.action] || 0) + 1;
+      return counts;
+    }, {}),
+    worktrees: results,
+  };
+}
+
+function migrationPlan(options) {
+  const repoRoot = primaryRoot(options.repo || process.cwd());
+  const records = linkedWorktrees(repoRoot);
+  return records.map((record) => {
+    if (!record.branch) {
+      return {
+        currentPath: record.path,
+        branch: null,
+        safe: false,
+        reason: "detached worktree",
+      };
+    }
+    const proposed = resolvePlan({ repo: repoRoot, branch: record.branch });
+    const changes = dirty(record);
+    const pr = lookupPr(repoRoot, record.branch);
+    const canonical = path.resolve(record.path) === proposed.worktreePath;
+    let reason = "safe to migrate";
+    let safe = true;
+    if (canonical) {
+      safe = false;
+      reason = "already canonical";
+    } else if (record.locked) {
+      safe = false;
+      reason = `locked: ${record.lockReason || "unknown owner"}`;
+    } else if (changes) {
+      safe = false;
+      reason = "dirty worktree";
+    } else if (fs.existsSync(proposed.worktreePath)) {
+      safe = false;
+      reason = "destination occupied";
+    }
+    return {
+      currentPath: record.path,
+      proposedPath: proposed.worktreePath,
+      branch: record.branch,
+      dirty: Boolean(changes),
+      locked: record.locked,
+      lockReason: record.lockReason,
+      pr,
+      safe,
+      reason,
+    };
+  });
+}
+
+function migrate(options) {
+  const repoRoot = primaryRoot(options.repo || process.cwd());
+  const plans = migrationPlan(options);
+  const results = [];
+  for (const plan of plans) {
+    if (!options.apply || !plan.safe) {
+      results.push({ ...plan, action: "report" });
+      continue;
+    }
+    fs.mkdirSync(path.dirname(plan.proposedPath), { recursive: true });
+    git(repoRoot, ["worktree", "move", plan.currentPath, plan.proposedPath]);
+    git(repoRoot, ["worktree", "repair", plan.proposedPath]);
+    writeMetadata(repoRoot, plan.branch, {
+      worktreePath: plan.proposedPath,
+      slug: path.basename(plan.proposedPath),
+      migratedFrom: plan.currentPath,
+      migratedAt: new Date().toISOString(),
+      state: "active",
+    });
+    results.push({ ...plan, action: "moved" });
+  }
+  return {
+    repoRoot,
+    applied: Boolean(options.apply),
+    worktrees: results,
+  };
+}
+
+function repair(options) {
+  const repoRoot = options.primary
+    ? realpathExisting(options.primary, "Primary checkout")
+    : primaryRoot(options.repo || process.cwd());
+  const records = linkedWorktrees(repoRoot);
+  const results = [];
+  for (const record of records) {
+    if (!fs.existsSync(record.path)) {
+      results.push({
+        path: record.path,
+        branch: record.branch,
+        action: "missing; use reconcile --repair-stale",
+      });
+      continue;
+    }
+    if (
+      options.oldRepoName &&
+      record.path.includes(
+        `${path.sep}${DEFAULT_CONTAINER}${path.sep}${options.oldRepoName}${path.sep}`,
+      )
+    ) {
+      const destination = resolvePlan({
+        repo: repoRoot,
+        branch: record.branch,
+      }).worktreePath;
+      if (!options.apply) {
+        results.push({
+          path: record.path,
+          destination,
+          branch: record.branch,
+          action: "would move",
+        });
+        continue;
+      }
+      if (record.locked) {
+        results.push({
+          path: record.path,
+          branch: record.branch,
+          action: "skipped",
+          reason: "locked",
+        });
+        continue;
+      }
+      if (fs.existsSync(destination)) {
+        throw new ManagerError(
+          `Repair destination collision: ${destination}`,
+          "PATH_OCCUPIED",
+        );
+      }
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      // A moved primary checkout leaves each linked worktree's .git pointer
+      // referring to the old common directory. Repair that exact registration
+      // before asking Git to move the dirty-preserving checkout.
+      git(repoRoot, ["worktree", "repair", record.path]);
+      git(repoRoot, ["worktree", "move", record.path, destination]);
+      git(repoRoot, ["worktree", "repair", destination]);
+      writeMetadata(repoRoot, record.branch, {
+        worktreePath: destination,
+        slug: path.basename(destination),
+        repairedFrom: record.path,
+        repairedAt: new Date().toISOString(),
+      });
+      results.push({
+        path: record.path,
+        destination,
+        branch: record.branch,
+        action: "moved and repaired",
+      });
+    } else {
+      if (options.apply) git(repoRoot, ["worktree", "repair", record.path]);
+      results.push({
+        path: record.path,
+        branch: record.branch,
+        action: options.apply ? "repaired" : "would repair",
+      });
+    }
+  }
+  return { repoRoot, applied: Boolean(options.apply), worktrees: results };
+}
+
+function parseCli(argv) {
+  const command = argv[0];
+  if (!command || command === "--help" || command === "-h") {
+    return { command: "help", options: {} };
+  }
+  const options = {};
+  const booleans = new Set([
+    "--apply",
+    "--dry-run",
+    "--recover",
+    "--terminal",
+    "--delete-branch",
+    "--allow-closed",
+    "--allow-unknown",
+    "--skip-pr-check",
+    "--repair-stale",
+    "--json",
+  ]);
+  for (let index = 1; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (booleans.has(token)) {
+      const key = token
+        .slice(2)
+        .replace(/-([a-z])/g, (_, character) => character.toUpperCase());
+      options[key] = token !== "--dry-run";
+      continue;
+    }
+    if (!token.startsWith("--") || index + 1 >= argv.length) {
+      throw new ManagerError(`Unexpected argument: ${token}`, "USAGE");
+    }
+    const key = token
+      .slice(2)
+      .replace(/-([a-z])/g, (_, character) => character.toUpperCase());
+    options[key] = argv[index + 1];
+    index += 1;
+  }
+  return { command, options };
+}
+
+function help() {
+  return {
+    usage: [
+      "worktree-manager resolve --repo <path> --branch <branch>",
+      "worktree-manager create --repo <path> --branch <branch> [--base <ref>] [--creator <workflow>] [--purpose <purpose>] [--invocation <id>] [--lock-reason <identity>]",
+      "worktree-manager lock --repo <path> (--branch <branch>|--path <path>) --reason <identity> [--takeover-owner <exact prior identity>]",
+      "worktree-manager unlock --repo <path> (--branch <branch>|--path <path>) --owner <exact identity> [--terminal]",
+      "worktree-manager status --repo <path>",
+      "worktree-manager remove --repo <path> (--branch <branch>|--path <path>) [--delete-branch] [--recover --owner <exact identity>]",
+      "worktree-manager reconcile --repo <path> [--apply] [--grace-hours <n>] [--recent-minutes <n>] [--delete-branch] [--repair-stale]",
+      "worktree-manager migrate --repo <path> (--dry-run|--apply)",
+      "worktree-manager repair --repo <path> [--primary <path>] [--old-repo-name <name>] [--apply]",
+    ],
+  };
+}
+
+function execute(command, options) {
+  switch (command) {
+    case "help":
+      return help();
+    case "resolve":
+      return resolvePlan(options);
+    case "create":
+      return create(options);
+    case "lock":
+      return lock(options);
+    case "unlock":
+      return unlock(options);
+    case "status":
+      return status(options);
+    case "remove":
+      return remove(options);
+    case "reconcile":
+      return reconcile(options);
+    case "migrate":
+      return migrate(options);
+    case "repair":
+      return repair(options);
+    default:
+      throw new ManagerError(`Unknown command: ${command}`, "USAGE");
+  }
+}
+
+module.exports = {
+  ManagerError,
+  classify,
+  config,
+  create,
+  execute,
+  migrate,
+  parseCli,
+  parseWorktrees,
+  primaryRoot,
+  reconcile,
+  remove,
+  repair,
+  resolvePlan,
+  slugBranch,
+  status,
+};
+
+if (require.main === module) {
+  try {
+    const { command, options } = parseCli(process.argv.slice(2));
+    const result = execute(command, options);
+    process.stdout.write(
+      `${JSON.stringify({ ok: true, ...result }, null, 2)}\n`,
+    );
+  } catch (error) {
+    const payload = {
+      ok: false,
+      error: error.message,
+      code: error.code || "UNEXPECTED",
+      details: error.details || {},
+    };
+    process.stderr.write(`${JSON.stringify(payload, null, 2)}\n`);
+    process.exitCode = error.code === "USAGE" ? 2 : 1;
+  }
+}
