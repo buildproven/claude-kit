@@ -601,11 +601,22 @@ function createManifest(options) {
 
 function strongerReviewForCurrentHead(manifest, root) {
   if (manifest.risk?.resolved !== true) return null;
+  const config = riskScore.loadConfig(root);
   const rescored = riskScore.score({
     base: manifest.revisions.baseRef,
     repoRoot: root,
     gitRunner: (args) => git(root, args),
+    config,
   });
+  const minimumScore = {
+    medium: 20,
+    high: 50,
+    critical: riskScore.CRITICAL_RISK_SCORE,
+    95: 50,
+    98: riskScore.CRITICAL_RISK_SCORE,
+  }[manifest.risk.requestedLevel];
+  const effectiveScore = Math.max(rescored.riskScore, minimumScore || 0);
+  const requiredKnobs = riskScore.scoreToKnobs(effectiveScore, config);
   const tierForScore = (score) => {
     if (score >= riskScore.CRITICAL_RISK_SCORE) return "critical";
     if (score >= 50) return "high";
@@ -614,14 +625,14 @@ function strongerReviewForCurrentHead(manifest, root) {
   };
   const tierRank = { low: 0, medium: 1, high: 2, critical: 3 };
   const codexRank = { skip: 0, low: 0, medium: 1, high: 2, xhigh: 3 };
-  const nextTier = tierForScore(rescored.riskScore);
+  const nextTier = tierForScore(effectiveScore);
   const stronger =
     tierRank[nextTier] > tierRank[manifest.risk.tier] ||
-    rescored.knobs.agents > manifest.risk.agentTarget ||
-    (codexRank[rescored.knobs.codex] ?? -1) >
+    requiredKnobs.agents > manifest.risk.agentTarget ||
+    (codexRank[requiredKnobs.codex] ?? -1) >
       (codexRank[manifest.risk.codexDepth] ?? -1) ||
-    rescored.knobs.codexRounds > manifest.risk.codexRounds;
-  return stronger ? { ...rescored.knobs, tier: nextTier } : null;
+    requiredKnobs.codexRounds > manifest.risk.codexRounds;
+  return stronger ? { ...requiredKnobs, tier: nextTier } : null;
 }
 
 function assertCurrentReviewStrength(manifest, root) {

@@ -1872,6 +1872,32 @@ exit 1
     ).toThrow(/stronger review.*now critical\/6\/xhigh.*fresh invocation/i);
   });
 
+  it("reapplies an explicit level-98 minimum when validating a stale same-HEAD contract", () => {
+    const root = repo("same-head-level-98");
+    const manifest = create(root, ["--level", "98"]);
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    state.risk = {
+      ...state.risk,
+      requestedLevel: "98",
+      resolved: true,
+      tier: "critical",
+      score: 75,
+      agentTarget: 6,
+      codexDepth: "high",
+      codexRounds: 1,
+    };
+    writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
+
+    const result = spawnSync("node", [INVOCATION, "advance", manifest], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(
+      /stronger review.*now critical\/6\/xhigh.*fresh invocation/i,
+    );
+  });
+
   it("fails early when required repository gate scripts are missing", () => {
     const root = repo("missing-baselines");
     writeFileSync(
