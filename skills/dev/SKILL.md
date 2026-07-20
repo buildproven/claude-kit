@@ -402,6 +402,18 @@ focused tests, then the full suite.
 
 **CRITICAL: Explicit completion marker for agents**
 
+Successful development is the terminal handoff for the `bs:dev` owner. Release
+that exact lock before offering `/bs:quality`; a crashed or incomplete run
+leaves the lock as evidence and must not be taken over automatically:
+
+```bash
+node "$WORKTREE_MANAGER" unlock \
+  --repo "$WORKTREE_DIR" \
+  --branch "$BRANCH_NAME" \
+  --owner "$INVOCATION_ID" \
+  --terminal
+```
+
 After implementation is complete, provide explicit completion signal:
 
 ```markdown
@@ -481,7 +493,8 @@ TARGET_DIR: ${worktreePaths[i]}
 2. Infer requirements from the task description.
 3. Assess complexity (Simple/Medium/Complex), explore if needed.
 4. Implement with TodoWrite tracking.
-5. Run /bs:quality --merge --target-dir TARGET_DIR.
+5. Release the exact bs:dev worktree lock as a terminal handoff, then run
+   /bs:quality --merge --target-dir TARGET_DIR.
 6. Report back: branch name, PR URL, status (passed/failed/blocked).`,
 });
 ```
@@ -583,14 +596,15 @@ Task(subagent_type: "general-purpose",
      3. Assess complexity using Sequential Thinking
      4. Explore codebase if needed (use Task + Explore agent)
      5. Implement with TodoWrite tracking
-     6. Run autonomous quality loop:
+     6. Release the exact bs:dev worktree lock as a terminal handoff.
+     7. Run autonomous quality loop:
         - Run tests (fix until passing)
         - Run ESLint (fix until passing)
         - Run TypeScript check (fix until passing)
         - Run build (fix until passing)
         - Verify all checks pass (95% quality)
-     7. Create PR with description
-     8. If --merge: gh pr merge --auto --squash --delete-branch
+     8. Create PR with description
+     9. If --merge: gh pr merge --auto --squash --delete-branch
 
      Note: You work in an isolated worktree. No coordination with other agents needed.
      Quality must hit 95% before PR creation.`)

@@ -54,7 +54,14 @@ cd "$PRIMARY_CHECKOUT" || {
   echo "  Recovery: node \"$MANAGER\" reconcile --repo \"$PRIMARY_CHECKOUT\" --apply" >&2
   exit 0
 }
-if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+PRIMARY_STATUS="$(git status --porcelain 2>&1)"
+PRIMARY_STATUS_RC=$?
+if [ "$PRIMARY_STATUS_RC" -ne 0 ]; then
+  echo "[quality] merge succeeded; cleanup incomplete: primary checkout status could not be inspected: $PRIMARY_STATUS" >&2
+  echo "  Recovery: node \"$MANAGER\" reconcile --repo \"$PRIMARY_CHECKOUT\" --apply" >&2
+  exit 0
+fi
+if [ -n "$PRIMARY_STATUS" ]; then
   echo "[quality] merge succeeded; cleanup incomplete: primary checkout is dirty; it was not changed." >&2
   echo "  Recovery: node \"$MANAGER\" reconcile --repo \"$PRIMARY_CHECKOUT\" --apply" >&2
   exit 0
@@ -98,6 +105,11 @@ BRANCH_DELETE_ERROR="$(printf '%s' "$REMOVE_JSON" | jq -r '.branchDeletionError 
 if [ "$PRESERVE_BRANCH" = false ] && [ "$BRANCH_DELETED" != true ]; then
   echo "[quality] merge succeeded; worktree removed; local branch cleanup incomplete: ${BRANCH_DELETE_ERROR:-git branch -d refused deletion}." >&2
   echo "  Recovery: git -C \"$PRIMARY_CHECKOUT\" branch -d \"$FEATURE_BRANCH\"" >&2
+  echo "  primary: $PRIMARY_CHECKOUT ($DEFAULT_BRANCH)"
+  echo "  removed: $WORKTREE_PATH"
+  echo "  remaining worktrees:"
+  git worktree list
+  exit 0
 fi
 
 echo "[quality] merge cleanup complete."

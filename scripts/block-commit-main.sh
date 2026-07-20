@@ -77,15 +77,6 @@ print_fix_hint() {
   echo "    BYPASS_BRANCH_GUARD=1 git commit -m \"...\""
 }
 
-IS_SUBMODULE=""
-if [ -n "$REPO_ROOT" ] &&
-  [ -n "$(git -C "$REPO_ROOT" rev-parse --show-superproject-working-tree 2>/dev/null)" ] &&
-  [ -n "$CURRENT_BRANCH" ] &&
-  [ "$CURRENT_BRANCH" != "main" ] &&
-  [ "$CURRENT_BRANCH" != "master" ]; then
-  IS_SUBMODULE=1
-fi
-
 IS_TMPDIR=""
 if [ -n "$REPO_ROOT" ]; then
   HAS_SUPERPROJECT="$(git -C "$REPO_ROOT" rev-parse --show-superproject-working-tree 2>/dev/null || true)"
@@ -100,7 +91,7 @@ if [ -n "$REPO_ROOT" ]; then
   fi
 fi
 
-if [ -n "$REPO_ROOT" ] && [ -z "$IS_SUBMODULE" ] && [ -z "$IS_TMPDIR" ]; then
+if [ -n "$REPO_ROOT" ] && [ -z "$IS_TMPDIR" ]; then
   CURRENT_GIT_DIR="$(resolve_dir "$(git -C "$REPO_ROOT" rev-parse --git-dir)")"
   COMMON_GIT_DIR="$(resolve_dir "$(git -C "$REPO_ROOT" rev-parse --git-common-dir)")"
   if [ "$CURRENT_GIT_DIR" = "$COMMON_GIT_DIR" ]; then

@@ -384,7 +384,25 @@ function defaultBranch(repoRoot) {
     { allowFailure: true },
   ).stdout;
   if (remoteHead.startsWith("origin/")) return remoteHead.slice(7);
-  for (const candidate of ["main", "master"]) {
+  const configuredDefault = git(
+    repoRoot,
+    ["config", "--get", "init.defaultBranch"],
+    { allowFailure: true },
+  ).stdout;
+  const primaryBranch = git(
+    primaryRoot(repoRoot),
+    ["branch", "--show-current"],
+    {
+      allowFailure: true,
+    },
+  ).stdout;
+  const candidates = [
+    configuredDefault,
+    primaryBranch,
+    "main",
+    "master",
+  ].filter(Boolean);
+  for (const candidate of [...new Set(candidates)]) {
     if (
       git(
         repoRoot,
@@ -454,85 +472,98 @@ function withLifecycleLock(repoRoot, key, operation, callback) {
 }
 
 function create(options) {
-  const plan = resolvePlan(options);
-  return withLifecycleLock(plan.repoRoot, plan.branch, "create", () => {
-    const existing = registeredWorktrees(plan.repoRoot);
-    const forBranch = existing.find((record) => record.branch === plan.branch);
-    if (forBranch) {
-      if (!fs.existsSync(forBranch.path)) {
+  const initialPlan = resolvePlan(options);
+  return withLifecycleLock(
+    initialPlan.repoRoot,
+    initialPlan.worktreePath,
+    "create",
+    () => {
+      const plan = resolvePlan(options);
+      const existing = registeredWorktrees(plan.repoRoot);
+      const forBranch = existing.find(
+        (record) => record.branch === plan.branch,
+      );
+      if (forBranch) {
+        if (!fs.existsSync(forBranch.path)) {
+          throw new ManagerError(
+            `Branch '${plan.branch}' has stale worktree registration at ${forBranch.path}. Run reconcile --repair-stale before retrying.`,
+            "STALE_REGISTRATION",
+            { worktreePath: forBranch.path },
+          );
+        }
+        let metadata = writeMetadata(plan.repoRoot, plan.branch, {
+          creator: options.creator || null,
+          purpose: options.purpose || null,
+          invocation: options.invocation || null,
+          worktreePath: forBranch.path,
+          slug: path.basename(forBranch.path),
+          state: "active",
+        });
+        if (options.lockReason) {
+          metadata = lockRecord(plan.repoRoot, forBranch, {
+            creator: options.creator,
+            purpose: options.purpose,
+            invocation: options.invocation,
+            reason: options.lockReason,
+            recover: options.recover,
+            takeoverOwner: options.takeoverOwner,
+          }).metadata;
+        }
+        return {
+          ...plan,
+          worktreePath: forBranch.path,
+          reused: true,
+          metadata,
+        };
+      }
+      if (fs.existsSync(plan.worktreePath)) {
         throw new ManagerError(
-          `Branch '${plan.branch}' has stale worktree registration at ${forBranch.path}. Run reconcile --repair-stale before retrying.`,
-          "STALE_REGISTRATION",
-          { worktreePath: forBranch.path },
+          `Canonical path is occupied but not registered for '${plan.branch}': ${plan.worktreePath}`,
+          "PATH_OCCUPIED",
         );
       }
-      let metadata = writeMetadata(plan.repoRoot, plan.branch, {
+      const baseRef = resolveBase(plan.repoRoot, options.base);
+      const branchExists =
+        git(
+          plan.repoRoot,
+          ["show-ref", "--verify", "--quiet", `refs/heads/${plan.branch}`],
+          { allowFailure: true },
+        ).status === 0;
+      const args = ["worktree", "add"];
+      if (!branchExists) args.push("-b", plan.branch);
+      args.push(plan.worktreePath, branchExists ? plan.branch : baseRef);
+      git(plan.repoRoot, args);
+      const metadata = writeMetadata(plan.repoRoot, plan.branch, {
         creator: options.creator || null,
         purpose: options.purpose || null,
         invocation: options.invocation || null,
-        worktreePath: forBranch.path,
-        slug: path.basename(forBranch.path),
+        worktreePath: plan.worktreePath,
+        slug: plan.slug,
+        baseRef,
         state: "active",
+        prNumber: options.pr ? Number(options.pr) : null,
       });
       if (options.lockReason) {
-        metadata = lockRecord(plan.repoRoot, forBranch, {
-          creator: options.creator,
-          purpose: options.purpose,
-          invocation: options.invocation,
-          reason: options.lockReason,
-          recover: options.recover,
-          takeoverOwner: options.takeoverOwner,
-        }).metadata;
+        lockRecord(
+          plan.repoRoot,
+          {
+            path: plan.worktreePath,
+            branch: plan.branch,
+            head: git(plan.worktreePath, ["rev-parse", "HEAD"]).stdout,
+            locked: false,
+            lockReason: null,
+          },
+          {
+            creator: options.creator,
+            purpose: options.purpose,
+            invocation: options.invocation,
+            reason: options.lockReason,
+          },
+        );
       }
-      return { ...plan, worktreePath: forBranch.path, reused: true, metadata };
-    }
-    if (fs.existsSync(plan.worktreePath)) {
-      throw new ManagerError(
-        `Canonical path is occupied but not registered for '${plan.branch}': ${plan.worktreePath}`,
-        "PATH_OCCUPIED",
-      );
-    }
-    const baseRef = resolveBase(plan.repoRoot, options.base);
-    const branchExists =
-      git(
-        plan.repoRoot,
-        ["show-ref", "--verify", "--quiet", `refs/heads/${plan.branch}`],
-        { allowFailure: true },
-      ).status === 0;
-    const args = ["worktree", "add"];
-    if (!branchExists) args.push("-b", plan.branch);
-    args.push(plan.worktreePath, branchExists ? plan.branch : baseRef);
-    git(plan.repoRoot, args);
-    const metadata = writeMetadata(plan.repoRoot, plan.branch, {
-      creator: options.creator || null,
-      purpose: options.purpose || null,
-      invocation: options.invocation || null,
-      worktreePath: plan.worktreePath,
-      slug: plan.slug,
-      baseRef,
-      state: "active",
-      prNumber: options.pr ? Number(options.pr) : null,
-    });
-    if (options.lockReason) {
-      lockRecord(
-        plan.repoRoot,
-        {
-          path: plan.worktreePath,
-          branch: plan.branch,
-          head: git(plan.worktreePath, ["rev-parse", "HEAD"]).stdout,
-          locked: false,
-          lockReason: null,
-        },
-        {
-          creator: options.creator,
-          purpose: options.purpose,
-          invocation: options.invocation,
-          reason: options.lockReason,
-        },
-      );
-    }
-    return { ...plan, baseRef, reused: false, metadata };
-  });
+      return { ...plan, baseRef, reused: false, metadata };
+    },
+  );
 }
 
 function recordFor(options) {
@@ -622,7 +653,7 @@ function lock(options) {
   const initial = recordFor(options);
   return withLifecycleLock(
     initial.repoRoot,
-    worktreeMetadataKey(initial.record),
+    initial.record.path,
     "lock",
     () => {
       const { repoRoot, record } = recordFor(options);
@@ -652,7 +683,7 @@ function unlock(options) {
   const initial = recordFor(options);
   return withLifecycleLock(
     initial.repoRoot,
-    worktreeMetadataKey(initial.record),
+    initial.record.path,
     "unlock",
     () => {
       const { repoRoot, record } = recordFor(options);
@@ -961,7 +992,7 @@ function status(options) {
   return { repoRoot, worktrees: records };
 }
 
-function remove(options) {
+function removeRecord(options) {
   const { repoRoot, record } = recordFor(options);
   if (record.path === repoRoot) {
     throw new ManagerError(
@@ -970,17 +1001,17 @@ function remove(options) {
     );
   }
   if (record.locked) {
-    const metadata = record.branch
-      ? readMetadata(repoRoot, record.branch)
-      : null;
-    const expected = metadata?.lockReason || record.lockReason;
+    const expected = expectedLockOwner(repoRoot, record);
     if (!options.recover || !options.owner || options.owner !== expected) {
       throw new ManagerError(
         `Locked worktree removal refused. Recovery requires --recover and exact --owner '${expected || "<lock reason>"}'.`,
         "LOCKED",
       );
     }
-    git(repoRoot, ["worktree", "unlock", record.path]);
+    unlockRecord(repoRoot, record, {
+      owner: options.owner,
+      terminal: true,
+    });
   }
   if (dirty(record)) {
     throw new ManagerError(
@@ -1055,6 +1086,16 @@ function remove(options) {
     branchDeletionError,
     recoverableAs: record.branch,
   };
+}
+
+function remove(options) {
+  const initial = recordFor(options);
+  return withLifecycleLock(
+    initial.repoRoot,
+    initial.record.path,
+    "remove",
+    () => removeRecord(options),
+  );
 }
 
 function reconcile(options) {

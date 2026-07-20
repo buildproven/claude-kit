@@ -651,6 +651,30 @@ esac
     expect(count).toBe(1);
   });
 
+  it("serializes concurrent slug collisions and preserves both branches", async () => {
+    const { repo } = fixture();
+    const createBranch = (branch) =>
+      runAsync("node", [MANAGER, "create", "--repo", repo, "--branch", branch]);
+    const branches = ["feature/collision_a", "feature/collision-a"];
+    const concurrent = await Promise.all(branches.map(createBranch));
+    for (let index = 0; index < concurrent.length; index += 1) {
+      if (concurrent[index].status !== 0) {
+        const retry = await createBranch(branches[index]);
+        expect(retry.status, retry.stderr).toBe(0);
+      }
+    }
+    const records = git(repo, "worktree", "list", "--porcelain");
+    expect(records).toContain("branch refs/heads/feature/collision_a");
+    expect(records).toContain("branch refs/heads/feature/collision-a");
+    const paths = records
+      .split("\n")
+      .filter((line) => line.startsWith("worktree "))
+      .map((line) => line.slice("worktree ".length))
+      .filter((candidate) => candidate.includes("collision-a"));
+    expect(paths).toHaveLength(2);
+    expect(new Set(paths).size).toBe(2);
+  });
+
   it("dry-runs legacy migration and applies only clean unlocked worktrees", () => {
     const { parent, repo } = fixture();
     const legacy = path.join(parent, "repo-wt-legacy");
@@ -696,5 +720,14 @@ describe("canonical-source contract", () => {
     expect(source).not.toMatch(/worktree["',\s]+remove["',\s]+--force/);
     expect(source).not.toContain("rm -rf");
     expect(source).not.toMatch(/branch["',\s]+-D/);
+  });
+
+  it("does not exempt primary submodule checkouts from the commit guard", () => {
+    const source = readFileSync(
+      path.join(ROOT, "scripts", "block-commit-main.sh"),
+      "utf8",
+    );
+    expect(source).not.toContain("IS_SUBMODULE");
+    expect(source).toContain('CURRENT_GIT_DIR" = "$COMMON_GIT_DIR');
   });
 });

@@ -73,7 +73,9 @@ for repo in "${repos[@]}"; do
   cat > "$prompt" <<EOF
 Repair the exact fleet-steward audit failures recorded in $audit_file for repository $worktree.
 Preserve unrelated behavior. Run the repository's required checks, commit on the existing feature branch,
-push, open a PR, and complete the repository's provider-neutral quality merge workflow. Never push directly
+push, open a PR, release the terminal worktree lock with:
+node "$KIT_ROOT/scripts/worktree-manager.js" unlock --repo "$worktree" --branch "$branch" --owner "$invocation" --terminal
+and complete the repository's provider-neutral quality merge workflow. Never push directly
 to the default branch. Return the PR URL and final verification evidence.
 EOF
   args=(--prompt-file "$prompt" --target-dir "$worktree" --timeout 3600)
