@@ -42,11 +42,13 @@ if [ "$MODE" = parser-inconclusive ]; then
     [ -e "$evidence" ] || continue
     preserve_pass="$(basename "$evidence" .normalized.json)"
     preserve_destination="$REVIEW_OUT/primary-$preserve_pass.result.json"
-    preserve_counter=2
-    while [ -e "$preserve_destination" ]; do
-      preserve_destination="$REVIEW_OUT/primary-$preserve_pass-$preserve_counter.result.json"
-      preserve_counter=$((preserve_counter + 1))
-    done
+    if [ -e "$preserve_destination" ]; then
+      # Re-entry into an attempt directory must not abort or create a second
+      # authoritative result for the same pass. Retain the first immutable
+      # result and quarantine the duplicate as diagnostic evidence.
+      quarantine "$evidence"
+      continue
+    fi
     mv "$evidence" "$preserve_destination"
   done
 fi

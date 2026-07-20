@@ -593,7 +593,7 @@ describe("quality merge gates", () => {
     ).toBe(true);
   });
 
-  it("preserves repeated primary evidence without aborting on a destination collision", () => {
+  it("quarantines repeated primary evidence without replacing the authoritative result", () => {
     const reviewOut = mkdtempSync(path.join(tmpdir(), "quality-collision-"));
     writeFileSync(
       path.join(reviewOut, "primary-codex-1.result.json"),
@@ -620,7 +620,15 @@ describe("quality merge gates", () => {
     expect(
       JSON.parse(
         readFileSync(
-          path.join(reviewOut, "primary-codex-1-2.result.json"),
+          path.join(reviewOut, "primary-codex-1.result.json"),
+          "utf8",
+        ),
+      ).findings[0].title,
+    ).toBe("earlier evidence");
+    expect(
+      JSON.parse(
+        readFileSync(
+          path.join(reviewOut, "failed-primary", "codex-1.normalized.json"),
           "utf8",
         ),
       ).findings[0].title,
