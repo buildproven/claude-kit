@@ -1834,6 +1834,44 @@ exit 1
     );
   });
 
+  it("rejects a same-HEAD manifest with a stale underpowered critical contract", () => {
+    const root = repo("same-head-critical-boundary");
+    mkdirSync(path.join(root, "auth"), { recursive: true });
+    writeFileSync(
+      path.join(root, "auth", "session.js"),
+      "export const session = true;\n",
+    );
+    git(root, ["add", "auth/session.js"]);
+    git(root, ["commit", "-q", "-m", "feat: add auth surface"]);
+
+    const manifest = create(root);
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    state.risk = {
+      ...state.risk,
+      resolved: true,
+      tier: "critical",
+      score: 75,
+      agentTarget: 2,
+      codexDepth: "low",
+      codexRounds: 0,
+    };
+    writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
+
+    const result = spawnSync("node", [INVOCATION, "advance", manifest], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(
+      /stronger review.*now critical\/6\/xhigh.*fresh invocation/i,
+    );
+    expect(() =>
+      invocation.reviewAuthorization(
+        JSON.parse(readFileSync(manifest, "utf8")),
+      ),
+    ).toThrow(/stronger review.*now critical\/6\/xhigh.*fresh invocation/i);
+  });
+
   it("fails early when required repository gate scripts are missing", () => {
     const root = repo("missing-baselines");
     writeFileSync(

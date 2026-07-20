@@ -624,9 +624,24 @@ function strongerReviewForCurrentHead(manifest, root) {
   return stronger ? { ...rescored.knobs, tier: nextTier } : null;
 }
 
+function assertCurrentReviewStrength(manifest, root) {
+  const stronger = strongerReviewForCurrentHead(manifest, root);
+  if (!stronger) return;
+  throw new Error(
+    `quality resume requires stronger review at HEAD ${manifest.revisions.currentHead} ` +
+      `(was ${manifest.risk.tier}/${manifest.risk.agentTarget}/${manifest.risk.codexDepth}, ` +
+      `now ${stronger.tier}/${stronger.agents}/${stronger.codex}); start a fresh invocation`,
+  );
+}
+
 function advanceHead(manifest, root) {
   const nextHead = git(root, ["rev-parse", "HEAD"]);
   const priorHead = manifest.revisions.currentHead;
+  // Revalidate even when HEAD has not moved. A manifest created by an older
+  // runtime can persist a review contract that the current policy considers
+  // underpowered (for example, the former 75–84 critical boundary gap).
+  // Returning before this assertion would grandfather that stale contract.
+  assertCurrentReviewStrength(manifest, root);
   if (nextHead === priorHead) return false;
   const stampHead = manifest.merge?.stampHead;
   if (stampHead) {
@@ -642,14 +657,6 @@ function advanceHead(manifest, root) {
   } catch {
     throw new Error(
       `quality resume refused: ${priorHead} is not an ancestor of ${nextHead}`,
-    );
-  }
-  const stronger = strongerReviewForCurrentHead(manifest, root);
-  if (stronger) {
-    throw new Error(
-      `quality resume requires stronger review at HEAD ${nextHead} ` +
-        `(was ${manifest.risk.tier}/${manifest.risk.agentTarget}/${manifest.risk.codexDepth}, ` +
-        `now ${stronger.tier}/${stronger.agents}/${stronger.codex}); start a fresh invocation`,
     );
   }
   if (
@@ -1938,6 +1945,10 @@ function reviewTrailers(manifest) {
 }
 
 function reviewAuthorization(manifest) {
+  // This is the authoritative provider-neutral merge evidence boundary. Repeat
+  // the strength assertion here so a caller cannot bypass resume/advance and
+  // authorize review artifacts produced under a stale, weaker risk contract.
+  assertCurrentReviewStrength(manifest, manifest.repo.realpath);
   const authorization = reviewCoverage(manifest);
   const successful = manifest.reviews.filter(
     (review) => review.status === "success",
