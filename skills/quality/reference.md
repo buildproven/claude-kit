@@ -10,6 +10,15 @@ repository realpath, PR, base SHA, and expected HEAD before reading or writing
 state. There is no session sentinel, active-state glob, mtime lookup, or
 `latest` pointer.
 
+Risk resolution also records a deterministic task type from the branch commit
+range and, when commit intent is unavailable, an all-specialized path set:
+`docs`, `ci`, `build`, `chore`, `feature`, `bugfix`, `performance`, or
+`unknown`. Bug-fix and performance work impose the non-security high-review
+floor; feature work imposes the standard floor. Task routing can raise review
+depth but never lower path, magnitude, or security floors. The initial type is
+reused while advancing the same campaign so remediation commit labels do not
+change its identity or budget.
+
 The state directory is:
 
 ```text

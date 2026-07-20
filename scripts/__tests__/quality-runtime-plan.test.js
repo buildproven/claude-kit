@@ -103,6 +103,7 @@ describe("quality runtime planning", () => {
       }),
     );
     expect(micro.workload).toBe("micro");
+    expect(micro.taskType).toBe("docs");
     expect(micro.campaignSeconds).toBe(300);
 
     fs.mkdirSync(path.join(repo, ".github", "workflows"), { recursive: true });
@@ -121,6 +122,7 @@ describe("quality runtime planning", () => {
       }),
     );
     expect(critical.tier).toBe("critical");
+    expect(critical.taskType).toBe("ci");
     expect(critical.campaignSeconds).toBe(900);
 
     fs.writeFileSync(path.join(repo, "large.md"), "line\n".repeat(6000));
