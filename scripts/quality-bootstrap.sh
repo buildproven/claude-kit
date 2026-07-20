@@ -307,12 +307,18 @@ for arg in "$@"; do
 done
 
 if [ "$ARGS_MERGE" = true ]; then
-  CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-  PRIMARY=$(node "$SCRIPT_DIR/worktree-manager.js" resolve \
-    --repo "$GIT_ROOT" --branch "$CURRENT_BRANCH" 2>/dev/null |
-    jq -r '.repoRoot // empty')
-  if [ "$CURRENT_BRANCH" = "main" ] && [ -n "$PRIMARY" ] && [ "$GIT_ROOT" = "$PRIMARY" ]; then
-    echo "❌ /bs:quality --merge cannot run from the primary checkout on main."
+  CURRENT_BRANCH=$(git branch --show-current)
+  PRIMARY_STATUS=$(node "$SCRIPT_DIR/worktree-manager.js" status \
+    --repo "$GIT_ROOT" --skip-pr-check) || {
+    echo "❌ /bs:quality --merge could not resolve the primary checkout." >&2
+    exit 1
+  }
+  PRIMARY=$(printf '%s' "$PRIMARY_STATUS" | jq -er '.repoRoot') || {
+    echo "❌ /bs:quality --merge could not parse the primary checkout." >&2
+    exit 1
+  }
+  if [ "$GIT_ROOT" = "$PRIMARY" ]; then
+    echo "❌ /bs:quality --merge cannot run from the primary checkout (${CURRENT_BRANCH:-detached HEAD})."
     echo "   Create a worktree first:"
     echo "     node $SCRIPT_DIR/worktree-manager.js create --repo \"$GIT_ROOT\" --branch <type>/<slug>"
     echo "   Move uncommitted changes there with: git stash; cd <worktree>; git stash pop"

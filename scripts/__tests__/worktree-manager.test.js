@@ -461,6 +461,59 @@ esac
     expect(state.lockReason).toBe("owner-20");
   });
 
+  it("records explicit recovery evidence when removal and relocking both fail", () => {
+    const { parent, repo } = fixture();
+    const worktree = create(repo, "feature/double-failure", [
+      "--lock-reason",
+      "owner-21",
+    ]);
+    const bin = path.join(parent, "double-failure-bin");
+    mkdirSync(bin);
+    const realGit = spawnSync("which", ["git"], {
+      encoding: "utf8",
+    }).stdout.trim();
+    writeFileSync(
+      path.join(bin, "git"),
+      `#!/bin/sh
+case "$*" in
+  *"worktree remove"*|*"worktree lock"*) echo "simulated lifecycle failure" >&2; exit 2 ;;
+  *) exec "${realGit}" "$@" ;;
+esac
+`,
+    );
+    chmodSync(path.join(bin, "git"), 0o755);
+    const { json } = manager(
+      [
+        "remove",
+        "--repo",
+        repo,
+        "--branch",
+        "feature/double-failure",
+        "--recover",
+        "--owner",
+        "owner-21",
+        "--skip-pr-check",
+      ],
+      {
+        ok: false,
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+    expect(json.code).toBe("LOCK_RECOVERY_FAILED");
+    expect(json.error).toContain("ownership could not be restored");
+    expect(existsSync(worktree.worktreePath)).toBe(true);
+    const state = manager([
+      "status",
+      "--repo",
+      repo,
+      "--skip-pr-check",
+    ]).json.worktrees.find(
+      (candidate) => candidate.branch === "feature/double-failure",
+    );
+    expect(state.metadata.state).toBe("recovery-required");
+    expect(state.metadata.lockReason).toBe("owner-21");
+  });
+
   it("transfers a lock only when the prior ownership identity is exact", () => {
     const { repo } = fixture();
     create(repo, "feature/handoff", ["--lock-reason", "bs:dev/run-1"]);
@@ -590,6 +643,38 @@ esac
     expect(state.lockReason).toBe("steward/run-2");
   });
 
+  it("does not mutate audit metadata before refusing a lock takeover", () => {
+    const { repo } = fixture();
+    create(repo, "feature/refused-takeover", [
+      "--lock-reason",
+      "owner-original",
+      "--invocation",
+      "invocation-original",
+    ]);
+    const { json } = manager(
+      [
+        "create",
+        "--repo",
+        repo,
+        "--branch",
+        "feature/refused-takeover",
+        "--creator",
+        "attacker",
+        "--invocation",
+        "invocation-attacker",
+        "--lock-reason",
+        "owner-attacker",
+      ],
+      { ok: false },
+    );
+    expect(json.code).toBe("LOCKED");
+    const state = manager(["status", "--repo", repo, "--skip-pr-check"]).json
+      .worktrees[0];
+    expect(state.metadata.creator).toBe("test");
+    expect(state.metadata.invocation).toBe("invocation-original");
+    expect(state.metadata.lockReason).toBe("owner-original");
+  });
+
   it("creates an existing local branch without resolving an unused base", () => {
     const { repo } = fixture();
     git(repo, "branch", "feature/existing", "main");
@@ -662,6 +747,21 @@ esac
       { ok: false, env: ghEnv(bin, "OPEN") },
     );
     expect(json.code).toBe("OPEN_PR");
+  });
+
+  it("honors --skip-pr-check during status classification", () => {
+    const { parent, repo } = fixture();
+    const bin = fakeGh(parent);
+    const worktree = create(repo, "feature/test");
+    git(worktree.worktreePath, "push", "-u", "origin", "feature/test");
+    const checked = manager(["status", "--repo", repo], {
+      env: ghEnv(bin, "OPEN"),
+    }).json.worktrees[0];
+    const skipped = manager(["status", "--repo", repo, "--skip-pr-check"], {
+      env: ghEnv(bin, "OPEN"),
+    }).json.worktrees[0];
+    expect(checked.classification).toBe("clean with open PR");
+    expect(skipped.classification).not.toBe("clean with open PR");
   });
 
   it("refuses worktrees whose PR was closed without merge", () => {

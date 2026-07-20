@@ -532,14 +532,7 @@ function create(options) {
             "LOCKED",
           );
         }
-        let metadata = writeMetadata(plan.repoRoot, plan.branch, {
-          creator: options.creator || null,
-          purpose: options.purpose || null,
-          invocation: options.invocation || null,
-          worktreePath: forBranch.path,
-          slug: path.basename(forBranch.path),
-          state: "active",
-        });
+        let metadata;
         if (options.lockReason) {
           metadata = lockRecord(plan.repoRoot, forBranch, {
             creator: options.creator,
@@ -549,6 +542,15 @@ function create(options) {
             recover: options.recover,
             takeoverOwner: options.takeoverOwner,
           }).metadata;
+        } else {
+          metadata = writeMetadata(plan.repoRoot, plan.branch, {
+            creator: options.creator || null,
+            purpose: options.purpose || null,
+            invocation: options.invocation || null,
+            worktreePath: forBranch.path,
+            slug: path.basename(forBranch.path),
+            state: "active",
+          });
         }
         return {
           ...plan,
@@ -967,10 +969,9 @@ function classify(repoRoot, record, options = {}) {
       reason: "branch contains commits absent from its remote",
     };
   }
-  const pr =
-    options.prLookup === false
-      ? { available: false, state: "UNKNOWN", number: null }
-      : lookupPr(repoRoot, record.branch);
+  const pr = options.skipPrCheck
+    ? { available: false, state: "UNKNOWN", number: null }
+    : lookupPr(repoRoot, record.branch);
   if (pr.state === "OPEN") {
     return {
       ...record,
@@ -1117,11 +1118,26 @@ function removeRecord(options) {
     git(repoRoot, ["worktree", "remove", record.path]);
   } catch (error) {
     if (recoveryOwner) {
-      lockRecord(
-        repoRoot,
-        { ...record, locked: false, lockReason: null },
-        { reason: recoveryOwner, creator: "recovery-rollback" },
-      );
+      try {
+        lockRecord(
+          repoRoot,
+          { ...record, locked: false, lockReason: null },
+          { reason: recoveryOwner, creator: "recovery-rollback" },
+        );
+      } catch (rollbackError) {
+        writeMetadata(repoRoot, worktreeMetadataKey(record), {
+          state: "recovery-required",
+          lockReason: recoveryOwner,
+          removalError: error.message,
+          rollbackError: rollbackError.message,
+          recoveryRequiredAt: new Date().toISOString(),
+        });
+        throw new ManagerError(
+          `Worktree removal failed and ownership could not be restored. Original error: ${error.message}. Lock recovery error: ${rollbackError.message}. Worktree retained at ${record.path}; run repair --repo '${repoRoot}' and restore owner '${recoveryOwner}' before continuing.`,
+          "LOCK_RECOVERY_FAILED",
+          { worktreePath: record.path, owner: recoveryOwner },
+        );
+      }
     }
     throw error;
   }
