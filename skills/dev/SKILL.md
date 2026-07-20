@@ -560,7 +560,7 @@ if [[ -n "$RUNNER" ]]; then
   node "$RUNNER" \
     "What implementation approach should we take for: [task description]?" \
     --decision "Choose implementation approach before coding" \
-    --providers claude,codex,gemini \
+    --providers claude,codex \
     --mode parallel \
     --output scorecard \
     --rubric "implementation risk,complexity,maintainability,migration cost,speed"

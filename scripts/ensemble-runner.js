@@ -4,7 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const { execFile, spawnSync } = require("child_process");
 
-const DEFAULT_PROVIDERS = ["claude", "codex", "gemini"];
+const DEFAULT_PROVIDERS = ["claude", "codex"];
 const DEFAULT_MODE = "parallel";
 const DEFAULT_OUTPUT = "memo";
 const DEFAULT_TIMEOUT_MS = 120000;
@@ -298,6 +298,35 @@ function buildProviderPrompt(provider, options, packet, priorResponses = []) {
     .trim();
 }
 
+function formatProviderFailure(provider, detail) {
+  const message = detail || "unknown error";
+  if (
+    provider === "gemini" &&
+    /Failed to spawn agent command:\s*gemini --acp/i.test(message)
+  ) {
+    return (
+      "Gemini CLI is unavailable in the active Node/PATH runtime. Install the " +
+      "current @google/gemini-cli and configure API-key auth before requesting " +
+      "Gemini explicitly. Personal OAuth clients may be rejected by Google; " +
+      "acpx does not yet support the replacement Antigravity CLI. " +
+      `Original error: ${message}`
+    );
+  }
+  if (
+    provider === "gemini" &&
+    /client is no longer supported|migrate to (?:the )?Antigravity/i.test(
+      message,
+    )
+  ) {
+    return (
+      "Gemini authentication was rejected by Google. Configure Gemini CLI with " +
+      "API-key auth, or omit Gemini until acpx supports Antigravity. " +
+      `Original error: ${message}`
+    );
+  }
+  return message;
+}
+
 function execAcpx(provider, prompt, options) {
   return new Promise((resolve) => {
     // Pass prompt via stdin (-f -) to avoid OS arg length limits on large prompts
@@ -316,7 +345,7 @@ function execAcpx(provider, prompt, options) {
             provider,
             ok: false,
             stdout: stdout || "",
-            stderr: stderr || error.message,
+            stderr: formatProviderFailure(provider, stderr || error.message),
           });
           return;
         }
@@ -675,6 +704,7 @@ module.exports = {
   buildContextPacket,
   buildOutputInstructions,
   buildProviderPrompt,
+  formatProviderFailure,
   parseArgs,
   parseScores,
   runEnsemble,
