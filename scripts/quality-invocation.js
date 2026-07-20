@@ -1498,7 +1498,6 @@ function providerFindings(manifest) {
   for (const review of manifest.reviews.filter(
     (item) => item.status === "success",
   )) {
-    const reviewFindingsStart = findings.length;
     const inventory = parseJson(
       fs.readFileSync(path.join(review.artifactDir, "artifact-inventory.json")),
       "provider artifact inventory",
@@ -1507,6 +1506,7 @@ function providerFindings(manifest) {
       file.name.endsWith(".json"),
     );
     const resultNames = new Set(resultFiles.map((file) => file.name));
+    let hasCodexStructuredFindings = false;
     for (const item of resultFiles.filter((file) => {
       const rawPass = file.name.match(/^codex-(\d+)\.json$/);
       return (
@@ -1524,6 +1524,9 @@ function providerFindings(manifest) {
       }
       const items = parsed.findings || parsed.result?.findings;
       if (!Array.isArray(items)) continue;
+      if (/^codex-\d+(?:\.normalized)?\.json$/.test(item.name)) {
+        hasCodexStructuredFindings = true;
+      }
       items.forEach((finding, index) => {
         findings.push({
           ...finding,
@@ -1539,11 +1542,10 @@ function providerFindings(manifest) {
         });
       });
     }
-    const hasStructuredFindings = findings.length > reviewFindingsStart;
     for (const item of inventory.files.filter((file) =>
       file.name.endsWith(".findings.txt"),
     )) {
-      if (hasStructuredFindings && item.name === "codex.findings.txt") {
+      if (hasCodexStructuredFindings && item.name === "codex.findings.txt") {
         continue;
       }
       const text = fs
@@ -1718,11 +1720,11 @@ function writeArtifactInventory(manifest, artifactDir, provider) {
     throw new Error("inconclusive provider findings cannot be inventoried");
   }
   if (provider === "claude") {
-    const claudeFindings = findings.filter(
-      (name) => name !== "codex.findings.txt",
-    );
     const expectedFindings = manifest.agents.map(
       (agent) => `${agent}.findings.txt`,
+    );
+    const claudeFindings = findings.filter((name) =>
+      expectedFindings.includes(name),
     );
     if (
       claudeFindings.length !== expectedFindings.length ||
@@ -2441,6 +2443,7 @@ module.exports = {
   loadManifest,
   parseOptions,
   parseJson,
+  providerFindings,
   recordReview,
   recordJudge,
   recordGate,

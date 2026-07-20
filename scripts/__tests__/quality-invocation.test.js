@@ -2470,16 +2470,29 @@ exit 1
     );
     writeFileSync(
       path.join(artifactDir, "reviewer-a.findings.txt"),
-      "NO FINDINGS\n",
+      "NO FINDINGS.\n",
     );
     writeFileSync(
       path.join(artifactDir, "reviewer-b.findings.txt"),
-      "NO FINDINGS\n",
+      "NO FINDINGS.\n",
     );
 
     expect(() =>
       invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
     ).not.toThrow();
+    manifest.reviews = [
+      {
+        status: "success",
+        artifactDir,
+        inventorySha256: "fallback-inventory",
+      },
+    ];
+    expect(invocation.providerFindings(manifest)).toEqual([
+      expect.objectContaining({
+        title: "BLOCKING: preserved primary finding",
+        source: "codex.findings.txt",
+      }),
+    ]);
     expect(
       JSON.parse(
         readFileSync(path.join(artifactDir, "artifact-inventory.json"), "utf8"),
@@ -2489,6 +2502,7 @@ exit 1
       "reviewer-a.findings.txt",
       "reviewer-b.findings.txt",
     ]);
+    manifest.reviews = [];
 
     writeFileSync(
       path.join(artifactDir, "codex.findings.txt"),

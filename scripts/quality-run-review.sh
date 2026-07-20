@@ -306,8 +306,10 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
   fi
   # Preserve failed-primary diagnostics without discarding conclusive findings
   # from an earlier successful pass when a later pass becomes inconclusive.
+  PRESERVATION_MODE=evidence-absent
+  [ "$PROVIDER_RC" -eq 4 ] && PRESERVATION_MODE=parser-inconclusive
   bash "$SCRIPT_DIR/quality-preserve-primary-evidence.sh" \
-    --review-out "$REVIEW_OUT"
+    --review-out "$REVIEW_OUT" --mode "$PRESERVATION_MODE"
   REVIEW_PROVIDER="$QUALITY_FALLBACK"
   run_provider "$QUALITY_FALLBACK"
   PROVIDER_RC=$?

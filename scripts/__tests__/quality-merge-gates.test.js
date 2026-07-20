@@ -552,7 +552,13 @@ describe("quality merge gates", () => {
     writeFileSync(path.join(reviewOut, "codex-2.json"), "{}\n");
     writeFileSync(path.join(reviewOut, "codex-2.stderr"), "parse failure\n");
 
-    execFileSync("bash", [PRESERVE_PRIMARY, "--review-out", reviewOut]);
+    execFileSync("bash", [
+      PRESERVE_PRIMARY,
+      "--review-out",
+      reviewOut,
+      "--mode",
+      "parser-inconclusive",
+    ]);
 
     expect(
       readFileSync(path.join(reviewOut, "codex.findings.txt"), "utf8"),
@@ -576,10 +582,16 @@ describe("quality merge gates", () => {
     mkdirSync(path.join(reviewOut, "unrelated"));
     writeFileSync(
       path.join(reviewOut, "codex.findings.txt"),
-      "INCONCLUSIVE: parser failed\n",
+      "INCONCLUSIVE: parser failed\n\n",
     );
 
-    execFileSync("bash", [PRESERVE_PRIMARY, "--review-out", reviewOut]);
+    execFileSync("bash", [
+      PRESERVE_PRIMARY,
+      "--review-out",
+      reviewOut,
+      "--mode",
+      "parser-inconclusive",
+    ]);
 
     expect(existsSync(path.join(reviewOut, "codex.findings.txt"))).toBe(false);
     expect(
@@ -587,7 +599,31 @@ describe("quality merge gates", () => {
         path.join(reviewOut, "failed-primary", "codex.findings.txt"),
         "utf8",
       ),
-    ).toBe("INCONCLUSIVE: parser failed\n");
+    ).toBe("INCONCLUSIVE: parser failed\n\n");
+  });
+
+  it("quarantines partial findings when the primary produced no evidence", () => {
+    const reviewOut = mkdtempSync(path.join(tmpdir(), "quality-evidence-"));
+    writeFileSync(
+      path.join(reviewOut, "codex.findings.txt"),
+      "BLOCKING: partial pass before timeout\n",
+    );
+
+    execFileSync("bash", [
+      PRESERVE_PRIMARY,
+      "--review-out",
+      reviewOut,
+      "--mode",
+      "evidence-absent",
+    ]);
+
+    expect(existsSync(path.join(reviewOut, "codex.findings.txt"))).toBe(false);
+    expect(
+      readFileSync(
+        path.join(reviewOut, "failed-primary", "codex.findings.txt"),
+        "utf8",
+      ),
+    ).toContain("partial pass before timeout");
   });
 
   it("persists and reloads the exact reviewed base across fenced shells", () => {
