@@ -153,6 +153,21 @@ describe("quality merge gates", () => {
     );
   });
 
+  it("never uses a billing admin merge on a protectable repository", () => {
+    const restriction = AUTHORIZE.indexOf(
+      '[ "$ATOMIC_BASE_FRESHNESS" != unprotectable ]',
+    );
+    const adminMerge = AUTHORIZE.indexOf("MERGE_ARGS+=(--admin)");
+    expect(restriction).toBeGreaterThan(-1);
+    expect(adminMerge).toBeGreaterThan(restriction);
+    expect(AUTHORIZE).toMatch(
+      /CI billing waivers are limited to plan-proven unprotectable private repositories/,
+    );
+    expect(SKILL).toMatch(
+      /except on a plan-proven unprotectable private repository/,
+    );
+  });
+
   it("requires explicit opt-in to merge on an unprotectable base", () => {
     // Private repos without GitHub Pro get HTTP 403 on the protection API, so
     // ATOMIC_BASE_FRESHNESS can never become true and --merge is unsatisfiable

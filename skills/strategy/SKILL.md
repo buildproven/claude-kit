@@ -50,7 +50,7 @@ done
 
 node "$RUNNER" \
   "<question>" \
-  --providers claude,codex,gemini \
+  --providers claude,codex \
   --mode parallel \
   --output memo
 ```
@@ -115,7 +115,8 @@ If the runner script fails, surface the exact command and error so the shared la
 
 ## Practical Defaults
 
-- Default providers: `claude,codex,gemini`
+- Default providers: `claude,codex`. Gemini is opt-in because it requires a
+  separately installed native CLI and supported authentication.
 - Default mode: `parallel`
 - Default output: `memo`
 - Prefer `scorecard` for concrete option selection
