@@ -82,8 +82,9 @@ function parseNativeReview(raw, root = process.cwd()) {
     /\b(?:preserves?|retains?) (?:behaviors?|checks?|semantics|compatibility|invariants?|guarantees?|required-only checks|existing behavior|their existing behavior|the existing behavior|all checks|required checks)\b/i;
   const ADVERSE_FINDING =
     /\b(?:incorrect(?:ly)?|unsafe(?:ly)?|fails?|broken|vulnerable|regressions?|issues?|concerns?|problems?|bugs?)\b/i;
-  const NEGATED_POSITIVE =
-    /\bnot\s+(?:correctly|properly|safely|preserv(?:e|es)|retain(?:s)?)\b/i;
+  const NEGATIVE_PREFIX =
+    /\b(?:not|never|cannot|can't|fails? to|does not|doesn't|no longer)\b/i;
+  const CONTRAST = /\b(?:but|however)\b|;/i;
   const INCOMPLETE =
     /\b(?:could ?n[o']?t be reviewed|ended unexpectedly|was (?:truncated|interrupted|incomplete)|(?:review|analysis) was (?:not )?completed|another (?:path|file))\b/i;
   const sentences = String(raw).split(/[.\n!?]+/);
@@ -94,11 +95,11 @@ function parseNativeReview(raw, root = process.cwd()) {
   // unrelated clean prose ("not risky. No concerns found.") poison the entire
   // review. Clause boundaries still ensure that "No issues, but a bug remains"
   // cannot borrow the negation from the clean clause.
-  const clauses = sentences.flatMap((sentence) =>
-    sentence.split(/\b(?:but|however)\b|;/i),
-  );
+  const clauses = sentences.flatMap((sentence) => sentence.split(CONTRAST));
   const adverseVerdict = clauses.some((clause) => {
-    if (NEGATED_POSITIVE.test(clause)) return true;
+    if (NEGATIVE_PREFIX.test(clause) && POSITIVE_VERDICT.test(clause)) {
+      return true;
+    }
     if (!ADVERSE_FINDING.test(clause)) return false;
     return !(NEGATION.test(clause) && NOUN.test(clause));
   });
@@ -106,7 +107,7 @@ function parseNativeReview(raw, root = process.cwd()) {
     if (incompleteVerdict || adverseVerdict) return false;
     if (CLEAN_PHRASE.test(sentence)) return true;
     if (POSITIVE_VERDICT.test(sentence)) {
-      return true;
+      return !CONTRAST.test(sentence) && !NEGATIVE_PREFIX.test(sentence);
     }
     return NEGATION.test(sentence) && NOUN.test(sentence);
   });

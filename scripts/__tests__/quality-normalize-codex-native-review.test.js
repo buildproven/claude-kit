@@ -79,6 +79,14 @@ Full review comments:
     "No issues were found, but a bug remains in the fallback.",
     "The function correctly handles the happy path.",
     "The change safely handles input. It dereferences a null pointer.",
+    "The refactor preserves existing behavior, but leaks a file descriptor on the error path.",
+    "The change retains compatibility, however it introduces a race condition.",
+    "The patch preserves all checks but silently swallows exceptions.",
+    "The change no longer preserves required checks.",
+    "The patch cannot preserve existing behavior.",
+    "The fallback never retains compatibility.",
+    "The implementation fails to preserve required checks.",
+    "The implementation does not fully preserve required checks.",
   ])("rejects qualified no-finding prose: %s", (prose) => {
     expect(() => parseNativeReview(prose)).toThrow(/no recognizable verdict/);
   });
