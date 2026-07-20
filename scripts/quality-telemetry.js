@@ -212,6 +212,7 @@ function identityFields(manifest) {
     branch: orNull(repo.headRefName),
     baseSha: orNull(revisions.baseSha),
     head: orNull(revisions.currentHead),
+    taskType: resolved ? orNull(risk.taskType) : null,
     riskTier: resolved ? orNull(risk.tier) : null,
     riskScore: resolved ? orNull(risk.score) : null,
     requestedLevel: orNull(risk.requestedLevel),

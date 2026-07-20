@@ -65,8 +65,13 @@ bash "$QUALITY_SCRIPTS_DIR/quality-select-agents.sh" \
   --manifest "<exact-manifest-path>"
 ```
 
-Risk resolution must persist a concrete tier and numeric agent target before
-selection. Critical review requires a signed break-glass capability created by
+Risk resolution must persist a concrete task type, tier, and numeric agent
+target before selection. Docs/CI/build/chore work receives the lightest
+eligible routing without weakening path or security floors; feature work keeps
+the standard floor; bug-fix and performance work receive the high-review floor.
+The initial task type remains bound to the campaign so a later remediation
+commit named `fix` cannot mint a stronger campaign or reset its budget.
+Critical review requires a signed break-glass capability created by
 the outer wrapper and bound to repository, PR, HEAD, invocation, approver, and
 expiry identity. The wrapper pins its verification key into the invocation
 before attachment; artifacts cannot supply or replace their own trust key.

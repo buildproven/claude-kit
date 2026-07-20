@@ -488,6 +488,7 @@ exit 1
 
   it("survives a zsh parent and separate Bash processes", () => {
     const root = repo("zsh");
+    git(root, ["commit", "--amend", "-q", "-m", "fix: correct value"]);
     const result = spawnSync(
       "zsh",
       [
@@ -514,6 +515,8 @@ printf '%s\\n' "$manifest"
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     expect(manifest.risk.resolved).toBe(true);
     expect(manifest.risk.tier).not.toBe("auto");
+    expect(manifest.risk.taskType).toBe("bugfix");
+    expect(manifest.risk.score).toBeGreaterThanOrEqual(60);
     expect(manifest.agents.length).toBeGreaterThanOrEqual(2);
   }, 120_000);
 

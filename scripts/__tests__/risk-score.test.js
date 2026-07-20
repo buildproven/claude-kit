@@ -492,6 +492,7 @@ describe("score — base resolution is deterministic and fails closed", () => {
       if (prev !== undefined) process.env.GITHUB_BASE_REF = prev;
     }
     expect(r.riskScore).toBe(100);
+    expect(r.taskType).toBe("unknown");
     expect(r.baseUnresolved).toBe(true);
     expect(r.reasons.join(" ")).toMatch(/base unresolved/i);
     // diffStats must keep the { files, lines } shape the CLI/GITHUB_OUTPUT
