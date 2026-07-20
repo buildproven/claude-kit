@@ -145,6 +145,22 @@ describe("score — semantic policy failures", () => {
     );
   });
 
+  it.each([
+    ["securityFloor", { securityFloor: {} }, /array of strings/i],
+    ["high", { high: { 0: "**/docs/**" } }, /array of strings/i],
+    ["curve", { curve: { 3: DEFAULTS.curve[3] } }, /non-empty array/i],
+    ["base", { base: [] }, /base\.securityFloor must be a finite number/i],
+    [
+      "magnitude",
+      { magnitude: [] },
+      /magnitude\.linesForSmall must be a finite number/i,
+    ],
+  ])("rejects object/array type confusion for %s", (_name, override, error) => {
+    expect(() =>
+      score({ base: "BASE", config: deepMerge(DEFAULTS, override) }),
+    ).toThrow(error);
+  });
+
   it.each([false, "bad", 1, [], null])(
     "rejects a present non-object scorePolicy root %j",
     (scorePolicy) => {

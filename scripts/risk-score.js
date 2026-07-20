@@ -952,12 +952,7 @@ function deepMerge(base, override) {
   if (!override || typeof override !== "object") return base;
   const out = Array.isArray(base) ? [...base] : { ...base };
   for (const [k, v] of Object.entries(override)) {
-    if (
-      v &&
-      typeof v === "object" &&
-      !Array.isArray(v) &&
-      typeof out[k] === "object"
-    ) {
+    if (isPlainObject(v) && isPlainObject(out[k])) {
       out[k] = deepMerge(out[k], v);
     } else {
       out[k] = v;
