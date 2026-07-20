@@ -127,6 +127,25 @@ describe("quality merge gates", () => {
     );
   });
 
+  it("validates an exact-head billing waiver before bypassing the green-CI guard", () => {
+    const waiverValidation = AUTHORIZE.indexOf(
+      'node "$SCRIPT_DIR/quality-ci-billing-waiver.js"',
+    );
+    const requiredChecks = AUTHORIZE.indexOf(
+      'gh pr checks "$PR" --repo "$EXPECTED_REPOSITORY" --required',
+    );
+    const adminMerge = AUTHORIZE.indexOf("MERGE_ARGS+=(--admin)");
+    expect(waiverValidation).toBeGreaterThan(-1);
+    expect(requiredChecks).toBeGreaterThan(waiverValidation);
+    expect(adminMerge).toBeGreaterThan(requiredChecks);
+    expect(AUTHORIZE).toMatch(
+      /if \[ "\$CI_BILLING_WAIVED" = false \]; then[\s\S]*gh pr checks/,
+    );
+    expect(AUTHORIZE).toMatch(
+      /if \[ "\$\{CI_BILLING_WAIVED:-false\}" = true \]; then[\s\S]*MERGE_ARGS\+=\(--admin\)/,
+    );
+  });
+
   it("requires explicit opt-in to merge on an unprotectable base", () => {
     // Private repos without GitHub Pro get HTTP 403 on the protection API, so
     // ATOMIC_BASE_FRESHNESS can never become true and --merge is unsatisfiable
