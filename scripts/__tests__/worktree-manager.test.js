@@ -471,25 +471,21 @@ describe("worktree-manager public CLI", () => {
 
 describe("canonical-source contract", () => {
   it("keeps path construction and destructive worktree operations in the manager", () => {
-    const files = run(
-      "rg",
-      [
-        "-l",
-        "--hidden",
-        "--glob",
-        "!.git/**",
-        "--glob",
-        "!scripts/__tests__/**",
-        "--glob",
-        "!CHANGELOG.md",
-        "git worktree add|git worktree remove|-[Ww][Tt]-|-worktrees/",
-        ".",
-      ],
-      { cwd: ROOT, ok: false },
-    )
+    const trackedFiles = run("git", ["ls-files"], { cwd: ROOT })
       .stdout.trim()
       .split("\n")
       .filter(Boolean);
+    const disallowed = /git worktree (?:add|remove)|-[Ww][Tt]-|-worktrees\//;
+    const files = trackedFiles.filter((file) => {
+      if (file === "CHANGELOG.md" || file.startsWith("scripts/__tests__/")) {
+        return false;
+      }
+      try {
+        return disallowed.test(readFileSync(path.join(ROOT, file), "utf8"));
+      } catch {
+        return false;
+      }
+    });
     expect(files).toEqual([]);
   });
 
