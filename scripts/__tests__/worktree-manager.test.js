@@ -1,10 +1,12 @@
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   writeFileSync,
@@ -317,6 +319,33 @@ esac
     ).toBe("LOCKED");
   });
 
+  it("retains the lock when recovered removal later fails a safety check", () => {
+    const { repo } = fixture();
+    const worktree = create(repo, "feature/locked-dirty", [
+      "--lock-reason",
+      "owner-18",
+    ]);
+    writeFileSync(path.join(worktree.worktreePath, "dirty.txt"), "dirty\n");
+    const { json } = manager(
+      [
+        "remove",
+        "--repo",
+        repo,
+        "--branch",
+        "feature/locked-dirty",
+        "--recover",
+        "--owner",
+        "owner-18",
+      ],
+      { ok: false },
+    );
+    expect(json.code).toBe("DIRTY");
+    const state = manager(["status", "--repo", repo, "--skip-pr-check"]).json
+      .worktrees[0];
+    expect(state.locked).toBe(true);
+    expect(state.lockReason).toBe("owner-18");
+  });
+
   it("transfers a lock only when the prior ownership identity is exact", () => {
     const { repo } = fixture();
     create(repo, "feature/handoff", ["--lock-reason", "bs:dev/run-1"]);
@@ -394,6 +423,25 @@ esac
       .worktrees[0];
     expect(state.locked).toBe(true);
     expect(state.lockReason).toBe("steward/run-2");
+  });
+
+  it("creates an existing local branch without resolving an unused base", () => {
+    const { repo } = fixture();
+    git(repo, "branch", "feature/existing", "main");
+    const output = manager([
+      "create",
+      "--repo",
+      repo,
+      "--branch",
+      "feature/existing",
+      "--base",
+      "refs/heads/does-not-exist",
+    ]).json;
+    expect(output.reused).toBe(false);
+    expect(output.baseRef).toBeNull();
+    expect(git(output.worktreePath, "branch", "--show-current")).toBe(
+      "feature/existing",
+    );
   });
 
   it("serializes concurrent lock attempts without changing owners silently", async () => {
@@ -675,6 +723,46 @@ esac
     expect(new Set(paths).size).toBe(2);
   });
 
+  it("recovers a dead lifecycle mutex while preserving stale evidence", () => {
+    const { repo } = fixture();
+    const plan = manager([
+      "resolve",
+      "--repo",
+      repo,
+      "--branch",
+      "feature/stale-mutex",
+    ]).json;
+    const common = git(
+      repo,
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-common-dir",
+    );
+    const lockRoot = path.join(common, "worktree-manager", "locks");
+    const lockName = createHash("sha256")
+      .update(plan.worktreePath)
+      .digest("hex")
+      .slice(0, 8);
+    const lock = path.join(lockRoot, `${lockName}.lock`);
+    mkdirSync(lock, { recursive: true });
+    writeFileSync(
+      path.join(lock, "owner.json"),
+      `${JSON.stringify({
+        pid: 999999,
+        hostname: os.hostname(),
+        operation: "create",
+        key: plan.worktreePath,
+      })}\n`,
+    );
+    const output = create(repo, "feature/stale-mutex");
+    expect(existsSync(output.worktreePath)).toBe(true);
+    expect(
+      readdirSync(lockRoot).some((entry) =>
+        entry.startsWith(`${lockName}.lock.stale-`),
+      ),
+    ).toBe(true);
+  });
+
   it("dry-runs legacy migration and applies only clean unlocked worktrees", () => {
     const { parent, repo } = fixture();
     const legacy = path.join(parent, "repo-wt-legacy");
@@ -729,5 +817,14 @@ describe("canonical-source contract", () => {
     );
     expect(source).not.toContain("IS_SUBMODULE");
     expect(source).toContain('CURRENT_GIT_DIR" = "$COMMON_GIT_DIR');
+    expect(source).toMatch(/grep -oE 'git\\s\+-C\\s\+\\S\+' \|\s+tail -1/);
+  });
+
+  it("materializes PR heads through the base repository pull ref", () => {
+    const source = readFileSync(
+      path.join(ROOT, "scripts", "quality-bootstrap.sh"),
+      "utf8",
+    );
+    expect(source).toContain("refs/pull/$RES_PR/head:$WT_BASE_REF");
   });
 });

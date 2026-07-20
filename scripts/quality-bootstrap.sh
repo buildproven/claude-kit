@@ -258,11 +258,21 @@ else
           exit 1
         }
         REPO_ROOT_FOR_WT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-        git -C "$REPO_ROOT_FOR_WT" fetch origin "$RES_BRANCH" >/dev/null 2>&1 || true
+        WT_BASE_REF="origin/$RES_BRANCH"
+        if [ "$RES_KIND" = pr ] && [ -n "${RES_PR:-}" ]; then
+          WT_BASE_REF="refs/remotes/pull/$RES_PR/head"
+          git -C "$REPO_ROOT_FOR_WT" fetch origin \
+            "refs/pull/$RES_PR/head:$WT_BASE_REF" >/dev/null 2>&1 || {
+            echo "❌ Could not fetch exact head for PR #$RES_PR." >&2
+            exit 1
+          }
+        else
+          git -C "$REPO_ROOT_FOR_WT" fetch origin "$RES_BRANCH" >/dev/null 2>&1 || true
+        fi
         WT_CREATE_JSON=$(node "$WORKTREE_MANAGER" create \
           --repo "$REPO_ROOT_FOR_WT" \
           --branch "$RES_BRANCH" \
-          --base "origin/$RES_BRANCH" \
+          --base "$WT_BASE_REF" \
           --creator "bs:quality" \
           --purpose "quality-target-materialization") || exit 1
         RES_PATH=$(printf '%s' "$WT_CREATE_JSON" | jq -er '.worktreePath') || exit 1

@@ -32,7 +32,7 @@ printf '%s' "$COMMAND" | grep -qE 'git(\s+-[CcX]\s+\S+)*\s+commit' || exit 0
 
 GIT_DIR="$(printf '%s' "$COMMAND" |
   grep -oE 'git\s+-C\s+\S+' |
-  head -1 |
+  tail -1 |
   awk '{print $3}' || true)"
 if [ -z "$GIT_DIR" ]; then
   GIT_DIR="$(printf '%s' "$COMMAND" |

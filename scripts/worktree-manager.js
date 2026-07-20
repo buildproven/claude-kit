@@ -4,6 +4,7 @@
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
@@ -456,17 +457,51 @@ function withLifecycleLock(repoRoot, key, operation, callback) {
     fs.mkdirSync(lock);
   } catch (error) {
     if (error.code === "EEXIST") {
-      throw new ManagerError(
-        `Another process is changing the '${key}' worktree lifecycle. Retry after it finishes.`,
-        "LIFECYCLE_BUSY",
-        { operation },
-      );
+      const ownerFile = path.join(lock, "owner.json");
+      let owner = null;
+      try {
+        owner = JSON.parse(fs.readFileSync(ownerFile, "utf8"));
+      } catch {
+        // An unidentifiable lock is retained rather than guessed stale.
+      }
+      let alive = true;
+      if (owner?.hostname === os.hostname() && Number.isInteger(owner.pid)) {
+        try {
+          process.kill(owner.pid, 0);
+        } catch (signalError) {
+          alive = signalError.code !== "ESRCH";
+        }
+      }
+      if (!owner || alive) {
+        throw new ManagerError(
+          `Another process is changing the '${key}' worktree lifecycle. Retry after it finishes.`,
+          "LIFECYCLE_BUSY",
+          { operation, owner },
+        );
+      }
+      const evidence = `${lock}.stale-${Date.now()}`;
+      fs.renameSync(lock, evidence);
+      fs.mkdirSync(lock);
+    } else {
+      throw error;
     }
-    throw error;
   }
+  const ownerFile = path.join(lock, "owner.json");
+  fs.writeFileSync(
+    ownerFile,
+    `${JSON.stringify({
+      pid: process.pid,
+      hostname: os.hostname(),
+      operation,
+      key,
+      createdAt: new Date().toISOString(),
+    })}\n`,
+    { mode: 0o600 },
+  );
   try {
     return callback();
   } finally {
+    fs.unlinkSync(ownerFile);
     fs.rmdirSync(lock);
   }
 }
@@ -522,13 +557,15 @@ function create(options) {
           "PATH_OCCUPIED",
         );
       }
-      const baseRef = resolveBase(plan.repoRoot, options.base);
       const branchExists =
         git(
           plan.repoRoot,
           ["show-ref", "--verify", "--quiet", `refs/heads/${plan.branch}`],
           { allowFailure: true },
         ).status === 0;
+      const baseRef = branchExists
+        ? null
+        : resolveBase(plan.repoRoot, options.base);
       const args = ["worktree", "add"];
       if (!branchExists) args.push("-b", plan.branch);
       args.push(plan.worktreePath, branchExists ? plan.branch : baseRef);
@@ -1000,18 +1037,15 @@ function removeRecord(options) {
       "PRIMARY_REMOVE_REFUSED",
     );
   }
+  let recoveryOwner = null;
   if (record.locked) {
-    const expected = expectedLockOwner(repoRoot, record);
-    if (!options.recover || !options.owner || options.owner !== expected) {
+    recoveryOwner = expectedLockOwner(repoRoot, record);
+    if (!options.recover || !options.owner || options.owner !== recoveryOwner) {
       throw new ManagerError(
-        `Locked worktree removal refused. Recovery requires --recover and exact --owner '${expected || "<lock reason>"}'.`,
+        `Locked worktree removal refused. Recovery requires --recover and exact --owner '${recoveryOwner || "<lock reason>"}'.`,
         "LOCKED",
       );
     }
-    unlockRecord(repoRoot, record, {
-      owner: options.owner,
-      terminal: true,
-    });
   }
   if (dirty(record)) {
     throw new ManagerError(
@@ -1048,6 +1082,12 @@ function removeRecord(options) {
         "UNKNOWN",
       );
     }
+  }
+  if (record.locked) {
+    unlockRecord(repoRoot, record, {
+      owner: recoveryOwner,
+      terminal: true,
+    });
   }
   git(repoRoot, ["worktree", "remove", record.path]);
   git(repoRoot, ["worktree", "prune", "--expire", "now"]);
