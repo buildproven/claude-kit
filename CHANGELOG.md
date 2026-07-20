@@ -58,6 +58,7 @@ All notable changes to claude-kit are documented here.
   (#134).
 - Gemini provider support is now opt-in and diagnosable instead of silently
   misconfigured (#130).
+- CI is now validated on unprotectable repos instead of being skipped (#138).
 - A recursive temp-cleanup trap that could delete unintended paths was
   removed (#107).
 - Vitest global timeout raised to fix parallel-load flakes (#118).
