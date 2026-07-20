@@ -21,6 +21,8 @@ All notable changes to claude-kit are documented here.
 - Campaign telemetry recorder for quality runs (#115).
 - Repo-context-aware critical gate with an always-human review floor (#128).
 - Strengthened engineering and UI design disciplines in shared skills (#105).
+- Review depth now routes by task type instead of a single fixed policy (#133).
+- Unified worktree lifecycle management (#131).
 
 ### Changed
 
@@ -52,6 +54,8 @@ All notable changes to claude-kit are documented here.
   silently degrading (#129).
 - Quality campaigns are now durable and failure-aware across interruptions
   (#117).
+- Validated CI billing waivers are now honored instead of blocking merges
+  (#134).
 - A recursive temp-cleanup trap that could delete unintended paths was
   removed (#107).
 - Vitest global timeout raised to fix parallel-load flakes (#118).
