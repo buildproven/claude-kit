@@ -538,7 +538,12 @@ function mandatoryValidationHasReservedBudget(
 
 function validationDeadlineIsActive(manifest) {
   const deadline = manifest.governor.validationDeadlineEpoch;
-  return Number.isInteger(deadline) && Math.floor(Date.now() / 1000) < deadline;
+  const campaignDeadline = manifest.governor.campaignDeadlineEpoch;
+  return (
+    Number.isInteger(deadline) &&
+    Number.isInteger(campaignDeadline) &&
+    Math.floor(Date.now() / 1000) < Math.min(deadline, campaignDeadline)
+  );
 }
 
 function loadReconciledState(sentinelPath) {

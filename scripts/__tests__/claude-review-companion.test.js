@@ -346,6 +346,43 @@ esac
       ).toMatch(/cancelled/i);
     });
 
+    it("recognizes Claude's exit-0 error envelope and fails over immediately", () => {
+      const d = tmpdir();
+      const bin = path.join(d, "bin");
+      fs.mkdirSync(bin);
+      const fakeClaude = path.join(bin, "claude");
+      fs.writeFileSync(
+        fakeClaude,
+        `#!/bin/bash
+printf '%s\\n' '{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"Weekly usage limit reached"}'
+exit 0
+`,
+      );
+      fs.chmodSync(fakeClaude, 0o755);
+      fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+      const out = path.join(d, "o");
+      const r = run(
+        [
+          "--diff-file",
+          path.join(d, "diff.txt"),
+          "--out-dir",
+          out,
+          "--agents",
+          "code-reviewer",
+        ],
+        { env: { PATH: `${bin}:${process.env.PATH}` } },
+      );
+      expect(r.code, r.stderr).toBe(75);
+      expect(
+        JSON.parse(
+          fs.readFileSync(path.join(out, "provider-failure.json"), "utf8"),
+        ),
+      ).toMatchObject({
+        provider: "claude",
+        category: "provider-exhaustion",
+      });
+    });
+
     it("does not classify successful review text mentioning 429 and quota as exhaustion", () => {
       const d = tmpdir();
       const bin = path.join(d, "bin");

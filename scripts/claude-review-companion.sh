@@ -28,6 +28,7 @@
 #   1  bad args / no agents resolved / OUT_DIR unwritable
 #   2  the `claude` CLI is unavailable (caller must fail LOUD, never skip review)
 #   75 Claude account quota/rate limit exhausted (safe to invoke fallback)
+#   79 Claude billing/credits unavailable (safe to invoke fallback)
 #
 # Design invariants (each maps to a staff-engineer review finding):
 #   - MODEL: never pin a *[1m] model. Inherit by default (omit --model). Only
@@ -205,36 +206,34 @@ run_with_timeout() {
 # --- run one agent as a blocking subprocess ----------------------------------
 # Writes the agent's .result (final answer) to $OUT_DIR/<agent>.md, or an
 # INCONCLUSIVE marker.
-structured_exhaustion_file() {
-  local evidence="$1"
-  [ -s "$evidence" ] || return 1
-  jq -e '
-    .. | objects |
-    select(
-      (.status? == 429) or
-      (.statusCode? == 429) or
-      (.code? | tostring | test("^(429|rate_limit|rate_limit_exceeded|resource_exhausted|quota_exhausted)$"; "i")) or
-      (.type? | tostring | test("^(rate_limit|rate_limit_error|resource_exhausted|quota_exhausted)$"; "i"))
-    )
-  ' "$evidence" >/dev/null 2>&1
-}
-
-record_structured_exhaustion() {
-  local evidence="$1" failure_json reset_at temporary
+record_structured_failure() {
+  local evidence="$1" failure_json category reset_at temporary
   failure_json="$(node "$SCRIPT_DIR/quality-provider-error.js" describe "$evidence")" ||
     return 1
+  category="$(printf '%s' "$failure_json" | jq -r '.category')"
   reset_at="$(printf '%s' "$failure_json" |
     jq -r '.resetAt // "time unavailable"')"
   temporary="${FAILURE_FILE}.$$.$RANDOM.tmp"
   printf '%s' "$failure_json" |
     jq '. + {provider: "claude"}' > "$temporary" || return 1
   mv "$temporary" "$FAILURE_FILE"
-  printf 'Claude provider exhausted (structured error metadata; reset %s)\n' \
-    "$reset_at" > "$EXHAUSTED_FILE"
+  case "$category" in
+    provider-exhaustion)
+      printf 'Claude provider exhausted (structured error metadata; reset %s)\n' \
+        "$reset_at" > "$EXHAUSTED_FILE"
+      return 75
+      ;;
+    provider-billing)
+      printf 'Claude provider billing or credits unavailable (structured error metadata)\n' \
+        > "$EXHAUSTED_FILE"
+      return 79
+      ;;
+    *) return 1 ;;
+  esac
 }
 
 run_agent() {
-  local agent="$1" sysfile out raw result rc stderr_file error_json
+  local agent="$1" sysfile out raw result rc stderr_file error_json failure_rc
   out="$OUT_DIR/${agent##*:}.findings.txt"
   stderr_file="$OUT_DIR/${agent##*:}.stderr"
   if ! sysfile="$(resolve_agent_file "$agent")"; then
@@ -276,25 +275,28 @@ run_agent() {
   # non-zero process status plus structured API/CLI error metadata can classify
   # account exhaustion. A successful review may legitimately discuss HTTP 429
   # or quota-handling code and must remain successful.
-  if [ "$rc" -ne 0 ]; then
-    error_json="$OUT_DIR/${agent##*:}.error-metadata.json"
-    if printf '%s' "$raw" | jq -e . > "$error_json" 2>/dev/null \
-       && structured_exhaustion_file "$error_json"; then
-      record_structured_exhaustion "$error_json" || return 3
+  error_json="$OUT_DIR/${agent##*:}.error-metadata.json"
+  if printf '%s' "$raw" | jq -e . > "$error_json" 2>/dev/null; then
+    record_structured_failure "$error_json"
+    failure_rc=$?
+    if [ "$failure_rc" -eq 75 ] || [ "$failure_rc" -eq 79 ]; then
       : > "$CANCEL_FILE"
-      echo "INCONCLUSIVE: Claude provider exhausted" > "$out"
-      return 75
+      echo "INCONCLUSIVE: Claude provider failed with typed category" > "$out"
+      return "$failure_rc"
     fi
-    if structured_exhaustion_file "$stderr_file"; then
-      record_structured_exhaustion "$stderr_file" || return 3
+  fi
+  if [ "$rc" -ne 0 ] && [ -s "$stderr_file" ]; then
+    record_structured_failure "$stderr_file"
+    failure_rc=$?
+    if [ "$failure_rc" -eq 75 ] || [ "$failure_rc" -eq 79 ]; then
       : > "$CANCEL_FILE"
-      echo "INCONCLUSIVE: Claude provider exhausted" > "$out"
-      return 75
+      echo "INCONCLUSIVE: Claude provider failed with typed category" > "$out"
+      return "$failure_rc"
     fi
   fi
 
   if [ -f "$CANCEL_FILE" ]; then
-    echo "INCONCLUSIVE: agent '$agent' cancelled because a sibling reported provider exhaustion" > "$out"
+    echo "INCONCLUSIVE: agent '$agent' cancelled because a sibling reported a provider failure" > "$out"
     return 78
   fi
 
@@ -340,21 +342,22 @@ fi
 # review is degraded — exit 4 so the caller can block the merge rather than
 # treat "N inconclusive files" as a clean pass.
 inconclusive=0
-exhausted=false
+provider_failure_rc=0
 for pid in "${pids[@]}"; do
   wait "$pid"
   rc=$?
-  if [ "$rc" -eq 75 ]; then
-    exhausted=true
+  if [ "$rc" -eq 75 ] || [ "$rc" -eq 79 ]; then
+    provider_failure_rc="$rc"
   elif [ "$rc" -ne 0 ]; then
     inconclusive=$((inconclusive + 1))
   fi
 done
 
-if [ "$exhausted" = true ] || [ -f "$EXHAUSTED_FILE" ]; then
+if [ "$provider_failure_rc" -ne 0 ] || [ -f "$EXHAUSTED_FILE" ]; then
   cat "$EXHAUSTED_FILE" >&2 2>/dev/null || true
   echo "claude-review-companion: cancelled sibling reviewers; fallback may run immediately" >&2
-  exit 75
+  [ "$provider_failure_rc" -ne 0 ] || provider_failure_rc=75
+  exit "$provider_failure_rc"
 fi
 
 echo "claude-review-companion: wrote findings for $resolved agent(s) to $OUT_DIR ($inconclusive inconclusive)" >&2

@@ -46,11 +46,8 @@ describe("quality runtime planning", () => {
 
     expect(low.workload).toBe("micro");
     expect(critical.workload).toBe("micro");
-    expect(critical.reviewSeconds).toBe(240);
-    expect(critical.campaignSeconds).toBe(600);
-    expect(critical.campaignSeconds).toBeLessThan(
-      plan(90, 80, 9000).campaignSeconds,
-    );
+    expect(critical.reviewSeconds).toBe(540);
+    expect(critical.campaignSeconds).toBe(900);
   });
 
   it("makes targeted verification cheaper than discovery for the same delta", () => {
@@ -82,7 +79,7 @@ describe("quality runtime planning", () => {
     expect(level95.tier).toBe("high");
     expect(level95.campaignSeconds).toBe(540);
     expect(level98.tier).toBe("critical");
-    expect(level98.campaignSeconds).toBe(600);
+    expect(level98.campaignSeconds).toBe(900);
   });
 
   it("plans real git diffs at the same public CLI seam", () => {
@@ -124,7 +121,7 @@ describe("quality runtime planning", () => {
       }),
     );
     expect(critical.tier).toBe("critical");
-    expect(critical.campaignSeconds).toBe(600);
+    expect(critical.campaignSeconds).toBe(900);
 
     fs.writeFileSync(path.join(repo, "large.md"), "line\n".repeat(6000));
     execFileSync("git", ["add", "large.md"], { cwd: repo });

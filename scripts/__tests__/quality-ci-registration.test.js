@@ -52,8 +52,34 @@ esac
     ).toEqual([
       "pr checks 17 --required",
       "pr checks 17 --required",
+      "pr checks 17",
+      "pr checks 17 --watch --interval 10",
+    ]);
+  });
+
+  it("waits on all registered CI when the base cannot require checks", () => {
+    const { root, bin } = harness(`
+printf '%s\n' "$*" >> "$QUALITY_TEST_CALLS"
+case "$*" in
+  "pr checks 17 --required") echo 'no required checks reported' >&2; exit 1 ;;
+  "pr checks 17") echo 'test pass'; exit 0 ;;
+  "pr checks 17 --watch --interval 10") exit 0 ;;
+  *) exit 99 ;;
+esac
+`);
+    execFileSync("bash", [WAIT, "--pr", "17", "--interval", "0"], {
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        QUALITY_TEST_CALLS: path.join(root, "calls.log"),
+      },
+    });
+    expect(
+      readFileSync(path.join(root, "calls.log"), "utf8").trim().split("\n"),
+    ).toEqual([
       "pr checks 17 --required",
-      "pr checks 17 --required --watch --interval 10",
+      "pr checks 17",
+      "pr checks 17 --watch --interval 10",
     ]);
   });
 

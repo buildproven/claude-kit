@@ -319,9 +319,28 @@ FINAL_BASE_OID="$(printf '%s' "$FINAL_BASE_LS" | awk 'NR==1 {print $1}')"
     echo "❌ MERGE BLOCKED: PR identity changed immediately before merge." >&2
     exit 1
   }
+MERGE_ARGS=(
+  "$PR" --repo "$EXPECTED_REPOSITORY" --squash
+  --match-head-commit "$ACTUAL_HEAD"
+)
+CI_BILLING_WAIVER_ARTIFACT="${BS_QUALITY_CI_BILLING_WAIVER_ARTIFACT:-}"
+if [ -n "$CI_BILLING_WAIVER_ARTIFACT" ]; then
+  EXPECTED_WAIVER_ARTIFACT="$(dirname "$MANIFEST")/ci-billing-waiver.json"
+  [ "$CI_BILLING_WAIVER_ARTIFACT" = "$EXPECTED_WAIVER_ARTIFACT" ] || {
+    echo "❌ MERGE BLOCKED: CI billing waiver artifact path is not invocation-bound." >&2
+    exit 1
+  }
+  node "$SCRIPT_DIR/quality-ci-billing-waiver.js" \
+    --repo "$EXPECTED_REPOSITORY" --pr "$PR" --head "$ACTUAL_HEAD" \
+    --artifact "$CI_BILLING_WAIVER_ARTIFACT" >/dev/null || {
+    echo "❌ MERGE BLOCKED: CI billing waiver no longer matches live exact-HEAD evidence." >&2
+    exit 1
+  }
+  MERGE_ARGS+=(--admin)
+  echo "⚠️  [quality] using admin merge only for verified GitHub Actions billing preallocation failures." >&2
+fi
 MERGE_RC=0
-gh pr merge "$PR" --repo "$EXPECTED_REPOSITORY" --squash \
-  --match-head-commit "$ACTUAL_HEAD" || MERGE_RC=$?
+gh pr merge "${MERGE_ARGS[@]}" || MERGE_RC=$?
 MERGED_JSON="$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
   --json state,mergedAt,mergeCommit,headRefName,headRefOid)" || exit 1
 if { [ "$(printf '%s' "$MERGED_JSON" | jq -r '.state')" = MERGED ] &&

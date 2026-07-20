@@ -255,8 +255,19 @@ Quality-Base: ${base}`;
     expect(source).toMatch(/"\$REVIEW_OUT"\/codex-\*\.progress/);
     expect(source).toMatch(/"\$REVIEW_OUT"\/codex-\*\.prompt/);
     expect(source).toMatch(/grep -q '\^INCONCLUSIVE:'/);
-    expect(source).not.toMatch(
-      /PROVIDER_RC.*-eq 76.*QUALITY_FALLBACK|QUALITY_FALLBACK.*PROVIDER_RC.*-eq 76/,
+    // rc=76 (bounded-budget timeout without converging) is now CONFIGURABLE:
+    // it fails over to the fallback when BS_QUALITY_FALLBACK_ON_TIMEOUT=1
+    // (the default), gated so a degraded primary doesn't block a merge while a
+    // healthy fallback sits idle (BUI-357). #104's strict single-clock bound is
+    // preserved via BS_QUALITY_FALLBACK_ON_TIMEOUT=0. The fallback still runs at
+    // most once — a fallback rc=76 hard-blocks below, so total review time is
+    // bounded at two clocks, never unbounded.
+    expect(source).toMatch(/BS_QUALITY_FALLBACK_ON_TIMEOUT/);
+    expect(source).toMatch(
+      /FALLBACK_ON_TIMEOUT="\$\{BS_QUALITY_FALLBACK_ON_TIMEOUT:-1\}"/,
+    );
+    expect(source).toMatch(
+      /PROVIDER_RC" -eq 76 \] && \[ "\$FALLBACK_ON_TIMEOUT" = 1 \]/,
     );
   });
 

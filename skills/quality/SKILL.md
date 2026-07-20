@@ -11,6 +11,12 @@ Run autonomously to completion. Every mutable fact belongs to one versioned
 JSON invocation manifest. Never infer active state from environment inheritance,
 session IDs, globbing, mtimes, or a "latest" pointer.
 
+Campaign identity is deterministic for the exact repository, PR, base, HEAD,
+scope, level, and merge intent. Repeating the same request resumes that campaign
+and its evidence, deadlines, attempts, and terminal state. Changing provider
+order cannot mint a fresh budget for the same work. Never start another campaign
+for an unchanged identity merely to retry a provider or reset a clock.
+
 Each fenced Bash block runs in a fresh shell. Resolve the installed runtime at
 the start of every block; never assume a variable from an earlier block exists.
 
@@ -80,9 +86,10 @@ pass unless the manifest's
 `options.skipTests` is true for a config-only repository. Execute the mandatory
 categories through the evidence-recording runner:
 
-The invocation also persists an absolute provider deadline and attempt cap
-from its start time. Every Claude panel and Codex pass consumes an attempt
-before launch; fallback and resumed review rounds cannot reset either bound.
+The invocation persists a campaign deadline and absolute attempt cap. Each
+provider gets one bounded phase window within the remaining campaign deadline;
+a fallback does not inherit an already-expired primary window, but neither
+provider can extend the campaign or mint additional attempts.
 
 ```bash
 QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
@@ -98,6 +105,9 @@ The runner resolves commands only from the revision-bound `requiredGates`
 policy and executes and records each result atomically. It rejects caller
 commands. Cross-repository PRs fail during bootstrap until trusted CI-evidence
 ingestion exists; never run fork-controlled scripts on the operator host.
+On resume, an exact-HEAD successful gate whose persisted source and command
+still match policy is reused instead of rerun. A changed HEAD, command, source,
+or failed result executes normally.
 
 When `options.skipTests` is true, record the config-only decision explicitly
 instead of inventing a passing test command:
@@ -143,30 +153,33 @@ the next review covers `previousReviewedHead..currentHead`. Review artifacts
 live under the invocation directory at `reviews/<headSha>/round-N/` and carry
 repository, PR, base, head, invocation, and diff-hash identity.
 
-Provider exhaustion is classified only from a non-zero provider exit plus
-structured API/CLI metadata. Generated review text mentioning HTTP 429, quota,
-or rate-limit handling is ordinary review content.
+Provider exhaustion and billing failures are classified only from structured
+API/CLI error metadata. Some provider CLIs return an error envelope with process
+status 0, so the envelope is authoritative; generated review text mentioning
+HTTP 429, quota, or rate-limit handling remains ordinary review content.
 
-Typed exhaustion preserves a structured provider reset time when one is
-supplied. A terminal failure prints repository-gate state, provider checkpoint,
-break-glass state, GitHub CI state, and the exact safe
-`/bs:quality --manifest <path>` retry. Parser failures, provider exhaustion,
-provider availability, timeouts, code findings, and CI failures remain distinct
-fail-closed diagnoses.
+Typed failures update an operator-state provider circuit. Exhaustion remains
+open until its structured reset time; failures without a reset use a bounded
+cooldown before one recovery probe (one hour for exhaustion, six for billing).
+A successful probe clears the circuit. An open primary circuit skips immediately
+to the configured fallback instead of spending another review clock. Parser
+failures, provider exhaustion, billing, availability, timeouts, code findings,
+and CI failures remain distinct fail-closed diagnoses.
 
 Runtime is derived from both risk and actual diff workload. Risk controls
-depth; changed lines plus per-file overhead control the clock. Discovery scales
-from 5 minutes for micro changes to 15 minutes for huge changes. If and only if
-the discovery review requires a fix, separate workload-scaled allowances reserve
-2–6 minutes for affected gates and 3–5 minutes for targeted verification. The
-absolute default maximum is therefore 10–26 minutes, with no recursive third
-round.
+depth; changed lines plus per-file overhead control the clock. The complete
+default campaign is capped at 15 minutes. Critical review receives a 9-minute
+provider floor because measured xhigh review of a roughly 1,200-line security
+change exceeded the former 330-second large-diff window. Lower-risk windows
+remain workload-scaled. If discovery requires a fix, the remaining campaign
+budget reserves affected gates and one targeted verification; there is no
+recursive third round.
 
 One campaign permits exactly one discovery review, one batched fix commit, and
 one targeted verification review. A verification finding is a terminal
 blocked result for that campaign: report it with evidence and stop. Do not fix
-it and recursively start a third review. A new invocation may address the
-reported blocker with a fresh, explicitly budgeted campaign.
+it and recursively start a third review. Address the reported blocker in a new
+commit; the changed HEAD then creates a distinct, explicitly budgeted campaign.
 
 ## 5. Judge and remediation
 
@@ -232,12 +245,21 @@ Merge is forbidden when:
 - manifest identity does not match the current repository/revision;
 - review coverage is stale or discontinuous;
 - required break-glass approval is absent/stale;
-- CI is failing;
+- CI is failing, except for an active operator-authorized GitHub billing window
+  where every failed Actions job is exact-HEAD, acquired no runner, ran zero
+  steps, and terminated within 30 seconds;
 - trailers are missing, malformed, or revision-stale.
 
-After green CI and valid evidence, the merge invocation must execute the merge,
-then perform worktree-aware cleanup. Never use `--no-verify`, weaken critical
-review, or bypass the governor.
+When a repository cannot express required checks, wait for all registered
+checks instead of polling forever for a nonexistent required set. A billing
+waiver never excuses a job that acquired a runner, ran a step, is pending,
+failed outside GitHub Actions, or has an ambiguous result. Persist its
+classification artifact alongside the manifest.
+
+After green CI—or the narrow billing-preallocation classification above—and
+valid evidence, the merge invocation must execute the merge, then perform
+worktree-aware cleanup. Never use `--no-verify`, weaken critical review, or
+bypass the governor.
 
 ## 7. Campaign telemetry (terminal — always run)
 
