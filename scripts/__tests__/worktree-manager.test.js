@@ -512,6 +512,28 @@ esac
     );
     expect(state.metadata.state).toBe("recovery-required");
     expect(state.metadata.lockReason).toBe("owner-21");
+    expect(state.classification).toBe("unknown/inconclusive");
+    expect(
+      manager(
+        [
+          "remove",
+          "--repo",
+          repo,
+          "--branch",
+          "feature/double-failure",
+          "--skip-pr-check",
+        ],
+        { ok: false },
+      ).json.code,
+    ).toBe("RECOVERY_REQUIRED");
+    const repairReport = manager(["repair", "--repo", repo]).json;
+    expect(repairReport.worktrees[0].reason).toContain("--owner 'owner-21'");
+    manager(["repair", "--repo", repo, "--apply", "--owner", "owner-21"]);
+    const recovered = manager(["status", "--repo", repo, "--skip-pr-check"])
+      .json.worktrees[0];
+    expect(recovered.locked).toBe(true);
+    expect(recovered.lockReason).toBe("owner-21");
+    expect(recovered.metadata.state).toBe("active");
   });
 
   it("transfers a lock only when the prior ownership identity is exact", () => {

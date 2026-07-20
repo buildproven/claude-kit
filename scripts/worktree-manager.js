@@ -532,6 +532,13 @@ function create(options) {
             "LOCKED",
           );
         }
+        const existingMetadata = readMetadata(plan.repoRoot, plan.branch);
+        if (existingMetadata?.state === "recovery-required") {
+          throw new ManagerError(
+            `Branch '${plan.branch}' requires ownership recovery before reuse. Run repair --repo '${plan.repoRoot}' --apply --owner '${existingMetadata.lockReason || "<recorded owner>"}'.`,
+            "RECOVERY_REQUIRED",
+          );
+        }
         let metadata;
         if (options.lockReason) {
           metadata = lockRecord(plan.repoRoot, forBranch, {
@@ -683,14 +690,19 @@ function lockRecord(repoRoot, record, options) {
   if (!record.locked) {
     git(repoRoot, ["worktree", "lock", "--reason", reason, record.path]);
   }
-  const metadata = writeMetadata(repoRoot, worktreeMetadataKey(record), {
+  const metadataPatch = {
     worktreePath: record.path,
-    creator: options.creator || null,
-    purpose: options.purpose || null,
-    invocation: options.invocation || null,
     lockReason: reason,
     state: "active",
-  });
+  };
+  if (options.creator) metadataPatch.creator = options.creator;
+  if (options.purpose) metadataPatch.purpose = options.purpose;
+  if (options.invocation) metadataPatch.invocation = options.invocation;
+  const metadata = writeMetadata(
+    repoRoot,
+    worktreeMetadataKey(record),
+    metadataPatch,
+  );
   return { repoRoot, ...record, locked: true, lockReason: reason, metadata };
 }
 
@@ -924,6 +936,16 @@ function classify(repoRoot, record, options = {}) {
       reason: "registered path is missing",
     };
   }
+  const metadata = readMetadata(repoRoot, worktreeMetadataKey(record));
+  if (metadata?.state === "recovery-required") {
+    return {
+      ...record,
+      classification: "unknown/inconclusive",
+      removable: false,
+      reason: `ownership recovery required for '${metadata.lockReason || "unknown owner"}'`,
+      errorCode: "RECOVERY_REQUIRED",
+    };
+  }
   if (record.locked) {
     return {
       ...record,
@@ -1060,6 +1082,13 @@ function removeRecord(options) {
     throw new ManagerError(
       "The primary checkout cannot be removed.",
       "PRIMARY_REMOVE_REFUSED",
+    );
+  }
+  const lifecycleMetadata = readMetadata(repoRoot, worktreeMetadataKey(record));
+  if (lifecycleMetadata?.state === "recovery-required") {
+    throw new ManagerError(
+      `Worktree removal refused: ownership recovery is required. Run repair --repo '${repoRoot}' --apply --owner '${lifecycleMetadata.lockReason || "<recorded owner>"}'.`,
+      "RECOVERY_REQUIRED",
     );
   }
   let recoveryOwner = null;
@@ -1352,6 +1381,37 @@ function repair(options) {
           ownershipRepairedAt: new Date().toISOString(),
         });
       }
+    }
+    const recoveryMetadata = readMetadata(
+      repoRoot,
+      worktreeMetadataKey(record),
+    );
+    if (!record.locked && recoveryMetadata?.state === "recovery-required") {
+      if (
+        !options.apply ||
+        !options.owner ||
+        options.owner !== recoveryMetadata.lockReason
+      ) {
+        results.push({
+          path: record.path,
+          branch: record.branch,
+          action: "skipped",
+          reason: `ownership recovery requires --apply --owner '${recoveryMetadata.lockReason || "<recorded owner>"}'`,
+        });
+        continue;
+      }
+      git(repoRoot, [
+        "worktree",
+        "lock",
+        "--reason",
+        options.owner,
+        record.path,
+      ]);
+      writeMetadata(repoRoot, worktreeMetadataKey(record), {
+        state: "active",
+        lockReason: options.owner,
+        ownershipRecoveredAt: new Date().toISOString(),
+      });
     }
     if (
       options.oldRepoName &&
