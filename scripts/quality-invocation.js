@@ -300,7 +300,12 @@ function discoverRequiredGates(
       manager,
       options["skip-tests"] === true,
     ),
-    baselineGate("security", scripts, ["security:audit", "security"], manager),
+    baselineGate(
+      "security",
+      scripts,
+      ["security:audit", "security:check", "security"],
+      manager,
+    ),
   ].filter(Boolean);
   const missing = ["lint", "security"].filter(
     (name) => !required.some((gate) => gate.name === name),

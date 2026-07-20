@@ -22,6 +22,14 @@ Quick reference for the public `claude-kit` workflow.
 
 Use `/bs:quality --merge` when you want the quality loop to carry through merge as well.
 
+If auto risk resolves to critical, approve exactly one PR revision with:
+
+```bash
+/bs:quality approve --pr 14 --head <exact-40-character-sha>
+```
+
+Approval is signed, expiring, and invalidated by any HEAD change.
+
 When invoking from a forked agent context (e.g. a parallel agent whose `cwd` is a harness scratch directory rather than the worktree), pass `--target-dir <path>`:
 
 ```bash

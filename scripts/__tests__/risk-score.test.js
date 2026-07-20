@@ -9,6 +9,10 @@ const {
   manifestRisk,
   DEFAULTS,
 } = require("../risk-score");
+const { execFileSync } = require("child_process");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 
 // Helper: build a descriptor.
 function d(file, status = "M", patch = "", lines = 10, isBinary = false) {
@@ -291,6 +295,72 @@ describe("computeScore — large mechanical diff is not low-risk", () => {
     // mechanical downgrade is suppressed above the cap, and magnitude adds.
     expect(r.changeNature).toBe("mechanical");
     expect(r.riskScore).toBeGreaterThan(20);
+  });
+});
+
+describe("score — rename-aware workload", () => {
+  function git(cwd, args) {
+    return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+  }
+
+  it("counts only residual edits in renamed files, while retaining changed-file overhead", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-renames-"));
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.name", "Quality Test"]);
+    git(root, ["config", "user.email", "quality@example.com"]);
+    fs.mkdirSync(path.join(root, "src", "old"), { recursive: true });
+    const largeBody = Array.from(
+      { length: 500 },
+      (_, index) => `export const oldName${index} = ${index};`,
+    ).join("\n");
+    fs.writeFileSync(
+      path.join(root, "src", "old", "pure.js"),
+      `${largeBody}\n`,
+    );
+    fs.writeFileSync(
+      path.join(root, "src", "old", "edited.js"),
+      `${largeBody}\nexport const packageName = "old-package";\n`,
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "base"]);
+    fs.renameSync(path.join(root, "src", "old"), path.join(root, "src", "new"));
+    fs.writeFileSync(
+      path.join(root, "src", "new", "edited.js"),
+      `${largeBody}\nexport const packageName = "new-package";\n`,
+    );
+    git(root, ["add", "-A"]);
+    git(root, ["commit", "-q", "-m", "rename package"]);
+
+    const result = score({
+      base: "HEAD^",
+      repoRoot: root,
+      gitRunner: (args) => git(root, args),
+    });
+
+    expect(result.diffStats).toEqual({ files: 2, lines: 2 });
+    expect(result.riskScore).toBeLessThan(75);
+  });
+
+  it("keeps substantial edits inside a rename classified as logic and escalates magnitude", () => {
+    const descriptor = {
+      ...d("src/new/service.js", "R", "-old()\n+newBehavior()", 600),
+      baseFile: "src/old/service.js",
+      similarity: 60,
+      pureRename: false,
+    };
+    const result = scoreOf([descriptor]);
+    expect(result.changeNature).toBe("logic");
+    expect(result.riskScore).toBeGreaterThanOrEqual(50);
+  });
+
+  it("classifies a pure non-sensitive move as mechanical", () => {
+    const descriptor = {
+      ...d("src/new/service.js", "R", "", 0),
+      baseFile: "src/old/service.js",
+      similarity: 100,
+      pureRename: true,
+    };
+    expect(scoreOf([descriptor]).changeNature).toBe("mechanical");
   });
 });
 

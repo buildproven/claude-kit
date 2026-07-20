@@ -46,6 +46,12 @@ if [ "$SKIP" = true ]; then
   exit 0
 fi
 node "$SCRIPT_DIR/quality-invocation.js" gate-run "$MANIFEST" \
-  --name "$NAME" || exit 1
+  --name "$NAME"
+GATE_RC=$?
+if [ "$GATE_RC" -ne 0 ]; then
+  node "$SCRIPT_DIR/quality-terminal-status.js" \
+    --manifest "$MANIFEST" --category repository-gate --gate "$NAME" || true
+  exit "$GATE_RC"
+fi
 bash "$SCRIPT_DIR/quality-assert-clean.sh" \
   --manifest "$MANIFEST" --phase "gate '$NAME' completion" || exit 1

@@ -131,14 +131,19 @@ esac
 }
 echo "[quality] waiting up to ${CI_TIMEOUT}s for required CI on stamp $STAMP_HEAD"
 bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CI_TIMEOUT" -- \
-  bash "$SCRIPT_DIR/quality-wait-required-checks.sh" --pr "$PR" || {
-    RC=$?
-    [ "$RC" -eq 124 ] &&
-      echo "❌ MERGE BLOCKED: timed out waiting for CI on stamp $STAMP_HEAD." >&2
-    [ "$RC" -ne 124 ] &&
-      echo "❌ MERGE BLOCKED: required CI failed on stamp $STAMP_HEAD." >&2
-    exit 1
-  }
+  bash "$SCRIPT_DIR/quality-wait-required-checks.sh" --pr "$PR"
+RC=$?
+if [ "$RC" -ne 0 ]; then
+  if [ "$RC" -eq 124 ]; then
+    DETAIL="timed out waiting for CI on stamp $STAMP_HEAD"
+  else
+    DETAIL="required CI failed on stamp $STAMP_HEAD"
+  fi
+  echo "❌ MERGE BLOCKED: $DETAIL." >&2
+  node "$SCRIPT_DIR/quality-terminal-status.js" \
+    --manifest "$MANIFEST" --category github-ci --detail "$DETAIL" || true
+  exit 1
+fi
 [ "$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
   --json headRefOid --jq .headRefOid)" = "$STAMP_HEAD" ] || {
   echo "❌ MERGE BLOCKED: PR HEAD changed while waiting for stamp CI." >&2

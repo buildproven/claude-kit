@@ -55,6 +55,14 @@ function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
+function withoutAmbientGitHubIdentity(overrides = {}) {
+  const env = { ...process.env, ...overrides };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("GITHUB_")) delete env[key];
+  }
+  return env;
+}
+
 function repo(label) {
   const root = mkdtempSync(path.join(tmpdir(), `quality-${label}-`));
   git(root, ["init", "-q", "-b", "main"]);
@@ -575,6 +583,98 @@ wait
     });
     expect(Date.parse(renewed.expiresAt)).toBeGreaterThan(Date.now());
   }, 120_000);
+
+  it("supports one explicit approve command bound to PR and exact HEAD", () => {
+    const root = repo("approval-command");
+    const head = git(root, ["rev-parse", "HEAD"]);
+    const base = git(root, ["rev-parse", "origin/main"]);
+    const bin = mkdtempSync(path.join(tmpdir(), "quality-approve-gh-"));
+    const gh = path.join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+if [ "$1 $2" = "pr view" ]; then
+  printf '%s\\n' '{"number":14,"headRefName":"feature","headRefOid":"${head}","headRepository":{"nameWithOwner":"owner/repo"},"isCrossRepository":false,"baseRefName":"main","baseRefOid":"${base}"}'
+  exit 0
+fi
+if [ "$1 $2" = "repo view" ]; then
+  printf '%s\\n' 'owner/repo'
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(gh, 0o755);
+    const result = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+      cwd: root,
+      input: JSON.stringify({
+        argv: [
+          "approve",
+          "--target-dir",
+          root,
+          "--pr",
+          "14",
+          "--head",
+          head,
+          "--level",
+          "98",
+        ],
+      }),
+      encoding: "utf8",
+      env: withoutAmbientGitHubIdentity({
+        BREAK_GLASS_APPROVER: "brett",
+        CLAUDE_SETUP_ROOT: ROOT,
+        PATH: `${bin}:${process.env.PATH}`,
+      }),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("PR: 14");
+    expect(result.stdout).toContain(`HEAD: ${head}`);
+    expect(result.stdout).toContain("Approver: brett");
+    expect(result.stdout).toMatch(/Expires: \d{4}-\d{2}-\d{2}T/);
+    const manifest = result.stdout
+      .split("\n")
+      .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
+      ?.slice("BS_QUALITY_MANIFEST=".length);
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", manifest], {
+        cwd: root,
+      }).status,
+    ).toBe(0);
+  });
+
+  it("rejects approve commands from nested or headless quality children", () => {
+    const root = repo("approval-command-child");
+    const head = git(root, ["rev-parse", "HEAD"]);
+    for (const guard of ["BS_QUALITY_HEADLESS", "BS_QUALITY_ACTIVE"]) {
+      const result = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+        cwd: root,
+        input: JSON.stringify({
+          argv: ["approve", "--pr", "14", "--head", head],
+        }),
+        encoding: "utf8",
+        env: { ...process.env, [guard]: "1" },
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(/outer quality invocation/i);
+    }
+  });
+
+  it("also rejects legacy environment approval from nested quality children", () => {
+    const root = repo("approval-environment-child");
+    const result = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+      cwd: root,
+      input: JSON.stringify({ argv: ["--level", "98"] }),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BREAK_GLASS_APPROVED: "true",
+        BS_QUALITY_ACTIVE: "1",
+      },
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/outer quality invocation/i);
+  });
 
   it("rejects headless review children before the resume path", () => {
     const root = repo("headless-resume");
@@ -2113,6 +2213,57 @@ exit 1
     expect(JSON.parse(readFileSync(manifest, "utf8")).requiredGates).toEqual(
       required,
     );
+  });
+
+  it("discovers security:check without requiring a redundant security alias", () => {
+    const root = repo("security-check-gate");
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: {
+          lint: "true",
+          test: "true",
+          "security:check": "node --check file.js",
+        },
+      }),
+    );
+    git(root, ["add", "package.json"]);
+    git(root, ["commit", "-q", "-m", "use repository security convention"]);
+
+    const manifest = create(root);
+    expect(
+      JSON.parse(readFileSync(manifest, "utf8")).requiredGates.find(
+        (gate) => gate.name === "security",
+      ),
+    ).toMatchObject({
+      source: "package-script:security:check",
+      args: ["run", "security:check"],
+    });
+  });
+
+  it("uses deterministic security gate precedence", () => {
+    const root = repo("security-gate-precedence");
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: {
+          lint: "true",
+          test: "true",
+          security: "true",
+          "security:check": "true",
+          "security:audit": "true",
+        },
+      }),
+    );
+    git(root, ["add", "package.json"]);
+    git(root, ["commit", "-q", "-m", "define security candidates"]);
+
+    const manifest = create(root);
+    expect(
+      JSON.parse(readFileSync(manifest, "utf8")).requiredGates.find(
+        (gate) => gate.name === "security",
+      ).source,
+    ).toBe("package-script:security:audit");
   });
 
   it("binds optional gate evidence to the persisted trusted source and command", () => {

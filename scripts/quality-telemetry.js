@@ -16,15 +16,11 @@
  * DESTINATION (kit stays standalone — see core/CLAUDE.md "this repo never
  * embeds references to anything that overlays it"): the log path resolves to
  *   1. $BS_QUALITY_TELEMETRY_FILE if set (an overlay can pin a committed path)
- *   2. else <target-repo>/data/quality-telemetry.jsonl
- * The target repo is the manifest's own repo.realpath, so each repo accrues
- * its own history and a fleet aggregator can read across repos.
- *
- * The default path (case 2) is intentionally git-ignored in this public repo
- * (see .gitignore) and stays local-only: a per-campaign log carries branch
- * names and commit SHAs that must not land in public history. Committed,
- * fleet-visible history is opt-in via $BS_QUALITY_TELEMETRY_FILE pointing at a
- * tracked path — the mechanism an overlay uses to aggregate across repos.
+ *   2. else $XDG_STATE_HOME/claude-kit/quality-telemetry/<repo-key>.jsonl
+ *      (falling back to ~/.local/state)
+ * The default is deliberately outside the target repo: auditing a clean
+ * worktree must leave it clean. Committed, fleet-visible history remains
+ * opt-in via $BS_QUALITY_TELEMETRY_FILE.
  *
  * IDEMPOTENT: keyed on invocationId. A campaign that records twice (a merge
  * path plus a terminal-report path, or a resumed run) appends exactly once.
@@ -42,6 +38,7 @@
 "use strict";
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 const TELEMETRY_SCHEMA_VERSION = 1;
@@ -84,15 +81,22 @@ function readManifest(manifestPath) {
 
 /**
  * Resolve where telemetry lines are appended. Env override wins so an overlay
- * (or CI) can pin a single committed path; otherwise the target repo's own
- * data/ dir, which keeps kit standalone and per-repo history local.
+ * (or CI) can pin a single committed path; otherwise an operator-state
+ * directory keeps the audited repository byte-for-byte clean.
  */
 function resolveTelemetryFile(manifest) {
   const override = process.env.BS_QUALITY_TELEMETRY_FILE;
   if (override && override.trim()) {
     return path.resolve(override.trim());
   }
-  return path.join(manifest.repo.realpath, "data", "quality-telemetry.jsonl");
+  const stateHome =
+    process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state");
+  return path.join(
+    stateHome,
+    "claude-kit",
+    "quality-telemetry",
+    `${manifest.repo.key}.jsonl`,
+  );
 }
 
 /**
