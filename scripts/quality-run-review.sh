@@ -72,7 +72,21 @@ if [ "$REVIEW_ROUND" -gt 1 ]; then
 fi
 
 record_provider_exhaustion() {
-  printf '%s provider exhausted (structured error metadata)\n' "$1" > "$REVIEW_OUT/provider-exhausted"
+  local provider="$1" evidence="$2" reset_at
+  node "$SCRIPT_DIR/quality-provider-error.js" describe "$evidence" |
+    jq --arg provider "$provider" '. + {provider: ($provider | ascii_downcase)}' \
+      > "$REVIEW_OUT/provider-failure.json" || return 1
+  reset_at="$(jq -r '.resetAt // "time unavailable"' "$REVIEW_OUT/provider-failure.json")"
+  printf '%s provider exhausted (structured error metadata; reset %s)\n' \
+    "$provider" "$reset_at" > "$REVIEW_OUT/provider-exhausted"
+}
+
+terminal_diagnosis() {
+  local category="$1" provider="${2:-}" reset_at="${3:-}"
+  local args=(--manifest "$MANIFEST" --category "$category")
+  [ -n "$provider" ] && args+=(--provider "$provider")
+  [ -n "$reset_at" ] && args+=(--reset-at "$reset_at")
+  node "$SCRIPT_DIR/quality-terminal-status.js" "${args[@]}" || true
 }
 
 authorize_provider_attempt() {
@@ -187,8 +201,15 @@ run_codex_review() {
       [ "$rc" -eq 124 ] && return 76
       if node "$SCRIPT_DIR/quality-provider-error.js" \
         "$REVIEW_OUT/codex-${pass}.progress"; then
-        record_provider_exhaustion Codex
+        record_provider_exhaustion Codex "$REVIEW_OUT/codex-${pass}.progress"
         return 75
+      fi
+      if FAILURE_JSON="$(node "$SCRIPT_DIR/quality-provider-error.js" describe \
+        "$REVIEW_OUT/codex-${pass}.progress" 2>/dev/null)" &&
+        [ "$(printf '%s' "$FAILURE_JSON" | jq -r '.category')" = provider-billing ]; then
+        printf '%s' "$FAILURE_JSON" |
+          jq '. + {provider: "codex"}' > "$REVIEW_OUT/provider-failure.json"
+        return 79
       fi
       grep -Eiq 'not authenticated|not logged in|login required|setup required' "$error_file" 2>/dev/null && return 2
       return 1
@@ -228,11 +249,13 @@ PROVIDER_RC=$?
 # fallback=claude set. The fallback attempt cannot overrun the invocation, since
 # authorize_provider_attempt caps it against the absolute deadline and returns
 # 77 when there is no budget left to give.
-if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 2 ] || [ "$PROVIDER_RC" -eq 76 ]; } &&
+if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] || [ "$PROVIDER_RC" -eq 2 ] || [ "$PROVIDER_RC" -eq 76 ]; } &&
   [ "$QUALITY_FALLBACK" != none ]; then
   if [ "$PROVIDER_RC" -eq 75 ]; then
     DETAIL="$(cat "$REVIEW_OUT/provider-exhausted" 2>/dev/null || true)"
     echo "⚠️  [quality] $QUALITY_PRIMARY exhausted${DETAIL:+ — $DETAIL}; switching immediately to $QUALITY_FALLBACK." >&2
+  elif [ "$PROVIDER_RC" -eq 79 ]; then
+    echo "⚠️  [quality] $QUALITY_PRIMARY reported a billing or credits failure; switching immediately to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 2 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY unavailable; switching immediately to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 76 ]; then
@@ -271,12 +294,35 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
     FALLBACK_NOTE="and the $QUALITY_FALLBACK fallback did not run"
   fi
   case "$PROVIDER_RC" in
-    75) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER account quota exhausted $FALLBACK_NOTE." >&2 ;;
-    2) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER CLI unavailable $FALLBACK_NOTE." >&2 ;;
-    76) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER exceeded its bounded review budget $FALLBACK_NOTE." >&2 ;;
-    77) echo "❌ MERGE BLOCKED: the invocation-wide provider attempt cap or absolute deadline is exhausted." >&2 ;;
-    4) echo "❌ MERGE BLOCKED: every $REVIEW_PROVIDER review was inconclusive." >&2 ;;
-    *) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER review runner failed (rc=$PROVIDER_RC)." >&2 ;;
+    75)
+      RESET_AT="$(jq -r '.resetAt // empty' "$REVIEW_OUT/provider-failure.json" 2>/dev/null || true)"
+      echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER account quota exhausted $FALLBACK_NOTE." >&2
+      terminal_diagnosis provider-exhaustion "$REVIEW_PROVIDER" "$RESET_AT"
+      ;;
+    2)
+      echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER CLI unavailable $FALLBACK_NOTE." >&2
+      terminal_diagnosis provider-unavailable "$REVIEW_PROVIDER"
+      ;;
+    79)
+      echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER billing or credits failure $FALLBACK_NOTE." >&2
+      terminal_diagnosis provider-billing "$REVIEW_PROVIDER"
+      ;;
+    76)
+      echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER exceeded its bounded review budget $FALLBACK_NOTE." >&2
+      terminal_diagnosis provider-timeout "$REVIEW_PROVIDER"
+      ;;
+    77)
+      echo "❌ MERGE BLOCKED: the invocation-wide provider attempt cap or absolute deadline is exhausted." >&2
+      terminal_diagnosis provider-governor
+      ;;
+    4)
+      echo "❌ MERGE BLOCKED: every $REVIEW_PROVIDER review was inconclusive." >&2
+      terminal_diagnosis parser-inconclusive "$REVIEW_PROVIDER"
+      ;;
+    *)
+      echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER review runner failed (rc=$PROVIDER_RC)." >&2
+      terminal_diagnosis provider-error "$REVIEW_PROVIDER"
+      ;;
   esac
   exit 1
 fi

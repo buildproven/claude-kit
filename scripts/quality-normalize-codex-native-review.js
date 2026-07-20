@@ -75,11 +75,11 @@ function parseNativeReview(raw, root = process.cwd()) {
   // inconclusive, not an approval.
   const NEGATION = /\b(?:no|not|n[o']?t|without)\b/i;
   const NOUN =
-    /\b(?:findings?|issues?|concerns?|problems?|bugs?|(?:correctness|security)\s+(?:issue|problem|concern)s?)\b/i;
+    /\b(?:findings?|issues?|concerns?|problems?|bugs?|regressions?|(?:correctness|security)\s+(?:issue|problem|concern)s?)\b/i;
   const CLEAN_PHRASE =
     /\b(?:looks good|lgtm|no changes? (?:needed|required))\b/i;
   const INCOMPLETE =
-    /\b(?:could ?n[o']?t be reviewed|ended unexpectedly|was (?:truncated|interrupted|incomplete)|another (?:path|file))\b/i;
+    /\b(?:could ?n[o']?t be reviewed|ended unexpectedly|was (?:truncated|interrupted|incomplete)|(?:review|analysis) was (?:not )?completed|another (?:path|file))\b/i;
   const sentences = String(raw).split(/[.\n!?]+/);
   const cleanVerdict = sentences.some((sentence) => {
     if (INCOMPLETE.test(sentence)) return false;

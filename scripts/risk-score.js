@@ -401,7 +401,7 @@ function resolveBase(gitRunner, baseArg) {
 // never a floor file. (The setup gate's variant additionally treats dep-version
 // bumps and generated-file refreshes as mechanical — that is why the sub-rule
 // is injected into the shared classifier rather than living in it.)
-function fileIsMechanical(file, status, patch, floorPaths) {
+function fileIsMechanical(file, status, patch, floorPaths, descriptor = {}) {
   if (
     matchesPattern(
       normalizeFloorPath(file),
@@ -409,6 +409,7 @@ function fileIsMechanical(file, status, patch, floorPaths) {
     )
   )
     return false; // floor files are never mechanical
+  if (descriptor.pureRename === true) return true;
   const testRuleAllowed = isTestPath(file);
   return (
     (testRuleAllowed && status === "A") ||
@@ -449,50 +450,37 @@ function collectDescriptors(base, gitRunner) {
   const nameStatus = safeGit(gitRunner, [
     "diff",
     "--name-status",
-    "--no-renames",
+    "--find-renames",
     "-z",
     `${mergeBase}...HEAD`,
   ]);
   const numstat = safeGit(gitRunner, [
     "diff",
     "--numstat",
-    "--no-renames",
+    "--find-renames",
     "-z",
     `${mergeBase}...HEAD`,
   ]);
 
-  const statusByFile = new Map();
-  const statusRecords = nameStatus.split("\0");
-  for (let index = 0; index + 1 < statusRecords.length; index += 2) {
-    const status = statusRecords[index];
-    const file = statusRecords[index + 1];
-    if (!status || !file) continue;
-    const letter = status[0];
-    statusByFile.set(file, {
-      status: letter,
-      baseFile: file,
-    });
-  }
+  const statuses = parseNameStatusZ(nameStatus);
+  const stats = parseNumstatZ(numstat);
 
   let totalLines = 0;
   const descriptors = [];
-  for (const record of numstat.split("\0")) {
-    if (!record) continue;
-    const firstTab = record.indexOf("\t");
-    const secondTab = record.indexOf("\t", firstTab + 1);
-    if (firstTab < 0 || secondTab < 0) continue;
-    const add = record.slice(0, firstTab);
-    const del = record.slice(firstTab + 1, secondTab);
-    const file = record.slice(secondTab + 1);
+  for (let index = 0; index < stats.length; index += 1) {
+    const { add, del, paths } = stats[index];
+    const statusInfo = statuses[index] || {
+      status: "M",
+      baseFile: paths[0],
+      file: paths.at(-1),
+      similarity: null,
+    };
+    const file = statusInfo.file || paths.at(-1);
     const isBinary = add === "-" && del === "-";
     const lines = isBinary
       ? 0
       : (parseInt(add, 10) || 0) + (parseInt(del, 10) || 0);
     totalLines += lines;
-    const statusInfo = statusByFile.get(file) || {
-      status: "M",
-      baseFile: file,
-    };
     descriptors.push(
       collectDescriptor({
         file,
@@ -509,6 +497,65 @@ function collectDescriptors(base, gitRunner) {
     descriptors,
     diffStats: { files: descriptors.length, lines: totalLines },
   };
+}
+
+function parseNameStatusZ(raw) {
+  if (!String(raw).includes("\0")) {
+    return String(raw)
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const [code, baseFile, renamedFile] = line.split("\t");
+        const status = code[0];
+        return {
+          status,
+          similarity: /^[RC][0-9]+$/.test(code) ? Number(code.slice(1)) : null,
+          baseFile,
+          file: ["R", "C"].includes(status) ? renamedFile : baseFile,
+        };
+      });
+  }
+  const tokens = String(raw).split("\0");
+  const rows = [];
+  for (let index = 0; index < tokens.length;) {
+    const code = tokens[index++];
+    if (!code) continue;
+    const status = code[0];
+    const similarity = /^[RC][0-9]+$/.test(code) ? Number(code.slice(1)) : null;
+    const baseFile = tokens[index++] || "";
+    const file = ["R", "C"].includes(status) ? tokens[index++] || "" : baseFile;
+    rows.push({ status, similarity, baseFile, file });
+  }
+  return rows;
+}
+
+function parseNumstatZ(raw) {
+  if (!String(raw).includes("\0")) {
+    return String(raw)
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const [add, del, file] = line.split("\t");
+        return { add, del, paths: [file] };
+      });
+  }
+  const tokens = String(raw).split("\0");
+  const rows = [];
+  for (let index = 0; index < tokens.length;) {
+    const token = tokens[index++];
+    if (!token) continue;
+    const [add, del, file] = token.split("\t");
+    if (file === "") {
+      rows.push({
+        add,
+        del,
+        paths: [tokens[index++] || "", tokens[index++] || ""],
+      });
+    } else {
+      rows.push({ add, del, paths: [file] });
+    }
+  }
+  return rows;
 }
 
 function collectDescriptor({
@@ -532,6 +579,8 @@ function collectDescriptor({
     isBinary,
     lines,
     patch,
+    similarity: statusInfo.similarity,
+    pureRename: status === "R" && statusInfo.similarity === 100 && lines === 0,
   };
   if (matchesPattern(file, ["**/package.json"])) {
     descriptor.manifest = collectManifestSnapshots(
@@ -1206,6 +1255,8 @@ module.exports = {
   touchesHumanFloor,
   loadConfig,
   deepMerge,
+  parseNameStatusZ,
+  parseNumstatZ,
   DEFAULTS,
   CRITICAL_RISK_SCORE,
 };
