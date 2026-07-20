@@ -105,6 +105,36 @@ describe("score — Git-valid control-character paths", () => {
   });
 });
 
+describe("score — semantic policy failures", () => {
+  it("converts a non-finite policy result to maximum risk", () => {
+    const config = deepMerge(DEFAULTS, {
+      mechanicalDelta: "not-a-number",
+      curve: [{ maxScore: 100, agents: 6, codex: "high", codexRounds: 1 }],
+    });
+    const result = score({
+      base: "BASE",
+      config,
+      gitRunner: gitRunner([
+        {
+          path: "src/widget.js",
+          status: "M",
+          added: 1,
+          deleted: 1,
+          patch: "-// before\n+// after",
+        },
+      ]),
+    });
+
+    expect(result.riskScore).toBe(100);
+    expect(result.knobs).toEqual({
+      agents: 6,
+      codex: "xhigh",
+      codexRounds: 1,
+    });
+    expect(result.reasons.join(" ")).toMatch(/non-finite.*fail-closed/i);
+  });
+});
+
 describe("deepMerge", () => {
   it("merges nested objects instead of replacing them", () => {
     const out = deepMerge({ a: { x: 1, y: 2 } }, { a: { y: 9 } });

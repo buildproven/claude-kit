@@ -884,33 +884,64 @@ function computeScore(descriptors, diffStats, cfg) {
     reasons.push(`pinned to security floor ${floorScore}`);
   }
 
-  score = Math.max(0, Math.min(100, score));
+  const numericScore = Number(score);
+  if (!Number.isFinite(numericScore)) {
+    score = 100;
+    reasons.push("non-finite risk policy result → maximum risk fail-closed");
+  } else {
+    score = Math.max(0, Math.min(100, numericScore));
+  }
   return { riskScore: score, changeNature, reasons };
 }
 
-function scoreToKnobs(score, cfg) {
+function nonnegativeInteger(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.max(0, Math.trunc(numeric)) : 0;
+}
+
+function configuredKnobs(score, cfg) {
+  const curve =
+    Array.isArray(cfg?.curve) && cfg.curve.length ? cfg.curve : DEFAULTS.curve;
   const band =
-    cfg.curve.find((b) => score <= b.maxScore) ||
-    cfg.curve[cfg.curve.length - 1];
-  let codex = band.codex;
-  let codexRounds = band.codexRounds;
-  if (score >= cfg.codexForceFloor && codex === "skip") {
-    codex = "high";
-    codexRounds = 1;
+    curve.find((candidate) => score <= Number(candidate.maxScore)) ||
+    curve[curve.length - 1];
+  return {
+    agents: nonnegativeInteger(band?.agents),
+    codex: ["skip", "high", "xhigh"].includes(band?.codex)
+      ? band.codex
+      : "skip",
+    codexRounds: nonnegativeInteger(band?.codexRounds),
+  };
+}
+
+function scoreToKnobs(score, cfg) {
+  const numericScore = Number(score);
+  const effectiveScore = Number.isFinite(numericScore) ? numericScore : 100;
+  const knobs = configuredKnobs(effectiveScore, cfg);
+  const configuredForceFloor = Number(cfg?.codexForceFloor);
+  const codexForceFloor = Math.min(
+    DEFAULTS.codexForceFloor,
+    Number.isFinite(configuredForceFloor)
+      ? configuredForceFloor
+      : DEFAULTS.codexForceFloor,
+  );
+  if (effectiveScore >= codexForceFloor && knobs.codex === "skip") {
+    knobs.codex = "high";
+    knobs.codexRounds = 1;
   }
-  let agents = band.agents;
-  if (score >= CRITICAL_RISK_SCORE) {
+  if (effectiveScore >= CRITICAL_RISK_SCORE) {
     const baseline =
-      DEFAULTS.curve.find((candidate) => score <= candidate.maxScore) ||
-      DEFAULTS.curve[DEFAULTS.curve.length - 1];
+      DEFAULTS.curve.find(
+        (candidate) => effectiveScore <= candidate.maxScore,
+      ) || DEFAULTS.curve[DEFAULTS.curve.length - 1];
     const codexRank = { skip: 0, high: 1, xhigh: 2 };
-    agents = Math.max(agents, baseline.agents);
-    if ((codexRank[codex] ?? -1) < codexRank[baseline.codex]) {
-      codex = baseline.codex;
+    knobs.agents = Math.max(knobs.agents, baseline.agents);
+    if ((codexRank[knobs.codex] ?? -1) < codexRank[baseline.codex]) {
+      knobs.codex = baseline.codex;
     }
-    codexRounds = Math.max(codexRounds, baseline.codexRounds);
+    knobs.codexRounds = Math.max(knobs.codexRounds, baseline.codexRounds);
   }
-  return { agents, codex, codexRounds };
+  return knobs;
 }
 
 // ---------------------------------------------------------------------------
