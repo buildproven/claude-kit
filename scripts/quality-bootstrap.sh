@@ -425,10 +425,17 @@ if [ "$ARGS_MERGE" = true ] && [ "$CURRENT_BRANCH" != "main" ] && [ "$CURRENT_BR
     --creator "bs:quality" \
     --purpose "verified-merge" \
     --invocation "$INVOCATION_ID")
-  PRIOR_LOCK=$(node "$SCRIPT_DIR/worktree-manager.js" status \
-    --repo "$GIT_ROOT" --skip-pr-check 2>/dev/null |
-    jq -r --arg branch "$CURRENT_BRANCH" \
-      '.worktrees[] | select(.branch == $branch) | .lockReason // empty')
+  PRIOR_STATUS=$(node "$SCRIPT_DIR/worktree-manager.js" status \
+    --repo "$GIT_ROOT" --skip-pr-check) || {
+    echo "❌ Could not inspect existing worktree ownership." >&2
+    exit 1
+  }
+  PRIOR_LOCK=$(printf '%s' "$PRIOR_STATUS" |
+    jq -er --arg branch "$CURRENT_BRANCH" \
+      '[.worktrees[] | select(.branch == $branch) | .lockReason // empty][0] // ""') || {
+    echo "❌ Could not parse existing worktree ownership." >&2
+    exit 1
+  }
   if [ -n "$PRIOR_LOCK" ] && [ "$PRIOR_LOCK" != "bs:quality/$INVOCATION_ID" ]; then
     echo "❌ quality target is actively locked by '$PRIOR_LOCK'." >&2
     echo "Release that exact owner at its terminal handoff before retrying:" >&2

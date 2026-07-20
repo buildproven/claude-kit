@@ -28,18 +28,73 @@ else
     sed 's/.*"command"[[:space:]]*:[[:space:]]*"//; s/"$//')"
 fi
 [ -n "$COMMAND" ] || exit 0
-printf '%s' "$COMMAND" | grep -qE 'git(\s+-[CcX]\s+\S+)*\s+commit' || exit 0
+printf '%s' "$COMMAND" | grep -qE '(^|[;&|[:space:]])git([[:space:]]|$)' || exit 0
+printf '%s' "$COMMAND" | grep -qE '(^|[;&|[:space:]])commit([;&|[:space:]]|$)' || exit 0
 
-GIT_DIR="$(printf '%s' "$COMMAND" |
-  grep -oE 'git\s+-C\s+\S+' |
-  tail -1 |
-  awk '{print $3}' || true)"
-if [ -z "$GIT_DIR" ]; then
+GIT_DIR=""
+if command -v python3 >/dev/null 2>&1; then
+  GIT_DIR="$(python3 - "$COMMAND" <<'PY'
+import shlex
+import sys
+
+lexer = shlex.shlex(sys.argv[1], posix=True, punctuation_chars=";&|")
+lexer.whitespace_split = True
+tokens = list(lexer)
+segments = []
+segment = []
+for token in tokens:
+    if token and all(character in ";&|" for character in token):
+        if segment:
+            segments.append(segment)
+            segment = []
+    else:
+        segment.append(token)
+if segment:
+    segments.append(segment)
+
+current_dir = ""
+targets = []
+for words in segments:
+    if len(words) >= 2 and words[0] == "cd":
+        current_dir = words[1]
+        continue
+    for index, word in enumerate(words):
+        if word != "git":
+            continue
+        git_dir = ""
+        cursor = index + 1
+        is_commit = False
+        while cursor < len(words):
+            argument = words[cursor]
+            if argument == "-C" and cursor + 1 < len(words):
+                git_dir = words[cursor + 1]
+                cursor += 2
+                continue
+            if argument.startswith("-C") and len(argument) > 2:
+                git_dir = argument[2:]
+            if argument == "commit":
+                is_commit = True
+                break
+            cursor += 1
+        if is_commit:
+            targets.append(git_dir or current_dir or ".")
+print(targets[-1] if targets else "")
+PY
+)"
+else
   GIT_DIR="$(printf '%s' "$COMMAND" |
+    grep -oE 'git\s+-C\s+\S+' |
+    tail -1 |
+    awk '{print $3}' || true)"
+  if [ -z "$GIT_DIR" ]; then
+    GIT_DIR="$(printf '%s' "$COMMAND" |
     grep -oE '^[[:space:]]*cd[[:space:]]+\S+' |
     head -1 |
     awk '{print $2}' || true)"
+  fi
+  [ -n "$GIT_DIR" ] || GIT_DIR="."
 fi
+[ -n "$GIT_DIR" ] || exit 0
 if [ -n "$GIT_DIR" ]; then
   GIT_DIR="${GIT_DIR/#\~/$HOME}"
   REPO_ROOT="$(git -C "$GIT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"

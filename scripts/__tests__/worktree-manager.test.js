@@ -220,6 +220,16 @@ describe("worktree-manager public CLI", () => {
     expect(second.worktreePath).toBe(first.worktreePath);
   });
 
+  it("refuses to reuse a worktree owned by another invocation", () => {
+    const { repo } = fixture();
+    create(repo, "feature/owned-reuse", ["--lock-reason", "owner-19"]);
+    const { json } = manager(
+      ["create", "--repo", repo, "--branch", "feature/owned-reuse"],
+      { ok: false },
+    );
+    expect(json.code).toBe("LOCKED");
+  });
+
   it("refuses an occupied unregistered canonical path", () => {
     const { repo } = fixture();
     const plan = manager([
@@ -294,6 +304,39 @@ esac
     expect(existsSync(worktree.worktreePath)).toBe(true);
   });
 
+  it("classifies an unreadable worktree as unknown without hiding its peers", () => {
+    const { parent, repo } = fixture();
+    create(repo, "feature/status-unknown");
+    create(repo, "feature/status-readable");
+    const bin = path.join(parent, "status-bin");
+    mkdirSync(bin);
+    const realGit = spawnSync("which", ["git"], {
+      encoding: "utf8",
+    }).stdout.trim();
+    writeFileSync(
+      path.join(bin, "git"),
+      `#!/bin/sh
+case "$*" in
+  *"feature-status-unknown status --porcelain"*) echo "simulated status failure" >&2; exit 2 ;;
+  *) exec "${realGit}" "$@" ;;
+esac
+`,
+    );
+    chmodSync(path.join(bin, "git"), 0o755);
+    const { json } = manager(["status", "--repo", repo, "--skip-pr-check"], {
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    });
+    const unknown = json.worktrees.find(
+      (worktree) => worktree.branch === "feature/status-unknown",
+    );
+    const readable = json.worktrees.find(
+      (worktree) => worktree.branch === "feature/status-readable",
+    );
+    expect(unknown.classification).toBe("unknown/inconclusive");
+    expect(unknown.removable).toBe(false);
+    expect(readable.classification).not.toBe("unknown/inconclusive");
+  });
+
   it("requires exact ownership and recovery to remove a locked worktree", () => {
     const { repo } = fixture();
     create(repo, "feature/locked", ["--lock-reason", "owner-17"]);
@@ -344,6 +387,58 @@ esac
       .worktrees[0];
     expect(state.locked).toBe(true);
     expect(state.lockReason).toBe("owner-18");
+  });
+
+  it("restores ownership when Git cannot remove a recovered worktree", () => {
+    const { parent, repo } = fixture();
+    const worktree = create(repo, "feature/remove-rollback", [
+      "--lock-reason",
+      "owner-20",
+    ]);
+    const bin = path.join(parent, "remove-bin");
+    mkdirSync(bin);
+    const realGit = spawnSync("which", ["git"], {
+      encoding: "utf8",
+    }).stdout.trim();
+    writeFileSync(
+      path.join(bin, "git"),
+      `#!/bin/sh
+case "$*" in
+  *"worktree remove"*) echo "simulated removal failure" >&2; exit 2 ;;
+  *) exec "${realGit}" "$@" ;;
+esac
+`,
+    );
+    chmodSync(path.join(bin, "git"), 0o755);
+    const { json } = manager(
+      [
+        "remove",
+        "--repo",
+        repo,
+        "--branch",
+        "feature/remove-rollback",
+        "--recover",
+        "--owner",
+        "owner-20",
+        "--skip-pr-check",
+      ],
+      {
+        ok: false,
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+    expect(json.code).toBe("COMMAND_FAILED");
+    expect(existsSync(worktree.worktreePath)).toBe(true);
+    const state = manager([
+      "status",
+      "--repo",
+      repo,
+      "--skip-pr-check",
+    ]).json.worktrees.find(
+      (candidate) => candidate.branch === "feature/remove-rollback",
+    );
+    expect(state.locked).toBe(true);
+    expect(state.lockReason).toBe("owner-20");
   });
 
   it("transfers a lock only when the prior ownership identity is exact", () => {
@@ -406,6 +501,56 @@ esac
       "feature/unlock",
       "--owner",
       "owner-17",
+      "--terminal",
+    ]).json;
+    expect(unlocked.unlocked).toBe(true);
+  });
+
+  it("repairs divergent lifecycle ownership only for the Git lock owner", () => {
+    const { repo } = fixture();
+    create(repo, "feature/ownership-repair", ["--lock-reason", "native-owner"]);
+    const metadataName = `${createHash("sha256")
+      .update("feature/ownership-repair")
+      .digest("hex")
+      .slice(0, 8)}.json`;
+    const common = git(
+      repo,
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-common-dir",
+    );
+    const metadataPath = path.join(common, "worktree-manager", metadataName);
+    const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
+    writeFileSync(
+      metadataPath,
+      `${JSON.stringify({ ...metadata, lockReason: "stale-owner" }, null, 2)}\n`,
+    );
+
+    expect(
+      manager(
+        [
+          "unlock",
+          "--repo",
+          repo,
+          "--branch",
+          "feature/ownership-repair",
+          "--owner",
+          "native-owner",
+        ],
+        { ok: false },
+      ).json.code,
+    ).toBe("LOCK_METADATA_DIVERGED");
+    const report = manager(["repair", "--repo", repo]).json;
+    expect(report.worktrees[0].reason).toContain("--owner 'native-owner'");
+    manager(["repair", "--repo", repo, "--apply", "--owner", "native-owner"]);
+    const unlocked = manager([
+      "unlock",
+      "--repo",
+      repo,
+      "--branch",
+      "feature/ownership-repair",
+      "--owner",
+      "native-owner",
       "--terminal",
     ]).json;
     expect(unlocked.unlocked).toBe(true);
@@ -817,7 +962,8 @@ describe("canonical-source contract", () => {
     );
     expect(source).not.toContain("IS_SUBMODULE");
     expect(source).toContain('CURRENT_GIT_DIR" = "$COMMON_GIT_DIR');
-    expect(source).toMatch(/grep -oE 'git\\s\+-C\\s\+\\S\+' \|\s+tail -1/);
+    expect(source).toContain('punctuation_chars=";&|"');
+    expect(source).toContain("targets[-1]");
   });
 
   it("materializes PR heads through the base repository pull ref", () => {

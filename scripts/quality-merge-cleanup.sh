@@ -71,12 +71,17 @@ git fetch origin "$DEFAULT_BRANCH" -q || {
   echo "  Recovery: node \"$MANAGER\" reconcile --repo \"$PRIMARY_CHECKOUT\" --apply" >&2
   exit 0
 }
-if [ "$(git branch --show-current)" = "$DEFAULT_BRANCH" ]; then
+PRIMARY_BRANCH="$(git branch --show-current 2>/dev/null || true)"
+if [ "$PRIMARY_BRANCH" = "$DEFAULT_BRANCH" ]; then
   git merge --ff-only "origin/$DEFAULT_BRANCH" >/dev/null || {
     echo "[quality] merge succeeded; cleanup incomplete: primary $DEFAULT_BRANCH did not fast-forward." >&2
     echo "  Recovery: node \"$MANAGER\" reconcile --repo \"$PRIMARY_CHECKOUT\" --apply" >&2
     exit 0
   }
+else
+  echo "[quality] merge succeeded; cleanup incomplete: primary checkout is on '${PRIMARY_BRANCH:-detached}', not '$DEFAULT_BRANCH'; it was not updated." >&2
+  echo "  Recovery: switch \"$PRIMARY_CHECKOUT\" to \"$DEFAULT_BRANCH\", fast-forward it, then run node \"$MANAGER\" reconcile --repo \"$PRIMARY_CHECKOUT\" --apply" >&2
+  exit 0
 fi
 
 if [ -n "$INVOCATION_ID" ]; then

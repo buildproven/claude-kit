@@ -526,6 +526,12 @@ function create(options) {
             { worktreePath: forBranch.path },
           );
         }
+        if (forBranch.locked && !options.lockReason) {
+          throw new ManagerError(
+            `Branch '${plan.branch}' is already locked by '${forBranch.lockReason || "unknown"}'; reuse requires an explicit matching --lock-reason.`,
+            "LOCKED",
+          );
+        }
         let metadata = writeMetadata(plan.repoRoot, plan.branch, {
           creator: options.creator || null,
           purpose: options.purpose || null,
@@ -743,6 +749,14 @@ function dirty(record) {
   return result.stdout;
 }
 
+function inspectDirty(record) {
+  try {
+    return { available: true, changes: dirty(record), error: null };
+  } catch (error) {
+    return { available: false, changes: null, error };
+  }
+}
+
 function upstreamState(repoRoot, branch) {
   if (!branch) return { upstream: null, ahead: null, unpushed: true };
   const upstream = git(
@@ -916,7 +930,17 @@ function classify(repoRoot, record, options = {}) {
       reason: record.lockReason || "Git worktree lock",
     };
   }
-  const changes = dirty(record);
+  const cleanliness = inspectDirty(record);
+  if (!cleanliness.available) {
+    return {
+      ...record,
+      classification: "unknown/inconclusive",
+      removable: false,
+      reason: cleanliness.error.message,
+      errorCode: cleanliness.error.code,
+    };
+  }
+  const changes = cleanliness.changes;
   if (changes) {
     return {
       ...record,
@@ -1089,7 +1113,18 @@ function removeRecord(options) {
       terminal: true,
     });
   }
-  git(repoRoot, ["worktree", "remove", record.path]);
+  try {
+    git(repoRoot, ["worktree", "remove", record.path]);
+  } catch (error) {
+    if (recoveryOwner) {
+      lockRecord(
+        repoRoot,
+        { ...record, locked: false, lockReason: null },
+        { reason: recoveryOwner, creator: "recovery-rollback" },
+      );
+    }
+    throw error;
+  }
   git(repoRoot, ["worktree", "prune", "--expire", "now"]);
   let branchDeleted = false;
   let branchDeletionError = null;
@@ -1198,12 +1233,16 @@ function migrationPlan(options) {
       };
     }
     const proposed = resolvePlan({ repo: repoRoot, branch: record.branch });
-    const changes = dirty(record);
+    const cleanliness = inspectDirty(record);
+    const changes = cleanliness.changes;
     const pr = lookupPr(repoRoot, record.branch);
     const canonical = path.resolve(record.path) === proposed.worktreePath;
     let reason = "safe to migrate";
     let safe = true;
-    if (canonical) {
+    if (!cleanliness.available) {
+      safe = false;
+      reason = cleanliness.error.message;
+    } else if (canonical) {
       safe = false;
       reason = "already canonical";
     } else if (record.locked) {
@@ -1273,6 +1312,30 @@ function repair(options) {
         action: "missing; use reconcile --repair-stale",
       });
       continue;
+    }
+    if (record.locked) {
+      const metadataKey = worktreeMetadataKey(record);
+      const metadata = readMetadata(repoRoot, metadataKey);
+      if (
+        metadata?.lockReason &&
+        record.lockReason &&
+        metadata.lockReason !== record.lockReason
+      ) {
+        if (!options.apply || options.owner !== record.lockReason) {
+          results.push({
+            path: record.path,
+            branch: record.branch,
+            action: "skipped",
+            reason: `lock metadata diverged; repair requires --apply --owner '${record.lockReason}'`,
+          });
+          continue;
+        }
+        writeMetadata(repoRoot, metadataKey, {
+          lockReason: record.lockReason,
+          state: "active",
+          ownershipRepairedAt: new Date().toISOString(),
+        });
+      }
     }
     if (
       options.oldRepoName &&
