@@ -2645,6 +2645,109 @@ exit 1
     ).toBe("package-script:security:audit");
   });
 
+  it("discovers and executes committed native repository gates without a package manifest", () => {
+    const root = repo("native-repository-gates");
+    unlinkSync(path.join(root, "package.json"));
+    writeFileSync(
+      path.join(root, ".quality-gates.json"),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          lint: {
+            executable: "node",
+            args: ["--check", "file.js"],
+          },
+          test: {
+            executable: "node",
+            args: [
+              "-e",
+              "require('node:fs').writeFileSync('native-test-ran', 'yes')",
+            ],
+          },
+          security: {
+            executable: "node",
+            args: ["--check", "file.js"],
+          },
+        },
+      }),
+    );
+    git(root, ["add", ".quality-gates.json"]);
+    git(root, ["rm", "package.json"]);
+    git(root, ["commit", "-q", "-m", "declare native quality gates"]);
+
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.map((gate) => gate.name)).toEqual([
+      "lint",
+      "test",
+      "security",
+    ]);
+    expect(required.find((gate) => gate.name === "test")).toMatchObject({
+      source: "quality-gates:.quality-gates.json#test",
+      executable: "node",
+      args: [
+        "-e",
+        "require('node:fs').writeFileSync('native-test-ran', 'yes')",
+      ],
+    });
+
+    execFileSync("node", [INVOCATION, "gate-run", manifest, "--name", "test"], {
+      cwd: root,
+    });
+    expect(readFileSync(path.join(root, "native-test-ran"), "utf8")).toBe(
+      "yes",
+    );
+  });
+
+  it("rejects shell-command strings in native repository gate policy", () => {
+    const root = repo("invalid-native-repository-gates");
+    unlinkSync(path.join(root, "package.json"));
+    writeFileSync(
+      path.join(root, ".quality-gates.json"),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          lint: { command: "node --check file.js" },
+          test: { executable: "node", args: ["--test"] },
+          security: { executable: "node", args: ["--check", "file.js"] },
+        },
+      }),
+    );
+    git(root, ["add", ".quality-gates.json"]);
+    git(root, ["rm", "package.json"]);
+    git(root, ["commit", "-q", "-m", "declare unsafe native gate"]);
+
+    expect(() => create(root)).toThrow(
+      /\.quality-gates\.json gate 'lint' requires a non-empty executable and string args array/,
+    );
+  });
+
+  it("uses an explicitly declared native gate ahead of a package-script fallback", () => {
+    const root = repo("native-gate-precedence");
+    writeFileSync(
+      path.join(root, ".quality-gates.json"),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          test: { executable: "node", args: ["--test", "file.js"] },
+        },
+      }),
+    );
+    git(root, ["add", ".quality-gates.json"]);
+    git(root, ["commit", "-q", "-m", "select native test gate"]);
+
+    const manifest = create(root);
+    expect(
+      JSON.parse(readFileSync(manifest, "utf8")).requiredGates.find(
+        (gate) => gate.name === "test",
+      ),
+    ).toMatchObject({
+      source: "quality-gates:.quality-gates.json#test",
+      executable: "node",
+      args: ["--test", "file.js"],
+    });
+  });
+
   it("binds optional gate evidence to the persisted trusted source and command", () => {
     const root = repo("trusted-gate-runner");
     const marker = path.join(tmpdir(), `quality-build-${process.pid}.marker`);

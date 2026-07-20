@@ -324,6 +324,85 @@ function baselineGate(name, scripts, candidates, manager, allowSkip = false) {
     : null;
 }
 
+const NATIVE_GATES_FILE = ".quality-gates.json";
+const NATIVE_GATE_NAMES = new Set([
+  "lint",
+  "test",
+  "security",
+  "build",
+  "type",
+  "consumer",
+]);
+
+function nativeGate(name, definition, allowSkip = false) {
+  const argv = [definition.executable, ...definition.args];
+  return {
+    name,
+    source: `quality-gates:${NATIVE_GATES_FILE}#${name}`,
+    command: argv.map((part) => JSON.stringify(part)).join(" "),
+    executable: definition.executable,
+    args: definition.args,
+    allowSkip,
+  };
+}
+
+function validateNativeGateDefinition(name, definition) {
+  const invalid =
+    !definition ||
+    Array.isArray(definition) ||
+    typeof definition !== "object" ||
+    typeof definition.executable !== "string" ||
+    definition.executable.trim() === "" ||
+    definition.executable.includes("\0") ||
+    !Array.isArray(definition.args) ||
+    definition.args.some(
+      (argument) => typeof argument !== "string" || argument.includes("\0"),
+    );
+  if (invalid) {
+    throw new Error(
+      `${NATIVE_GATES_FILE} gate '${name}' requires a non-empty executable and string args array`,
+    );
+  }
+  const unsupported = Object.keys(definition).filter(
+    (key) => !["executable", "args"].includes(key),
+  );
+  if (unsupported.length > 0) {
+    throw new Error(
+      `${NATIVE_GATES_FILE} gate '${name}' has unsupported fields: ${unsupported.join(", ")}`,
+    );
+  }
+  return definition;
+}
+
+function discoverNativeGates(root, head) {
+  const content = committedFile(root, head, NATIVE_GATES_FILE);
+  if (content === null) return new Map();
+  const policy = parseJson(content, `${NATIVE_GATES_FILE} at ${head}`);
+  if (
+    !policy ||
+    Array.isArray(policy) ||
+    policy.version !== 1 ||
+    !policy.gates ||
+    Array.isArray(policy.gates) ||
+    typeof policy.gates !== "object"
+  ) {
+    throw new Error(
+      `${NATIVE_GATES_FILE} must contain version 1 and a gates object`,
+    );
+  }
+
+  const gates = new Map();
+  for (const [name, definition] of Object.entries(policy.gates)) {
+    if (!NATIVE_GATE_NAMES.has(name)) {
+      throw new Error(
+        `${NATIVE_GATES_FILE} declares unsupported gate '${name}'`,
+      );
+    }
+    gates.set(name, validateNativeGateDefinition(name, definition));
+  }
+  return gates;
+}
+
 function discoverRequiredGates(
   root,
   options,
@@ -337,21 +416,19 @@ function discoverRequiredGates(
     scripts = packageJson.scripts || {};
   }
   const manager = packageManagerAt(root, head, packageJson);
+  const nativeGates = discoverNativeGates(root, head);
+  const requiredGate = (name, candidates, allowSkip = false) =>
+    nativeGates.has(name)
+      ? nativeGate(name, nativeGates.get(name), allowSkip)
+      : baselineGate(name, scripts, candidates, manager, allowSkip);
   const required = [
-    baselineGate("lint", scripts, ["lint", "lint:check"], manager),
-    baselineGate(
+    requiredGate("lint", ["lint", "lint:check"]),
+    requiredGate(
       "test",
-      scripts,
       ["test", "test:unit", "test:ci"],
-      manager,
       options["skip-tests"] === true,
     ),
-    baselineGate(
-      "security",
-      scripts,
-      ["security:audit", "security:check", "security"],
-      manager,
-    ),
+    requiredGate("security", ["security:audit", "security:check", "security"]),
   ].filter(Boolean);
   const missing = ["lint", "security"].filter(
     (name) => !required.some((gate) => gate.name === name),
@@ -369,11 +446,15 @@ function discoverRequiredGates(
   }
   if (typeof scripts.build === "string") {
     required.push(scriptGate("build", "build", manager));
+  } else if (nativeGates.has("build")) {
+    required.push(nativeGate("build", nativeGates.get("build")));
   }
   const typeScript = ["type-check:all", "type-check", "typecheck"].find(
     (name) => typeof scripts[name] === "string",
   );
-  if (typeScript) {
+  if (nativeGates.has("type")) {
+    required.push(nativeGate("type", nativeGates.get("type")));
+  } else if (typeScript) {
     required.push(scriptGate("type", typeScript, manager));
   }
   const consumerScript = Object.keys(scripts).find((name) =>
@@ -382,7 +463,9 @@ function discoverRequiredGates(
   const consumerFixture =
     committedFile(root, head, "tests/consumer-workflow-integration.test.js") !==
     null;
-  if (consumerScript || consumerFixture) {
+  if (nativeGates.has("consumer")) {
+    required.push(nativeGate("consumer", nativeGates.get("consumer")));
+  } else if (consumerScript || consumerFixture) {
     required.push(
       consumerScript
         ? scriptGate("consumer", consumerScript, manager)

@@ -84,10 +84,39 @@ expired/replaced capability invalidates approval.
 ## 3. Automated gates and formatting
 
 Run every gate in the manifest's immutable `requiredGates` policy, derived at
-invocation creation from applicable repository scripts and consumer-workflow
-fixtures. This includes lint, type, test, build, security, and consumer gates
-when applicable, all evidenced against the current HEAD. Tests must exist and
-pass unless the manifest's
+invocation creation from applicable package scripts, a committed
+`.quality-gates.json` policy, and consumer-workflow fixtures. A native
+Python/shell/polyglot repository can declare revision-bound commands without
+adding a fake `package.json`:
+
+```json
+{
+  "version": 1,
+  "gates": {
+    "lint": {
+      "executable": "python3",
+      "args": ["-m", "ruff", "check", "."]
+    },
+    "test": {
+      "executable": "python3",
+      "args": ["-m", "pytest", "-q"]
+    },
+    "security": {
+      "executable": "python3",
+      "args": ["-m", "pip_audit", "-r", "requirements.txt"]
+    }
+  }
+}
+```
+
+Only argv arrays are accepted; shell command strings and unknown gate fields
+fail closed. Explicit native declarations take precedence over same-named
+package-script fallbacks. Supported names are `lint`, `test`, `security`,
+`build`, `type`, and `consumer`.
+
+This includes lint, type, test, build, security, and consumer gates when
+applicable, all evidenced against the current HEAD. Tests must exist and pass
+unless the manifest's
 `options.skipTests` is true for a config-only repository. Execute the mandatory
 categories through the evidence-recording runner:
 
