@@ -289,7 +289,7 @@ PROVIDER_RC=$?
 # absolute campaign deadline and returns 77 when no budget remains.
 if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
   [ "$PROVIDER_RC" -eq 2 ] ||
-  { [ "$PROVIDER_RC" -eq 4 ] && [ "$QUALITY_PRIMARY" = codex ]; } ||
+  { [ "$PROVIDER_RC" -eq 4 ] && [ "$REVIEW_PROVIDER" = codex ]; } ||
   { [ "$PROVIDER_RC" -eq 76 ] && [ "$FALLBACK_ON_TIMEOUT" = 1 ]; }; } &&
   [ "$QUALITY_FALLBACK" != none ]; then
   if [ "$PROVIDER_RC" -eq 75 ]; then
@@ -299,27 +299,15 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
     echo "⚠️  [quality] $QUALITY_PRIMARY reported a billing or credits failure; switching immediately to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 2 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY unavailable; switching immediately to $QUALITY_FALLBACK." >&2
-  elif [ "$PROVIDER_RC" -eq 4 ] && [ "$QUALITY_PRIMARY" = codex ]; then
+  elif [ "$PROVIDER_RC" -eq 4 ] && [ "$REVIEW_PROVIDER" = codex ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY review was inconclusive; switching once to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 76 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY exceeded its review budget without converging; failing over to $QUALITY_FALLBACK (BS_QUALITY_FALLBACK_ON_TIMEOUT=0 to disable)." >&2
   fi
-  # Preserve failed-primary diagnostics. Findings from an earlier successful
-  # primary pass remain authoritative if a later pass triggers fallback.
-  mkdir -p "$REVIEW_OUT/failed-primary"
-  for evidence in "$REVIEW_OUT"/*.findings.txt; do
-    [ -e "$evidence" ] || continue
-    grep -q '^INCONCLUSIVE:' "$evidence" &&
-      mv "$evidence" "$REVIEW_OUT/failed-primary/"
-  done
-  for evidence in \
-    "$REVIEW_OUT"/*.stderr \
-    "$REVIEW_OUT"/codex.findings.txt \
-    "$REVIEW_OUT"/codex-*.json \
-    "$REVIEW_OUT"/codex-*.progress \
-    "$REVIEW_OUT"/codex-*.prompt; do
-    [ -e "$evidence" ] && mv "$evidence" "$REVIEW_OUT/failed-primary/"
-  done
+  # Preserve failed-primary diagnostics without discarding conclusive findings
+  # from an earlier successful pass when a later pass becomes inconclusive.
+  bash "$SCRIPT_DIR/quality-preserve-primary-evidence.sh" \
+    --review-out "$REVIEW_OUT"
   REVIEW_PROVIDER="$QUALITY_FALLBACK"
   run_provider "$QUALITY_FALLBACK"
   PROVIDER_RC=$?
@@ -359,7 +347,7 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
       terminal_diagnosis provider-governor
       ;;
     4)
-      echo "❌ MERGE BLOCKED: every $REVIEW_PROVIDER review was inconclusive." >&2
+      echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER review was inconclusive $FALLBACK_NOTE." >&2
       terminal_diagnosis parser-inconclusive "$REVIEW_PROVIDER"
       ;;
     *)

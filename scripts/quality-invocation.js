@@ -1711,15 +1711,27 @@ function writeArtifactInventory(manifest, artifactDir, provider) {
     findings.some((name) =>
       fs
         .readFileSync(path.join(resolved, name), "utf8")
-        .startsWith("INCONCLUSIVE:"),
+        .split(/\r?\n/)
+        .some((line) => line.startsWith("INCONCLUSIVE:")),
     )
   ) {
     throw new Error("inconclusive provider findings cannot be inventoried");
   }
-  if (provider === "claude" && findings.length !== manifest.agents.length) {
-    throw new Error(
-      "Claude findings inventory does not cover the mandatory panel",
+  if (provider === "claude") {
+    const claudeFindings = findings.filter(
+      (name) => name !== "codex.findings.txt",
     );
+    const expectedFindings = manifest.agents.map(
+      (agent) => `${agent}.findings.txt`,
+    );
+    if (
+      claudeFindings.length !== expectedFindings.length ||
+      expectedFindings.some((name) => !claudeFindings.includes(name))
+    ) {
+      throw new Error(
+        "Claude findings inventory does not cover the mandatory panel",
+      );
+    }
   }
   const inventory = {
     schemaVersion: 1,

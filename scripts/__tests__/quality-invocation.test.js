@@ -2447,6 +2447,58 @@ exit 1
     ).not.toThrow();
   });
 
+  it("inventories preserved Codex findings with a complete Claude fallback panel", () => {
+    const root = repo("fallback-inventory");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 2,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(manifest, ["reviewer-a", "reviewer-b"]);
+    });
+    const manifest = invocation.loadManifest(manifestPath).manifest;
+    const artifactDir = invocation.reviewInfo(manifest).artifactDir;
+    mkdirSync(artifactDir, { recursive: true });
+    writeFileSync(
+      path.join(artifactDir, "codex.findings.txt"),
+      "BLOCKING: preserved primary finding\n",
+    );
+    writeFileSync(
+      path.join(artifactDir, "reviewer-a.findings.txt"),
+      "NO FINDINGS\n",
+    );
+    writeFileSync(
+      path.join(artifactDir, "reviewer-b.findings.txt"),
+      "NO FINDINGS\n",
+    );
+
+    expect(() =>
+      invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
+    ).not.toThrow();
+    expect(
+      JSON.parse(
+        readFileSync(path.join(artifactDir, "artifact-inventory.json"), "utf8"),
+      ).files.map(({ name }) => name),
+    ).toEqual([
+      "codex.findings.txt",
+      "reviewer-a.findings.txt",
+      "reviewer-b.findings.txt",
+    ]);
+
+    writeFileSync(
+      path.join(artifactDir, "codex.findings.txt"),
+      "BLOCKING: preserved primary finding\nINCONCLUSIVE: later pass\n",
+    );
+    expect(() =>
+      invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
+    ).toThrow(/inconclusive provider findings/);
+  });
+
   it("treats trailing text after a clean sentinel as blocking evidence", () => {
     const root = repo("contradictory-clean-sentinel");
     const manifest = create(root);
