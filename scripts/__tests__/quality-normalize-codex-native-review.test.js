@@ -52,6 +52,10 @@ Full review comments:
     "No regressions were found.",
     "The authorization gate now waits until repository protectability is classified, checks all registered CI for explicitly unprotectable repositories, and preserves required-only checks for protectable repositories.",
     "The preflight and billing-waiver paths retain their existing behavior.",
+    "The refactor is not risky. No concerns found.",
+    "LGTM. The rename is applied consistently, however I noted it reads cleanly.",
+    "No issues found. The behavior is not affected.",
+    "No regressions were found. The reviewed diff does not alter unrelated paths.",
   ])("approves clean prose verdicts: %s", (prose) => {
     expect(parseNativeReview(prose).verdict).toBe("approve");
   });
@@ -71,6 +75,8 @@ Full review comments:
     "The implementation preserves the fast path, but fails on protected repositories.",
     "The patch retains existing behavior; however, the new path is unsafe.",
     "The patch safely preserves the old path. However, the new path is vulnerable.",
+    "The function correctly handles the happy path. A security issue remains.",
+    "No issues were found, but a bug remains in the fallback.",
   ])("rejects qualified no-finding prose: %s", (prose) => {
     expect(() => parseNativeReview(prose)).toThrow(/no recognizable verdict/);
   });

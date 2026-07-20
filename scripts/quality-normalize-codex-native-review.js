@@ -80,20 +80,32 @@ function parseNativeReview(raw, root = process.cwd()) {
     /\b(?:looks good|lgtm|no changes? (?:needed|required))\b/i;
   const POSITIVE_VERDICT =
     /\b(?:correctly|properly|safely|preserves?|retains?)\b/i;
-  const NEGATIVE_QUALIFIER =
-    /\b(?:but|however|incorrect(?:ly)?|unsafe(?:ly)?|fails?|broken|vulnerable|not|regressions?|issues?|concerns?|problems?|bugs?)\b/i;
+  const ADVERSE_FINDING =
+    /\b(?:incorrect(?:ly)?|unsafe(?:ly)?|fails?|broken|vulnerable|regressions?|issues?|concerns?|problems?|bugs?)\b/i;
+  const NEGATED_POSITIVE =
+    /\bnot\s+(?:correctly|properly|safely|preserv(?:e|es)|retain(?:s)?)\b/i;
   const INCOMPLETE =
     /\b(?:could ?n[o']?t be reviewed|ended unexpectedly|was (?:truncated|interrupted|incomplete)|(?:review|analysis) was (?:not )?completed|another (?:path|file))\b/i;
   const sentences = String(raw).split(/[.\n!?]+/);
-  const qualifiedVerdict = sentences.some((sentence) => {
-    if (INCOMPLETE.test(sentence)) return true;
-    if (!NEGATIVE_QUALIFIER.test(sentence)) return false;
-    return !(NEGATION.test(sentence) && NOUN.test(sentence));
+  const incompleteVerdict = sentences.some((sentence) =>
+    INCOMPLETE.test(sentence),
+  );
+  // Evaluate adverse language per clause. A global `not`/`however` check made
+  // unrelated clean prose ("not risky. No concerns found.") poison the entire
+  // review. Clause boundaries still ensure that "No issues, but a bug remains"
+  // cannot borrow the negation from the clean clause.
+  const clauses = sentences.flatMap((sentence) =>
+    sentence.split(/\b(?:but|however)\b|;/i),
+  );
+  const adverseVerdict = clauses.some((clause) => {
+    if (NEGATED_POSITIVE.test(clause)) return true;
+    if (!ADVERSE_FINDING.test(clause)) return false;
+    return !(NEGATION.test(clause) && NOUN.test(clause));
   });
   const cleanVerdict = sentences.some((sentence) => {
-    if (qualifiedVerdict) return false;
+    if (incompleteVerdict || adverseVerdict) return false;
     if (CLEAN_PHRASE.test(sentence)) return true;
-    if (POSITIVE_VERDICT.test(sentence) && !NEGATIVE_QUALIFIER.test(sentence)) {
+    if (POSITIVE_VERDICT.test(sentence)) {
       return true;
     }
     return NEGATION.test(sentence) && NOUN.test(sentence);
