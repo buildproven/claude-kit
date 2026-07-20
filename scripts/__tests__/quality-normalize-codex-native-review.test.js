@@ -48,6 +48,8 @@ Full review comments:
     "Change is straightforward. LGTM.",
     "Reviewed the timeout config change; it looks good.",
     "No security concerns in the modified handler.",
+    "The package and CLI rename is applied consistently. No actionable regressions were identified.",
+    "No regressions were found.",
   ])("approves clean prose verdicts: %s", (prose) => {
     expect(parseNativeReview(prose).verdict).toBe("approve");
   });
@@ -61,6 +63,8 @@ Full review comments:
   it.each([
     "No findings could be determined because the review ended unexpectedly.",
     "This path looks good, but another path could not be reviewed.",
+    "No regressions were found in the reviewed file, but another file was truncated.",
+    "No regression analysis was completed.",
   ])("rejects qualified no-finding prose: %s", (prose) => {
     expect(() => parseNativeReview(prose)).toThrow(/no recognizable verdict/);
   });

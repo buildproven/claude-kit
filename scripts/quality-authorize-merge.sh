@@ -69,7 +69,18 @@ fi
   echo "❌ MERGE BLOCKED: PR is not open or safely merged (state=$ACTUAL_STATE)." >&2
   exit 1
 }
-ACTUAL_BASE_OID="$(git ls-remote origin "refs/heads/$ACTUAL_BASE_NAME" | awk '{print $1}')"
+# Capture before piping: `cmd | awk` reports awk's status, so a failed lookup
+# whose partial output still parsed would read as a successful base resolution.
+# This is the authoritative base read and --preflight exits before the later one.
+ACTUAL_BASE_LS="$(git ls-remote origin "refs/heads/$ACTUAL_BASE_NAME")" || {
+  echo "❌ MERGE BLOCKED: could not resolve the PR base ref." >&2
+  exit 1
+}
+ACTUAL_BASE_OID="$(printf '%s' "$ACTUAL_BASE_LS" | awk 'NR==1 {print $1}')"
+[ -n "$ACTUAL_BASE_OID" ] || {
+  echo "❌ MERGE BLOCKED: base ref resolved to no OID." >&2
+  exit 1
+}
 EXPECTED_BASE_REF="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseRef)"
 EXPECTED_BASE_OID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseHeadSha)"
 [ "$EXPECTED_BASE_REF" = "origin/$ACTUAL_BASE_NAME" ] &&
@@ -136,6 +147,22 @@ if [ "$(gh api "repos/$REPOSITORY/branches/$ENCODED_BASE_NAME/protection/require
   --jq '.strict' 2>/dev/null || true)" = true ]; then
   ATOMIC_BASE_FRESHNESS=true
 fi
+# Repos whose plan cannot enforce strict checks (private, no GitHub Pro) can
+# never satisfy the check above, so --merge is unsatisfiable there and operators
+# fall back to --admin, which skips every gate rather than just this one.
+#
+# This escape hatch is deliberately NOT presented as an equivalent guarantee.
+# GitHub exposes no base-SHA precondition on merge (only --match-head-commit),
+# so a client cannot reconstruct atomic base freshness: the base may advance
+# between the last check and the merge, producing exactly the untested
+# head-on-new-base combination that strict checks exist to prevent. What follows
+# is a documented, opt-in acceptance of that weaker property — equivalent to a
+# non-strict protected branch — not a reproduction of the strong one.
+#
+# Plan capability is read from the repository object, never inferred from API
+# error text: rate limiting and insufficient token scope also return HTTP 403,
+# and treating a failed observation as "protection is unavailable" would turn a
+# transient failure into an authorization.
 # GitHub evaluates ruleset include/exclude patterns for this concrete branch.
 # Do not duplicate fnmatch semantics locally: exclusions, nested wildcards,
 # organization rulesets, and future pattern syntax must remain server-owned.
@@ -158,17 +185,105 @@ if EFFECTIVE_RULES="$(gh api \
     ATOMIC_BASE_FRESHNESS=true
   fi
 fi
-[ "$ATOMIC_BASE_FRESHNESS" = true ] || {
-  echo "❌ MERGE BLOCKED: the PR base lacks server-enforced strict freshness." >&2
-  echo "   Enable strict required-status checks or use a supported merge queue." >&2
-  exit 1
-}
+# Last resort, and only after BOTH classic protection and effective rulesets have
+# had their chance to authorize: a ruleset can supply strict freshness on a repo
+# with no classic protection, so running this earlier would reject a properly
+# protected base.
+UNPROTECTABLE_MERGE_POLICY="${BS_QUALITY_ALLOW_UNPROTECTABLE_BASE:-false}"
+if [ "$ATOMIC_BASE_FRESHNESS" != true ] && [ "$UNPROTECTABLE_MERGE_POLICY" = true ]; then
+  # Classification lives in quality-base-protectability.sh so it is executable
+  # in tests; it fails closed on anything short of a proven plan limit.
+  #
+  # Write the body to a file rather than a shell variable: command substitution
+  # silently strips NUL bytes, which would let a malformed raw response be
+  # normalized into a well-formed authorized one before jq ever sees it.
+  PROTECTION_RC=0
+  PROTECTION_BODY_FILE="$(mktemp)"
+  # STDOUT ONLY. gh prints the JSON error body to stdout and a human-readable
+  # line to stderr; folding them together would make the body un-parseable as a
+  # single JSON document and force fragment-recovery, which is the exact
+  # response-injection hole the classifier refuses to accept.
+  gh api "repos/$REPOSITORY/branches/$ENCODED_BASE_NAME/protection" \
+    >"$PROTECTION_BODY_FILE" 2>/dev/null || PROTECTION_RC=$?
+  REPO_PRIVATE="$(gh api "repos/$REPOSITORY" --jq '.private' 2>/dev/null || echo unknown)"
+  if bash "$SCRIPT_DIR/quality-base-protectability.sh" \
+    --private "$REPO_PRIVATE" --rc "$PROTECTION_RC" \
+    --body-file "$PROTECTION_BODY_FILE" >/dev/null; then
+    echo "⚠️  [quality] this plan cannot protect branches on a private repo." >&2
+    echo "⚠️  [quality] BS_QUALITY_ALLOW_UNPROTECTABLE_BASE=true accepts NON-ATOMIC base freshness." >&2
+    echo "⚠️  [quality] The base may advance before the merge lands; that combination is untested." >&2
+    ATOMIC_BASE_FRESHNESS=unprotectable
+  else
+    rm -f "$PROTECTION_BODY_FILE"
+    echo "❌ MERGE BLOCKED: BS_QUALITY_ALLOW_UNPROTECTABLE_BASE is set, but this base is protectable" >&2
+    echo "   or its capability could not be proven (private=$REPO_PRIVATE)." >&2
+    echo "   Configure strict required-status checks instead." >&2
+    exit 1
+  fi
+  rm -f "$PROTECTION_BODY_FILE"
+fi
+case "$ATOMIC_BASE_FRESHNESS" in
+  true | unprotectable) ;;
+  *)
+    echo "❌ MERGE BLOCKED: the PR base lacks server-enforced strict freshness." >&2
+    echo "   Enable strict required-status checks or use a supported merge queue." >&2
+    echo "   If this repo's plan cannot protect branches at all, set" >&2
+    echo "   BS_QUALITY_ALLOW_UNPROTECTABLE_BASE=true to accept the weaker," >&2
+    echo "   non-atomic guarantee explicitly." >&2
+    exit 1
+    ;;
+esac
 TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"
-if [ "$TIER" = critical ]; then
+
+# Human-capability policy (autonomous-quality-v-model plan, Phase 0).
+#
+# Two independent conditions require a human break-glass capability; a merge is
+# authorized without one ONLY when NEITHER holds:
+#
+#   A. The change touches the always-human security floor
+#      (secrets/creds/keys/auth/license/deploy/webhooks — humanFloor). Checked
+#      for EVERY merge, INDEPENDENT of tier: a persisted tier is derived from an
+#      earlier revision and a floor path can be added during remediation or evade
+#      tier classification, so gating the floor on tier=critical would let such a
+#      change through (Codex review: tier-nesting exploit).
+#
+#   B. The change is critical tier AND the base is server-enforceable. On a repo
+#      that genuinely cannot be enforced (ATOMIC_BASE_FRESHNESS=unprotectable — a
+#      value set only by the hardened quality-base-protectability.sh classifier),
+#      a human break-glass buys no real protection (no external attacker, no
+#      server enforcement), so clean review + green gates suffice for critical.
+#
+# Fail-closed exit-code contract of human-floor-check:
+#   0  = VERIFIED CLEAR of the floor
+#   10 = touches the floor
+#   anything else (1 = error, empty diff, tampered manifest) = treat as touches.
+# Only an explicit rc=0 counts as clear; every other outcome requires a human, so
+# an errored or ambiguous check can never silently authorize an autonomous merge.
+HUMAN_FLOOR_RC=0
+node "$SCRIPT_DIR/quality-invocation.js" human-floor-check "$MANIFEST" \
+  || HUMAN_FLOOR_RC=$?
+TOUCHES_HUMAN_FLOOR=true
+[ "$HUMAN_FLOOR_RC" -eq 0 ] && TOUCHES_HUMAN_FLOOR=false
+
+REQUIRE_APPROVAL=false
+FLOOR_REASON=""
+if [ "$TOUCHES_HUMAN_FLOOR" = true ]; then
+  REQUIRE_APPROVAL=true
+  FLOOR_REASON="the change touches the always-human security floor"
+elif [ "$TIER" = critical ] && [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ]; then
+  REQUIRE_APPROVAL=true
+  FLOOR_REASON="critical tier on a server-enforceable base"
+fi
+
+if [ "$REQUIRE_APPROVAL" = true ]; then
   node "$SCRIPT_DIR/quality-invocation.js" approval-valid "$MANIFEST" || {
-    echo "❌ MERGE BLOCKED: critical break-glass approval is missing or stale." >&2
+    echo "❌ MERGE BLOCKED: human break-glass approval is missing or stale ($FLOOR_REASON)." >&2
     exit 1
   }
+elif [ "$TIER" = critical ]; then
+  echo "[quality] Critical tier on an unprotectable private repo, clear of the" >&2
+  echo "          always-human security floor: accepting clean review + green" >&2
+  echo "          gates in lieu of human break-glass (Phase 0 policy)." >&2
 fi
 [ "$PREFLIGHT" = false ] || {
   echo "[quality] non-mutating merge authorization preflight passed"
@@ -187,7 +302,18 @@ FINAL_PR_JSON="$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
   echo "❌ MERGE BLOCKED: PR target branch changed immediately before merge." >&2
   exit 1
 }
-FINAL_BASE_OID="$(git ls-remote origin "refs/heads/$ACTUAL_BASE_NAME" | awk '{print $1}')"
+# Capture ls-remote BEFORE piping. `cmd | awk` reports awk's status, not git's,
+# and this script does not set pipefail — so a failed lookup whose partial output
+# still parsed would have been read as a successful base re-read.
+FINAL_BASE_LS="$(git ls-remote origin "refs/heads/$ACTUAL_BASE_NAME")" || {
+  echo "❌ MERGE BLOCKED: could not re-read the base ref to confirm freshness." >&2
+  exit 1
+}
+FINAL_BASE_OID="$(printf '%s' "$FINAL_BASE_LS" | awk 'NR==1 {print $1}')"
+[ -n "$FINAL_BASE_OID" ] || {
+  echo "❌ MERGE BLOCKED: base ref lookup returned no OID." >&2
+  exit 1
+}
 [ "$(printf '%s' "$FINAL_PR_JSON" | jq -r '.headRefOid')" = "$ACTUAL_HEAD" ] &&
   [ "$FINAL_BASE_OID" = "$EXPECTED_BASE_OID" ] || {
     echo "❌ MERGE BLOCKED: PR identity changed immediately before merge." >&2

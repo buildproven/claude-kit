@@ -74,6 +74,12 @@ causes sibling process groups to terminate. A successful review records HEAD;
 later fix rounds use that SHA as their diff base so unchanged commits are not
 reviewed again. Bootstrap clears this state for every new invocation.
 
+When structured exhaustion metadata includes a reset timestamp, quality prints
+that timestamp and the exact manifest-bound retry command. The terminal
+diagnosis reports repository gates, provider checkpoint, break-glass, and
+GitHub CI separately; it does not flatten quota, parser, billing/auth,
+code-finding, and CI failures into one generic merge message.
+
 ## Regression History
 
 - **2026-05-11**: target resolution ignored PR/branch args in favor of
@@ -204,28 +210,29 @@ auto-fix loop, re-run `npm test` to verify they pass before continuing.
 
 ## Flags
 
-| Flag                  | Default | Description                                                                                 |
-| --------------------- | ------- | ------------------------------------------------------------------------------------------- |
-| `--level N`           | auto    | Quality level: `auto` (read tier from harness-config.json), `95`, or `98`                   |
-| `--scope S`           | branch  | Revision-bound branch scope; other values fail fast                                         |
-| `--merge`             | false   | Auto-merge PR after quality                                                                 |
-| `--skip-tests`        | false   | Skip hard test gate (config-only repos)                                                     |
-| `--pr <number>`       | -       | Bind to one open PR                                                                         |
-| `--manifest <path>`   | -       | Resume one exact persisted invocation; accepts no other flags                               |
-| `--target-dir <path>` | -       | Run against this repo (use when invoking from a forked/agent context with no inherited cwd) |
+| Flag                                 | Default | Description                                                                                 |
+| ------------------------------------ | ------- | ------------------------------------------------------------------------------------------- |
+| `--level N`                          | auto    | Quality level: `auto` (read tier from harness-config.json), `95`, or `98`                   |
+| `--scope S`                          | branch  | Revision-bound branch scope; other values fail fast                                         |
+| `--merge`                            | false   | Auto-merge PR after quality                                                                 |
+| `--skip-tests`                       | false   | Skip hard test gate (config-only repos)                                                     |
+| `--pr <number>`                      | -       | Bind to one open PR                                                                         |
+| `approve --pr <number> --head <sha>` | -       | Mint outer signed break-glass approval for one exact PR/HEAD and continue the run           |
+| `--manifest <path>`                  | -       | Resume one exact persisted invocation; accepts no other flags                               |
+| `--target-dir <path>`                | -       | Run against this repo (use when invoking from a forked/agent context with no inherited cwd) |
 
 ### Environment Variables
 
-| Variable                              | Default | Description                                                                                                                                                              |
-| ------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `BS_QUALITY_PRIMARY`                  | config  | Per-run primary override: `claude` or `codex`.                                                                                                                           |
-| `BS_QUALITY_FALLBACK`                 | config  | Per-run fallback override: `claude`, `codex`, or `none`.                                                                                                                 |
-| `BS_QUALITY_FALLBACK_ON_TIMEOUT`      | `1`     | On `1`, a primary that times out without converging (rc=76) fails over to the fallback (runs once). `0` restores #104's strict single-clock bound (timeout hard-blocks). |
-| `BS_QUALITY_TARGET_DIR`               | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd.                                                                       |
-| `BS_QUALITY_MAX_FIX_COMMITS`          | 1       | Explicit override for the default one-commit batched-remediation cap.                                                                                                    |
-| `BS_QUALITY_MAX_REMEDIATION_SECONDS`  | planned | Batched-fix allowance remaining after proportional discovery and verification reserves.                                                                                  |
-| `BS_QUALITY_REREVIEW_RESERVE_SECONDS` | planned | Workload-scaled allowance for one targeted validation review after fixes.                                                                                                |
-| `BS_QUALITY_TELEMETRY_FILE`           | -       | Absolute path for the campaign telemetry log. Default: `<target-repo>/data/quality-telemetry.jsonl`.                                                                     |
+| Variable                              | Default | Description                                                                                                                                        |
+| ------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BS_QUALITY_PRIMARY`                  | config  | Per-run primary override: `claude` or `codex`.                                                                                                     |
+| `BS_QUALITY_FALLBACK`                 | config  | Per-run fallback override: `claude`, `codex`, or `none`.                                                                                           |
+| `BS_QUALITY_FALLBACK_ON_TIMEOUT`      | `1`     | On `1`, a primary timeout fails over once. Set `0` to hard-block on the first timeout.                                                             |
+| `BS_QUALITY_TARGET_DIR`               | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd.                                                 |
+| `BS_QUALITY_MAX_FIX_COMMITS`          | 1       | Explicit override for the default one-commit batched-remediation cap.                                                                              |
+| `BS_QUALITY_MAX_REMEDIATION_SECONDS`  | planned | Batched-fix allowance remaining after proportional discovery and verification reserves.                                                            |
+| `BS_QUALITY_REREVIEW_RESERVE_SECONDS` | planned | Workload-scaled allowance for one targeted validation review after fixes.                                                                          |
+| `BS_QUALITY_TELEMETRY_FILE`           | -       | Absolute path for the campaign telemetry log. Default: operator state under `$XDG_STATE_HOME/claude-kit/quality-telemetry/` (or `~/.local/state`). |
 
 ### Run Governor (runaway-loop guardrails)
 

@@ -304,7 +304,7 @@ describe("claude-review-companion.sh", () => {
         fakeClaude,
         `#!/bin/bash
 case "$*" in
-  *code-reviewer.md*) echo '{"is_error":true,"error":{"status":429,"code":"rate_limit_exceeded"}}'; exit 1 ;;
+  *code-reviewer.md*) echo '{"is_error":true,"error":{"status":429,"code":"rate_limit_exceeded","reset_at":"2026-07-20T03:00:00Z"}}'; exit 1 ;;
   *) sleep 30; printf '{"is_error":false,"result":"NO FINDINGS."}\\n' ;;
 esac
 `,
@@ -327,6 +327,16 @@ esac
       );
       expect(r.code).toBe(75);
       expect(r.stderr).toMatch(/weekly usage limit|provider exhausted/i);
+      expect(r.stderr).toContain("2026-07-20T03:00:00.000Z");
+      expect(
+        JSON.parse(
+          fs.readFileSync(path.join(d, "o", "provider-failure.json"), "utf8"),
+        ),
+      ).toMatchObject({
+        provider: "claude",
+        category: "provider-exhaustion",
+        resetAt: "2026-07-20T03:00:00.000Z",
+      });
       expect(Date.now() - started).toBeLessThan(8000);
       expect(
         fs.readFileSync(

@@ -249,7 +249,7 @@ Quality-Base: ${base}`;
     expect(source).not.toMatch(/provider_stderr_exhausted/);
     expect(source).not.toMatch(/provider_exhausted "\$raw_file"/);
     expect(source.indexOf('[ "$rc" -eq 124 ] && return 76')).toBeLessThan(
-      source.indexOf("quality-provider-error.js"),
+      source.indexOf('if node "$SCRIPT_DIR/quality-provider-error.js"'),
     );
     expect(source).toMatch(/"\$REVIEW_OUT"\/codex-\*\.json/);
     expect(source).toMatch(/"\$REVIEW_OUT"\/codex-\*\.progress/);
