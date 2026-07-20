@@ -549,6 +549,14 @@ describe("quality merge gates", () => {
       path.join(reviewOut, "codex.findings.txt"),
       "BLOCKING: src/example.js:12 — real finding\nFix it.\nINCONCLUSIVE: pass 2 parser failed\n",
     );
+    writeFileSync(
+      path.join(reviewOut, "codex-1.normalized.json"),
+      JSON.stringify({
+        verdict: "needs-attention",
+        summary: "completed pass",
+        findings: [{ severity: "high", title: "real finding" }],
+      }),
+    );
     writeFileSync(path.join(reviewOut, "codex-2.json"), "{}\n");
     writeFileSync(path.join(reviewOut, "codex-2.stderr"), "parse failure\n");
 
@@ -560,9 +568,17 @@ describe("quality merge gates", () => {
       "parser-inconclusive",
     ]);
 
+    expect(existsSync(path.join(reviewOut, "codex.findings.txt"))).toBe(false);
     expect(
-      readFileSync(path.join(reviewOut, "codex.findings.txt"), "utf8"),
-    ).toBe("BLOCKING: src/example.js:12 — real finding\nFix it.\n");
+      JSON.parse(
+        readFileSync(
+          path.join(reviewOut, "primary-codex-1.result.json"),
+          "utf8",
+        ),
+      ).findings,
+    ).toEqual([
+      expect.objectContaining({ severity: "high", title: "real finding" }),
+    ]);
     expect(
       readFileSync(
         path.join(reviewOut, "failed-primary", "codex.findings.txt"),

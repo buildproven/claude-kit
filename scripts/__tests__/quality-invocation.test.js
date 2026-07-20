@@ -2465,8 +2465,18 @@ exit 1
     const artifactDir = invocation.reviewInfo(manifest).artifactDir;
     mkdirSync(artifactDir, { recursive: true });
     writeFileSync(
-      path.join(artifactDir, "codex.findings.txt"),
-      "BLOCKING: preserved primary finding\n",
+      path.join(artifactDir, "primary-codex-1.result.json"),
+      JSON.stringify({
+        verdict: "needs-attention",
+        summary: "preserved primary pass",
+        findings: [
+          {
+            severity: "high",
+            title: "preserved primary finding",
+            body: "must remain authoritative",
+          },
+        ],
+      }),
     );
     writeFileSync(
       path.join(artifactDir, "reviewer-a.findings.txt"),
@@ -2480,33 +2490,19 @@ exit 1
     expect(() =>
       invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
     ).not.toThrow();
-    manifest.reviews = [
-      {
-        status: "success",
-        artifactDir,
-        inventorySha256: "fallback-inventory",
-      },
-    ];
-    expect(invocation.providerFindings(manifest)).toEqual([
-      expect.objectContaining({
-        title: "BLOCKING: preserved primary finding",
-        source: "codex.findings.txt",
-      }),
-    ]);
     expect(
       JSON.parse(
         readFileSync(path.join(artifactDir, "artifact-inventory.json"), "utf8"),
       ).files.map(({ name }) => name),
     ).toEqual([
-      "codex.findings.txt",
+      "primary-codex-1.result.json",
       "reviewer-a.findings.txt",
       "reviewer-b.findings.txt",
     ]);
-    manifest.reviews = [];
 
     writeFileSync(
-      path.join(artifactDir, "codex.findings.txt"),
-      "BLOCKING: preserved primary finding\nINCONCLUSIVE: later pass\n",
+      path.join(artifactDir, "reviewer-a.findings.txt"),
+      "NO FINDINGS.\nINCONCLUSIVE: later pass\n",
     );
     expect(() =>
       invocation.writeArtifactInventory(manifest, artifactDir, "claude"),

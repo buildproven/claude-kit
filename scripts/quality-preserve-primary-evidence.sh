@@ -35,28 +35,27 @@ quarantine() {
 }
 
 if [ "$MODE" = parser-inconclusive ]; then
-  # Codex rc=4 means an earlier pass completed but a later pass could not be
-  # parsed. Preserve only non-marker, non-whitespace findings from that
-  # completed pass; quarantine the complete original for diagnosis.
-  evidence="$REVIEW_OUT/codex.findings.txt"
-  if [ -e "$evidence" ]; then
-    kept="$(mktemp "$FAILED_PRIMARY/.conclusive-findings.XXXXXX")"
-    grep -v '^INCONCLUSIVE:' "$evidence" > "$kept" || true
-    quarantine "$evidence"
-    if grep -q '[^[:space:]]' "$kept"; then
-      mv "$kept" "$evidence"
-    else
-      rm -f "$kept"
-    fi
-  fi
-else
-  # Quota, billing, unavailability, and timeout mean the primary did not
-  # complete. Partial findings are diagnostics, never authoritative evidence.
-  for evidence in "$REVIEW_OUT"/*.findings.txt; do
+  # Preserve only successfully normalized passes, under names that cannot
+  # collide with a fallback Codex run. Rendered text can contain partial,
+  # clean-sentinel, or marker-adjacent content and is never authoritative.
+  for evidence in "$REVIEW_OUT"/codex-*.normalized.json; do
     [ -e "$evidence" ] || continue
-    quarantine "$evidence"
+    pass="$(basename "$evidence" .normalized.json)"
+    destination="$REVIEW_OUT/primary-$pass.result.json"
+    [ ! -e "$destination" ] || {
+      echo "quality-preserve-primary-evidence: preserved result collision" >&2
+      exit 1
+    }
+    mv "$evidence" "$destination"
   done
 fi
+
+# Every rendered or partial findings file is diagnostic only. For rc=4, the
+# normalized result above carries completed-pass findings with exact severity.
+for evidence in "$REVIEW_OUT"/*.findings.txt; do
+  [ -e "$evidence" ] || continue
+  quarantine "$evidence"
+done
 
 for evidence in \
   "$REVIEW_OUT"/*.stderr \
