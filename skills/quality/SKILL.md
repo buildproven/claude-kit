@@ -250,9 +250,10 @@ Merge is forbidden when:
 - manifest identity does not match the current repository/revision;
 - review coverage is stale or discontinuous;
 - required break-glass approval is absent/stale;
-- CI is failing, except for an active operator-authorized GitHub billing window
-  where every failed Actions job is exact-HEAD, acquired no runner, ran zero
-  steps, and terminated within 30 seconds;
+- CI is failing, except on a plan-proven unprotectable private repository
+  during an active operator-authorized GitHub billing window where every failed
+  Actions job is exact-HEAD, acquired no runner, ran zero steps, and terminated
+  within 30 seconds;
 - trailers are missing, malformed, or revision-stale.
 
 When a repository cannot express required checks, wait for all registered
