@@ -190,7 +190,9 @@ Critical questions:
 2. Extract or load the artifact.
 3. If the artifact is visual, inspect layout and not just text.
 4. Build an artifact packet for the ensemble runner.
-5. Run collaborative review with `claude,codex,gemini` unless the context suggests fewer.
+5. Run collaborative review with the reliable default pair, `claude,codex`.
+   Request Gemini explicitly only after its CLI and API-key authentication pass
+   a local smoke check.
 6. Synthesize into a blunt ship/no-ship verdict.
 
 Keep the final synthesis tighter than the raw panel output. The point is editorial judgment, not replaying every model response.
