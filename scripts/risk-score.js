@@ -1047,11 +1047,31 @@ function validateScoreConfig(cfg) {
   return cfg;
 }
 
+function isPlainObject(value) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (Object.getPrototypeOf(value) === Object.prototype ||
+      Object.getPrototypeOf(value) === null)
+  );
+}
+
 function loadConfig(repoRoot) {
   const p = path.join(repoRoot || process.cwd(), "harness-config.json");
   if (!fs.existsSync(p)) return validateScoreConfig(DEFAULTS);
   const repoCfg = parseConfigJson(fs.readFileSync(p, "utf8"), p);
-  if (!repoCfg.scorePolicy) return validateScoreConfig(DEFAULTS);
+  if (!isPlainObject(repoCfg)) {
+    throw new Error(
+      "invalid risk policy: harness-config root must be an object",
+    );
+  }
+  if (!Object.hasOwn(repoCfg, "scorePolicy")) {
+    return validateScoreConfig(DEFAULTS);
+  }
+  if (!isPlainObject(repoCfg.scorePolicy)) {
+    throw new Error("invalid risk policy: scorePolicy must be an object");
+  }
   const cfg = deepMerge(DEFAULTS, repoCfg.scorePolicy);
   cfg.securityFloor = effectiveSecurityFloor(cfg);
   cfg.humanFloor = additiveFloorPatterns(DEFAULTS.humanFloor, cfg.humanFloor);

@@ -144,6 +144,15 @@ describe("score — semantic policy failures", () => {
       /curve\[0\] must be an object/i,
     );
   });
+
+  it.each([false, "bad", 1, [], null])(
+    "rejects a present non-object scorePolicy root %j",
+    (scorePolicy) => {
+      expect(() => loadConfig(repoWith({ scorePolicy }))).toThrow(
+        /scorePolicy must be an object/i,
+      );
+    },
+  );
 });
 
 describe("deepMerge", () => {
