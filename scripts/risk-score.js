@@ -268,7 +268,10 @@ function globToRegExp(glob) {
       re += c;
     }
   }
-  return new RegExp("^" + re + "$");
+  // Git permits control characters, including newlines, in path segments.
+  // DotAll keeps `**` faithful to "any characters across separators"; without
+  // it, `safe\n/auth/session.js` evades an otherwise matching `**/auth/**`.
+  return new RegExp("^" + re + "$", "s");
 }
 
 const _matcherCache = new Map();

@@ -173,6 +173,8 @@ describe("computeScore — security floor never beaten by mechanical", () => {
     "src/server.pk8",
     "key-material/config.json",
     "key_store/config.json",
+    "safe\n/auth/session.js",
+    "safe\r/keys/server.pem",
   ])("sensitive directory path %s stays at the security floor", (file) => {
     const r = scoreOf([d(file, "M", "+// note", 1)]);
     expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
