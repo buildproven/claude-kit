@@ -143,7 +143,7 @@ describe("quality merge gates", () => {
     expect(finalWaiverValidation).toBeGreaterThan(requiredChecks);
     expect(adminMerge).toBeGreaterThan(finalWaiverValidation);
     expect(AUTHORIZE).toMatch(
-      /if \[ "\$CI_BILLING_WAIVED" = false \]; then[\s\S]*gh pr checks/,
+      /if \[ "\$PREFLIGHT" = false \] && \[ "\$\{CI_BILLING_WAIVED:-false\}" = false \]; then[\s\S]*gh pr checks/,
     );
     expect(AUTHORIZE).toMatch(
       /if \[ "\$\{CI_BILLING_WAIVED:-false\}" = true \]; then[\s\S]*MERGE_ARGS\+=\(--admin\)/,
@@ -178,6 +178,17 @@ describe("quality merge gates", () => {
     expect(AUTHORIZE).toMatch(
       /case "\$ATOMIC_BASE_FRESHNESS" in\s*\n\s*true \| unprotectable\)/,
     );
+    expect(AUTHORIZE).toMatch(
+      /\[ "\$ATOMIC_BASE_FRESHNESS" = unprotectable \]; then[\s\S]*gh pr checks "\$PR" --repo "\$EXPECTED_REPOSITORY" >\/dev\/null/,
+    );
+    expect(AUTHORIZE).toMatch(
+      /else\s*\n\s*gh pr checks "\$PR" --repo "\$EXPECTED_REPOSITORY" --required/,
+    );
+    expect(
+      AUTHORIZE.indexOf(
+        'if [ "$ATOMIC_BASE_FRESHNESS" = unprotectable ]; then',
+      ),
+    ).toBeGreaterThan(AUTHORIZE.indexOf('case "$ATOMIC_BASE_FRESHNESS" in'));
   });
 
   describe("unprotectable-base classification", () => {
