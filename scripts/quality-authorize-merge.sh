@@ -254,7 +254,7 @@ case "$ATOMIC_BASE_FRESHNESS" in
     exit 1
     ;;
 esac
-if [ -n "$CI_BILLING_WAIVER_ARTIFACT" ] &&
+if [ -n "${CI_BILLING_WAIVER_ARTIFACT:-}" ] &&
   [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ]; then
   echo "❌ MERGE BLOCKED: CI billing waivers are limited to plan-proven unprotectable private repositories." >&2
   echo "   Refusing an admin merge that could bypass required reviews, status checks, or strict base freshness." >&2
