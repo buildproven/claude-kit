@@ -9,7 +9,58 @@ All notable changes to claude-kit are documented here.
 - The revision-bound quality engine now supports opt-in Gemini review as a
   bounded, read-only primary or fallback provider. Gemini responses use the
   same strict structured-review schema, provider circuit, attempt governor,
-  artifact inventory, and fail-closed merge evidence as Claude and Codex.
+  artifact inventory, and fail-closed merge evidence as Claude and Codex
+  (#139).
+
+## [4.1.0] - 2026-07-19
+
+### Added
+
+- Tool-agnostic provider parity for Codex and Claude Code across the quality
+  workflow (#121).
+- Campaign telemetry recorder for quality runs (#115).
+- Repo-context-aware critical gate with an always-human review floor (#128).
+- Strengthened engineering and UI design disciplines in shared skills (#105).
+
+### Changed
+
+- Quality provider health probing now detects an unwinnable Codex cache and
+  skips straight to fallback instead of stalling (#124).
+- Quality CI jobs consolidated to eliminate per-job round-up overhead (#123).
+- Default Codex skill surface trimmed to reduce install footprint (#102).
+- Risk-change-nature detection extracted into a single shared module so
+  fail-open channels can't diverge between call sites (#113, #114).
+
+### Fixed
+
+- Concurrent quality review runs now converge instead of racing to
+  inconsistent verdicts (#98).
+- Review verdict consistency enforced across providers (#103).
+- Quality reviews are bounded to avoid runaway cost (#104).
+- Merge state is isolated per revision, closing a cross-run leak (#100).
+- Final evidence gaps in the quality gate closed (#110).
+- `stop-validation.sh` no longer crashes in bare repositories (#112).
+- Codex clean prose verdicts are accepted instead of blocking merges (#119).
+- Removed a `-a` flag from `codex exec` invocations that Codex no longer
+  supports (#116).
+- Quality falls back to the secondary provider on review timeout (#120).
+- Merges on unprotectable bases are no longer blocked; N/A SOTA scores are
+  excluded from scoring (#126).
+- Plugin manifest YAML with a colon-bearing description is now quoted
+  correctly, with CI validation added to catch regressions (#127).
+- Rename risk detection and failure recovery made actionable instead of
+  silently degrading (#129).
+- Quality campaigns are now durable and failure-aware across interruptions
+  (#117).
+- A recursive temp-cleanup trap that could delete unintended paths was
+  removed (#107).
+- Vitest global timeout raised to fix parallel-load flakes (#118).
+- Changelog helper now resolves beside the gate it documents (#106).
+
+### Security
+
+- `notify` now passes text as an argv element instead of interpolating it
+  into an AppleScript string, closing an AppleScript injection vector (#122).
 
 ## [4.0.1] - 2026-07-16
 
