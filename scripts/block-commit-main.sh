@@ -141,21 +141,7 @@ print_fix_hint() {
   echo "    BYPASS_BRANCH_GUARD=1 git commit -m \"...\""
 }
 
-IS_TMPDIR=""
 if [ -n "$REPO_ROOT" ]; then
-  HAS_SUPERPROJECT="$(git -C "$REPO_ROOT" rev-parse --show-superproject-working-tree 2>/dev/null || true)"
-  if [ -z "$HAS_SUPERPROJECT" ]; then
-    REAL_TMPDIR="$(cd "${TMPDIR:-/tmp}" 2>/dev/null && pwd -P || echo "/tmp")"
-    REAL_REPO="$(cd "$REPO_ROOT" 2>/dev/null && pwd -P || echo "$REPO_ROOT")"
-    case "$REAL_REPO" in
-      "$REAL_TMPDIR"/* | /tmp/* | /private/tmp/* | /private/var/folders/*)
-        IS_TMPDIR=1
-        ;;
-    esac
-  fi
-fi
-
-if [ -n "$REPO_ROOT" ] && [ -z "$IS_TMPDIR" ]; then
   CURRENT_GIT_DIR="$(resolve_dir "$(git -C "$REPO_ROOT" rev-parse --git-dir)")"
   COMMON_GIT_DIR="$(resolve_dir "$(git -C "$REPO_ROOT" rev-parse --git-common-dir)")"
   if [ "$CURRENT_GIT_DIR" = "$COMMON_GIT_DIR" ]; then
@@ -166,8 +152,7 @@ if [ -n "$REPO_ROOT" ] && [ -z "$IS_TMPDIR" ]; then
   fi
 fi
 
-if [ -z "$IS_TMPDIR" ] &&
-  { [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ]; }; then
+if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ]; then
   echo "Blocked: git commit on $CURRENT_BRANCH. Create a feature worktree first."
   print_fix_hint "${REPO_ROOT:-.}"
   log_event "block" "$REPO_ROOT" "$CURRENT_BRANCH" "on $CURRENT_BRANCH"

@@ -1071,6 +1071,15 @@ esac
 });
 
 describe("canonical-source contract", () => {
+  it("blocks primary checkouts even when they live under the temporary directory", () => {
+    const { repo } = fixture();
+    const result = commitGuard(
+      `git -C ${JSON.stringify(repo)} commit -m "change"`,
+    );
+    expect(result.status).toBe(2);
+    expect(result.stdout).toContain("Blocked");
+  });
+
   it("recognizes only an actual guard-bypass assignment", () => {
     const repo = persistentFixture();
     const quoted = JSON.stringify(repo);
