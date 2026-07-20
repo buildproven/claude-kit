@@ -444,10 +444,10 @@ function discoverRequiredGates(
       `quality requires executable repository scripts for: ${missing.join(", ")}`,
     );
   }
-  if (typeof scripts.build === "string") {
-    required.push(scriptGate("build", "build", manager));
-  } else if (nativeGates.has("build")) {
+  if (nativeGates.has("build")) {
     required.push(nativeGate("build", nativeGates.get("build")));
+  } else if (typeof scripts.build === "string") {
+    required.push(scriptGate("build", "build", manager));
   }
   const typeScript = ["type-check:all", "type-check", "typecheck"].find(
     (name) => typeof scripts[name] === "string",

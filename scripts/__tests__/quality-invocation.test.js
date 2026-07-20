@@ -2722,29 +2722,37 @@ exit 1
     );
   });
 
-  it("uses an explicitly declared native gate ahead of a package-script fallback", () => {
+  it("uses explicitly declared native gates ahead of package-script fallbacks", () => {
     const root = repo("native-gate-precedence");
+    const packageJson = JSON.parse(
+      readFileSync(path.join(root, "package.json"), "utf8"),
+    );
+    packageJson.scripts.build = "node --check file.js";
+    writeFileSync(path.join(root, "package.json"), JSON.stringify(packageJson));
     writeFileSync(
       path.join(root, ".quality-gates.json"),
       JSON.stringify({
         version: 1,
         gates: {
           test: { executable: "node", args: ["--test", "file.js"] },
+          build: { executable: "node", args: ["--check", "native-build.js"] },
         },
       }),
     );
-    git(root, ["add", ".quality-gates.json"]);
-    git(root, ["commit", "-q", "-m", "select native test gate"]);
+    git(root, ["add", ".quality-gates.json", "package.json"]);
+    git(root, ["commit", "-q", "-m", "select native quality gates"]);
 
     const manifest = create(root);
-    expect(
-      JSON.parse(readFileSync(manifest, "utf8")).requiredGates.find(
-        (gate) => gate.name === "test",
-      ),
-    ).toMatchObject({
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.find((gate) => gate.name === "test")).toMatchObject({
       source: "quality-gates:.quality-gates.json#test",
       executable: "node",
       args: ["--test", "file.js"],
+    });
+    expect(required.find((gate) => gate.name === "build")).toMatchObject({
+      source: "quality-gates:.quality-gates.json#build",
+      executable: "node",
+      args: ["--check", "native-build.js"],
     });
   });
 
