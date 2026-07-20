@@ -615,7 +615,10 @@ function strongerReviewForCurrentHead(manifest, root) {
     95: 50,
     98: riskScore.CRITICAL_RISK_SCORE,
   }[manifest.risk.requestedLevel];
-  const effectiveScore = Math.max(rescored.riskScore, minimumScore || 0);
+  const rescoredRisk = Number.isFinite(rescored.riskScore)
+    ? rescored.riskScore
+    : 100;
+  const effectiveScore = Math.max(rescoredRisk, minimumScore || 0);
   const requiredKnobs = riskScore.scoreToKnobs(effectiveScore, config);
   const tierForScore = (score) => {
     if (score >= riskScore.CRITICAL_RISK_SCORE) return "critical";

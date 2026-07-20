@@ -1898,6 +1898,57 @@ exit 1
     );
   });
 
+  it("fails a non-finite policy closed before validating a stale level-98 contract", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "quality-non-finite-policy-"));
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.name", "Quality Test"]);
+    git(root, ["config", "user.email", "quality@example.com"]);
+    writeFileSync(path.join(root, "file.js"), "// before\n");
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: { lint: "true", test: "true", "security:audit": "true" },
+      }),
+    );
+    writeFileSync(
+      path.join(root, "harness-config.json"),
+      JSON.stringify({
+        scorePolicy: {
+          mechanicalDelta: "not-a-number",
+          curve: [{ maxScore: 100, agents: 6, codex: "high", codexRounds: 1 }],
+        },
+      }),
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "base"]);
+    git(root, ["remote", "add", "origin", root]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "-c", "feature"]);
+    writeFileSync(path.join(root, "file.js"), "// after\n");
+    git(root, ["commit", "-qam", "comment-only change"]);
+
+    const manifest = create(root, ["--level", "98"]);
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    state.risk = {
+      ...state.risk,
+      requestedLevel: "98",
+      resolved: true,
+      tier: "critical",
+      score: 75,
+      agentTarget: 6,
+      codexDepth: "high",
+      codexRounds: 1,
+    };
+    writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
+
+    const result = spawnSync("node", [INVOCATION, "advance", manifest], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/mechanicalDelta must be a finite number/i);
+  });
+
   it("fails early when required repository gate scripts are missing", () => {
     const root = repo("missing-baselines");
     writeFileSync(

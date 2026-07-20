@@ -105,6 +105,47 @@ describe("score — Git-valid control-character paths", () => {
   });
 });
 
+describe("score — semantic policy failures", () => {
+  it("rejects a non-finite policy before scoring", () => {
+    const config = deepMerge(DEFAULTS, {
+      mechanicalDelta: "not-a-number",
+      curve: [{ maxScore: 100, agents: 6, codex: "high", codexRounds: 1 }],
+    });
+    expect(() =>
+      score({
+        base: "BASE",
+        config,
+        gitRunner: gitRunner([
+          {
+            path: "src/widget.js",
+            status: "M",
+            added: 1,
+            deleted: 1,
+            patch: "-// before\n+// after",
+          },
+        ]),
+      }),
+    ).toThrow(/mechanicalDelta must be a finite number/i);
+  });
+
+  it.each([null, false, {}, []])(
+    "rejects wrong-type base.medium value %j",
+    (medium) => {
+      const config = deepMerge(DEFAULTS, { base: { medium } });
+      expect(() => score({ base: "BASE", config })).toThrow(
+        /base\.medium must be a finite number/i,
+      );
+    },
+  );
+
+  it("rejects a malformed curve instead of selecting a weak fallback", () => {
+    const config = deepMerge(DEFAULTS, { curve: [null] });
+    expect(() => score({ base: "BASE", config })).toThrow(
+      /curve\[0\] must be an object/i,
+    );
+  });
+});
+
 describe("deepMerge", () => {
   it("merges nested objects instead of replacing them", () => {
     const out = deepMerge({ a: { x: 1, y: 2 } }, { a: { y: 9 } });
