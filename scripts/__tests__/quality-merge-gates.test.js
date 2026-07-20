@@ -128,21 +128,28 @@ describe("quality merge gates", () => {
   });
 
   it("validates an exact-head billing waiver before bypassing the green-CI guard", () => {
-    const waiverValidation = AUTHORIZE.indexOf(
+    const firstWaiverValidation = AUTHORIZE.indexOf(
       'node "$SCRIPT_DIR/quality-ci-billing-waiver.js"',
     );
     const requiredChecks = AUTHORIZE.indexOf(
       'gh pr checks "$PR" --repo "$EXPECTED_REPOSITORY" --required',
     );
+    const finalWaiverValidation = AUTHORIZE.lastIndexOf(
+      'node "$SCRIPT_DIR/quality-ci-billing-waiver.js"',
+    );
     const adminMerge = AUTHORIZE.indexOf("MERGE_ARGS+=(--admin)");
-    expect(waiverValidation).toBeGreaterThan(-1);
-    expect(requiredChecks).toBeGreaterThan(waiverValidation);
-    expect(adminMerge).toBeGreaterThan(requiredChecks);
+    expect(firstWaiverValidation).toBeGreaterThan(-1);
+    expect(requiredChecks).toBeGreaterThan(firstWaiverValidation);
+    expect(finalWaiverValidation).toBeGreaterThan(requiredChecks);
+    expect(adminMerge).toBeGreaterThan(finalWaiverValidation);
     expect(AUTHORIZE).toMatch(
       /if \[ "\$CI_BILLING_WAIVED" = false \]; then[\s\S]*gh pr checks/,
     );
     expect(AUTHORIZE).toMatch(
       /if \[ "\$\{CI_BILLING_WAIVED:-false\}" = true \]; then[\s\S]*MERGE_ARGS\+=\(--admin\)/,
+    );
+    expect(AUTHORIZE).toMatch(
+      /\[ "\$ATOMIC_BASE_FRESHNESS" = unprotectable \][\s\S]*quality-ci-billing-waiver\.js[\s\S]*MERGE_ARGS\+=\(--admin\)/,
     );
   });
 

@@ -342,6 +342,16 @@ MERGE_ARGS=(
   --match-head-commit "$ACTUAL_HEAD"
 )
 if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
+  [ "$ATOMIC_BASE_FRESHNESS" = unprotectable ] || {
+    echo "❌ MERGE BLOCKED: CI billing waiver admin merge is restricted to repositories that cannot enforce branch protection." >&2
+    exit 1
+  }
+  node "$SCRIPT_DIR/quality-ci-billing-waiver.js" \
+    --repo "$EXPECTED_REPOSITORY" --pr "$PR" --head "$ACTUAL_HEAD" \
+    --artifact "$CI_BILLING_WAIVER_ARTIFACT" >/dev/null || {
+    echo "❌ MERGE BLOCKED: CI billing waiver changed before merge." >&2
+    exit 1
+  }
   MERGE_ARGS+=(--admin)
   echo "⚠️  [quality] using admin merge only for verified GitHub Actions billing preallocation failures." >&2
 fi
