@@ -59,7 +59,30 @@ function originIdentity(root) {
 }
 
 function repoKey(root) {
-  return crypto.createHash("sha256").update(root).digest("hex").slice(0, 16);
+  return crypto
+    .createHash("sha256")
+    .update(gitCommonDir(root))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+function deterministicInvocationId(identity) {
+  const digest = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(canonicalJson(identity)))
+    .digest("hex")
+    .slice(0, 32)
+    .split("");
+  digest[12] = "5";
+  digest[16] = (8 + (parseInt(digest[16], 16) % 4)).toString(16);
+  const value = digest.join("");
+  return [
+    value.slice(0, 8),
+    value.slice(8, 12),
+    value.slice(12, 16),
+    value.slice(16, 20),
+    value.slice(20),
+  ].join("-");
 }
 
 function qualityTmpRoot() {
@@ -79,6 +102,27 @@ function atomicWrite(file, value) {
   fs.chmodSync(file, 0o600);
 }
 
+function atomicCreate(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const temporary = path.join(
+    path.dirname(file),
+    `.${path.basename(file)}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.create`,
+  );
+  fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  try {
+    fs.linkSync(temporary, file);
+    fs.chmodSync(file, 0o600);
+    return true;
+  } catch (error) {
+    if (error.code === "EEXIST") return false;
+    throw error;
+  } finally {
+    fs.unlinkSync(temporary);
+  }
+}
+
 function normalizeGovernor(manifest) {
   manifest.governor ??= {};
   manifest.governor.authorizedAttempts ??= [];
@@ -87,6 +131,7 @@ function normalizeGovernor(manifest) {
   manifest.governor.providerDeadlineEpoch ??=
     manifest.governor.startedAtEpoch + manifest.governor.providerWindowSeconds;
   manifest.governor.providerDeadlineHead ??= null;
+  manifest.governor.providerDeadlineProvider ??= null;
   manifest.governor.providerAttempts ??= [];
   manifest.governor.campaignSeconds ??=
     manifest.governor.providerWindowSeconds +
@@ -487,22 +532,7 @@ function executableScope(options) {
   return scope;
 }
 
-function createManifest(options) {
-  const root = canonicalRoot(firstValue(options.repo, process.cwd()));
-  const baseRef = firstValue(options["base-ref"], "origin/main");
-  const head = git(root, ["rev-parse", "HEAD"]);
-  const baseSha = git(root, ["merge-base", head, baseRef]);
-  const invocationId = firstValue(
-    options["invocation-id"],
-    crypto.randomUUID(),
-  );
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      invocationId,
-    )
-  ) {
-    throw new Error("invocation-id must be a UUID");
-  }
+function resolvePrIdentity(options) {
   const pr =
     options.pr === undefined
       ? null
@@ -517,7 +547,6 @@ function createManifest(options) {
       : crossRepositoryValue === "false"
         ? false
         : null;
-  const scope = executableScope(options);
   if (
     pr !== null &&
     (!githubRepository ||
@@ -540,8 +569,105 @@ function createManifest(options) {
       "cross-repository quality requires trusted CI evidence ingestion and is not yet supported",
     );
   }
+  return {
+    pr,
+    githubRepository,
+    headRefName,
+    headRepository,
+    isCrossRepository,
+  };
+}
+
+function existingCampaign(manifestPath, campaignIdentity) {
+  const existing = loadManifest(manifestPath).manifest;
+  const existingIdentity = {
+    root: existing.repo.realpath,
+    gitCommonDir: existing.repo.gitCommonDir,
+    origin: existing.repo.origin,
+    pr: existing.repo.pr,
+    githubRepository: existing.repo.githubRepository,
+    headRefName: existing.repo.headRefName,
+    headRepository: existing.repo.headRepository,
+    isCrossRepository: existing.repo.isCrossRepository,
+    baseRef: existing.revisions.baseRef,
+    baseSha: existing.revisions.baseSha,
+    baseHeadSha: existing.revisions.baseHeadSha,
+    head: existing.revisions.currentHead,
+    options: existing.options,
+    provider: existing.provider,
+  };
+  if (
+    JSON.stringify(canonicalJson(existingIdentity)) !==
+    JSON.stringify(canonicalJson(campaignIdentity))
+  ) {
+    throw new Error("deterministic quality campaign identity collision");
+  }
+  return manifestPath;
+}
+
+function createManifest(options) {
+  const root = canonicalRoot(firstValue(options.repo, process.cwd()));
+  const baseRef = firstValue(options["base-ref"], "origin/main");
+  const head = git(root, ["rev-parse", "HEAD"]);
+  const baseSha = git(root, ["merge-base", head, baseRef]);
+  const {
+    pr,
+    githubRepository,
+    headRefName,
+    headRepository,
+    isCrossRepository,
+  } = resolvePrIdentity(options);
+  const scope = executableScope(options);
   if (options.manifest !== undefined) {
     throw new Error("create does not accept a custom manifest path");
+  }
+  const baseHeadSha = firstValue(options["base-head-sha"], baseSha);
+  const manifestOptions = {
+    merge: options.merge === true,
+    level: firstValue(options.level, "auto"),
+    scope,
+    skipTests: options["skip-tests"] === true,
+  };
+  const provider = buildProvider(options);
+  const campaignIdentity = {
+    root,
+    gitCommonDir: gitCommonDir(root),
+    origin: originIdentity(root),
+    pr,
+    githubRepository,
+    headRefName,
+    headRepository,
+    isCrossRepository,
+    baseRef,
+    baseSha,
+    baseHeadSha,
+    head,
+    options: manifestOptions,
+    provider,
+  };
+  // Provider policy is part of the immutable campaign identity, but not its
+  // deterministic key. A caller cannot create a fresh budget merely by
+  // swapping primary/fallback order for the same exact work: it resolves to
+  // the existing campaign path and fails the identity comparison below.
+  const campaignKeyIdentity = { ...campaignIdentity };
+  delete campaignKeyIdentity.provider;
+  delete campaignKeyIdentity.root;
+  delete campaignKeyIdentity.gitCommonDir;
+  const invocationId = deterministicInvocationId(campaignKeyIdentity);
+  if (
+    options["invocation-id"] !== undefined &&
+    options["invocation-id"] !== invocationId
+  ) {
+    throw new Error(
+      "invocation-id is deterministic for this campaign and cannot be overridden",
+    );
+  }
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      invocationId,
+    )
+  ) {
+    throw new Error("invocation-id must be a UUID");
   }
   const stateRoot = path.join(
     qualityTmpRoot(),
@@ -552,6 +678,9 @@ function createManifest(options) {
     invocationId,
   );
   const manifestPath = path.join(stateRoot, "invocation.json");
+  if (fs.existsSync(manifestPath)) {
+    return existingCampaign(manifestPath, campaignIdentity);
+  }
   const now = new Date().toISOString();
   const key = repoKey(root);
   const manifest = {
@@ -561,12 +690,7 @@ function createManifest(options) {
     createdAt: now,
     updatedAt: now,
     stateRoot,
-    options: {
-      merge: options.merge === true,
-      level: firstValue(options.level, "auto"),
-      scope,
-      skipTests: options["skip-tests"] === true,
-    },
+    options: manifestOptions,
     repo: {
       realpath: root,
       key,
@@ -581,7 +705,7 @@ function createManifest(options) {
     revisions: {
       baseRef,
       baseSha,
-      baseHeadSha: firstValue(options["base-head-sha"], baseSha),
+      baseHeadSha,
       initialHead: head,
       currentHead: head,
     },
@@ -593,15 +717,16 @@ function createManifest(options) {
       resolved: false,
     },
     agents: [],
-    provider: buildProvider(options),
+    provider,
     reviews: [],
     governor: buildGovernor(head),
     requiredGates: discoverRequiredGates(root, options),
     requiredGatesPolicyVersion: REQUIRED_GATES_POLICY_VERSION,
     gates: [],
   };
-  atomicWrite(manifestPath, manifest);
-  return manifestPath;
+  return atomicCreate(manifestPath, manifest)
+    ? manifestPath
+    : existingCampaign(manifestPath, campaignIdentity);
 }
 
 function strongerReviewForCurrentHead(manifest, root) {
@@ -1130,9 +1255,10 @@ function armApprovalChallenge(manifest, options) {
 
 function providerPhaseDeadline(manifest) {
   const validation = manifest.governor.validationDeadlineEpoch;
+  const campaign = manifest.governor.campaignDeadlineEpoch;
   return manifest.reviews.length > 0 && Number.isInteger(validation)
-    ? validation
-    : manifest.governor.campaignDeadlineEpoch;
+    ? Math.min(validation, campaign)
+    : campaign;
 }
 
 function providerPhaseSeconds(manifest) {
@@ -1158,16 +1284,20 @@ function authorizeProviderAttempt(manifest, options) {
   }
   const currentHead = manifest.revisions.currentHead;
   const phaseDeadline = providerPhaseDeadline(manifest);
-  const firstAttemptForHead = !governor.providerAttempts.some(
-    (attempt) => attempt.head === currentHead,
+  const firstAttemptForProvider = !governor.providerAttempts.some(
+    (attempt) =>
+      attempt.head === currentHead &&
+      attempt.provider === provider &&
+      attempt.reviewCount === manifest.reviews.length,
   );
-  if (firstAttemptForHead) {
+  if (firstAttemptForProvider) {
     const phaseSeconds = providerPhaseSeconds(manifest);
     governor.providerDeadlineEpoch = Math.min(
       now + phaseSeconds,
       phaseDeadline,
     );
     governor.providerDeadlineHead = currentHead;
+    governor.providerDeadlineProvider = provider;
   }
   const deadline = Math.min(governor.providerDeadlineEpoch, phaseDeadline);
   if (now >= deadline) {
@@ -1180,6 +1310,7 @@ function authorizeProviderAttempt(manifest, options) {
     number: governor.providerAttempts.length + 1,
     provider,
     head: currentHead,
+    reviewCount: manifest.reviews.length,
     startedAt: new Date().toISOString(),
   };
   governor.providerAttempts.push(attempt);
@@ -1824,11 +1955,7 @@ function recordSkippedGate(manifest, required, name, log, options) {
 
 function executeGate(manifest, required, name, log) {
   const gateSeconds = manifest.risk?.runtime?.checkSeconds ?? 300;
-  const phaseDeadline =
-    manifest.reviews.length > 0 &&
-    Number.isInteger(manifest.governor?.validationDeadlineEpoch)
-      ? manifest.governor.validationDeadlineEpoch
-      : manifest.governor?.campaignDeadlineEpoch;
+  const phaseDeadline = providerPhaseDeadline(manifest);
   const campaignRemaining = phaseDeadline
     ? phaseDeadline - Math.floor(Date.now() / 1000)
     : gateSeconds;
@@ -2107,6 +2234,20 @@ function humanFloorCheck(manifest) {
   return riskScore.touchesHumanFloor(files, cfg);
 }
 
+function gateSatisfied(manifest, name) {
+  const required = manifest.requiredGates.find((gate) => gate.name === name);
+  if (!required) throw new Error(`gate '${name}' is not required`);
+  return manifest.gates.some(
+    (gate) =>
+      gate.name === name &&
+      gate.head === manifest.revisions.currentHead &&
+      ["success", "skipped"].includes(gate.status) &&
+      gate.source === required.source &&
+      gate.command === required.command &&
+      validGateArtifact(gate),
+  );
+}
+
 const COMMANDS = {
   validate: ({ manifest }) =>
     process.stdout.write(`${manifest.invocationId}\n`),
@@ -2124,6 +2265,10 @@ const COMMANDS = {
     //   10 = touches the always-human floor (human capability required)
     //   1  = error (top-level catch) → human required (fail closed)
     process.exitCode = humanFloorCheck(manifest) ? 10 : 0;
+  },
+  "gate-satisfied": ({ manifest, rawArgs }) => {
+    const options = parseOptions(rawArgs);
+    process.exitCode = gateSatisfied(manifest, options.name) ? 0 : 1;
   },
   "provider-attempt": ({ manifestArg, rawArgs }) => {
     let result;
@@ -2207,10 +2352,12 @@ function runAdvance(manifestArg, manifest, rawArgs) {
       locked.reviews.length > 0 &&
       locked.governor.providerDeadlineHead !== locked.revisions.currentHead
     ) {
-      locked.governor.validationDeadlineEpoch =
+      locked.governor.validationDeadlineEpoch = Math.min(
+        locked.governor.campaignDeadlineEpoch,
         Math.floor(Date.now() / 1000) +
-        (locked.risk?.runtime?.checkReserveSeconds ?? 300) +
-        (locked.risk?.runtime?.reviewReserveSeconds ?? 300);
+          (locked.risk?.runtime?.checkReserveSeconds ?? 300) +
+          (locked.risk?.runtime?.reviewReserveSeconds ?? 300),
+      );
     }
   });
   process.stdout.write(`${updated.revisions.currentHead}\n`);

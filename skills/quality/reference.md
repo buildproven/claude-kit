@@ -63,9 +63,12 @@ Claude Code and Codex read the shared workflow policy at
 `${XDG_CONFIG_HOME:-~/.config}/buildproven/agent-providers.json`. Configure it
 with `scripts/provider-config.sh --primary codex --fallback claude`
 (or reverse the providers). `BS_QUALITY_PRIMARY`, `BS_QUALITY_FALLBACK`, and
-`BS_QUALITY_PROVIDER_CONFIG` are per-run overrides. The fallback runs only for
-typed account exhaustion (HTTP 429, weekly/rate/usage limit, exhausted quota)
-or an unavailable CLI—not when the primary reports code findings.
+`BS_QUALITY_PROVIDER_CONFIG` are per-run overrides. The fallback runs for typed
+account exhaustion (HTTP 429, weekly/rate/usage limit, exhausted quota), an
+unavailable CLI, or — when `BS_QUALITY_FALLBACK_ON_TIMEOUT=1` (the default) — a
+primary that exhausts its bounded review clock without converging (a degraded
+primary shouldn't block a merge while a healthy fallback is idle). It does NOT
+run when the primary reports code findings.
 
 Claude panels share a cancellation sentinel: the first exhausted reviewer
 causes sibling process groups to terminate. A successful review records HEAD;
@@ -225,6 +228,9 @@ auto-fix loop, re-run `npm test` to verify they pass before continuing.
 | ------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `BS_QUALITY_PRIMARY`                  | config  | Per-run primary override: `claude` or `codex`.                                                                                                     |
 | `BS_QUALITY_FALLBACK`                 | config  | Per-run fallback override: `claude`, `codex`, or `none`.                                                                                           |
+| `BS_QUALITY_FALLBACK_ON_TIMEOUT`      | `1`     | On `1`, a primary timeout fails over once. Set `0` to hard-block on the first timeout.                                                             |
+| `BS_QUALITY_PROVIDER_HEALTH_FILE`     | state   | Operator-state provider circuit file/prefix. Legacy aggregate files are read; writes use race-safe per-provider records beside it.                 |
+| `BS_QUALITY_CI_BILLING_WAIVER_UNTIL`  | config  | ISO timestamp overriding `ciBillingWaiverUntil` in the shared provider config; authorizes only exact-HEAD zero-runner/zero-step Actions failures.  |
 | `BS_QUALITY_TARGET_DIR`               | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd.                                                 |
 | `BS_QUALITY_MAX_FIX_COMMITS`          | 1       | Explicit override for the default one-commit batched-remediation cap.                                                                              |
 | `BS_QUALITY_MAX_REMEDIATION_SECONDS`  | planned | Batched-fix allowance remaining after proportional discovery and verification reserves.                                                            |
@@ -242,10 +248,10 @@ tracks governor state inside the explicit invocation manifest with:
 - **Fix-commit cap** (`BS_QUALITY_MAX_FIX_COMMITS`, default 1) — one batched
   remediation commit, checked before every fix attempt and verification.
 - **Proportional phase caps** — changed lines plus 25 units per changed file
-  select a micro/small/medium/large/huge band. Discovery scales from 300 to 900
-  seconds. A fix reserves 120–360 seconds for affected gates and a separate
-  180–300 seconds for targeted verification, making the absolute default
-  ceiling 10–26 minutes.
+  select a micro/small/medium/large/huge band. The whole default campaign is
+  capped at 900 seconds. Critical discovery receives up to 540 seconds based on
+  measured xhigh review latency; lower-risk discovery and the single
+  verification reserve remain workload-scaled inside that campaign cap.
 - **Two-review convergence** — one discovery review and one targeted
   verification are allowed. A blocker discovered by verification is reported
   as the terminal result; it cannot trigger another fix/review recursion.
@@ -260,9 +266,10 @@ N/M` so the operator can see the loop's position in real time, not just in
 
 **On a tripped cap**, the skill hard-stops autonomous continuation — no
 further rounds, no `--merge` — and hands back a plain-text summary of what
-was tried, why it didn't converge, and the exact re-invocation command to
-raise the cap (e.g. `BS_QUALITY_MAX_FIX_COMMITS=8 /bs:quality --merge`). The
-skill never raises its own cap; that is an explicit operator decision.
+was tried and why it did not converge. Repeating the unchanged request resumes
+the same exhausted campaign; environment changes cannot mint a replacement
+budget. A code finding must be addressed in a new commit and reviewed as a new
+HEAD. The skill never raises its own cap.
 
 **`BS_QUALITY_TARGET_DIR` usage**: when a spawning harness (e.g. a Task agent
 running in an isolated worktree) exports this env var, every forked
@@ -315,10 +322,11 @@ When `harness-config.json` exists in the repo root, the skill reads the resolved
 | `low`      | focused regression         | 75s            |
 | `medium`   | broad correctness/security | 120s           |
 | `high`     | deep adversarial           | 180s           |
-| `critical` | release-veto + break-glass | 240s           |
+| `critical` | release-veto + break-glass | 540s           |
 
 Workload can raise these limits, but the complete default campaign remains
-bounded at 5–15 minutes.
+bounded at 5–15 minutes. Provider fallback has an independent bounded window
+inside the same remaining campaign deadline; it never doubles the total cap.
 
 ### Level 95 (Ship-Ready, no tier classification)
 

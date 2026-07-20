@@ -65,6 +65,7 @@ git log "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" --oneline > "$REVIEW_OUT/log.txt
 node "$SCRIPT_DIR/quality-invocation.js" review-identity "$MANIFEST" \
   > "$REVIEW_OUT/identity.json" || exit 1
 PRIOR_FINDINGS_FILE=""
+PROVIDER_HEALTH="$SCRIPT_DIR/quality-provider-health.js"
 if [ "$REVIEW_ROUND" -gt 1 ]; then
   PRIOR_FINDINGS_FILE="$REVIEW_OUT/prior-findings.json"
   node "$SCRIPT_DIR/quality-invocation.js" prior-findings "$MANIFEST" \
@@ -230,26 +231,60 @@ run_codex_review() {
 }
 
 run_provider() {
-  case "$1" in
+  local provider="$1" availability rc
+  availability="$(node "$PROVIDER_HEALTH" check "$provider")"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '%s' "$availability" |
+      jq --arg provider "$provider" '. + {provider: $provider}' \
+        > "$REVIEW_OUT/provider-failure.json"
+    echo "⚠️  [quality] skipping $provider: provider-health circuit is open." >&2
+    return "$rc"
+  fi
+  case "$provider" in
     claude) run_claude_review ;;
     codex) run_codex_review ;;
     *) return 2 ;;
   esac
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    node "$PROVIDER_HEALTH" clear "$provider" || return 1
+  elif { [ "$rc" -eq 75 ] || [ "$rc" -eq 79 ]; } &&
+    [ -s "$REVIEW_OUT/provider-failure.json" ]; then
+    node "$PROVIDER_HEALTH" record "$provider" \
+      "$REVIEW_OUT/provider-failure.json" || return 1
+  fi
+  return "$rc"
 }
 
+# Should a primary that exhausts its bounded review clock without converging
+# (rc=76, from a 124 timeout) fail over to the fallback? Two competing goals:
+#   - #104 bounded total review time: DON'T fall back on timeout — a second full
+#     review doubles the clock, and on a genuinely huge diff the fallback times
+#     out too, so you burn both clocks and still block.
+#   - Resilience: a DEGRADED primary (e.g. a broken codex models-cache stalling
+#     model resolution) times out on diffs the fallback reviews in seconds — here
+#     blocking every merge while a healthy fallback sits idle is the wrong call.
+# It's therefore configurable. Default TRUE: in practice a stalled primary
+# blocking merges outright is worse than an occasional bounded double-review,
+# and the fallback runs exactly ONCE (a fallback rc=76 hard-blocks below — no
+# loop, so the total is at most two review clocks, never unbounded). Set
+# BS_QUALITY_FALLBACK_ON_TIMEOUT=0 to restore the strict single-clock bound.
+FALLBACK_ON_TIMEOUT="${BS_QUALITY_FALLBACK_ON_TIMEOUT:-1}"
+
 REVIEW_PROVIDER="$QUALITY_PRIMARY"
-echo "[quality] reviewer policy: primary=$QUALITY_PRIMARY fallback=$QUALITY_FALLBACK" >&2
+echo "[quality] reviewer policy: primary=$QUALITY_PRIMARY fallback=$QUALITY_FALLBACK (fallback-on-timeout=$FALLBACK_ON_TIMEOUT)" >&2
 run_provider "$QUALITY_PRIMARY"
 PROVIDER_RC=$?
 
-# 76 (bounded-budget timeout) belongs here alongside 75 and 2: all three mean
-# the primary produced no usable findings, which is exactly what a fallback is
-# configured for. Excluding it made a primary that merely ran slow block the
-# merge outright while reporting "no usable fallback is configured" — even with
-# fallback=claude set. The fallback attempt cannot overrun the invocation, since
-# authorize_provider_attempt caps it against the absolute deadline and returns
-# 77 when there is no budget left to give.
-if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] || [ "$PROVIDER_RC" -eq 2 ] || [ "$PROVIDER_RC" -eq 76 ]; } &&
+# rc=76 (bounded-budget timeout without converging) fails over to the fallback
+# when configured. Exhaustion, billing, and unavailability always fail over
+# because they cannot produce review evidence. The fallback attempt cannot
+# overrun the invocation: authorize_provider_attempt caps it against the
+# absolute campaign deadline and returns 77 when no budget remains.
+if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
+  [ "$PROVIDER_RC" -eq 2 ] ||
+  { [ "$PROVIDER_RC" -eq 76 ] && [ "$FALLBACK_ON_TIMEOUT" = 1 ]; }; } &&
   [ "$QUALITY_FALLBACK" != none ]; then
   if [ "$PROVIDER_RC" -eq 75 ]; then
     DETAIL="$(cat "$REVIEW_OUT/provider-exhausted" 2>/dev/null || true)"
@@ -259,7 +294,7 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] || [ "$PROVIDER_RC" 
   elif [ "$PROVIDER_RC" -eq 2 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY unavailable; switching immediately to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 76 ]; then
-    echo "⚠️  [quality] $QUALITY_PRIMARY exceeded its bounded review budget; switching to $QUALITY_FALLBACK." >&2
+    echo "⚠️  [quality] $QUALITY_PRIMARY exceeded its review budget without converging; failing over to $QUALITY_FALLBACK (BS_QUALITY_FALLBACK_ON_TIMEOUT=0 to disable)." >&2
   fi
   # Preserve failed-primary diagnostics. Findings from an earlier successful
   # primary pass remain authoritative if a later pass triggers fallback.

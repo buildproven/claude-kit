@@ -119,6 +119,12 @@ describe("quality merge gates", () => {
       STAMP_AND_MERGE.indexOf("quality-wait-required-checks.sh"),
     ).toBeLessThan(STAMP_AND_MERGE.lastIndexOf("quality-authorize-merge.sh"));
     expect(AUTHORIZE).toMatch(/persisted empty stamp/);
+    expect(STAMP_AND_MERGE).toMatch(
+      /quality-wait-required-checks\.sh" --pr "\$PR" \|\| RC=\$\?/,
+    );
+    expect(AUTHORIZE).toMatch(
+      /quality-ci-billing-waiver\.js[\s\S]*MERGE_ARGS\+=\(--admin\)/,
+    );
   });
 
   it("requires explicit opt-in to merge on an unprotectable base", () => {
