@@ -131,10 +131,31 @@ else
       echo "❌ MERGE BLOCKED: PR HEAD is not the persisted empty stamp of reviewed HEAD." >&2
       exit 1
     }
-  gh pr checks "$PR" --repo "$EXPECTED_REPOSITORY" --required >/dev/null || {
-    echo "❌ MERGE BLOCKED: required CI is not successful." >&2
-    exit 1
-  }
+  CI_BILLING_WAIVER_ARTIFACT="${BS_QUALITY_CI_BILLING_WAIVER_ARTIFACT:-}"
+  CI_BILLING_WAIVED=false
+  if [ -n "$CI_BILLING_WAIVER_ARTIFACT" ]; then
+    # This is deliberately the first of two validations: it authorizes
+    # bypassing only the green-check query below. Revalidate the same
+    # invocation-bound, exact-head artifact immediately before adding --admin.
+    EXPECTED_WAIVER_ARTIFACT="$(dirname "$MANIFEST")/ci-billing-waiver.json"
+    [ "$CI_BILLING_WAIVER_ARTIFACT" = "$EXPECTED_WAIVER_ARTIFACT" ] || {
+      echo "❌ MERGE BLOCKED: CI billing waiver artifact path is not invocation-bound." >&2
+      exit 1
+    }
+    node "$SCRIPT_DIR/quality-ci-billing-waiver.js" \
+      --repo "$EXPECTED_REPOSITORY" --pr "$PR" --head "$ACTUAL_HEAD" \
+      --artifact "$CI_BILLING_WAIVER_ARTIFACT" >/dev/null || {
+      echo "❌ MERGE BLOCKED: CI billing waiver no longer matches live exact-HEAD evidence." >&2
+      exit 1
+    }
+    CI_BILLING_WAIVED=true
+  fi
+  if [ "$CI_BILLING_WAIVED" = false ]; then
+    gh pr checks "$PR" --repo "$EXPECTED_REPOSITORY" --required >/dev/null || {
+      echo "❌ MERGE BLOCKED: required CI is not successful." >&2
+      exit 1
+    }
+  fi
 fi
 git merge-base --is-ancestor "$EXPECTED_BASE_OID" "$EXPECTED_HEAD" || {
   echo "❌ MERGE BLOCKED: reviewed branch is not up to date with the PR base." >&2
@@ -323,17 +344,15 @@ MERGE_ARGS=(
   "$PR" --repo "$EXPECTED_REPOSITORY" --squash
   --match-head-commit "$ACTUAL_HEAD"
 )
-CI_BILLING_WAIVER_ARTIFACT="${BS_QUALITY_CI_BILLING_WAIVER_ARTIFACT:-}"
-if [ -n "$CI_BILLING_WAIVER_ARTIFACT" ]; then
-  EXPECTED_WAIVER_ARTIFACT="$(dirname "$MANIFEST")/ci-billing-waiver.json"
-  [ "$CI_BILLING_WAIVER_ARTIFACT" = "$EXPECTED_WAIVER_ARTIFACT" ] || {
-    echo "❌ MERGE BLOCKED: CI billing waiver artifact path is not invocation-bound." >&2
+if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
+  [ "$ATOMIC_BASE_FRESHNESS" = unprotectable ] || {
+    echo "❌ MERGE BLOCKED: CI billing waiver admin merge is restricted to repositories that cannot enforce branch protection." >&2
     exit 1
   }
   node "$SCRIPT_DIR/quality-ci-billing-waiver.js" \
     --repo "$EXPECTED_REPOSITORY" --pr "$PR" --head "$ACTUAL_HEAD" \
     --artifact "$CI_BILLING_WAIVER_ARTIFACT" >/dev/null || {
-    echo "❌ MERGE BLOCKED: CI billing waiver no longer matches live exact-HEAD evidence." >&2
+    echo "❌ MERGE BLOCKED: CI billing waiver changed before merge." >&2
     exit 1
   }
   MERGE_ARGS+=(--admin)
