@@ -623,6 +623,7 @@ exit 1
       encoding: "utf8",
       env: withoutAmbientGitHubIdentity({
         BREAK_GLASS_APPROVER: "brett",
+        CLAUDE_SETUP_ROOT: ROOT,
         PATH: `${bin}:${process.env.PATH}`,
       }),
     });

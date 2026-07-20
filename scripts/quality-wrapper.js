@@ -128,7 +128,7 @@ function issueApprovalCapability(
       manifest.revisions.currentHead !== expectedIdentity.head)
   ) {
     throw new Error(
-      `approval identity mismatch: expected PR ${expectedIdentity.pr} at ${expectedIdentity.head}`,
+      `approval identity mismatch: expected PR ${expectedIdentity.pr} at ${expectedIdentity.head}, got PR ${manifest.repo.pr} at ${manifest.revisions.currentHead}`,
     );
   }
   const payload = {
