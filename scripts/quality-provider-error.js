@@ -37,10 +37,25 @@ function isErrorEvent(event) {
   );
 }
 
+function errorMessage(event) {
+  if (!isErrorEvent(event)) return "";
+  if (typeof event.message === "string") return event.message;
+  if (typeof event.error?.message === "string") return event.error.message;
+  return "";
+}
+
+function hasExhaustionMessage(event) {
+  return /\b(?:hit|reached) (?:your )?(?:usage|rate|quota) limit\b/i.test(
+    errorMessage(event),
+  );
+}
+
 function isExhaustionEvent(event) {
   if (!isErrorEvent(event)) return false;
-  return values(event).some((value) =>
-    EXHAUSTED_CODES.has(String(value).toLowerCase()),
+  return (
+    values(event).some((value) =>
+      EXHAUSTED_CODES.has(String(value).toLowerCase()),
+    ) || hasExhaustionMessage(event)
   );
 }
 
@@ -69,13 +84,10 @@ function hasStructuredExhaustion(raw) {
 
 function normalizedResetAt(event) {
   const error = event?.error;
-  if (!error || typeof error !== "object") return null;
   const raw =
-    error.reset_at ??
-    error.resetAt ??
-    error.resets_at ??
-    error.resetsAt ??
-    null;
+    (error && typeof error === "object"
+      ? (error.reset_at ?? error.resetAt ?? error.resets_at ?? error.resetsAt)
+      : null) ?? resetAtFromMessage(errorMessage(event));
   if (raw === null) return null;
   const epoch =
     typeof raw === "number" && raw < 10_000_000_000 ? raw * 1000 : raw;
@@ -83,18 +95,33 @@ function normalizedResetAt(event) {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
+function resetAtFromMessage(message) {
+  const marker = "try again at ";
+  const start = String(message).toLowerCase().indexOf(marker);
+  if (start === -1) return null;
+  return String(message)
+    .slice(start + marker.length)
+    .replace(/(\d)(?:st|nd|rd|th)\b/gi, "$1")
+    .trim();
+}
+
 function classifyStructuredFailure(raw) {
-  const event = parseJsonLines(raw).find(isErrorEvent);
-  if (!event) return null;
-  const codes = values(event).map((value) => String(value).toLowerCase());
-  if (codes.some((code) => BILLING_CODES.has(code))) {
-    return { category: "provider-billing", resetAt: null };
+  for (const event of parseJsonLines(raw).filter(isErrorEvent)) {
+    const codes = values(event).map((value) => String(value).toLowerCase());
+    if (codes.some((code) => BILLING_CODES.has(code))) {
+      return { category: "provider-billing", resetAt: null };
+    }
+    if (
+      codes.some((code) => EXHAUSTED_CODES.has(code)) ||
+      hasExhaustionMessage(event)
+    ) {
+      return {
+        category: "provider-exhaustion",
+        resetAt: normalizedResetAt(event),
+      };
+    }
   }
-  if (!codes.some((code) => EXHAUSTED_CODES.has(code))) return null;
-  return {
-    category: "provider-exhaustion",
-    resetAt: normalizedResetAt(event),
-  };
+  return null;
 }
 
 function main() {
