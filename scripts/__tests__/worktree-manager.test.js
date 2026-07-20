@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const MANAGER = path.join(ROOT, "scripts", "worktree-manager.js");
+const COMMIT_GUARD = path.join(ROOT, "scripts", "block-commit-main.sh");
 const temporaryRoots = [];
 
 function run(command, args, options = {}) {
@@ -75,6 +76,25 @@ function fixture(name = "repo") {
   git(repo, "fetch", "origin");
   git(repo, "remote", "set-head", "origin", "-a");
   return { parent, remote, repo };
+}
+
+function persistentFixture() {
+  const repo = mkdtempSync(path.join(ROOT, ".hook test-"));
+  temporaryRoots.push(repo);
+  run("git", ["init", "--initial-branch=main", repo]);
+  git(repo, "config", "user.email", "tests@example.com");
+  git(repo, "config", "user.name", "Worktree Tests");
+  writeFileSync(path.join(repo, "README.md"), "fixture\n");
+  git(repo, "add", "README.md");
+  git(repo, "commit", "-m", "initial");
+  return repo;
+}
+
+function commitGuard(command) {
+  return spawnSync("bash", [COMMIT_GUARD], {
+    input: JSON.stringify({ tool_input: { command } }),
+    encoding: "utf8",
+  });
 }
 
 function manager(args, options = {}) {
@@ -929,6 +949,20 @@ esac
 });
 
 describe("canonical-source contract", () => {
+  it("recognizes only an actual guard-bypass assignment", () => {
+    const repo = persistentFixture();
+    const quoted = JSON.stringify(repo);
+    const messageOnly = commitGuard(
+      `git -C ${quoted} commit -m "note: BYPASS_BRANCH_GUARD=1"`,
+    );
+    const explicit = commitGuard(
+      `BYPASS_BRANCH_GUARD=1 git -C ${quoted} commit -m "exception"`,
+    );
+    expect(messageOnly.status).toBe(2);
+    expect(messageOnly.stdout).toContain("Blocked");
+    expect(explicit.status).toBe(0);
+  });
+
   it("keeps path construction and destructive worktree operations in the manager", () => {
     const trackedFiles = run("git", ["ls-files"], { cwd: ROOT })
       .stdout.trim()
