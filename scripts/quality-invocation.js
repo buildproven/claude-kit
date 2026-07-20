@@ -1524,7 +1524,10 @@ function providerFindings(manifest) {
       }
       const items = parsed.findings || parsed.result?.findings;
       if (!Array.isArray(items)) continue;
-      if (/^codex-\d+(?:\.normalized)?\.json$/.test(item.name)) {
+      if (
+        items.length > 0 &&
+        /^codex-\d+(?:\.normalized)?\.json$/.test(item.name)
+      ) {
         hasCodexStructuredFindings = true;
       }
       items.forEach((finding, index) => {
