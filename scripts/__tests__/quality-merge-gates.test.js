@@ -501,12 +501,15 @@ describe("quality merge gates", () => {
     );
   });
 
-  it("falls back once when the primary review is parser-inconclusive (rc 4)", () => {
+  it("falls back once when native Codex parsing is inconclusive (rc 4)", () => {
     const branch = RUN_REVIEW.slice(
       RUN_REVIEW.indexOf('if { [ "$PROVIDER_RC" -eq 75 ]'),
       RUN_REVIEW.indexOf('[ "$QUALITY_FALLBACK" != none ]; then'),
     );
-    expect(branch).toMatch(/PROVIDER_RC" -eq 4/);
+    expect(branch).toMatch(
+      /PROVIDER_RC" -eq 4 \] && \[ "\$QUALITY_PRIMARY" = codex/,
+    );
+    expect(branch).not.toMatch(/\[ "\$PROVIDER_RC" -eq 4 \] \|\|/);
     expect(RUN_REVIEW).toMatch(
       /review was inconclusive; switching once to \$QUALITY_FALLBACK/,
     );

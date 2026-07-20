@@ -278,14 +278,18 @@ run_provider "$QUALITY_PRIMARY"
 PROVIDER_RC=$?
 
 # rc=76 (bounded-budget timeout without converging) fails over to the fallback
-# when configured. Exhaustion, billing, unavailability, and parser-inconclusive
-# output always fail over because they cannot produce review evidence. A parser
-# failure is not promoted to a clean result: the fallback must independently
-# complete, and an inconclusive fallback remains terminal below. The fallback
-# attempt cannot overrun the invocation: authorize_provider_attempt caps it
-# against the absolute campaign deadline and returns 77 when no budget remains.
+# when configured. Exhaustion, billing, and unavailability always fail over
+# because they cannot produce review evidence. Native Codex parser-inconclusive
+# output also fails over; Claude's rc=4 currently combines parser, timeout, and
+# unresolved-agent failures, so it remains fail-closed rather than masking those
+# distinct causes or bypassing the timeout policy. A parser failure is not
+# promoted to a clean result: the fallback must independently complete, and an
+# inconclusive fallback remains terminal below. The fallback attempt cannot
+# overrun the invocation: authorize_provider_attempt caps it against the
+# absolute campaign deadline and returns 77 when no budget remains.
 if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
-  [ "$PROVIDER_RC" -eq 2 ] || [ "$PROVIDER_RC" -eq 4 ] ||
+  [ "$PROVIDER_RC" -eq 2 ] ||
+  { [ "$PROVIDER_RC" -eq 4 ] && [ "$QUALITY_PRIMARY" = codex ]; } ||
   { [ "$PROVIDER_RC" -eq 76 ] && [ "$FALLBACK_ON_TIMEOUT" = 1 ]; }; } &&
   [ "$QUALITY_FALLBACK" != none ]; then
   if [ "$PROVIDER_RC" -eq 75 ]; then
@@ -295,7 +299,7 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
     echo "⚠️  [quality] $QUALITY_PRIMARY reported a billing or credits failure; switching immediately to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 2 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY unavailable; switching immediately to $QUALITY_FALLBACK." >&2
-  elif [ "$PROVIDER_RC" -eq 4 ]; then
+  elif [ "$PROVIDER_RC" -eq 4 ] && [ "$QUALITY_PRIMARY" = codex ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY review was inconclusive; switching once to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 76 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY exceeded its review budget without converging; failing over to $QUALITY_FALLBACK (BS_QUALITY_FALLBACK_ON_TIMEOUT=0 to disable)." >&2
