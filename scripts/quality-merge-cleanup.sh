@@ -54,7 +54,7 @@ cd "$PRIMARY_CHECKOUT" || {
   echo "  Recovery: node \"$MANAGER\" reconcile --repo \"$PRIMARY_CHECKOUT\" --apply" >&2
   exit 0
 }
-PRIMARY_STATUS="$(git status --porcelain 2>&1)"
+PRIMARY_STATUS="$(git status --porcelain)"
 PRIMARY_STATUS_RC=$?
 if [ "$PRIMARY_STATUS_RC" -ne 0 ]; then
   echo "[quality] merge succeeded; cleanup incomplete: primary checkout status could not be inspected: $PRIMARY_STATUS" >&2
@@ -84,19 +84,9 @@ else
   exit 0
 fi
 
-if [ -n "$INVOCATION_ID" ]; then
-  node "$MANAGER" unlock \
-    --repo "$PRIMARY_CHECKOUT" \
-    --branch "$FEATURE_BRANCH" \
-    --owner "bs:quality/$INVOCATION_ID" \
-    --terminal >/dev/null 2>&1 || {
-    echo "[quality] merge succeeded; cleanup incomplete: worktree ownership could not be released." >&2
-    echo "  Recovery: node \"$MANAGER\" unlock --repo \"$PRIMARY_CHECKOUT\" --branch \"$FEATURE_BRANCH\" --owner \"bs:quality/$INVOCATION_ID\" --terminal" >&2
-    exit 0
-  }
-fi
-
 REMOVE_ARGS=(remove --repo "$PRIMARY_CHECKOUT" --branch "$FEATURE_BRANCH" --allow-unknown)
+[ -n "$INVOCATION_ID" ] &&
+  REMOVE_ARGS+=(--recover --owner "bs:quality/$INVOCATION_ID")
 [ "$PRESERVE_BRANCH" = false ] && REMOVE_ARGS+=(--delete-branch)
 REMOVE_JSON="$(node "$MANAGER" "${REMOVE_ARGS[@]}" 2>&1)"
 REMOVE_RC=$?

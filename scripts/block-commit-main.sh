@@ -32,8 +32,9 @@ printf '%s' "$COMMAND" | grep -qE '(^|[;&|[:space:]])git([[:space:]]|$)' || exit
 printf '%s' "$COMMAND" | grep -qE '(^|[;&|[:space:]])commit([;&|[:space:]]|$)' || exit 0
 
 GIT_DIR=""
+BYPASS_REQUESTED=0
 if command -v python3 >/dev/null 2>&1; then
-  GIT_DIR="$(python3 - "$COMMAND" <<'PY'
+  PARSED_COMMIT="$(python3 - "$COMMAND" <<'PY'
 import shlex
 import sys
 
@@ -77,10 +78,15 @@ for words in segments:
                 break
             cursor += 1
         if is_commit:
-            targets.append(git_dir or current_dir or ".")
-print(targets[-1] if targets else "")
+            bypass = "BYPASS_BRANCH_GUARD=1" in words[:index]
+            targets.append((git_dir or current_dir or ".", bypass))
+if targets:
+    target, bypass = targets[-1]
+    print(f"{target}\t{1 if bypass else 0}")
 PY
 )"
+  GIT_DIR="${PARSED_COMMIT%	*}"
+  BYPASS_REQUESTED="${PARSED_COMMIT##*	}"
 else
   GIT_DIR="$(printf '%s' "$COMMAND" |
     grep -oE 'git\s+-C\s+\S+' |
@@ -93,6 +99,10 @@ else
     awk '{print $2}' || true)"
   fi
   [ -n "$GIT_DIR" ] || GIT_DIR="."
+  if printf '%s' "$COMMAND" |
+    grep -qE '(^|[;&|][[:space:]]*)(env[[:space:]]+)?BYPASS_BRANCH_GUARD=1[[:space:]]+git([[:space:]]|$)'; then
+    BYPASS_REQUESTED=1
+  fi
 fi
 [ -n "$GIT_DIR" ] || exit 0
 if [ -n "$GIT_DIR" ]; then
@@ -104,8 +114,7 @@ else
   CURRENT_BRANCH="$(git branch --show-current 2>/dev/null || true)"
 fi
 
-if printf '%s' "$COMMAND" |
-  grep -qE '(^|[[:space:]])BYPASS_BRANCH_GUARD=1\b'; then
+if [ "$BYPASS_REQUESTED" = "1" ]; then
   log_event "bypass" "$REPO_ROOT" "$CURRENT_BRANCH" \
     "explicit BYPASS_BRANCH_GUARD=1"
   exit 0
