@@ -79,7 +79,7 @@ function parseNativeReview(raw, root = process.cwd()) {
   const CLEAN_PHRASE =
     /\b(?:looks good|lgtm|no changes? (?:needed|required))\b/i;
   const POSITIVE_VERDICT =
-    /\b(?:correctly|properly|safely|preserves?|retains?)\b/i;
+    /\b(?:preserves?|retains?) (?:behaviors?|checks?|semantics|compatibility|invariants?|guarantees?|required-only checks|existing behavior|their existing behavior|the existing behavior|all checks|required checks)\b/i;
   const ADVERSE_FINDING =
     /\b(?:incorrect(?:ly)?|unsafe(?:ly)?|fails?|broken|vulnerable|regressions?|issues?|concerns?|problems?|bugs?)\b/i;
   const NEGATED_POSITIVE =

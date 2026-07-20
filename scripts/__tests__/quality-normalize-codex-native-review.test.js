@@ -77,6 +77,8 @@ Full review comments:
     "The patch safely preserves the old path. However, the new path is vulnerable.",
     "The function correctly handles the happy path. A security issue remains.",
     "No issues were found, but a bug remains in the fallback.",
+    "The function correctly handles the happy path.",
+    "The change safely handles input. It dereferences a null pointer.",
   ])("rejects qualified no-finding prose: %s", (prose) => {
     expect(() => parseNativeReview(prose)).toThrow(/no recognizable verdict/);
   });
