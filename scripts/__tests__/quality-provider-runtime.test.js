@@ -14,6 +14,11 @@ const VALIDATOR = path.join(
   "quality-validate-review-trailers.sh",
 );
 const RUN_REVIEW = path.join(ROOT, "scripts", "quality-run-review.sh");
+const PRESERVE_PRIMARY = path.join(
+  ROOT,
+  "scripts",
+  "quality-preserve-primary-evidence.sh",
+);
 const NORMALIZE_CODEX_REVIEW = path.join(
   ROOT,
   "scripts",
@@ -230,6 +235,9 @@ Quality-Base: ${base}`;
 
   it("passes scorer effort and exact round count to Codex mechanically", () => {
     const source = spawnSync("cat", [RUN_REVIEW], { encoding: "utf8" }).stdout;
+    const preservation = spawnSync("cat", [PRESERVE_PRIMARY], {
+      encoding: "utf8",
+    }).stdout;
     expect(source).toMatch(
       /while \[ "\$pass" -le "\$QUALITY_REVIEW_PASSES" \]/,
     );
@@ -251,10 +259,10 @@ Quality-Base: ${base}`;
     expect(source.indexOf('[ "$rc" -eq 124 ] && return 76')).toBeLessThan(
       source.indexOf('if node "$SCRIPT_DIR/quality-provider-error.js"'),
     );
-    expect(source).toMatch(/"\$REVIEW_OUT"\/codex-\*\.json/);
-    expect(source).toMatch(/"\$REVIEW_OUT"\/codex-\*\.progress/);
-    expect(source).toMatch(/"\$REVIEW_OUT"\/codex-\*\.prompt/);
-    expect(source).toMatch(/grep -q '\^INCONCLUSIVE:'/);
+    expect(preservation).toMatch(/"\$REVIEW_OUT"\/codex-\*\.json/);
+    expect(preservation).toMatch(/"\$REVIEW_OUT"\/codex-\*\.progress/);
+    expect(preservation).toMatch(/"\$REVIEW_OUT"\/codex-\*\.prompt/);
+    expect(preservation).toMatch(/grep -q '\^INCONCLUSIVE:'/);
     // rc=76 (bounded-budget timeout without converging) is now CONFIGURABLE:
     // it fails over to the fallback when BS_QUALITY_FALLBACK_ON_TIMEOUT=1
     // (the default), gated so a degraded primary doesn't block a merge while a
