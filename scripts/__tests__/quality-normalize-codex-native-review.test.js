@@ -50,6 +50,8 @@ Full review comments:
     "No security concerns in the modified handler.",
     "The package and CLI rename is applied consistently. No actionable regressions were identified.",
     "No regressions were found.",
+    "The authorization gate now waits until repository protectability is classified, checks all registered CI for explicitly unprotectable repositories, and preserves required-only checks for protectable repositories.",
+    "The preflight and billing-waiver paths retain their existing behavior.",
   ])("approves clean prose verdicts: %s", (prose) => {
     expect(parseNativeReview(prose).verdict).toBe("approve");
   });
@@ -65,6 +67,10 @@ Full review comments:
     "This path looks good, but another path could not be reviewed.",
     "No regressions were found in the reviewed file, but another file was truncated.",
     "No regression analysis was completed.",
+    "The implementation does not correctly preserve required checks.",
+    "The implementation preserves the fast path, but fails on protected repositories.",
+    "The patch retains existing behavior; however, the new path is unsafe.",
+    "The patch safely preserves the old path. However, the new path is vulnerable.",
   ])("rejects qualified no-finding prose: %s", (prose) => {
     expect(() => parseNativeReview(prose)).toThrow(/no recognizable verdict/);
   });

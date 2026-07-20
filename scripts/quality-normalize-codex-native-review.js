@@ -78,12 +78,24 @@ function parseNativeReview(raw, root = process.cwd()) {
     /\b(?:findings?|issues?|concerns?|problems?|bugs?|regressions?|(?:correctness|security)\s+(?:issue|problem|concern)s?)\b/i;
   const CLEAN_PHRASE =
     /\b(?:looks good|lgtm|no changes? (?:needed|required))\b/i;
+  const POSITIVE_VERDICT =
+    /\b(?:correctly|properly|safely|preserves?|retains?)\b/i;
+  const NEGATIVE_QUALIFIER =
+    /\b(?:but|however|incorrect(?:ly)?|unsafe(?:ly)?|fails?|broken|vulnerable|not|regressions?|issues?|concerns?|problems?|bugs?)\b/i;
   const INCOMPLETE =
     /\b(?:could ?n[o']?t be reviewed|ended unexpectedly|was (?:truncated|interrupted|incomplete)|(?:review|analysis) was (?:not )?completed|another (?:path|file))\b/i;
   const sentences = String(raw).split(/[.\n!?]+/);
+  const qualifiedVerdict = sentences.some((sentence) => {
+    if (INCOMPLETE.test(sentence)) return true;
+    if (!NEGATIVE_QUALIFIER.test(sentence)) return false;
+    return !(NEGATION.test(sentence) && NOUN.test(sentence));
+  });
   const cleanVerdict = sentences.some((sentence) => {
-    if (INCOMPLETE.test(sentence)) return false;
+    if (qualifiedVerdict) return false;
     if (CLEAN_PHRASE.test(sentence)) return true;
+    if (POSITIVE_VERDICT.test(sentence) && !NEGATIVE_QUALIFIER.test(sentence)) {
+      return true;
+    }
     return NEGATION.test(sentence) && NOUN.test(sentence);
   });
   if (findings.length === 0 && !cleanVerdict) {
