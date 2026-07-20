@@ -24,19 +24,46 @@ primary checkout's `main` branch. Every piece of work happens in a linked
 worktree on a feature branch.
 
 ```bash
-# Create a worktree for new work (preferred — `/bs:dev` does this for you)
-git worktree add ../<repo>-worktrees/<slug> -b <type>/<slug> main
+# Create a canonical worktree (preferred — `/bs:dev` does this for you)
+node scripts/worktree-manager.js create \
+  --repo /path/to/repo --branch <type>/<slug> \
+  --creator manual --purpose "<task>"
 
-# After `/bs:quality --merge` lands the PR, return + clean up
-git checkout main && git pull --ff-only
-git worktree remove ../<repo>-worktrees/<slug>   # removes the worktree dir
-git branch -D <type>/<slug>                       # delete merged local branch
-git worktree prune -v                             # tidy stale refs
+# Inspect lifecycle state or reconcile after a manual/admin merge
+node scripts/worktree-manager.js status --repo /path/to/repo
+node scripts/worktree-manager.js reconcile --repo /path/to/repo --apply
 ```
+
+Worktrees live at
+`<primary-repo-parent>/.worktrees/<repo-name>/<branch-slug>`, outside the
+repository so recursive searches, linters, secret scans, IDEs, and backups do
+not accidentally traverse another checkout. Resolution always starts from the
+primary checkout's Git common directory, even when invoked in a linked
+worktree.
 
 `/bs:quality --merge` MUST handle the cleanup tail. If you ever find yourself
 with uncommitted changes on the primary checkout's `main`, stop, stash, create
 the worktree, and pop the stash there — do not proceed in-place.
+
+After a crash, `status` reports the native lock and owning invocation. Release
+only with the exact owner, then reconcile:
+
+```bash
+node scripts/worktree-manager.js unlock --repo /path/to/repo \
+  --branch <type>/<slug> --owner "<exact lock reason>" --terminal
+node scripts/worktree-manager.js reconcile --repo /path/to/repo --apply
+```
+
+For a moved/renamed checkout, run `repair` explicitly. Preview old-layout
+migration before applying it:
+
+```bash
+node scripts/worktree-manager.js repair --repo /new/repo/path --apply
+node scripts/worktree-manager.js repair --repo /new/repo/path \
+  --old-repo-name old-name --apply
+node scripts/worktree-manager.js migrate --repo /path/to/repo --dry-run
+node scripts/worktree-manager.js migrate --repo /path/to/repo --apply
+```
 
 ## Workflow Selection
 
