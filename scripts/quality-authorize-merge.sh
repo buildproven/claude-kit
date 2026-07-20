@@ -134,6 +134,9 @@ else
   CI_BILLING_WAIVER_ARTIFACT="${BS_QUALITY_CI_BILLING_WAIVER_ARTIFACT:-}"
   CI_BILLING_WAIVED=false
   if [ -n "$CI_BILLING_WAIVER_ARTIFACT" ]; then
+    # This is deliberately the first of two validations: it authorizes
+    # bypassing only the green-check query below. Revalidate the same
+    # invocation-bound, exact-head artifact immediately before adding --admin.
     EXPECTED_WAIVER_ARTIFACT="$(dirname "$MANIFEST")/ci-billing-waiver.json"
     [ "$CI_BILLING_WAIVER_ARTIFACT" = "$EXPECTED_WAIVER_ARTIFACT" ] || {
       echo "❌ MERGE BLOCKED: CI billing waiver artifact path is not invocation-bound." >&2
