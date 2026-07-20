@@ -109,7 +109,8 @@ For a specific Sentry issue ID:
 
 1. Pull full issue from Sentry MCP: stack trace, breadcrumbs, user context, release version
 2. Find the repo + commit that shipped the regression (via release tag in Sentry)
-3. `git worktree add ../fix-sentry-<issue-id> -b fix-sentry-<issue-id>` in the relevant repo
+3. Create and lock the worktree through the shared manager:
+   `node <kit-scripts>/worktree-manager.js create --repo <repo> --branch fix/sentry-<issue-id> --creator bs:triage --purpose <issue-id> --lock-reason bs:triage/<issue-id>`
 4. **HUMAN PAUSE GATE**: present a one-paragraph hypothesis of root cause. Generate it with a Sonnet-pinned subagent — reading a stack trace and proposing a root cause is analysis, not the coding work, so it does not need the session model's tier (matches the budget gate below: "hypothesis → Sonnet, fix → session/Opus"). The pin is a per-call `model` override, never a frontmatter pin, so it can't trip the 1M-context billing gate:
 
    ```javascript
