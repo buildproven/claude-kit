@@ -223,6 +223,9 @@ run_codex_review() {
       if (.findings | length) == 0 then "NO FINDINGS. Verdict: \(.verdict). \(.summary)"
       else .findings[] | "\(.severity // "WARNING"): \(.file // "unknown"):\(.line_start // 0) — \(.title // "finding")\n\(.body // "")\nFix: \(.recommendation // "")"
       end' "$normalized_file" >> "$REVIEW_OUT/codex.findings.txt"; then
+      # A normalized payload whose rendering failed is part of the
+      # inconclusive pass, not authoritative completed-pass evidence.
+      rm -f "$normalized_file"
       echo "INCONCLUSIVE: normalized Codex findings could not be rendered — human review required" >> "$REVIEW_OUT/codex.findings.txt"
       return 4
     fi
@@ -289,9 +292,10 @@ PROVIDER_RC=$?
 # absolute campaign deadline and returns 77 when no budget remains.
 if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
   [ "$PROVIDER_RC" -eq 2 ] ||
-  { [ "$PROVIDER_RC" -eq 4 ] && [ "$REVIEW_PROVIDER" = codex ]; } ||
+  { [ "$PROVIDER_RC" -eq 4 ] && [ "$QUALITY_PRIMARY" = codex ]; } ||
   { [ "$PROVIDER_RC" -eq 76 ] && [ "$FALLBACK_ON_TIMEOUT" = 1 ]; }; } &&
-  [ "$QUALITY_FALLBACK" != none ]; then
+  [ "$QUALITY_FALLBACK" != none ] &&
+  [ "$QUALITY_FALLBACK" != "$QUALITY_PRIMARY" ]; then
   if [ "$PROVIDER_RC" -eq 75 ]; then
     DETAIL="$(cat "$REVIEW_OUT/provider-exhausted" 2>/dev/null || true)"
     echo "⚠️  [quality] $QUALITY_PRIMARY exhausted${DETAIL:+ — $DETAIL}; switching immediately to $QUALITY_FALLBACK." >&2
@@ -299,7 +303,7 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
     echo "⚠️  [quality] $QUALITY_PRIMARY reported a billing or credits failure; switching immediately to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 2 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY unavailable; switching immediately to $QUALITY_FALLBACK." >&2
-  elif [ "$PROVIDER_RC" -eq 4 ] && [ "$REVIEW_PROVIDER" = codex ]; then
+  elif [ "$PROVIDER_RC" -eq 4 ] && [ "$QUALITY_PRIMARY" = codex ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY review was inconclusive; switching once to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 76 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY exceeded its review budget without converging; failing over to $QUALITY_FALLBACK (BS_QUALITY_FALLBACK_ON_TIMEOUT=0 to disable)." >&2
@@ -307,7 +311,7 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
   # Preserve failed-primary diagnostics without discarding conclusive findings
   # from an earlier successful pass when a later pass becomes inconclusive.
   PRESERVATION_MODE=evidence-absent
-  if [ "$PROVIDER_RC" -eq 4 ] && [ "$REVIEW_PROVIDER" = codex ]; then
+  if [ "$PROVIDER_RC" -eq 4 ] && [ "$QUALITY_PRIMARY" = codex ]; then
     PRESERVATION_MODE=parser-inconclusive
   fi
   bash "$SCRIPT_DIR/quality-preserve-primary-evidence.sh" \

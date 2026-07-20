@@ -532,7 +532,7 @@ describe("quality merge gates", () => {
       RUN_REVIEW.indexOf('[ "$QUALITY_FALLBACK" != none ]; then'),
     );
     expect(branch).toMatch(
-      /PROVIDER_RC" -eq 4 \] && \[ "\$REVIEW_PROVIDER" = codex/,
+      /PROVIDER_RC" -eq 4 \] && \[ "\$QUALITY_PRIMARY" = codex/,
     );
     expect(branch).not.toMatch(/\[ "\$PROVIDER_RC" -eq 4 \] \|\|/);
     expect(RUN_REVIEW).toMatch(
@@ -591,6 +591,40 @@ describe("quality merge gates", () => {
     expect(
       existsSync(path.join(reviewOut, "failed-primary", "codex-2.stderr")),
     ).toBe(true);
+  });
+
+  it("preserves repeated primary evidence without aborting on a destination collision", () => {
+    const reviewOut = mkdtempSync(path.join(tmpdir(), "quality-collision-"));
+    writeFileSync(
+      path.join(reviewOut, "primary-codex-1.result.json"),
+      JSON.stringify({ findings: [{ title: "earlier evidence" }] }),
+    );
+    writeFileSync(
+      path.join(reviewOut, "codex-1.normalized.json"),
+      JSON.stringify({ findings: [{ title: "new evidence" }] }),
+    );
+    writeFileSync(
+      path.join(reviewOut, "codex.findings.txt"),
+      "INCONCLUSIVE:\n",
+    );
+
+    expect(() =>
+      execFileSync("bash", [
+        PRESERVE_PRIMARY,
+        "--review-out",
+        reviewOut,
+        "--mode",
+        "parser-inconclusive",
+      ]),
+    ).not.toThrow();
+    expect(
+      JSON.parse(
+        readFileSync(
+          path.join(reviewOut, "primary-codex-1-2.result.json"),
+          "utf8",
+        ),
+      ).findings[0].title,
+    ).toBe("new evidence");
   });
 
   it("does not promote a marker-only inconclusive review to evidence", () => {

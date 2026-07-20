@@ -2460,6 +2460,8 @@ exit 1
         "codex-rounds": 1,
       });
       invocation.setAgents(manifest, ["reviewer-a", "reviewer-b"]);
+      manifest.provider.primary = "codex";
+      manifest.provider.fallback = "claude";
     });
     const manifest = invocation.loadManifest(manifestPath).manifest;
     const artifactDir = invocation.reviewInfo(manifest).artifactDir;
@@ -2490,14 +2492,23 @@ exit 1
     expect(() =>
       invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
     ).not.toThrow();
-    expect(
-      JSON.parse(
-        readFileSync(path.join(artifactDir, "artifact-inventory.json"), "utf8"),
-      ).files.map(({ name }) => name),
-    ).toEqual([
-      "primary-codex-1.result.json",
-      "reviewer-a.findings.txt",
-      "reviewer-b.findings.txt",
+    const inventory = JSON.parse(
+      readFileSync(path.join(artifactDir, "artifact-inventory.json"), "utf8"),
+    );
+    expect(inventory.provider).toBe("claude");
+    expect(inventory.files).toEqual([
+      expect.objectContaining({
+        name: "primary-codex-1.result.json",
+        provider: "codex",
+      }),
+      expect.objectContaining({
+        name: "reviewer-a.findings.txt",
+        provider: "claude",
+      }),
+      expect.objectContaining({
+        name: "reviewer-b.findings.txt",
+        provider: "claude",
+      }),
     ]);
 
     writeFileSync(

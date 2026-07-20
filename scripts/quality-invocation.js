@@ -1510,7 +1510,9 @@ function providerFindings(manifest) {
     for (const item of resultFiles.filter((file) => {
       const rawPass = file.name.match(/^codex-(\d+)\.json$/);
       return (
-        !rawPass || !resultNames.has(`codex-${rawPass[1]}.normalized.json`)
+        !rawPass ||
+        (!resultNames.has(`codex-${rawPass[1]}.normalized.json`) &&
+          !resultNames.has(`primary-codex-${rawPass[1]}.result.json`))
       );
     })) {
       let parsed;
@@ -1535,7 +1537,8 @@ function providerFindings(manifest) {
             .digest("hex"),
           severity: finding.severity || "unknown",
           title: finding.title || "provider finding",
-          source: `${item.name}#${index}`,
+          provider: item.provider || inventory.provider,
+          source: `${item.provider || inventory.provider}:${item.name}#${index}`,
         });
       });
     }
@@ -1728,10 +1731,16 @@ function writeArtifactInventory(manifest, artifactDir, provider) {
     headSha: manifest.revisions.currentHead,
     provider,
     status: "success",
-    files: names.map((name) => ({
-      name,
-      sha256: sha256File(path.join(resolved, name)),
-    })),
+    files: names.map((name) => {
+      const preservedProvider = name.startsWith("primary-")
+        ? manifest.provider.primary
+        : null;
+      return {
+        name,
+        provider: preservedProvider || provider,
+        sha256: sha256File(path.join(resolved, name)),
+      };
+    }),
   };
   atomicWrite(path.join(resolved, "artifact-inventory.json"), inventory);
 }

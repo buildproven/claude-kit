@@ -40,13 +40,14 @@ if [ "$MODE" = parser-inconclusive ]; then
   # clean-sentinel, or marker-adjacent content and is never authoritative.
   for evidence in "$REVIEW_OUT"/codex-*.normalized.json; do
     [ -e "$evidence" ] || continue
-    pass="$(basename "$evidence" .normalized.json)"
-    destination="$REVIEW_OUT/primary-$pass.result.json"
-    [ ! -e "$destination" ] || {
-      echo "quality-preserve-primary-evidence: preserved result collision" >&2
-      exit 1
-    }
-    mv "$evidence" "$destination"
+    preserve_pass="$(basename "$evidence" .normalized.json)"
+    preserve_destination="$REVIEW_OUT/primary-$preserve_pass.result.json"
+    preserve_counter=2
+    while [ -e "$preserve_destination" ]; do
+      preserve_destination="$REVIEW_OUT/primary-$preserve_pass-$preserve_counter.result.json"
+      preserve_counter=$((preserve_counter + 1))
+    done
+    mv "$evidence" "$preserve_destination"
   done
 fi
 

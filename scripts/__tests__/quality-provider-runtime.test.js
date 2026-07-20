@@ -263,7 +263,7 @@ Quality-Base: ${base}`;
     expect(preservation).toMatch(/"\$REVIEW_OUT"\/codex-\*\.progress/);
     expect(preservation).toMatch(/"\$REVIEW_OUT"\/codex-\*\.prompt/);
     expect(preservation).toMatch(/codex-\*\.normalized\.json/);
-    expect(preservation).toMatch(/primary-\$pass\.result\.json/);
+    expect(preservation).toMatch(/primary-\$preserve_pass\.result\.json/);
     // rc=76 (bounded-budget timeout without converging) is now CONFIGURABLE:
     // it fails over to the fallback when BS_QUALITY_FALLBACK_ON_TIMEOUT=1
     // (the default), gated so a degraded primary doesn't block a merge while a
