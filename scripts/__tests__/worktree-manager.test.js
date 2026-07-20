@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -29,6 +29,25 @@ function run(command, args, options = {}) {
     );
   }
   return result;
+}
+
+function runAsync(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env || process.env,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (status) => resolve({ status, stdout, stderr }));
+  });
 }
 
 function git(repo, ...args) {
@@ -429,7 +448,7 @@ describe("worktree-manager public CLI", () => {
     ).toBe("feature/rename-repair");
   });
 
-  it("serializes concurrent creation attempts without duplicate worktrees", () => {
+  it("serializes concurrent creation attempts without duplicate worktrees", async () => {
     const { repo } = fixture();
     const args = [
       MANAGER,
@@ -439,10 +458,20 @@ describe("worktree-manager public CLI", () => {
       "--branch",
       "feature/concurrent",
     ];
-    const first = spawnSync("node", args, { encoding: "utf8" });
-    const second = spawnSync("node", args, { encoding: "utf8" });
-    expect(first.status).toBe(0);
-    expect(second.status).toBe(0);
+    const results = await Promise.all([
+      runAsync("node", args),
+      runAsync("node", args),
+    ]);
+    expect(results.some(({ status }) => status === 0)).toBe(true);
+    expect(
+      results.every(
+        ({ status, stderr }) =>
+          status === 0 ||
+          (status === 1 &&
+            stderr.includes("Another process is creating") &&
+            stderr.includes("Retry after it finishes")),
+      ),
+    ).toBe(true);
     const count = git(repo, "worktree", "list", "--porcelain")
       .split("\n")
       .filter((line) => line === "branch refs/heads/feature/concurrent").length;
