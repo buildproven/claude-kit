@@ -56,6 +56,8 @@ All notable changes to claude-kit are documented here.
   (#117).
 - Validated CI billing waivers are now honored instead of blocking merges
   (#134).
+- Gemini provider support is now opt-in and diagnosable instead of silently
+  misconfigured (#130).
 - A recursive temp-cleanup trap that could delete unintended paths was
   removed (#107).
 - Vitest global timeout raised to fix parallel-load flakes (#118).
