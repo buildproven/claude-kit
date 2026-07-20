@@ -145,6 +145,55 @@ describe("computeScore — security floor never beaten by mechanical", () => {
     const r = scoreOf([d(".github/workflows/quality.yml", "M", "+# note", 1)]);
     expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
   });
+  it.each([
+    "secrets/aws.json",
+    "credentials/cloud.json",
+    "passwords/admin.txt",
+    "tokens/api.json",
+    "webhooks/receive.js",
+    "license/policy.js",
+    "licensing/policy.js",
+    "deployments/ship.sh",
+    "keystore/config.json",
+    "keystores/config.json",
+    "keyring/config.json",
+    "keychain/config.json",
+    "AUTH/session.js",
+    "Secrets/aws.json",
+    "server.PEM",
+    ".ENV",
+    "certs/client.p12",
+    "certs/store.pfx",
+    "config/app.jks",
+    "config/store.keystore",
+    "src/auth.ts",
+    "src/oauth.ts",
+    "src/api-key.txt",
+    "config/key.yaml",
+    "src/keystore.yaml",
+    "src/keyring.ts",
+    "src/keychain.json",
+    "src/server.ppk",
+    "src/server.pk8",
+    "key-material/config.json",
+    "key_store/config.json",
+    "safe\n/auth/session.js",
+    "safe\r/keys/server.pem",
+    "safe/server.pem\n",
+    "safe/server.pem\r",
+  ])("sensitive directory path %s stays at the security floor", (file) => {
+    const r = scoreOf([d(file, "M", "+// note", 1)]);
+    expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
+  });
+
+  it("a reviewed config cannot erase the immutable security floor", () => {
+    const cfg = deepMerge(DEFAULTS, {
+      securityFloor: [],
+      base: { securityFloor: 0 },
+    });
+    const r = scoreOf([d("secrets/aws.json", "M", "+x", 1)], cfg);
+    expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
+  });
 });
 
 describe("computeScore — package manifests use semantic field risk", () => {
@@ -381,8 +430,8 @@ describe("computeScore — trivial change goes low (but never zero handling)", (
 describe("score — base resolution is deterministic and fails closed", () => {
   // A gitRunner where origin/main IS present locally: the same diff must score
   // against the merge-base, identically to the CI (GITHUB_BASE_REF) path.
-  const NAME_STATUS = "M\tlib/widget.js";
-  const NUMSTAT = "40\t0\tlib/widget.js";
+  const NAME_STATUS = "M\0lib/widget.js\0";
+  const NUMSTAT = "40\t0\tlib/widget.js\0";
 
   function runnerWith({ hasOriginMain, hasUpstream }) {
     return (args) => {
@@ -506,6 +555,20 @@ describe("scoreToKnobs — Moderate curve", () => {
     });
     expect(scoreToKnobs(80, cfg).codex).not.toBe("skip");
   });
+  it.each([75, 76, 80, 84, 85])(
+    "reviewed config cannot weaken critical review depth at score %i",
+    (score) => {
+      const cfg = deepMerge(DEFAULTS, {
+        curve: [{ maxScore: 100, agents: 2, codex: "skip", codexRounds: 0 }],
+        codexForceFloor: 101,
+      });
+      expect(scoreToKnobs(score, cfg)).toEqual({
+        agents: 6,
+        codex: "xhigh",
+        codexRounds: 1,
+      });
+    },
+  );
 });
 
 // ─── config override merge ───────────────────────────────────────────────────

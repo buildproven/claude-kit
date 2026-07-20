@@ -555,9 +555,20 @@ wait
     git(root, ["commit", "-q", "-m", "fix"]);
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
     const state = JSON.parse(readFileSync(manifest, "utf8"));
+    // Advancing HEAD invalidates the HEAD-bound approval.
     expect(state.approval.approved).toBe(false);
+    // Phase 0 contract: select-agents no longer HARD-BLOCKS critical when the
+    // approval is absent — it defers so the full critical review runs, and the
+    // human-capability decision moves to quality-authorize-merge.sh (which knows
+    // repo enforceability). So select-agents succeeds even with approval void…
     expect(
       spawnSync("bash", [SELECT, "--manifest", manifest], { cwd: root }).status,
+    ).toBe(0);
+    // …but the invalidated approval must remain invalid, which is what keeps the
+    // authoritative merge gate correct until re-approval.
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", manifest], { cwd: root })
+        .status,
     ).not.toBe(0);
 
     const resumed = spawnSync("node", [WRAPPER, BOOTSTRAP], {
@@ -1863,6 +1874,181 @@ exit 1
     ).not.toBe(0);
   });
 
+  it("rejects a resumed HEAD whose complete diff requires stronger review", () => {
+    const root = repo("risk-escalation");
+    const manifest = create(root);
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
+    execFileSync("bash", [SELECT, "--manifest", manifest], { cwd: root });
+    const before = JSON.parse(readFileSync(manifest, "utf8"));
+
+    mkdirSync(path.join(root, "auth"), { recursive: true });
+    writeFileSync(
+      path.join(root, "auth/session.js"),
+      "export const session = true;\n",
+    );
+    git(root, ["add", "auth/session.js"]);
+    git(root, ["commit", "-q", "-m", "fix: add auth remediation"]);
+
+    const result = spawnSync("node", [INVOCATION, "advance", manifest], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/stronger review.*fresh invocation/i);
+    expect(
+      JSON.parse(readFileSync(manifest, "utf8")).revisions.currentHead,
+    ).toBe(before.revisions.currentHead);
+  });
+
+  it("rejects an underpowered persisted critical contract at the 75 boundary", () => {
+    const root = repo("critical-boundary-escalation");
+    const manifest = create(root);
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    state.risk = {
+      ...state.risk,
+      resolved: true,
+      tier: "critical",
+      score: 75,
+      agentTarget: 2,
+      codexDepth: "low",
+      codexRounds: 0,
+    };
+    writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
+
+    mkdirSync(path.join(root, "server"), { recursive: true });
+    writeFileSync(
+      path.join(root, "server", "large.js"),
+      `${Array.from({ length: 450 }, (_, index) => `export const v${index} = ${index};`).join("\n")}\n`,
+    );
+    git(root, ["add", "server/large.js"]);
+    git(root, ["commit", "-q", "-m", "fix: add large server remediation"]);
+
+    const result = spawnSync("node", [INVOCATION, "advance", manifest], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(
+      /stronger review.*now critical\/6\/xhigh.*fresh invocation/i,
+    );
+  });
+
+  it("rejects a same-HEAD manifest with a stale underpowered critical contract", () => {
+    const root = repo("same-head-critical-boundary");
+    mkdirSync(path.join(root, "auth"), { recursive: true });
+    writeFileSync(
+      path.join(root, "auth", "session.js"),
+      "export const session = true;\n",
+    );
+    git(root, ["add", "auth/session.js"]);
+    git(root, ["commit", "-q", "-m", "feat: add auth surface"]);
+
+    const manifest = create(root);
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    state.risk = {
+      ...state.risk,
+      resolved: true,
+      tier: "critical",
+      score: 75,
+      agentTarget: 2,
+      codexDepth: "low",
+      codexRounds: 0,
+    };
+    writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
+
+    const result = spawnSync("node", [INVOCATION, "advance", manifest], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(
+      /stronger review.*now critical\/6\/xhigh.*fresh invocation/i,
+    );
+    expect(() =>
+      invocation.reviewAuthorization(
+        JSON.parse(readFileSync(manifest, "utf8")),
+      ),
+    ).toThrow(/stronger review.*now critical\/6\/xhigh.*fresh invocation/i);
+  });
+
+  it("reapplies an explicit level-98 minimum when validating a stale same-HEAD contract", () => {
+    const root = repo("same-head-level-98");
+    const manifest = create(root, ["--level", "98"]);
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    state.risk = {
+      ...state.risk,
+      requestedLevel: "98",
+      resolved: true,
+      tier: "critical",
+      score: 75,
+      agentTarget: 6,
+      codexDepth: "high",
+      codexRounds: 1,
+    };
+    writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
+
+    const result = spawnSync("node", [INVOCATION, "advance", manifest], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(
+      /stronger review.*now critical\/6\/xhigh.*fresh invocation/i,
+    );
+  });
+
+  it("fails a non-finite policy closed before validating a stale level-98 contract", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "quality-non-finite-policy-"));
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.name", "Quality Test"]);
+    git(root, ["config", "user.email", "quality@example.com"]);
+    writeFileSync(path.join(root, "file.js"), "// before\n");
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: { lint: "true", test: "true", "security:audit": "true" },
+      }),
+    );
+    writeFileSync(
+      path.join(root, "harness-config.json"),
+      JSON.stringify({
+        scorePolicy: {
+          mechanicalDelta: "not-a-number",
+          curve: [{ maxScore: 100, agents: 6, codex: "high", codexRounds: 1 }],
+        },
+      }),
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "base"]);
+    git(root, ["remote", "add", "origin", root]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "-c", "feature"]);
+    writeFileSync(path.join(root, "file.js"), "// after\n");
+    git(root, ["commit", "-qam", "comment-only change"]);
+
+    const manifest = create(root, ["--level", "98"]);
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    state.risk = {
+      ...state.risk,
+      requestedLevel: "98",
+      resolved: true,
+      tier: "critical",
+      score: 75,
+      agentTarget: 6,
+      codexDepth: "high",
+      codexRounds: 1,
+    };
+    writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
+
+    const result = spawnSync("node", [INVOCATION, "advance", manifest], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/mechanicalDelta must be a finite number/i);
+  });
+
   it("fails early when required repository gate scripts are missing", () => {
     const root = repo("missing-baselines");
     writeFileSync(
@@ -2508,5 +2694,139 @@ exit 1
     expect(
       JSON.parse(readFileSync(manifestPath, "utf8")).requiredGates,
     ).toEqual(migrated.requiredGates);
+  });
+});
+
+describe("human-floor-check command (Phase 0 autonomy relaxation)", () => {
+  // Build a repo whose feature branch changes exactly `changedFile`.
+  // Exit-code contract: 0 = VERIFIED CLEAR (autonomous OK); 10 = touches floor;
+  // any other code (error) = human required. Only rc 0 unlocks autonomy.
+  function repoChanging(label, changedFile, scorePolicy = null) {
+    const root = mkdtempSync(path.join(tmpdir(), `hfloor-${label}-`));
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.name", "Quality Test"]);
+    git(root, ["config", "user.email", "quality@example.com"]);
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: { lint: "true", test: "true", "security:audit": "true" },
+      }),
+    );
+    const target = path.join(root, changedFile);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, "base\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "base"]);
+    git(root, ["remote", "add", "origin", root]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "-c", "feature"]);
+    writeFileSync(target, "changed\n");
+    if (scorePolicy) {
+      writeFileSync(
+        path.join(root, "harness-config.json"),
+        JSON.stringify({ scorePolicy }),
+      );
+    }
+    git(root, ["add", "."]);
+    git(root, ["commit", "-qm", "change"]);
+    return { root, manifest: create(root) };
+  }
+
+  const rc = (root, manifest) =>
+    spawnSync("node", [INVOCATION, "human-floor-check", manifest], {
+      cwd: root,
+    }).status;
+
+  it("exits 0 (verified clear) for an ordinary script", () => {
+    const { root, manifest } = repoChanging("clear", "scripts/util.sh");
+    expect(rc(root, manifest)).toBe(0);
+  });
+
+  it("exits 10 for a key file", () => {
+    const { root, manifest } = repoChanging("pem", "keys/server.pem");
+    expect(rc(root, manifest)).toBe(10);
+  });
+
+  it("exits 10 for an uppercase-cased key (case-insensitive)", () => {
+    const { root, manifest } = repoChanging("upper", "Keys/Server.PEM");
+    expect(rc(root, manifest)).toBe(10);
+  });
+
+  it("exits 10 for an auth dir change", () => {
+    const { root, manifest } = repoChanging("auth", "src/auth/session.js");
+    expect(rc(root, manifest)).toBe(10);
+  });
+
+  it("exits 10 when the reviewed commit tries to erase the built-in floor", () => {
+    const { root, manifest } = repoChanging("self-disarm", "keys/server.pem", {
+      humanFloor: [],
+    });
+    expect(rc(root, manifest)).toBe(10);
+  });
+
+  const sensitiveDirectories = [
+    "secrets/aws.json",
+    "credentials/cloud.json",
+    "passwords/admin.txt",
+    "tokens/api.json",
+    "webhooks/receive.js",
+    "license/policy.js",
+    "licensing/policy.js",
+    "deployments/ship.sh",
+    "keystore/config.json",
+    "keystores/config.json",
+    "keyring/config.json",
+    "keychain/config.json",
+  ];
+  for (const changedFile of sensitiveDirectories) {
+    it(`exits 10 for sensitive directory path ${changedFile}`, () => {
+      const label = changedFile.replace(/[^a-z]/gi, "-");
+      const { root, manifest } = repoChanging(label, changedFile);
+      expect(rc(root, manifest)).toBe(10);
+    });
+  }
+
+  it("exits 10 when a sensitive file is RENAMED out of a floor path", () => {
+    // auth/login.js -> login.js. --no-renames must surface the old auth/ path.
+    const root = mkdtempSync(path.join(tmpdir(), "hfloor-rename-"));
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.name", "Quality Test"]);
+    git(root, ["config", "user.email", "quality@example.com"]);
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: { lint: "true", test: "true", "security:audit": "true" },
+      }),
+    );
+    mkdirSync(path.join(root, "auth"), { recursive: true });
+    writeFileSync(path.join(root, "auth/login.js"), "export const x = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "base"]);
+    git(root, ["remote", "add", "origin", root]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "-c", "feature"]);
+    git(root, ["mv", "auth/login.js", "login.js"]);
+    git(root, ["commit", "-qam", "move auth out"]);
+    const manifest = create(root);
+    expect(rc(root, manifest)).toBe(10);
+  });
+
+  it("FAILS CLOSED (not 0) when the check errors — error must not unlock autonomy", () => {
+    // Tampered manifest (currentHead ≠ real HEAD) makes the loader throw →
+    // top-level exit 1. Autonomy is reachable ONLY on exit 0.
+    const { root, manifest } = repoChanging("err", "scripts/util.sh");
+    const m = JSON.parse(readFileSync(manifest, "utf8"));
+    m.revisions.currentHead = m.revisions.baseSha;
+    writeFileSync(manifest, `${JSON.stringify(m, null, 2)}\n`);
+    expect(rc(root, manifest)).not.toBe(0);
+  });
+
+  it("FAILS CLOSED when harness-config.json is malformed", () => {
+    const { root, manifest } = repoChanging(
+      "malformed-policy",
+      "scripts/util.sh",
+    );
+    writeFileSync(path.join(root, "harness-config.json"), "{ not json");
+    expect(rc(root, manifest)).not.toBe(0);
   });
 });

@@ -32,13 +32,18 @@ N="$AGENT_TARGET"
 AGENTS=("${PANEL[@]:0:$N}")
 
 if [ "$TIER" = critical ]; then
-  if ! node "$SCRIPT_DIR/quality-invocation.js" approval-valid "$MANIFEST"; then
-    echo "❌ MERGE BLOCKED: critical tier requires break-glass approval bound to this exact repository, PR, and HEAD." >&2
-    node "$SCRIPT_DIR/quality-terminal-status.js" \
-      --manifest "$MANIFEST" --category break-glass || true
-    exit 1
+  # Do NOT hard-block here. The authoritative critical gate is
+  # quality-authorize-merge.sh, which is the only place that knows whether the
+  # base is server-enforceable (ATOMIC_BASE_FRESHNESS) — the signal Phase 0 uses
+  # to decide whether a human break-glass is required or clean review suffices.
+  # Blocking at selection time would force a human capability even on
+  # unprotectable private repos, defeating the policy. The full critical review
+  # panel runs regardless; a pre-existing valid capability is merely noted.
+  if node "$SCRIPT_DIR/quality-invocation.js" approval-valid "$MANIFEST"; then
+    echo "[quality] Pre-existing break-glass approval verified for exact HEAD $HEAD_SHA"
+  else
+    echo "[quality] Critical tier: no approval yet — running full critical review; the merge gate decides human-capability need by repo enforceability." >&2
   fi
-  echo "[quality] Break-glass approval verified for exact HEAD $HEAD_SHA"
 fi
 
 node "$SCRIPT_DIR/quality-invocation.js" agents "$MANIFEST" "${AGENTS[@]}" || exit 1
