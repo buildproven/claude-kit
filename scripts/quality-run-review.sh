@@ -65,6 +65,7 @@ git log "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" --oneline > "$REVIEW_OUT/log.txt
 node "$SCRIPT_DIR/quality-invocation.js" review-identity "$MANIFEST" \
   > "$REVIEW_OUT/identity.json" || exit 1
 PRIOR_FINDINGS_FILE=""
+PROVIDER_HEALTH="$SCRIPT_DIR/quality-provider-health.js"
 if [ "$REVIEW_ROUND" -gt 1 ]; then
   PRIOR_FINDINGS_FILE="$REVIEW_OUT/prior-findings.json"
   node "$SCRIPT_DIR/quality-invocation.js" prior-findings "$MANIFEST" \
@@ -230,11 +231,30 @@ run_codex_review() {
 }
 
 run_provider() {
-  case "$1" in
+  local provider="$1" availability rc
+  availability="$(node "$PROVIDER_HEALTH" check "$provider")"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '%s' "$availability" |
+      jq --arg provider "$provider" '. + {provider: $provider}' \
+        > "$REVIEW_OUT/provider-failure.json"
+    echo "⚠️  [quality] skipping $provider: provider-health circuit is open." >&2
+    return "$rc"
+  fi
+  case "$provider" in
     claude) run_claude_review ;;
     codex) run_codex_review ;;
     *) return 2 ;;
   esac
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    node "$PROVIDER_HEALTH" clear "$provider" || return 1
+  elif { [ "$rc" -eq 75 ] || [ "$rc" -eq 79 ]; } &&
+    [ -s "$REVIEW_OUT/provider-failure.json" ]; then
+    node "$PROVIDER_HEALTH" record "$provider" \
+      "$REVIEW_OUT/provider-failure.json" || return 1
+  fi
+  return "$rc"
 }
 
 # Should a primary that exhausts its bounded review clock without converging
@@ -262,12 +282,9 @@ PROVIDER_RC=$?
 # because they cannot produce review evidence. The fallback attempt cannot
 # overrun the invocation: authorize_provider_attempt caps it against the
 # absolute campaign deadline and returns 77 when no budget remains.
-timeout_should_fall_back() {
-  [ "$PROVIDER_RC" -eq 76 ] && [ "$FALLBACK_ON_TIMEOUT" = 1 ]
-}
-
 if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
-  [ "$PROVIDER_RC" -eq 2 ] || timeout_should_fall_back; } &&
+  [ "$PROVIDER_RC" -eq 2 ] ||
+  { [ "$PROVIDER_RC" -eq 76 ] && [ "$FALLBACK_ON_TIMEOUT" = 1 ]; }; } &&
   [ "$QUALITY_FALLBACK" != none ]; then
   if [ "$PROVIDER_RC" -eq 75 ]; then
     DETAIL="$(cat "$REVIEW_OUT/provider-exhausted" 2>/dev/null || true)"

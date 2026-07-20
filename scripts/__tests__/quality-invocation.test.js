@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -120,6 +120,29 @@ function create(root, extra = [], env = {}) {
       encoding: "utf8",
     },
   ).trim();
+}
+
+function createAsync(root) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      "node",
+      [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
+      { cwd: root, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve(stdout.trim());
+      else reject(new Error(stderr || `create exited ${code}`));
+    });
+  });
 }
 
 function prepareCodexReview(
@@ -298,6 +321,95 @@ exit 1
 }
 
 describe("quality invocation manifest", () => {
+  it("reuses one durable campaign for the same exact repo, PR, base, HEAD, and options", () => {
+    const root = repo("durable-campaign");
+    const args = ["--level", "98", "--pr", "7", "--merge"];
+    const first = create(root, args);
+    execFileSync(
+      "node",
+      [INVOCATION, "provider-attempt", first, "--provider", "codex"],
+      { cwd: root },
+    );
+
+    const second = create(root, args);
+    expect(second).toBe(first);
+    expect(
+      JSON.parse(readFileSync(second, "utf8")).governor.providerAttempts,
+    ).toHaveLength(1);
+
+    writeFileSync(path.join(root, "next.js"), "export const next = true;\n");
+    git(root, ["add", "next.js"]);
+    git(root, ["commit", "-q", "-m", "fix: new reviewed head"]);
+    expect(create(root, args)).not.toBe(first);
+  });
+
+  it("refuses a fresh same-work campaign created only by swapping provider policy", () => {
+    const root = repo("durable-provider-policy");
+    create(root, [], {
+      BS_QUALITY_PRIMARY: "codex",
+      BS_QUALITY_FALLBACK: "claude",
+    });
+
+    const changedPolicy = spawnSync(
+      "node",
+      [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          BS_QUALITY_PRIMARY: "claude",
+          BS_QUALITY_FALLBACK: "codex",
+        },
+      },
+    );
+    expect(changedPolicy.status).not.toBe(0);
+    expect(changedPolicy.stderr).toMatch(
+      /deterministic quality campaign identity collision/,
+    );
+  });
+
+  it("refuses caller-selected invocation ids that would reset a campaign", () => {
+    const root = repo("durable-explicit-id");
+    expect(() =>
+      create(root, ["--invocation-id", "11111111-1111-4111-8111-111111111111"]),
+    ).toThrow(/deterministic.*cannot be overridden/);
+  });
+
+  it("atomically converges concurrent creators on one durable manifest", async () => {
+    const root = repo("durable-concurrent-create");
+    const manifests = await Promise.all([
+      createAsync(root),
+      createAsync(root),
+      createAsync(root),
+      createAsync(root),
+    ]);
+    expect(new Set(manifests).size).toBe(1);
+    expect(JSON.parse(readFileSync(manifests[0], "utf8")).invocationId).toBe(
+      path.basename(path.dirname(manifests[0])),
+    );
+  });
+
+  it("cannot reset the same campaign from another linked worktree", () => {
+    const root = repo("durable-linked-worktree");
+    create(root);
+    const linked = mkdtempSync(path.join(tmpdir(), "quality-linked-"));
+    git(root, ["worktree", "add", "--detach", linked, "HEAD"]);
+    expect(() => create(linked)).toThrow(
+      /deterministic quality campaign identity collision/,
+    );
+  });
+
+  it("namespaces independent clones by their Git common directory", () => {
+    const root = repo("durable-independent-clone");
+    const original = create(root);
+    const clone = mkdtempSync(path.join(tmpdir(), "quality-clone-"));
+    execFileSync("git", ["clone", "-q", root, clone]);
+    git(clone, ["fetch", "-q", "origin", "main"]);
+    const independent = create(clone);
+    expect(independent).not.toBe(original);
+  });
+
   it("bootstraps one explicit manifest from a zsh parent", () => {
     const root = repo("bootstrap");
     const result = spawnSync(
@@ -785,6 +897,62 @@ exit 1
     );
   });
 
+  it("reserves an independent bounded window for a different fallback provider", () => {
+    const root = repo("provider-fallback-window");
+    const manifest = create(root, [], {
+      BS_QUALITY_MAX_PROVIDER_SECONDS: "120",
+    });
+    execFileSync(
+      "node",
+      [INVOCATION, "provider-attempt", manifest, "--provider", "codex"],
+      { cwd: root },
+    );
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    state.governor.providerDeadlineEpoch = Math.floor(Date.now() / 1000) - 1;
+    state.governor.campaignDeadlineEpoch = Math.floor(Date.now() / 1000) + 600;
+    writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
+
+    const fallback = spawnSync(
+      "node",
+      [INVOCATION, "provider-attempt", manifest, "--provider", "claude"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(fallback.status, fallback.stderr).toBe(0);
+    expect(JSON.parse(fallback.stdout).remainingSeconds).toBeGreaterThan(0);
+  });
+
+  it("reports exact-head successful gate evidence as reusable", () => {
+    const root = repo("gate-reuse");
+    const manifest = create(root);
+    recordGateFixture(manifest, "lint");
+
+    expect(
+      spawnSync(
+        "node",
+        [INVOCATION, "gate-satisfied", manifest, "--name", "lint"],
+        { cwd: root },
+      ).status,
+    ).toBe(0);
+    expect(
+      spawnSync(
+        "node",
+        [INVOCATION, "gate-satisfied", manifest, "--name", "test"],
+        { cwd: root },
+      ).status,
+    ).toBe(1);
+
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    const lint = state.gates.find((gate) => gate.name === "lint");
+    writeFileSync(lint.log, "tampered\n");
+    expect(
+      spawnSync(
+        "node",
+        [INVOCATION, "gate-satisfied", manifest, "--name", "lint"],
+        { cwd: root },
+      ).status,
+    ).toBe(1);
+  });
+
   it("starts the provider phase clock at the first attempt, not bootstrap", () => {
     const root = repo("provider-phase-start");
     const manifest = create(root, [], {
@@ -1189,11 +1357,16 @@ exit 1
       BS_QUALITY_REREVIEW_RESERVE_SECONDS: "60",
     });
     prepareCodexReview(root, manifest);
+    writeFileSync(path.join(root, "fix.js"), "export const fixed = true;\n");
+    git(root, ["add", "fix.js"]);
+    git(root, ["commit", "-q", "-m", "fix: verification head"]);
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
     const state = JSON.parse(readFileSync(manifest, "utf8"));
     state.governor.campaignSeconds = 1;
     state.governor.startedAtEpoch = Math.floor(Date.now() / 1000) - 2;
     state.governor.campaignDeadlineEpoch =
       state.governor.startedAtEpoch + state.governor.campaignSeconds;
+    state.governor.validationDeadlineEpoch = Math.floor(Date.now() / 1000) + 60;
     writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
     expect(
       spawnSync("node", [GOVERNOR, "check", manifest], { cwd: root }).status,
@@ -1201,6 +1374,18 @@ exit 1
     expect(
       spawnSync("node", [GOVERNOR, "bump-round", manifest], { cwd: root })
         .status,
+    ).not.toBe(0);
+    expect(
+      spawnSync(
+        "node",
+        [INVOCATION, "provider-attempt", manifest, "--provider", "codex"],
+        { cwd: root },
+      ).status,
+    ).not.toBe(0);
+    expect(
+      spawnSync("bash", [RUN_GATE, "--manifest", manifest, "--name", "lint"], {
+        cwd: root,
+      }).status,
     ).not.toBe(0);
   });
 
@@ -1385,24 +1570,28 @@ exit 99
     const advanceStarted = Math.floor(Date.now() / 1000);
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
     const validationState = JSON.parse(readFileSync(manifest, "utf8"));
-    expect(
-      validationState.governor.validationDeadlineEpoch,
-    ).toBeGreaterThanOrEqual(
+    const earliestValidationDeadline = Math.min(
+      validationState.governor.campaignDeadlineEpoch,
       advanceStarted +
         validationState.risk.runtime.checkReserveSeconds +
         validationState.risk.runtime.reviewReserveSeconds,
+    );
+    expect(
+      validationState.governor.validationDeadlineEpoch,
+    ).toBeGreaterThanOrEqual(earliestValidationDeadline);
+    expect(
+      validationState.governor.validationDeadlineEpoch,
+    ).toBeLessThanOrEqual(
+      Math.min(
+        validationState.governor.campaignDeadlineEpoch,
+        earliestValidationDeadline + 2,
+      ),
     );
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
     expect(
       JSON.parse(readFileSync(manifest, "utf8")).governor
         .validationDeadlineEpoch,
     ).toBe(validationState.governor.validationDeadlineEpoch);
-    validationState.governor.startedAtEpoch =
-      Math.floor(Date.now() / 1000) - 2000;
-    validationState.governor.campaignSeconds = 900;
-    validationState.governor.campaignDeadlineEpoch =
-      validationState.governor.startedAtEpoch + 900;
-    writeFileSync(manifest, `${JSON.stringify(validationState, null, 2)}\n`);
     const second = prepareCodexReview(root, manifest);
     expect(second.from).toBe(first.to);
     recordJudgeArtifact(root, manifest);
@@ -2095,7 +2284,8 @@ exit 1
       JSON.parse(readFileSync(manifest, "utf8")).governor.maxReviewRounds,
     ).toBe(2);
 
-    const explicitlyBounded = create(root, [], {
+    const boundedRoot = repo("critical-rounds-explicit-bound");
+    const explicitlyBounded = create(boundedRoot, [], {
       BS_QUALITY_MAX_REVIEW_ROUNDS: "2",
     });
     execFileSync(
@@ -2113,7 +2303,7 @@ exit 1
         "--codex-rounds",
         "1",
       ],
-      { cwd: root },
+      { cwd: boundedRoot },
     );
     expect(
       JSON.parse(readFileSync(explicitlyBounded, "utf8")).governor

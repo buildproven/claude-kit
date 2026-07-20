@@ -35,6 +35,11 @@ bash "$SCRIPT_DIR/quality-assert-clean.sh" \
   --manifest "$MANIFEST" --phase "gate '$NAME'" || exit 1
 STATE_ROOT="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" stateRoot)"
 HEAD="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.currentHead)"
+if node "$SCRIPT_DIR/quality-invocation.js" gate-satisfied "$MANIFEST" \
+  --name "$NAME"; then
+  echo "[quality] reusing exact-HEAD gate evidence: $NAME @ $HEAD"
+  exit 0
+fi
 LOG_DIR="$STATE_ROOT/gates/$HEAD"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/$NAME.log"

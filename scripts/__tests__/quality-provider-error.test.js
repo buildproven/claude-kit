@@ -79,6 +79,20 @@ describe("structured provider failure classification", () => {
     });
   });
 
+  it("recognizes Claude's successful-process API error envelope", () => {
+    expect(
+      classifyStructuredFailure(
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          api_error_status: 429,
+          result: "session limit",
+        }),
+      ),
+    ).toEqual({ category: "provider-exhaustion", resetAt: null });
+  });
+
   it("does not infer recovery metadata from successful review text", () => {
     expect(
       classifyStructuredFailure(

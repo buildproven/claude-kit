@@ -22,6 +22,7 @@ function values(value) {
   return [
     value.status,
     value.statusCode,
+    value.api_error_status,
     value.code,
     value.type,
     ...values(value.error),
