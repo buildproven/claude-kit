@@ -27,9 +27,9 @@ const gitRunner = (files) => (args) => {
   const cmd = args.join(" ");
   if (cmd.includes("merge-base")) return "BASE";
   if (cmd.includes("--numstat"))
-    return files.map((f) => `${f.added}\t${f.deleted}\t${f.path}`).join("\n");
+    return `${files.map((f) => `${f.added}\t${f.deleted}\t${f.path}`).join("\0")}\0`;
   if (cmd.includes("--name-status"))
-    return files.map((f) => `${f.status || "M"}\t${f.path}`).join("\n");
+    return `${files.map((f) => `${f.status || "M"}\0${f.path}`).join("\0")}\0`;
   if (cmd.includes("diff")) return files.map((f) => f.patch || "").join("\n");
   return "";
 };
@@ -76,6 +76,32 @@ describe("loadConfig — per-repo harness-config.json", () => {
       expect.arrayContaining(DEFAULTS.securityFloor),
     );
     expect(cfg.base.securityFloor).toBe(DEFAULTS.base.securityFloor);
+  });
+});
+
+describe("score — Git-valid control-character paths", () => {
+  it("parses NUL-delimited Git records and fails control paths into the security floor", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "risk-control-path-"));
+    const git = (args) =>
+      execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
+    git(["init", "-q", "-b", "main"]);
+    git(["config", "user.name", "Risk Test"]);
+    git(["config", "user.email", "risk@example.com"]);
+    fs.writeFileSync(path.join(dir, "base.txt"), "base\n");
+    git(["add", "base.txt"]);
+    git(["commit", "-q", "-m", "base"]);
+    git(["switch", "-q", "-c", "feature"]);
+    fs.mkdirSync(path.join(dir, "safe"));
+    fs.writeFileSync(path.join(dir, "safe", "server.pem\n"), "private key\n");
+    fs.writeFileSync(path.join(dir, "safe", "server.pem\r"), "private key\n");
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "add adversarial paths"]);
+
+    const result = score({ base: "main", repoRoot: dir, gitRunner: git });
+    expect(result.diffStats.files).toBe(2);
+    expect(result.riskScore).toBeGreaterThanOrEqual(
+      DEFAULTS.base.securityFloor,
+    );
   });
 });
 

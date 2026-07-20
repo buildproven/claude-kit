@@ -291,6 +291,13 @@ function normalizeFloorPath(file) {
   return String(file).replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
 }
 
+function hasControlCharacters(file) {
+  return Array.from(String(file)).some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 31 || code === 127;
+  });
+}
+
 function additiveFloorPatterns(defaultPatterns, configuredPatterns) {
   const configured = Array.isArray(configuredPatterns)
     ? configuredPatterns
@@ -312,6 +319,10 @@ function effectiveSecurityFloor(cfg = DEFAULTS) {
 }
 
 function matchesSecurityFloor(file, cfg = DEFAULTS) {
+  // Git accepts control characters in filenames. Treat every such path as
+  // security-sensitive instead of trying to assign ordinary risk to an
+  // ambiguous/adversarial display surface.
+  if (hasControlCharacters(file)) return true;
   return matchesPattern(normalizeFloorPath(file), effectiveSecurityFloor(cfg));
 }
 
@@ -439,32 +450,40 @@ function collectDescriptors(base, gitRunner) {
     "diff",
     "--name-status",
     "--no-renames",
+    "-z",
     `${mergeBase}...HEAD`,
   ]);
   const numstat = safeGit(gitRunner, [
     "diff",
     "--numstat",
     "--no-renames",
+    "-z",
     `${mergeBase}...HEAD`,
   ]);
 
   const statusByFile = new Map();
-  for (const line of nameStatus.split("\n")) {
-    if (!line.trim()) continue;
-    const parts = line.split("\t");
-    const letter = parts[0][0];
-    const file = parts[parts.length - 1];
+  const statusRecords = nameStatus.split("\0");
+  for (let index = 0; index + 1 < statusRecords.length; index += 2) {
+    const status = statusRecords[index];
+    const file = statusRecords[index + 1];
+    if (!status || !file) continue;
+    const letter = status[0];
     statusByFile.set(file, {
       status: letter,
-      baseFile: ["R", "C"].includes(letter) ? parts[1] : file,
+      baseFile: file,
     });
   }
 
   let totalLines = 0;
   const descriptors = [];
-  for (const line of numstat.split("\n")) {
-    if (!line.trim()) continue;
-    const [add, del, file] = line.split("\t");
+  for (const record of numstat.split("\0")) {
+    if (!record) continue;
+    const firstTab = record.indexOf("\t");
+    const secondTab = record.indexOf("\t", firstTab + 1);
+    if (firstTab < 0 || secondTab < 0) continue;
+    const add = record.slice(0, firstTab);
+    const del = record.slice(firstTab + 1, secondTab);
+    const file = record.slice(secondTab + 1);
     const isBinary = add === "-" && del === "-";
     const lines = isBinary
       ? 0
@@ -1049,8 +1068,10 @@ function touchesHumanFloor(files, cfg = DEFAULTS) {
   // would let a PR commit `humanFloor: []` and authorize its own sensitive diff.
   // Repository policy can only add stricter patterns.
   const patterns = additiveFloorPatterns(DEFAULTS.humanFloor, cfg?.humanFloor);
-  return (files || []).some((file) =>
-    matchesPattern(normalizeFloorPath(file), patterns),
+  return (files || []).some(
+    (file) =>
+      hasControlCharacters(file) ||
+      matchesPattern(normalizeFloorPath(file), patterns),
   );
 }
 

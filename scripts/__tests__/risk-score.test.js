@@ -175,6 +175,8 @@ describe("computeScore — security floor never beaten by mechanical", () => {
     "key_store/config.json",
     "safe\n/auth/session.js",
     "safe\r/keys/server.pem",
+    "safe/server.pem\n",
+    "safe/server.pem\r",
   ])("sensitive directory path %s stays at the security floor", (file) => {
     const r = scoreOf([d(file, "M", "+// note", 1)]);
     expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
@@ -358,8 +360,8 @@ describe("computeScore — trivial change goes low (but never zero handling)", (
 describe("score — base resolution is deterministic and fails closed", () => {
   // A gitRunner where origin/main IS present locally: the same diff must score
   // against the merge-base, identically to the CI (GITHUB_BASE_REF) path.
-  const NAME_STATUS = "M\tlib/widget.js";
-  const NUMSTAT = "40\t0\tlib/widget.js";
+  const NAME_STATUS = "M\0lib/widget.js\0";
+  const NUMSTAT = "40\t0\tlib/widget.js\0";
 
   function runnerWith({ hasOriginMain, hasUpstream }) {
     return (args) => {

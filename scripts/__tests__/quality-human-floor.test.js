@@ -21,6 +21,8 @@ describe("touchesHumanFloor", () => {
     [".env.production", "env secrets"],
     ["safe\n/auth/session.js", "newline path segment"],
     ["safe\r/keys/server.pem", "carriage-return path segment"],
+    ["safe/server.pem\n", "trailing newline"],
+    ["safe/server.pem\r", "trailing carriage return"],
   ];
   for (const [file, why] of humanFloorCases) {
     it(`flags ${file} (${why})`, () => {
