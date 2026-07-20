@@ -372,6 +372,7 @@ function resolvePlan(options) {
     worktreeRoot,
     worktreePath,
     baseRef: options.base || null,
+    defaultBranch: defaultBranch(repoRoot),
     config: settings,
   };
 }
@@ -425,16 +426,22 @@ function resolveBase(repoRoot, requested) {
   );
 }
 
-function withCreationLock(worktreeRoot, slug, callback) {
-  fs.mkdirSync(worktreeRoot, { recursive: true });
-  const lock = path.join(worktreeRoot, `.${slug}.create-lock`);
+function worktreeMetadataKey(record) {
+  return record.branch || `detached-${record.head}`;
+}
+
+function withLifecycleLock(repoRoot, key, operation, callback) {
+  const lockRoot = path.join(metadataDir(repoRoot), "locks");
+  fs.mkdirSync(lockRoot, { recursive: true, mode: 0o700 });
+  const lock = path.join(lockRoot, `${stableHash(key)}.lock`);
   try {
     fs.mkdirSync(lock);
   } catch (error) {
     if (error.code === "EEXIST") {
       throw new ManagerError(
-        `Another process is creating the '${slug}' worktree. Retry after it finishes.`,
-        "CREATE_BUSY",
+        `Another process is changing the '${key}' worktree lifecycle. Retry after it finishes.`,
+        "LIFECYCLE_BUSY",
+        { operation },
       );
     }
     throw error;
@@ -448,7 +455,7 @@ function withCreationLock(worktreeRoot, slug, callback) {
 
 function create(options) {
   const plan = resolvePlan(options);
-  return withCreationLock(plan.worktreeRoot, plan.slug, () => {
+  return withLifecycleLock(plan.repoRoot, plan.branch, "create", () => {
     const existing = registeredWorktrees(plan.repoRoot);
     const forBranch = existing.find((record) => record.branch === plan.branch);
     if (forBranch) {
@@ -459,7 +466,7 @@ function create(options) {
           { worktreePath: forBranch.path },
         );
       }
-      const metadata = writeMetadata(plan.repoRoot, plan.branch, {
+      let metadata = writeMetadata(plan.repoRoot, plan.branch, {
         creator: options.creator || null,
         purpose: options.purpose || null,
         invocation: options.invocation || null,
@@ -467,6 +474,16 @@ function create(options) {
         slug: path.basename(forBranch.path),
         state: "active",
       });
+      if (options.lockReason) {
+        metadata = lockRecord(plan.repoRoot, forBranch, {
+          creator: options.creator,
+          purpose: options.purpose,
+          invocation: options.invocation,
+          reason: options.lockReason,
+          recover: options.recover,
+          takeoverOwner: options.takeoverOwner,
+        }).metadata;
+      }
       return { ...plan, worktreePath: forBranch.path, reused: true, metadata };
     }
     if (fs.existsSync(plan.worktreePath)) {
@@ -497,12 +514,22 @@ function create(options) {
       prNumber: options.pr ? Number(options.pr) : null,
     });
     if (options.lockReason) {
-      lock({
-        ...options,
-        repo: plan.repoRoot,
-        branch: plan.branch,
-        reason: options.lockReason,
-      });
+      lockRecord(
+        plan.repoRoot,
+        {
+          path: plan.worktreePath,
+          branch: plan.branch,
+          head: git(plan.worktreePath, ["rev-parse", "HEAD"]).stdout,
+          locked: false,
+          lockReason: null,
+        },
+        {
+          creator: options.creator,
+          purpose: options.purpose,
+          invocation: options.invocation,
+          reason: options.lockReason,
+        },
+      );
     }
     return { ...plan, baseRef, reused: false, metadata };
   });
@@ -531,8 +558,23 @@ function recordFor(options) {
   return { repoRoot, record };
 }
 
-function lock(options) {
-  const { repoRoot, record } = recordFor(options);
+function expectedLockOwner(repoRoot, record) {
+  const metadata = readMetadata(repoRoot, worktreeMetadataKey(record));
+  if (
+    record.locked &&
+    record.lockReason &&
+    metadata?.lockReason &&
+    record.lockReason !== metadata.lockReason
+  ) {
+    throw new ManagerError(
+      `Git lock owner '${record.lockReason}' disagrees with lifecycle metadata owner '${metadata.lockReason}'. Reconcile ownership explicitly before continuing.`,
+      "LOCK_METADATA_DIVERGED",
+    );
+  }
+  return record.lockReason || metadata?.lockReason || null;
+}
+
+function lockRecord(repoRoot, record, options) {
   const reason = options.reason || options.owner || options.invocation;
   if (!reason) {
     throw new ManagerError(
@@ -540,39 +582,58 @@ function lock(options) {
       "OWNER_REQUIRED",
     );
   }
-  if (record.locked && record.lockReason !== reason) {
-    if (!options.takeoverOwner || options.takeoverOwner !== record.lockReason) {
+  const expected = expectedLockOwner(repoRoot, record);
+  if (record.locked && expected !== reason) {
+    if (
+      !options.recover ||
+      !options.takeoverOwner ||
+      options.takeoverOwner !== expected
+    ) {
       throw new ManagerError(
-        `Worktree is already locked by '${record.lockReason || "unknown"}'. Exact ownership handoff requires --takeover-owner '${record.lockReason || "<lock reason>"}'.`,
+        `Worktree is already locked by '${expected || "unknown"}'. Explicit recovery requires --recover --takeover-owner '${expected || "<lock reason>"}'.`,
         "LOCKED",
       );
     }
     git(repoRoot, ["worktree", "unlock", record.path]);
-    git(repoRoot, ["worktree", "lock", "--reason", reason, record.path]);
+    try {
+      git(repoRoot, ["worktree", "lock", "--reason", reason, record.path]);
+    } catch (error) {
+      git(repoRoot, ["worktree", "lock", "--reason", expected, record.path], {
+        allowFailure: true,
+      });
+      throw error;
+    }
   }
   if (!record.locked) {
     git(repoRoot, ["worktree", "lock", "--reason", reason, record.path]);
   }
-  const metadata = writeMetadata(
-    repoRoot,
-    record.branch || `detached-${record.head}`,
-    {
-      worktreePath: record.path,
-      creator: options.creator || null,
-      purpose: options.purpose || null,
-      invocation: options.invocation || null,
-      lockReason: reason,
-      state: "active",
-    },
-  );
+  const metadata = writeMetadata(repoRoot, worktreeMetadataKey(record), {
+    worktreePath: record.path,
+    creator: options.creator || null,
+    purpose: options.purpose || null,
+    invocation: options.invocation || null,
+    lockReason: reason,
+    state: "active",
+  });
   return { repoRoot, ...record, locked: true, lockReason: reason, metadata };
 }
 
-function unlock(options) {
-  const { repoRoot, record } = recordFor(options);
+function lock(options) {
+  const initial = recordFor(options);
+  return withLifecycleLock(
+    initial.repoRoot,
+    worktreeMetadataKey(initial.record),
+    "lock",
+    () => {
+      const { repoRoot, record } = recordFor(options);
+      return lockRecord(repoRoot, record, options);
+    },
+  );
+}
+
+function unlockRecord(repoRoot, record, options) {
   if (!record.locked) return { repoRoot, ...record, unlocked: false };
-  const metadata = record.branch ? readMetadata(repoRoot, record.branch) : null;
-  const expected = metadata?.lockReason || record.lockReason;
+  const expected = expectedLockOwner(repoRoot, record);
   if (!options.owner || options.owner !== expected) {
     throw new ManagerError(
       `Unlock refused. Supply the exact ownership identity with --owner '${expected || "<lock reason>"}'.`,
@@ -580,20 +641,38 @@ function unlock(options) {
     );
   }
   git(repoRoot, ["worktree", "unlock", record.path]);
-  if (record.branch) {
-    writeMetadata(repoRoot, record.branch, {
-      lockReason: null,
-      state: options.terminal ? "terminal" : "unlocked",
-    });
-  }
+  writeMetadata(repoRoot, worktreeMetadataKey(record), {
+    lockReason: null,
+    state: options.terminal ? "terminal" : "unlocked",
+  });
   return { repoRoot, ...record, locked: false, unlocked: true };
+}
+
+function unlock(options) {
+  const initial = recordFor(options);
+  return withLifecycleLock(
+    initial.repoRoot,
+    worktreeMetadataKey(initial.record),
+    "unlock",
+    () => {
+      const { repoRoot, record } = recordFor(options);
+      return unlockRecord(repoRoot, record, options);
+    },
+  );
 }
 
 function dirty(record) {
   if (!fs.existsSync(record.path)) return null;
-  return git(record.path, ["status", "--porcelain"], {
+  const result = git(record.path, ["status", "--porcelain"], {
     allowFailure: true,
-  }).stdout;
+  });
+  if (result.status !== 0) {
+    throw new ManagerError(
+      `Could not inspect worktree cleanliness at ${record.path}: ${result.stderr || "git status failed"}`,
+      "STATUS_UNKNOWN",
+    );
+  }
+  return result.stdout;
 }
 
 function upstreamState(repoRoot, branch) {
@@ -877,7 +956,7 @@ function status(options) {
   const repoRoot = primaryRoot(options.repo || process.cwd());
   const records = linkedWorktrees(repoRoot).map((record) => ({
     ...classify(repoRoot, record, options),
-    metadata: record.branch ? readMetadata(repoRoot, record.branch) : null,
+    metadata: readMetadata(repoRoot, worktreeMetadataKey(record)),
   }));
   return { repoRoot, worktrees: records };
 }
@@ -942,11 +1021,18 @@ function remove(options) {
   git(repoRoot, ["worktree", "remove", record.path]);
   git(repoRoot, ["worktree", "prune", "--expire", "now"]);
   let branchDeleted = false;
+  let branchDeletionError = null;
   if (options.deleteBranch && record.branch) {
     const deletion = git(repoRoot, ["branch", "-d", record.branch], {
       allowFailure: true,
     });
     branchDeleted = deletion.status === 0;
+    if (!branchDeleted) {
+      branchDeletionError =
+        deletion.stderr ||
+        deletion.stdout ||
+        `git branch -d '${record.branch}' failed`;
+    }
   }
   if (record.branch) {
     writeMetadata(repoRoot, record.branch, {
@@ -966,6 +1052,7 @@ function remove(options) {
     removedPath: record.path,
     branch: record.branch,
     branchDeleted,
+    branchDeletionError,
     recoverableAs: record.branch,
   };
 }
@@ -1095,6 +1182,7 @@ function repair(options) {
     ? realpathExisting(options.primary, "Primary checkout")
     : primaryRoot(options.repo || process.cwd());
   const records = linkedWorktrees(repoRoot);
+  const containerName = config(repoRoot).containerName;
   const results = [];
   for (const record of records) {
     if (!fs.existsSync(record.path)) {
@@ -1108,7 +1196,7 @@ function repair(options) {
     if (
       options.oldRepoName &&
       record.path.includes(
-        `${path.sep}${DEFAULT_CONTAINER}${path.sep}${options.oldRepoName}${path.sep}`,
+        `${path.sep}${containerName}${path.sep}${options.oldRepoName}${path.sep}`,
       )
     ) {
       const destination = resolvePlan({

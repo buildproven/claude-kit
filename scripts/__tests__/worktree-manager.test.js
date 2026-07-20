@@ -263,6 +263,35 @@ describe("worktree-manager public CLI", () => {
     expect(json.code).toBe("DIRTY");
   });
 
+  it("fails closed when worktree cleanliness cannot be inspected", () => {
+    const { parent, repo } = fixture();
+    const worktree = create(repo, "feature/status-failure");
+    const bin = path.join(parent, "git-bin");
+    mkdirSync(bin);
+    const realGit = spawnSync("which", ["git"], {
+      encoding: "utf8",
+    }).stdout.trim();
+    writeFileSync(
+      path.join(bin, "git"),
+      `#!/bin/sh
+case "$*" in
+  *"status --porcelain"*) echo "simulated status failure" >&2; exit 2 ;;
+  *) exec "${realGit}" "$@" ;;
+esac
+`,
+    );
+    chmodSync(path.join(bin, "git"), 0o755);
+    const { json } = manager(
+      ["remove", "--repo", repo, "--branch", "feature/status-failure"],
+      {
+        ok: false,
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+    expect(json.code).toBe("STATUS_UNKNOWN");
+    expect(existsSync(worktree.worktreePath)).toBe(true);
+  });
+
   it("requires exact ownership and recovery to remove a locked worktree", () => {
     const { repo } = fixture();
     create(repo, "feature/locked", ["--lock-reason", "owner-17"]);
@@ -301,6 +330,7 @@ describe("worktree-manager public CLI", () => {
           "feature/handoff",
           "--reason",
           "bs:quality/run-2",
+          "--recover",
           "--takeover-owner",
           "wrong",
         ],
@@ -315,10 +345,85 @@ describe("worktree-manager public CLI", () => {
       "feature/handoff",
       "--reason",
       "bs:quality/run-2",
+      "--recover",
       "--takeover-owner",
       "bs:dev/run-1",
     ]).json;
     expect(transferred.lockReason).toBe("bs:quality/run-2");
+  });
+
+  it("requires exact ownership to unlock and records terminal release", () => {
+    const { repo } = fixture();
+    create(repo, "feature/unlock", ["--lock-reason", "owner-17"]);
+    expect(
+      manager(
+        [
+          "unlock",
+          "--repo",
+          repo,
+          "--branch",
+          "feature/unlock",
+          "--owner",
+          "wrong",
+        ],
+        { ok: false },
+      ).json.code,
+    ).toBe("OWNER_MISMATCH");
+    const unlocked = manager([
+      "unlock",
+      "--repo",
+      repo,
+      "--branch",
+      "feature/unlock",
+      "--owner",
+      "owner-17",
+      "--terminal",
+    ]).json;
+    expect(unlocked.unlocked).toBe(true);
+  });
+
+  it("honors a requested lock when reusing a registered worktree", () => {
+    const { repo } = fixture();
+    create(repo, "feature/reuse-lock");
+    const reused = create(repo, "feature/reuse-lock", [
+      "--lock-reason",
+      "steward/run-2",
+    ]);
+    expect(reused.reused).toBe(true);
+    const state = manager(["status", "--repo", repo, "--skip-pr-check"]).json
+      .worktrees[0];
+    expect(state.locked).toBe(true);
+    expect(state.lockReason).toBe("steward/run-2");
+  });
+
+  it("serializes concurrent lock attempts without changing owners silently", async () => {
+    const { repo } = fixture();
+    create(repo, "feature/concurrent-lock");
+    const command = (reason) =>
+      runAsync("node", [
+        MANAGER,
+        "lock",
+        "--repo",
+        repo,
+        "--branch",
+        "feature/concurrent-lock",
+        "--reason",
+        reason,
+      ]);
+    const results = await Promise.all([command("owner-a"), command("owner-b")]);
+    expect(results.filter(({ status }) => status === 0)).toHaveLength(1);
+    expect(
+      results
+        .filter(({ status }) => status !== 0)
+        .every(
+          ({ stderr }) =>
+            stderr.includes("Another process is changing") ||
+            stderr.includes("already locked"),
+        ),
+    ).toBe(true);
+    const state = manager(["status", "--repo", repo, "--skip-pr-check"]).json
+      .worktrees[0];
+    expect(["owner-a", "owner-b"]).toContain(state.lockReason);
   });
 
   it("refuses a clean branch with unpushed commits", () => {
@@ -344,6 +449,40 @@ describe("worktree-manager public CLI", () => {
       { ok: false, env: ghEnv(bin, "OPEN") },
     );
     expect(json.code).toBe("OPEN_PR");
+  });
+
+  it("refuses worktrees whose PR was closed without merge", () => {
+    const { parent, repo } = fixture();
+    const bin = fakeGh(parent);
+    const worktree = create(repo, "feature/test");
+    git(worktree.worktreePath, "push", "-u", "origin", "feature/test");
+    const { json } = manager(
+      ["remove", "--repo", repo, "--branch", "feature/test"],
+      { ok: false, env: ghEnv(bin, "CLOSED") },
+    );
+    expect(json.code).toBe("CLOSED_PR");
+  });
+
+  it("reports a safe branch deletion refusal after removing the worktree", () => {
+    const { parent, repo } = fixture();
+    const bin = fakeGh(parent);
+    const worktree = create(repo, "feature/test");
+    writeFileSync(path.join(worktree.worktreePath, "change.txt"), "change\n");
+    git(worktree.worktreePath, "add", "change.txt");
+    git(worktree.worktreePath, "commit", "-m", "change");
+    git(worktree.worktreePath, "push", "-u", "origin", "feature/test");
+    git(repo, "branch", "--unset-upstream", "feature/test");
+    const output = manager(
+      ["remove", "--repo", repo, "--branch", "feature/test", "--delete-branch"],
+      { env: ghEnv(bin, "MERGED") },
+    ).json;
+    expect(output.branchDeleted).toBe(false);
+    expect(output.branchDeletionError).toMatch(
+      /not fully merged|not deleting/i,
+    );
+    expect(
+      git(repo, "show-ref", "--verify", "refs/heads/feature/test"),
+    ).toContain("refs/heads/feature/test");
   });
 
   it("reconciles a clean merged PR, including a manual/admin merge", () => {
@@ -448,6 +587,40 @@ describe("worktree-manager public CLI", () => {
     ).toBe("feature/rename-repair");
   });
 
+  it("repairs a renamed repository using the configured container name", () => {
+    const { parent, repo } = fixture("old-custom");
+    mkdirSync(path.join(repo, ".claude"));
+    writeFileSync(
+      path.join(repo, ".claude", "config.json"),
+      JSON.stringify({
+        worktrees: {
+          rootStrategy: "sibling-container",
+          containerName: ".custom-worktrees",
+        },
+      }),
+    );
+    git(repo, "add", ".claude/config.json");
+    git(repo, "commit", "-m", "configure worktrees");
+    const worktree = create(repo, "feature/custom-repair");
+    expect(worktree.worktreePath).toContain(
+      `${path.sep}.custom-worktrees${path.sep}`,
+    );
+    const renamed = path.join(parent, "new-custom");
+    renameSync(repo, renamed);
+    const repaired = manager([
+      "repair",
+      "--repo",
+      renamed,
+      "--old-repo-name",
+      "old-custom",
+      "--apply",
+    ]).json;
+    expect(repaired.worktrees[0].action).toBe("moved and repaired");
+    expect(repaired.worktrees[0].destination).toContain(
+      `${path.sep}.custom-worktrees${path.sep}new-custom${path.sep}`,
+    );
+  });
+
   it("serializes concurrent creation attempts without duplicate worktrees", async () => {
     const { repo } = fixture();
     const args = [
@@ -468,7 +641,7 @@ describe("worktree-manager public CLI", () => {
         ({ status, stderr }) =>
           status === 0 ||
           (status === 1 &&
-            stderr.includes("Another process is creating") &&
+            stderr.includes("Another process is changing") &&
             stderr.includes("Retry after it finishes")),
       ),
     ).toBe(true);

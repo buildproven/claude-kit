@@ -419,7 +419,7 @@ if [ "$ARGS_MERGE" = true ] && [ "$CURRENT_BRANCH" != "main" ] && [ "$CURRENT_BR
     --repo "$GIT_ROOT" --skip-pr-check 2>/dev/null |
     jq -r --arg branch "$CURRENT_BRANCH" \
       '.worktrees[] | select(.branch == $branch) | .lockReason // empty')
-  [ -z "$PRIOR_LOCK" ] || LOCK_ARGS+=(--takeover-owner "$PRIOR_LOCK")
+  [ -z "$PRIOR_LOCK" ] || LOCK_ARGS+=(--recover --takeover-owner "$PRIOR_LOCK")
   node "$SCRIPT_DIR/worktree-manager.js" "${LOCK_ARGS[@]}" >/dev/null || exit 1
 fi
 

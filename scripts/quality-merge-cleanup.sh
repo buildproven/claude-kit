@@ -24,6 +24,7 @@ fi
 
 PLAN="$(node "$MANAGER" resolve --repo "$WORKTREE_PATH" --branch "$FEATURE_BRANCH" 2>/dev/null || true)"
 PRIMARY_CHECKOUT="$(printf '%s' "$PLAN" | jq -r '.repoRoot // empty' 2>/dev/null)"
+DEFAULT_BRANCH="$(printf '%s' "$PLAN" | jq -r '.defaultBranch // empty' 2>/dev/null)"
 if [ -z "$PRIMARY_CHECKOUT" ]; then
   echo "[quality] merge succeeded; cleanup incomplete: primary checkout could not be resolved." >&2
   echo "  Recovery: node \"$MANAGER\" reconcile --repo \"$WORKTREE_PATH\" --apply" >&2
@@ -48,8 +49,11 @@ cd "$PRIMARY_CHECKOUT" || {
   exit 0
 }
 
-DEFAULT_BRANCH="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')"
-[ -n "$DEFAULT_BRANCH" ] || DEFAULT_BRANCH=main
+[ -n "$DEFAULT_BRANCH" ] || {
+  echo "[quality] merge succeeded; cleanup incomplete: default branch could not be resolved." >&2
+  echo "  Recovery: node \"$MANAGER\" reconcile --repo \"$PRIMARY_CHECKOUT\" --apply" >&2
+  exit 0
+}
 if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
   echo "[quality] merge succeeded; cleanup incomplete: primary checkout is dirty; it was not changed." >&2
   echo "  Recovery: node \"$MANAGER\" reconcile --repo \"$PRIMARY_CHECKOUT\" --apply" >&2
@@ -88,6 +92,12 @@ if [ "$REMOVE_RC" -ne 0 ]; then
   echo "[quality] merge succeeded; cleanup incomplete: $REMOVE_JSON" >&2
   echo "  Recovery: node \"$MANAGER\" reconcile --repo \"$PRIMARY_CHECKOUT\" --apply" >&2
   exit 0
+fi
+BRANCH_DELETED="$(printf '%s' "$REMOVE_JSON" | jq -r '.branchDeleted // false' 2>/dev/null)"
+BRANCH_DELETE_ERROR="$(printf '%s' "$REMOVE_JSON" | jq -r '.branchDeletionError // empty' 2>/dev/null)"
+if [ "$PRESERVE_BRANCH" = false ] && [ "$BRANCH_DELETED" != true ]; then
+  echo "[quality] merge succeeded; worktree removed; local branch cleanup incomplete: ${BRANCH_DELETE_ERROR:-git branch -d refused deletion}." >&2
+  echo "  Recovery: git -C \"$PRIMARY_CHECKOUT\" branch -d \"$FEATURE_BRANCH\"" >&2
 fi
 
 echo "[quality] merge cleanup complete."
