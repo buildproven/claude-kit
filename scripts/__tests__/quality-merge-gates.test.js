@@ -501,6 +501,20 @@ describe("quality merge gates", () => {
     );
   });
 
+  it("falls back once when the primary review is parser-inconclusive (rc 4)", () => {
+    const branch = RUN_REVIEW.slice(
+      RUN_REVIEW.indexOf('if { [ "$PROVIDER_RC" -eq 75 ]'),
+      RUN_REVIEW.indexOf('[ "$QUALITY_FALLBACK" != none ]; then'),
+    );
+    expect(branch).toMatch(/PROVIDER_RC" -eq 4/);
+    expect(RUN_REVIEW).toMatch(
+      /review was inconclusive; switching once to \$QUALITY_FALLBACK/,
+    );
+    expect(RUN_REVIEW).toMatch(
+      /4\)\s+echo "❌ MERGE BLOCKED: every \$REVIEW_PROVIDER review was inconclusive\."/,
+    );
+  });
+
   it("persists and reloads the exact reviewed base across fenced shells", () => {
     expect(RUN_REVIEW).toMatch(/quality-invocation\.js" record-review/);
     expect(RUN_REVIEW).toMatch(/--from "\$REVIEW_DIFF_BASE"/);

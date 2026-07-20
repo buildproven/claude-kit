@@ -169,7 +169,9 @@ cooldown before one recovery probe (one hour for exhaustion, six for billing).
 A successful probe clears the circuit. An open primary circuit skips immediately
 to the configured fallback instead of spending another review clock. Parser
 failures, provider exhaustion, billing, availability, timeouts, code findings,
-and CI failures remain distinct fail-closed diagnoses.
+and CI failures remain distinct diagnoses. An inconclusive primary parser result
+gets exactly one bounded fallback attempt; an inconclusive fallback remains
+fail-closed.
 
 Runtime is derived from both risk and actual diff workload. Risk controls
 depth; changed lines plus per-file overhead control the clock. The complete
