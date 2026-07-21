@@ -902,6 +902,63 @@ exit 1
     ).not.toBe(0);
   }, 120_000);
 
+  it("never carries a non-string-patchId approval across a rebase-only HEAD change", () => {
+    // invalidateOrCarryApproval() now guards manifest.approval.patchId with
+    // typeof === "string" before comparing to currentPatchId(), mirroring
+    // the sibling approvalHeadCarriedByRebase() guard, instead of relying
+    // on plain `===` to fail safe by accident of JS equality (null !==
+    // "realhash"). Locks in that a missing/non-string recorded patchId is
+    // never treated as a proven patch-id match, even across a genuine
+    // rebase-only replay.
+    const root = repo("approval-null-patchid");
+    const wrapped = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+      cwd: root,
+      input: JSON.stringify({
+        argv: ["--target-dir", root, "--level", "98"],
+      }),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BREAK_GLASS_APPROVED: "true",
+        BREAK_GLASS_APPROVER: "brett",
+      },
+    });
+    expect(wrapped.status, wrapped.stderr).toBe(0);
+    const manifest = wrapped.stdout
+      .split("\n")
+      .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
+      ?.slice("BS_QUALITY_MANIFEST=".length);
+    const priorHead = JSON.parse(readFileSync(manifest, "utf8")).revisions
+      .currentHead;
+
+    // Simulate an approval record that never got a patchId (e.g. from a
+    // pre-BUI-380 signer): null it out before the rebase.
+    invocation.withManifestLock(manifest, (state) => {
+      state.approval.patchId = null;
+    });
+
+    // Genuine rebase-only replay: rewrite history via an unrelated main
+    // commit + rebase, same as the BUI-380 carry test above.
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(path.join(root, "unrelated.js"), "export const u = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "unrelated main change"]);
+    git(root, ["push", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["rebase", "-q", "origin/main"]);
+    const rebasedHead = git(root, ["rev-parse", "HEAD"]);
+    expect(rebasedHead).not.toBe(priorHead);
+
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    const afterState = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(afterState.revisions.currentHead).toBe(rebasedHead);
+    // A non-string patchId must never be treated as a proven patch-id
+    // match: the approval must be invalidated, not silently carried.
+    expect(afterState.approval.approved).toBe(false);
+    expect(afterState.approval.rebaseCarriedHead).toBeUndefined();
+  });
+
   it("rejects approve commands from nested or headless quality children", () => {
     const root = repo("approval-command-child");
     const head = git(root, ["rev-parse", "HEAD"]);

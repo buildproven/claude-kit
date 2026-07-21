@@ -1014,6 +1014,7 @@ function invalidateOrCarryApproval(manifest, root, nextHead, rebaseOnly) {
   }
   if (
     rebaseOnly &&
+    typeof manifest.approval.patchId === "string" &&
     manifest.approval.patchId === currentPatchId(manifest, root)
   ) {
     // Rebase-only HEAD change with a patch-id-identical diff: the approved
