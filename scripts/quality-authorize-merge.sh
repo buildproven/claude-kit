@@ -150,12 +150,6 @@ else
     }
     CI_BILLING_WAIVED=true
   fi
-  if [ "$CI_BILLING_WAIVED" = false ]; then
-    gh pr checks "$PR" --repo "$EXPECTED_REPOSITORY" --required >/dev/null || {
-      echo "❌ MERGE BLOCKED: required CI is not successful." >&2
-      exit 1
-    }
-  fi
 fi
 git merge-base --is-ancestor "$EXPECTED_BASE_OID" "$EXPECTED_HEAD" || {
   echo "❌ MERGE BLOCKED: reviewed branch is not up to date with the PR base." >&2
@@ -254,6 +248,27 @@ case "$ATOMIC_BASE_FRESHNESS" in
     exit 1
     ;;
 esac
+if [ "$PREFLIGHT" = false ] && [ "${CI_BILLING_WAIVED:-false}" = false ]; then
+  if [ "$ATOMIC_BASE_FRESHNESS" = unprotectable ]; then
+    # This plan cannot define required checks, so the stamp waiter and final
+    # authorization must both validate every registered exact-HEAD check.
+    gh pr checks "$PR" --repo "$EXPECTED_REPOSITORY" >/dev/null || {
+      echo "❌ MERGE BLOCKED: registered CI is not successful." >&2
+      exit 1
+    }
+  else
+    gh pr checks "$PR" --repo "$EXPECTED_REPOSITORY" --required >/dev/null || {
+      echo "❌ MERGE BLOCKED: required CI is not successful." >&2
+      exit 1
+    }
+  fi
+fi
+if [ -n "${CI_BILLING_WAIVER_ARTIFACT:-}" ] &&
+  [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ]; then
+  echo "❌ MERGE BLOCKED: CI billing waivers are limited to plan-proven unprotectable private repositories." >&2
+  echo "   Refusing an admin merge that could bypass required reviews, status checks, or strict base freshness." >&2
+  exit 1
+fi
 TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"
 
 # Human-capability policy (autonomous-quality-v-model plan, Phase 0).

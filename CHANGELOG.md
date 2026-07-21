@@ -2,6 +2,15 @@
 
 All notable changes to claude-kit are documented here.
 
+## Unreleased
+
+### Added
+
+- The revision-bound quality engine now supports opt-in Gemini review as a
+  bounded, read-only primary or fallback provider. Gemini responses use the
+  same strict structured-review schema, provider circuit, attempt governor,
+  artifact inventory, and fail-closed merge evidence as Claude and Codex.
+
 ## [4.0.1] - 2026-07-16
 
 ### Fixed

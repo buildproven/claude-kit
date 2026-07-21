@@ -30,7 +30,7 @@ cd "$GIT_ROOT" || exit 1
 bash "$SCRIPT_DIR/quality-assert-clean.sh" \
   --manifest "$MANIFEST" --phase "blocking review" || exit 1
 # shellcheck source=quality-provider-policy.sh
-source "$SCRIPT_DIR/quality-provider-policy.sh"
+source "$SCRIPT_DIR/quality-provider-policy.sh" || exit 1
 # shellcheck source=quality-review-plan.sh
 source "$SCRIPT_DIR/quality-review-plan.sh"
 
@@ -131,6 +131,29 @@ run_claude_review() {
   return "$rc"
 }
 
+render_structured_review() {
+  local normalized_file="$1" findings_file="$2"
+  jq -r '
+    if (.findings | length) == 0 then "NO FINDINGS. Verdict: \(.verdict). \(.summary)"
+    else .findings[] | "\(.severity // "WARNING"): \(.file // "unknown"):\(.line_start // 0) — \(.title // "finding")\n\(.body // "")\nFix: \(.recommendation // "")"
+    end' "$normalized_file" >> "$findings_file"
+}
+
+classify_structured_provider_failure() {
+  local provider="$1" evidence="$2" failure_json category
+  failure_json="$(node "$SCRIPT_DIR/quality-provider-error.js" describe \
+    "$evidence" 2>/dev/null)" || return 1
+  category="$(printf '%s' "$failure_json" | jq -r '.category')"
+  printf '%s' "$failure_json" |
+    jq --arg provider "$provider" '. + {provider: $provider}' \
+      > "$REVIEW_OUT/provider-failure.json" || return 1
+  case "$category" in
+    provider-exhaustion) return 75 ;;
+    provider-billing) return 79 ;;
+    *) return 1 ;;
+  esac
+}
+
 run_codex_review() {
   local bounded normalizer schema raw_file normalized_file error_file rc pass pass_timeout
   local auth_output prompt_file
@@ -219,11 +242,90 @@ run_codex_review() {
       echo "INCONCLUSIVE: Codex output could not be parsed — human review required" >> "$REVIEW_OUT/codex.findings.txt"
       return 4
     fi
-    if ! jq -r '
-      if (.findings | length) == 0 then "NO FINDINGS. Verdict: \(.verdict). \(.summary)"
-      else .findings[] | "\(.severity // "WARNING"): \(.file // "unknown"):\(.line_start // 0) — \(.title // "finding")\n\(.body // "")\nFix: \(.recommendation // "")"
-      end' "$normalized_file" >> "$REVIEW_OUT/codex.findings.txt"; then
+    if ! render_structured_review "$normalized_file" \
+      "$REVIEW_OUT/codex.findings.txt"; then
       echo "INCONCLUSIVE: normalized Codex findings could not be rendered — human review required" >> "$REVIEW_OUT/codex.findings.txt"
+      return 4
+    fi
+    pass=$((pass + 1))
+  done
+}
+
+run_gemini_review() {
+  local bounded normalizer schema raw_file normalized_file error_file
+  local prompt_file rc pass pass_timeout focus failure_rc
+  bounded="$SCRIPT_DIR/quality-run-bounded.sh"
+  normalizer="$SCRIPT_DIR/quality-normalize-gemini-review.js"
+  schema="$SCRIPT_DIR/schemas/quality-review-output.schema.json"
+  [ -f "$schema" ] || return 2
+  command -v gemini >/dev/null 2>&1 || return 2
+  case "$QUALITY_REVIEW_PASSES" in
+    1|2) ;;
+    *) echo "quality: Gemini review passes must be 1 or 2" >&2; return 64 ;;
+  esac
+
+  : > "$REVIEW_OUT/gemini.findings.txt"
+  pass_timeout=$((QUALITY_REVIEW_TIMEOUT / QUALITY_REVIEW_PASSES))
+  [ "$pass_timeout" -ge 30 ] || pass_timeout=30
+  pass=1
+  while [ "$pass" -le "$QUALITY_REVIEW_PASSES" ]; do
+    raw_file="$REVIEW_OUT/gemini-${pass}.json"
+    normalized_file="$REVIEW_OUT/gemini-${pass}.normalized.json"
+    error_file="$REVIEW_OUT/gemini-${pass}.stderr"
+    prompt_file="$REVIEW_OUT/gemini-${pass}.prompt"
+    if [ "$pass" -eq 1 ]; then
+      focus="correctness, security, reliability, and silent failure paths"
+    else
+      focus="test adequacy, performance, architecture, and accidental complexity"
+    fi
+    {
+      echo "$QUALITY_REVIEW_FOCUS"
+      echo "Review focus for pass $pass/$QUALITY_REVIEW_PASSES: $focus."
+      echo "Review ONLY the supplied committed diff. Automated gates already passed."
+      echo "Do not run commands, edit files, or use tools."
+      if [ "$REVIEW_ROUND" -gt 1 ]; then
+        echo "Prior reviewed findings requiring verification:"
+        cat "$PRIOR_FINDINGS_FILE"
+      fi
+      echo "Repository and revision identity:"
+      cat "$REVIEW_OUT/identity.json"
+      echo "Changed files:"
+      cat "$REVIEW_OUT/files.txt"
+      echo "Commit log:"
+      cat "$REVIEW_OUT/log.txt"
+      echo "The next block is a JSON Schema definition for validation, not the response instance."
+      cat "$schema"
+      echo "Return one response INSTANCE with exactly the top-level keys verdict, summary, and findings."
+      echo "Never return JSON Schema definition keys such as \$schema, type, properties, required, or additionalProperties."
+      echo "Use verdict=approve only with zero findings. Use needs-attention with one or more actionable findings."
+      echo "Diff:"
+      cat "$REVIEW_OUT/diff.txt"
+    } > "$prompt_file"
+    pass_timeout="$(authorize_provider_attempt gemini "$pass_timeout")" \
+      || return 77
+    bash "$bounded" --timeout "$pass_timeout" -- \
+      gemini --skip-trust --approval-mode plan --output-format json \
+        -p "Perform the bounded static review supplied on stdin. Return only a JSON response instance with exactly verdict, summary, and findings; never echo or merge the JSON Schema definition." \
+        < "$prompt_file" > "$raw_file" 2> "$error_file"
+    rc=$?
+    classify_structured_provider_failure gemini "$raw_file"
+    failure_rc=$?
+    case "$failure_rc" in 75|79) return "$failure_rc" ;; esac
+    classify_structured_provider_failure gemini "$error_file"
+    failure_rc=$?
+    case "$failure_rc" in 75|79) return "$failure_rc" ;; esac
+    if [ "$rc" -ne 0 ]; then
+      [ "$rc" -eq 124 ] && return 76
+      grep -Eiq 'not authenticated|not logged in|login required|setup required|api key.*(?:missing|not found)' "$error_file" 2>/dev/null && return 2
+      return 1
+    fi
+    if ! node "$normalizer" "$raw_file" "$normalized_file"; then
+      echo "INCONCLUSIVE: Gemini output could not be parsed — human review required" >> "$REVIEW_OUT/gemini.findings.txt"
+      return 4
+    fi
+    if ! render_structured_review "$normalized_file" \
+      "$REVIEW_OUT/gemini.findings.txt"; then
+      echo "INCONCLUSIVE: normalized Gemini findings could not be rendered — human review required" >> "$REVIEW_OUT/gemini.findings.txt"
       return 4
     fi
     pass=$((pass + 1))
@@ -244,6 +346,7 @@ run_provider() {
   case "$provider" in
     claude) run_claude_review ;;
     codex) run_codex_review ;;
+    gemini) run_gemini_review ;;
     *) return 2 ;;
   esac
   rc=$?
@@ -309,7 +412,11 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
     "$REVIEW_OUT"/codex.findings.txt \
     "$REVIEW_OUT"/codex-*.json \
     "$REVIEW_OUT"/codex-*.progress \
-    "$REVIEW_OUT"/codex-*.prompt; do
+    "$REVIEW_OUT"/codex-*.prompt \
+    "$REVIEW_OUT"/gemini.findings.txt \
+    "$REVIEW_OUT"/gemini-*.json \
+    "$REVIEW_OUT"/gemini-*.stderr \
+    "$REVIEW_OUT"/gemini-*.prompt; do
     [ -e "$evidence" ] && mv "$evidence" "$REVIEW_OUT/failed-primary/"
   done
   REVIEW_PROVIDER="$QUALITY_FALLBACK"

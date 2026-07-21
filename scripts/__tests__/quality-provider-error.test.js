@@ -93,6 +93,49 @@ describe("structured provider failure classification", () => {
     ).toEqual({ category: "provider-exhaustion", resetAt: null });
   });
 
+  it("recognizes Gemini's root API error envelope", () => {
+    expect(
+      classifyStructuredFailure(
+        JSON.stringify({
+          error: {
+            code: 429,
+            status: "RESOURCE_EXHAUSTED",
+            message: "Quota exhausted.",
+          },
+        }),
+      ),
+    ).toEqual({ category: "provider-exhaustion", resetAt: null });
+  });
+
+  it("recognizes Codex's structured usage-limit message after warning events", () => {
+    const events = [
+      {
+        type: "error",
+        message: "Under-development features enabled: runtime_metrics.",
+      },
+      {
+        type: "error",
+        message:
+          "You've hit your usage limit. Purchase more credits or try again at Jul 25th, 2026 10:57 AM.",
+      },
+      {
+        type: "turn.failed",
+        error: {
+          message:
+            "You've hit your usage limit. Purchase more credits or try again at Jul 25th, 2026 10:57 AM.",
+        },
+      },
+    ];
+    expect(
+      classifyStructuredFailure(
+        events.map((event) => JSON.stringify(event)).join("\n"),
+      ),
+    ).toMatchObject({
+      category: "provider-exhaustion",
+      resetAt: expect.stringMatching(/^2026-07-25T/),
+    });
+  });
+
   it("does not infer recovery metadata from successful review text", () => {
     expect(
       classifyStructuredFailure(

@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const SCHEMA_VERSION = 1;
-const PROVIDERS = new Set(["claude", "codex"]);
+const PROVIDERS = new Set(["claude", "codex", "gemini"]);
 const CATEGORIES = new Set(["provider-exhaustion", "provider-billing"]);
 const PROBE_DELAYS_MS = {
   "provider-exhaustion": 60 * 60 * 1000,

@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -12,7 +12,18 @@ function resolvePolicy(env = {}) {
     "bash",
     [
       "-c",
-      `source "${POLICY}"; printf '%s/%s' "$QUALITY_PRIMARY" "$QUALITY_FALLBACK"`,
+      `source "${POLICY}" || exit $?; printf '%s/%s' "$QUALITY_PRIMARY" "$QUALITY_FALLBACK"`,
+    ],
+    { encoding: "utf8", env: { ...process.env, ...env } },
+  );
+}
+
+function resolvePolicyResult(env = {}) {
+  return spawnSync(
+    "bash",
+    [
+      "-c",
+      `source "${POLICY}" || exit $?; printf '%s/%s' "$QUALITY_PRIMARY" "$QUALITY_FALLBACK"`,
     ],
     { encoding: "utf8", env: { ...process.env, ...env } },
   );
@@ -49,5 +60,26 @@ describe("quality provider policy", () => {
         BS_QUALITY_FALLBACK: "none",
       }),
     ).toBe("claude/none");
+  });
+
+  it("accepts Gemini as an explicit governed provider", () => {
+    expect(
+      resolvePolicy({
+        HOME: mkdtempSync(path.join(tmpdir(), "qpp-")),
+        BS_QUALITY_PRIMARY: "gemini",
+        BS_QUALITY_FALLBACK: "none",
+      }),
+    ).toBe("gemini/none");
+  });
+
+  it("fails closed when the provider policy is invalid", () => {
+    const result = resolvePolicyResult({
+      HOME: mkdtempSync(path.join(tmpdir(), "qpp-")),
+      BS_QUALITY_PRIMARY: "unknown-provider",
+      BS_QUALITY_FALLBACK: "none",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toMatch(/invalid provider policy/);
   });
 });
