@@ -537,13 +537,20 @@ describe("quality merge gates", () => {
     );
   });
 
-  it("falls back once when native Codex parsing is inconclusive (rc 4)", () => {
+  it("falls back once when native Codex or Gemini parsing is inconclusive (rc 4)", () => {
+    // Codex and Gemini both report parser-inconclusive output the same way
+    // (rc=4) from their normalized-output parsers, so both must fail over.
+    // Claude's rc=4 combines parser/timeout/unresolved-agent failures and
+    // must stay fail-closed, so it is deliberately excluded here.
+    expect(RUN_REVIEW).toMatch(
+      /PRIMARY_HAS_STRUCTURED_RC4=false[\s\S]{0,80}case "\$QUALITY_PRIMARY" in[\s\S]{0,40}codex \| gemini\)/,
+    );
     const branch = RUN_REVIEW.slice(
       RUN_REVIEW.indexOf('if { [ "$PROVIDER_RC" -eq 75 ]'),
       RUN_REVIEW.indexOf('[ "$QUALITY_FALLBACK" != none ]; then'),
     );
     expect(branch).toMatch(
-      /PROVIDER_RC" -eq 4 \] && \[ "\$QUALITY_PRIMARY" = codex/,
+      /PROVIDER_RC" -eq 4 \] && \[ "\$PRIMARY_HAS_STRUCTURED_RC4" = true/,
     );
     expect(branch).not.toMatch(/\[ "\$PROVIDER_RC" -eq 4 \] \|\|/);
     expect(RUN_REVIEW).toMatch(

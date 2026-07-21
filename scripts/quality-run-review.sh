@@ -387,17 +387,23 @@ PROVIDER_RC=$?
 
 # rc=76 (bounded-budget timeout without converging) fails over to the fallback
 # when configured. Exhaustion, billing, and unavailability always fail over
-# because they cannot produce review evidence. Native Codex parser-inconclusive
-# output also fails over; Claude's rc=4 currently combines parser, timeout, and
-# unresolved-agent failures, so it remains fail-closed rather than masking those
-# distinct causes or bypassing the timeout policy. A parser failure is not
-# promoted to a clean result: the fallback must independently complete, and an
-# inconclusive fallback remains terminal below. The fallback attempt cannot
-# overrun the invocation: authorize_provider_attempt caps it against the
-# absolute campaign deadline and returns 77 when no budget remains.
+# because they cannot produce review evidence. Native Codex and Gemini both
+# report parser-inconclusive output structurally the same way (rc=4) and both
+# fail over for the same reason: their normalized-output parser rejected the
+# response, not the model. Claude's rc=4 currently combines parser, timeout,
+# and unresolved-agent failures, so it remains fail-closed rather than masking
+# those distinct causes or bypassing the timeout policy. A parser failure is
+# not promoted to a clean result: the fallback must independently complete,
+# and an inconclusive fallback remains terminal below. The fallback attempt
+# cannot overrun the invocation: authorize_provider_attempt caps it against
+# the absolute campaign deadline and returns 77 when no budget remains.
+PRIMARY_HAS_STRUCTURED_RC4=false
+case "$QUALITY_PRIMARY" in
+  codex | gemini) PRIMARY_HAS_STRUCTURED_RC4=true ;;
+esac
 if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
   [ "$PROVIDER_RC" -eq 2 ] ||
-  { [ "$PROVIDER_RC" -eq 4 ] && [ "$QUALITY_PRIMARY" = codex ]; } ||
+  { [ "$PROVIDER_RC" -eq 4 ] && [ "$PRIMARY_HAS_STRUCTURED_RC4" = true ]; } ||
   { [ "$PROVIDER_RC" -eq 76 ] && [ "$FALLBACK_ON_TIMEOUT" = 1 ]; }; } &&
   [ "$QUALITY_FALLBACK" != none ] &&
   [ "$QUALITY_FALLBACK" != "$QUALITY_PRIMARY" ]; then
@@ -408,7 +414,7 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
     echo "⚠️  [quality] $QUALITY_PRIMARY reported a billing or credits failure; switching immediately to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 2 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY unavailable; switching immediately to $QUALITY_FALLBACK." >&2
-  elif [ "$PROVIDER_RC" -eq 4 ] && [ "$QUALITY_PRIMARY" = codex ]; then
+  elif [ "$PROVIDER_RC" -eq 4 ] && [ "$PRIMARY_HAS_STRUCTURED_RC4" = true ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY review was inconclusive; switching once to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 76 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY exceeded its review budget without converging; failing over to $QUALITY_FALLBACK (BS_QUALITY_FALLBACK_ON_TIMEOUT=0 to disable)." >&2
@@ -416,7 +422,7 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
   # Preserve failed-primary diagnostics without discarding conclusive findings
   # from an earlier successful pass when a later pass becomes inconclusive.
   PRESERVATION_MODE=evidence-absent
-  if [ "$PROVIDER_RC" -eq 4 ] && [ "$QUALITY_PRIMARY" = codex ]; then
+  if [ "$PROVIDER_RC" -eq 4 ] && [ "$PRIMARY_HAS_STRUCTURED_RC4" = true ]; then
     PRESERVATION_MODE=parser-inconclusive
   fi
   bash "$SCRIPT_DIR/quality-preserve-primary-evidence.sh" \
