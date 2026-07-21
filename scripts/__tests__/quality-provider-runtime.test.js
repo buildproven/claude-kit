@@ -403,4 +403,47 @@ Quality-Base: ${base}`;
     expect(policy).toMatch(/BASH_VERSION/);
     expect(policy).toMatch(/ZSH_VERSION/);
   });
+
+  it.each(["parser-inconclusive", "evidence-absent"])(
+    "preserves a completed earlier pass's normalized findings in --mode %s when a LATER pass fails",
+    (mode) => {
+      // Multi-pass Codex review: pass 1 completes with real findings, pass 2
+      // fails for whatever reason (parser error -> parser-inconclusive;
+      // exhaustion/timeout/unavailability -> evidence-absent). Either way,
+      // pass 1's normalized result is authoritative and must not be
+      // discarded as if the primary produced nothing.
+      const dir = mkdtempSync(path.join(tmpdir(), "preserve-primary-"));
+      writeFileSync(
+        path.join(dir, "codex-1.normalized.json"),
+        JSON.stringify({
+          verdict: "needs-attention",
+          summary: "pass 1 completed",
+          findings: [{ severity: "high", title: "real finding" }],
+        }),
+      );
+      writeFileSync(
+        path.join(dir, "codex.findings.txt"),
+        "INCONCLUSIVE: pass 2 failed\n",
+      );
+
+      const result = spawnSync("bash", [
+        PRESERVE_PRIMARY,
+        "--review-out",
+        dir,
+        "--mode",
+        mode,
+      ]);
+      expect(result.status).toBe(0);
+
+      const preserved = readFileSync(
+        path.join(dir, "primary-codex-1.result.json"),
+        "utf8",
+      );
+      expect(JSON.parse(preserved).findings).toHaveLength(1);
+      expect(
+        spawnSync("test", ["-e", path.join(dir, "codex-1.normalized.json")])
+          .status,
+      ).not.toBe(0);
+    },
+  );
 });

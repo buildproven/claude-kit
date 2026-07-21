@@ -34,27 +34,30 @@ quarantine() {
   mv "$evidence" "$destination"
 }
 
-if [ "$MODE" = parser-inconclusive ]; then
-  # Preserve only successfully normalized passes, under names that cannot
-  # collide with a fallback Codex run. Rendered text can contain partial,
-  # clean-sentinel, or marker-adjacent content and is never authoritative.
-  for evidence in "$REVIEW_OUT"/codex-*.normalized.json; do
-    [ -e "$evidence" ] || continue
-    preserve_pass="$(basename "$evidence" .normalized.json)"
-    preserve_destination="$REVIEW_OUT/primary-$preserve_pass.result.json"
-    if [ -e "$preserve_destination" ]; then
-      # Re-entry into an attempt directory must not abort or create a second
-      # authoritative result for the same pass. Retain the first immutable
-      # result and quarantine the duplicate as diagnostic evidence.
-      quarantine "$evidence"
-      continue
-    fi
-    mv "$evidence" "$preserve_destination"
-  done
-fi
+# A multi-pass primary (e.g. Codex's 2-pass review) can complete one pass
+# with real findings before a LATER pass fails for any reason — parser
+# failure, exhaustion, timeout, unavailability. The completed pass's
+# normalized result is authoritative regardless of why the later pass
+# failed, so this preservation runs for both modes, not just
+# parser-inconclusive. Names that cannot collide with a fallback Codex run.
+for evidence in "$REVIEW_OUT"/codex-*.normalized.json; do
+  [ -e "$evidence" ] || continue
+  preserve_pass="$(basename "$evidence" .normalized.json)"
+  preserve_destination="$REVIEW_OUT/primary-$preserve_pass.result.json"
+  if [ -e "$preserve_destination" ]; then
+    # Re-entry into an attempt directory must not abort or create a second
+    # authoritative result for the same pass. Retain the first immutable
+    # result and quarantine the duplicate as diagnostic evidence.
+    quarantine "$evidence"
+    continue
+  fi
+  mv "$evidence" "$preserve_destination"
+done
 
-# Every rendered or partial findings file is diagnostic only. For rc=4, the
-# normalized result above carries completed-pass findings with exact severity.
+# Every rendered or partial findings file is diagnostic only. The normalized
+# result preserved above (if any) carries completed-pass findings with exact
+# severity; rendered text can contain partial, clean-sentinel, or
+# marker-adjacent content and is never authoritative.
 for evidence in "$REVIEW_OUT"/*.findings.txt; do
   [ -e "$evidence" ] || continue
   quarantine "$evidence"

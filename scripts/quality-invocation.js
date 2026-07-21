@@ -1822,12 +1822,15 @@ function writeArtifactInventory(manifest, artifactDir, provider) {
     provider,
     status: "success",
     files: names.map((name) => {
-      const preservedProvider = name.startsWith("primary-")
-        ? manifest.provider.primary
-        : null;
+      // Preserved artifacts encode their authoring provider in the filename
+      // itself (e.g. primary-codex-1.result.json). manifest.provider.primary
+      // is not yet populated on a campaign's first round — recordReview()
+      // sets it after this inventory is written — so it cannot be trusted
+      // here; the filename is always correct regardless of round ordering.
+      const preservedMatch = name.match(/^primary-(codex|gemini|claude)-/);
       return {
         name,
-        provider: preservedProvider || provider,
+        provider: preservedMatch ? preservedMatch[1] : provider,
         sha256: sha256File(path.join(resolved, name)),
       };
     }),

@@ -2553,6 +2553,66 @@ exit 1
     ).toThrow(/inconclusive provider findings/);
   });
 
+  it("attributes preserved primary evidence from the filename on a campaign's first round, before manifest.provider.primary is populated", () => {
+    // recordReview() is what sets manifest.provider.primary, and it only
+    // runs AFTER a review round completes. On a campaign's very first round
+    // (primary fails mid-pass, fallback picks up), writeArtifactInventory
+    // runs with manifest.provider.primary still unset — attribution must not
+    // depend on it.
+    const root = repo("fallback-inventory-first-round");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 2,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(manifest, ["reviewer-a", "reviewer-b"]);
+      // Deliberately NOT setting manifest.provider.primary — this is the
+      // first-round state the real pipeline is in when inventory is written.
+    });
+    const manifest = invocation.loadManifest(manifestPath).manifest;
+    expect(manifest.provider?.primary).toBeUndefined();
+    const artifactDir = invocation.reviewInfo(manifest).artifactDir;
+    mkdirSync(artifactDir, { recursive: true });
+    writeFileSync(
+      path.join(artifactDir, "primary-codex-1.result.json"),
+      JSON.stringify({
+        verdict: "needs-attention",
+        summary: "preserved primary pass",
+        findings: [
+          {
+            severity: "high",
+            title: "preserved primary finding",
+            body: "must remain authoritative",
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      path.join(artifactDir, "reviewer-a.findings.txt"),
+      "NO FINDINGS.\n",
+    );
+    writeFileSync(
+      path.join(artifactDir, "reviewer-b.findings.txt"),
+      "NO FINDINGS.\n",
+    );
+
+    invocation.writeArtifactInventory(manifest, artifactDir, "claude");
+    const inventory = JSON.parse(
+      readFileSync(path.join(artifactDir, "artifact-inventory.json"), "utf8"),
+    );
+    expect(inventory.files).toContainEqual(
+      expect.objectContaining({
+        name: "primary-codex-1.result.json",
+        provider: "codex",
+      }),
+    );
+  });
+
   it("treats trailing text after a clean sentinel as blocking evidence", () => {
     const root = repo("contradictory-clean-sentinel");
     const manifest = create(root);
