@@ -1,0 +1,23 @@
+{
+  "defaultProfile": "default",
+  "profiles": {
+    "default": [],
+    "example": ["example-http", "example-stdio"]
+  },
+  "servers": [
+    {
+      "name": "example-http",
+      "transport": "http",
+      "url": "https://mcp.example.com",
+      "auth": "oauth",
+      "clients": ["claude", "codex"]
+    },
+    {
+      "name": "example-stdio",
+      "transport": "stdio",
+      "command": "node",
+      "args": ["/path/to/your/mcp-server/index.js"],
+      "clients": ["claude", "codex"]
+    }
+  ]
+}
