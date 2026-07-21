@@ -8,8 +8,20 @@ set -euo pipefail
 # relative default breaks silently when this file ships from core/scripts/
 # inside the kit submodule. Resolve through the installed symlink target
 # instead (see setup-codex-skill-profile.sh for the same fix pattern).
+#
+# The resolved path ends in .../scripts/setup-mcp-parity.sh either way, but
+# the overlay root is one level further up when this copy lives inside an
+# embedded core/ submodule than when the kit repo is used standalone (its own
+# scripts/ dir sits directly under its repo root). Detect embedding by
+# preferring an overlay-level config/mcp.json one level higher, since that
+# file only ever exists at the true overlay root.
 SETUP_MCP_PARITY_REAL_PATH="$(readlink -f "${HOME}/.claude/scripts/setup-mcp-parity.sh" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
-SETUP_REPO="${SETUP_REPO:-$(cd "$(dirname "$SETUP_MCP_PARITY_REAL_PATH")/.." && pwd -P)}"
+SETUP_MCP_PARITY_SCRIPTS_DIR="$(cd "$(dirname "$SETUP_MCP_PARITY_REAL_PATH")" && pwd -P)"
+SETUP_MCP_PARITY_ONE_UP="$(cd "$SETUP_MCP_PARITY_SCRIPTS_DIR/.." && pwd -P)"
+if [ -z "${SETUP_REPO:-}" ] && [ -f "$SETUP_MCP_PARITY_ONE_UP/../config/mcp.json" ]; then
+  SETUP_REPO="$(cd "$SETUP_MCP_PARITY_ONE_UP/.." && pwd -P)"
+fi
+SETUP_REPO="${SETUP_REPO:-$SETUP_MCP_PARITY_ONE_UP}"
 MANIFEST="$SETUP_REPO/config/mcp.json"
 PROFILE=""
 LOGIN=0

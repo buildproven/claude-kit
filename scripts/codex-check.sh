@@ -80,8 +80,21 @@ fi
 # so resolving THIS running script's own symlink target — not a directory
 # symlink — gets back to the real overlay root regardless of which layer
 # shipped it. Fall back to $BASH_SOURCE for a non-installed/dev checkout.
+#
+# The resolved path ends in .../scripts/codex-check.sh either way, but the
+# overlay root is one level further up when this copy lives inside an
+# embedded core/ submodule than when the kit repo is used standalone (its
+# own scripts/ dir sits directly under its repo root). Detect embedding by
+# preferring an overlay-level config/CLAUDE.md one level higher — install.sh
+# always symlinks AGENTS.md to the overlay's own config/CLAUDE.md, never to
+# core/config/CLAUDE.md, so its presence is the disambiguating signal.
 CODEX_CHECK_REAL_PATH="$(readlink -f "${HOME}/.claude/scripts/codex-check.sh" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
-PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "$CODEX_CHECK_REAL_PATH")/.." && pwd)}"
+CODEX_CHECK_SCRIPTS_DIR="$(cd "$(dirname "$CODEX_CHECK_REAL_PATH")" && pwd)"
+CODEX_CHECK_ONE_UP="$(cd "$CODEX_CHECK_SCRIPTS_DIR/.." && pwd)"
+if [ -z "${PROJECT_DIR:-}" ] && [ -f "$CODEX_CHECK_ONE_UP/../config/CLAUDE.md" ]; then
+  PROJECT_DIR="$(cd "$CODEX_CHECK_ONE_UP/.." && pwd)"
+fi
+PROJECT_DIR="${PROJECT_DIR:-$CODEX_CHECK_ONE_UP}"
 SYNC_SCRIPT="$PROJECT_DIR/scripts/sync-codex-prompts.sh"
 CODEX_AGENTS="${HOME}/.codex/AGENTS.md"
 CODEX_MANIFEST="${HOME}/.codex/.sync-codex-prompts-managed"
