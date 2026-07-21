@@ -293,8 +293,10 @@ run_gemini_review() {
       cat "$REVIEW_OUT/files.txt"
       echo "Commit log:"
       cat "$REVIEW_OUT/log.txt"
-      echo "Return only one JSON object matching this schema exactly:"
+      echo "The next block is a JSON Schema definition for validation, not the response instance."
       cat "$schema"
+      echo "Return one response INSTANCE with exactly the top-level keys verdict, summary, and findings."
+      echo "Never return JSON Schema definition keys such as \$schema, type, properties, required, or additionalProperties."
       echo "Use verdict=approve only with zero findings. Use needs-attention with one or more actionable findings."
       echo "Diff:"
       cat "$REVIEW_OUT/diff.txt"
@@ -303,7 +305,7 @@ run_gemini_review() {
       || return 77
     bash "$bounded" --timeout "$pass_timeout" -- \
       gemini --skip-trust --approval-mode plan --output-format json \
-        -p "Perform the bounded static code review supplied on stdin and return only the requested JSON." \
+        -p "Perform the bounded static review supplied on stdin. Return only a JSON response instance with exactly verdict, summary, and findings; never echo or merge the JSON Schema definition." \
         < "$prompt_file" > "$raw_file" 2> "$error_file"
     rc=$?
     classify_structured_provider_failure gemini "$raw_file"
