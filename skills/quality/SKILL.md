@@ -36,6 +36,30 @@ done
 [ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
 ```
 
+## 0. On-demand status (`/bs:quality status`)
+
+`quality-terminal-status.js`'s diagnosis (repository gate status, provider
+review/checkpoint state, break-glass approval state and expiry, GitHub CI
+status) is otherwise fired only reactively, from failure paths inside gate,
+review, and merge steps. `status` is the proactive entry point: check an
+in-flight or stalled campaign's state without waiting for a failure or
+reading the manifest JSON/`ps aux` by hand.
+
+```text
+/bs:quality status --manifest <exact-manifest-path>
+```
+
+```bash
+bash "$QUALITY_SCRIPTS_DIR/quality-status.sh" --manifest "<exact-manifest-path>"
+```
+
+Read-only: locates and validates the manifest (same identity checks as any
+resume) and prints the diagnosis — never mutates state, never starts a
+campaign. Requires the exact manifest path, same as every other resume path
+in this skill; there is deliberately no PR-number or session-glob discovery.
+If the exact path isn't known, it was printed as `BS_QUALITY_MANIFEST=` by
+whichever bootstrap/resume created the campaign being asked about.
+
 ## 1. Manifest handoff
 
 The wrapper has already run bootstrap and must invoke this fork with exactly
