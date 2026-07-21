@@ -344,9 +344,26 @@ fi
 
 BASE_REF=""
 if [ -n "${PR_BASE_NAME:-}" ]; then
+  # BUI-382: this used to compare the freshly-fetched base tip against
+  # $PR_BASE_OID — a value read from `gh pr view`'s cached baseRefOid field
+  # (above, potentially seconds stale relative to GitHub's own git backend).
+  # That produced false-positive "base changed" aborts on an active repo:
+  # the fetch would correctly reveal the true current tip, but comparing it
+  # to a stale API-cache snapshot looked identical to a genuine race. Take a
+  # fresh, authoritative read of the base tip via `git ls-remote` (bypasses
+  # GitHub's API response cache entirely — same pattern already used for the
+  # equivalent freshness check in quality-authorize-merge.sh) immediately
+  # before the fetch, and compare the fetch result against THAT instead.
+  # This still catches a genuine race (base moves between the ls-remote and
+  # the fetch), just without false-alarming on API cache lag.
+  FRESH_BASE_OID="$(git ls-remote origin "refs/heads/$PR_BASE_NAME" | awk '{print $1}')"
+  [ -n "$FRESH_BASE_OID" ] || {
+    echo "❌ /bs:quality could not resolve the live PR base tip." >&2
+    exit 1
+  }
   git fetch origin "$PR_BASE_NAME" -q || exit 1
   BASE_REF="origin/$PR_BASE_NAME"
-  [ "$(git rev-parse "$BASE_REF")" = "$PR_BASE_OID" ] || {
+  [ "$(git rev-parse "$BASE_REF")" = "$FRESH_BASE_OID" ] || {
     echo "❌ /bs:quality PR base changed during bootstrap." >&2
     exit 1
   }
@@ -382,7 +399,13 @@ done
 
 CREATE_ARGS=(create --repo "$GIT_ROOT" --base-ref "$BASE_REF" \
   --level "$LEVEL_ARG" --scope "$SCOPE_ARG")
-[ -n "${PR_BASE_OID:-}" ] && CREATE_ARGS+=(--base-head-sha "$PR_BASE_OID")
+# Prefer the freshly-verified base tip (FRESH_BASE_OID, see the base-drift
+# guard above) over the gh-pr-view snapshot (PR_BASE_OID) when both are
+# available — it's the authoritative value the fetch was actually checked
+# against, so persisting it as baseHeadSha keeps the merge-time freshness
+# gate (quality-authorize-merge.sh) anchored on real git state.
+BASE_HEAD_SHA_ARG="${FRESH_BASE_OID:-${PR_BASE_OID:-}}"
+[ -n "$BASE_HEAD_SHA_ARG" ] && CREATE_ARGS+=(--base-head-sha "$BASE_HEAD_SHA_ARG")
 [ "$ARGS_MERGE" = true ] && CREATE_ARGS+=(--merge)
 [ "$SKIP_TESTS" = true ] && CREATE_ARGS+=(--skip-tests)
 [ -n "${RES_PR:-}" ] && CREATE_ARGS+=(--pr "$RES_PR")

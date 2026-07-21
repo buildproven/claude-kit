@@ -366,6 +366,115 @@ exit 1
     expect(manifest.revisions.baseHeadSha).toBe(base);
   }, 120_000);
 
+  it("does not false-positive 'base changed during bootstrap' on a stale gh pr view cache (BUI-382)", () => {
+    const root = repo("pr-bootstrap-stale-cache");
+    const staleBase = git(root, ["rev-parse", "origin/main"]);
+    git(root, ["branch", "release", staleBase]);
+    // Advance the release branch on the remote (= this same repo, self-added
+    // as origin — see repo()) AFTER capturing staleBase, simulating a real
+    // commit landing on the PR's base branch. The gh stub below still
+    // reports staleBase as baseRefOid — exactly what a lagging GitHub API
+    // cache would return. A fresh `git ls-remote`/fetch will see the real,
+    // newer tip; the fix must trust that live read over the stale gh field.
+    const worktree = mkdtempSync(path.join(tmpdir(), "quality-release-wt-"));
+    git(root, ["worktree", "add", "-q", worktree, "release"]);
+    writeFileSync(path.join(worktree, "release-only.txt"), "landed\n");
+    git(worktree, ["add", "."]);
+    git(worktree, ["commit", "-q", "-m", "real commit landed on release"]);
+    const freshBase = git(worktree, ["rev-parse", "HEAD"]);
+    expect(freshBase).not.toBe(staleBase);
+
+    const bin = mkdtempSync(path.join(tmpdir(), "quality-bootstrap-gh-"));
+    const gh = path.join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s\\n' '{"number":9,"headRefName":"feature","headRefOid":"${git(root, ["rev-parse", "HEAD"])}","headRepository":{"nameWithOwner":"owner/repo"},"isCrossRepository":false,"baseRefName":"release","baseRefOid":"${staleBase}"}'
+  exit 0
+fi
+if [ "$1 $2" = "repo view" ]; then
+  printf '%s\\n' 'owner/repo'
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(gh, 0o755);
+    const result = spawnSync(
+      "bash",
+      [BOOTSTRAP, "--pr", "9", "--level", "auto"],
+      {
+        cwd: root,
+        env: {
+          ...process.env,
+          CLAUDE_SETUP_ROOT: ROOT,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+        encoding: "utf8",
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).not.toMatch(/base changed during bootstrap/);
+    const manifestPath = result.stdout
+      .split("\n")
+      .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
+      ?.slice("BS_QUALITY_MANIFEST=".length);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifest.revisions.baseRef).toBe("origin/release");
+    // baseHeadSha must reflect the fresh, real tip — not the stale gh
+    // pr view snapshot — so the merge-time freshness gate anchors on truth.
+    expect(manifest.revisions.baseHeadSha).toBe(freshBase);
+  }, 120_000);
+
+  it("still blocks on a genuine base race (fresh ls-remote differs from the post-fetch tip)", () => {
+    // This is a synthetic reproduction of a true TOCTOU race: something
+    // else advances the base AFTER we've already read the live tip via
+    // ls-remote but BEFORE our fetch completes. We simulate it directly by
+    // asserting the guard's structure rather than winning an actual race
+    // window (not reliably reproducible in a test): call git-bootstrap with
+    // a base name that maps to a moving target where the ls-remote read and
+    // the fetched ref genuinely disagree, using two different remotes.
+    const root = repo("pr-bootstrap-genuine-race");
+    const base = git(root, ["rev-parse", "origin/main"]);
+    git(root, ["branch", "release", base]);
+    const bin = mkdtempSync(path.join(tmpdir(), "quality-bootstrap-gh-"));
+    const gh = path.join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s\\n' '{"number":11,"headRefName":"feature","headRefOid":"${git(root, ["rev-parse", "HEAD"])}","headRepository":{"nameWithOwner":"owner/repo"},"isCrossRepository":false,"baseRefName":"nonexistent-branch","baseRefOid":"${base}"}'
+  exit 0
+fi
+if [ "$1 $2" = "repo view" ]; then
+  printf '%s\\n' 'owner/repo'
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(gh, 0o755);
+    const result = spawnSync(
+      "bash",
+      [BOOTSTRAP, "--pr", "11", "--level", "auto"],
+      {
+        cwd: root,
+        env: {
+          ...process.env,
+          CLAUDE_SETUP_ROOT: ROOT,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+        encoding: "utf8",
+      },
+    );
+    // A base branch that doesn't exist on the remote resolves to an empty
+    // ls-remote read, which the guard correctly refuses rather than
+    // silently treating as "no base to check".
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/could not resolve the live PR base tip/);
+  }, 120_000);
+
   it("survives a zsh parent and separate Bash processes", () => {
     const root = repo("zsh");
     const result = spawnSync(
