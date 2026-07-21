@@ -401,6 +401,11 @@ PRIMARY_HAS_STRUCTURED_RC4=false
 case "$QUALITY_PRIMARY" in
   codex | gemini) PRIMARY_HAS_STRUCTURED_RC4=true ;;
 esac
+# QUALITY_FALLBACK != QUALITY_PRIMARY guards every failure code below (75,
+# 79, 2, 4, 76), not only the rc=4 branch added alongside
+# PRIMARY_HAS_STRUCTURED_RC4 — pre-existing behavior, not new with that flag.
+# "Falling back" to the same provider that just failed can never make sense
+# regardless of which rc triggered it, so the guard is correctly universal.
 if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
   [ "$PROVIDER_RC" -eq 2 ] ||
   { [ "$PROVIDER_RC" -eq 4 ] && [ "$PRIMARY_HAS_STRUCTURED_RC4" = true ]; } ||
