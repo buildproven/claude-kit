@@ -576,6 +576,106 @@ wait
     expect(Date.parse(renewed.expiresAt)).toBeGreaterThan(Date.now());
   }, 120_000);
 
+  it("carries a valid break-glass approval across a rebase-only HEAD change with no new diff (BUI-380)", () => {
+    const root = repo("approval-rebase-carry");
+    const wrapped = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+      cwd: root,
+      input: JSON.stringify({
+        argv: ["--target-dir", root, "--level", "98"],
+      }),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BREAK_GLASS_APPROVED: "true",
+        BREAK_GLASS_APPROVER: "brett",
+      },
+    });
+    expect(wrapped.status, wrapped.stderr).toBe(0);
+    const manifest = wrapped.stdout
+      .split("\n")
+      .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
+      ?.slice("BS_QUALITY_MANIFEST=".length);
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", manifest], {
+        cwd: root,
+      }).status,
+    ).toBe(0);
+    const beforeState = JSON.parse(readFileSync(manifest, "utf8"));
+    const priorHead = beforeState.revisions.currentHead;
+
+    // Advance main with an unrelated commit, then rebase the feature branch
+    // onto it. This rewrites the feature commit (new SHA, new parent) but
+    // the diff content (file.js: 1 -> 2) is byte-identical.
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(path.join(root, "unrelated.js"), "export const u = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "unrelated main change"]);
+    git(root, ["push", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["rebase", "-q", "origin/main"]);
+    const rebasedHead = git(root, ["rev-parse", "HEAD"]);
+    expect(rebasedHead).not.toBe(priorHead);
+    expect(
+      spawnSync(
+        "git",
+        ["merge-base", "--is-ancestor", priorHead, rebasedHead],
+        {
+          cwd: root,
+        },
+      ).status,
+    ).not.toBe(0); // confirm this is a real rewrite, not a fast-forward
+
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    const afterState = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(afterState.revisions.currentHead).toBe(rebasedHead);
+    expect(afterState.approval.approved).toBe(true);
+    expect(afterState.approval.rebaseCarriedHead).toBe(rebasedHead);
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", manifest], {
+        cwd: root,
+      }).status,
+    ).toBe(0);
+
+    // baseHeadSha (quality-authorize-merge.sh's live-freshness anchor at
+    // merge time, EXPECTED_BASE_OID) must advance with the rebase too, or
+    // merge authorization would keep comparing against the pre-rebase base
+    // forever and wrongly block an up-to-date branch with "PR base changed
+    // after review" even though nothing unreviewed landed.
+    const newMainHead = git(root, ["rev-parse", "origin/main"]);
+    expect(afterState.revisions.baseHeadSha).toBe(newMainHead);
+    expect(afterState.revisions.baseRebaseCarry).toMatchObject({
+      head: rebasedHead,
+      baseSha: newMainHead,
+    });
+    expect(
+      spawnSync(
+        "git",
+        [
+          "merge-base",
+          "--is-ancestor",
+          afterState.revisions.baseHeadSha,
+          rebasedHead,
+        ],
+        { cwd: root },
+      ).status,
+    ).toBe(0);
+
+    // A genuine new content change after the rebase must still invalidate
+    // the carried approval — rebase tolerance must never become a blanket
+    // pass.
+    writeFileSync(path.join(root, "file.js"), "export const value = 3;\n");
+    git(root, ["commit", "-qam", "real content change"]);
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    const finalState = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(finalState.approval.approved).toBe(false);
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", manifest], {
+        cwd: root,
+      }).status,
+    ).not.toBe(0);
+  }, 120_000);
+
   it("rejects headless review children before the resume path", () => {
     const root = repo("headless-resume");
     const manifest = create(root);
