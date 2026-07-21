@@ -1,4 +1,10 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -13,6 +19,10 @@ const VALIDATOR = readFileSync(
 const RUN_REVIEW = readFileSync(
   path.join(ROOT, "scripts/quality-run-review.sh"),
   "utf8",
+);
+const PRESERVE_PRIMARY = path.join(
+  ROOT,
+  "scripts/quality-preserve-primary-evidence.sh",
 );
 const AUTHORIZE = readFileSync(
   path.join(ROOT, "scripts/quality-authorize-merge.sh"),
@@ -525,6 +535,171 @@ describe("quality merge gates", () => {
     expect(RUN_REVIEW).not.toMatch(
       /bounded review budget and no usable fallback is configured/,
     );
+  });
+
+  it("falls back once when native Codex or Gemini parsing is inconclusive (rc 4)", () => {
+    // Codex and Gemini both report parser-inconclusive output the same way
+    // (rc=4) from their normalized-output parsers, so both must fail over.
+    // Claude's rc=4 combines parser/timeout/unresolved-agent failures and
+    // must stay fail-closed, so it is deliberately excluded here.
+    expect(RUN_REVIEW).toMatch(
+      /PRIMARY_HAS_STRUCTURED_RC4=false[\s\S]{0,80}case "\$QUALITY_PRIMARY" in[\s\S]{0,40}codex \| gemini\)/,
+    );
+    const branch = RUN_REVIEW.slice(
+      RUN_REVIEW.indexOf('if { [ "$PROVIDER_RC" -eq 75 ]'),
+      RUN_REVIEW.indexOf('[ "$QUALITY_FALLBACK" != none ]; then'),
+    );
+    expect(branch).toMatch(
+      /PROVIDER_RC" -eq 4 \] && \[ "\$PRIMARY_HAS_STRUCTURED_RC4" = true/,
+    );
+    expect(branch).not.toMatch(/\[ "\$PROVIDER_RC" -eq 4 \] \|\|/);
+    expect(RUN_REVIEW).toMatch(
+      /review was inconclusive; switching once to \$QUALITY_FALLBACK/,
+    );
+    expect(RUN_REVIEW).toMatch(
+      /4\)\s+echo "❌ MERGE BLOCKED: \$REVIEW_PROVIDER review was inconclusive \$FALLBACK_NOTE\."/,
+    );
+  });
+
+  it("preserves conclusive findings when a later primary pass is inconclusive", () => {
+    const reviewOut = mkdtempSync(path.join(tmpdir(), "quality-evidence-"));
+    writeFileSync(
+      path.join(reviewOut, "codex.findings.txt"),
+      "BLOCKING: src/example.js:12 — real finding\nFix it.\nINCONCLUSIVE: pass 2 parser failed\n",
+    );
+    writeFileSync(
+      path.join(reviewOut, "codex-1.normalized.json"),
+      JSON.stringify({
+        verdict: "needs-attention",
+        summary: "completed pass",
+        findings: [{ severity: "high", title: "real finding" }],
+      }),
+    );
+    writeFileSync(path.join(reviewOut, "codex-2.json"), "{}\n");
+    writeFileSync(path.join(reviewOut, "codex-2.stderr"), "parse failure\n");
+
+    execFileSync("bash", [
+      PRESERVE_PRIMARY,
+      "--review-out",
+      reviewOut,
+      "--mode",
+      "parser-inconclusive",
+    ]);
+
+    expect(existsSync(path.join(reviewOut, "codex.findings.txt"))).toBe(false);
+    expect(
+      JSON.parse(
+        readFileSync(
+          path.join(reviewOut, "primary-codex-1.result.json"),
+          "utf8",
+        ),
+      ).findings,
+    ).toEqual([
+      expect.objectContaining({ severity: "high", title: "real finding" }),
+    ]);
+    expect(
+      readFileSync(
+        path.join(reviewOut, "failed-primary", "codex.findings.txt"),
+        "utf8",
+      ),
+    ).toContain("INCONCLUSIVE: pass 2 parser failed");
+    expect(
+      existsSync(path.join(reviewOut, "failed-primary", "codex-2.json")),
+    ).toBe(true);
+    expect(
+      existsSync(path.join(reviewOut, "failed-primary", "codex-2.stderr")),
+    ).toBe(true);
+  });
+
+  it("quarantines repeated primary evidence without replacing the authoritative result", () => {
+    const reviewOut = mkdtempSync(path.join(tmpdir(), "quality-collision-"));
+    writeFileSync(
+      path.join(reviewOut, "primary-codex-1.result.json"),
+      JSON.stringify({ findings: [{ title: "earlier evidence" }] }),
+    );
+    writeFileSync(
+      path.join(reviewOut, "codex-1.normalized.json"),
+      JSON.stringify({ findings: [{ title: "new evidence" }] }),
+    );
+    writeFileSync(
+      path.join(reviewOut, "codex.findings.txt"),
+      "INCONCLUSIVE:\n",
+    );
+
+    expect(() =>
+      execFileSync("bash", [
+        PRESERVE_PRIMARY,
+        "--review-out",
+        reviewOut,
+        "--mode",
+        "parser-inconclusive",
+      ]),
+    ).not.toThrow();
+    expect(
+      JSON.parse(
+        readFileSync(
+          path.join(reviewOut, "primary-codex-1.result.json"),
+          "utf8",
+        ),
+      ).findings[0].title,
+    ).toBe("earlier evidence");
+    expect(
+      JSON.parse(
+        readFileSync(
+          path.join(reviewOut, "failed-primary", "codex-1.normalized.json"),
+          "utf8",
+        ),
+      ).findings[0].title,
+    ).toBe("new evidence");
+  });
+
+  it("does not promote a marker-only inconclusive review to evidence", () => {
+    const reviewOut = mkdtempSync(path.join(tmpdir(), "quality-evidence-"));
+    mkdirSync(path.join(reviewOut, "unrelated"));
+    writeFileSync(
+      path.join(reviewOut, "codex.findings.txt"),
+      "INCONCLUSIVE: parser failed\n\n",
+    );
+
+    execFileSync("bash", [
+      PRESERVE_PRIMARY,
+      "--review-out",
+      reviewOut,
+      "--mode",
+      "parser-inconclusive",
+    ]);
+
+    expect(existsSync(path.join(reviewOut, "codex.findings.txt"))).toBe(false);
+    expect(
+      readFileSync(
+        path.join(reviewOut, "failed-primary", "codex.findings.txt"),
+        "utf8",
+      ),
+    ).toBe("INCONCLUSIVE: parser failed\n\n");
+  });
+
+  it("quarantines partial findings when the primary produced no evidence", () => {
+    const reviewOut = mkdtempSync(path.join(tmpdir(), "quality-evidence-"));
+    writeFileSync(
+      path.join(reviewOut, "codex.findings.txt"),
+      "BLOCKING: partial pass before timeout\n",
+    );
+
+    execFileSync("bash", [
+      PRESERVE_PRIMARY,
+      "--review-out",
+      reviewOut,
+      "--mode",
+      "evidence-absent",
+    ]);
+
+    expect(existsSync(path.join(reviewOut, "codex.findings.txt"))).toBe(false);
+    expect(
+      readFileSync(
+        path.join(reviewOut, "failed-primary", "codex.findings.txt"),
+        "utf8",
+      ),
+    ).toContain("partial pass before timeout");
   });
 
   it("persists and reloads the exact reviewed base across fenced shells", () => {

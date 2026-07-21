@@ -802,6 +802,163 @@ exit 1
     ).toBe(0);
   });
 
+  it("carries a valid break-glass approval across a rebase-only HEAD change with no new diff (BUI-380)", () => {
+    const root = repo("approval-rebase-carry");
+    const wrapped = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+      cwd: root,
+      input: JSON.stringify({
+        argv: ["--target-dir", root, "--level", "98"],
+      }),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BREAK_GLASS_APPROVED: "true",
+        BREAK_GLASS_APPROVER: "brett",
+      },
+    });
+    expect(wrapped.status, wrapped.stderr).toBe(0);
+    const manifest = wrapped.stdout
+      .split("\n")
+      .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
+      ?.slice("BS_QUALITY_MANIFEST=".length);
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", manifest], {
+        cwd: root,
+      }).status,
+    ).toBe(0);
+    const beforeState = JSON.parse(readFileSync(manifest, "utf8"));
+    const priorHead = beforeState.revisions.currentHead;
+
+    // Advance main with an unrelated commit, then rebase the feature branch
+    // onto it. This rewrites the feature commit (new SHA, new parent) but
+    // the diff content (file.js: 1 -> 2) is byte-identical.
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(path.join(root, "unrelated.js"), "export const u = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "unrelated main change"]);
+    git(root, ["push", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["rebase", "-q", "origin/main"]);
+    const rebasedHead = git(root, ["rev-parse", "HEAD"]);
+    expect(rebasedHead).not.toBe(priorHead);
+    expect(
+      spawnSync(
+        "git",
+        ["merge-base", "--is-ancestor", priorHead, rebasedHead],
+        {
+          cwd: root,
+        },
+      ).status,
+    ).not.toBe(0); // confirm this is a real rewrite, not a fast-forward
+
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    const afterState = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(afterState.revisions.currentHead).toBe(rebasedHead);
+    expect(afterState.approval.approved).toBe(true);
+    expect(afterState.approval.rebaseCarriedHead).toBe(rebasedHead);
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", manifest], {
+        cwd: root,
+      }).status,
+    ).toBe(0);
+
+    // baseHeadSha (quality-authorize-merge.sh's live-freshness anchor at
+    // merge time, EXPECTED_BASE_OID) must advance with the rebase too, or
+    // merge authorization would keep comparing against the pre-rebase base
+    // forever and wrongly block an up-to-date branch with "PR base changed
+    // after review" even though nothing unreviewed landed.
+    const newMainHead = git(root, ["rev-parse", "origin/main"]);
+    expect(afterState.revisions.baseHeadSha).toBe(newMainHead);
+    expect(afterState.revisions.baseRebaseCarry).toMatchObject({
+      head: rebasedHead,
+      baseSha: newMainHead,
+    });
+    expect(
+      spawnSync(
+        "git",
+        [
+          "merge-base",
+          "--is-ancestor",
+          afterState.revisions.baseHeadSha,
+          rebasedHead,
+        ],
+        { cwd: root },
+      ).status,
+    ).toBe(0);
+
+    // A genuine new content change after the rebase must still invalidate
+    // the carried approval — rebase tolerance must never become a blanket
+    // pass.
+    writeFileSync(path.join(root, "file.js"), "export const value = 3;\n");
+    git(root, ["commit", "-qam", "real content change"]);
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    const finalState = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(finalState.approval.approved).toBe(false);
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", manifest], {
+        cwd: root,
+      }).status,
+    ).not.toBe(0);
+  }, 120_000);
+
+  it("never carries a non-string-patchId approval across a rebase-only HEAD change", () => {
+    // invalidateOrCarryApproval() now guards manifest.approval.patchId with
+    // typeof === "string" before comparing to currentPatchId(), mirroring
+    // the sibling approvalHeadCarriedByRebase() guard, instead of relying
+    // on plain `===` to fail safe by accident of JS equality (null !==
+    // "realhash"). Locks in that a missing/non-string recorded patchId is
+    // never treated as a proven patch-id match, even across a genuine
+    // rebase-only replay.
+    const root = repo("approval-null-patchid");
+    const wrapped = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+      cwd: root,
+      input: JSON.stringify({
+        argv: ["--target-dir", root, "--level", "98"],
+      }),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BREAK_GLASS_APPROVED: "true",
+        BREAK_GLASS_APPROVER: "brett",
+      },
+    });
+    expect(wrapped.status, wrapped.stderr).toBe(0);
+    const manifest = wrapped.stdout
+      .split("\n")
+      .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
+      ?.slice("BS_QUALITY_MANIFEST=".length);
+    const priorHead = JSON.parse(readFileSync(manifest, "utf8")).revisions
+      .currentHead;
+
+    // Simulate an approval record that never got a patchId (e.g. from a
+    // pre-BUI-380 signer): null it out before the rebase.
+    invocation.withManifestLock(manifest, (state) => {
+      state.approval.patchId = null;
+    });
+
+    // Genuine rebase-only replay: rewrite history via an unrelated main
+    // commit + rebase, same as the BUI-380 carry test above.
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(path.join(root, "unrelated.js"), "export const u = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "unrelated main change"]);
+    git(root, ["push", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["rebase", "-q", "origin/main"]);
+    const rebasedHead = git(root, ["rev-parse", "HEAD"]);
+    expect(rebasedHead).not.toBe(priorHead);
+
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    const afterState = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(afterState.revisions.currentHead).toBe(rebasedHead);
+    // A non-string patchId must never be treated as a proven patch-id
+    // match: the approval must be invalidated, not silently carried.
+    expect(afterState.approval.approved).toBe(false);
+    expect(afterState.approval.rebaseCarriedHead).toBeUndefined();
+  });
+
   it("rejects approve commands from nested or headless quality children", () => {
     const root = repo("approval-command-child");
     const head = git(root, ["rev-parse", "HEAD"]);
@@ -2478,6 +2635,245 @@ exit 1
         { cwd: root },
       ),
     ).not.toThrow();
+  });
+
+  it("inventories preserved Codex findings with a complete Claude fallback panel", () => {
+    const root = repo("fallback-inventory");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 2,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(manifest, ["reviewer-a", "reviewer-b"]);
+      manifest.provider.primary = "codex";
+      manifest.provider.fallback = "claude";
+    });
+    const manifest = invocation.loadManifest(manifestPath).manifest;
+    const artifactDir = invocation.reviewInfo(manifest).artifactDir;
+    mkdirSync(artifactDir, { recursive: true });
+    writeFileSync(
+      path.join(artifactDir, "primary-codex-1.result.json"),
+      JSON.stringify({
+        verdict: "needs-attention",
+        summary: "preserved primary pass",
+        findings: [
+          {
+            severity: "high",
+            title: "preserved primary finding",
+            body: "must remain authoritative",
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      path.join(artifactDir, "reviewer-a.findings.txt"),
+      "NO FINDINGS.\n",
+    );
+    writeFileSync(
+      path.join(artifactDir, "reviewer-b.findings.txt"),
+      "NO FINDINGS.\n",
+    );
+
+    expect(() =>
+      invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
+    ).not.toThrow();
+    const inventory = JSON.parse(
+      readFileSync(path.join(artifactDir, "artifact-inventory.json"), "utf8"),
+    );
+    expect(inventory.provider).toBe("claude");
+    expect(inventory.files).toEqual([
+      expect.objectContaining({
+        name: "primary-codex-1.result.json",
+        provider: "codex",
+      }),
+      expect.objectContaining({
+        name: "reviewer-a.findings.txt",
+        provider: "claude",
+      }),
+      expect.objectContaining({
+        name: "reviewer-b.findings.txt",
+        provider: "claude",
+      }),
+    ]);
+
+    writeFileSync(
+      path.join(artifactDir, "reviewer-a.findings.txt"),
+      "NO FINDINGS.\nINCONCLUSIVE: later pass\n",
+    );
+    expect(() =>
+      invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
+    ).toThrow(/inconclusive provider findings/);
+  });
+
+  it("attributes preserved primary evidence from the filename on a campaign's first round, before manifest.provider.primary is populated", () => {
+    // recordReview() is what sets manifest.provider.primary, and it only
+    // runs AFTER a review round completes. On a campaign's very first round
+    // (primary fails mid-pass, fallback picks up), writeArtifactInventory
+    // runs with manifest.provider.primary still unset — attribution must not
+    // depend on it.
+    const root = repo("fallback-inventory-first-round");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 2,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(manifest, ["reviewer-a", "reviewer-b"]);
+      // Deliberately NOT setting manifest.provider.primary — this is the
+      // first-round state the real pipeline is in when inventory is written.
+    });
+    const manifest = invocation.loadManifest(manifestPath).manifest;
+    expect(manifest.provider?.primary).toBeUndefined();
+    const artifactDir = invocation.reviewInfo(manifest).artifactDir;
+    mkdirSync(artifactDir, { recursive: true });
+    writeFileSync(
+      path.join(artifactDir, "primary-codex-1.result.json"),
+      JSON.stringify({
+        verdict: "needs-attention",
+        summary: "preserved primary pass",
+        findings: [
+          {
+            severity: "high",
+            title: "preserved primary finding",
+            body: "must remain authoritative",
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      path.join(artifactDir, "reviewer-a.findings.txt"),
+      "NO FINDINGS.\n",
+    );
+    writeFileSync(
+      path.join(artifactDir, "reviewer-b.findings.txt"),
+      "NO FINDINGS.\n",
+    );
+
+    invocation.writeArtifactInventory(manifest, artifactDir, "claude");
+    const inventory = JSON.parse(
+      readFileSync(path.join(artifactDir, "artifact-inventory.json"), "utf8"),
+    );
+    expect(inventory.files).toContainEqual(
+      expect.objectContaining({
+        name: "primary-codex-1.result.json",
+        provider: "codex",
+      }),
+    );
+  });
+
+  it("does not double-count a Gemini pass's findings between the raw and normalized JSON (not just Codex)", () => {
+    // The raw-vs-normalized dedup filter in providerFindings() only matched
+    // codex-(\d+)\.json, so a raw gemini-1.json and its gemini-1.normalized.json
+    // sibling both got counted as separate findings sources — doubling every
+    // Gemini finding. This mirrors the existing (implicit) Codex coverage from
+    // prepareCodexReview, which always writes both codex-1.json and
+    // codex-1.normalized.json and relies on the dedup to avoid double-counting.
+    const root = repo("gemini-raw-normalized-dedup");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 2,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["reviewer-a", "reviewer-b"]);
+    });
+    execFileSync("node", [GOVERNOR, "bump-round", manifest], { cwd: root });
+    const loaded = invocation.loadManifest(manifest).manifest;
+    const info = invocation.reviewInfo(loaded);
+    mkdirSync(info.artifactDir, { recursive: true });
+    writeFileSync(
+      path.join(info.artifactDir, "diff.txt"),
+      execFileSync("git", ["diff", `${info.from}..${info.to}`], { cwd: root }),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "identity.json"),
+      execFileSync("node", [INVOCATION, "review-identity", manifest], {
+        cwd: root,
+      }),
+    );
+    const geminiResult = {
+      verdict: "needs-attention",
+      summary: "gemini findings",
+      findings: [{ severity: "high", title: "the one real finding" }],
+    };
+    writeFileSync(
+      path.join(info.artifactDir, "gemini-1.json"),
+      JSON.stringify(geminiResult),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "gemini-1.normalized.json"),
+      JSON.stringify(geminiResult),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "gemini.findings.txt"),
+      "HIGH: the one real finding\n",
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "reviewer-a.findings.txt"),
+      "NO FINDINGS.\n",
+    );
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "inventory",
+        manifest,
+        "--artifact-dir",
+        info.artifactDir,
+        "--provider",
+        "gemini",
+      ],
+      { cwd: root },
+    );
+    const diffSha = createHash("sha256")
+      .update(readFileSync(path.join(info.artifactDir, "diff.txt")))
+      .digest("hex");
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "record-review",
+        manifest,
+        "--from",
+        info.from,
+        "--to",
+        info.to,
+        "--provider",
+        "gemini",
+        "--primary",
+        "gemini",
+        "--fallback",
+        "none",
+        "--artifact-dir",
+        info.artifactDir,
+        "--diff-sha",
+        diffSha,
+      ],
+      { cwd: root },
+    );
+    for (const name of ["lint", "test", "security"]) {
+      recordGateFixture(manifest, name);
+    }
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toHaveLength(1);
   });
 
   it("treats trailing text after a clean sentinel as blocking evidence", () => {
