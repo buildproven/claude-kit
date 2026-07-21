@@ -1595,11 +1595,12 @@ function providerFindings(manifest) {
     );
     const resultNames = new Set(resultFiles.map((file) => file.name));
     for (const item of resultFiles.filter((file) => {
-      const rawPass = file.name.match(/^codex-(\d+)\.json$/);
+      const rawPass = file.name.match(/^(codex|gemini)-(\d+)\.json$/);
+      if (!rawPass) return true;
+      const [, providerName, pass] = rawPass;
       return (
-        !rawPass ||
-        (!resultNames.has(`codex-${rawPass[1]}.normalized.json`) &&
-          !resultNames.has(`primary-codex-${rawPass[1]}.result.json`))
+        !resultNames.has(`${providerName}-${pass}.normalized.json`) &&
+        !resultNames.has(`primary-${providerName}-${pass}.result.json`)
       );
     })) {
       let parsed;

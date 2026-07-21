@@ -34,13 +34,16 @@ quarantine() {
   mv "$evidence" "$destination"
 }
 
-# A multi-pass primary (e.g. Codex's 2-pass review) can complete one pass
-# with real findings before a LATER pass fails for any reason — parser
-# failure, exhaustion, timeout, unavailability. The completed pass's
+# A multi-pass primary (e.g. Codex's or Gemini's 2-pass review) can complete
+# one pass with real findings before a LATER pass fails for any reason —
+# parser failure, exhaustion, timeout, unavailability. The completed pass's
 # normalized result is authoritative regardless of why the later pass
 # failed, so this preservation runs for both modes, not just
-# parser-inconclusive. Names that cannot collide with a fallback Codex run.
-for evidence in "$REVIEW_OUT"/codex-*.normalized.json; do
+# parser-inconclusive, and for both providers. Names that cannot collide
+# with a fallback run.
+for evidence in \
+  "$REVIEW_OUT"/codex-*.normalized.json \
+  "$REVIEW_OUT"/gemini-*.normalized.json; do
   [ -e "$evidence" ] || continue
   preserve_pass="$(basename "$evidence" .normalized.json)"
   preserve_destination="$REVIEW_OUT/primary-$preserve_pass.result.json"

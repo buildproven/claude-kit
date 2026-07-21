@@ -446,4 +446,46 @@ Quality-Base: ${base}`;
       ).not.toBe(0);
     },
   );
+
+  it.each(["parser-inconclusive", "evidence-absent"])(
+    "preserves a completed Gemini pass's normalized findings in --mode %s (not just Codex)",
+    (mode) => {
+      // Same bug class as the Codex test above, but for Gemini: the
+      // preservation loop only globbed codex-*.normalized.json, so a
+      // completed Gemini pass got swept into failed-primary/ by the raw
+      // artifact quarantine loop (gemini-*.json) instead of being preserved.
+      const dir = mkdtempSync(path.join(tmpdir(), "preserve-primary-gemini-"));
+      writeFileSync(
+        path.join(dir, "gemini-1.normalized.json"),
+        JSON.stringify({
+          verdict: "needs-attention",
+          summary: "gemini pass 1 completed",
+          findings: [{ severity: "high", title: "real gemini finding" }],
+        }),
+      );
+      writeFileSync(
+        path.join(dir, "gemini.findings.txt"),
+        "INCONCLUSIVE: pass 2 failed\n",
+      );
+
+      const result = spawnSync("bash", [
+        PRESERVE_PRIMARY,
+        "--review-out",
+        dir,
+        "--mode",
+        mode,
+      ]);
+      expect(result.status).toBe(0);
+
+      const preserved = readFileSync(
+        path.join(dir, "primary-gemini-1.result.json"),
+        "utf8",
+      );
+      expect(JSON.parse(preserved).findings).toHaveLength(1);
+      expect(
+        spawnSync("test", ["-e", path.join(dir, "gemini-1.normalized.json")])
+          .status,
+      ).not.toBe(0);
+    },
+  );
 });

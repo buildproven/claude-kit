@@ -2613,6 +2613,112 @@ exit 1
     );
   });
 
+  it("does not double-count a Gemini pass's findings between the raw and normalized JSON (not just Codex)", () => {
+    // The raw-vs-normalized dedup filter in providerFindings() only matched
+    // codex-(\d+)\.json, so a raw gemini-1.json and its gemini-1.normalized.json
+    // sibling both got counted as separate findings sources — doubling every
+    // Gemini finding. This mirrors the existing (implicit) Codex coverage from
+    // prepareCodexReview, which always writes both codex-1.json and
+    // codex-1.normalized.json and relies on the dedup to avoid double-counting.
+    const root = repo("gemini-raw-normalized-dedup");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 2,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["reviewer-a", "reviewer-b"]);
+    });
+    execFileSync("node", [GOVERNOR, "bump-round", manifest], { cwd: root });
+    const loaded = invocation.loadManifest(manifest).manifest;
+    const info = invocation.reviewInfo(loaded);
+    mkdirSync(info.artifactDir, { recursive: true });
+    writeFileSync(
+      path.join(info.artifactDir, "diff.txt"),
+      execFileSync("git", ["diff", `${info.from}..${info.to}`], { cwd: root }),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "identity.json"),
+      execFileSync("node", [INVOCATION, "review-identity", manifest], {
+        cwd: root,
+      }),
+    );
+    const geminiResult = {
+      verdict: "needs-attention",
+      summary: "gemini findings",
+      findings: [{ severity: "high", title: "the one real finding" }],
+    };
+    writeFileSync(
+      path.join(info.artifactDir, "gemini-1.json"),
+      JSON.stringify(geminiResult),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "gemini-1.normalized.json"),
+      JSON.stringify(geminiResult),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "gemini.findings.txt"),
+      "HIGH: the one real finding\n",
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "reviewer-a.findings.txt"),
+      "NO FINDINGS.\n",
+    );
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "inventory",
+        manifest,
+        "--artifact-dir",
+        info.artifactDir,
+        "--provider",
+        "gemini",
+      ],
+      { cwd: root },
+    );
+    const diffSha = createHash("sha256")
+      .update(readFileSync(path.join(info.artifactDir, "diff.txt")))
+      .digest("hex");
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "record-review",
+        manifest,
+        "--from",
+        info.from,
+        "--to",
+        info.to,
+        "--provider",
+        "gemini",
+        "--primary",
+        "gemini",
+        "--fallback",
+        "none",
+        "--artifact-dir",
+        info.artifactDir,
+        "--diff-sha",
+        diffSha,
+      ],
+      { cwd: root },
+    );
+    for (const name of ["lint", "test", "security"]) {
+      recordGateFixture(manifest, name);
+    }
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toHaveLength(1);
+  });
+
   it("treats trailing text after a clean sentinel as blocking evidence", () => {
     const root = repo("contradictory-clean-sentinel");
     const manifest = create(root);
