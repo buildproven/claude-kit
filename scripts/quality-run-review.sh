@@ -133,10 +133,15 @@ run_claude_review() {
 
 render_structured_review() {
   local normalized_file="$1" findings_file="$2"
-  jq -r '
+  if ! jq -r '
     if (.findings | length) == 0 then "NO FINDINGS. Verdict: \(.verdict). \(.summary)"
     else .findings[] | "\(.severity // "WARNING"): \(.file // "unknown"):\(.line_start // 0) — \(.title // "finding")\n\(.body // "")\nFix: \(.recommendation // "")"
-    end' "$normalized_file" >> "$findings_file"
+    end' "$normalized_file" >> "$findings_file"; then
+    # A normalized payload whose rendering failed is part of the inconclusive
+    # pass, not authoritative completed-pass evidence.
+    rm -f "$normalized_file"
+    return 1
+  fi
 }
 
 classify_structured_provider_failure() {
@@ -382,13 +387,31 @@ PROVIDER_RC=$?
 
 # rc=76 (bounded-budget timeout without converging) fails over to the fallback
 # when configured. Exhaustion, billing, and unavailability always fail over
-# because they cannot produce review evidence. The fallback attempt cannot
-# overrun the invocation: authorize_provider_attempt caps it against the
-# absolute campaign deadline and returns 77 when no budget remains.
+# because they cannot produce review evidence. Native Codex and Gemini both
+# report parser-inconclusive output structurally the same way (rc=4) and both
+# fail over for the same reason: their normalized-output parser rejected the
+# response, not the model. Claude's rc=4 currently combines parser, timeout,
+# and unresolved-agent failures, so it remains fail-closed rather than masking
+# those distinct causes or bypassing the timeout policy. A parser failure is
+# not promoted to a clean result: the fallback must independently complete,
+# and an inconclusive fallback remains terminal below. The fallback attempt
+# cannot overrun the invocation: authorize_provider_attempt caps it against
+# the absolute campaign deadline and returns 77 when no budget remains.
+PRIMARY_HAS_STRUCTURED_RC4=false
+case "$QUALITY_PRIMARY" in
+  codex | gemini) PRIMARY_HAS_STRUCTURED_RC4=true ;;
+esac
+# QUALITY_FALLBACK != QUALITY_PRIMARY guards every failure code below (75,
+# 79, 2, 4, 76), not only the rc=4 branch added alongside
+# PRIMARY_HAS_STRUCTURED_RC4 — pre-existing behavior, not new with that flag.
+# "Falling back" to the same provider that just failed can never make sense
+# regardless of which rc triggered it, so the guard is correctly universal.
 if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
   [ "$PROVIDER_RC" -eq 2 ] ||
+  { [ "$PROVIDER_RC" -eq 4 ] && [ "$PRIMARY_HAS_STRUCTURED_RC4" = true ]; } ||
   { [ "$PROVIDER_RC" -eq 76 ] && [ "$FALLBACK_ON_TIMEOUT" = 1 ]; }; } &&
-  [ "$QUALITY_FALLBACK" != none ]; then
+  [ "$QUALITY_FALLBACK" != none ] &&
+  [ "$QUALITY_FALLBACK" != "$QUALITY_PRIMARY" ]; then
   if [ "$PROVIDER_RC" -eq 75 ]; then
     DETAIL="$(cat "$REVIEW_OUT/provider-exhausted" 2>/dev/null || true)"
     echo "⚠️  [quality] $QUALITY_PRIMARY exhausted${DETAIL:+ — $DETAIL}; switching immediately to $QUALITY_FALLBACK." >&2
@@ -396,29 +419,19 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
     echo "⚠️  [quality] $QUALITY_PRIMARY reported a billing or credits failure; switching immediately to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 2 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY unavailable; switching immediately to $QUALITY_FALLBACK." >&2
+  elif [ "$PROVIDER_RC" -eq 4 ] && [ "$PRIMARY_HAS_STRUCTURED_RC4" = true ]; then
+    echo "⚠️  [quality] $QUALITY_PRIMARY review was inconclusive; switching once to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 76 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY exceeded its review budget without converging; failing over to $QUALITY_FALLBACK (BS_QUALITY_FALLBACK_ON_TIMEOUT=0 to disable)." >&2
   fi
-  # Preserve failed-primary diagnostics. Findings from an earlier successful
-  # primary pass remain authoritative if a later pass triggers fallback.
-  mkdir -p "$REVIEW_OUT/failed-primary"
-  for evidence in "$REVIEW_OUT"/*.findings.txt; do
-    [ -e "$evidence" ] || continue
-    grep -q '^INCONCLUSIVE:' "$evidence" &&
-      mv "$evidence" "$REVIEW_OUT/failed-primary/"
-  done
-  for evidence in \
-    "$REVIEW_OUT"/*.stderr \
-    "$REVIEW_OUT"/codex.findings.txt \
-    "$REVIEW_OUT"/codex-*.json \
-    "$REVIEW_OUT"/codex-*.progress \
-    "$REVIEW_OUT"/codex-*.prompt \
-    "$REVIEW_OUT"/gemini.findings.txt \
-    "$REVIEW_OUT"/gemini-*.json \
-    "$REVIEW_OUT"/gemini-*.stderr \
-    "$REVIEW_OUT"/gemini-*.prompt; do
-    [ -e "$evidence" ] && mv "$evidence" "$REVIEW_OUT/failed-primary/"
-  done
+  # Preserve failed-primary diagnostics without discarding conclusive findings
+  # from an earlier successful pass when a later pass becomes inconclusive.
+  PRESERVATION_MODE=evidence-absent
+  if [ "$PROVIDER_RC" -eq 4 ] && [ "$PRIMARY_HAS_STRUCTURED_RC4" = true ]; then
+    PRESERVATION_MODE=parser-inconclusive
+  fi
+  bash "$SCRIPT_DIR/quality-preserve-primary-evidence.sh" \
+    --review-out "$REVIEW_OUT" --mode "$PRESERVATION_MODE"
   REVIEW_PROVIDER="$QUALITY_FALLBACK"
   run_provider "$QUALITY_FALLBACK"
   PROVIDER_RC=$?
@@ -458,7 +471,7 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
       terminal_diagnosis provider-governor
       ;;
     4)
-      echo "❌ MERGE BLOCKED: every $REVIEW_PROVIDER review was inconclusive." >&2
+      echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER review was inconclusive $FALLBACK_NOTE." >&2
       terminal_diagnosis parser-inconclusive "$REVIEW_PROVIDER"
       ;;
     *)
