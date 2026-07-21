@@ -362,4 +362,47 @@ describe("block-destructive-paths hook", () => {
       expect(status).toBe(2);
     });
   });
+
+  // Regression: Rule 1 originally anchored command extraction to `^` or
+  // `[;&|]` only, so any recursive removal nested inside a shell control
+  // construct — a subshell, if/then, loop body, brace group, or simply a
+  // newline-separated line — was never extracted and fell straight through
+  // the guard. That is a fail-open bypass of the protection this hook exists
+  // to provide, so each construct gets an explicit test.
+  describe("Rule 1: recursive rm nested in shell control constructs", () => {
+    const nested = [
+      ["a subshell", "(rm -rf /Users/alice)"],
+      ["an if/then body", "if true; then rm -rf /Users/alice; fi"],
+      ["a for-loop body", "for i in 1; do rm -rf /Users/alice; done"],
+      ["a while-loop body", "while true; do rm -rf /Users/alice; done"],
+      ["a brace group", "{ rm -rf /Users/alice; }"],
+      ["a newline-separated line", "echo hi\nrm -rf /Users/alice"],
+      ["a nested subshell", "( ( rm -rf /Users/alice ) )"],
+    ];
+
+    it.each(nested)("blocks a top-level personal wipe inside %s", (_, cmd) => {
+      const { status } = runHook(cmd);
+      expect(status).toBe(2);
+    });
+
+    it("still blocks a substitution target inside a subshell", () => {
+      const { status } = runHook('(rm -rf "$(dirname "$VAR")")');
+      expect(status).toBe(2);
+    });
+
+    // The widened boundary class must not start blocking ordinary commands
+    // that merely contain parentheses or braces.
+    const allowed = [
+      ["a scoped build artifact in a subshell", "(rm -rf ./dist)"],
+      ["a repo-owned path", "rm -rf /Users/alice/Projects/repo/dist"],
+      ["a brace-grouped build", "{ npm run build; }"],
+      ["a shell function definition", "cleanup() { echo hi; }"],
+      ["a grep alternation pattern", "grep -E '(foo|bar)' file.txt"],
+    ];
+
+    it.each(allowed)("does not over-block %s", (_, cmd) => {
+      const { status } = runHook(cmd);
+      expect(status).toBe(0);
+    });
+  });
 });
