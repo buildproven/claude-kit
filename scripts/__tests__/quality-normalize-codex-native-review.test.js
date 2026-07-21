@@ -48,6 +48,14 @@ Full review comments:
     "Change is straightforward. LGTM.",
     "Reviewed the timeout config change; it looks good.",
     "No security concerns in the modified handler.",
+    "The package and CLI rename is applied consistently. No actionable regressions were identified.",
+    "No regressions were found.",
+    "The authorization gate now waits until repository protectability is classified, checks all registered CI for explicitly unprotectable repositories, and preserves required-only checks for protectable repositories.",
+    "The preflight and billing-waiver paths retain their existing behavior.",
+    "The refactor is not risky. No concerns found.",
+    "LGTM. The rename is applied consistently, however I noted it reads cleanly.",
+    "No issues found. The behavior is not affected.",
+    "No regressions were found. The reviewed diff does not alter unrelated paths.",
   ])("approves clean prose verdicts: %s", (prose) => {
     expect(parseNativeReview(prose).verdict).toBe("approve");
   });
@@ -61,6 +69,24 @@ Full review comments:
   it.each([
     "No findings could be determined because the review ended unexpectedly.",
     "This path looks good, but another path could not be reviewed.",
+    "No regressions were found in the reviewed file, but another file was truncated.",
+    "No regression analysis was completed.",
+    "The implementation does not correctly preserve required checks.",
+    "The implementation preserves the fast path, but fails on protected repositories.",
+    "The patch retains existing behavior; however, the new path is unsafe.",
+    "The patch safely preserves the old path. However, the new path is vulnerable.",
+    "The function correctly handles the happy path. A security issue remains.",
+    "No issues were found, but a bug remains in the fallback.",
+    "The function correctly handles the happy path.",
+    "The change safely handles input. It dereferences a null pointer.",
+    "The refactor preserves existing behavior, but leaks a file descriptor on the error path.",
+    "The change retains compatibility, however it introduces a race condition.",
+    "The patch preserves all checks but silently swallows exceptions.",
+    "The change no longer preserves required checks.",
+    "The patch cannot preserve existing behavior.",
+    "The fallback never retains compatibility.",
+    "The implementation fails to preserve required checks.",
+    "The implementation does not fully preserve required checks.",
   ])("rejects qualified no-finding prose: %s", (prose) => {
     expect(() => parseNativeReview(prose)).toThrow(/no recognizable verdict/);
   });

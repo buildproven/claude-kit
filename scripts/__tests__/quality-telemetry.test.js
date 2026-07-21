@@ -25,7 +25,13 @@ function baseManifest(overrides = {}) {
       headRefName: "feat/x",
     },
     revisions: { baseSha: "aaa", currentHead: "bbb" },
-    risk: { resolved: true, tier: "medium", score: 61, requestedLevel: "auto" },
+    risk: {
+      resolved: true,
+      taskType: "feature",
+      tier: "medium",
+      score: 61,
+      requestedLevel: "auto",
+    },
     agents: [{ name: "code-reviewer" }, { name: "security-auditor" }],
     reviews: [
       { status: "success", round: 1 },
@@ -47,10 +53,12 @@ describe("resolveTelemetryFile", () => {
     else process.env.BS_QUALITY_TELEMETRY_FILE = original;
   });
 
-  it("defaults to the target repo's data dir", () => {
+  it("defaults outside the audited target repository", () => {
     delete process.env.BS_QUALITY_TELEMETRY_FILE;
-    expect(resolveTelemetryFile(baseManifest())).toBe(
-      "/tmp/target-repo/data/quality-telemetry.jsonl",
+    const telemetry = resolveTelemetryFile(baseManifest());
+    expect(telemetry).not.toContain("/tmp/target-repo/");
+    expect(telemetry).toMatch(
+      /claude-kit[/\\]quality-telemetry[/\\]target-repo\.jsonl$/,
     );
   });
 
@@ -118,6 +126,7 @@ describe("buildRecord", () => {
       telemetrySchemaVersion: 1,
       invocationId: "11111111-1111-4111-8111-111111111111",
       repoKey: "target-repo",
+      taskType: "feature",
       riskTier: "medium",
       riskScore: 61,
       durationSeconds: 0, // start 1000 > now 600 → clamps to 0
@@ -158,6 +167,7 @@ describe("buildRecord", () => {
     );
     expect(rec.riskTier).toBeNull();
     expect(rec.riskScore).toBeNull();
+    expect(rec.taskType).toBeNull();
   });
 });
 
@@ -213,6 +223,7 @@ describe("recordCampaign (idempotent append)", () => {
   afterEach(() => {
     fs.rmSync(repoDir, { recursive: true, force: true });
     delete process.env.BS_QUALITY_TELEMETRY_FILE;
+    delete process.env.XDG_STATE_HOME;
   });
 
   it("appends exactly one line even when called twice", () => {
@@ -228,6 +239,32 @@ describe("recordCampaign (idempotent append)", () => {
     expect(JSON.parse(lines[0]).invocationId).toBe(
       "22222222-2222-4222-8222-222222222222",
     );
+  });
+
+  it("leaves a previously clean target tree unchanged by default", () => {
+    const stateHome = fs.mkdtempSync(path.join(os.tmpdir(), "qtel-state-"));
+    process.env.XDG_STATE_HOME = stateHome;
+    const before = fs.readdirSync(repoDir, { recursive: true }).sort();
+
+    expect(
+      recordCampaign(manifestPath, {
+        execFileSync: NO_FILES,
+        nowIso: NOW,
+      }),
+    ).toBe(0);
+
+    expect(fs.readdirSync(repoDir, { recursive: true }).sort()).toEqual(before);
+    expect(
+      fs.existsSync(
+        path.join(
+          stateHome,
+          "claude-kit",
+          "quality-telemetry",
+          "target-repo.jsonl",
+        ),
+      ),
+    ).toBe(true);
+    fs.rmSync(stateHome, { recursive: true, force: true });
   });
 
   it("returns 1 on an unreadable manifest", () => {

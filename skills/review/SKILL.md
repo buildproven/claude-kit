@@ -100,7 +100,7 @@ node "$RUNNER" \
   "Review this [artifact type] for [goal]. Is it strong enough to ship?" \
   --decision "Decide whether this artifact is ready to ship and what must change first" \
   --artifact [artifact file or temp packet] \
-  --providers claude,codex,gemini \
+  --providers claude,codex \
   --mode parallel \
   --output scorecard \
   --rubric "[artifact-specific rubric from skill]" \

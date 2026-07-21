@@ -30,7 +30,7 @@ cd "$GIT_ROOT" || exit 1
 bash "$SCRIPT_DIR/quality-assert-clean.sh" \
   --manifest "$MANIFEST" --phase "blocking review" || exit 1
 # shellcheck source=quality-provider-policy.sh
-source "$SCRIPT_DIR/quality-provider-policy.sh"
+source "$SCRIPT_DIR/quality-provider-policy.sh" || exit 1
 # shellcheck source=quality-review-plan.sh
 source "$SCRIPT_DIR/quality-review-plan.sh"
 
@@ -65,6 +65,7 @@ git log "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" --oneline > "$REVIEW_OUT/log.txt
 node "$SCRIPT_DIR/quality-invocation.js" review-identity "$MANIFEST" \
   > "$REVIEW_OUT/identity.json" || exit 1
 PRIOR_FINDINGS_FILE=""
+PROVIDER_HEALTH="$SCRIPT_DIR/quality-provider-health.js"
 if [ "$REVIEW_ROUND" -gt 1 ]; then
   PRIOR_FINDINGS_FILE="$REVIEW_OUT/prior-findings.json"
   node "$SCRIPT_DIR/quality-invocation.js" prior-findings "$MANIFEST" \
@@ -72,7 +73,21 @@ if [ "$REVIEW_ROUND" -gt 1 ]; then
 fi
 
 record_provider_exhaustion() {
-  printf '%s provider exhausted (structured error metadata)\n' "$1" > "$REVIEW_OUT/provider-exhausted"
+  local provider="$1" evidence="$2" reset_at
+  node "$SCRIPT_DIR/quality-provider-error.js" describe "$evidence" |
+    jq --arg provider "$provider" '. + {provider: ($provider | ascii_downcase)}' \
+      > "$REVIEW_OUT/provider-failure.json" || return 1
+  reset_at="$(jq -r '.resetAt // "time unavailable"' "$REVIEW_OUT/provider-failure.json")"
+  printf '%s provider exhausted (structured error metadata; reset %s)\n' \
+    "$provider" "$reset_at" > "$REVIEW_OUT/provider-exhausted"
+}
+
+terminal_diagnosis() {
+  local category="$1" provider="${2:-}" reset_at="${3:-}"
+  local args=(--manifest "$MANIFEST" --category "$category")
+  [ -n "$provider" ] && args+=(--provider "$provider")
+  [ -n "$reset_at" ] && args+=(--reset-at "$reset_at")
+  node "$SCRIPT_DIR/quality-terminal-status.js" "${args[@]}" || true
 }
 
 authorize_provider_attempt() {
@@ -116,6 +131,34 @@ run_claude_review() {
   return "$rc"
 }
 
+render_structured_review() {
+  local normalized_file="$1" findings_file="$2"
+  if ! jq -r '
+    if (.findings | length) == 0 then "NO FINDINGS. Verdict: \(.verdict). \(.summary)"
+    else .findings[] | "\(.severity // "WARNING"): \(.file // "unknown"):\(.line_start // 0) — \(.title // "finding")\n\(.body // "")\nFix: \(.recommendation // "")"
+    end' "$normalized_file" >> "$findings_file"; then
+    # A normalized payload whose rendering failed is part of the inconclusive
+    # pass, not authoritative completed-pass evidence.
+    rm -f "$normalized_file"
+    return 1
+  fi
+}
+
+classify_structured_provider_failure() {
+  local provider="$1" evidence="$2" failure_json category
+  failure_json="$(node "$SCRIPT_DIR/quality-provider-error.js" describe \
+    "$evidence" 2>/dev/null)" || return 1
+  category="$(printf '%s' "$failure_json" | jq -r '.category')"
+  printf '%s' "$failure_json" |
+    jq --arg provider "$provider" '. + {provider: $provider}' \
+      > "$REVIEW_OUT/provider-failure.json" || return 1
+  case "$category" in
+    provider-exhaustion) return 75 ;;
+    provider-billing) return 79 ;;
+    *) return 1 ;;
+  esac
+}
+
 run_codex_review() {
   local bounded normalizer schema raw_file normalized_file error_file rc pass pass_timeout
   local auth_output prompt_file
@@ -125,6 +168,13 @@ run_codex_review() {
   schema="$SCRIPT_DIR/schemas/quality-review-output.schema.json"
   [ -f "$schema" ] || return 2
   command -v codex >/dev/null 2>&1 || return 2
+  # Probe the codex models-cache (BUI-352). exit 1 means an incompatible codex
+  # version owns $CODEX_HOME and codex will stall its whole clock on an
+  # unparseable cache — treat codex as UNAVAILABLE (return 2) so the runner
+  # fails over to the fallback provider immediately instead of after a timeout.
+  if ! bash "$SCRIPT_DIR/quality-codex-cache-guard.sh"; then
+    return 2
+  fi
   auth_output="$(bash "$bounded" --timeout 10 -- \
     codex login status 2>&1)"
   rc=$?
@@ -180,8 +230,15 @@ run_codex_review() {
       [ "$rc" -eq 124 ] && return 76
       if node "$SCRIPT_DIR/quality-provider-error.js" \
         "$REVIEW_OUT/codex-${pass}.progress"; then
-        record_provider_exhaustion Codex
+        record_provider_exhaustion Codex "$REVIEW_OUT/codex-${pass}.progress"
         return 75
+      fi
+      if FAILURE_JSON="$(node "$SCRIPT_DIR/quality-provider-error.js" describe \
+        "$REVIEW_OUT/codex-${pass}.progress" 2>/dev/null)" &&
+        [ "$(printf '%s' "$FAILURE_JSON" | jq -r '.category')" = provider-billing ]; then
+        printf '%s' "$FAILURE_JSON" |
+          jq '. + {provider: "codex"}' > "$REVIEW_OUT/provider-failure.json"
+        return 79
       fi
       grep -Eiq 'not authenticated|not logged in|login required|setup required' "$error_file" 2>/dev/null && return 2
       return 1
@@ -190,10 +247,8 @@ run_codex_review() {
       echo "INCONCLUSIVE: Codex output could not be parsed — human review required" >> "$REVIEW_OUT/codex.findings.txt"
       return 4
     fi
-    if ! jq -r '
-      if (.findings | length) == 0 then "NO FINDINGS. Verdict: \(.verdict). \(.summary)"
-      else .findings[] | "\(.severity // "WARNING"): \(.file // "unknown"):\(.line_start // 0) — \(.title // "finding")\n\(.body // "")\nFix: \(.recommendation // "")"
-      end' "$normalized_file" >> "$REVIEW_OUT/codex.findings.txt"; then
+    if ! render_structured_review "$normalized_file" \
+      "$REVIEW_OUT/codex.findings.txt"; then
       echo "INCONCLUSIVE: normalized Codex findings could not be rendered — human review required" >> "$REVIEW_OUT/codex.findings.txt"
       return 4
     fi
@@ -201,52 +256,182 @@ run_codex_review() {
   done
 }
 
-run_provider() {
-  case "$1" in
-    claude) run_claude_review ;;
-    codex) run_codex_review ;;
-    *) return 2 ;;
+run_gemini_review() {
+  local bounded normalizer schema raw_file normalized_file error_file
+  local prompt_file rc pass pass_timeout focus failure_rc
+  bounded="$SCRIPT_DIR/quality-run-bounded.sh"
+  normalizer="$SCRIPT_DIR/quality-normalize-gemini-review.js"
+  schema="$SCRIPT_DIR/schemas/quality-review-output.schema.json"
+  [ -f "$schema" ] || return 2
+  command -v gemini >/dev/null 2>&1 || return 2
+  case "$QUALITY_REVIEW_PASSES" in
+    1|2) ;;
+    *) echo "quality: Gemini review passes must be 1 or 2" >&2; return 64 ;;
   esac
+
+  : > "$REVIEW_OUT/gemini.findings.txt"
+  pass_timeout=$((QUALITY_REVIEW_TIMEOUT / QUALITY_REVIEW_PASSES))
+  [ "$pass_timeout" -ge 30 ] || pass_timeout=30
+  pass=1
+  while [ "$pass" -le "$QUALITY_REVIEW_PASSES" ]; do
+    raw_file="$REVIEW_OUT/gemini-${pass}.json"
+    normalized_file="$REVIEW_OUT/gemini-${pass}.normalized.json"
+    error_file="$REVIEW_OUT/gemini-${pass}.stderr"
+    prompt_file="$REVIEW_OUT/gemini-${pass}.prompt"
+    if [ "$pass" -eq 1 ]; then
+      focus="correctness, security, reliability, and silent failure paths"
+    else
+      focus="test adequacy, performance, architecture, and accidental complexity"
+    fi
+    {
+      echo "$QUALITY_REVIEW_FOCUS"
+      echo "Review focus for pass $pass/$QUALITY_REVIEW_PASSES: $focus."
+      echo "Review ONLY the supplied committed diff. Automated gates already passed."
+      echo "Do not run commands, edit files, or use tools."
+      if [ "$REVIEW_ROUND" -gt 1 ]; then
+        echo "Prior reviewed findings requiring verification:"
+        cat "$PRIOR_FINDINGS_FILE"
+      fi
+      echo "Repository and revision identity:"
+      cat "$REVIEW_OUT/identity.json"
+      echo "Changed files:"
+      cat "$REVIEW_OUT/files.txt"
+      echo "Commit log:"
+      cat "$REVIEW_OUT/log.txt"
+      echo "The next block is a JSON Schema definition for validation, not the response instance."
+      cat "$schema"
+      echo "Return one response INSTANCE with exactly the top-level keys verdict, summary, and findings."
+      echo "Never return JSON Schema definition keys such as \$schema, type, properties, required, or additionalProperties."
+      echo "Use verdict=approve only with zero findings. Use needs-attention with one or more actionable findings."
+      echo "Diff:"
+      cat "$REVIEW_OUT/diff.txt"
+    } > "$prompt_file"
+    pass_timeout="$(authorize_provider_attempt gemini "$pass_timeout")" \
+      || return 77
+    bash "$bounded" --timeout "$pass_timeout" -- \
+      gemini --skip-trust --approval-mode plan --output-format json \
+        -p "Perform the bounded static review supplied on stdin. Return only a JSON response instance with exactly verdict, summary, and findings; never echo or merge the JSON Schema definition." \
+        < "$prompt_file" > "$raw_file" 2> "$error_file"
+    rc=$?
+    classify_structured_provider_failure gemini "$raw_file"
+    failure_rc=$?
+    case "$failure_rc" in 75|79) return "$failure_rc" ;; esac
+    classify_structured_provider_failure gemini "$error_file"
+    failure_rc=$?
+    case "$failure_rc" in 75|79) return "$failure_rc" ;; esac
+    if [ "$rc" -ne 0 ]; then
+      [ "$rc" -eq 124 ] && return 76
+      grep -Eiq 'not authenticated|not logged in|login required|setup required|api key.*(?:missing|not found)' "$error_file" 2>/dev/null && return 2
+      return 1
+    fi
+    if ! node "$normalizer" "$raw_file" "$normalized_file"; then
+      echo "INCONCLUSIVE: Gemini output could not be parsed — human review required" >> "$REVIEW_OUT/gemini.findings.txt"
+      return 4
+    fi
+    if ! render_structured_review "$normalized_file" \
+      "$REVIEW_OUT/gemini.findings.txt"; then
+      echo "INCONCLUSIVE: normalized Gemini findings could not be rendered — human review required" >> "$REVIEW_OUT/gemini.findings.txt"
+      return 4
+    fi
+    pass=$((pass + 1))
+  done
 }
 
+run_provider() {
+  local provider="$1" availability rc
+  availability="$(node "$PROVIDER_HEALTH" check "$provider")"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '%s' "$availability" |
+      jq --arg provider "$provider" '. + {provider: $provider}' \
+        > "$REVIEW_OUT/provider-failure.json"
+    echo "⚠️  [quality] skipping $provider: provider-health circuit is open." >&2
+    return "$rc"
+  fi
+  case "$provider" in
+    claude) run_claude_review ;;
+    codex) run_codex_review ;;
+    gemini) run_gemini_review ;;
+    *) return 2 ;;
+  esac
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    node "$PROVIDER_HEALTH" clear "$provider" || return 1
+  elif { [ "$rc" -eq 75 ] || [ "$rc" -eq 79 ]; } &&
+    [ -s "$REVIEW_OUT/provider-failure.json" ]; then
+    node "$PROVIDER_HEALTH" record "$provider" \
+      "$REVIEW_OUT/provider-failure.json" || return 1
+  fi
+  return "$rc"
+}
+
+# Should a primary that exhausts its bounded review clock without converging
+# (rc=76, from a 124 timeout) fail over to the fallback? Two competing goals:
+#   - #104 bounded total review time: DON'T fall back on timeout — a second full
+#     review doubles the clock, and on a genuinely huge diff the fallback times
+#     out too, so you burn both clocks and still block.
+#   - Resilience: a DEGRADED primary (e.g. a broken codex models-cache stalling
+#     model resolution) times out on diffs the fallback reviews in seconds — here
+#     blocking every merge while a healthy fallback sits idle is the wrong call.
+# It's therefore configurable. Default TRUE: in practice a stalled primary
+# blocking merges outright is worse than an occasional bounded double-review,
+# and the fallback runs exactly ONCE (a fallback rc=76 hard-blocks below — no
+# loop, so the total is at most two review clocks, never unbounded). Set
+# BS_QUALITY_FALLBACK_ON_TIMEOUT=0 to restore the strict single-clock bound.
+FALLBACK_ON_TIMEOUT="${BS_QUALITY_FALLBACK_ON_TIMEOUT:-1}"
+
 REVIEW_PROVIDER="$QUALITY_PRIMARY"
-echo "[quality] reviewer policy: primary=$QUALITY_PRIMARY fallback=$QUALITY_FALLBACK" >&2
+echo "[quality] reviewer policy: primary=$QUALITY_PRIMARY fallback=$QUALITY_FALLBACK (fallback-on-timeout=$FALLBACK_ON_TIMEOUT)" >&2
 run_provider "$QUALITY_PRIMARY"
 PROVIDER_RC=$?
 
-# 76 (bounded-budget timeout) belongs here alongside 75 and 2: all three mean
-# the primary produced no usable findings, which is exactly what a fallback is
-# configured for. Excluding it made a primary that merely ran slow block the
-# merge outright while reporting "no usable fallback is configured" — even with
-# fallback=claude set. The fallback attempt cannot overrun the invocation, since
-# authorize_provider_attempt caps it against the absolute deadline and returns
-# 77 when there is no budget left to give.
-if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 2 ] || [ "$PROVIDER_RC" -eq 76 ]; } &&
-  [ "$QUALITY_FALLBACK" != none ]; then
+# rc=76 (bounded-budget timeout without converging) fails over to the fallback
+# when configured. Exhaustion, billing, and unavailability always fail over
+# because they cannot produce review evidence. Native Codex and Gemini both
+# report parser-inconclusive output structurally the same way (rc=4) and both
+# fail over for the same reason: their normalized-output parser rejected the
+# response, not the model. Claude's rc=4 currently combines parser, timeout,
+# and unresolved-agent failures, so it remains fail-closed rather than masking
+# those distinct causes or bypassing the timeout policy. A parser failure is
+# not promoted to a clean result: the fallback must independently complete,
+# and an inconclusive fallback remains terminal below. The fallback attempt
+# cannot overrun the invocation: authorize_provider_attempt caps it against
+# the absolute campaign deadline and returns 77 when no budget remains.
+PRIMARY_HAS_STRUCTURED_RC4=false
+case "$QUALITY_PRIMARY" in
+  codex | gemini) PRIMARY_HAS_STRUCTURED_RC4=true ;;
+esac
+# QUALITY_FALLBACK != QUALITY_PRIMARY guards every failure code below (75,
+# 79, 2, 4, 76), not only the rc=4 branch added alongside
+# PRIMARY_HAS_STRUCTURED_RC4 — pre-existing behavior, not new with that flag.
+# "Falling back" to the same provider that just failed can never make sense
+# regardless of which rc triggered it, so the guard is correctly universal.
+if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
+  [ "$PROVIDER_RC" -eq 2 ] ||
+  { [ "$PROVIDER_RC" -eq 4 ] && [ "$PRIMARY_HAS_STRUCTURED_RC4" = true ]; } ||
+  { [ "$PROVIDER_RC" -eq 76 ] && [ "$FALLBACK_ON_TIMEOUT" = 1 ]; }; } &&
+  [ "$QUALITY_FALLBACK" != none ] &&
+  [ "$QUALITY_FALLBACK" != "$QUALITY_PRIMARY" ]; then
   if [ "$PROVIDER_RC" -eq 75 ]; then
     DETAIL="$(cat "$REVIEW_OUT/provider-exhausted" 2>/dev/null || true)"
     echo "⚠️  [quality] $QUALITY_PRIMARY exhausted${DETAIL:+ — $DETAIL}; switching immediately to $QUALITY_FALLBACK." >&2
+  elif [ "$PROVIDER_RC" -eq 79 ]; then
+    echo "⚠️  [quality] $QUALITY_PRIMARY reported a billing or credits failure; switching immediately to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 2 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY unavailable; switching immediately to $QUALITY_FALLBACK." >&2
+  elif [ "$PROVIDER_RC" -eq 4 ] && [ "$PRIMARY_HAS_STRUCTURED_RC4" = true ]; then
+    echo "⚠️  [quality] $QUALITY_PRIMARY review was inconclusive; switching once to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 76 ]; then
-    echo "⚠️  [quality] $QUALITY_PRIMARY exceeded its bounded review budget; switching to $QUALITY_FALLBACK." >&2
+    echo "⚠️  [quality] $QUALITY_PRIMARY exceeded its review budget without converging; failing over to $QUALITY_FALLBACK (BS_QUALITY_FALLBACK_ON_TIMEOUT=0 to disable)." >&2
   fi
-  # Preserve failed-primary diagnostics. Findings from an earlier successful
-  # primary pass remain authoritative if a later pass triggers fallback.
-  mkdir -p "$REVIEW_OUT/failed-primary"
-  for evidence in "$REVIEW_OUT"/*.findings.txt; do
-    [ -e "$evidence" ] || continue
-    grep -q '^INCONCLUSIVE:' "$evidence" &&
-      mv "$evidence" "$REVIEW_OUT/failed-primary/"
-  done
-  for evidence in \
-    "$REVIEW_OUT"/*.stderr \
-    "$REVIEW_OUT"/codex.findings.txt \
-    "$REVIEW_OUT"/codex-*.json \
-    "$REVIEW_OUT"/codex-*.progress \
-    "$REVIEW_OUT"/codex-*.prompt; do
-    [ -e "$evidence" ] && mv "$evidence" "$REVIEW_OUT/failed-primary/"
-  done
+  # Preserve failed-primary diagnostics without discarding conclusive findings
+  # from an earlier successful pass when a later pass becomes inconclusive.
+  PRESERVATION_MODE=evidence-absent
+  if [ "$PROVIDER_RC" -eq 4 ] && [ "$PRIMARY_HAS_STRUCTURED_RC4" = true ]; then
+    PRESERVATION_MODE=parser-inconclusive
+  fi
+  bash "$SCRIPT_DIR/quality-preserve-primary-evidence.sh" \
+    --review-out "$REVIEW_OUT" --mode "$PRESERVATION_MODE"
   REVIEW_PROVIDER="$QUALITY_FALLBACK"
   run_provider "$QUALITY_FALLBACK"
   PROVIDER_RC=$?
@@ -264,12 +449,35 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
     FALLBACK_NOTE="and the $QUALITY_FALLBACK fallback did not run"
   fi
   case "$PROVIDER_RC" in
-    75) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER account quota exhausted $FALLBACK_NOTE." >&2 ;;
-    2) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER CLI unavailable $FALLBACK_NOTE." >&2 ;;
-    76) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER exceeded its bounded review budget $FALLBACK_NOTE." >&2 ;;
-    77) echo "❌ MERGE BLOCKED: the invocation-wide provider attempt cap or absolute deadline is exhausted." >&2 ;;
-    4) echo "❌ MERGE BLOCKED: every $REVIEW_PROVIDER review was inconclusive." >&2 ;;
-    *) echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER review runner failed (rc=$PROVIDER_RC)." >&2 ;;
+    75)
+      RESET_AT="$(jq -r '.resetAt // empty' "$REVIEW_OUT/provider-failure.json" 2>/dev/null || true)"
+      echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER account quota exhausted $FALLBACK_NOTE." >&2
+      terminal_diagnosis provider-exhaustion "$REVIEW_PROVIDER" "$RESET_AT"
+      ;;
+    2)
+      echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER CLI unavailable $FALLBACK_NOTE." >&2
+      terminal_diagnosis provider-unavailable "$REVIEW_PROVIDER"
+      ;;
+    79)
+      echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER billing or credits failure $FALLBACK_NOTE." >&2
+      terminal_diagnosis provider-billing "$REVIEW_PROVIDER"
+      ;;
+    76)
+      echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER exceeded its bounded review budget $FALLBACK_NOTE." >&2
+      terminal_diagnosis provider-timeout "$REVIEW_PROVIDER"
+      ;;
+    77)
+      echo "❌ MERGE BLOCKED: the invocation-wide provider attempt cap or absolute deadline is exhausted." >&2
+      terminal_diagnosis provider-governor
+      ;;
+    4)
+      echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER review was inconclusive $FALLBACK_NOTE." >&2
+      terminal_diagnosis parser-inconclusive "$REVIEW_PROVIDER"
+      ;;
+    *)
+      echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER review runner failed (rc=$PROVIDER_RC)." >&2
+      terminal_diagnosis provider-error "$REVIEW_PROVIDER"
+      ;;
   esac
   exit 1
 fi

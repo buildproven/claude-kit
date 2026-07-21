@@ -9,6 +9,10 @@ const {
   manifestRisk,
   DEFAULTS,
 } = require("../risk-score");
+const { execFileSync } = require("child_process");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 
 // Helper: build a descriptor.
 function d(file, status = "M", patch = "", lines = 10, isBinary = false) {
@@ -139,6 +143,55 @@ describe("computeScore — security floor never beaten by mechanical", () => {
   });
   it("comment-only .github/workflows stays high", () => {
     const r = scoreOf([d(".github/workflows/quality.yml", "M", "+# note", 1)]);
+    expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
+  });
+  it.each([
+    "secrets/aws.json",
+    "credentials/cloud.json",
+    "passwords/admin.txt",
+    "tokens/api.json",
+    "webhooks/receive.js",
+    "license/policy.js",
+    "licensing/policy.js",
+    "deployments/ship.sh",
+    "keystore/config.json",
+    "keystores/config.json",
+    "keyring/config.json",
+    "keychain/config.json",
+    "AUTH/session.js",
+    "Secrets/aws.json",
+    "server.PEM",
+    ".ENV",
+    "certs/client.p12",
+    "certs/store.pfx",
+    "config/app.jks",
+    "config/store.keystore",
+    "src/auth.ts",
+    "src/oauth.ts",
+    "src/api-key.txt",
+    "config/key.yaml",
+    "src/keystore.yaml",
+    "src/keyring.ts",
+    "src/keychain.json",
+    "src/server.ppk",
+    "src/server.pk8",
+    "key-material/config.json",
+    "key_store/config.json",
+    "safe\n/auth/session.js",
+    "safe\r/keys/server.pem",
+    "safe/server.pem\n",
+    "safe/server.pem\r",
+  ])("sensitive directory path %s stays at the security floor", (file) => {
+    const r = scoreOf([d(file, "M", "+// note", 1)]);
+    expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
+  });
+
+  it("a reviewed config cannot erase the immutable security floor", () => {
+    const cfg = deepMerge(DEFAULTS, {
+      securityFloor: [],
+      base: { securityFloor: 0 },
+    });
+    const r = scoreOf([d("secrets/aws.json", "M", "+x", 1)], cfg);
     expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
   });
 });
@@ -294,6 +347,72 @@ describe("computeScore — large mechanical diff is not low-risk", () => {
   });
 });
 
+describe("score — rename-aware workload", () => {
+  function git(cwd, args) {
+    return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+  }
+
+  it("counts only residual edits in renamed files, while retaining changed-file overhead", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-renames-"));
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.name", "Quality Test"]);
+    git(root, ["config", "user.email", "quality@example.com"]);
+    fs.mkdirSync(path.join(root, "src", "old"), { recursive: true });
+    const largeBody = Array.from(
+      { length: 500 },
+      (_, index) => `export const oldName${index} = ${index};`,
+    ).join("\n");
+    fs.writeFileSync(
+      path.join(root, "src", "old", "pure.js"),
+      `${largeBody}\n`,
+    );
+    fs.writeFileSync(
+      path.join(root, "src", "old", "edited.js"),
+      `${largeBody}\nexport const packageName = "old-package";\n`,
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "base"]);
+    fs.renameSync(path.join(root, "src", "old"), path.join(root, "src", "new"));
+    fs.writeFileSync(
+      path.join(root, "src", "new", "edited.js"),
+      `${largeBody}\nexport const packageName = "new-package";\n`,
+    );
+    git(root, ["add", "-A"]);
+    git(root, ["commit", "-q", "-m", "rename package"]);
+
+    const result = score({
+      base: "HEAD^",
+      repoRoot: root,
+      gitRunner: (args) => git(root, args),
+    });
+
+    expect(result.diffStats).toEqual({ files: 2, lines: 2 });
+    expect(result.riskScore).toBeLessThan(75);
+  });
+
+  it("keeps substantial edits inside a rename classified as logic and escalates magnitude", () => {
+    const descriptor = {
+      ...d("src/new/service.js", "R", "-old()\n+newBehavior()", 600),
+      baseFile: "src/old/service.js",
+      similarity: 60,
+      pureRename: false,
+    };
+    const result = scoreOf([descriptor]);
+    expect(result.changeNature).toBe("logic");
+    expect(result.riskScore).toBeGreaterThanOrEqual(50);
+  });
+
+  it("classifies a pure non-sensitive move as mechanical", () => {
+    const descriptor = {
+      ...d("src/new/service.js", "R", "", 0),
+      baseFile: "src/old/service.js",
+      similarity: 100,
+      pureRename: true,
+    };
+    expect(scoreOf([descriptor]).changeNature).toBe("mechanical");
+  });
+});
+
 describe("computeScore — trivial change goes low (but never zero handling)", () => {
   it("tiny comment-only change in a docs file → low score", () => {
     const r = scoreOf([d("docs/readme-notes.md", "M", "+<!-- note -->", 1)]);
@@ -311,8 +430,8 @@ describe("computeScore — trivial change goes low (but never zero handling)", (
 describe("score — base resolution is deterministic and fails closed", () => {
   // A gitRunner where origin/main IS present locally: the same diff must score
   // against the merge-base, identically to the CI (GITHUB_BASE_REF) path.
-  const NAME_STATUS = "M\tlib/widget.js";
-  const NUMSTAT = "40\t0\tlib/widget.js";
+  const NAME_STATUS = "M\0lib/widget.js\0";
+  const NUMSTAT = "40\t0\tlib/widget.js\0";
 
   function runnerWith({ hasOriginMain, hasUpstream }) {
     return (args) => {
@@ -373,6 +492,7 @@ describe("score — base resolution is deterministic and fails closed", () => {
       if (prev !== undefined) process.env.GITHUB_BASE_REF = prev;
     }
     expect(r.riskScore).toBe(100);
+    expect(r.taskType).toBe("unknown");
     expect(r.baseUnresolved).toBe(true);
     expect(r.reasons.join(" ")).toMatch(/base unresolved/i);
     // diffStats must keep the { files, lines } shape the CLI/GITHUB_OUTPUT
@@ -436,6 +556,20 @@ describe("scoreToKnobs — Moderate curve", () => {
     });
     expect(scoreToKnobs(80, cfg).codex).not.toBe("skip");
   });
+  it.each([75, 76, 80, 84, 85])(
+    "reviewed config cannot weaken critical review depth at score %i",
+    (score) => {
+      const cfg = deepMerge(DEFAULTS, {
+        curve: [{ maxScore: 100, agents: 2, codex: "skip", codexRounds: 0 }],
+        codexForceFloor: 101,
+      });
+      expect(scoreToKnobs(score, cfg)).toEqual({
+        agents: 6,
+        codex: "xhigh",
+        codexRounds: 1,
+      });
+    },
+  );
 });
 
 // ─── config override merge ───────────────────────────────────────────────────

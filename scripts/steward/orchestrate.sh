@@ -57,15 +57,25 @@ for repo in "${repos[@]}"; do
   }
 
   slug="steward-$(date +%Y%m%d-%H%M%S)"
-  worktree="$(dirname "$repo")/$(basename "$repo")-$slug"
   branch="codex/$slug"
   default_branch=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["defaultBranch"])' "$audit_file")
-  git -C "$repo" worktree add -b "$branch" "$worktree" "origin/$default_branch"
+  invocation="bs:steward/$(basename "$repo")/$slug"
+  create_json=$(node "$KIT_ROOT/scripts/worktree-manager.js" create \
+    --repo "$repo" \
+    --branch "$branch" \
+    --base "origin/$default_branch" \
+    --creator "bs:steward" \
+    --purpose "fleet-repair" \
+    --invocation "$invocation" \
+    --lock-reason "$invocation")
+  worktree=$(printf '%s' "$create_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["worktreePath"])')
   prompt="$STATE_DIR/$(basename "$repo")-$slug.prompt"
   cat > "$prompt" <<EOF
 Repair the exact fleet-steward audit failures recorded in $audit_file for repository $worktree.
 Preserve unrelated behavior. Run the repository's required checks, commit on the existing feature branch,
-push, open a PR, and complete the repository's provider-neutral quality merge workflow. Never push directly
+push, open a PR, release the terminal worktree lock with:
+node "$KIT_ROOT/scripts/worktree-manager.js" unlock --repo "$worktree" --branch "$branch" --owner "$invocation" --terminal
+and complete the repository's provider-neutral quality merge workflow. Never push directly
 to the default branch. Return the PR URL and final verification evidence.
 EOF
   args=(--prompt-file "$prompt" --target-dir "$worktree" --timeout 3600)

@@ -43,9 +43,11 @@ AGENT_TARGET="$(printf '%s' "$PLAN_JSON" | jq -r '.agents')"
 CODEX_DEPTH="$(printf '%s' "$PLAN_JSON" | jq -r '.reviewDepth')"
 CODEX_ROUNDS="$(printf '%s' "$PLAN_JSON" | jq -r '.reviewPasses')"
 NATURE="$(printf '%s' "$PLAN_JSON" | jq -r '.changeNature')"
+TASK_TYPE="$(printf '%s' "$PLAN_JSON" | jq -r '.taskType')"
 
 node "$SCRIPT_DIR/quality-invocation.js" risk "$MANIFEST" \
   --tier "$TIER" \
+  --task-type "$TASK_TYPE" \
   --score "$RISK_SCORE" \
   --agents "$AGENT_TARGET" \
   --codex-depth "$CODEX_DEPTH" \
@@ -62,4 +64,4 @@ node "$SCRIPT_DIR/quality-invocation.js" risk "$MANIFEST" \
   --check-reserve-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.checkReserveSeconds')" \
   --level "$LEVEL" || exit 1
 
-echo "🧭 Risk: ${RISK_SCORE}/100 (${NATURE}), $(printf '%s' "$PLAN_JSON" | jq -r '"\(.workload): \(.diffStats.files) files/\(.diffStats.lines) lines"') → ${AGENT_TARGET} agents, Codex ${CODEX_DEPTH}×${CODEX_ROUNDS} [${TIER}], $(printf '%s' "$PLAN_JSON" | jq -r '.campaignSeconds')s campaign"
+echo "🧭 Risk: ${RISK_SCORE}/100 (${TASK_TYPE}/${NATURE}), $(printf '%s' "$PLAN_JSON" | jq -r '"\(.workload): \(.diffStats.files) files/\(.diffStats.lines) lines"') → ${AGENT_TARGET} agents, Codex ${CODEX_DEPTH}×${CODEX_ROUNDS} [${TIER}], $(printf '%s' "$PLAN_JSON" | jq -r '.campaignSeconds')s campaign"

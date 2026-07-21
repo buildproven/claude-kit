@@ -119,8 +119,9 @@ function isExecutablePromptSurface(file) {
 // Forced-logic conditions (Codex round 1) — these can never be mechanical:
 // deletions, renames, copies, type/mode changes, binaries, CI workflows, and
 // executable prompt surfaces.
-function isForcedLogic(file, status, isBinary) {
-  if (["D", "R", "C", "T"].includes(status)) return true;
+function isForcedLogic(file, status, isBinary, descriptor = {}) {
+  if (["D", "C", "T"].includes(status)) return true;
+  if (status === "R" && descriptor.pureRename !== true) return true;
   if (isBinary) return true;
   if (/(^|\/)\.github\/workflows\//.test(file)) return true;
   if (isExecutablePromptSurface(file)) return true;
@@ -151,8 +152,8 @@ function classifyChangeNature(descriptors, opts = {}) {
   }
   if (!Array.isArray(descriptors) || descriptors.length === 0) return "logic";
   for (const d of descriptors) {
-    if (isForcedLogic(d.file, d.status, d.isBinary)) return "logic";
-    if (!fileIsMechanical(d.file, d.status, d.patch, floorPaths))
+    if (isForcedLogic(d.file, d.status, d.isBinary, d)) return "logic";
+    if (!fileIsMechanical(d.file, d.status, d.patch, floorPaths, d))
       return "logic";
   }
   return "mechanical";

@@ -6,6 +6,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync, spawnSync } = require("child_process");
+const riskScore = require("./risk-score.js");
 
 const SCHEMA_VERSION = 1;
 const REQUIRED_GATES_POLICY_VERSION = 2;
@@ -46,6 +47,61 @@ function canonicalRoot(input) {
   return fs.realpathSync(git(resolved, ["rev-parse", "--show-toplevel"]));
 }
 
+// Stable identity for "the reviewed diff" that survives a pure rebase (same
+// tree changes replayed onto a newer base, no new content). `git patch-id`
+// hashes the diff hunks independent of blob/commit SHAs, so a rebase-only
+// HEAD change yields the same patch-id while any real content change does
+// not. Returns null if the ref has no diff against base (e.g. identical to
+// base) or patch-id computation fails, so callers must treat null as
+// "cannot prove equivalence" rather than a wildcard match.
+function computePatchId(root, base, head) {
+  try {
+    const diff = execFileSync("git", ["diff", `${base}..${head}`], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 1024 * 1024 * 64,
+    });
+    if (!diff.trim()) return null;
+    const patchId = execFileSync("git", ["patch-id", "--stable"], {
+      cwd: root,
+      encoding: "utf8",
+      input: diff,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    const hash = patchId.split(/\s+/)[0];
+    return /^[0-9a-f]{40}$/.test(hash) ? hash : null;
+  } catch {
+    return null;
+  }
+}
+
+// Patch-id of the currently reviewed HEAD against a freshly resolved base.
+// Always recompute the base from the live ref rather than the manifest's
+// stored baseSha snapshot — the stored value is fixed at creation time and
+// would make every post-creation rebase look like a diff change even when
+// only the base moved.
+function currentPatchId(manifest, root) {
+  const baseRef = manifest.revisions.baseRef;
+  if (!baseRef) return null;
+  let base;
+  try {
+    base = git(root, ["merge-base", "HEAD", baseRef]);
+  } catch {
+    return null;
+  }
+  return computePatchId(root, base, "HEAD");
+}
+
+function isAncestorOf(root, ancestor, descendant) {
+  try {
+    git(root, ["merge-base", "--is-ancestor", ancestor, descendant]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function gitCommonDir(root) {
   const value = git(root, ["rev-parse", "--git-common-dir"]);
   return fs.realpathSync(path.resolve(root, value));
@@ -58,7 +114,30 @@ function originIdentity(root) {
 }
 
 function repoKey(root) {
-  return crypto.createHash("sha256").update(root).digest("hex").slice(0, 16);
+  return crypto
+    .createHash("sha256")
+    .update(gitCommonDir(root))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+function deterministicInvocationId(identity) {
+  const digest = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(canonicalJson(identity)))
+    .digest("hex")
+    .slice(0, 32)
+    .split("");
+  digest[12] = "5";
+  digest[16] = (8 + (parseInt(digest[16], 16) % 4)).toString(16);
+  const value = digest.join("");
+  return [
+    value.slice(0, 8),
+    value.slice(8, 12),
+    value.slice(12, 16),
+    value.slice(16, 20),
+    value.slice(20),
+  ].join("-");
 }
 
 function qualityTmpRoot() {
@@ -78,6 +157,27 @@ function atomicWrite(file, value) {
   fs.chmodSync(file, 0o600);
 }
 
+function atomicCreate(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const temporary = path.join(
+    path.dirname(file),
+    `.${path.basename(file)}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.create`,
+  );
+  fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  try {
+    fs.linkSync(temporary, file);
+    fs.chmodSync(file, 0o600);
+    return true;
+  } catch (error) {
+    if (error.code === "EEXIST") return false;
+    throw error;
+  } finally {
+    fs.unlinkSync(temporary);
+  }
+}
+
 function normalizeGovernor(manifest) {
   manifest.governor ??= {};
   manifest.governor.authorizedAttempts ??= [];
@@ -86,6 +186,7 @@ function normalizeGovernor(manifest) {
   manifest.governor.providerDeadlineEpoch ??=
     manifest.governor.startedAtEpoch + manifest.governor.providerWindowSeconds;
   manifest.governor.providerDeadlineHead ??= null;
+  manifest.governor.providerDeadlineProvider ??= null;
   manifest.governor.providerAttempts ??= [];
   manifest.governor.campaignSeconds ??=
     manifest.governor.providerWindowSeconds +
@@ -169,6 +270,35 @@ function saveManifest(file, manifest) {
   atomicWrite(file, manifest);
 }
 
+// manifest.revisions.baseSha is an immutable creation-time snapshot (it also
+// namespaces stateRoot and anchors review-trailer provenance, so it is never
+// reassigned). A base that has legitimately moved since then (main advanced
+// and the PR branch was rebased onto it) always fails an exact-match against
+// actualBase — that used to be unreachable because advanceHead() refused any
+// HEAD that wasn't a strict descendant of the reviewed head. BUI-380 lets a
+// proven rebase-only replay (patch-id identical) through advanceHead(),
+// which records that proof in manifest.revisions.baseRebaseCarry: { head,
+// baseSha } naming the head and live base reconciled at the moment of the
+// rebase. baseSha permanently mismatches actualBase after that (merge-base
+// is now computed against a different, later base forever), so trust is
+// anchored on baseRebaseCarry.baseSha instead, once a carry exists.
+// currentHead is accepted either as the exact carried head (the rebase
+// replay itself) or as a normal git-ancestry descendant of it (ordinary new
+// commits stacked afterward, same as pre-BUI-380 behavior relative to the
+// original base) — descendants are NOT required to patch-id match anything;
+// that requirement only ever applied to the rebase replay commit itself.
+function baseIdentityMatches(manifest, actualRoot, currentHead, actualBase) {
+  if (actualBase === manifest.revisions.baseSha) return true;
+  const carry = manifest.revisions.baseRebaseCarry;
+  return Boolean(
+    carry &&
+    typeof carry.baseSha === "string" &&
+    carry.baseSha === actualBase &&
+    (carry.head === currentHead ||
+      isAncestorOf(actualRoot, carry.head, currentHead)),
+  );
+}
+
 function validateIdentity(manifest, cwd, { requireHead = true } = {}) {
   const actualRoot = canonicalRoot(cwd);
   if (actualRoot !== manifest.repo.realpath) {
@@ -190,12 +320,20 @@ function validateIdentity(manifest, cwd, { requireHead = true } = {}) {
       );
     }
   }
+  // requireHead:false marks the pre-advance identity check in runAdvance()
+  // (see below): HEAD may already be a rebased commit whose base-relative
+  // identity is not yet proven (that's exactly what advanceHead() is about
+  // to establish, recording proof in baseRebaseCarry for the post-advance
+  // re-check with requireHead left at its default). Skip the base check
+  // here rather than duplicating advanceHead()'s rebase-equivalence logic
+  // ahead of time.
+  if (!requireHead) return { actualRoot, currentHead };
   const actualBase = git(actualRoot, [
     "merge-base",
     currentHead,
     manifest.revisions.baseRef,
   ]);
-  if (actualBase !== manifest.revisions.baseSha) {
+  if (!baseIdentityMatches(manifest, actualRoot, currentHead, actualBase)) {
     throw new Error(
       `quality base identity mismatch: expected ${manifest.revisions.baseSha}, got ${actualBase}`,
     );
@@ -278,6 +416,85 @@ function baselineGate(name, scripts, candidates, manager, allowSkip = false) {
     : null;
 }
 
+const NATIVE_GATES_FILE = ".quality-gates.json";
+const NATIVE_GATE_NAMES = new Set([
+  "lint",
+  "test",
+  "security",
+  "build",
+  "type",
+  "consumer",
+]);
+
+function nativeGate(name, definition, allowSkip = false) {
+  const argv = [definition.executable, ...definition.args];
+  return {
+    name,
+    source: `quality-gates:${NATIVE_GATES_FILE}#${name}`,
+    command: argv.map((part) => JSON.stringify(part)).join(" "),
+    executable: definition.executable,
+    args: definition.args,
+    allowSkip,
+  };
+}
+
+function validateNativeGateDefinition(name, definition) {
+  const invalid =
+    !definition ||
+    Array.isArray(definition) ||
+    typeof definition !== "object" ||
+    typeof definition.executable !== "string" ||
+    definition.executable.trim() === "" ||
+    definition.executable.includes("\0") ||
+    !Array.isArray(definition.args) ||
+    definition.args.some(
+      (argument) => typeof argument !== "string" || argument.includes("\0"),
+    );
+  if (invalid) {
+    throw new Error(
+      `${NATIVE_GATES_FILE} gate '${name}' requires a non-empty executable and string args array`,
+    );
+  }
+  const unsupported = Object.keys(definition).filter(
+    (key) => !["executable", "args"].includes(key),
+  );
+  if (unsupported.length > 0) {
+    throw new Error(
+      `${NATIVE_GATES_FILE} gate '${name}' has unsupported fields: ${unsupported.join(", ")}`,
+    );
+  }
+  return definition;
+}
+
+function discoverNativeGates(root, head) {
+  const content = committedFile(root, head, NATIVE_GATES_FILE);
+  if (content === null) return new Map();
+  const policy = parseJson(content, `${NATIVE_GATES_FILE} at ${head}`);
+  if (
+    !policy ||
+    Array.isArray(policy) ||
+    policy.version !== 1 ||
+    !policy.gates ||
+    Array.isArray(policy.gates) ||
+    typeof policy.gates !== "object"
+  ) {
+    throw new Error(
+      `${NATIVE_GATES_FILE} must contain version 1 and a gates object`,
+    );
+  }
+
+  const gates = new Map();
+  for (const [name, definition] of Object.entries(policy.gates)) {
+    if (!NATIVE_GATE_NAMES.has(name)) {
+      throw new Error(
+        `${NATIVE_GATES_FILE} declares unsupported gate '${name}'`,
+      );
+    }
+    gates.set(name, validateNativeGateDefinition(name, definition));
+  }
+  return gates;
+}
+
 function discoverRequiredGates(
   root,
   options,
@@ -291,16 +508,19 @@ function discoverRequiredGates(
     scripts = packageJson.scripts || {};
   }
   const manager = packageManagerAt(root, head, packageJson);
+  const nativeGates = discoverNativeGates(root, head);
+  const requiredGate = (name, candidates, allowSkip = false) =>
+    nativeGates.has(name)
+      ? nativeGate(name, nativeGates.get(name), allowSkip)
+      : baselineGate(name, scripts, candidates, manager, allowSkip);
   const required = [
-    baselineGate("lint", scripts, ["lint", "lint:check"], manager),
-    baselineGate(
+    requiredGate("lint", ["lint", "lint:check"]),
+    requiredGate(
       "test",
-      scripts,
       ["test", "test:unit", "test:ci"],
-      manager,
       options["skip-tests"] === true,
     ),
-    baselineGate("security", scripts, ["security:audit", "security"], manager),
+    requiredGate("security", ["security:audit", "security:check", "security"]),
   ].filter(Boolean);
   const missing = ["lint", "security"].filter(
     (name) => !required.some((gate) => gate.name === name),
@@ -316,13 +536,17 @@ function discoverRequiredGates(
       `quality requires executable repository scripts for: ${missing.join(", ")}`,
     );
   }
-  if (typeof scripts.build === "string") {
+  if (nativeGates.has("build")) {
+    required.push(nativeGate("build", nativeGates.get("build")));
+  } else if (typeof scripts.build === "string") {
     required.push(scriptGate("build", "build", manager));
   }
   const typeScript = ["type-check:all", "type-check", "typecheck"].find(
     (name) => typeof scripts[name] === "string",
   );
-  if (typeScript) {
+  if (nativeGates.has("type")) {
+    required.push(nativeGate("type", nativeGates.get("type")));
+  } else if (typeScript) {
     required.push(scriptGate("type", typeScript, manager));
   }
   const consumerScript = Object.keys(scripts).find((name) =>
@@ -331,7 +555,9 @@ function discoverRequiredGates(
   const consumerFixture =
     committedFile(root, head, "tests/consumer-workflow-integration.test.js") !==
     null;
-  if (consumerScript || consumerFixture) {
+  if (nativeGates.has("consumer")) {
+    required.push(nativeGate("consumer", nativeGates.get("consumer")));
+  } else if (consumerScript || consumerFixture) {
     required.push(
       consumerScript
         ? scriptGate("consumer", consumerScript, manager)
@@ -481,22 +707,7 @@ function executableScope(options) {
   return scope;
 }
 
-function createManifest(options) {
-  const root = canonicalRoot(firstValue(options.repo, process.cwd()));
-  const baseRef = firstValue(options["base-ref"], "origin/main");
-  const head = git(root, ["rev-parse", "HEAD"]);
-  const baseSha = git(root, ["merge-base", head, baseRef]);
-  const invocationId = firstValue(
-    options["invocation-id"],
-    crypto.randomUUID(),
-  );
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      invocationId,
-    )
-  ) {
-    throw new Error("invocation-id must be a UUID");
-  }
+function resolvePrIdentity(options) {
   const pr =
     options.pr === undefined
       ? null
@@ -511,7 +722,6 @@ function createManifest(options) {
       : crossRepositoryValue === "false"
         ? false
         : null;
-  const scope = executableScope(options);
   if (
     pr !== null &&
     (!githubRepository ||
@@ -534,8 +744,109 @@ function createManifest(options) {
       "cross-repository quality requires trusted CI evidence ingestion and is not yet supported",
     );
   }
+  return {
+    pr,
+    githubRepository,
+    headRefName,
+    headRepository,
+    isCrossRepository,
+  };
+}
+
+function existingCampaign(manifestPath, campaignIdentity) {
+  const existing = loadManifest(manifestPath).manifest;
+  const existingIdentity = {
+    root: existing.repo.realpath,
+    gitCommonDir: existing.repo.gitCommonDir,
+    origin: existing.repo.origin,
+    pr: existing.repo.pr,
+    githubRepository: existing.repo.githubRepository,
+    headRefName: existing.repo.headRefName,
+    headRepository: existing.repo.headRepository,
+    isCrossRepository: existing.repo.isCrossRepository,
+    baseRef: existing.revisions.baseRef,
+    baseSha: existing.revisions.baseSha,
+    baseHeadSha: existing.revisions.baseHeadSha,
+    head: existing.revisions.currentHead,
+    options: existing.options,
+    provider: {
+      primaryOverride: existing.provider?.primaryOverride,
+      fallbackOverride: existing.provider?.fallbackOverride,
+      config: existing.provider?.config,
+    },
+  };
+  if (
+    JSON.stringify(canonicalJson(existingIdentity)) !==
+    JSON.stringify(canonicalJson(campaignIdentity))
+  ) {
+    throw new Error("deterministic quality campaign identity collision");
+  }
+  return manifestPath;
+}
+
+function createManifest(options) {
+  const root = canonicalRoot(firstValue(options.repo, process.cwd()));
+  const baseRef = firstValue(options["base-ref"], "origin/main");
+  const head = git(root, ["rev-parse", "HEAD"]);
+  const baseSha = git(root, ["merge-base", head, baseRef]);
+  const {
+    pr,
+    githubRepository,
+    headRefName,
+    headRepository,
+    isCrossRepository,
+  } = resolvePrIdentity(options);
+  const scope = executableScope(options);
   if (options.manifest !== undefined) {
     throw new Error("create does not accept a custom manifest path");
+  }
+  const baseHeadSha = firstValue(options["base-head-sha"], baseSha);
+  const manifestOptions = {
+    merge: options.merge === true,
+    level: firstValue(options.level, "auto"),
+    scope,
+    skipTests: options["skip-tests"] === true,
+  };
+  const provider = buildProvider(options);
+  const campaignIdentity = {
+    root,
+    gitCommonDir: gitCommonDir(root),
+    origin: originIdentity(root),
+    pr,
+    githubRepository,
+    headRefName,
+    headRepository,
+    isCrossRepository,
+    baseRef,
+    baseSha,
+    baseHeadSha,
+    head,
+    options: manifestOptions,
+    provider,
+  };
+  // Provider policy is part of the immutable campaign identity, but not its
+  // deterministic key. A caller cannot create a fresh budget merely by
+  // swapping primary/fallback order for the same exact work: it resolves to
+  // the existing campaign path and fails the identity comparison below.
+  const campaignKeyIdentity = { ...campaignIdentity };
+  delete campaignKeyIdentity.provider;
+  delete campaignKeyIdentity.root;
+  delete campaignKeyIdentity.gitCommonDir;
+  const invocationId = deterministicInvocationId(campaignKeyIdentity);
+  if (
+    options["invocation-id"] !== undefined &&
+    options["invocation-id"] !== invocationId
+  ) {
+    throw new Error(
+      "invocation-id is deterministic for this campaign and cannot be overridden",
+    );
+  }
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      invocationId,
+    )
+  ) {
+    throw new Error("invocation-id must be a UUID");
   }
   const stateRoot = path.join(
     qualityTmpRoot(),
@@ -546,6 +857,9 @@ function createManifest(options) {
     invocationId,
   );
   const manifestPath = path.join(stateRoot, "invocation.json");
+  if (fs.existsSync(manifestPath)) {
+    return existingCampaign(manifestPath, campaignIdentity);
+  }
   const now = new Date().toISOString();
   const key = repoKey(root);
   const manifest = {
@@ -555,12 +869,7 @@ function createManifest(options) {
     createdAt: now,
     updatedAt: now,
     stateRoot,
-    options: {
-      merge: options.merge === true,
-      level: firstValue(options.level, "auto"),
-      scope,
-      skipTests: options["skip-tests"] === true,
-    },
+    options: manifestOptions,
     repo: {
       realpath: root,
       key,
@@ -575,7 +884,7 @@ function createManifest(options) {
     revisions: {
       baseRef,
       baseSha,
-      baseHeadSha: firstValue(options["base-head-sha"], baseSha),
+      baseHeadSha,
       initialHead: head,
       currentHead: head,
     },
@@ -587,20 +896,151 @@ function createManifest(options) {
       resolved: false,
     },
     agents: [],
-    provider: buildProvider(options),
+    provider,
     reviews: [],
     governor: buildGovernor(head),
     requiredGates: discoverRequiredGates(root, options),
     requiredGatesPolicyVersion: REQUIRED_GATES_POLICY_VERSION,
     gates: [],
   };
-  atomicWrite(manifestPath, manifest);
-  return manifestPath;
+  return atomicCreate(manifestPath, manifest)
+    ? manifestPath
+    : existingCampaign(manifestPath, campaignIdentity);
+}
+
+function strongerReviewForCurrentHead(manifest, root) {
+  if (manifest.risk?.resolved !== true) return null;
+  const config = riskScore.loadConfig(root);
+  const rescored = riskScore.score({
+    base: manifest.revisions.baseRef,
+    repoRoot: root,
+    gitRunner: (args) => git(root, args),
+    config,
+    taskType: manifest.risk.taskType || "unknown",
+  });
+  const minimumScore = {
+    medium: 20,
+    high: 50,
+    critical: riskScore.CRITICAL_RISK_SCORE,
+    95: 50,
+    98: riskScore.CRITICAL_RISK_SCORE,
+  }[manifest.risk.requestedLevel];
+  const rescoredRisk = Number.isFinite(rescored.riskScore)
+    ? rescored.riskScore
+    : 100;
+  const effectiveScore = Math.max(rescoredRisk, minimumScore || 0);
+  const requiredKnobs = riskScore.scoreToKnobs(effectiveScore, config);
+  const tierForScore = (score) => {
+    if (score >= riskScore.CRITICAL_RISK_SCORE) return "critical";
+    if (score >= 50) return "high";
+    if (score >= 20) return "medium";
+    return "low";
+  };
+  const tierRank = { low: 0, medium: 1, high: 2, critical: 3 };
+  const codexRank = { skip: 0, low: 0, medium: 1, high: 2, xhigh: 3 };
+  const nextTier = tierForScore(effectiveScore);
+  const stronger =
+    tierRank[nextTier] > tierRank[manifest.risk.tier] ||
+    requiredKnobs.agents > manifest.risk.agentTarget ||
+    (codexRank[requiredKnobs.codex] ?? -1) >
+      (codexRank[manifest.risk.codexDepth] ?? -1) ||
+    requiredKnobs.codexRounds > manifest.risk.codexRounds;
+  return stronger ? { ...requiredKnobs, tier: nextTier } : null;
+}
+
+function assertCurrentReviewStrength(manifest, root) {
+  const stronger = strongerReviewForCurrentHead(manifest, root);
+  if (!stronger) return;
+  throw new Error(
+    `quality resume requires stronger review at HEAD ${manifest.revisions.currentHead} ` +
+      `(was ${manifest.risk.tier}/${manifest.risk.agentTarget}/${manifest.risk.codexDepth}, ` +
+      `now ${stronger.tier}/${stronger.agents}/${stronger.codex}); start a fresh invocation`,
+  );
+}
+
+// A real rebase rewrites commits, so nextHead is typically NOT a descendant
+// of priorHead even when the reviewed diff is unchanged (only the base
+// moved). Returns true only when the diff against each head's own live base
+// is provably identical (patch-id match) — a rebase-only replay, not new
+// content.
+function isRebaseOnlyReplay(manifest, root, priorHead) {
+  const baseRef = manifest.revisions.baseRef;
+  let priorBase;
+  try {
+    priorBase = baseRef && git(root, ["merge-base", priorHead, baseRef]);
+  } catch {
+    priorBase = null;
+  }
+  const priorPatchId = priorBase && computePatchId(root, priorBase, priorHead);
+  const nextPatchId = currentPatchId(manifest, root);
+  return Boolean(priorPatchId && nextPatchId && priorPatchId === nextPatchId);
+}
+
+// Persist proof that baseSha (immutable — it namespaces stateRoot and
+// anchors review-trailer provenance, so it is never reassigned) no longer
+// reflects the live base, but nextHead's diff against the fresh live base
+// is provably identical to what was already reviewed. baseSha permanently
+// mismatches actualBase from this point on (rebase moves the merge-base
+// forever), so validateIdentity() anchors trust on this record's own
+// baseSha/head instead. A later normal descendant of nextHead (the
+// isAncestor branch on the next advance call) must NOT clear this record —
+// it still correctly names the reconciled live base for the whole
+// descendant chain.
+function recordBaseRebaseCarry(manifest, root, nextHead) {
+  const baseRef = manifest.revisions.baseRef;
+  const freshBaseSha = baseRef
+    ? git(root, ["merge-base", nextHead, baseRef])
+    : null;
+  manifest.revisions.baseRebaseCarry = {
+    head: nextHead,
+    baseSha: freshBaseSha,
+    recordedAt: new Date().toISOString(),
+  };
+  // baseHeadSha (unlike baseSha) does not namespace stateRoot or anchor
+  // trailer provenance — it exists solely so quality-authorize-merge.sh can
+  // do a final live-freshness check at merge time. Advance it with the
+  // rebase so that check compares against the base this rebase actually
+  // reconciled onto, not a base from before the rebase, which would
+  // otherwise permanently mismatch and wrongly block an up-to-date merge.
+  if (freshBaseSha) manifest.revisions.baseHeadSha = freshBaseSha;
+}
+
+function invalidateOrCarryApproval(manifest, root, nextHead, rebaseOnly) {
+  if (
+    manifest.approval?.approved !== true ||
+    manifest.approval.head === nextHead
+  ) {
+    return;
+  }
+  if (
+    rebaseOnly &&
+    typeof manifest.approval.patchId === "string" &&
+    manifest.approval.patchId === currentPatchId(manifest, root)
+  ) {
+    // Rebase-only HEAD change with a patch-id-identical diff: the approved
+    // capability's signed payload still names the old head, so it cannot
+    // authorize a merge of nextHead directly (approvalValid() checks the
+    // signature payload, not this cache), but preserve the record instead
+    // of discarding it — the rebase-tolerant check in approvalValid()
+    // re-derives validity from the patch-id match, not this flag alone.
+    manifest.approval.rebaseCarriedHead = nextHead;
+  } else {
+    manifest.approval = {
+      approved: false,
+      invalidatedAt: new Date().toISOString(),
+      reason: `HEAD advanced from ${manifest.approval.head} to ${nextHead}`,
+    };
+  }
 }
 
 function advanceHead(manifest, root) {
   const nextHead = git(root, ["rev-parse", "HEAD"]);
   const priorHead = manifest.revisions.currentHead;
+  // Revalidate even when HEAD has not moved. A manifest created by an older
+  // runtime can persist a review contract that the current policy considers
+  // underpowered (for example, the former 75–84 critical boundary gap).
+  // Returning before this assertion would grandfather that stale contract.
+  assertCurrentReviewStrength(manifest, root);
   if (nextHead === priorHead) return false;
   const stampHead = manifest.merge?.stampHead;
   if (stampHead) {
@@ -611,23 +1051,19 @@ function advanceHead(manifest, root) {
     }
     if (nextHead === stampHead) return false;
   }
-  try {
-    git(root, ["merge-base", "--is-ancestor", priorHead, nextHead]);
-  } catch {
-    throw new Error(
-      `quality resume refused: ${priorHead} is not an ancestor of ${nextHead}`,
-    );
+  const isAncestor = isAncestorOf(root, priorHead, nextHead);
+  let rebaseOnly = false;
+  if (!isAncestor) {
+    rebaseOnly = isRebaseOnlyReplay(manifest, root, priorHead);
+    if (!rebaseOnly) {
+      throw new Error(
+        `quality resume refused: ${priorHead} is not an ancestor of ${nextHead} ` +
+          `and the diff is not a provable rebase-only replay`,
+      );
+    }
   }
-  if (
-    manifest.approval?.approved === true &&
-    manifest.approval.head !== nextHead
-  ) {
-    manifest.approval = {
-      approved: false,
-      invalidatedAt: new Date().toISOString(),
-      reason: `HEAD advanced from ${manifest.approval.head} to ${nextHead}`,
-    };
-  }
+  if (rebaseOnly) recordBaseRebaseCarry(manifest, root, nextHead);
+  invalidateOrCarryApproval(manifest, root, nextHead, rebaseOnly);
   if (stampHead) {
     manifest.merge.invalidatedStamps.push({
       head: stampHead,
@@ -805,10 +1241,26 @@ function setRisk(manifest, options) {
       `resolved tier ${tier} is below requested minimum ${requestedMinimum}`,
     );
   }
+  const taskType = options["task-type"] || "unknown";
+  if (
+    ![
+      "unknown",
+      "chore",
+      "docs",
+      "build",
+      "ci",
+      "feature",
+      "bugfix",
+      "performance",
+    ].includes(taskType)
+  ) {
+    throw new Error(`invalid resolved task type '${taskType}'`);
+  }
   const resolved = {
     requestedLevel: manifest.risk.requestedLevel,
     resolved: true,
     tier,
+    taskType,
     score:
       options.score === undefined || options.score === ""
         ? null
@@ -916,16 +1368,33 @@ function bindPrRepositoryIdentity(manifest, options) {
   }
 }
 
-function approvalRecordValid(manifest, approval) {
+// True when the approval's signed head no longer equals currentHead, but
+// advanceHead() recorded it as carried across a provable rebase-only replay
+// (identical patch-id) and that equivalence still holds right now. Recomputed
+// fresh rather than trusting the cached flag alone, so a later real content
+// change (which would call advanceHead again and clear rebaseCarriedHead,
+// or leave a stale flag if inspected out-of-band) can never wrongly pass.
+function approvalHeadCarriedByRebase(manifest, approval, root) {
+  if (!root) return false;
+  if (approval?.rebaseCarriedHead !== manifest.revisions.currentHead) {
+    return false;
+  }
+  if (typeof approval.patchId !== "string") return false;
+  return approval.patchId === currentPatchId(manifest, root);
+}
+
+function approvalRecordValid(manifest, approval, root) {
+  const headMatches =
+    approval?.head === manifest.revisions.currentHead ||
+    approvalHeadCarriedByRebase(manifest, approval, root);
   const expected = {
     repoKey: manifest.repo.key,
     pr: manifest.repo.pr,
-    head: manifest.revisions.currentHead,
     invocationId: manifest.invocationId,
   };
-  const identityMatches = Object.entries(expected).every(
-    ([key, value]) => approval?.[key] === value,
-  );
+  const identityMatches =
+    headMatches &&
+    Object.entries(expected).every(([key, value]) => approval?.[key] === value);
   return Boolean(
     approval?.approved === true &&
     identityMatches &&
@@ -955,19 +1424,24 @@ function capabilitySignatureValid(manifest, artifact) {
   );
 }
 
-function approvalValid(manifest) {
+function approvalValid(manifest, root) {
   const approval = manifest.approval;
-  if (!approvalRecordValid(manifest, approval)) return false;
+  if (!approvalRecordValid(manifest, approval, root)) return false;
   try {
     const artifact = parseJson(
       fs.readFileSync(approval.artifactPath, "utf8"),
       "approval capability",
     );
     const payload = artifact.payload;
+    // The signed payload always names the head that was actually reviewed
+    // and signed (approval.head), never currentHead directly — a rebase
+    // never re-signs. approvalRecordValid() is what proves approval.head is
+    // either literally currentHead, or a prior head whose patch-id equals
+    // currentHead's patch-id right now (rebase-only replay).
     const identityMatches =
       payload?.repoKey === manifest.repo.key &&
       payload?.pr === manifest.repo.pr &&
-      payload?.head === manifest.revisions.currentHead &&
+      payload?.head === approval.head &&
       payload?.invocationId === manifest.invocationId &&
       payload?.approver === approval.approver &&
       payload?.expiresAt === approval.expiresAt;
@@ -1039,6 +1513,11 @@ function attachApproval(manifest, options) {
     source: "outer-wrapper-capability",
     artifactPath,
     artifactSha256: sha256File(artifactPath),
+    // Patch-id of the reviewed diff at approval time, cached so a later
+    // rebase-only HEAD change (advanceHead()) can prove the diff is still
+    // identical without re-signing. Best-effort: null if unavailable (e.g.
+    // empty diff against base), in which case rebase-carry never applies.
+    patchId: currentPatchId(manifest, manifest.repo.realpath),
   };
   manifest.approvalChallengeSha256 = null;
 }
@@ -1058,7 +1537,7 @@ function armApprovalChallenge(manifest, options) {
   } catch {
     throw new Error("approval trust key is invalid");
   }
-  if (approvalValid(manifest)) {
+  if (approvalValid(manifest, manifest.repo.realpath)) {
     throw new Error("cannot replace a currently valid approval capability");
   }
   manifest.approvalChallengeSha256 = challenge;
@@ -1070,9 +1549,10 @@ function armApprovalChallenge(manifest, options) {
 
 function providerPhaseDeadline(manifest) {
   const validation = manifest.governor.validationDeadlineEpoch;
+  const campaign = manifest.governor.campaignDeadlineEpoch;
   return manifest.reviews.length > 0 && Number.isInteger(validation)
-    ? validation
-    : manifest.governor.campaignDeadlineEpoch;
+    ? Math.min(validation, campaign)
+    : campaign;
 }
 
 function providerPhaseSeconds(manifest) {
@@ -1084,7 +1564,7 @@ function providerPhaseSeconds(manifest) {
 
 function authorizeProviderAttempt(manifest, options) {
   const provider = options.provider;
-  if (!["claude", "codex"].includes(provider)) {
+  if (!["claude", "codex", "gemini"].includes(provider)) {
     throw new Error(`invalid review provider '${provider}'`);
   }
   const governor = manifest.governor;
@@ -1098,16 +1578,20 @@ function authorizeProviderAttempt(manifest, options) {
   }
   const currentHead = manifest.revisions.currentHead;
   const phaseDeadline = providerPhaseDeadline(manifest);
-  const firstAttemptForHead = !governor.providerAttempts.some(
-    (attempt) => attempt.head === currentHead,
+  const firstAttemptForProvider = !governor.providerAttempts.some(
+    (attempt) =>
+      attempt.head === currentHead &&
+      attempt.provider === provider &&
+      attempt.reviewCount === manifest.reviews.length,
   );
-  if (firstAttemptForHead) {
+  if (firstAttemptForProvider) {
     const phaseSeconds = providerPhaseSeconds(manifest);
     governor.providerDeadlineEpoch = Math.min(
       now + phaseSeconds,
       phaseDeadline,
     );
     governor.providerDeadlineHead = currentHead;
+    governor.providerDeadlineProvider = provider;
   }
   const deadline = Math.min(governor.providerDeadlineEpoch, phaseDeadline);
   if (now >= deadline) {
@@ -1120,6 +1604,7 @@ function authorizeProviderAttempt(manifest, options) {
     number: governor.providerAttempts.length + 1,
     provider,
     head: currentHead,
+    reviewCount: manifest.reviews.length,
     startedAt: new Date().toISOString(),
   };
   governor.providerAttempts.push(attempt);
@@ -1300,9 +1785,12 @@ function providerFindings(manifest) {
     );
     const resultNames = new Set(resultFiles.map((file) => file.name));
     for (const item of resultFiles.filter((file) => {
-      const rawPass = file.name.match(/^codex-(\d+)\.json$/);
+      const rawPass = file.name.match(/^(codex|gemini)-(\d+)\.json$/);
+      if (!rawPass) return true;
+      const [, providerName, pass] = rawPass;
       return (
-        !rawPass || !resultNames.has(`codex-${rawPass[1]}.normalized.json`)
+        !resultNames.has(`${providerName}-${pass}.normalized.json`) &&
+        !resultNames.has(`primary-${providerName}-${pass}.result.json`)
       );
     })) {
       let parsed;
@@ -1327,7 +1815,8 @@ function providerFindings(manifest) {
             .digest("hex"),
           severity: finding.severity || "unknown",
           title: finding.title || "provider finding",
-          source: `${item.name}#${index}`,
+          provider: item.provider || inventory.provider,
+          source: `${item.provider || inventory.provider}:${item.name}#${index}`,
         });
       });
     }
@@ -1335,7 +1824,10 @@ function providerFindings(manifest) {
     for (const item of inventory.files.filter((file) =>
       file.name.endsWith(".findings.txt"),
     )) {
-      if (hasStructuredFindings && item.name === "codex.findings.txt") {
+      if (
+        hasStructuredFindings &&
+        /^(?:codex|gemini)\.findings\.txt$/.test(item.name)
+      ) {
         continue;
       }
       const text = fs
@@ -1494,7 +1986,7 @@ function writeArtifactInventory(manifest, artifactDir, provider) {
       (name) =>
         name.endsWith(".findings.txt") ||
         name.endsWith(".result.json") ||
-        /^codex-\d+(?:\.normalized)?\.json$/.test(name),
+        /^(?:codex|gemini)-\d+(?:\.normalized)?\.json$/.test(name),
     )
     .sort();
   const findings = names.filter((name) => name.endsWith(".findings.txt"));
@@ -1503,7 +1995,8 @@ function writeArtifactInventory(manifest, artifactDir, provider) {
     findings.some((name) =>
       fs
         .readFileSync(path.join(resolved, name), "utf8")
-        .startsWith("INCONCLUSIVE:"),
+        .split(/\r?\n/)
+        .some((line) => line.startsWith("INCONCLUSIVE:")),
     )
   ) {
     throw new Error("inconclusive provider findings cannot be inventoried");
@@ -1519,10 +2012,19 @@ function writeArtifactInventory(manifest, artifactDir, provider) {
     headSha: manifest.revisions.currentHead,
     provider,
     status: "success",
-    files: names.map((name) => ({
-      name,
-      sha256: sha256File(path.join(resolved, name)),
-    })),
+    files: names.map((name) => {
+      // Preserved artifacts encode their authoring provider in the filename
+      // itself (e.g. primary-codex-1.result.json). manifest.provider.primary
+      // is not yet populated on a campaign's first round — recordReview()
+      // sets it after this inventory is written — so it cannot be trusted
+      // here; the filename is always correct regardless of round ordering.
+      const preservedMatch = name.match(/^primary-(codex|gemini|claude)-/);
+      return {
+        name,
+        provider: preservedMatch ? preservedMatch[1] : provider,
+        sha256: sha256File(path.join(resolved, name)),
+      };
+    }),
   };
   atomicWrite(path.join(resolved, "artifact-inventory.json"), inventory);
 }
@@ -1764,11 +2266,7 @@ function recordSkippedGate(manifest, required, name, log, options) {
 
 function executeGate(manifest, required, name, log) {
   const gateSeconds = manifest.risk?.runtime?.checkSeconds ?? 300;
-  const phaseDeadline =
-    manifest.reviews.length > 0 &&
-    Number.isInteger(manifest.governor?.validationDeadlineEpoch)
-      ? manifest.governor.validationDeadlineEpoch
-      : manifest.governor?.campaignDeadlineEpoch;
+  const phaseDeadline = providerPhaseDeadline(manifest);
   const campaignRemaining = phaseDeadline
     ? phaseDeadline - Math.floor(Date.now() / 1000)
     : gateSeconds;
@@ -1904,6 +2402,10 @@ function reviewTrailers(manifest) {
 }
 
 function reviewAuthorization(manifest) {
+  // This is the authoritative provider-neutral merge evidence boundary. Repeat
+  // the strength assertion here so a caller cannot bypass resume/advance and
+  // authorize review artifacts produced under a stale, weaker risk contract.
+  assertCurrentReviewStrength(manifest, manifest.repo.realpath);
   const authorization = reviewCoverage(manifest);
   const successful = manifest.reviews.filter(
     (review) => review.status === "success",
@@ -2008,6 +2510,55 @@ function mutate(manifestArg, operation) {
   });
 }
 
+// Repo-relative files changed across the reviewed base..head, quoted-path safe.
+function reviewedChangedFiles(manifest) {
+  const root = manifest.repo.realpath;
+  const range = `${manifest.revisions.baseSha}..${manifest.revisions.currentHead}`;
+  // -z NUL-delimits and -c core.quotepath=false keeps non-ASCII paths literal,
+  // so a file with an accented/space name cannot slip past the matcher.
+  // --no-renames represents a rename as delete(old)+add(new) so BOTH paths are
+  // surfaced; without it git collapses a rename to the destination only, letting
+  // `auth/x.js -> src/x.js` hide the sensitive origin from the floor matcher
+  // (Codex + security-auditor review: rename-hides-path exploit).
+  const out = git(root, [
+    "-c",
+    "core.quotepath=false",
+    "diff",
+    "--name-only",
+    "--no-renames",
+    "-z",
+    range,
+  ]);
+  return out.split("\0").filter(Boolean);
+}
+
+// True when the reviewed change touches the always-human security floor.
+// An EMPTY changed-file set fails closed (returns true → human required): the
+// relaxation must never proceed having verified nothing. base==head, a bad
+// range, or a zero-file diff all mean "could not prove clear", which is NOT
+// "clear". A git error inside reviewedChangedFiles throws → top-level exit 1,
+// which the caller also treats as human-required.
+function humanFloorCheck(manifest) {
+  const cfg = riskScore.loadConfig(manifest.repo.realpath);
+  const files = reviewedChangedFiles(manifest);
+  if (files.length === 0) return true;
+  return riskScore.touchesHumanFloor(files, cfg);
+}
+
+function gateSatisfied(manifest, name) {
+  const required = manifest.requiredGates.find((gate) => gate.name === name);
+  if (!required) throw new Error(`gate '${name}' is not required`);
+  return manifest.gates.some(
+    (gate) =>
+      gate.name === name &&
+      gate.head === manifest.revisions.currentHead &&
+      ["success", "skipped"].includes(gate.status) &&
+      gate.source === required.source &&
+      gate.command === required.command &&
+      validGateArtifact(gate),
+  );
+}
+
 const COMMANDS = {
   validate: ({ manifest }) =>
     process.stdout.write(`${manifest.invocationId}\n`),
@@ -2016,7 +2567,19 @@ const COMMANDS = {
   agents: ({ manifestArg, rawArgs }) =>
     mutate(manifestArg, (locked) => setAgents(locked, rawArgs)),
   "approval-valid": ({ manifest }) => {
-    process.exitCode = approvalValid(manifest) ? 0 : 1;
+    process.exitCode = approvalValid(manifest, manifest.repo.realpath) ? 0 : 1;
+  },
+  "human-floor-check": ({ manifest }) => {
+    // Contract designed so the AUTONOMOUS path is reachable ONLY by an explicit
+    // verified-clear result; every other outcome requires a human.
+    //   0  = verified clear of the human floor (autonomous critical permitted)
+    //   10 = touches the always-human floor (human capability required)
+    //   1  = error (top-level catch) → human required (fail closed)
+    process.exitCode = humanFloorCheck(manifest) ? 10 : 0;
+  },
+  "gate-satisfied": ({ manifest, rawArgs }) => {
+    const options = parseOptions(rawArgs);
+    process.exitCode = gateSatisfied(manifest, options.name) ? 0 : 1;
   },
   "provider-attempt": ({ manifestArg, rawArgs }) => {
     let result;
@@ -2100,10 +2663,12 @@ function runAdvance(manifestArg, manifest, rawArgs) {
       locked.reviews.length > 0 &&
       locked.governor.providerDeadlineHead !== locked.revisions.currentHead
     ) {
-      locked.governor.validationDeadlineEpoch =
+      locked.governor.validationDeadlineEpoch = Math.min(
+        locked.governor.campaignDeadlineEpoch,
         Math.floor(Date.now() / 1000) +
-        (locked.risk?.runtime?.checkReserveSeconds ?? 300) +
-        (locked.risk?.runtime?.reviewReserveSeconds ?? 300);
+          (locked.risk?.runtime?.checkReserveSeconds ?? 300) +
+          (locked.risk?.runtime?.reviewReserveSeconds ?? 300),
+      );
     }
   });
   process.stdout.write(`${updated.revisions.currentHead}\n`);
@@ -2154,6 +2719,8 @@ module.exports = {
   authorizeProviderAttempt,
   atomicWrite,
   canonicalRoot,
+  computePatchId,
+  currentPatchId,
   createManifest,
   loadManifest,
   parseOptions,

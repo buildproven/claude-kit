@@ -75,15 +75,40 @@ function parseNativeReview(raw, root = process.cwd()) {
   // inconclusive, not an approval.
   const NEGATION = /\b(?:no|not|n[o']?t|without)\b/i;
   const NOUN =
-    /\b(?:findings?|issues?|concerns?|problems?|bugs?|(?:correctness|security)\s+(?:issue|problem|concern)s?)\b/i;
+    /\b(?:findings?|issues?|concerns?|problems?|bugs?|regressions?|(?:correctness|security)\s+(?:issue|problem|concern)s?)\b/i;
   const CLEAN_PHRASE =
     /\b(?:looks good|lgtm|no changes? (?:needed|required))\b/i;
+  const POSITIVE_VERDICT =
+    /\b(?:preserves?|retains?) (?:behaviors?|checks?|semantics|compatibility|invariants?|guarantees?|required-only checks|existing behavior|their existing behavior|the existing behavior|all checks|required checks)\b/i;
+  const ADVERSE_FINDING =
+    /\b(?:incorrect(?:ly)?|unsafe(?:ly)?|fails?|broken|vulnerable|regressions?|issues?|concerns?|problems?|bugs?)\b/i;
+  const NEGATIVE_PREFIX =
+    /\b(?:not|never|cannot|can't|fails? to|does not|doesn't|no longer)\b/i;
+  const CONTRAST = /\b(?:but|however)\b|;/i;
   const INCOMPLETE =
-    /\b(?:could ?n[o']?t be reviewed|ended unexpectedly|was (?:truncated|interrupted|incomplete)|another (?:path|file))\b/i;
+    /\b(?:could ?n[o']?t be reviewed|ended unexpectedly|was (?:truncated|interrupted|incomplete)|(?:review|analysis) was (?:not )?completed|another (?:path|file))\b/i;
   const sentences = String(raw).split(/[.\n!?]+/);
+  const incompleteVerdict = sentences.some((sentence) =>
+    INCOMPLETE.test(sentence),
+  );
+  // Evaluate adverse language per clause. A global `not`/`however` check made
+  // unrelated clean prose ("not risky. No concerns found.") poison the entire
+  // review. Clause boundaries still ensure that "No issues, but a bug remains"
+  // cannot borrow the negation from the clean clause.
+  const clauses = sentences.flatMap((sentence) => sentence.split(CONTRAST));
+  const adverseVerdict = clauses.some((clause) => {
+    if (NEGATIVE_PREFIX.test(clause) && POSITIVE_VERDICT.test(clause)) {
+      return true;
+    }
+    if (!ADVERSE_FINDING.test(clause)) return false;
+    return !(NEGATION.test(clause) && NOUN.test(clause));
+  });
   const cleanVerdict = sentences.some((sentence) => {
-    if (INCOMPLETE.test(sentence)) return false;
+    if (incompleteVerdict || adverseVerdict) return false;
     if (CLEAN_PHRASE.test(sentence)) return true;
+    if (POSITIVE_VERDICT.test(sentence)) {
+      return !CONTRAST.test(sentence) && !NEGATIVE_PREFIX.test(sentence);
+    }
     return NEGATION.test(sentence) && NOUN.test(sentence);
   });
   if (findings.length === 0 && !cleanVerdict) {

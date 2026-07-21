@@ -47,7 +47,7 @@ PREFLIGHT_OUTPUT="$(bash "$SCRIPT_DIR/quality-authorize-merge.sh" \
 printf '%s\n' "$PREFLIGHT_OUTPUT"
 if printf '%s\n' "$PREFLIGHT_OUTPUT" |
   grep -Fxq 'BS_QUALITY_ALREADY_MERGED=true'; then
-  bash "$SCRIPT_DIR/quality-merge-cleanup.sh" --preserve-branch
+  bash "$SCRIPT_DIR/quality-merge-cleanup.sh" --manifest "$MANIFEST"
   exit 0
 fi
 PREFLIGHT_PR_HEAD="$(printf '%s\n' "$PREFLIGHT_OUTPUT" |
@@ -130,19 +130,38 @@ esac
   exit 1
 }
 echo "[quality] waiting up to ${CI_TIMEOUT}s for required CI on stamp $STAMP_HEAD"
+RC=0
 bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CI_TIMEOUT" -- \
-  bash "$SCRIPT_DIR/quality-wait-required-checks.sh" --pr "$PR" || {
-    RC=$?
-    [ "$RC" -eq 124 ] &&
-      echo "❌ MERGE BLOCKED: timed out waiting for CI on stamp $STAMP_HEAD." >&2
-    [ "$RC" -ne 124 ] &&
-      echo "❌ MERGE BLOCKED: required CI failed on stamp $STAMP_HEAD." >&2
+  bash "$SCRIPT_DIR/quality-wait-required-checks.sh" --pr "$PR" || RC=$?
+CI_BILLING_WAIVED=false
+if [ "$RC" -ne 0 ]; then
+  CI_WAIVER_ARTIFACT="$(dirname "$MANIFEST")/ci-billing-waiver.json"
+  if node "$SCRIPT_DIR/quality-ci-billing-waiver.js" \
+    --repo "$EXPECTED_REPOSITORY" --pr "$PR" --head "$STAMP_HEAD" \
+    --artifact "$CI_WAIVER_ARTIFACT"; then
+    CI_BILLING_WAIVED=true
+    echo "⚠️  [quality] GitHub Actions billing prevented runner allocation; exact-HEAD local gates and review remain authoritative (waiver: $CI_WAIVER_ARTIFACT)." >&2
+  else
+    if [ "$RC" -eq 124 ]; then
+      DETAIL="timed out waiting for CI on stamp $STAMP_HEAD"
+    else
+      DETAIL="required CI failed on stamp $STAMP_HEAD"
+    fi
+    echo "❌ MERGE BLOCKED: $DETAIL." >&2
+    node "$SCRIPT_DIR/quality-terminal-status.js" \
+      --manifest "$MANIFEST" --category github-ci --detail "$DETAIL" || true
     exit 1
-  }
+  fi
+fi
 [ "$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
   --json headRefOid --jq .headRefOid)" = "$STAMP_HEAD" ] || {
   echo "❌ MERGE BLOCKED: PR HEAD changed while waiting for stamp CI." >&2
   exit 1
 }
-bash "$SCRIPT_DIR/quality-authorize-merge.sh" --manifest "$MANIFEST"
-bash "$SCRIPT_DIR/quality-merge-cleanup.sh" --preserve-branch
+if [ "$CI_BILLING_WAIVED" = true ]; then
+  BS_QUALITY_CI_BILLING_WAIVER_ARTIFACT="$CI_WAIVER_ARTIFACT" \
+    bash "$SCRIPT_DIR/quality-authorize-merge.sh" --manifest "$MANIFEST"
+else
+  bash "$SCRIPT_DIR/quality-authorize-merge.sh" --manifest "$MANIFEST"
+fi
+bash "$SCRIPT_DIR/quality-merge-cleanup.sh" --manifest "$MANIFEST"

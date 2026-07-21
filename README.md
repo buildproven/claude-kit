@@ -45,14 +45,15 @@ strategy panels).
 
 ## Prerequisites
 
-|                        | Needed for                                                  |
-| ---------------------- | ----------------------------------------------------------- |
-| **git**                | everything                                                  |
-| **Node 24+**           | quality-gate scripts (`package.json` engines)               |
-| **python3**            | `csc_lint.py` (the command/skill linter)                    |
-| **jq** _(recommended)_ | the hooks; they degrade to `grep` without it, less reliably |
-| **gh** _(optional)_    | PR-aware features in `/bs:quality`, `/bs:status`            |
-| **acpx** _(optional)_  | `/bs:strategy` only — every provider is invoked through it  |
+|                                   | Needed for                                                                                                                                                  |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **git**                           | everything                                                                                                                                                  |
+| **Node 24+**                      | quality-gate scripts (`package.json` engines)                                                                                                               |
+| **python3**                       | `csc_lint.py` (the command/skill linter)                                                                                                                    |
+| **jq** _(recommended)_            | the hooks; they degrade to `grep` without it, less reliably                                                                                                 |
+| **gh** _(optional)_               | PR-aware features in `/bs:quality`, `/bs:status`                                                                                                            |
+| **acpx** _(optional)_             | Ensemble workflows — every provider is invoked through it                                                                                                   |
+| Native provider CLIs _(optional)_ | Required only for providers you request explicitly. Gemini currently needs `@google/gemini-cli` plus API-key auth; `acpx` does not yet support Antigravity. |
 
 Some skills also need an MCP server and will tell you so rather than failing
 quietly: `/bs:backlog` and `/bs:dev --next` need **Linear**; `/bs:triage` needs

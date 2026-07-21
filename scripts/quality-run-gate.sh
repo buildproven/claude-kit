@@ -35,6 +35,11 @@ bash "$SCRIPT_DIR/quality-assert-clean.sh" \
   --manifest "$MANIFEST" --phase "gate '$NAME'" || exit 1
 STATE_ROOT="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" stateRoot)"
 HEAD="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.currentHead)"
+if node "$SCRIPT_DIR/quality-invocation.js" gate-satisfied "$MANIFEST" \
+  --name "$NAME"; then
+  echo "[quality] reusing exact-HEAD gate evidence: $NAME @ $HEAD"
+  exit 0
+fi
 LOG_DIR="$STATE_ROOT/gates/$HEAD"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/$NAME.log"
@@ -46,6 +51,12 @@ if [ "$SKIP" = true ]; then
   exit 0
 fi
 node "$SCRIPT_DIR/quality-invocation.js" gate-run "$MANIFEST" \
-  --name "$NAME" || exit 1
+  --name "$NAME"
+GATE_RC=$?
+if [ "$GATE_RC" -ne 0 ]; then
+  node "$SCRIPT_DIR/quality-terminal-status.js" \
+    --manifest "$MANIFEST" --category repository-gate --gate "$NAME" || true
+  exit "$GATE_RC"
+fi
 bash "$SCRIPT_DIR/quality-assert-clean.sh" \
   --manifest "$MANIFEST" --phase "gate '$NAME' completion" || exit 1

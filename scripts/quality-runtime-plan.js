@@ -9,7 +9,12 @@
  * clock, while still giving a broad low-risk diff enough time to be read.
  */
 
-const { score, scoreToKnobs, DEFAULTS } = require("./risk-score");
+const {
+  score,
+  scoreToKnobs,
+  DEFAULTS,
+  CRITICAL_RISK_SCORE,
+} = require("./risk-score");
 
 const WORKLOAD_BANDS = [
   {
@@ -68,11 +73,15 @@ const RISK_FLOORS = {
   low: { campaignSeconds: 300, reviewSeconds: 75 },
   medium: { campaignSeconds: 420, reviewSeconds: 120 },
   high: { campaignSeconds: 540, reviewSeconds: 180 },
-  critical: { campaignSeconds: 600, reviewSeconds: 240 },
+  // Empirical floor: an xhigh Codex pass over a 1.2k-line security diff took
+  // longer than the old 330s "large" allowance. Keep the whole campaign capped
+  // at 15 minutes, but reserve nine minutes for the only provider pass that can
+  // produce the mandatory critical review evidence.
+  critical: { campaignSeconds: 900, reviewSeconds: 540 },
 };
 
 function riskTier(riskScore) {
-  if (riskScore >= 75) return "critical";
+  if (riskScore >= CRITICAL_RISK_SCORE) return "critical";
   if (riskScore >= 50) return "high";
   if (riskScore >= 20) return "medium";
   return "low";
@@ -186,6 +195,7 @@ function main() {
   });
   const result = {
     ...plan,
+    taskType: scored.taskType,
     changeNature: scored.changeNature,
     reasons: scored.reasons,
     base: scored.base,

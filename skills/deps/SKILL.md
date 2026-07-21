@@ -35,7 +35,8 @@ Check for lock files: `pnpm-lock.yaml` → pnpm | `yarn.lock` → yarn | `packag
 1. Run `npm audit --prefix <path>` (or pnpm/yarn equivalent). Note the vuln count.
 2. If vulns exist, run `npm audit fix --prefix <path>`. Check if anything changed (`git -C <path> status --short`).
 3. Re-run audit. If vulns remain that require `--force`:
-   - Create a worktree: `git -C <path> worktree add <path>-deps-fix -b chore/deps-fix-$(date +%Y-%m-%d)`
+   - Create the worktree through the shared manager:
+     `node <kit-scripts>/worktree-manager.js create --repo <path> --branch chore/deps-fix-$(date +%Y-%m-%d) --creator bs:deps --purpose dependency-audit`
    - In the worktree, run `npm audit fix --force`
    - Run tests: prefer `npm run test:fast` if available, else `npm test`. Exit 0 or 5 = pass.
    - If **tests pass**: `git add package.json package-lock.json` (or pnpm/yarn equivalents), commit with message `chore(deps): npm audit fix --force — resolve remaining vulnerabilities\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>`, push branch, open PR.
@@ -68,7 +69,7 @@ After processing all repos, print a concise table:
 
 ## Rules
 
-- NEVER commit directly to main — always worktree + branch
+- NEVER commit directly to main — always use the shared manager's worktree + branch
 - NEVER use `--no-verify`
 - `npm outdated` exits 1 when packages are outdated — not an error
 - `npm audit` exits 1 when vulns found — not fatal, continue

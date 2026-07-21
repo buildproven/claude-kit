@@ -22,6 +22,33 @@ Quick reference for the public `claude-kit` workflow.
 
 Use `/bs:quality --merge` when you want the quality loop to carry through merge as well.
 
+All linked worktrees use one lifecycle API and live outside the primary
+repository:
+
+```text
+<primary-repo-parent>/.worktrees/<repo-name>/<branch-slug>
+```
+
+```bash
+node scripts/worktree-manager.js create --repo /path/to/repo \
+  --branch feature/my-feature --creator manual --purpose "my feature"
+node scripts/worktree-manager.js status --repo /path/to/repo
+node scripts/worktree-manager.js reconcile --repo /path/to/repo --apply
+```
+
+`reconcile --apply` is the recovery path after manual/admin merges. It retains
+locked, dirty, unpushed, open-PR, recent, and inconclusive worktrees. Use
+`migrate --dry-run` before adopting legacy layouts and `repair --apply` after
+an explicitly reviewed repository move or rename.
+
+If auto risk resolves to critical, approve exactly one PR revision with:
+
+```bash
+/bs:quality approve --pr 14 --head <exact-40-character-sha>
+```
+
+Approval is signed, expiring, and invalidated by any HEAD change.
+
 When invoking from a forked agent context (e.g. a parallel agent whose `cwd` is a harness scratch directory rather than the worktree), pass `--target-dir <path>`:
 
 ```bash

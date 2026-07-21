@@ -11,6 +11,12 @@ Run autonomously to completion. Every mutable fact belongs to one versioned
 JSON invocation manifest. Never infer active state from environment inheritance,
 session IDs, globbing, mtimes, or a "latest" pointer.
 
+Campaign identity is deterministic for the exact repository, PR, base, HEAD,
+scope, level, and merge intent. Repeating the same request resumes that campaign
+and its evidence, deadlines, attempts, and terminal state. Changing provider
+order cannot mint a fresh budget for the same work. Never start another campaign
+for an unchanged identity merely to retry a provider or reset a clock.
+
 Each fenced Bash block runs in a fresh shell. Resolve the installed runtime at
 the start of every block; never assume a variable from an earlier block exists.
 
@@ -59,29 +65,65 @@ bash "$QUALITY_SCRIPTS_DIR/quality-select-agents.sh" \
   --manifest "<exact-manifest-path>"
 ```
 
-Risk resolution must persist a concrete tier and numeric agent target before
-selection. Critical review requires a signed break-glass capability created by
+Risk resolution must persist a concrete task type, tier, and numeric agent
+target before selection. Docs/CI/build/chore work receives the lightest
+eligible routing without weakening path or security floors; feature work keeps
+the standard floor; bug-fix and performance work receive the high-review floor.
+The initial task type remains bound to the campaign so a later remediation
+commit named `fix` cannot mint a stronger campaign or reset its budget.
+Critical review requires a signed break-glass capability created by
 the outer wrapper and bound to repository, PR, HEAD, invocation, approver, and
 expiry identity. The wrapper pins its verification key into the invocation
 before attachment; artifacts cannot supply or replace their own trust key.
-Approval is accepted only from the outer `BREAK_GLASS_APPROVED=true`
-environment channel, never from quality argv. Nested quality processes cannot
-mint approval for an existing invocation. A changed HEAD or expired/replaced
-capability invalidates approval.
+Approval is accepted only from the outer wrapper, either through
+`/bs:quality approve --pr <number> --head <exact-sha>` or the backward-compatible
+outer `BREAK_GLASS_APPROVED=true` environment channel. Nested quality processes
+cannot mint approval for an existing invocation. A changed HEAD or
+expired/replaced capability invalidates approval.
 
 ## 3. Automated gates and formatting
 
 Run every gate in the manifest's immutable `requiredGates` policy, derived at
-invocation creation from applicable repository scripts and consumer-workflow
-fixtures. This includes lint, type, test, build, security, and consumer gates
-when applicable, all evidenced against the current HEAD. Tests must exist and
-pass unless the manifest's
+invocation creation from applicable package scripts, a committed
+`.quality-gates.json` policy, and consumer-workflow fixtures. A native
+Python/shell/polyglot repository can declare revision-bound commands without
+adding a fake `package.json`:
+
+```json
+{
+  "version": 1,
+  "gates": {
+    "lint": {
+      "executable": "python3",
+      "args": ["-m", "ruff", "check", "."]
+    },
+    "test": {
+      "executable": "python3",
+      "args": ["-m", "pytest", "-q"]
+    },
+    "security": {
+      "executable": "python3",
+      "args": ["-m", "pip_audit", "-r", "requirements.txt"]
+    }
+  }
+}
+```
+
+Only argv arrays are accepted; shell command strings and unknown gate fields
+fail closed. Explicit native declarations take precedence over same-named
+package-script fallbacks. Supported names are `lint`, `test`, `security`,
+`build`, `type`, and `consumer`.
+
+This includes lint, type, test, build, security, and consumer gates when
+applicable, all evidenced against the current HEAD. Tests must exist and pass
+unless the manifest's
 `options.skipTests` is true for a config-only repository. Execute the mandatory
 categories through the evidence-recording runner:
 
-The invocation also persists an absolute provider deadline and attempt cap
-from its start time. Every Claude panel and Codex pass consumes an attempt
-before launch; fallback and resumed review rounds cannot reset either bound.
+The invocation persists a campaign deadline and absolute attempt cap. Each
+provider gets one bounded phase window within the remaining campaign deadline;
+a fallback does not inherit an already-expired primary window, but neither
+provider can extend the campaign or mint additional attempts.
 
 ```bash
 QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
@@ -97,6 +139,9 @@ The runner resolves commands only from the revision-bound `requiredGates`
 policy and executes and records each result atomically. It rejects caller
 commands. Cross-repository PRs fail during bootstrap until trusted CI-evidence
 ingestion exists; never run fork-controlled scripts on the operator host.
+On resume, an exact-HEAD successful gate whose persisted source and command
+still match policy is reused instead of rerun. A changed HEAD, command, source,
+or failed result executes normally.
 
 When `options.skipTests` is true, record the config-only decision explicitly
 instead of inventing a passing test command:
@@ -142,23 +187,39 @@ the next review covers `previousReviewedHead..currentHead`. Review artifacts
 live under the invocation directory at `reviews/<headSha>/round-N/` and carry
 repository, PR, base, head, invocation, and diff-hash identity.
 
-Provider exhaustion is classified only from a non-zero provider exit plus
-structured API/CLI metadata. Generated review text mentioning HTTP 429, quota,
-or rate-limit handling is ordinary review content.
+Provider exhaustion and billing failures are classified only from structured
+API/CLI error metadata. Some provider CLIs return an error envelope with process
+status 0, so the envelope is authoritative; generated review text mentioning
+HTTP 429, quota, or rate-limit handling remains ordinary review content.
+Claude, Codex, and the opt-in Gemini adapter share this circuit and governor
+contract; Gemini runs only when explicitly selected by quality provider policy.
+
+Typed failures update an operator-state provider circuit. Exhaustion remains
+open until its structured reset time; failures without a reset use a bounded
+cooldown before one recovery probe (one hour for exhaustion, six for billing).
+A successful probe clears the circuit. An open primary circuit skips immediately
+to the configured fallback instead of spending another review clock. Parser
+failures, provider exhaustion, billing, availability, timeouts, code findings,
+and CI failures remain distinct diagnoses. An inconclusive native Codex or
+Gemini parser result — both report the same structured rc=4 — gets exactly one
+bounded fallback attempt. Claude's currently bundled inconclusive result
+remains fail-closed until its timeout, parser, and unresolved agent causes are
+typed separately; an inconclusive fallback also remains fail-closed.
 
 Runtime is derived from both risk and actual diff workload. Risk controls
-depth; changed lines plus per-file overhead control the clock. Discovery scales
-from 5 minutes for micro changes to 15 minutes for huge changes. If and only if
-the discovery review requires a fix, separate workload-scaled allowances reserve
-2–6 minutes for affected gates and 3–5 minutes for targeted verification. The
-absolute default maximum is therefore 10–26 minutes, with no recursive third
-round.
+depth; changed lines plus per-file overhead control the clock. The complete
+default campaign is capped at 15 minutes. Critical review receives a 9-minute
+provider floor because measured xhigh review of a roughly 1,200-line security
+change exceeded the former 330-second large-diff window. Lower-risk windows
+remain workload-scaled. If discovery requires a fix, the remaining campaign
+budget reserves affected gates and one targeted verification; there is no
+recursive third round.
 
 One campaign permits exactly one discovery review, one batched fix commit, and
 one targeted verification review. A verification finding is a terminal
 blocked result for that campaign: report it with evidence and stop. Do not fix
-it and recursively start a third review. A new invocation may address the
-reported blocker with a fresh, explicitly budgeted campaign.
+it and recursively start a third review. Address the reported blocker in a new
+commit; the changed HEAD then creates a distinct, explicitly budgeted campaign.
 
 ## 5. Judge and remediation
 
@@ -188,6 +249,15 @@ node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" judge \
   mutate the reviewed HEAD after the second review in the same campaign.
 - An inconclusive or malformed provider response blocks merge.
 
+Before a terminal stop for remaining code findings, print the separated
+diagnosis:
+
+```bash
+QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-terminal-status.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
+node "$QUALITY_SCRIPTS_DIR/quality-terminal-status.js" \
+  --manifest "<exact-manifest-path>" --category code-findings
+```
+
 ## 6. Review evidence and merge
 
 Final authorization remains bound to the complete base/final-HEAD
@@ -215,12 +285,22 @@ Merge is forbidden when:
 - manifest identity does not match the current repository/revision;
 - review coverage is stale or discontinuous;
 - required break-glass approval is absent/stale;
-- CI is failing;
+- CI is failing, except on a plan-proven unprotectable private repository
+  during an active operator-authorized GitHub billing window where every failed
+  Actions job is exact-HEAD, acquired no runner, ran zero steps, and terminated
+  within 30 seconds;
 - trailers are missing, malformed, or revision-stale.
 
-After green CI and valid evidence, the merge invocation must execute the merge,
-then perform worktree-aware cleanup. Never use `--no-verify`, weaken critical
-review, or bypass the governor.
+When a repository cannot express required checks, wait for all registered
+checks instead of polling forever for a nonexistent required set. A billing
+waiver never excuses a job that acquired a runner, ran a step, is pending,
+failed outside GitHub Actions, or has an ambiguous result. Persist its
+classification artifact alongside the manifest.
+
+After green CI—or the narrow billing-preallocation classification above—and
+valid evidence, the merge invocation must execute the merge, then perform
+worktree-aware cleanup. Never use `--no-verify`, weaken critical review, or
+bypass the governor.
 
 ## 7. Campaign telemetry (terminal — always run)
 
@@ -250,9 +330,12 @@ else
 fi
 ```
 
-The line lands in `$BS_QUALITY_TELEMETRY_FILE` when set, else the target repo's
-`data/quality-telemetry.jsonl`. The monthly quality-value report derives
-escaped-defect rate, finding precision, and cost-per-caught-bug from these lines.
+The line lands in `$BS_QUALITY_TELEMETRY_FILE` when set, else in the operator
+state directory at
+`$XDG_STATE_HOME/claude-kit/quality-telemetry/<repo-key>.jsonl` (falling back to
+`~/.local/state`). It never dirties the audited repository by default. The
+monthly quality-value report derives escaped-defect rate, finding precision,
+and cost-per-caught-bug from these lines.
 
 ## References
 
