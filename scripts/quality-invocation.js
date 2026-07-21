@@ -1595,9 +1595,12 @@ function providerFindings(manifest) {
     );
     const resultNames = new Set(resultFiles.map((file) => file.name));
     for (const item of resultFiles.filter((file) => {
-      const rawPass = file.name.match(/^codex-(\d+)\.json$/);
+      const rawPass = file.name.match(/^(codex|gemini)-(\d+)\.json$/);
+      if (!rawPass) return true;
+      const [, providerName, pass] = rawPass;
       return (
-        !rawPass || !resultNames.has(`codex-${rawPass[1]}.normalized.json`)
+        !resultNames.has(`${providerName}-${pass}.normalized.json`) &&
+        !resultNames.has(`primary-${providerName}-${pass}.result.json`)
       );
     })) {
       let parsed;
@@ -1622,7 +1625,8 @@ function providerFindings(manifest) {
             .digest("hex"),
           severity: finding.severity || "unknown",
           title: finding.title || "provider finding",
-          source: `${item.name}#${index}`,
+          provider: item.provider || inventory.provider,
+          source: `${item.provider || inventory.provider}:${item.name}#${index}`,
         });
       });
     }
@@ -1801,7 +1805,8 @@ function writeArtifactInventory(manifest, artifactDir, provider) {
     findings.some((name) =>
       fs
         .readFileSync(path.join(resolved, name), "utf8")
-        .startsWith("INCONCLUSIVE:"),
+        .split(/\r?\n/)
+        .some((line) => line.startsWith("INCONCLUSIVE:")),
     )
   ) {
     throw new Error("inconclusive provider findings cannot be inventoried");
@@ -1817,10 +1822,19 @@ function writeArtifactInventory(manifest, artifactDir, provider) {
     headSha: manifest.revisions.currentHead,
     provider,
     status: "success",
-    files: names.map((name) => ({
-      name,
-      sha256: sha256File(path.join(resolved, name)),
-    })),
+    files: names.map((name) => {
+      // Preserved artifacts encode their authoring provider in the filename
+      // itself (e.g. primary-codex-1.result.json). manifest.provider.primary
+      // is not yet populated on a campaign's first round — recordReview()
+      // sets it after this inventory is written — so it cannot be trusted
+      // here; the filename is always correct regardless of round ordering.
+      const preservedMatch = name.match(/^primary-(codex|gemini|claude)-/);
+      return {
+        name,
+        provider: preservedMatch ? preservedMatch[1] : provider,
+        sha256: sha256File(path.join(resolved, name)),
+      };
+    }),
   };
   atomicWrite(path.join(resolved, "artifact-inventory.json"), inventory);
 }
