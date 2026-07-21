@@ -68,10 +68,14 @@ so repeat invocations reuse it deterministically.
 
 ## Reviewer Provider Policy
 
-Claude Code and Codex read the shared workflow policy at
+Claude Code, Codex, and the opt-in Gemini quality adapter read the shared workflow policy at
 `${XDG_CONFIG_HOME:-~/.config}/buildproven/agent-providers.json`. Configure it
 with `scripts/provider-config.sh --primary codex --fallback claude`
-(or reverse the providers). `BS_QUALITY_PRIMARY`, `BS_QUALITY_FALLBACK`, and
+(or reverse the providers). Gemini is accepted only by the quality-specific
+policy surface; select it explicitly with `BS_QUALITY_PRIMARY=gemini` or
+`BS_QUALITY_FALLBACK=gemini`. The Gemini leg runs the installed `gemini` CLI in
+bounded, read-only plan mode and validates its JSON response against the same
+strict review schema as Codex. `BS_QUALITY_PRIMARY`, `BS_QUALITY_FALLBACK`, and
 `BS_QUALITY_PROVIDER_CONFIG` are per-run overrides. The fallback runs for typed
 account exhaustion (HTTP 429, weekly/rate/usage limit, exhausted quota), an
 unavailable CLI, or — when `BS_QUALITY_FALLBACK_ON_TIMEOUT=1` (the default) — a
@@ -235,8 +239,8 @@ auto-fix loop, re-run `npm test` to verify they pass before continuing.
 
 | Variable                              | Default | Description                                                                                                                                        |
 | ------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BS_QUALITY_PRIMARY`                  | config  | Per-run primary override: `claude` or `codex`.                                                                                                     |
-| `BS_QUALITY_FALLBACK`                 | config  | Per-run fallback override: `claude`, `codex`, or `none`.                                                                                           |
+| `BS_QUALITY_PRIMARY`                  | config  | Per-run primary override: `claude`, `codex`, or opt-in `gemini`.                                                                                   |
+| `BS_QUALITY_FALLBACK`                 | config  | Per-run fallback override: `claude`, `codex`, opt-in `gemini`, or `none`.                                                                          |
 | `BS_QUALITY_FALLBACK_ON_TIMEOUT`      | `1`     | On `1`, a primary timeout fails over once. Set `0` to hard-block on the first timeout.                                                             |
 | `BS_QUALITY_PROVIDER_HEALTH_FILE`     | state   | Operator-state provider circuit file/prefix. Legacy aggregate files are read; writes use race-safe per-provider records beside it.                 |
 | `BS_QUALITY_CI_BILLING_WAIVER_UNTIL`  | config  | ISO timestamp overriding `ciBillingWaiverUntil` in the shared provider config; authorizes only exact-HEAD zero-runner/zero-step Actions failures.  |
@@ -371,7 +375,10 @@ merge-base SHA before starting the first provider so a fetch in another linked
 worktree cannot move `origin/main` and inject reverse-diff findings. Later
 rounds review from the last successfully reviewed SHA. Claude uses the same tier
 timeout around each parallel reviewer and cancels sibling process groups on
-account exhaustion.
+account exhaustion. Gemini receives the exact revision identity and committed
+diff on stdin, uses one or two workload-selected static-analysis passes, runs
+with `--approval-mode plan`, and fails closed on malformed, contradictory, or
+unstructured output.
 
 ## Trailer Convention
 

@@ -93,6 +93,20 @@ describe("structured provider failure classification", () => {
     ).toEqual({ category: "provider-exhaustion", resetAt: null });
   });
 
+  it("recognizes Gemini's root API error envelope", () => {
+    expect(
+      classifyStructuredFailure(
+        JSON.stringify({
+          error: {
+            code: 429,
+            status: "RESOURCE_EXHAUSTED",
+            message: "Quota exhausted.",
+          },
+        }),
+      ),
+    ).toEqual({ category: "provider-exhaustion", resetAt: null });
+  });
+
   it("recognizes Codex's structured usage-limit message after warning events", () => {
     const events = [
       {

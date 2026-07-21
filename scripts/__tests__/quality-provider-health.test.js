@@ -109,4 +109,17 @@ describe("quality provider health circuit", () => {
       codex: { category: "provider-billing" },
     });
   });
+
+  it("tracks Gemini without disturbing other provider circuits", () => {
+    const file = stateFile();
+    recordProviderFailure(file, "gemini", {
+      category: "provider-exhaustion",
+      resetAt: "2099-01-01T00:00:00.000Z",
+    });
+    expect(providerAvailability(file, "gemini")).toMatchObject({
+      available: false,
+      category: "provider-exhaustion",
+    });
+    expect(providerAvailability(file, "claude")).toEqual({ available: true });
+  });
 });

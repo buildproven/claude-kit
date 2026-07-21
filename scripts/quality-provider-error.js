@@ -33,7 +33,13 @@ function isErrorEvent(event) {
   return (
     event &&
     typeof event === "object" &&
-    (["error", "turn.failed"].includes(event.type) || event.is_error === true)
+    (["error", "turn.failed"].includes(event.type) ||
+      event.is_error === true ||
+      (event.error &&
+        typeof event.error === "object" &&
+        (event.error.code !== undefined ||
+          event.error.status !== undefined ||
+          event.error.statusCode !== undefined)))
   );
 }
 

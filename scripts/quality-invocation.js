@@ -1370,7 +1370,7 @@ function providerPhaseSeconds(manifest) {
 
 function authorizeProviderAttempt(manifest, options) {
   const provider = options.provider;
-  if (!["claude", "codex"].includes(provider)) {
+  if (!["claude", "codex", "gemini"].includes(provider)) {
     throw new Error(`invalid review provider '${provider}'`);
   }
   const governor = manifest.governor;
@@ -1626,7 +1626,10 @@ function providerFindings(manifest) {
     for (const item of inventory.files.filter((file) =>
       file.name.endsWith(".findings.txt"),
     )) {
-      if (hasStructuredFindings && item.name === "codex.findings.txt") {
+      if (
+        hasStructuredFindings &&
+        /^(?:codex|gemini)\.findings\.txt$/.test(item.name)
+      ) {
         continue;
       }
       const text = fs
@@ -1785,7 +1788,7 @@ function writeArtifactInventory(manifest, artifactDir, provider) {
       (name) =>
         name.endsWith(".findings.txt") ||
         name.endsWith(".result.json") ||
-        /^codex-\d+(?:\.normalized)?\.json$/.test(name),
+        /^(?:codex|gemini)-\d+(?:\.normalized)?\.json$/.test(name),
     )
     .sort();
   const findings = names.filter((name) => name.endsWith(".findings.txt"));

@@ -191,6 +191,8 @@ Provider exhaustion and billing failures are classified only from structured
 API/CLI error metadata. Some provider CLIs return an error envelope with process
 status 0, so the envelope is authoritative; generated review text mentioning
 HTTP 429, quota, or rate-limit handling remains ordinary review content.
+Claude, Codex, and the opt-in Gemini adapter share this circuit and governor
+contract; Gemini runs only when explicitly selected by quality provider policy.
 
 Typed failures update an operator-state provider circuit. Exhaustion remains
 open until its structured reset time; failures without a reset use a bounded

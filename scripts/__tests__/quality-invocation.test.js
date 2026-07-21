@@ -343,6 +343,20 @@ describe("quality invocation manifest", () => {
     expect(create(root, args)).not.toBe(first);
   });
 
+  it("authorizes Gemini inside the existing provider attempt budget", () => {
+    const root = repo("gemini-provider-attempt");
+    const manifest = create(root, []);
+    const result = JSON.parse(
+      execFileSync(
+        "node",
+        [INVOCATION, "provider-attempt", manifest, "--provider", "gemini"],
+        { cwd: root, encoding: "utf8" },
+      ),
+    );
+    expect(result.provider).toBe("gemini");
+    expect(result.number).toBe(1);
+  });
+
   it("refuses a fresh same-work campaign created only by swapping provider policy", () => {
     const root = repo("durable-provider-policy");
     create(root, [], {

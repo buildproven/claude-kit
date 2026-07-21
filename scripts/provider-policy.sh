@@ -7,8 +7,16 @@ bs_provider_default_config() {
 
 bs_provider_validate() {
   local primary="$1" fallback="$2"
-  case "$primary" in auto|codex|claude) ;; *) return 1 ;; esac
-  case "$fallback" in none|codex|claude) ;; *) return 1 ;; esac
+  case "$primary" in
+    auto|codex|claude) ;;
+    gemini) [ "${BS_PROVIDER_ALLOW_GEMINI:-0}" = 1 ] || return 1 ;;
+    *) return 1 ;;
+  esac
+  case "$fallback" in
+    none|codex|claude) ;;
+    gemini) [ "${BS_PROVIDER_ALLOW_GEMINI:-0}" = 1 ] || return 1 ;;
+    *) return 1 ;;
+  esac
   [ "$primary" = auto ] || [ "$primary" != "$fallback" ]
 }
 
