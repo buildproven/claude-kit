@@ -84,10 +84,39 @@ expired/replaced capability invalidates approval.
 ## 3. Automated gates and formatting
 
 Run every gate in the manifest's immutable `requiredGates` policy, derived at
-invocation creation from applicable repository scripts and consumer-workflow
-fixtures. This includes lint, type, test, build, security, and consumer gates
-when applicable, all evidenced against the current HEAD. Tests must exist and
-pass unless the manifest's
+invocation creation from applicable package scripts, a committed
+`.quality-gates.json` policy, and consumer-workflow fixtures. A native
+Python/shell/polyglot repository can declare revision-bound commands without
+adding a fake `package.json`:
+
+```json
+{
+  "version": 1,
+  "gates": {
+    "lint": {
+      "executable": "python3",
+      "args": ["-m", "ruff", "check", "."]
+    },
+    "test": {
+      "executable": "python3",
+      "args": ["-m", "pytest", "-q"]
+    },
+    "security": {
+      "executable": "python3",
+      "args": ["-m", "pip_audit", "-r", "requirements.txt"]
+    }
+  }
+}
+```
+
+Only argv arrays are accepted; shell command strings and unknown gate fields
+fail closed. Explicit native declarations take precedence over same-named
+package-script fallbacks. Supported names are `lint`, `test`, `security`,
+`build`, `type`, and `consumer`.
+
+This includes lint, type, test, build, security, and consumer gates when
+applicable, all evidenced against the current HEAD. Tests must exist and pass
+unless the manifest's
 `options.skipTests` is true for a config-only repository. Execute the mandatory
 categories through the evidence-recording runner:
 
@@ -162,6 +191,8 @@ Provider exhaustion and billing failures are classified only from structured
 API/CLI error metadata. Some provider CLIs return an error envelope with process
 status 0, so the envelope is authoritative; generated review text mentioning
 HTTP 429, quota, or rate-limit handling remains ordinary review content.
+Claude, Codex, and the opt-in Gemini adapter share this circuit and governor
+contract; Gemini runs only when explicitly selected by quality provider policy.
 
 Typed failures update an operator-state provider circuit. Exhaustion remains
 open until its structured reset time; failures without a reset use a bounded

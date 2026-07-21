@@ -64,7 +64,9 @@ for evidence in \
   "$REVIEW_OUT"/*.stderr \
   "$REVIEW_OUT"/codex-*.json \
   "$REVIEW_OUT"/codex-*.progress \
-  "$REVIEW_OUT"/codex-*.prompt; do
+  "$REVIEW_OUT"/codex-*.prompt \
+  "$REVIEW_OUT"/gemini-*.json \
+  "$REVIEW_OUT"/gemini-*.prompt; do
   [ -e "$evidence" ] || continue
   quarantine "$evidence"
 done

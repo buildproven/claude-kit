@@ -343,6 +343,20 @@ describe("quality invocation manifest", () => {
     expect(create(root, args)).not.toBe(first);
   });
 
+  it("authorizes Gemini inside the existing provider attempt budget", () => {
+    const root = repo("gemini-provider-attempt");
+    const manifest = create(root, []);
+    const result = JSON.parse(
+      execFileSync(
+        "node",
+        [INVOCATION, "provider-attempt", manifest, "--provider", "gemini"],
+        { cwd: root, encoding: "utf8" },
+      ),
+    );
+    expect(result.provider).toBe("gemini");
+    expect(result.number).toBe(1);
+  });
+
   it("refuses a fresh same-work campaign created only by swapping provider policy", () => {
     const root = repo("durable-provider-policy");
     create(root, [], {
@@ -367,6 +381,25 @@ describe("quality invocation manifest", () => {
     expect(changedPolicy.stderr).toMatch(
       /deterministic quality campaign identity collision/,
     );
+  });
+
+  it("resumes after review without treating provider evidence as configuration drift", () => {
+    const root = repo("reviewed-provider-identity");
+    const env = {
+      BS_QUALITY_PRIMARY: "gemini",
+      BS_QUALITY_FALLBACK: "none",
+    };
+    const manifest = create(root, [], env);
+    const body = JSON.parse(readFileSync(manifest, "utf8"));
+    body.provider = {
+      ...body.provider,
+      primary: "gemini",
+      fallback: "none",
+      reviewer: "gemini",
+    };
+    writeFileSync(manifest, `${JSON.stringify(body, null, 2)}\n`);
+
+    expect(create(root, [], env)).toBe(manifest);
   });
 
   it("refuses caller-selected invocation ids that would reset a campaign", () => {
@@ -2716,6 +2749,117 @@ exit 1
         (gate) => gate.name === "security",
       ).source,
     ).toBe("package-script:security:audit");
+  });
+
+  it("discovers and executes committed native repository gates without a package manifest", () => {
+    const root = repo("native-repository-gates");
+    unlinkSync(path.join(root, "package.json"));
+    writeFileSync(
+      path.join(root, ".quality-gates.json"),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          lint: {
+            executable: "node",
+            args: ["--check", "file.js"],
+          },
+          test: {
+            executable: "node",
+            args: [
+              "-e",
+              "require('node:fs').writeFileSync('native-test-ran', 'yes')",
+            ],
+          },
+          security: {
+            executable: "node",
+            args: ["--check", "file.js"],
+          },
+        },
+      }),
+    );
+    git(root, ["add", ".quality-gates.json"]);
+    git(root, ["rm", "package.json"]);
+    git(root, ["commit", "-q", "-m", "declare native quality gates"]);
+
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.map((gate) => gate.name)).toEqual([
+      "lint",
+      "test",
+      "security",
+    ]);
+    expect(required.find((gate) => gate.name === "test")).toMatchObject({
+      source: "quality-gates:.quality-gates.json#test",
+      executable: "node",
+      args: [
+        "-e",
+        "require('node:fs').writeFileSync('native-test-ran', 'yes')",
+      ],
+    });
+
+    execFileSync("node", [INVOCATION, "gate-run", manifest, "--name", "test"], {
+      cwd: root,
+    });
+    expect(readFileSync(path.join(root, "native-test-ran"), "utf8")).toBe(
+      "yes",
+    );
+  });
+
+  it("rejects shell-command strings in native repository gate policy", () => {
+    const root = repo("invalid-native-repository-gates");
+    unlinkSync(path.join(root, "package.json"));
+    writeFileSync(
+      path.join(root, ".quality-gates.json"),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          lint: { command: "node --check file.js" },
+          test: { executable: "node", args: ["--test"] },
+          security: { executable: "node", args: ["--check", "file.js"] },
+        },
+      }),
+    );
+    git(root, ["add", ".quality-gates.json"]);
+    git(root, ["rm", "package.json"]);
+    git(root, ["commit", "-q", "-m", "declare unsafe native gate"]);
+
+    expect(() => create(root)).toThrow(
+      /\.quality-gates\.json gate 'lint' requires a non-empty executable and string args array/,
+    );
+  });
+
+  it("uses explicitly declared native gates ahead of package-script fallbacks", () => {
+    const root = repo("native-gate-precedence");
+    const packageJson = JSON.parse(
+      readFileSync(path.join(root, "package.json"), "utf8"),
+    );
+    packageJson.scripts.build = "node --check file.js";
+    writeFileSync(path.join(root, "package.json"), JSON.stringify(packageJson));
+    writeFileSync(
+      path.join(root, ".quality-gates.json"),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          test: { executable: "node", args: ["--test", "file.js"] },
+          build: { executable: "node", args: ["--check", "native-build.js"] },
+        },
+      }),
+    );
+    git(root, ["add", ".quality-gates.json", "package.json"]);
+    git(root, ["commit", "-q", "-m", "select native quality gates"]);
+
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.find((gate) => gate.name === "test")).toMatchObject({
+      source: "quality-gates:.quality-gates.json#test",
+      executable: "node",
+      args: ["--test", "file.js"],
+    });
+    expect(required.find((gate) => gate.name === "build")).toMatchObject({
+      source: "quality-gates:.quality-gates.json#build",
+      executable: "node",
+      args: ["--check", "native-build.js"],
+    });
   });
 
   it("binds optional gate evidence to the persisted trusted source and command", () => {

@@ -24,6 +24,11 @@ const NORMALIZE_CODEX_REVIEW = path.join(
   "scripts",
   "quality-normalize-codex-review.sh",
 );
+const NORMALIZE_GEMINI_REVIEW = path.join(
+  ROOT,
+  "scripts",
+  "quality-normalize-gemini-review.js",
+);
 
 describe("provider review runtime", () => {
   it.each([
@@ -277,6 +282,22 @@ Quality-Base: ${base}`;
     );
     expect(source).toMatch(
       /PROVIDER_RC" -eq 76 \] && \[ "\$FALLBACK_ON_TIMEOUT" = 1 \]/,
+    );
+  });
+
+  it("runs Gemini through the same bounded, read-only provider contract", () => {
+    const source = readFileSync(RUN_REVIEW, "utf8");
+    expect(source).toMatch(/authorize_provider_attempt gemini/);
+    expect(source).toMatch(/gemini --skip-trust --approval-mode plan/);
+    expect(source).toMatch(/--output-format json/);
+    expect(source).toMatch(/quality-normalize-gemini-review\.js/);
+    expect(source).toMatch(/quality-run-bounded\.sh/);
+    expect(source).toMatch(/classify_structured_provider_failure gemini/);
+    expect(source).toMatch(/quality-provider-policy\.sh" \|\| exit 1/);
+    expect(source).toMatch(/Never return JSON Schema definition keys/);
+    expect(source).not.toMatch(/gemini[^\n]*(?:--yolo|approval-mode yolo)/);
+    expect(readFileSync(NORMALIZE_GEMINI_REVIEW, "utf8")).toMatch(
+      /normalizeStructuredReview/,
     );
   });
 
