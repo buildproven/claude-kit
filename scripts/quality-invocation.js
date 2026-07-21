@@ -677,7 +677,11 @@ function existingCampaign(manifestPath, campaignIdentity) {
     baseHeadSha: existing.revisions.baseHeadSha,
     head: existing.revisions.currentHead,
     options: existing.options,
-    provider: existing.provider,
+    provider: {
+      primaryOverride: existing.provider?.primaryOverride,
+      fallbackOverride: existing.provider?.fallbackOverride,
+      config: existing.provider?.config,
+    },
   };
   if (
     JSON.stringify(canonicalJson(existingIdentity)) !==

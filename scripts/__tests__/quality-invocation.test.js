@@ -383,6 +383,25 @@ describe("quality invocation manifest", () => {
     );
   });
 
+  it("resumes after review without treating provider evidence as configuration drift", () => {
+    const root = repo("reviewed-provider-identity");
+    const env = {
+      BS_QUALITY_PRIMARY: "gemini",
+      BS_QUALITY_FALLBACK: "none",
+    };
+    const manifest = create(root, [], env);
+    const body = JSON.parse(readFileSync(manifest, "utf8"));
+    body.provider = {
+      ...body.provider,
+      primary: "gemini",
+      fallback: "none",
+      reviewer: "gemini",
+    };
+    writeFileSync(manifest, `${JSON.stringify(body, null, 2)}\n`);
+
+    expect(create(root, [], env)).toBe(manifest);
+  });
+
   it("refuses caller-selected invocation ids that would reset a campaign", () => {
     const root = repo("durable-explicit-id");
     expect(() =>
