@@ -54,13 +54,14 @@ if [ "$LIST" -eq 1 ]; then
 fi
 
 ENGINE="$ROOT/core/scripts/setup-codex-skills.sh"
-ARGS=(
-  --source "$ROOT/core/skills"
-  --allowlist "$ROOT/core/config/codex-skills.json"
-  --source "$ROOT/skills"
-  --allowlist "$ROOT/config/codex-skills.json"
-  --target "$TARGET"
-)
+if [ ! -f "$ENGINE" ]; then
+  ENGINE="$ROOT/scripts/setup-codex-skills.sh"
+fi
+ARGS=(--target "$TARGET")
+[ -d "$ROOT/core/skills" ] && ARGS+=(--source "$ROOT/core/skills")
+[ -f "$ROOT/core/config/codex-skills.json" ] && ARGS+=(--allowlist "$ROOT/core/config/codex-skills.json")
+[ -d "$ROOT/skills" ] && ARGS+=(--source "$ROOT/skills")
+[ -f "$ROOT/config/codex-skills.json" ] && ARGS+=(--allowlist "$ROOT/config/codex-skills.json")
 
 add_pack() {
   local name="$1"

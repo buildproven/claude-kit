@@ -124,7 +124,7 @@ else
     HEALTH_OK=false
 fi
 
-if bash "$PROJECT_DIR/scripts/setup-codex-plugin-profile.sh" --profile default --check >/tmp/codex-plugin-check.$$ 2>&1; then
+if bash "$PROJECT_DIR/scripts/setup-codex-skill-profile.sh" --profile default --check >/tmp/codex-plugin-check.$$ 2>&1; then
     ok "Codex plugins: lean default active"
 else
     warn "Codex plugins: drift detected"
