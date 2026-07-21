@@ -9,8 +9,21 @@ set -euo pipefail
 # this script's own installed symlink target (install.sh links each file
 # individually into ~/.claude/scripts/) rather than $BASH_SOURCE, which would
 # resolve to core/ when this file lives inside the kit submodule.
+#
+# The resolved path ends in .../scripts/setup-codex-skill-profile.sh either
+# way, but the overlay root is one level further up when this copy lives
+# inside an embedded core/ submodule than when the kit repo is used
+# standalone (its own scripts/ dir sits directly under its repo root).
+# Detect embedding by preferring an overlay-level config/codex-skills.json
+# one level higher, since that file only ever exists at the true overlay
+# root of a private overlay, never inside the kit submodule's own tree.
 SETUP_CODEX_SKILL_PROFILE_REAL_PATH="$(readlink -f "${HOME}/.claude/scripts/setup-codex-skill-profile.sh" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
-ROOT="${SETUP_REPO:-$(cd "$(dirname "$SETUP_CODEX_SKILL_PROFILE_REAL_PATH")/.." && pwd)}"
+SETUP_CODEX_SKILL_PROFILE_SCRIPTS_DIR="$(cd "$(dirname "$SETUP_CODEX_SKILL_PROFILE_REAL_PATH")" && pwd)"
+SETUP_CODEX_SKILL_PROFILE_ONE_UP="$(cd "$SETUP_CODEX_SKILL_PROFILE_SCRIPTS_DIR/.." && pwd)"
+if [ -z "${SETUP_REPO:-}" ] && [ -f "$SETUP_CODEX_SKILL_PROFILE_ONE_UP/../config/codex-skills.json" ]; then
+  SETUP_REPO="$(cd "$SETUP_CODEX_SKILL_PROFILE_ONE_UP/.." && pwd)"
+fi
+ROOT="${SETUP_REPO:-$SETUP_CODEX_SKILL_PROFILE_ONE_UP}"
 TARGET="${CODEX_AGENT_SKILLS_DIR:-$HOME/.agents/skills}"
 PROFILE="default"
 MODE=()
