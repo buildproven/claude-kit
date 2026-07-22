@@ -260,6 +260,7 @@ UTSV
         out="$(run_with_timeout "$pass_timeout" \
               env BS_QUALITY_HEADLESS=1 \
               claude -p "$(verify_prompt "$F_FILE" "$F_LINE" "$F_SUM" "$F_DET")" \
+                --no-session-persistence \
                 --permission-mode bypassPermissions \
                 --allowedTools "Read,Grep,Glob" \
                 ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} \

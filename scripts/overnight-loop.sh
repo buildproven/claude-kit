@@ -12,6 +12,8 @@ fi
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CCUSAGE_BIN="${CCUSAGE_BIN:-ccusage}"
+AUTONOMOUS_RUNTIME="$SCRIPT_DIR/autonomous-loop-runtime.js"
+CLAUDE_USAGE_COMMAND="${CLAUDE_USAGE_COMMAND:-}"
 CURL_BIN="${CURL_BIN:-curl}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 LINEAR_API_URL="${LINEAR_API_URL:-https://api.linear.app/graphql}"
@@ -200,17 +202,27 @@ sleep_until_reset() {
   sleep "$wait_s"
 }
 
-cleanup_lock() { rmdir "$LOCK_DIR" 2>/dev/null || true; }
+cleanup_lock() {
+  if [ "${LOOP_ADMITTED:-0}" -eq 1 ]; then
+    node "$AUTONOMOUS_RUNTIME" release --id "$LOOP_ID" >/dev/null 2>&1 || true
+  fi
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+}
 
 main() {
   [ -n "${LINEAR_API_KEY:-}" ] || { log "FATAL: LINEAR_API_KEY is required"; return 1; }
   [ -x "$SCRIPT_DIR/provider-run.sh" ] || { log "FATAL: provider runner missing"; return 1; }
+  [ -f "$AUTONOMOUS_RUNTIME" ] || { log "FATAL: autonomous-loop runtime missing"; return 1; }
   [ -f "$RUN_WITH_DEADLINE" ] || { log "FATAL: deadline helper missing at $RUN_WITH_DEADLINE"; return 1; }
   command -v git >/dev/null 2>&1 || { log "FATAL: git not on PATH"; return 1; }
   command -v shasum >/dev/null 2>&1 || { log "FATAL: shasum not on PATH"; return 1; }
   command -v "$PYTHON_BIN" >/dev/null 2>&1 || { log "FATAL: python3 not on PATH"; return 1; }
   command -v "$CURL_BIN" >/dev/null 2>&1 || { log "FATAL: curl not on PATH"; return 1; }
   [ -d "$TARGET_DIR" ] && [ -n "$(main_tip)" ] || { log "FATAL: target has no readable main branch: $TARGET_DIR"; return 1; }
+  [ -n "$CLAUDE_USAGE_COMMAND" ] || {
+    log "FATAL: CLAUDE_USAGE_COMMAND is required for unattended work (must emit fiveHourPercent/sevenDayPercent JSON)"
+    return 1
+  }
 
   local lock_key
   lock_key=$(printf '%s\0%s' "$TARGET_DIR" "$LINEAR_PROJECT" | shasum -a 256 | cut -c1-20)
@@ -219,6 +231,17 @@ main() {
     log "FATAL: another loop owns $LOCK_DIR (remove only after proving it is stale)"
     return 1
   fi
+  LOOP_ID="overnight:${TARGET_DIR}:${LINEAR_PROJECT}"
+  if ! node "$AUTONOMOUS_RUNTIME" admit \
+    --kind ralph \
+    --id "$LOOP_ID" \
+    --owner-pid "$$" \
+    --usage-command "$CLAUDE_USAGE_COMMAND" >/dev/null; then
+    log "FATAL: autonomous-loop admission denied; inspect operator telemetry for the sanitized reason"
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+    return 1
+  fi
+  LOOP_ADMITTED=1
   trap cleanup_lock EXIT
   trap 'exit 130' INT TERM
 

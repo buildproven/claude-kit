@@ -1,7 +1,6 @@
 ---
 name: quality
 description: Autonomous quality loop with configurable thoroughness. Runs checks, revision-bound provider review, remediation, CI, and optional merge.
-context: fork
 disallowed-tools: AskUserQuestion
 ---
 
@@ -10,6 +9,13 @@ disallowed-tools: AskUserQuestion
 Run autonomously to completion. Every mutable fact belongs to one versioned
 JSON invocation manifest. Never infer active state from environment inheritance,
 session IDs, globbing, mtimes, or a "latest" pointer.
+
+This skill deliberately does not request `context: fork`: its provider review
+workers start from revision-bound manifests and explicit diff/identity files.
+Claude workers run with `--no-session-persistence`; Codex workers run with
+`--ephemeral`. A quality campaign therefore never inherits a long-lived parent
+transcript. The outer autonomous runner must obtain the same operator-scoped
+usage/concurrency admission as Ralph before it starts a new campaign.
 
 Campaign identity is deterministic for the exact repository, PR, base, HEAD,
 scope, level, and merge intent. Repeating the same request resumes that campaign

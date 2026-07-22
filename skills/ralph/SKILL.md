@@ -1,7 +1,6 @@
 ---
 name: ralph
 description: "Autonomous backlog execution with reflection, evidence, worktree isolation, and /bs:quality --merge"
-context: fork
 # Runs unattended (forked, no user in the loop). AskUserQuestion here would
 # block forever with nobody to answer it — remove the tool, don't just ask it
 # nicely not to. https://code.claude.com/docs/en/skills
@@ -27,6 +26,46 @@ category: development
 State machine: `PICK -> IMPLEMENT -> QUALITY -> REFLECT -> DECIDE`
 
 **Arguments received:** $ARGUMENTS
+
+## Fresh-campaign and budget contract
+
+Do not fork this long-running loop from the caller's transcript. The initial
+invocation runs in its current session; unattended runners start one fresh,
+non-persistent provider process per item through `scripts/provider-run.sh`.
+That runner uses `codex exec --ephemeral` or Claude's
+`--no-session-persistence`, so an item receives only its explicit prompt and
+the persisted backlog/quality state—not its parent's session history.
+
+Before an unattended run, acquire operator-scoped admission with
+`scripts/autonomous-loop-runtime.js admit`. It requires a local,
+user-configured usage adapter that prints only this JSON shape:
+
+```json
+{ "fiveHourPercent": 12, "sevenDayPercent": 18 }
+```
+
+The default gate refuses a new loop at 70% on either window, refuses a third
+loop across all repositories for the operator, and records only sanitized
+percentages/outcomes under `$XDG_STATE_HOME/claude-kit/autonomous-loops/`.
+Never put account credentials, raw usage responses, or that telemetry in a
+repository.
+
+After each completed item, if the runtime reports observed transcript/context
+tokens at or above `RALPH_CONTEXT_CAP_TOKENS` (default 80000), atomically mark
+the exact state file for a fresh handoff:
+
+```bash
+AUTONOMOUS_RUNTIME="$(dirname "$SCRIPT")/autonomous-loop-runtime.js"
+node "$AUTONOMOUS_RUNTIME" context-break \
+  --state "$EVIDENCE_DIR/state.json" \
+  --observed-tokens "$OBSERVED_CONTEXT_TOKENS" \
+  --cap-tokens "${RALPH_CONTEXT_CAP_TOKENS:-80000}"
+```
+
+When that returns `"breakRequired":true`, stop this campaign after state is
+written; do not compact and continue. Launch a new process through
+`autonomous-loop-runtime.js fresh-launch` with the state file and target
+directory. The new agent reads only that handoff and resumes remaining items.
 
 ## Execution
 

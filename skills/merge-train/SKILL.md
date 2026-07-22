@@ -2,7 +2,6 @@
 name: merge-train
 title: "Merge Train"
 description: Parallel cross-repo quality+merge sweep. One Task agent per repo in an isolated worktree runs /bs:quality --merge, auto-merges if green, post-merge cleanup, consolidated summary. Honors the never-skip-pre-existing-broken-CI rule.
-context: fork
 ---
 
 # /bs:merge-train — Parallel Cross-Repo Merge Sweep
@@ -10,6 +9,13 @@ context: fork
 **Goal**: Turn the ad-hoc "check status, run quality, merge PRs across 5+ repos" sweep into a single command. Mornings become "what shipped overnight" instead of "what needs shipping today."
 
 > **Scaling hint**: Keep the sweep deliberately small (at most 4 concurrent workers) until the operator has a cross-repo concurrency and usage budget. Resume a deferred batch in a fresh session rather than growing one long-lived parent context.
+
+Before dispatch, acquire one `merge-train` admission through
+`scripts/autonomous-loop-runtime.js`. The operator-scoped gate allows at most
+two autonomous loops across repositories and rejects a start when the configured
+Claude 5h or 7d utilization reaches its threshold. Each worker must be a fresh,
+non-persistent process with an explicit repo/PR/manifest handoff; do not fork or
+resume the train's transcript into a worker.
 
 ## Inputs
 
