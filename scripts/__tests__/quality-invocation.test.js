@@ -3566,6 +3566,36 @@ exit 1
     unlinkSync(marker);
   }, 10_000);
 
+  it("preserves the re-review reserve after a remediation gate", () => {
+    const root = repo("gate-validation-reserve");
+    const gateScript = path.join(root, "gate-too-slow.sh");
+    writeFileSync(gateScript, "#!/usr/bin/env bash\nsleep 3\n");
+    chmodSync(gateScript, 0o755);
+    const packageFile = path.join(root, "package.json");
+    const packageJson = JSON.parse(readFileSync(packageFile, "utf8"));
+    packageJson.scripts.build = "bash gate-too-slow.sh";
+    writeFileSync(packageFile, JSON.stringify(packageJson));
+    git(root, ["add", "gate-too-slow.sh", "package.json"]);
+    git(root, ["commit", "-q", "-m", "add validation gate"]);
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.risk.runtime = { checkSeconds: 1, checkReserveSeconds: 2 };
+    manifest.reviews = [{}];
+    manifest.governor.validationDeadlineEpoch =
+      Math.floor(Date.now() / 1000) + 3;
+    manifest.governor.campaignDeadlineEpoch =
+      Math.floor(Date.now() / 1000) + 30;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const result = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/exceeded its proportional 2s budget/);
+  }, 10_000);
+
   it("discovers committed gates on every advance and unions them monotonically", () => {
     const root = repo("monotonic-gates");
     const packageFile = path.join(root, "package.json");

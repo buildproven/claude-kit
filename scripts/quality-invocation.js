@@ -2297,7 +2297,12 @@ function executeGate(manifest, required, name, log) {
   const runtime = manifest.risk?.runtime;
   const gateSeconds = runtime?.checkSeconds ?? 300;
   const gateReserveSeconds = runtime?.checkReserveSeconds ?? 0;
-  const boundedGateSeconds = gateSeconds + gateReserveSeconds;
+  const validationGate =
+    manifest.reviews.length > 0 &&
+    Number.isInteger(manifest.governor.validationDeadlineEpoch);
+  const boundedGateSeconds = validationGate
+    ? gateReserveSeconds
+    : gateSeconds + gateReserveSeconds;
   const phaseDeadline = providerPhaseDeadline(manifest);
   const campaignRemaining = phaseDeadline
     ? phaseDeadline - Math.floor(Date.now() / 1000)
