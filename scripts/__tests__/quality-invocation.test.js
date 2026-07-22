@@ -548,10 +548,29 @@ printf '%s\\n' "$manifest"
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     expect(manifest.risk.resolved).toBe(true);
     expect(manifest.risk.tier).not.toBe("auto");
+    expect(manifest.risk.mergeAuthority).toBe("autonomous");
     expect(manifest.risk.taskType).toBe("bugfix");
     expect(manifest.risk.score).toBeGreaterThanOrEqual(60);
     expect(manifest.agents.length).toBeGreaterThanOrEqual(2);
   }, 120_000);
+
+  it("persists an explicit human-required policy in the immutable risk contract", () => {
+    const root = repo("human-required-authority");
+    writeFileSync(
+      path.join(root, "harness-config.json"),
+      JSON.stringify({ scorePolicy: { mergeAuthority: "human-required" } }),
+    );
+    git(root, ["add", "harness-config.json"]);
+    git(root, ["commit", "-qm", "configure manual governance"]);
+    const manifestPath = create(root);
+    const result = spawnSync("bash", [RISK, "--manifest", manifestPath], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifest.risk.mergeAuthority).toBe("human-required");
+  });
 
   it("locates an explicit target manifest without trusting the caller cwd", () => {
     const first = repo("first");

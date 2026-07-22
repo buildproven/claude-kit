@@ -41,6 +41,7 @@ const gitRunner =
 describe("loadConfig — per-repo harness-config.json", () => {
   it("returns the defaults when no config file exists", () => {
     expect(loadConfig(repoWith(null))).toBe(DEFAULTS);
+    expect(DEFAULTS.mergeAuthority).toBe("autonomous");
   });
 
   it("merges a repo's scorePolicy over the defaults", () => {
@@ -57,6 +58,21 @@ describe("loadConfig — per-repo harness-config.json", () => {
 
   it("ignores a config with no scorePolicy block", () => {
     expect(loadConfig(repoWith({ somethingElse: true }))).toBe(DEFAULTS);
+  });
+
+  it("allows a repository to opt into legacy human-required merge authority", () => {
+    const cfg = loadConfig(
+      repoWith({ scorePolicy: { mergeAuthority: "human-required" } }),
+    );
+    expect(cfg.mergeAuthority).toBe("human-required");
+  });
+
+  it("rejects an unknown merge authority instead of weakening the contract", () => {
+    expect(() =>
+      loadConfig(
+        repoWith({ scorePolicy: { mergeAuthority: "ask-the-model" } }),
+      ),
+    ).toThrow(/mergeAuthority must be either/i);
   });
 
   it("fails closed on malformed JSON", () => {

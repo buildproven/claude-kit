@@ -40,7 +40,12 @@ function providerStatus(manifest, failure) {
 }
 
 function breakGlassStatus(manifest) {
-  if (manifest.risk?.tier !== "critical") return "not required";
+  // A manifest created before mergeAuthority was introduced must report the
+  // same manual-governance requirement that final authorization enforces.
+  const mergeAuthority = manifest.risk?.mergeAuthority || "human-required";
+  if (mergeAuthority !== "human-required") {
+    return "not required (autonomous merge authority)";
+  }
   if (
     manifest.approval?.approved === true &&
     invocation.approvalValid(manifest)

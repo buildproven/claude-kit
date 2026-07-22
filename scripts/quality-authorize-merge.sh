@@ -270,11 +270,31 @@ if [ -n "${CI_BILLING_WAIVER_ARTIFACT:-}" ] &&
   exit 1
 fi
 TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"
+MERGE_AUTHORITY="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.mergeAuthority)"
+# Manifests created before mergeAuthority was introduced retain their original
+# manual-governance behavior. Every newly resolved campaign persists an explicit
+# value, so an installed runtime upgrade can never grant authority mid-campaign.
+[ -n "$MERGE_AUTHORITY" ] || MERGE_AUTHORITY=human-required
+case "$MERGE_AUTHORITY" in
+  autonomous | human-required) ;;
+  *)
+    echo "❌ MERGE BLOCKED: manifest has invalid merge authority '$MERGE_AUTHORITY'." >&2
+    exit 1
+    ;;
+esac
 
-# Human-capability policy (autonomous-quality-v-model plan, Phase 0).
+# Manual-governance policy (legacy opt-in).
 #
-# Two independent conditions require a human break-glass capability; a merge is
-# authorized without one ONLY when NEITHER holds:
+# Review tier controls evidence depth. It does NOT control merge authority:
+# autonomous campaigns merge once their revision-bound review, CI, base, and
+# trailer evidence is clean. Repositories that explicitly select
+# `human-required` retain the signed break-glass check below.
+#
+# In either mode, BLOCKING findings, malformed/inconclusive review output,
+# failed/stale CI, or changed base/HEAD remain hard stops. Those are the rare
+# cases where quality cannot mechanically converge on a safe merge decision.
+#
+# In human-required mode, two independent conditions require a signed capability:
 #
 #   A. The change touches the always-human security floor
 #      (secrets/creds/keys/auth/license/deploy/webhooks — humanFloor). Checked
@@ -289,26 +309,28 @@ TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"
 #      a human break-glass buys no real protection (no external attacker, no
 #      server enforcement), so clean review + green gates suffice for critical.
 #
-# Fail-closed exit-code contract of human-floor-check:
+# Fail-closed exit-code contract of human-floor-check when manual governance is
+# explicitly enabled:
 #   0  = VERIFIED CLEAR of the floor
 #   10 = touches the floor
 #   anything else (1 = error, empty diff, tampered manifest) = treat as touches.
 # Only an explicit rc=0 counts as clear; every other outcome requires a human, so
 # an errored or ambiguous check can never silently authorize an autonomous merge.
-HUMAN_FLOOR_RC=0
-node "$SCRIPT_DIR/quality-invocation.js" human-floor-check "$MANIFEST" \
-  || HUMAN_FLOOR_RC=$?
-TOUCHES_HUMAN_FLOOR=true
-[ "$HUMAN_FLOOR_RC" -eq 0 ] && TOUCHES_HUMAN_FLOOR=false
-
 REQUIRE_APPROVAL=false
 FLOOR_REASON=""
-if [ "$TOUCHES_HUMAN_FLOOR" = true ]; then
-  REQUIRE_APPROVAL=true
-  FLOOR_REASON="the change touches the always-human security floor"
-elif [ "$TIER" = critical ] && [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ]; then
-  REQUIRE_APPROVAL=true
-  FLOOR_REASON="critical tier on a server-enforceable base"
+if [ "$MERGE_AUTHORITY" = human-required ]; then
+  HUMAN_FLOOR_RC=0
+  node "$SCRIPT_DIR/quality-invocation.js" human-floor-check "$MANIFEST" \
+    || HUMAN_FLOOR_RC=$?
+  TOUCHES_HUMAN_FLOOR=true
+  [ "$HUMAN_FLOOR_RC" -eq 0 ] && TOUCHES_HUMAN_FLOOR=false
+  if [ "$TOUCHES_HUMAN_FLOOR" = true ]; then
+    REQUIRE_APPROVAL=true
+    FLOOR_REASON="the change touches the always-human security floor"
+  elif [ "$TIER" = critical ] && [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ]; then
+    REQUIRE_APPROVAL=true
+    FLOOR_REASON="critical tier on a server-enforceable base"
+  fi
 fi
 
 if [ "$REQUIRE_APPROVAL" = true ]; then
@@ -316,7 +338,7 @@ if [ "$REQUIRE_APPROVAL" = true ]; then
     echo "❌ MERGE BLOCKED: human break-glass approval is missing or stale ($FLOOR_REASON)." >&2
     exit 1
   }
-elif [ "$TIER" = critical ]; then
+elif [ "$MERGE_AUTHORITY" = human-required ] && [ "$TIER" = critical ]; then
   echo "[quality] Critical tier on an unprotectable private repo, clear of the" >&2
   echo "          always-human security floor: accepting clean review + green" >&2
   echo "          gates in lieu of human break-glass (Phase 0 policy)." >&2

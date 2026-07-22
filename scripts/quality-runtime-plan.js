@@ -195,6 +195,7 @@ function main() {
   });
   const result = {
     ...plan,
+    mergeAuthority: scored.mergeAuthority,
     taskType: scored.taskType,
     changeNature: scored.changeNature,
     reasons: scored.reasons,

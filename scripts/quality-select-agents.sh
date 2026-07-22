@@ -17,7 +17,6 @@ bash "$SCRIPT_DIR/quality-load-root.sh" --manifest "$MANIFEST" >/dev/null || exi
 field() { node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" "$1"; }
 TIER="$(field risk.tier)"
 AGENT_TARGET="$(field risk.agentTarget)"
-HEAD_SHA="$(field revisions.currentHead)"
 [ -n "$TIER" ] && [ -n "$AGENT_TARGET" ] || {
   echo "quality-select-agents: risk state is unresolved; run quality-risk-resolve first" >&2
   exit 1
@@ -31,19 +30,12 @@ N="$AGENT_TARGET"
 [ "$N" -gt "${#PANEL[@]}" ] && N="${#PANEL[@]}"
 AGENTS=("${PANEL[@]:0:$N}")
 
-if [ "$TIER" = critical ]; then
-  # Do NOT hard-block here. The authoritative critical gate is
-  # quality-authorize-merge.sh, which is the only place that knows whether the
-  # base is server-enforceable (ATOMIC_BASE_FRESHNESS) — the signal Phase 0 uses
-  # to decide whether a human break-glass is required or clean review suffices.
-  # Blocking at selection time would force a human capability even on
-  # unprotectable private repos, defeating the policy. The full critical review
-  # panel runs regardless; a pre-existing valid capability is merely noted.
-  if node "$SCRIPT_DIR/quality-invocation.js" approval-valid "$MANIFEST"; then
-    echo "[quality] Pre-existing break-glass approval verified for exact HEAD $HEAD_SHA"
-  else
-    echo "[quality] Critical tier: no approval yet — running full critical review; the merge gate decides human-capability need by repo enforceability." >&2
-  fi
+MERGE_AUTHORITY="$(field risk.mergeAuthority)"
+# Older manifests lack the field and preserve their established manual
+# governance behavior. New campaigns always persist one explicit authority.
+[ -n "$MERGE_AUTHORITY" ] || MERGE_AUTHORITY=human-required
+if [ "$TIER" = critical ] && [ "$MERGE_AUTHORITY" = autonomous ]; then
+  echo "[quality] Critical tier: autonomous merge authority; running full critical review." >&2
 fi
 
 node "$SCRIPT_DIR/quality-invocation.js" agents "$MANIFEST" "${AGENTS[@]}" || exit 1

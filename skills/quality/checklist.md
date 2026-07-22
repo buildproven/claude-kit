@@ -12,7 +12,7 @@ Review depth scales with the resolved risk tier (see `reference.md` §Quality Le
 | code-reviewer + silent-failure-hunter   | ✓   | ✓      | ✓    | ✓        |
 | type-design-analyzer + security-auditor |     | ✓      | ✓    | ✓        |
 | pr-test-analyzer                        |     |        | ✓    | ✓        |
-| break-glass-approval                    |     |        |      | ✓        |
+| critical-depth provider review          |     |        |      | ✓        |
 | provider review completed               | ✓   | ✓      | ✓    | ✓        |
 | `Reviewed-By: quality` trailer          | ✓   | ✓      | ✓    | ✓        |
 

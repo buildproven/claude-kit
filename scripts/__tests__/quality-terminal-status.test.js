@@ -10,7 +10,7 @@ describe("quality terminal diagnosis", () => {
       ],
       revisions: { currentHead: "abc" },
       reviews: [],
-      risk: { tier: "critical" },
+      risk: { tier: "critical", mergeAuthority: "human-required" },
       approval: { approved: false },
     };
     const output = buildDiagnosis("/tmp/exact/invocation.json", manifest, {
@@ -29,6 +29,23 @@ describe("quality terminal diagnosis", () => {
     expect(output).toContain("GitHub CI: not checked by this failure path");
     expect(output).toContain(
       "Retry/resume: /bs:quality --manifest /tmp/exact/invocation.json",
+    );
+  });
+
+  it("reports autonomous authority at critical tier without asking for break-glass", () => {
+    const output = buildDiagnosis(
+      "/tmp/exact/invocation.json",
+      {
+        requiredGates: [],
+        gates: [],
+        revisions: { currentHead: "abc" },
+        reviews: [],
+        risk: { tier: "critical", mergeAuthority: "autonomous" },
+      },
+      {},
+    );
+    expect(output).toContain(
+      "Break-glass: not required (autonomous merge authority)",
     );
   });
 
