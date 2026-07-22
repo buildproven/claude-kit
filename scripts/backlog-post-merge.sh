@@ -1,86 +1,97 @@
 #!/usr/bin/env bash
-# backlog-post-merge.sh - Auto-complete Linear issues when their branch is merged
-# Installed as: .git/hooks/post-merge (optional) or called by GitHub Actions
-# Detects CS-NNN from branch name → marks Linear issue as Done
+# backlog-post-merge.sh - Close every Linear issue cited by a merged change.
+#
+# Run locally from a post-merge hook or from .github/workflows/linear-post-merge.yml.
+# In Actions, GitHub's commit-to-pull-request endpoint contributes the PR body so
+# bundled fixes can cite more than one issue with `Closes BUI-123, BUI-456`.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GIT_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 
-# Find ISSUE_PREFIX-NNN pattern from recently merged branch name via reflog
-# Set ISSUE_PREFIX env var to match your Linear workspace prefix (default: CS)
-ISSUE_PREFIX="${ISSUE_PREFIX:-CS}"
-MERGED_BRANCH=$(git reflog --format='%gs' -1 | grep -oE "${ISSUE_PREFIX}-[0-9]+" | head -1 || true)
+fail() {
+  echo "[backlog-post-merge] ERROR: $*" >&2
+  exit 1
+}
 
-if [[ -z "$MERGED_BRANCH" ]]; then
-  MERGED_BRANCH=$(git log --format='%s %b' -1 | grep -oE "${ISSUE_PREFIX}-[0-9]+" | head -1 || true)
-fi
+extract_linear_ids() {
+  # Identifiers are intentionally prefix-agnostic: public users should not need
+  # to fork this script just because their Linear team key is not BUI or CS.
+  grep -Eo '[A-Z]{2,}-[0-9]+' | sort -u
+}
 
-if [[ -z "$MERGED_BRANCH" ]]; then
-  exit 0  # No ${ISSUE_PREFIX}-NNN found — not a backlog item branch
-fi
-
-ITEM_ID="$MERGED_BRANCH"
-
-# Allow override via environment (for manual testing)
-if [[ -n "${ITEM_ID_OVERRIDE:-}" ]]; then
-  ITEM_ID="$ITEM_ID_OVERRIDE"
-fi
-
-echo "[backlog-post-merge] Detected merged item: $ITEM_ID"
-
-# Require LINEAR_API_KEY
-LINEAR_API_KEY="${LINEAR_API_KEY:-}"
-if [[ -z "$LINEAR_API_KEY" ]]; then
-  # Try loading from .env
-  ENV_FILE="${GIT_ROOT}/.env"
-  if [[ -f "$ENV_FILE" ]]; then
-    LINEAR_API_KEY=$(grep -E '^LINEAR_API_KEY=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' || true)
+github_pr_bodies() {
+  if [[ -z "${GITHUB_REPOSITORY:-}" || -z "${GITHUB_SHA:-}" ]]; then
+    return 0
   fi
+
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "[backlog-post-merge] WARN: gh is unavailable; using commit text only" >&2
+    return 0
+  fi
+
+  gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+    --jq '.[].body // empty' 2>/dev/null || {
+      echo "[backlog-post-merge] WARN: could not read associated PR bodies; using commit text only" >&2
+      return 0
+    }
+}
+
+collect_linear_ids() {
+  local source_text
+  if [[ -n "${ITEM_ID_OVERRIDE:-}" ]]; then
+    printf '%s\n' "$ITEM_ID_OVERRIDE" | extract_linear_ids
+    return 0
+  fi
+
+  source_text="$(git -C "$GIT_ROOT" log -1 --format='%s%n%b')"
+  source_text+=$'\n'
+  source_text+="$(github_pr_bodies)"
+  printf '%s\n' "$source_text" | extract_linear_ids
+}
+
+linear_graphql() {
+  local query="$1"
+  curl -fsS \
+    -H "Content-Type: application/json" \
+    -H "Authorization: $LINEAR_API_KEY" \
+    --data "$(jq -cn --arg query "$query" '{query: $query}')" \
+    "https://api.linear.app/graphql"
+}
+
+LINEAR_API_KEY="${LINEAR_API_KEY:-}"
+if [[ -z "$LINEAR_API_KEY" && -f "$GIT_ROOT/.env" ]]; then
+  LINEAR_API_KEY="$(awk -F= '/^LINEAR_API_KEY=/{sub(/^[^=]*=/, ""); gsub(/^"|"$/, ""); print; exit}' "$GIT_ROOT/.env")"
+fi
+
+mapfile -t ITEM_IDS < <(collect_linear_ids)
+if [[ ${#ITEM_IDS[@]} -eq 0 ]]; then
+  echo "[backlog-post-merge] No Linear issue identifiers found; nothing to update"
+  exit 0
 fi
 
 if [[ -z "$LINEAR_API_KEY" ]]; then
-  echo "[backlog-post-merge] LINEAR_API_KEY not set — skipping Linear update"
-  exit 0
+  fail "LINEAR_API_KEY is required to close: ${ITEM_IDS[*]}. Add it as a repository Actions secret."
 fi
 
-# Find the Linear issue by identifier (e.g. CS-164 for ISSUE_PREFIX=CS)
-ISSUE_ID=$(curl -s \
-  -H "Content-Type: application/json" \
-  -H "Authorization: $LINEAR_API_KEY" \
-  -d "{\"query\": \"{ issues(filter: { identifier: { eq: \\\"$ITEM_ID\\\" } }) { nodes { id identifier state { id name } } } }\"}" \
-  "https://api.linear.app/graphql" \
-  | python3 -c "import json,sys; d=json.load(sys.stdin); nodes=d['data']['issues']['nodes']; print(nodes[0]['id'] if nodes else '')" 2>/dev/null || true)
+DONE_STATE_ID="$(linear_graphql '{ workflowStates(filter: { type: { eq: "completed" } }) { nodes { id } } }' \
+  | jq -r '.data.workflowStates.nodes[0].id // empty')"
+[[ -n "$DONE_STATE_ID" ]] || fail "could not find a completed Linear workflow state"
 
-if [[ -z "$ISSUE_ID" ]]; then
-  echo "[backlog-post-merge] Linear issue $ITEM_ID not found — skipping"
-  exit 0
-fi
+for item_id in "${ITEM_IDS[@]}"; do
+  issue_id="$(linear_graphql "{ issues(filter: { identifier: { eq: \\\"$item_id\\\" } }) { nodes { id } } }" \
+    | jq -r '.data.issues.nodes[0].id // empty')"
+  if [[ -z "$issue_id" ]]; then
+    echo "[backlog-post-merge] WARN: $item_id was not found in Linear; skipping" >&2
+    continue
+  fi
 
-# Find the "Done" state for this team
-DONE_STATE_ID=$(curl -s \
-  -H "Content-Type: application/json" \
-  -H "Authorization: $LINEAR_API_KEY" \
-  -d '{"query": "{ workflowStates(filter: { name: { eq: \"Done\" } }) { nodes { id name team { name } } } }"}' \
-  "https://api.linear.app/graphql" \
-  | python3 -c "import json,sys; d=json.load(sys.stdin); nodes=d['data']['workflowStates']['nodes']; print(nodes[0]['id'] if nodes else '')" 2>/dev/null || true)
-
-if [[ -z "$DONE_STATE_ID" ]]; then
-  echo "[backlog-post-merge] Could not find 'Done' state in Linear — skipping"
-  exit 0
-fi
-
-# Update the issue state to Done
-RESULT=$(curl -s \
-  -H "Content-Type: application/json" \
-  -H "Authorization: $LINEAR_API_KEY" \
-  -d "{\"query\": \"mutation { issueUpdate(id: \\\"$ISSUE_ID\\\", input: { stateId: \\\"$DONE_STATE_ID\\\" }) { success issue { identifier state { name } } } }\"}" \
-  "https://api.linear.app/graphql" \
-  | python3 -c "import json,sys; d=json.load(sys.stdin); u=d['data']['issueUpdate']; print('success' if u['success'] else 'failed')" 2>/dev/null || echo "error")
-
-if [[ "$RESULT" == "success" ]]; then
-  echo "[backlog-post-merge] ✅ Marked $ITEM_ID as Done in Linear"
-else
-  echo "[backlog-post-merge] ⚠️ Failed to update $ITEM_ID in Linear: $RESULT"
-fi
+  result="$(linear_graphql "mutation { issueUpdate(id: \\\"$issue_id\\\", input: { stateId: \\\"$DONE_STATE_ID\\\" }) { success } }" \
+    | jq -r '.data.issueUpdate.success // false')"
+  if [[ "$result" == "true" ]]; then
+    echo "[backlog-post-merge] Marked $item_id as Done"
+  else
+    fail "Linear rejected the update for $item_id"
+  fi
+done
