@@ -47,6 +47,17 @@ only this JSON shape:
 { "fiveHourPercent": 12, "sevenDayPercent": 18 }
 ```
 
+For a Bash-launched Ralph loop, the admission must bind the slot to that
+launcher's PID, not the `node` child that evaluates the command:
+
+```bash
+node "$AUTONOMOUS_RUNTIME" admit \
+  --kind ralph \
+  --id "$LOOP_ID" \
+  --owner-pid "$$" \
+  --usage-command "$CLAUDE_USAGE_COMMAND"
+```
+
 The default gate refuses a new loop at 70% on either window, refuses a third
 loop across all repositories for the operator, and records only sanitized
 percentages/outcomes under `$XDG_STATE_HOME/claude-kit/autonomous-loops/`.
