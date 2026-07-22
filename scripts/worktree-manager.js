@@ -751,9 +751,13 @@ function unlock(options) {
 
 function dirty(record) {
   if (!fs.existsSync(record.path)) return null;
-  const result = git(record.path, ["status", "--porcelain"], {
-    allowFailure: true,
-  });
+  const result = git(
+    record.path,
+    ["status", "--porcelain", "--ignore-submodules=none"],
+    {
+      allowFailure: true,
+    },
+  );
   if (result.status !== 0) {
     throw new ManagerError(
       `Could not inspect worktree cleanliness at ${record.path}: ${result.stderr || "git status failed"}`,
@@ -761,6 +765,31 @@ function dirty(record) {
     );
   }
   return result.stdout;
+}
+
+function restoreRecoveredLock(repoRoot, record, recoveryOwner, removalError) {
+  if (!recoveryOwner) throw removalError;
+  try {
+    lockRecord(
+      repoRoot,
+      { ...record, locked: false, lockReason: null },
+      { reason: recoveryOwner, creator: "recovery-rollback" },
+    );
+  } catch (rollbackError) {
+    writeMetadata(repoRoot, worktreeMetadataKey(record), {
+      state: "recovery-required",
+      lockReason: recoveryOwner,
+      removalError: removalError.message,
+      rollbackError: rollbackError.message,
+      recoveryRequiredAt: new Date().toISOString(),
+    });
+    throw new ManagerError(
+      `Worktree removal failed and ownership could not be restored. Original error: ${removalError.message}. Lock recovery error: ${rollbackError.message}. Worktree retained at ${record.path}; run repair --repo '${repoRoot}' and restore owner '${recoveryOwner}' before continuing.`,
+      "LOCK_RECOVERY_FAILED",
+      { worktreePath: record.path, owner: recoveryOwner },
+    );
+  }
+  throw removalError;
 }
 
 function inspectDirty(record) {
@@ -1152,37 +1181,19 @@ function removeRecord(options) {
     // PR checks above have already passed, so retry only this known Git refusal
     // with the narrowly scoped force flag. Do not use force for any other
     // removal error.
-    if (
-      /work(ing)? trees? containing submodules cannot be moved or removed/i.test(
-        error.message,
-      )
-    ) {
-      git(repoRoot, ["worktree", "remove", "--force", record.path]);
-      forcedForSubmodules = true;
-    } else if (recoveryOwner) {
-      try {
-        lockRecord(
-          repoRoot,
-          { ...record, locked: false, lockReason: null },
-          { reason: recoveryOwner, creator: "recovery-rollback" },
-        );
-      } catch (rollbackError) {
-        writeMetadata(repoRoot, worktreeMetadataKey(record), {
-          state: "recovery-required",
-          lockReason: recoveryOwner,
-          removalError: error.message,
-          rollbackError: rollbackError.message,
-          recoveryRequiredAt: new Date().toISOString(),
-        });
-        throw new ManagerError(
-          `Worktree removal failed and ownership could not be restored. Original error: ${error.message}. Lock recovery error: ${rollbackError.message}. Worktree retained at ${record.path}; run repair --repo '${repoRoot}' and restore owner '${recoveryOwner}' before continuing.`,
-          "LOCK_RECOVERY_FAILED",
-          { worktreePath: record.path, owner: recoveryOwner },
-        );
+    try {
+      if (
+        /work(ing)? trees? containing submodules cannot be moved or removed/i.test(
+          error.message,
+        )
+      ) {
+        git(repoRoot, ["worktree", "remove", "--force", record.path]);
+        forcedForSubmodules = true;
+      } else {
+        throw error;
       }
-      throw error;
-    } else {
-      throw error;
+    } catch (removalError) {
+      restoreRecoveredLock(repoRoot, record, recoveryOwner, removalError);
     }
   }
   git(repoRoot, ["worktree", "prune", "--expire", "now"]);
