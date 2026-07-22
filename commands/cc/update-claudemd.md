@@ -31,6 +31,24 @@ Consider what you've learned in this session:
 
 Read the existing file to understand current structure and content.
 
+Before editing, record its line count:
+
+```bash
+wc -l CLAUDE.md
+```
+
+## Anti-drift rule
+
+CLAUDE.md is a high-leverage working-memory file, not a session transcript.
+Keep its net change to **at most +10 lines** per invocation. For every new
+line, identify existing content to replace, consolidate, or remove; do not
+append a parallel rule when the same guidance already exists elsewhere.
+
+If the session produced no stable, non-obvious, actionable learning, make no
+edit and do not create an empty documentation commit. If the proposed update
+would exceed the ceiling, consolidate it until the net change is within the
+limit.
+
 ## Step 3: Identify Updates
 
 Only add information that is:

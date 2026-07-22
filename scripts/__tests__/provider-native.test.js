@@ -60,6 +60,19 @@ describe("provider-native platform", () => {
     expect(invocation).not.toContain("--fork-session");
   });
 
+  it("keeps cc:update-claudemd bounded and avoids no-op commits", () => {
+    const command = readFileSync(
+      path.join(ROOT, "commands", "cc", "update-claudemd.md"),
+      "utf8",
+    );
+    expect(command).toContain("wc -l CLAUDE.md");
+    expect(command).toMatch(/\*\*at most \+10 lines\*\*/);
+    expect(command).toMatch(
+      /make no\s+edit and do not create an empty documentation commit/i,
+    );
+    expect(command).toMatch(/replace, consolidate, or remove/i);
+  });
+
   it("classifies every Claude skill and keeps Ralph discoverable", () => {
     const settings = JSON.parse(
       readFileSync(path.join(ROOT, "config", "settings.json"), "utf8"),
