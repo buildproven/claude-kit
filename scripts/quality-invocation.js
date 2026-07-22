@@ -1294,7 +1294,7 @@ function setRisk(manifest, options) {
   manifest.risk = resolved;
 }
 
-function setAgents(manifest, names) {
+function setAgents(manifest, names, { incomplete = false } = {}) {
   if (!manifest.risk?.resolved) {
     throw new Error("cannot select agents before risk resolution");
   }
@@ -1303,7 +1303,8 @@ function setAgents(manifest, names) {
   }
   if (
     manifest.agents.length > 0 &&
-    JSON.stringify(manifest.agents) === JSON.stringify(names)
+    JSON.stringify(manifest.agents) === JSON.stringify(names) &&
+    Boolean(manifest.panel?.incomplete) === incomplete
   ) {
     return;
   }
@@ -1311,6 +1312,11 @@ function setAgents(manifest, names) {
     throw new Error("quality agent selection is immutable once persisted");
   }
   manifest.agents = names;
+  manifest.panel = {
+    requiredAgents: manifest.risk.agentTarget,
+    selectedAgents: names.length,
+    incomplete,
+  };
 }
 
 function prIdentityOptions(manifest, options) {
@@ -1967,6 +1973,7 @@ function recordReview(manifest, options) {
     status: "success",
     tier: boundExpected.tier,
     agentsSha256: boundExpected.agentsSha256,
+    incompletePanel: Boolean(manifest.panel?.incomplete),
     governorAttemptToken: authorizedAttempt.token,
     completedAt: new Date().toISOString(),
   });
@@ -2024,6 +2031,11 @@ function writeArtifactInventory(manifest, artifactDir, provider) {
     headSha: manifest.revisions.currentHead,
     provider,
     status: "success",
+    panel: manifest.panel || {
+      requiredAgents: manifest.agents.length,
+      selectedAgents: manifest.agents.length,
+      incomplete: false,
+    },
     files: names.map((name) => {
       // Preserved artifacts encode their authoring provider in the filename
       // itself (e.g. primary-codex-1.result.json). manifest.provider.primary
@@ -2179,6 +2191,11 @@ function reviewCoverage(manifest) {
     );
     if (!authorizedAttempt) {
       throw new Error("review lacks an authorized governor attempt");
+    }
+    if (review.incompletePanel) {
+      throw new Error(
+        "an incomplete reduced panel cannot satisfy merge review coverage",
+      );
     }
     expectedFrom = review.to;
   }
@@ -2576,8 +2593,11 @@ const COMMANDS = {
     process.stdout.write(`${manifest.invocationId}\n`),
   risk: ({ manifestArg, rawArgs }) =>
     mutate(manifestArg, (locked) => setRisk(locked, parseOptions(rawArgs))),
-  agents: ({ manifestArg, rawArgs }) =>
-    mutate(manifestArg, (locked) => setAgents(locked, rawArgs)),
+  agents: ({ manifestArg, rawArgs }) => {
+    const incomplete = rawArgs.includes("--incomplete");
+    const names = rawArgs.filter((argument) => argument !== "--incomplete");
+    mutate(manifestArg, (locked) => setAgents(locked, names, { incomplete }));
+  },
   "approval-valid": ({ manifest }) => {
     process.exitCode = approvalValid(manifest, manifest.repo.realpath) ? 0 : 1;
   },

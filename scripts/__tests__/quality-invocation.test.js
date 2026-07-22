@@ -2402,6 +2402,91 @@ exit 1
     ).not.toBe(0);
   });
 
+  it("records a deliberately reduced panel as incomplete and never authorizes it as full coverage", () => {
+    const root = repo("reduced-panel");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 4,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(manifest, ["reviewer-a", "reviewer-b"], {
+        incomplete: true,
+      });
+    });
+
+    prepareCodexReview(root, manifestPath);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const inventory = JSON.parse(
+      readFileSync(
+        path.join(manifest.reviews[0].artifactDir, "artifact-inventory.json"),
+        "utf8",
+      ),
+    );
+    expect(manifest.panel).toEqual({
+      requiredAgents: 4,
+      selectedAgents: 2,
+      incomplete: true,
+    });
+    expect(manifest.reviews[0].incompletePanel).toBe(true);
+    expect(inventory.panel).toEqual(manifest.panel);
+    expect(() => invocation.reviewAuthorization(manifest)).toThrow(
+      /incomplete reduced panel cannot satisfy merge review coverage/,
+    );
+  });
+
+  it("persists a merge-train panel cap visibly through the selector seam", () => {
+    const root = repo("reduced-panel-selector");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 4,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+    });
+    execFileSync("bash", [SELECT, "--manifest", manifestPath], {
+      cwd: root,
+      env: { ...process.env, BS_QUALITY_PANEL_AGENTS: "2" },
+    });
+    expect(JSON.parse(readFileSync(manifestPath, "utf8")).panel).toEqual({
+      requiredAgents: 4,
+      selectedAgents: 2,
+      incomplete: true,
+    });
+  });
+
+  it("refuses to reduce a critical panel through the selector seam", () => {
+    const root = repo("critical-panel-selector");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "critical",
+        taskType: "bugfix",
+        score: 80,
+        agents: 4,
+        "codex-depth": "xhigh",
+        "codex-rounds": 1,
+      });
+    });
+    const result = spawnSync("bash", [SELECT, "--manifest", manifestPath], {
+      cwd: root,
+      env: { ...process.env, BS_QUALITY_PANEL_AGENTS: "2" },
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(
+      /critical reviews require the full 4-agent panel/,
+    );
+  });
+
   it("rejects a resumed HEAD whose complete diff requires stronger review", () => {
     const root = repo("risk-escalation");
     const manifest = create(root);
