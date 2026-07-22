@@ -284,6 +284,67 @@ describe("worktree-manager public CLI", () => {
     expect(existsSync(worktree.worktreePath)).toBe(false);
   });
 
+  it("removes an eligible merged worktree with initialized submodules", () => {
+    const { parent, repo } = fixture();
+    const submoduleSource = path.join(parent, "submodule-source");
+    const submoduleRemote = path.join(parent, "submodule.git");
+    mkdirSync(submoduleSource);
+    run("git", ["init", "--initial-branch=main", submoduleSource]);
+    git(submoduleSource, "config", "user.email", "tests@example.com");
+    git(submoduleSource, "config", "user.name", "Worktree Tests");
+    writeFileSync(path.join(submoduleSource, "README.md"), "submodule\n");
+    git(submoduleSource, "add", "README.md");
+    git(submoduleSource, "commit", "-m", "initial submodule");
+    run("git", ["init", "--bare", submoduleRemote]);
+    run("git", [
+      "--git-dir",
+      submoduleRemote,
+      "symbolic-ref",
+      "HEAD",
+      "refs/heads/main",
+    ]);
+    git(submoduleSource, "remote", "add", "origin", submoduleRemote);
+    git(submoduleSource, "push", "-u", "origin", "main");
+
+    run("git", [
+      "-C",
+      repo,
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      submoduleRemote,
+      "vendor/submodule",
+    ]);
+    git(repo, "commit", "-am", "add submodule");
+    git(repo, "push", "origin", "main");
+
+    const worktree = create(repo, "feature/submodule-cleanup");
+    run("git", [
+      "-C",
+      worktree.worktreePath,
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "update",
+      "--init",
+      "--recursive",
+    ]);
+    const output = manager([
+      "remove",
+      "--repo",
+      repo,
+      "--branch",
+      "feature/submodule-cleanup",
+      "--delete-branch",
+    ]).json;
+
+    expect(output.removedPath).toBe(worktree.worktreePath);
+    expect(output.forcedForSubmodules).toBe(true);
+    expect(output.branchDeleted).toBe(true);
+    expect(existsSync(worktree.worktreePath)).toBe(false);
+  });
+
   it("refuses dirty worktrees", () => {
     const { repo } = fixture();
     const worktree = create(repo, "feature/dirty");
@@ -1113,9 +1174,14 @@ describe("canonical-source contract", () => {
     expect(files).toEqual([]);
   });
 
-  it("contains no force worktree removal, recursive deletion, or force branch deletion", () => {
+  it("limits force removal to the initialized-submodule recovery path", () => {
     const source = readFileSync(MANAGER, "utf8");
-    expect(source).not.toMatch(/worktree["',\s]+remove["',\s]+--force/);
+    expect(source).toMatch(
+      /submodules cannot be moved or removed[\s\S]*worktree", "remove", "--force", record\.path/,
+    );
+    expect(
+      source.match(/worktree", "remove", "--force", record\.path/g),
+    ).toHaveLength(1);
     expect(source).not.toContain("rm -rf");
     expect(source).not.toMatch(/branch["',\s]+-D/);
   });
