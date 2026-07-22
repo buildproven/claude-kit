@@ -604,6 +604,18 @@ function buildProvider(options) {
   };
 }
 
+function reviewArm(options) {
+  const arm = firstValue(
+    options["review-arm"],
+    process.env.BS_QUALITY_REVIEW_ARM,
+    "bespoke",
+  );
+  if (!["bespoke", "native"].includes(arm)) {
+    throw new Error("review arm must be bespoke or native");
+  }
+  return arm;
+}
+
 function governorInteger(name, fallback, label, minimum = 0) {
   return parseInteger(firstValue(process.env[name], fallback), label, {
     minimum,
@@ -806,6 +818,7 @@ function createManifest(options) {
     level: firstValue(options.level, "auto"),
     scope,
     skipTests: options["skip-tests"] === true,
+    reviewArm: reviewArm(options),
   };
   const provider = buildProvider(options);
   const campaignIdentity = {
@@ -1963,6 +1976,7 @@ function recordReview(manifest, options) {
     primary: options.primary,
     fallback: options.fallback,
     reviewer: options.provider,
+    effort: options.effort || null,
   };
   authorizedAttempt.consumedAt = new Date().toISOString();
 }

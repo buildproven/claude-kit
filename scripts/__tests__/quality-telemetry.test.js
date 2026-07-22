@@ -7,6 +7,7 @@ const {
   successfulReviewCount,
   deriveVerdict,
   buildRecord,
+  validateRecord,
   alreadyRecorded,
   recordCampaign,
 } = require("../quality-telemetry");
@@ -16,7 +17,7 @@ function baseManifest(overrides = {}) {
     schemaVersion: 1,
     invocationId: "11111111-1111-4111-8111-111111111111",
     stateRoot: "/does/not/matter",
-    options: { merge: false },
+    options: { merge: false, reviewArm: "bespoke" },
     repo: {
       realpath: "/tmp/target-repo",
       key: "target-repo",
@@ -33,6 +34,7 @@ function baseManifest(overrides = {}) {
       requestedLevel: "auto",
     },
     agents: [{ name: "code-reviewer" }, { name: "security-auditor" }],
+    provider: { reviewer: "codex", effort: "high" },
     reviews: [
       { status: "success", round: 1 },
       { status: "failed", round: 1 },
@@ -123,12 +125,16 @@ describe("buildRecord", () => {
       nowIso: NOW,
     });
     expect(rec).toMatchObject({
-      telemetrySchemaVersion: 1,
+      telemetrySchemaVersion: 2,
       invocationId: "11111111-1111-4111-8111-111111111111",
       repoKey: "target-repo",
       taskType: "feature",
       riskTier: "medium",
       riskScore: 61,
+      reviewArm: "bespoke",
+      reviewProvider: "codex",
+      reviewEffort: "high",
+      reviewTokens: null,
       durationSeconds: 0, // start 1000 > now 600 → clamps to 0
       reviewRounds: 1,
       agentsRun: 2,
@@ -168,6 +174,20 @@ describe("buildRecord", () => {
     expect(rec.riskTier).toBeNull();
     expect(rec.riskScore).toBeNull();
     expect(rec.taskType).toBeNull();
+  });
+
+  it("accepts nullable tokens and rejects an unknown review arm", () => {
+    const record = buildRecord(baseManifest(), {
+      execFileSync: NO_FILES,
+      nowIso: NOW,
+    });
+    expect(validateRecord(record)).toBe(true);
+    expect(validateRecord({ ...record, reviewArm: "unknown" })).toBe(false);
+  });
+
+  it("keeps legacy records readable without treating them as current schema", () => {
+    const legacy = { telemetrySchemaVersion: 1, invocationId: "legacy" };
+    expect(validateRecord(legacy)).toBe(false);
   });
 });
 

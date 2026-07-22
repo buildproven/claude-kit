@@ -418,23 +418,28 @@ done
 LEVEL_ARG=auto
 SCOPE_ARG=branch
 SKIP_TESTS=false
+REVIEW_ARM_ARG=""
 previous=""
 for argument in "$@"; do
   case "$previous" in
     --level) LEVEL_ARG="$argument"; previous=""; continue ;;
     --scope) SCOPE_ARG="$argument"; previous=""; continue ;;
+    --review-arm) REVIEW_ARM_ARG="$argument"; previous=""; continue ;;
   esac
   case "$argument" in
     --level) previous="--level" ;;
     --level=*) LEVEL_ARG="${argument#*=}" ;;
     --scope) previous="--scope" ;;
     --scope=*) SCOPE_ARG="${argument#*=}" ;;
+    --review-arm) previous="--review-arm" ;;
+    --review-arm=*) REVIEW_ARM_ARG="${argument#*=}" ;;
     --skip-tests) SKIP_TESTS=true ;;
   esac
 done
 
 CREATE_ARGS=(create --repo "$GIT_ROOT" --base-ref "$BASE_REF" \
   --level "$LEVEL_ARG" --scope "$SCOPE_ARG")
+[ -n "$REVIEW_ARM_ARG" ] && CREATE_ARGS+=(--review-arm "$REVIEW_ARM_ARG")
 # Prefer the freshly-verified base tip (FRESH_BASE_OID, see the base-drift
 # guard above) over the gh-pr-view snapshot (PR_BASE_OID) when both are
 # available — it's the authoritative value the fetch was actually checked

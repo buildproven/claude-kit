@@ -506,6 +506,7 @@ node "$SCRIPT_DIR/quality-invocation.js" record-review "$MANIFEST" \
   --provider "$REVIEW_PROVIDER" \
   --primary "$QUALITY_PRIMARY" \
   --fallback "$QUALITY_FALLBACK" \
+  --effort "$QUALITY_REVIEW_DEPTH" \
   --artifact-dir "$REVIEW_OUT" \
   --diff-sha "$DIFF_SHA" || exit 1
 
