@@ -25,7 +25,6 @@ TRIGGER_MAP=(
   ["test-strategy"]="test,behavior,interface,seam"
   ["ui-reviewer"]="screenshot,product,marketing,accessibility"
   ["recover"]="crash,broken,hang,freeze"
-  ["cleanup"]="slow,memory,disk,zombie,resource"
 )
 
 for skill_dir in "$SKILLS_DIR"/*/; do

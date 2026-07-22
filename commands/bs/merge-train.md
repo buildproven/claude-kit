@@ -23,8 +23,8 @@ Invoke the `merge-train` skill with all provided arguments.
 
 1. Discovers open PRs across configured repos in parallel (one Task agent per repo, isolated worktree)
 2. Each worker runs `/bs:quality --merge` (lint, tests, agent reviews, Codex stamp)
-3. Auto-merges PRs that pass and are within the diff threshold; flags larger ones for manual review
-4. Auto-checks-out main and prunes the merged branch (per workflow rule)
+3. Delegates each eligible merge exclusively to `/bs:quality --merge`; flags larger diffs for manual review
+4. Reconciles the assigned worktree after quality-owned merge cleanup
 5. Surfaces residual issues as Linear tickets, if a Linear team is configured (otherwise logs to `data/merge-train-residuals.jsonl`)
 6. Returns a single consolidated table: repos touched, PRs merged, branches cleaned, residual issues
 
@@ -32,4 +32,4 @@ Invoke the `merge-train` skill with all provided arguments.
 
 - Never skips pre-existing broken CI (per workflow rule)
 - Worktree isolation prevents the parallel-session conflicts that have bitten this fleet before
-- No merge without a provider-neutral `Reviewed-By: quality` trailer (quality gate contract)
+- Workers never invoke `gh pr merge` or check out the primary branch directly

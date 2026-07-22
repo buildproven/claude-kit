@@ -1,6 +1,6 @@
 ---
 name: codex
-description: "Codex health: ChatGPT auth, native skills, canonical AGENTS, temporary adapters, and MCP profile"
+description: "Codex health: ChatGPT auth, native skills, canonical AGENTS, and MCP profile"
 ---
 
 # Codex Health and Parity Check
@@ -10,7 +10,7 @@ Use this skill when you want a fast answer to:
 - Is Codex using ChatGPT auth instead of API billing?
 - Are curated Claude skills installed natively in Codex?
 - Does `~/.codex/AGENTS.md` point at canonical `CLAUDE.md`?
-- Are temporary command adapters and the MCP profile synchronized?
+- Are native skills and the MCP profile synchronized?
 - What exactly is out of sync if parity drifted?
 
 All commands below use `~/.claude/scripts/`, the installed (symlinked) location —
@@ -28,21 +28,8 @@ bash ~/.claude/scripts/codex-check.sh
 Then summarize the result in 3 sections:
 
 1. **Auth** — chatgpt vs apikey, and whether billing risk exists
-2. **Surface** — native skills, canonical instructions, temporary adapters, MCP profile
+2. **Surface** — native skills, canonical instructions, MCP profile
 3. **Action** — exact next command if repair is needed
-
-## `--sync` mode
-
-`sync-codex-prompts.sh` syncs a repo's own private Codex prompt/command adapter
-surface — it is not part of the kit, and a standalone install without a private
-overlay providing it won't have this script. If the user passes `--sync`:
-
-```bash
-bash ~/.claude/scripts/sync-codex-prompts.sh 2>/dev/null || echo "sync-codex-prompts.sh not installed — nothing to sync"
-bash ~/.claude/scripts/codex-check.sh
-```
-
-Then report the post-sync status and whether parity is now clean.
 
 ## `--profile` mode
 
@@ -101,5 +88,5 @@ bash ~/.claude/scripts/setup-mcp-parity.sh --profile <profile> --login
 
 - Do not print secret values.
 - If auth mode is `apikey`, make that the first line of the summary.
-- If sync drift exists, include the exact repair command.
+- If native-skill or profile drift exists, include the exact repair command.
 - Keep the summary concise and factual.

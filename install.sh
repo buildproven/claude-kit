@@ -45,10 +45,16 @@ fi
 mkdir -p "$CLAUDE_DIR"
 mkdir -p "$CODEX_DIR"
 
+# Keep first-run installation and later /bs:sync repair on one declared
+# surface. The manifest is deliberately shell-native so this curl|bash
+# installer has no JSON-parser dependency before Node tooling is installed.
+# shellcheck source=scripts/claude-link-manifest.sh
+source "$PROJECT_DIR/scripts/claude-link-manifest.sh"
+
 # Symlink commands, skills, agents, scripts.
 # `scripts` is load-bearing: config/settings.json wires command hooks to
 # $HOME/.claude/scripts/*.sh. Omit it and every hook silently no-ops.
-for dir in commands skills agents scripts; do
+for dir in "${CLAUDE_LINK_DIRS[@]}"; do
     src="$PROJECT_DIR/$dir"
     dest="$CLAUDE_DIR/$dir"
     if [[ -d "$src" ]]; then
@@ -63,29 +69,22 @@ for dir in commands skills agents scripts; do
     fi
 done
 
-# Symlink settings.json if not already present
-SETTINGS_SRC="$PROJECT_DIR/config/settings.json"
-SETTINGS_DEST="$CLAUDE_DIR/settings.json"
-if [[ -f "$SETTINGS_SRC" ]]; then
-    if [[ ! -f "$SETTINGS_DEST" && ! -L "$SETTINGS_DEST" ]]; then
-        ln -s "$SETTINGS_SRC" "$SETTINGS_DEST"
-        success "Linked ~/.claude/settings.json"
-    else
-        warn "~/.claude/settings.json already exists — skipping (merge manually if needed)"
+# Single-file links are intentionally non-destructive: operators often have
+# their own settings or instructions, unlike the kit-owned directory links.
+for link in "${CLAUDE_LINK_FILES[@]}"; do
+    dest_name="${link%%:*}"
+    src_rel="${link##*:}"
+    src="$PROJECT_DIR/$src_rel"
+    dest="$CLAUDE_DIR/$dest_name"
+    if [[ -f "$src" ]]; then
+        if [[ ! -f "$dest" && ! -L "$dest" ]]; then
+            ln -s "$src" "$dest"
+            success "Linked ~/.claude/$dest_name"
+        else
+            warn "~/.claude/$dest_name already exists — skipping (merge manually if needed)"
+        fi
     fi
-fi
-
-# Symlink CLAUDE.md if not already present
-CLAUDEMD_SRC="$PROJECT_DIR/config/CLAUDE.md"
-CLAUDEMD_DEST="$CLAUDE_DIR/CLAUDE.md"
-if [[ -f "$CLAUDEMD_SRC" ]]; then
-    if [[ ! -f "$CLAUDEMD_DEST" && ! -L "$CLAUDEMD_DEST" ]]; then
-        ln -s "$CLAUDEMD_SRC" "$CLAUDEMD_DEST"
-        success "Linked ~/.claude/CLAUDE.md"
-    else
-        warn "~/.claude/CLAUDE.md already exists — skipping (merge manually if needed)"
-    fi
-fi
+done
 
 # Install native Codex skills. Custom prompts remain a compatibility surface,
 # but Agent Skills are the supported reusable-workflow format.

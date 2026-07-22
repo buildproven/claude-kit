@@ -241,6 +241,7 @@ function loadState(sentinelPath) {
         // The workload plan is an end-to-end campaign bound. Provider,
         // orchestration, and remediation time all consume the same clock.
         start_epoch: governor.startedAtEpoch,
+        deadline_epoch: governor.startedAtEpoch + governor.campaignSeconds,
         start_commit_sha: governor.startCommitSha,
         max_fix_commits: governor.maxFixCommits,
         max_wall_seconds: governor.campaignSeconds,
@@ -725,12 +726,12 @@ function remainingBudget(
     reserveSeconds >= 0 &&
     Number.isFinite(capSeconds) &&
     capSeconds > 0;
-  if (!valid) return { ok: false, seconds: 0 };
+  if (!valid) return { ok: false, seconds: 0, valid: false };
   const seconds = Math.max(
     0,
     Math.min(capSeconds, state.deadline_epoch - nowEpoch - reserveSeconds),
   );
-  return { ok: seconds > 0, seconds };
+  return { ok: seconds > 0, seconds, valid: true };
 }
 
 function printRemaining(sentinelPath, rest) {
@@ -743,7 +744,7 @@ function printRemaining(sentinelPath, rest) {
       capIndex >= 0 ? Number(rest[capIndex + 1]) : Number.MAX_SAFE_INTEGER,
   });
   process.stdout.write(`${result.seconds}\n`);
-  return result.ok ? 0 : 1;
+  return result.ok ? 0 : result.valid ? 1 : 2;
 }
 
 function main() {

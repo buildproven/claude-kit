@@ -68,3 +68,46 @@ describe("quality-bootstrap active-campaign re-entrancy guard (1.3b)", () => {
     expect(r.stderr).not.toMatch(/campaign is already active/i);
   });
 });
+
+describe("quality-bootstrap explicit-target crash guard (BUI-401)", () => {
+  let resolverRoot;
+
+  beforeEach(() => {
+    resolverRoot = fs.mkdtempSync(path.join(os.tmpdir(), "qbg-resolver-"));
+    fs.mkdirSync(path.join(resolverRoot, "scripts"));
+    fs.writeFileSync(
+      path.join(resolverRoot, "scripts", "quality-target-resolver.js"),
+      "process.stderr.write('resolver fixture crashed\\n'); process.exit(70);\\n",
+    );
+  });
+
+  afterEach(() => {
+    fs.rmSync(resolverRoot, { recursive: true, force: true });
+  });
+
+  it.each([
+    ["--target-dir", "/tmp/other-repo"],
+    ["--target", "/tmp/other-repo"],
+    ["--worktree", "/tmp/other-repo"],
+    ["--pr", "42"],
+    ["--pull", "42"],
+    ["--pull-request", "42"],
+    ["--branch", "feature/other"],
+    ["--head", "feature/other"],
+    ["--head-ref", "feature/other"],
+    ["#42"],
+    ["codex/other-branch"],
+    ["./other-repo"],
+  ])("refuses cwd fallback after a resolver crash for %s", (...args) => {
+    const r = run(args, { env: { CLAUDE_SETUP_ROOT: resolverRoot } });
+    expect(r.code).not.toBe(0);
+    expect(r.stdout).toMatch(/target resolver crashed/i);
+    expect(r.stdout).toMatch(/refusing to fall back/i);
+    expect(r.stdout).not.toMatch(/continuing with cwd/i);
+  });
+
+  it("preserves spaces in the primary checkout path", () => {
+    const source = fs.readFileSync(SCRIPT, "utf8");
+    expect(source).toContain("p=substr($0, 10)");
+  });
+});
