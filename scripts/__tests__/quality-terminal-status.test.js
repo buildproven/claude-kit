@@ -84,6 +84,23 @@ describe("quality terminal diagnosis", () => {
     );
   });
 
+  it("does not claim approval is required for a non-critical manual campaign", () => {
+    const output = buildDiagnosis(
+      "/tmp/exact/invocation.json",
+      {
+        requiredGates: [],
+        gates: [],
+        revisions: { currentHead: "abc" },
+        reviews: [],
+        risk: { tier: "high", mergeAuthority: "human-required" },
+      },
+      {},
+    );
+    expect(output).toContain(
+      "Break-glass: not required unless the manual security floor applies",
+    );
+  });
+
   it("does not collapse malformed review output into provider exhaustion", () => {
     const output = buildDiagnosis(
       "/tmp/exact/invocation.json",
