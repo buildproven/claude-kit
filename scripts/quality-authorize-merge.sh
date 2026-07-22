@@ -298,10 +298,11 @@ esac
 #
 #   A. The change touches the always-human security floor
 #      (secrets/creds/keys/auth/license/deploy/webhooks — humanFloor). Checked
-#      for EVERY merge, INDEPENDENT of tier: a persisted tier is derived from an
-#      earlier revision and a floor path can be added during remediation or evade
-#      tier classification, so gating the floor on tier=critical would let such a
-#      change through (Codex review: tier-nesting exploit).
+#      for every manually governed merge, independent of tier: a persisted tier
+#      is derived from an earlier revision and a floor path can be added during
+#      remediation or evade tier classification, so gating the floor on
+#      tier=critical would let such a change through (Codex review: tier-nesting
+#      exploit).
 #
 #   B. The change is critical tier AND the base is server-enforceable. On a repo
 #      that genuinely cannot be enforced (ATOMIC_BASE_FRESHNESS=unprotectable — a

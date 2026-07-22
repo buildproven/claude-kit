@@ -1230,7 +1230,9 @@ function applyRuntimeGovernor(manifest, options, runtime) {
 }
 
 function parseMergeAuthority(value) {
-  const mergeAuthority = value || "autonomous";
+  // Risk resolution always persists an explicit authority. A direct/legacy
+  // caller that omits it must not mint autonomous merge authority.
+  const mergeAuthority = value || "human-required";
   if (!["autonomous", "human-required"].includes(mergeAuthority)) {
     throw new Error(`invalid merge authority '${mergeAuthority}'`);
   }

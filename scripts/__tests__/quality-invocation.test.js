@@ -681,6 +681,24 @@ printf '%s\\n' "$manifest"
     expect(manifest.risk.mergeAuthority).toBe("human-required");
   });
 
+  it("fails closed to human-required when a direct risk write omits authority", () => {
+    const root = repo("legacy-risk-authority");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 2,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+    });
+    expect(
+      invocation.loadManifest(manifestPath).manifest.risk.mergeAuthority,
+    ).toBe("human-required");
+  });
+
   it("locates an explicit target manifest without trusting the caller cwd", () => {
     const first = repo("first");
     const second = repo("second");
