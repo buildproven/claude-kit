@@ -2444,6 +2444,13 @@ function validMutationArtifact(manifest, artifact) {
 }
 
 function mutationEvidenceValid(manifest) {
+  // Creation begins with an unresolved risk contract. The normal quality flow
+  // cannot select agents or record reviews in that state, but fixture and
+  // inspection callers can still ask whether their existing evidence is
+  // coherent. Mutation proof is a requirement of a *resolved* high/critical
+  // contract, not a substitute for resolving that contract in the first
+  // place.
+  if (manifest.risk?.resolved !== true) return true;
   const tier = manifest.risk?.tier;
   if (["low", "medium"].includes(tier)) return true;
   if (!["high", "critical"].includes(tier)) return false;
