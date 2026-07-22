@@ -65,8 +65,9 @@ Never put account credentials, raw usage responses, or that telemetry in a
 repository.
 
 If the runtime reports corrupt admission state, stop the affected loop and use
-its exact ID to perform the explicit, audited repair below. This command refuses
-to remove a readable record, so it cannot silently free a live loop:
+its exact ID—or the 64-character hash in the corrupt record's filename—to
+perform the explicit, audited repair below. This command refuses to remove a
+readable record, so it cannot silently free a live loop:
 
 ```bash
 node "$AUTONOMOUS_RUNTIME" repair \

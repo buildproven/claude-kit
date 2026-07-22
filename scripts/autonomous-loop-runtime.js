@@ -20,7 +20,7 @@ const { spawnSync } = require("node:child_process");
 const DEFAULT_MAX_LOOPS = 2;
 const DEFAULT_MAX_UTILIZATION_PERCENT = 70;
 const DEFAULT_CONTEXT_CAP_TOKENS = 80_000;
-const LOCK_TIMEOUT_MS = 5_000;
+const LOCK_TIMEOUT_MS = 15_000;
 const LOCK_RETRY_MS = 25;
 const lockWait = new Int32Array(new SharedArrayBuffer(4));
 
@@ -74,6 +74,18 @@ function requireValue(options, name) {
     throw new RuntimeError(`--${name} is required`, "INVALID_ARGUMENT");
   }
   return value;
+}
+
+function recordIdentity(options) {
+  if (options.id) return { idHash: hash(requireValue(options, "id")) };
+  const idHash = requireValue(options, "record-hash");
+  if (!/^[a-f0-9]{64}$/.test(idHash)) {
+    throw new RuntimeError(
+      "--record-hash must be a SHA-256 hex digest",
+      "INVALID_ARGUMENT",
+    );
+  }
+  return { idHash };
 }
 
 function parseArguments(argv) {
@@ -397,7 +409,7 @@ function admit(options, environment = process.env) {
 }
 
 function release(options, environment = process.env) {
-  const id = requireValue(options, "id");
+  const { idHash } = recordIdentity(options);
   const ownerPid = positiveInteger(
     requireValue(options, "owner-pid"),
     "owner-pid",
@@ -405,7 +417,13 @@ function release(options, environment = process.env) {
   const directory = options["state-dir"]
     ? path.resolve(options["state-dir"])
     : runtimeDirectory(environment);
-  const idHash = hash(id);
+  const ownerStartedAt = processStartedAt(ownerPid);
+  if (!ownerStartedAt) {
+    throw new RuntimeError(
+      "--owner-pid must identify a readable local process",
+      "OWNER_NOT_LIVE",
+    );
+  }
   return withGlobalLock(directory, () => {
     const recordFile = path.join(directory, `${idHash}.json`);
     if (!fs.existsSync(recordFile))
@@ -417,7 +435,7 @@ function release(options, environment = process.env) {
         "INVALID_STATE",
       );
     }
-    if (record.pid !== ownerPid) {
+    if (record.pid !== ownerPid || record.processStartedAt !== ownerStartedAt) {
       throw new RuntimeError(
         "only the admitted loop owner can release this slot",
         "OWNER_MISMATCH",
@@ -435,7 +453,7 @@ function release(options, environment = process.env) {
 }
 
 function repair(options, environment = process.env) {
-  const id = requireValue(options, "id");
+  const { idHash } = recordIdentity(options);
   if (requireValue(options, "confirm") !== "remove-corrupt-record") {
     throw new RuntimeError(
       "--confirm must be remove-corrupt-record",
@@ -445,7 +463,6 @@ function repair(options, environment = process.env) {
   const directory = options["state-dir"]
     ? path.resolve(options["state-dir"])
     : runtimeDirectory(environment);
-  const idHash = hash(id);
   return withGlobalLock(directory, () => {
     const recordFile = path.join(directory, `${idHash}.json`);
     if (!fs.existsSync(recordFile)) {

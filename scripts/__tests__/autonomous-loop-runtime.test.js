@@ -254,12 +254,16 @@ describe("autonomous-loop runtime", () => {
       String(process.pid),
     ]);
     const recordFile = response(admitted).recordFile;
+    const recordHash = recordFile
+      .split("/")
+      .at(-1)
+      .replace(/\.json$/, "");
     writeFileSync(recordFile, "{not valid JSON");
 
     const unconfirmed = runtime([
       "repair",
-      "--id",
-      "corrupt-slot",
+      "--record-hash",
+      recordHash,
       "--state-dir",
       fx.state,
       "--confirm",
