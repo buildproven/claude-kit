@@ -302,9 +302,29 @@ the verified review result; do not invoke PR authorization. When it is true,
 generate the exact provider-neutral and provider-specific trailers:
 
 ```text
-Reviewed-By: quality (tier=<tier>, reviewer=<provider>, primary=<provider>, fallback=<provider-or-none>, findings=0, head=<reviewed-head>, base=<base-sha>)
-Reviewed-By: <provider> (tier=<tier>, findings=0, head=<reviewed-head>, base=<base-sha>)
+Reviewed-By: quality
+Reviewed-By: <provider>
+Quality-Tier: <tier>
+Quality-Reviewer: <provider>
+Quality-Primary: <provider>
+Quality-Fallback: <provider-or-none>
+Quality-Findings: 0
+Quality-Head: <reviewed-head>
+Quality-Base: <base-sha>
 ```
+
+This is the canonical version-1 schema. Every `Quality-*` trailer is required
+exactly once; `Quality-Reviewer` names the actual provider,
+`Quality-Findings` is the integer `0`, and `Quality-Tier` must meet the
+campaign's selected risk tier. `Quality-Head` and `Quality-Base` bind the
+evidence to the reviewed revision. The parenthetical `Reviewed-By` form is
+legacy reader compatibility only and must not be emitted.
+
+For compatibility with legacy readers, the historical neutral form was
+`Reviewed-By: quality (tier=<tier>, reviewer=<provider>, primary=<provider>,
+fallback=<provider-or-none>, findings=0, head=<reviewed-head>, base=<base-sha>)`.
+It documents how old readers interpret the canonical fields above; new quality
+campaigns emit only the `Quality-*` schema.
 
 ```bash
 QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
