@@ -3530,6 +3530,42 @@ exit 1
     expect(existsSync(marker)).toBe(false);
   }, 10_000);
 
+  it("allows a slow gate to finish within its declared check reserve", () => {
+    const root = repo("gate-check-reserve");
+    const marker = path.join(tmpdir(), `quality-slow-gate-${process.pid}`);
+    const gateScript = path.join(root, "gate-slow.sh");
+    writeFileSync(
+      gateScript,
+      '#!/usr/bin/env bash\nsleep 2\nprintf passed > "$QUALITY_GATE_MARKER"\n',
+    );
+    chmodSync(gateScript, 0o755);
+    const packageFile = path.join(root, "package.json");
+    const packageJson = JSON.parse(readFileSync(packageFile, "utf8"));
+    packageJson.scripts.build = "bash gate-slow.sh";
+    writeFileSync(packageFile, JSON.stringify(packageJson));
+    git(root, ["add", "gate-slow.sh", "package.json"]);
+    git(root, ["commit", "-q", "-m", "add slow gate"]);
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.risk.runtime = { checkSeconds: 1, checkReserveSeconds: 2 };
+    manifest.governor.campaignDeadlineEpoch =
+      Math.floor(Date.now() / 1000) + 30;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const result = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
+      {
+        cwd: root,
+        env: { ...process.env, QUALITY_GATE_MARKER: marker },
+        encoding: "utf8",
+      },
+    );
+    expect(result.status).toBe(0);
+    expect(readFileSync(marker, "utf8")).toBe("passed");
+    unlinkSync(marker);
+  }, 10_000);
+
   it("discovers committed gates on every advance and unions them monotonically", () => {
     const root = repo("monotonic-gates");
     const packageFile = path.join(root, "package.json");

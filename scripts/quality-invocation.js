@@ -2294,15 +2294,18 @@ function recordSkippedGate(manifest, required, name, log, options) {
 }
 
 function executeGate(manifest, required, name, log) {
-  const gateSeconds = manifest.risk?.runtime?.checkSeconds ?? 300;
+  const runtime = manifest.risk?.runtime;
+  const gateSeconds = runtime?.checkSeconds ?? 300;
+  const gateReserveSeconds = runtime?.checkReserveSeconds ?? 0;
+  const boundedGateSeconds = gateSeconds + gateReserveSeconds;
   const phaseDeadline = providerPhaseDeadline(manifest);
   const campaignRemaining = phaseDeadline
     ? phaseDeadline - Math.floor(Date.now() / 1000)
-    : gateSeconds;
+    : boundedGateSeconds;
   if (campaignRemaining <= 0) {
     throw new Error(`campaign budget is exhausted before gate '${name}'`);
   }
-  const timeoutSeconds = Math.min(gateSeconds, campaignRemaining);
+  const timeoutSeconds = Math.min(boundedGateSeconds, campaignRemaining);
   const boundedRunner = path.join(__dirname, "quality-run-bounded.sh");
   const result = spawnSync(
     "bash",
