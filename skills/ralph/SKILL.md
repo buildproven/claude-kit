@@ -37,8 +37,11 @@ That runner uses `codex exec --ephemeral` or Claude's
 the persisted backlog/quality state—not its parent's session history.
 
 Before an unattended run, acquire operator-scoped admission with
-`scripts/autonomous-loop-runtime.js admit`. It requires a local,
-user-configured usage adapter that prints only this JSON shape:
+`scripts/autonomous-loop-runtime.js admit`. Its launcher **must** pass
+`--owner-pid` for the long-lived loop process (for Bash, `"$$"`); the runtime
+rejects an omitted owner rather than guessing from the short-lived `node`
+child. It also requires a local, user-configured usage adapter that prints
+only this JSON shape:
 
 ```json
 { "fiveHourPercent": 12, "sevenDayPercent": 18 }

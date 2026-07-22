@@ -66,6 +66,8 @@ describe("autonomous-loop runtime", () => {
       fx.state,
       "--usage-command",
       adapter,
+      "--owner-pid",
+      String(process.pid),
       "--max-loops",
       "2",
     ];
@@ -119,6 +121,8 @@ describe("autonomous-loop runtime", () => {
       fx.state,
       "--usage-command",
       join(fx.root, "not-installed"),
+      "--owner-pid",
+      String(process.pid),
     ]);
     expect(response(unavailable)).toMatchObject({
       ok: false,
@@ -135,6 +139,8 @@ describe("autonomous-loop runtime", () => {
       fx.state,
       "--usage-command",
       usageAdapter(fx.root, { fiveHourPercent: 70, sevenDayPercent: 9 }),
+      "--owner-pid",
+      String(process.pid),
       "--max-utilization-percent",
       "70",
     ]);
@@ -144,6 +150,27 @@ describe("autonomous-loop runtime", () => {
     expect(telemetry).toContain('"result":"usage-unavailable"');
     expect(telemetry).toContain('"result":"usage-cap"');
     expect(telemetry).not.toContain("not-installed");
+  });
+
+  it("requires the long-lived loop owner rather than guessing from a shell parent", () => {
+    const fx = fixture();
+    const result = runtime([
+      "admit",
+      "--kind",
+      "ralph",
+      "--id",
+      "owner-required",
+      "--state-dir",
+      fx.state,
+      "--usage-command",
+      usageAdapter(fx.root, { fiveHourPercent: 12, sevenDayPercent: 18 }),
+    ]);
+
+    expect(response(result)).toMatchObject({
+      ok: false,
+      code: "INVALID_ARGUMENT",
+      error: "--owner-pid is required",
+    });
   });
 
   it("persists a context-cap handoff without changing completed backlog state", () => {

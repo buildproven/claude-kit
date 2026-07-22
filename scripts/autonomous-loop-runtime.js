@@ -264,10 +264,13 @@ function admit(options, environment = process.env) {
     "max-utilization-percent",
     DEFAULT_MAX_UTILIZATION_PERCENT,
   );
+  // The admission command is intentionally short-lived, so it cannot infer a
+  // reliable owner from its own parent process. Require the long-lived loop
+  // launcher to bind the slot explicitly rather than silently creating a
+  // record that will immediately look stale.
   const ownerPid = positiveInteger(
-    options["owner-pid"],
+    requireValue(options, "owner-pid"),
     "owner-pid",
-    process.ppid,
   );
   const directory = options["state-dir"]
     ? path.resolve(options["state-dir"])
