@@ -2506,7 +2506,6 @@ function reviewAuthorization(manifest) {
   // authorize review artifacts produced under a stale, weaker risk contract.
   assertCurrentReviewStrength(manifest, manifest.repo.realpath);
   const authorization = reviewCoverage(manifest);
-  assertMutationEvidence(manifest);
   const successful = manifest.reviews.filter(
     (review) => review.status === "success",
   );
@@ -2546,6 +2545,7 @@ function reviewAuthorization(manifest) {
       `${manifest.judge.blockingCount} unresolved BLOCKING finding(s)`,
     );
   }
+  assertMutationEvidence(manifest);
   return { ...authorization, blockingCount: manifest.judge.blockingCount };
 }
 
