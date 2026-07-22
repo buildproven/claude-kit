@@ -263,7 +263,6 @@ function prepareCodexReview(
 }
 
 function recordJudgeArtifact(root, manifest, dispositions = []) {
-  recordMutationFixture(manifest);
   const artifact = path.join(path.dirname(manifest), "judge-input.json");
   const context = JSON.parse(
     execFileSync("node", [INVOCATION, "judge-context", manifest], {
@@ -282,6 +281,7 @@ function recordJudgeArtifact(root, manifest, dispositions = []) {
     [INVOCATION, "judge", manifest, "--artifact", artifact],
     { cwd: root },
   );
+  recordMutationFixture(manifest);
 }
 
 function fakeGh(root, head) {
