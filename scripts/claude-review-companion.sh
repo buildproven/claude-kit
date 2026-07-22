@@ -263,6 +263,7 @@ run_agent() {
   raw="$(run_with_timeout "$TIMEOUT" \
         env BS_QUALITY_HEADLESS=1 \
         claude -p "$(cat "$CTX_FILE")" \
+          --no-session-persistence \
           --append-system-prompt-file "$sysfile" \
           --permission-mode bypassPermissions \
           --allowedTools "Read,Grep,Glob" \
