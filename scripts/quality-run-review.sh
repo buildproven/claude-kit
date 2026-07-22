@@ -397,17 +397,29 @@ PROVIDER_RC=$?
 # and an inconclusive fallback remains terminal below. The fallback attempt
 # cannot overrun the invocation: authorize_provider_attempt caps it against
 # the absolute campaign deadline and returns 77 when no budget remains.
+#
+# rc=77 from the PRIMARY (BUI-348): authorize_provider_attempt already
+# refuses to LAUNCH a provider once campaign budget is too tight — this is
+# the scope-degradation signal, not a guillotine, because nothing was ever
+# started. Before this fallback triggered on 77, a primary that correctly
+# declined to start (e.g. Claude skipping its panel because too little
+# budget remained) hard-blocked the campaign even when a fallback provider
+# had enough remaining budget to run. Falling back here reuses the exact
+# same machinery as every other primary failure mode below; a fallback that
+# ALSO returns 77 (no budget left for anyone) falls through unchanged to the
+# rc=77 terminal case further down — no new failure mode, no loop risk,
+# since run_provider is called at most twice in this script.
 PRIMARY_HAS_STRUCTURED_RC4=false
 case "$QUALITY_PRIMARY" in
   codex | gemini) PRIMARY_HAS_STRUCTURED_RC4=true ;;
 esac
 # QUALITY_FALLBACK != QUALITY_PRIMARY guards every failure code below (75,
-# 79, 2, 4, 76), not only the rc=4 branch added alongside
+# 79, 2, 4, 76, 77), not only the rc=4 branch added alongside
 # PRIMARY_HAS_STRUCTURED_RC4 — pre-existing behavior, not new with that flag.
 # "Falling back" to the same provider that just failed can never make sense
 # regardless of which rc triggered it, so the guard is correctly universal.
 if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
-  [ "$PROVIDER_RC" -eq 2 ] ||
+  [ "$PROVIDER_RC" -eq 2 ] || [ "$PROVIDER_RC" -eq 77 ] ||
   { [ "$PROVIDER_RC" -eq 4 ] && [ "$PRIMARY_HAS_STRUCTURED_RC4" = true ]; } ||
   { [ "$PROVIDER_RC" -eq 76 ] && [ "$FALLBACK_ON_TIMEOUT" = 1 ]; }; } &&
   [ "$QUALITY_FALLBACK" != none ] &&
@@ -423,6 +435,8 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
     echo "⚠️  [quality] $QUALITY_PRIMARY review was inconclusive; switching once to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 76 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY exceeded its review budget without converging; failing over to $QUALITY_FALLBACK (BS_QUALITY_FALLBACK_ON_TIMEOUT=0 to disable)." >&2
+  elif [ "$PROVIDER_RC" -eq 77 ]; then
+    echo "⚠️  [quality] $QUALITY_PRIMARY declined to start — too little campaign budget remained; trying $QUALITY_FALLBACK instead of blocking outright." >&2
   fi
   # Preserve failed-primary diagnostics without discarding conclusive findings
   # from an earlier successful pass when a later pass becomes inconclusive.
