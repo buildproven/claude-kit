@@ -2099,6 +2099,22 @@ exit 1
     ).not.toBe(0);
   });
 
+  it("resolves named high review level accepted by manifest creation", () => {
+    const root = repo("named-high-level");
+    const manifest = create(root, ["--level", "high"]);
+
+    expect(() =>
+      execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root }),
+    ).not.toThrow();
+
+    const risk = JSON.parse(readFileSync(manifest, "utf8")).risk;
+    expect(risk).toMatchObject({
+      requestedLevel: "high",
+      resolved: true,
+      tier: "high",
+    });
+  });
+
   it("rejects a resumed HEAD whose complete diff requires stronger review", () => {
     const root = repo("risk-escalation");
     const manifest = create(root);
