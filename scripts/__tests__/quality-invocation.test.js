@@ -3416,6 +3416,69 @@ exit 1
     });
   });
 
+  it("discovers executable Python gates when package scripts are absent", () => {
+    const root = repo("python-gate-discovery");
+    git(root, ["rm", "package.json"]);
+    writeFileSync(
+      path.join(root, "pyproject.toml"),
+      "[tool.ruff]\n\n[tool.pytest.ini_options]\n\n[tool.mypy]\n",
+    );
+    mkdirSync(path.join(root, "tests"));
+    writeFileSync(
+      path.join(root, "tests", "test_example.py"),
+      "def test_ok():\n  assert True\n",
+    );
+    git(root, ["add", "pyproject.toml", "tests/test_example.py"]);
+    git(root, ["commit", "-q", "-m", "add Python quality gates"]);
+
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "lint",
+          source: "python:ruff",
+          executable: "ruff",
+          args: ["check", "."],
+        }),
+        expect.objectContaining({
+          name: "test",
+          source: "python:pytest",
+          executable: "pytest",
+          args: [],
+        }),
+        expect.objectContaining({
+          name: "security",
+          source: "python:pip-audit",
+          executable: "pip-audit",
+          args: [],
+        }),
+        expect.objectContaining({
+          name: "type",
+          source: "python:mypy",
+          executable: "mypy",
+          args: [],
+        }),
+      ]),
+    );
+  });
+
+  it("prefers package scripts over Python fallbacks for mixed repositories", () => {
+    const root = repo("python-gate-precedence");
+    writeFileSync(path.join(root, "pyproject.toml"), "[tool.ruff]\n");
+    git(root, ["add", "pyproject.toml"]);
+    git(root, ["commit", "-q", "-m", "add Python tooling"]);
+
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.find((gate) => gate.name === "lint").source).toBe(
+      "package-script:lint",
+    );
+    expect(required.find((gate) => gate.name === "security").source).toBe(
+      "package-script:security:audit",
+    );
+  });
+
   it("binds optional gate evidence to the persisted trusted source and command", () => {
     const root = repo("trusted-gate-runner");
     const marker = path.join(tmpdir(), `quality-build-${process.pid}.marker`);
