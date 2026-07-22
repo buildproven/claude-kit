@@ -1174,9 +1174,14 @@ describe("canonical-source contract", () => {
     expect(files).toEqual([]);
   });
 
-  it("contains no force worktree removal, recursive deletion, or force branch deletion", () => {
+  it("limits force removal to the initialized-submodule recovery path", () => {
     const source = readFileSync(MANAGER, "utf8");
-    expect(source).not.toMatch(/worktree["',\s]+remove["',\s]+--force/);
+    expect(source).toMatch(
+      /submodules cannot be moved or removed[\s\S]*worktree", "remove", "--force", record\.path/,
+    );
+    expect(
+      source.match(/worktree", "remove", "--force", record\.path/g),
+    ).toHaveLength(1);
     expect(source).not.toContain("rm -rf");
     expect(source).not.toMatch(/branch["',\s]+-D/);
   });
