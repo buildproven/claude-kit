@@ -2822,6 +2822,7 @@ exit 1
       reason: "config-only fixture has no executable tests",
     });
     recordJudgeArtifact(root, manifest, []);
+    recordMutationFixture(manifest);
     expect(() =>
       execFileSync("node", [INVOCATION, "review-authorization", manifest], {
         cwd: root,
@@ -3270,6 +3271,7 @@ exit 1
     for (const name of ["build", "type", "consumer"])
       recordGateFixture(manifest, name);
     recordJudgeArtifact(root, manifest);
+    recordMutationFixture(manifest);
     expect(() =>
       execFileSync("node", [INVOCATION, "review-authorization", manifest], {
         cwd: root,
