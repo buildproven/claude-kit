@@ -173,6 +173,115 @@ describe("autonomous-loop runtime", () => {
     });
   });
 
+  it("rejects a dead owner and prevents a different process from releasing a slot", () => {
+    const fx = fixture();
+    const adapter = usageAdapter(fx.root, {
+      fiveHourPercent: 12,
+      sevenDayPercent: 18,
+    });
+    const deadOwner = runtime([
+      "admit",
+      "--kind",
+      "ralph",
+      "--id",
+      "dead-owner",
+      "--state-dir",
+      fx.state,
+      "--usage-command",
+      adapter,
+      "--owner-pid",
+      String(process.pid + 1_000_000),
+    ]);
+    expect(response(deadOwner)).toMatchObject({
+      ok: false,
+      code: "OWNER_NOT_LIVE",
+    });
+
+    const admitted = runtime([
+      "admit",
+      "--kind",
+      "ralph",
+      "--id",
+      "owned-slot",
+      "--state-dir",
+      fx.state,
+      "--usage-command",
+      adapter,
+      "--owner-pid",
+      String(process.pid),
+    ]);
+    expect(admitted.status).toBe(0);
+
+    const wrongOwner = runtime([
+      "release",
+      "--id",
+      "owned-slot",
+      "--state-dir",
+      fx.state,
+      "--owner-pid",
+      "1",
+    ]);
+    expect(response(wrongOwner)).toMatchObject({
+      ok: false,
+      code: "OWNER_MISMATCH",
+    });
+
+    const released = runtime([
+      "release",
+      "--id",
+      "owned-slot",
+      "--state-dir",
+      fx.state,
+      "--owner-pid",
+      String(process.pid),
+    ]);
+    expect(response(released)).toMatchObject({ ok: true, released: true });
+  });
+
+  it("repairs only an explicitly confirmed corrupt admission record", () => {
+    const fx = fixture();
+    const admitted = runtime([
+      "admit",
+      "--kind",
+      "ralph",
+      "--id",
+      "corrupt-slot",
+      "--state-dir",
+      fx.state,
+      "--usage-command",
+      usageAdapter(fx.root, { fiveHourPercent: 12, sevenDayPercent: 18 }),
+      "--owner-pid",
+      String(process.pid),
+    ]);
+    const recordFile = response(admitted).recordFile;
+    writeFileSync(recordFile, "{not valid JSON");
+
+    const unconfirmed = runtime([
+      "repair",
+      "--id",
+      "corrupt-slot",
+      "--state-dir",
+      fx.state,
+      "--confirm",
+      "no",
+    ]);
+    expect(response(unconfirmed)).toMatchObject({
+      ok: false,
+      code: "INVALID_ARGUMENT",
+    });
+
+    const repaired = runtime([
+      "repair",
+      "--id",
+      "corrupt-slot",
+      "--state-dir",
+      fx.state,
+      "--confirm",
+      "remove-corrupt-record",
+    ]);
+    expect(response(repaired)).toMatchObject({ ok: true, repaired: true });
+  });
+
   it("persists a context-cap handoff without changing completed backlog state", () => {
     const fx = fixture();
     const state = join(fx.root, "ralph-state.json");
@@ -219,7 +328,7 @@ describe("autonomous-loop runtime", () => {
     );
     const fakeClaude = executable(
       join(fx.root, "claude"),
-      `node -e 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify({ argv: process.argv.slice(2), session: process.env.CLAUDE_CODE_SESSION_ID || null }))' '${capture}' "$@"`,
+      `echo provider-output; node -e 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify({ argv: process.argv.slice(2), session: process.env.CLAUDE_CODE_SESSION_ID || null }))' '${capture}' "$@"`,
     );
 
     const result = runtime(
@@ -239,11 +348,18 @@ describe("autonomous-loop runtime", () => {
     const launched = JSON.parse(readFileSync(capture, "utf8"));
 
     expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      launched: true,
+    });
     expect(launched.session).toBeNull();
     expect(launched.argv).toContain("--no-session-persistence");
     expect(launched.argv).not.toContain("--resume");
     expect(launched.argv).not.toContain("--continue");
     expect(launched.argv).not.toContain("--fork-session");
     expect(launched.argv.at(-1)).toContain(handoff);
+    expect(JSON.parse(readFileSync(handoff, "utf8"))).not.toHaveProperty(
+      "continuation",
+    );
   });
 });

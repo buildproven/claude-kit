@@ -204,7 +204,7 @@ sleep_until_reset() {
 
 cleanup_lock() {
   if [ "${LOOP_ADMITTED:-0}" -eq 1 ]; then
-    node "$AUTONOMOUS_RUNTIME" release --id "$LOOP_ID" >/dev/null 2>&1 || true
+    node "$AUTONOMOUS_RUNTIME" release --id "$LOOP_ID" --owner-pid "$$" >/dev/null 2>&1 || true
   fi
   rmdir "$LOCK_DIR" 2>/dev/null || true
 }

@@ -272,6 +272,12 @@ function admit(options, environment = process.env) {
     requireValue(options, "owner-pid"),
     "owner-pid",
   );
+  if (!isLive({ hostname: os.hostname(), pid: ownerPid })) {
+    throw new RuntimeError(
+      "--owner-pid must identify a live local process",
+      "OWNER_NOT_LIVE",
+    );
+  }
   const directory = options["state-dir"]
     ? path.resolve(options["state-dir"])
     : runtimeDirectory(environment);
@@ -356,6 +362,10 @@ function admit(options, environment = process.env) {
 
 function release(options, environment = process.env) {
   const id = requireValue(options, "id");
+  const ownerPid = positiveInteger(
+    requireValue(options, "owner-pid"),
+    "owner-pid",
+  );
   const directory = options["state-dir"]
     ? path.resolve(options["state-dir"])
     : runtimeDirectory(environment);
@@ -371,6 +381,12 @@ function release(options, environment = process.env) {
         "INVALID_STATE",
       );
     }
+    if (record.pid !== ownerPid) {
+      throw new RuntimeError(
+        "only the admitted loop owner can release this slot",
+        "OWNER_MISMATCH",
+      );
+    }
     fs.unlinkSync(recordFile);
     appendTelemetry(directory, {
       event: "release",
@@ -379,6 +395,44 @@ function release(options, environment = process.env) {
       idHash,
     });
     return { released: true, stateDir: directory };
+  });
+}
+
+function repair(options, environment = process.env) {
+  const id = requireValue(options, "id");
+  if (requireValue(options, "confirm") !== "remove-corrupt-record") {
+    throw new RuntimeError(
+      "--confirm must be remove-corrupt-record",
+      "INVALID_ARGUMENT",
+    );
+  }
+  const directory = options["state-dir"]
+    ? path.resolve(options["state-dir"])
+    : runtimeDirectory(environment);
+  const idHash = hash(id);
+  return withGlobalLock(directory, () => {
+    const recordFile = path.join(directory, `${idHash}.json`);
+    if (!fs.existsSync(recordFile)) {
+      return { repaired: false, stateDir: directory };
+    }
+    try {
+      readJson(recordFile);
+    } catch (error) {
+      if (!(error instanceof RuntimeError) || error.code !== "INVALID_STATE") {
+        throw error;
+      }
+      fs.unlinkSync(recordFile);
+      appendTelemetry(directory, {
+        event: "repair",
+        result: "corrupt-record-removed",
+        idHash,
+      });
+      return { repaired: true, stateDir: directory };
+    }
+    throw new RuntimeError(
+      "refusing to remove a readable admission record",
+      "REPAIR_NOT_NEEDED",
+    );
   });
 }
 
@@ -423,6 +477,7 @@ function freshLaunch(options, environment = process.env) {
       "UNSAFE_PATH",
     );
   }
+  const handoffState = readJson(handoff);
   const prompt = [
     "Start a fresh autonomous campaign; do not resume, continue, or fork a prior session.",
     `Workflow: /bs:${workflow}`,
@@ -443,7 +498,9 @@ function freshLaunch(options, environment = process.env) {
       cwd: targetDir,
       env: childEnvironment,
       encoding: "utf8",
-      stdio: "inherit",
+      // The CLI itself has a JSON stdout contract. Keep provider output from
+      // interleaving with the final runtime result while preserving diagnostics.
+      stdio: ["ignore", "ignore", "inherit"],
     },
   );
   if (result.error) {
@@ -458,6 +515,11 @@ function freshLaunch(options, environment = process.env) {
       "LAUNCH_FAILED",
     );
   }
+  if (Object.hasOwn(handoffState, "continuation")) {
+    const resumedState = { ...handoffState };
+    delete resumedState.continuation;
+    writeJsonAtomically(handoff, resumedState);
+  }
   return { launched: true, handoff, targetDir, workflow };
 }
 
@@ -471,6 +533,9 @@ function runCli() {
     case "release":
       result = release(options);
       break;
+    case "repair":
+      result = repair(options);
+      break;
     case "context-break":
       result = contextBreak(options);
       break;
@@ -479,7 +544,7 @@ function runCli() {
       break;
     default:
       throw new RuntimeError(
-        "usage: autonomous-loop-runtime.js admit|release|context-break|fresh-launch [--option value]",
+        "usage: autonomous-loop-runtime.js admit|release|repair|context-break|fresh-launch [--option value]",
         "INVALID_COMMAND",
       );
   }
@@ -507,6 +572,7 @@ module.exports = {
   admit,
   contextBreak,
   freshLaunch,
+  repair,
   release,
   runtimeDirectory,
 };

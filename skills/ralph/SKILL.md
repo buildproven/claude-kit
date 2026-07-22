@@ -64,6 +64,16 @@ percentages/outcomes under `$XDG_STATE_HOME/claude-kit/autonomous-loops/`.
 Never put account credentials, raw usage responses, or that telemetry in a
 repository.
 
+If the runtime reports corrupt admission state, stop the affected loop and use
+its exact ID to perform the explicit, audited repair below. This command refuses
+to remove a readable record, so it cannot silently free a live loop:
+
+```bash
+node "$AUTONOMOUS_RUNTIME" repair \
+  --id "$LOOP_ID" \
+  --confirm remove-corrupt-record
+```
+
 After each completed item, if the runtime reports observed transcript/context
 tokens at or above `RALPH_CONTEXT_CAP_TOKENS` (default 80000), atomically mark
 the exact state file for a fresh handoff:
