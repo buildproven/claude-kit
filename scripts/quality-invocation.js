@@ -2466,6 +2466,13 @@ function mutationEvidenceValid(manifest) {
   }
 }
 
+function assertMutationEvidence(manifest) {
+  if (mutationEvidenceValid(manifest)) return;
+  throw new Error(
+    "required high/critical mutation evidence is missing, stale, or invalid",
+  );
+}
+
 function recordMutation(manifest, options) {
   if (!["high", "critical"].includes(manifest.risk?.tier)) {
     throw new Error(
@@ -2516,11 +2523,7 @@ function reviewAuthorization(manifest) {
   // authorize review artifacts produced under a stale, weaker risk contract.
   assertCurrentReviewStrength(manifest, manifest.repo.realpath);
   const authorization = reviewCoverage(manifest);
-  if (!mutationEvidenceValid(manifest)) {
-    throw new Error(
-      "required high/critical mutation evidence is missing, stale, or invalid",
-    );
-  }
+  assertMutationEvidence(manifest);
   const successful = manifest.reviews.filter(
     (review) => review.status === "success",
   );
