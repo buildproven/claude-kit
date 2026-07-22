@@ -77,6 +77,7 @@ if [ -n "$MANIFEST_ARG" ] && [ "${#BOOTSTRAP_ARGS[@]}" -ne 0 ]; then
   echo "❌ quality resume accepts only --manifest <path>" >&2
   exit 1
 fi
+EXPLICIT_TARGET=false
 for ((argument_index = 0; argument_index < ${#BOOTSTRAP_ARGS[@]}; argument_index += 1)); do
   argument="${BOOTSTRAP_ARGS[$argument_index]}"
   case "$argument" in
@@ -86,6 +87,11 @@ for ((argument_index = 0; argument_index < ${#BOOTSTRAP_ARGS[@]}; argument_index
       exit 1
       ;;
     --level|--scope|--target-dir|--target|--worktree|--pr|--pull|--pull-request|--branch|--head|--head-ref)
+      case "$argument" in
+        --target-dir|--target|--worktree|--pr|--pull|--pull-request|--branch|--head|--head-ref)
+          EXPLICIT_TARGET=true
+          ;;
+      esac
       argument_index=$((argument_index + 1))
       [ "$argument_index" -lt "${#BOOTSTRAP_ARGS[@]}" ] &&
         [ -n "${BOOTSTRAP_ARGS[$argument_index]}" ] &&
@@ -95,19 +101,26 @@ for ((argument_index = 0; argument_index < ${#BOOTSTRAP_ARGS[@]}; argument_index
       }
       ;;
     --level=*|--scope=*|--target-dir=*|--target=*|--worktree=*|--pr=*|--pull=*|--pull-request=*|--branch=*|--head=*|--head-ref=*)
+      case "$argument" in
+        --target-dir=*|--target=*|--worktree=*|--pr=*|--pull=*|--pull-request=*|--branch=*|--head=*|--head-ref=*)
+          EXPLICIT_TARGET=true
+          ;;
+      esac
       [ -n "${argument#*=}" ] || {
         echo "❌ ${argument%%=*} requires a value" >&2
         exit 1
       }
       ;;
     \#*)
+      EXPLICIT_TARGET=true
       [[ "$argument" =~ ^\#[1-9][0-9]*$ ]] || {
         echo "❌ unexpected quality argument: $argument" >&2
         exit 1
       }
       ;;
-    /*|~/*|./*|../*) ;;
+    /*|~/*|./*|../*) EXPLICIT_TARGET=true ;;
     */*)
+      EXPLICIT_TARGET=true
       [[ "$argument" =~ ^[A-Za-z][A-Za-z0-9_.-]*/[A-Za-z0-9_./-]+$ ]] || {
         echo "❌ unexpected quality argument: $argument" >&2
         exit 1
@@ -194,7 +207,7 @@ if [ -z "$RESOLVER" ]; then
 else
   # Use the resolver. It returns a JSON plan we act on.
   PRIMARY_CHECKOUT=$(git worktree list --porcelain 2>/dev/null \
-    | awk '/^worktree / {p=$2} /^branch refs\/heads\/main$/ {print p; exit}')
+    | awk '/^worktree / {p=substr($0, 10)} /^branch refs\/heads\/main$/ {print p; exit}')
   CWD_INPUT=$(pwd)
 
   RESOLVER_STDERR=$(mktemp 2>/dev/null || echo "/tmp/quality-resolver-stderr.$$")
@@ -209,7 +222,7 @@ else
   # is how the "audited the wrong repo" class of bug happens. Only fall through
   # to cwd resolution when the caller passed no target token at all.
   if [ "$RESOLVER_RC" -ne 0 ]; then
-    if printf '%s\n' "$@" | grep -Eq '(^|[[:space:]])(#[0-9]+|--target-dir|--pr|--branch)([[:space:]]|=|$)'; then
+    if [ "$EXPLICIT_TARGET" = true ]; then
       echo "❌ /bs:quality target resolver crashed (exit $RESOLVER_RC) while a target was requested."
       echo "   Refusing to fall back to the current directory — that could audit the wrong repo."
       [ -s "$RESOLVER_STDERR" ] && { echo "   Resolver error:"; sed 's/^/     /' "$RESOLVER_STDERR"; }

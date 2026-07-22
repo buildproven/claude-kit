@@ -22,11 +22,13 @@ function fixture(mode, seconds = 600) {
   const start = Math.floor(Date.now() / 1000);
   writeFileSync(
     governor,
-    JSON.stringify({
-      start_epoch: start,
-      deadline_epoch: start + seconds,
-      max_wall_seconds: seconds,
-    }),
+    mode === "invalid-governor"
+      ? JSON.stringify({ start_epoch: start })
+      : JSON.stringify({
+          start_epoch: start,
+          deadline_epoch: start + seconds,
+          max_wall_seconds: seconds,
+        }),
   );
   const gh = path.join(bin, "gh");
   writeFileSync(
@@ -38,7 +40,7 @@ case "$GH_MODE:$cmd" in
   auto-pending:"pr merge --auto --squash") exit 0 ;;
   auto-pending:"pr view --json state --jq .state") echo OPEN; exit 0 ;;
   view-timeout:"pr merge --auto --squash")
-    jq '.deadline_epoch = (now | floor) + 91' "$GH_GOVERNOR" > "$GH_GOVERNOR.tmp"
+    jq '.start_epoch = (now | floor) - 600 | .deadline_epoch = (now | floor) | .max_wall_seconds = 600' "$GH_GOVERNOR" > "$GH_GOVERNOR.tmp"
     mv "$GH_GOVERNOR.tmp" "$GH_GOVERNOR"
     exit 0
     ;;
@@ -50,7 +52,7 @@ case "$GH_MODE:$cmd" in
   fallback-success:"pr merge --squash") exit 0 ;;
   final-timeout:"pr merge --auto --squash") exit 1 ;;
   final-timeout:"pr checks --watch")
-    jq '.deadline_epoch = (now | floor)' "$GH_GOVERNOR" > "$GH_GOVERNOR.tmp"
+    jq '.start_epoch = (now | floor) - 600 | .deadline_epoch = (now | floor) | .max_wall_seconds = 600' "$GH_GOVERNOR" > "$GH_GOVERNOR.tmp"
     mv "$GH_GOVERNOR.tmp" "$GH_GOVERNOR"
     exit 0
     ;;
@@ -109,6 +111,14 @@ describe("quality-finish-merge", () => {
     const { result, commands } = fixture("auto-pending", 1);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("LOCAL_PASS_CI_PENDING");
+    expect(commands).toEqual([]);
+  });
+
+  it("fails closed when the governor is invalid instead of reporting pending success", () => {
+    const { result, commands } = fixture("invalid-governor");
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("governor state is unreadable or invalid");
+    expect(result.stdout).not.toContain("LOCAL_PASS_CI_PENDING");
     expect(commands).toEqual([]);
   });
 

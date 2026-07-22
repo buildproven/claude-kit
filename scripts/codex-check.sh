@@ -6,7 +6,7 @@
 #   1. Auth mode (chatgpt vs apikey)
 #   2. OPENAI_API_KEY env status
 #   3. Codex CLI version
-#   4. Native skills, temporary command adapters, AGENTS, and capability inventory
+#   4. Native skills, AGENTS, and capability inventory
 #   5. Session count from local history (past 30 days)
 
 set -euo pipefail
@@ -71,7 +71,7 @@ else
     ok "OPENAI_API_KEY: not set in current environment"
 fi
 
-# 4. Prompt + AGENTS freshness
+# 4. Native skill + AGENTS freshness
 #
 # PROJECT_DIR must resolve to the OVERLAY root (wherever install.sh's project
 # lives), not to wherever this specific copy of the script happens to be
@@ -95,27 +95,11 @@ if [ -z "${PROJECT_DIR:-}" ] && [ -f "$CODEX_CHECK_ONE_UP/../config/CLAUDE.md" ]
   PROJECT_DIR="$(cd "$CODEX_CHECK_ONE_UP/.." && pwd)"
 fi
 PROJECT_DIR="${PROJECT_DIR:-$CODEX_CHECK_ONE_UP}"
-SYNC_SCRIPT="$PROJECT_DIR/scripts/sync-codex-prompts.sh"
 CODEX_AGENTS="${HOME}/.codex/AGENTS.md"
-CODEX_MANIFEST="${HOME}/.codex/.sync-codex-prompts-managed"
 CODEX_SKILL_MANIFEST="${HOME}/.agents/skills/.buildproven-managed"
 
 echo
 echo "── Codex Surface ───────────────────────────────────────────────"
-
-if [[ -x "$SYNC_SCRIPT" || -f "$SYNC_SCRIPT" ]]; then
-    if bash "$SYNC_SCRIPT" --check >/tmp/codex-sync-check.$$ 2>&1; then
-        ok "Temporary command adapters: up to date"
-    else
-        warn "Temporary command adapters: drift detected"
-        sed 's/^/      /' /tmp/codex-sync-check.$$ | tail -n 12
-        HEALTH_OK=false
-    fi
-    rm -f /tmp/codex-sync-check.$$
-else
-    warn "Prompt sync script missing: $SYNC_SCRIPT"
-    HEALTH_OK=false
-fi
 
 if [[ -L "$CODEX_AGENTS" ]]; then
     if [[ "$(readlink "$CODEX_AGENTS")" == "$PROJECT_DIR/config/CLAUDE.md" ]]; then
@@ -145,21 +129,6 @@ else
     HEALTH_OK=false
 fi
 rm -f /tmp/codex-plugin-check.$$
-
-if [[ -f "$CODEX_MANIFEST" ]]; then
-    TOTAL_PROMPTS=$(wc -l < "$CODEX_MANIFEST" | tr -d ' ')
-    COMMAND_PROMPTS=$(grep -Ec '^(bs|gh|cc)-|^(debug|refactor|update-claudemd)\.md$' "$CODEX_MANIFEST" || true)
-    SKILL_PROMPTS=$(grep -Ec '^skill-.*\.md$' "$CODEX_MANIFEST" || true)
-    if [[ "$SKILL_PROMPTS" -gt 0 ]]; then
-        fail "Deprecated skill prompt copies remain: ${SKILL_PROMPTS}"
-        HEALTH_OK=false
-    else
-        ok "Legacy adapter inventory: ${TOTAL_PROMPTS} commands, 0 duplicated skills"
-    fi
-else
-    warn "Prompt inventory manifest missing: $CODEX_MANIFEST"
-    HEALTH_OK=false
-fi
 
 if bash "$PROJECT_DIR/scripts/setup-mcp-parity.sh" --profile default --check >/tmp/codex-mcp-check.$$ 2>&1; then
     ok "MCP profile: lean default active"
@@ -215,7 +184,7 @@ fi
 echo
 echo "── Summary ─────────────────────────────────────────────────────"
 if [[ "$HEALTH_OK" == true ]]; then
-    ok "Codex auth, instructions, native skills, command adapters, and lean capability profile are healthy"
+    ok "Codex auth, instructions, native skills, and lean capability profile are healthy"
 else
     fail "Codex setup needs attention — see warnings above"
 fi

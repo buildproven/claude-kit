@@ -9,7 +9,7 @@ context: fork
 
 **Goal**: Turn the ad-hoc "check status, run quality, merge PRs across 5+ repos" sweep into a single command. Mornings become "what shipped overnight" instead of "what needs shipping today."
 
-> **Scaling hint**: For sweeps across >5 repos, prefix your invocation with `ultracode` (or run `/effort ultracode`) to have Claude automatically plan a dynamic workflow — up to 16 concurrent workers, resumable if a repo stalls.
+> **Scaling hint**: Keep the sweep deliberately small (at most 4 concurrent workers) until the operator has a cross-repo concurrency and usage budget. Resume a deferred batch in a fresh session rather than growing one long-lived parent context.
 
 ## Inputs
 
@@ -67,10 +67,10 @@ Worker contract:
 2. For each open PR (oldest first):
    - `gh pr checkout <num>` into the agent's isolated worktree
    - Verify no pre-existing broken CI (lint, tests). If broken, **fix as part of this PR's work** — do not defer (per workflow rule)
-   - Run `/bs:quality --merge`
+   - Run `/bs:quality --merge` and treat its exit status as the merge outcome. Never invoke `gh pr merge` directly: quality owns identity validation, review coverage, CI, authorization, and merge.
    - If diff > `--max-diff`, do NOT auto-merge; mark for manual review
-   - If quality gate green AND diff ≤ threshold AND `Reviewed-By: quality` trailer present → merge
-   - Post-merge: `git checkout main && git pull && git branch -d <branch>` (auto-checkout-main rule)
+   - If the diff is over `--max-diff`, do NOT start a merge campaign; mark for manual review.
+   - Post-merge: invoke `quality-merge-cleanup.sh` through the quality campaign, then reconcile the assigned worktree with `worktree-manager.js`. Never `git checkout main` from the worker: the primary checkout already owns that branch.
 3. Return a per-repo summary
 
 ## Phase 3: Consolidation
@@ -95,9 +95,9 @@ For each "Manual review" or "Failed" PR, if a `--linear-team`/`$BS_MERGE_TRAIN_L
 
 - **Worktree isolation is mandatory** — every parallel worker uses `isolation: "worktree"`. The hook enforces this; a violation is a bug.
 - **Never skip pre-existing broken CI** — fix it as part of the current PR or fail loudly.
-- **Never merge without a provider-neutral `Reviewed-By: quality` trailer** — that's the quality-gate contract.
+- **Never invoke `gh pr merge` from a worker** — `/bs:quality --merge` is the only merge authority.
 - **Never push directly to main** — every change goes through a PR.
-- **Auto-checkout main after every successful merge** — never leave a worker stranded on a deleted branch.
+- **Reconcile worktrees after every successful merge** — quality cleanup owns the primary checkout; workers never check out its branch.
 
 ## Failure Modes & Recovery
 

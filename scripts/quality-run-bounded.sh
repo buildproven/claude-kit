@@ -24,7 +24,16 @@ if [ -n "$GOVERNOR_FILE" ]; then
   }
   EFFECTIVE_CAP="${CAP:-${TIMEOUT:-2147483647}}"
   TIMEOUT="$(node "$GOVERNOR" remaining "$GOVERNOR_FILE" \
-    --reserve "$RESERVE" --cap "$EFFECTIVE_CAP")" || exit 124
+    --reserve "$RESERVE" --cap "$EFFECTIVE_CAP")"
+  GOVERNOR_RC=$?
+  case "$GOVERNOR_RC" in
+    0) ;;
+    1) exit 124 ;; # Valid governor, but no budget remains.
+    *)
+      echo "quality-run-bounded: governor state is unreadable or invalid" >&2
+      exit "$GOVERNOR_RC"
+      ;;
+  esac
 fi
 [ -n "$TIMEOUT" ] && [ "${1:-}" = -- ] || { echo "usage: quality-run-bounded.sh --timeout <seconds> -- <command>" >&2; exit 1; }
 shift

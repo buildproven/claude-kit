@@ -348,17 +348,17 @@ if [ -f "$SOTA_HISTORY" ]; then
     LAST_EPOCH=$(date -j -f "%Y-%m-%d" "${LAST_DATE%T*}" "+%s" 2>/dev/null || date -d "$LAST_DATE" "+%s")
     DAYS_AGO=$(( ($(date "+%s") - LAST_EPOCH) / 86400 ))
     if [ "$DAYS_AGO" -gt 7 ]; then
-      echo "⚠️  SOTA last run ${DAYS_AGO} days ago — auto-running /bs:sota"
+      echo "⚠️  SOTA last run ${DAYS_AGO} days ago — run the SOTA skill before the main loop"
     fi
   else
-    echo "⚠️  SOTA never run — auto-running /bs:sota"
+    echo "⚠️  SOTA never run — run the SOTA skill before the main loop"
   fi
 else
-  echo "⚠️  SOTA history missing — auto-running /bs:sota"
+  echo "⚠️  SOTA history missing — run the SOTA skill before the main loop"
 fi
 ```
 
-If SOTA is stale (>7 days or never run), invoke `/bs:sota` before starting the main loop. Skip if `--dry-run` or if all items are inline (since inline runs are typically short ad-hoc batches).
+If SOTA is stale (>7 days or never run), invoke the `sota` skill before starting the main loop. Skip if `--dry-run` or if all items are inline (since inline runs are typically short ad-hoc batches).
 
 ### Step 1: Git Hygiene
 

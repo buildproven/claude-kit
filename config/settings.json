@@ -88,7 +88,6 @@
     "agent-browser": "name-only",
     "api-conventions": "on",
     "backlog": "on",
-    "cleanup": "on",
     "codebase-design": "name-only",
     "codex": "on",
     "deps": "on",
@@ -96,11 +95,9 @@
     "diagnosing-bugs": "on",
     "error-handling": "on",
     "frontend-design": "name-only",
-    "healthcheck": "name-only",
     "hotfix": "on",
     "legal": "name-only",
     "merge-train": "on",
-    "monetize": "name-only",
     "new": "on",
     "patterns": "name-only",
     "prd": "on",
@@ -120,7 +117,6 @@
     "triage": "name-only",
     "ui-reviewer": "name-only",
     "verify-claim": "on",
-    "visualise": "name-only",
     "workflow": "name-only"
   },
   "hooks": {
