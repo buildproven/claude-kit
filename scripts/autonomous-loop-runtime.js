@@ -57,6 +57,17 @@ function positiveInteger(value, name, fallback) {
   return candidate;
 }
 
+function nonNegativeInteger(value, name) {
+  const candidate = Number(value);
+  if (!Number.isSafeInteger(candidate) || candidate < 0) {
+    throw new RuntimeError(
+      `${name} must be a non-negative integer`,
+      "INVALID_ARGUMENT",
+    );
+  }
+  return candidate;
+}
+
 function percentage(value, name, fallback) {
   const candidate = value === undefined ? fallback : Number(value);
   if (!Number.isFinite(candidate) || candidate < 0 || candidate > 100) {
@@ -491,8 +502,8 @@ function repair(options, environment = process.env) {
 
 function contextBreak(options) {
   const stateFile = path.resolve(requireValue(options, "state"));
-  const observedTokens = positiveInteger(
-    options["observed-tokens"],
+  const observedTokens = nonNegativeInteger(
+    requireValue(options, "observed-tokens"),
     "observed-tokens",
   );
   const capTokens = positiveInteger(

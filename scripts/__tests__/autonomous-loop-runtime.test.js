@@ -322,6 +322,26 @@ describe("autonomous-loop runtime", () => {
     });
   });
 
+  it("accepts a zero-token context observation without requesting a handoff", () => {
+    const fx = fixture();
+    const state = join(fx.root, "ralph-state.json");
+    writeFileSync(state, JSON.stringify({ current: "BUI-414" }));
+
+    const result = runtime([
+      "context-break",
+      "--state",
+      state,
+      "--observed-tokens",
+      "0",
+    ]);
+
+    expect(response(result)).toMatchObject({
+      ok: true,
+      breakRequired: false,
+      observedTokens: 0,
+    });
+  });
+
   it("launches a fresh campaign without passing a parent session or resume flag", () => {
     const fx = fixture();
     const handoff = join(fx.root, "handoff.json");
