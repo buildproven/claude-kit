@@ -387,15 +387,27 @@ unstructured output.
 ## Trailer Convention
 
 ```
-Reviewed-By: quality (tier=high, reviewer=codex, primary=codex, fallback=claude, findings=0, head=<SHA>, base=<SHA>)
-Reviewed-By: codex (tier=high, findings=0, head=<SHA>, base=<SHA>)
+Reviewed-By: quality
+Reviewed-By: codex
+Quality-Tier: high
+Quality-Reviewer: codex
+Quality-Primary: codex
+Quality-Fallback: claude
+Quality-Findings: 0
+Quality-Head: <SHA>
+Quality-Base: <SHA>
 ```
 
 - `Reviewed-By: quality` is the provider-neutral authorization record.
-- The provider-specific trailer records which reviewer actually completed; it
-  can differ from `primary` when fallback was required.
-- `head` must equal HEAD or HEAD~1 (a dedicated stamp commit), and `base` must
-  equal the current merge-base. Any later code commit invalidates the stamp.
+- `Quality-Reviewer` records which reviewer actually completed; it can differ
+  from `Quality-Primary` when fallback was required.
+- Every `Quality-*` trailer is required exactly once. `Quality-Findings` is the
+  integer `0`, and `Quality-Tier` must meet the selected risk tier.
+- `Quality-Head` must equal HEAD or HEAD~1 (a dedicated stamp commit), and
+  `Quality-Base` must equal the current merge-base. Any later code commit
+  invalidates the stamp.
+- Parenthetical `Reviewed-By` metadata is legacy reader compatibility only and
+  must not be emitted by new quality campaigns.
 
 ## Deep Review Mode (`--audit --deep`)
 
