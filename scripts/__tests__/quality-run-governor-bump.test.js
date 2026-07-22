@@ -96,11 +96,15 @@ describe("bumpRound — the round cap that stops runaway review loops", () => {
     expect(bumpRound(p, process.cwd())).toBe(1);
   });
 
-  it("HALTS when the fix-commit budget is spent", () => {
+  it("HALTS when the fix-commit budget is spent after the initial review", () => {
     // Pretend the run started far enough back that the repo's current commit
     // count already exceeds the allowed fix-commits.
     const p = sentinel(
-      healthy({ start_commit_count: startCommits() - 50, max_fix_commits: 5 }),
+      healthy({
+        start_commit_count: startCommits() - 50,
+        max_fix_commits: 5,
+        rounds_used: 1,
+      }),
     );
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     expect(bumpRound(p, process.cwd())).toBe(1);
