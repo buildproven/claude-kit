@@ -345,6 +345,78 @@ describe("worktree-manager public CLI", () => {
     expect(existsSync(worktree.worktreePath)).toBe(false);
   });
 
+  it("refuses ignored submodule dirt before force removal", () => {
+    const { parent, repo } = fixture();
+    const submoduleSource = path.join(parent, "ignored-submodule-source");
+    const submoduleRemote = path.join(parent, "ignored-submodule.git");
+    mkdirSync(submoduleSource);
+    run("git", ["init", "--initial-branch=main", submoduleSource]);
+    git(submoduleSource, "config", "user.email", "tests@example.com");
+    git(submoduleSource, "config", "user.name", "Worktree Tests");
+    writeFileSync(path.join(submoduleSource, "README.md"), "submodule\n");
+    git(submoduleSource, "add", "README.md");
+    git(submoduleSource, "commit", "-m", "initial submodule");
+    run("git", ["init", "--bare", submoduleRemote]);
+    run("git", [
+      "--git-dir",
+      submoduleRemote,
+      "symbolic-ref",
+      "HEAD",
+      "refs/heads/main",
+    ]);
+    git(submoduleSource, "remote", "add", "origin", submoduleRemote);
+    git(submoduleSource, "push", "-u", "origin", "main");
+
+    run("git", [
+      "-C",
+      repo,
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      submoduleRemote,
+      "vendor/submodule",
+    ]);
+    git(repo, "commit", "-am", "add submodule");
+    git(repo, "push", "origin", "main");
+
+    const worktree = create(repo, "feature/ignored-submodule-dirt");
+    run("git", [
+      "-C",
+      worktree.worktreePath,
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "update",
+      "--init",
+      "--recursive",
+    ]);
+    git(
+      worktree.worktreePath,
+      "config",
+      "submodule.vendor/submodule.ignore",
+      "all",
+    );
+    writeFileSync(
+      path.join(worktree.worktreePath, "vendor", "submodule", "dirty.txt"),
+      "dirty\n",
+    );
+
+    const { json } = manager(
+      [
+        "remove",
+        "--repo",
+        repo,
+        "--branch",
+        "feature/ignored-submodule-dirt",
+        "--delete-branch",
+      ],
+      { ok: false },
+    );
+    expect(json.code).toBe("DIRTY");
+    expect(existsSync(worktree.worktreePath)).toBe(true);
+  });
+
   it("refuses dirty worktrees", () => {
     const { repo } = fixture();
     const worktree = create(repo, "feature/dirty");
@@ -520,6 +592,59 @@ esac
     );
     expect(state.locked).toBe(true);
     expect(state.lockReason).toBe("owner-20");
+  });
+
+  it("restores ownership when a forced submodule retry fails", () => {
+    const { parent, repo } = fixture();
+    const worktree = create(repo, "feature/forced-remove-rollback", [
+      "--lock-reason",
+      "owner-22",
+    ]);
+    const bin = path.join(parent, "force-remove-bin");
+    mkdirSync(bin);
+    const realGit = spawnSync("which", ["git"], {
+      encoding: "utf8",
+    }).stdout.trim();
+    writeFileSync(
+      path.join(bin, "git"),
+      `#!/bin/sh
+case "$*" in
+  *"worktree remove --force"*) echo "simulated forced removal failure" >&2; exit 2 ;;
+  *"worktree remove"*) echo "working trees containing submodules cannot be moved or removed" >&2; exit 2 ;;
+  *) exec "${realGit}" "$@" ;;
+esac
+`,
+    );
+    chmodSync(path.join(bin, "git"), 0o755);
+    const { json } = manager(
+      [
+        "remove",
+        "--repo",
+        repo,
+        "--branch",
+        "feature/forced-remove-rollback",
+        "--recover",
+        "--owner",
+        "owner-22",
+        "--skip-pr-check",
+      ],
+      {
+        ok: false,
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+    expect(json.code).toBe("COMMAND_FAILED");
+    expect(existsSync(worktree.worktreePath)).toBe(true);
+    const state = manager([
+      "status",
+      "--repo",
+      repo,
+      "--skip-pr-check",
+    ]).json.worktrees.find(
+      (candidate) => candidate.branch === "feature/forced-remove-rollback",
+    );
+    expect(state.locked).toBe(true);
+    expect(state.lockReason).toBe("owner-22");
   });
 
   it("records explicit recovery evidence when removal and relocking both fail", () => {
