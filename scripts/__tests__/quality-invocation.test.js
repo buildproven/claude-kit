@@ -51,6 +51,30 @@ function recordGateFixture(manifestPath, name, overrides = {}) {
   });
 }
 
+function recordMutationFixture(manifestPath) {
+  invocation.withManifestLock(manifestPath, (manifest) => {
+    if (!["high", "critical"].includes(manifest.risk?.tier)) return;
+    const artifact = path.join(
+      path.dirname(manifestPath),
+      `${manifest.revisions.currentHead}.mutation.json`,
+    );
+    writeFileSync(
+      artifact,
+      JSON.stringify({
+        schemaVersion: 1,
+        invocationId: manifest.invocationId,
+        base: manifest.revisions.baseSha,
+        head: manifest.revisions.currentHead,
+        tier: manifest.risk.tier,
+        method: "revert-diff",
+        mutatedPaths: ["file.js"],
+        testFailureObserved: true,
+      }),
+    );
+    invocation.recordMutation(manifest, { artifact });
+  });
+}
+
 function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
@@ -234,6 +258,7 @@ function prepareCodexReview(
   for (const name of ["lint", "test", "security"]) {
     recordGateFixture(manifestPath, name);
   }
+  recordMutationFixture(manifestPath);
   return info;
 }
 
