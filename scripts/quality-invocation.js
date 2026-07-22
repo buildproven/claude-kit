@@ -2211,11 +2211,6 @@ function reviewCoverage(manifest) {
     throw new Error("review provider evidence is incomplete");
   }
   verifyGateEvidence(manifest);
-  if (!mutationEvidenceValid(manifest)) {
-    throw new Error(
-      "required high/critical mutation evidence is missing, stale, or invalid",
-    );
-  }
   return {
     base: manifest.revisions.baseSha,
     head: manifest.revisions.currentHead,
@@ -2521,6 +2516,11 @@ function reviewAuthorization(manifest) {
   // authorize review artifacts produced under a stale, weaker risk contract.
   assertCurrentReviewStrength(manifest, manifest.repo.realpath);
   const authorization = reviewCoverage(manifest);
+  if (!mutationEvidenceValid(manifest)) {
+    throw new Error(
+      "required high/critical mutation evidence is missing, stale, or invalid",
+    );
+  }
   const successful = manifest.reviews.filter(
     (review) => review.status === "success",
   );
