@@ -51,6 +51,12 @@ CI).
 Repositories that explicitly set `scorePolicy.mergeAuthority` to
 `"human-required"` retain the legacy signed, expiring approval command; it is
 invalidated by any genuine HEAD change.
+Check an in-flight or stalled campaign's state on demand (gates, provider
+review, break-glass, CI) without waiting for a failure:
+
+```bash
+/bs:quality status --manifest <exact-manifest-path>
+```
 
 When invoking from a forked agent context (e.g. a parallel agent whose `cwd` is a harness scratch directory rather than the worktree), pass `--target-dir <path>`:
 

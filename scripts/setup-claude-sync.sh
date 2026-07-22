@@ -55,8 +55,10 @@ if [[ ! -f "$REPO_ROOT/config/settings.json" ]]; then
   exit 1
 fi
 
-# Directories symlinked wholesale into ~/.claude/
-LINK_DIRS=(commands skills agents scripts)
+# Shared with install.sh so first-run installation and later repair cannot
+# silently diverge. This is loaded only after REPO_ROOT has been resolved.
+# shellcheck source=claude-link-manifest.sh
+source "$REPO_ROOT/scripts/claude-link-manifest.sh"
 
 MODE="repair"
 case "${1:-}" in
@@ -127,13 +129,13 @@ echo "------------------------------------------------------------"
 
 [[ "$MODE" == "repair" ]] && mkdir -p "$CLAUDE_DIR"
 
-for dir in "${LINK_DIRS[@]}"; do
+for dir in "${CLAUDE_LINK_DIRS[@]}"; do
   want_link "$REPO_ROOT/$dir" "$CLAUDE_DIR/$dir" "$D/$dir"
 done
 
 # settings.json and CLAUDE.md are single files, and users are far more likely to
 # have their own. Only link them if the slot is genuinely free.
-for f in "settings.json:config/settings.json" "CLAUDE.md:config/CLAUDE.md"; do
+for f in "${CLAUDE_LINK_FILES[@]}"; do
   dest_name="${f%%:*}"; src_rel="${f##*:}"
   src="$REPO_ROOT/$src_rel"; dest="$CLAUDE_DIR/$dest_name"
 

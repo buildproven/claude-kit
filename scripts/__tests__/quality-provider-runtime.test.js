@@ -14,6 +14,11 @@ const VALIDATOR = path.join(
   "quality-validate-review-trailers.sh",
 );
 const RUN_REVIEW = path.join(ROOT, "scripts", "quality-run-review.sh");
+const PRESERVE_PRIMARY = path.join(
+  ROOT,
+  "scripts",
+  "quality-preserve-primary-evidence.sh",
+);
 const NORMALIZE_CODEX_REVIEW = path.join(
   ROOT,
   "scripts",
@@ -235,6 +240,9 @@ Quality-Base: ${base}`;
 
   it("passes scorer effort and exact round count to Codex mechanically", () => {
     const source = spawnSync("cat", [RUN_REVIEW], { encoding: "utf8" }).stdout;
+    const preservation = spawnSync("cat", [PRESERVE_PRIMARY], {
+      encoding: "utf8",
+    }).stdout;
     expect(source).toMatch(
       /while \[ "\$pass" -le "\$QUALITY_REVIEW_PASSES" \]/,
     );
@@ -256,10 +264,11 @@ Quality-Base: ${base}`;
     expect(source.indexOf('[ "$rc" -eq 124 ] && return 76')).toBeLessThan(
       source.indexOf('if node "$SCRIPT_DIR/quality-provider-error.js"'),
     );
-    expect(source).toMatch(/"\$REVIEW_OUT"\/codex-\*\.json/);
-    expect(source).toMatch(/"\$REVIEW_OUT"\/codex-\*\.progress/);
-    expect(source).toMatch(/"\$REVIEW_OUT"\/codex-\*\.prompt/);
-    expect(source).toMatch(/grep -q '\^INCONCLUSIVE:'/);
+    expect(preservation).toMatch(/"\$REVIEW_OUT"\/codex-\*\.json/);
+    expect(preservation).toMatch(/"\$REVIEW_OUT"\/codex-\*\.progress/);
+    expect(preservation).toMatch(/"\$REVIEW_OUT"\/codex-\*\.prompt/);
+    expect(preservation).toMatch(/codex-\*\.normalized\.json/);
+    expect(preservation).toMatch(/primary-\$preserve_pass\.result\.json/);
     // rc=76 (bounded-budget timeout without converging) is now CONFIGURABLE:
     // it fails over to the fallback when BS_QUALITY_FALLBACK_ON_TIMEOUT=1
     // (the default), gated so a degraded primary doesn't block a merge while a
@@ -394,4 +403,89 @@ Quality-Base: ${base}`;
     expect(policy).toMatch(/BASH_VERSION/);
     expect(policy).toMatch(/ZSH_VERSION/);
   });
+
+  it.each(["parser-inconclusive", "evidence-absent"])(
+    "preserves a completed earlier pass's normalized findings in --mode %s when a LATER pass fails",
+    (mode) => {
+      // Multi-pass Codex review: pass 1 completes with real findings, pass 2
+      // fails for whatever reason (parser error -> parser-inconclusive;
+      // exhaustion/timeout/unavailability -> evidence-absent). Either way,
+      // pass 1's normalized result is authoritative and must not be
+      // discarded as if the primary produced nothing.
+      const dir = mkdtempSync(path.join(tmpdir(), "preserve-primary-"));
+      writeFileSync(
+        path.join(dir, "codex-1.normalized.json"),
+        JSON.stringify({
+          verdict: "needs-attention",
+          summary: "pass 1 completed",
+          findings: [{ severity: "high", title: "real finding" }],
+        }),
+      );
+      writeFileSync(
+        path.join(dir, "codex.findings.txt"),
+        "INCONCLUSIVE: pass 2 failed\n",
+      );
+
+      const result = spawnSync("bash", [
+        PRESERVE_PRIMARY,
+        "--review-out",
+        dir,
+        "--mode",
+        mode,
+      ]);
+      expect(result.status).toBe(0);
+
+      const preserved = readFileSync(
+        path.join(dir, "primary-codex-1.result.json"),
+        "utf8",
+      );
+      expect(JSON.parse(preserved).findings).toHaveLength(1);
+      expect(
+        spawnSync("test", ["-e", path.join(dir, "codex-1.normalized.json")])
+          .status,
+      ).not.toBe(0);
+    },
+  );
+
+  it.each(["parser-inconclusive", "evidence-absent"])(
+    "preserves a completed Gemini pass's normalized findings in --mode %s (not just Codex)",
+    (mode) => {
+      // Same bug class as the Codex test above, but for Gemini: the
+      // preservation loop only globbed codex-*.normalized.json, so a
+      // completed Gemini pass got swept into failed-primary/ by the raw
+      // artifact quarantine loop (gemini-*.json) instead of being preserved.
+      const dir = mkdtempSync(path.join(tmpdir(), "preserve-primary-gemini-"));
+      writeFileSync(
+        path.join(dir, "gemini-1.normalized.json"),
+        JSON.stringify({
+          verdict: "needs-attention",
+          summary: "gemini pass 1 completed",
+          findings: [{ severity: "high", title: "real gemini finding" }],
+        }),
+      );
+      writeFileSync(
+        path.join(dir, "gemini.findings.txt"),
+        "INCONCLUSIVE: pass 2 failed\n",
+      );
+
+      const result = spawnSync("bash", [
+        PRESERVE_PRIMARY,
+        "--review-out",
+        dir,
+        "--mode",
+        mode,
+      ]);
+      expect(result.status).toBe(0);
+
+      const preserved = readFileSync(
+        path.join(dir, "primary-gemini-1.result.json"),
+        "utf8",
+      );
+      expect(JSON.parse(preserved).findings).toHaveLength(1);
+      expect(
+        spawnSync("test", ["-e", path.join(dir, "gemini-1.normalized.json")])
+          .status,
+      ).not.toBe(0);
+    },
+  );
 });

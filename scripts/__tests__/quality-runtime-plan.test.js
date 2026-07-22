@@ -106,10 +106,16 @@ describe("quality runtime planning", () => {
     expect(micro.taskType).toBe("docs");
     expect(micro.campaignSeconds).toBe(300);
 
+    // BUI-381: the security floor on .github/workflows/** is content-aware —
+    // a file with only a `name:` header would now score `high`, not
+    // `critical` (see scripts/__tests__/risk-score.test.js for that case in
+    // isolation). Use genuinely risk-bearing content (permissions: + run:)
+    // here so this end-to-end CLI-seam test still exercises the critical
+    // path it's named for.
     fs.mkdirSync(path.join(repo, ".github", "workflows"), { recursive: true });
     fs.writeFileSync(
       path.join(repo, ".github", "workflows", "quality.yml"),
-      "name: quality\n",
+      "name: quality\npermissions:\n  contents: write\njobs:\n  build:\n    steps:\n      - run: ./deploy.sh\n",
     );
     execFileSync("git", ["add", ".github/workflows/quality.yml"], {
       cwd: repo,

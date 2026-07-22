@@ -48,7 +48,7 @@ function breakGlassStatus(manifest) {
   }
   if (
     manifest.approval?.approved === true &&
-    invocation.approvalValid(manifest)
+    invocation.approvalValid(manifest, manifest.repo.realpath)
   ) {
     return `approved through ${manifest.approval.expiresAt}`;
   }

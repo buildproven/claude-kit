@@ -377,7 +377,15 @@ describe("score — task-type risk routing", () => {
 
     expect(docs.taskType).toBe("docs");
     expect(ci.taskType).toBe("ci");
-    expect(ci.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
+    // BUI-381: the .github/workflows/** security floor is content-aware.
+    // This fixture's diff ("-old\n+new") touches no risk-bearing content
+    // (no permissions:/secrets./run:/uses:/env:), so it downgrades to the
+    // `high` tier instead of staying pinned at the security floor — see
+    // scripts/__tests__/risk-score.test.js for that behavior in isolation,
+    // and the case there confirming a genuinely risk-bearing workflow diff
+    // still stays pinned.
+    expect(ci.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.high);
+    expect(ci.riskScore).toBeLessThan(DEFAULTS.base.securityFloor);
   });
 
   it("uses the strictest task type across a mixed commit range", () => {

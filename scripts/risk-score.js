@@ -222,6 +222,14 @@ const DEFAULTS = {
     medium: 35, // default for unclassified source
     low: 10,
   },
+  // Path patterns from securityFloor whose floor classification is
+  // content-gated rather than an unconditional path pin (BUI-381). A file
+  // matching one of these still starts in securityFloor's path tier, but is
+  // only actually HELD at the floor score if its diff touches risk-bearing
+  // content (see workflowDiffIsRiskBearing); otherwise it is downgraded to
+  // the `high` tier so a one-line comment/version-pin edit doesn't force the
+  // same critical-tier review as a permissions/secrets/run: rewrite.
+  contentAwareFloor: ["**/.github/workflows/**"],
   mechanicalDelta: -25, // bounded subtraction for mechanical changes
   magnitude: {
     // Diff size adds risk and caps how far mechanical can subtract.
@@ -977,12 +985,54 @@ function manifestRisk(descriptor, cfg = DEFAULTS) {
   return { ...highest, fields };
 }
 
+// Risk-bearing GitHub Actions diff hunk content (BUI-381): a workflow diff
+// that ONLY touches version pins, comments, `on:` triggers, or job/step
+// names is not the same risk as one that touches permissions, secrets, or
+// what actually executes. Conservative by construction — added OR removed
+// lines matching any of these patterns are enough to keep the floor; only a
+// diff with NONE of these signals downgrades. An unparsable/empty patch
+// (e.g. binary, truncated >200KB) is treated as risk-bearing (fail closed).
+const WORKFLOW_RISK_PATTERNS = [
+  /^permissions\s*:/i, // top-level or job-level permissions block
+  /permissions\s*:\s*\{/i, // inline permissions map
+  /\bsecrets\s*\.\s*[A-Z0-9_]+/, // secrets.FOO reference (added or removed)
+  /\bsecrets\s*:/i, // secrets: passthrough block (reusable workflow calls)
+  /^\s*run\s*:/i, // run: shell step content
+  /^\s*uses\s*:/i, // any uses: line change — new action pin or reference swap
+  /\benv\s*:\s*$/i, // env: block header (new/changed env injection point)
+  /\bGITHUB_TOKEN\b/,
+  /\bpull_request_target\b/i, // notoriously unsafe trigger
+];
+
+function workflowDiffIsRiskBearing(patch) {
+  if (!patch || !patch.trim()) return true; // fail closed on empty/unreadable
+  for (const line of patch.split("\n")) {
+    if (!(line.startsWith("+") || line.startsWith("-"))) continue;
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    const content = line.slice(1);
+    if (WORKFLOW_RISK_PATTERNS.some((pattern) => pattern.test(content))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function descriptorBaseRisk(descriptor, cfg) {
   if (
     matchesPattern(descriptor.file, ["**/package.json"]) &&
     !matchesSecurityFloor(descriptor.file, cfg)
   ) {
     return manifestRisk(descriptor, cfg);
+  }
+  if (
+    matchesPattern(descriptor.file, cfg.contentAwareFloor || []) &&
+    !workflowDiffIsRiskBearing(descriptor.patch)
+  ) {
+    return {
+      score: cfg.base.high,
+      reason:
+        "workflow diff touches only version pins/comments/triggers → high, not security floor",
+    };
   }
   return { score: pathBase(descriptor.file, cfg), reason: "" };
 }
@@ -1009,9 +1059,21 @@ function computeScore(descriptors, diffStats, cfg) {
       topReason = risk.reason;
     }
   }
-  const touchesFloor = descriptors.some((d) =>
-    matchesSecurityFloor(d.file, cfg),
-  );
+  // A file matches the (additive, repo-extensible) security floor by path
+  // but is excluded from touchesFloor when it is ALSO in contentAwareFloor
+  // (currently just workflow YAML) AND its own diff is provably not
+  // risk-bearing (BUI-381). Any other floor file (secrets, auth, deploy,
+  // install.sh, humanFloor, a repo's own extensions, etc.) is an
+  // unconditional path pin, unchanged. This must mirror descriptorBaseRisk's
+  // downgrade exactly, or a downgraded file's score could still get
+  // re-pinned to the floor right back here.
+  const touchesFloor = descriptors.some((d) => {
+    if (!matchesSecurityFloor(d.file, cfg)) return false;
+    if (matchesPattern(d.file, cfg.contentAwareFloor || [])) {
+      return workflowDiffIsRiskBearing(d.patch);
+    }
+    return true;
+  });
   reasons.push(`path base ${base} (most-sensitive: ${topFile || "n/a"})`);
   if (topReason) reasons.push(topReason);
 
@@ -1384,6 +1446,8 @@ module.exports = {
   matchesPattern,
   globToRegExp,
   fileIsMechanical,
+  workflowDiffIsRiskBearing,
+  descriptorBaseRisk,
   isForcedLogic,
   matchesSecurityFloor,
   touchesHumanFloor,

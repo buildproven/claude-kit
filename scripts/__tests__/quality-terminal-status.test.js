@@ -1,4 +1,39 @@
+const { execFileSync, spawnSync } = require("node:child_process");
+const { mkdtempSync, readFileSync, writeFileSync } = require("node:fs");
+const { tmpdir } = require("node:os");
+const path = require("node:path");
 const { buildDiagnosis } = require("../quality-terminal-status");
+
+const ROOT = path.resolve(__dirname, "..", "..");
+const WRAPPER = path.join(ROOT, "scripts", "quality-wrapper.js");
+const BOOTSTRAP = path.join(ROOT, "scripts", "quality-bootstrap.sh");
+const INVOCATION = path.join(ROOT, "scripts", "quality-invocation.js");
+
+function git(cwd, args) {
+  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+function repo(label) {
+  const root = mkdtempSync(path.join(tmpdir(), `quality-${label}-`));
+  git(root, ["init", "-q", "-b", "main"]);
+  git(root, ["config", "user.name", "Quality Test"]);
+  git(root, ["config", "user.email", "quality@example.com"]);
+  writeFileSync(path.join(root, "file.js"), "export const value = 1;\n");
+  writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify({
+      scripts: { lint: "true", test: "true", "security:audit": "true" },
+    }),
+  );
+  git(root, ["add", "."]);
+  git(root, ["commit", "-q", "-m", "base"]);
+  git(root, ["remote", "add", "origin", root]);
+  git(root, ["fetch", "-q", "origin", "main"]);
+  git(root, ["switch", "-q", "-c", "feature"]);
+  writeFileSync(path.join(root, "file.js"), "export const value = 2;\n");
+  git(root, ["commit", "-qam", "change"]);
+  return root;
+}
 
 describe("quality terminal diagnosis", () => {
   it("separates gates, provider exhaustion, approval, CI, and exact recovery", () => {
@@ -95,5 +130,73 @@ describe("quality terminal diagnosis", () => {
     );
     expect(output).toContain("actionable code findings remain");
     expect(output).toContain("GitHub CI: not checked by this failure path");
+  });
+
+  // Regression test: breakGlassStatus() must call invocation.approvalValid()
+  // with BOTH manifest and root (manifest.repo.realpath). approvalValid()'s
+  // rebase-tolerant carry check (BUI-380) needs a real repo root to compute
+  // patch-ids against live git state — silently omitting it doesn't throw,
+  // it just makes a rebase-carried approval look invalid (fails closed, but
+  // wrongly). This must be a real, validly-signed approval against a real
+  // repo, not a hand-built fixture, or the missing-root bug is invisible.
+  it("reports a genuinely valid break-glass approval as approved (needs manifest.repo.realpath wired through)", () => {
+    const root = repo("terminal-status-approval");
+    const wrapped = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+      cwd: root,
+      input: JSON.stringify({
+        argv: ["--target-dir", root, "--level", "98"],
+      }),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BREAK_GLASS_APPROVED: "true",
+        BREAK_GLASS_APPROVER: "brett",
+      },
+    });
+    expect(wrapped.status, wrapped.stderr).toBe(0);
+    const manifestPath = wrapped.stdout
+      .split("\n")
+      .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
+      ?.slice("BS_QUALITY_MANIFEST=".length);
+    execFileSync("bash", [
+      path.join(ROOT, "scripts", "quality-risk-resolve.sh"),
+      "--manifest",
+      manifestPath,
+    ]);
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", manifestPath], {
+        cwd: root,
+      }).status,
+    ).toBe(0);
+
+    // Rebase-only HEAD change (BUI-380): the approval's signed payload
+    // still names the pre-rebase head, so approvalValid() can only prove it
+    // still applies by recomputing a live patch-id against manifest.repo.
+    // realpath — this is the exact path that silently breaks if
+    // breakGlassStatus() forgets to pass root through to approvalValid().
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(path.join(root, "unrelated.js"), "export const u = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "unrelated main change"]);
+    git(root, ["push", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["rebase", "-q", "origin/main"]);
+    execFileSync("node", [INVOCATION, "advance", manifestPath], { cwd: root });
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", manifestPath], {
+        cwd: root,
+      }).status,
+    ).toBe(0);
+
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.risk.tier = "critical"; // force breakGlassStatus's approved branch
+    const output = buildDiagnosis(manifestPath, manifest, {});
+    expect(output).toMatch(
+      new RegExp(
+        `Break-glass: approved through ${manifest.approval.expiresAt}`,
+      ),
+    );
+    expect(output).not.toContain("required and missing or stale");
   });
 });

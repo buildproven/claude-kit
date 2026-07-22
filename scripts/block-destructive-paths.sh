@@ -69,7 +69,13 @@ has_recursive_force_rm() {
 # ---------------------------------------------------------------------------
 # Rule 1: `rm -rf` / `rm -fr` / `rm -r -f` with unsafe target.
 # ---------------------------------------------------------------------------
-RM_COMMANDS=$(printf '%s' "$CMD_FLAT" | grep -oE '(^|[;&|][[:space:]]*)((sudo|command|env)[[:space:]]+)*([^[:space:];|]*/)?rm[[:space:]]+[^;&|]*' | head -5 || true)
+# Command boundaries include shell *control constructs*, not just `;`, `&`, `|`.
+# Anchoring only on those three let `(rm -rf ~)`, `if true; then rm -rf ~; fi`,
+# `for i in 1; do rm -rf ~; done`, `{ rm -rf ~; }` and a plain newline-separated
+# `rm` escape Rule 1 entirely — a fail-open bypass of the whole guard. Treat
+# `(`, `)`, `{`, `}` and newlines as boundaries on both sides so a removal
+# nested in any of them is still extracted and inspected.
+RM_COMMANDS=$(printf '%s' "$CMD_FLAT" | grep -oE '(^|[;&|(){}[:space:]][[:space:]]*)((sudo|command|env)[[:space:]]+)*([^[:space:];|(){}]*/)?rm[[:space:]]+[^;&|(){}]*' | head -5 || true)
 while IFS= read -r TARGETS; do
   [[ -z "$TARGETS" ]] && continue
   has_recursive_force_rm "$TARGETS" || continue

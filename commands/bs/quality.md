@@ -1,12 +1,41 @@
 ---
 name: bs:quality
 description: Autonomous quality loop with configurable thoroughness. Runs checks, revision-bound review, remediation, CI, and optional merge.
-argument-hint: "[--level auto|95|98] [--scope branch] [--merge] [--pr <number>] [--manifest <path>] [--target-dir <path>]"
+argument-hint: "[status --manifest <path>] [--level auto|95|98] [--scope branch] [--merge] [--pr <number>] [--manifest <path>] [--target-dir <path>]"
 tags: [quality, ci, review]
 category: quality
 ---
 
-Run bootstrap in this wrapper before forking:
+For on-demand status of an in-flight or stalled campaign, the supported
+command is:
+
+```text
+/bs:quality status --manifest <exact-manifest-path>
+```
+
+This does NOT fork the quality skill or start/resume a campaign — it is a
+direct, read-only diagnosis print. Resolve and run it exactly like this:
+
+```bash
+STATUS_SCRIPT=""
+for candidate in \
+  "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-status.sh" \
+  "${CLAUDE_KIT_ROOT:-}/scripts/quality-status.sh" \
+  "$HOME/.claude/scripts/quality-status.sh" \
+  "./scripts/quality-status.sh"; do
+  [ -n "$candidate" ] && [ -f "$candidate" ] && { STATUS_SCRIPT="$candidate"; break; }
+done
+[ -n "$STATUS_SCRIPT" ] || { echo "quality-status.sh not found" >&2; exit 1; }
+bash "$STATUS_SCRIPT" --manifest "<exact-manifest-path-from-the-command-arguments>"
+```
+
+There is deliberately no PR-number or session lookup for `status` — the
+caller must supply the exact manifest path, same as every other resume path
+in this skill (printed as `BS_QUALITY_MANIFEST=` by an earlier
+bootstrap/resume). If `--manifest` is missing from the command arguments,
+report that to the user rather than guessing.
+
+For every other invocation, run bootstrap in this wrapper before forking:
 
 ```bash
 BOOTSTRAP=""

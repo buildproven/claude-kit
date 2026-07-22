@@ -73,9 +73,11 @@ git stash list
 git log --oneline -5
 ```
 
-### 3. Kill Orphaned Processes
+### 3. Recover System Resources
 
-Use `/bs:cleanup` for comprehensive cleanup, or manually:
+This recovery skill owns the former cleanup and health-check surface. Diagnose
+the affected resource first; only terminate a process or clear a cache after
+confirming it is not an active user task.
 
 ```bash
 # Kill specific process types
@@ -86,6 +88,19 @@ pkill -f "esbuild"
 # Nuclear option (all node)
 pkill -f node
 ```
+
+For low disk or memory pressure, inspect first:
+
+```bash
+df -h . ~
+memory_pressure 2>/dev/null || true
+sysctl vm.swapusage 2>/dev/null || true
+ps aux -m | head -10
+```
+
+Do not remove caches, `node_modules`, or other project data automatically.
+Explain the proposed cleanup and get operator confirmation before a destructive
+action.
 
 ### 4. Restore Context
 

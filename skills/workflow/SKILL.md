@@ -96,7 +96,7 @@ node scripts/worktree-manager.js migrate --repo /path/to/repo --apply
 /bs:status                       # Catch up after time away
 /bs:deps --audit                 # Check dependency health
 /bs:sync --mode check            # Verify ~/.claude symlinks + hooks resolve
-/bs:sota                         # Score the setup, self-heal
+sota                              # Score the setup, self-heal
 ```
 
 ## Context Management

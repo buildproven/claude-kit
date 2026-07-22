@@ -40,7 +40,7 @@ Workflow tool; worktree isolation; automatic memory; `/loop` + cron + Routines;
 So this kit doesn't reimplement any of it — the redundant parts were deleted (see
 [the table below](#removed--claude-code-now-does-these-natively)). What remains is
 the part the platform doesn't ship: opinionated workflow, and domain judgment
-(`legal`, `monetize`, `seo`, `review-content`, and the
+(`legal`, `seo`, `review-content`, and the
 strategy panels).
 
 ## Prerequisites
@@ -171,7 +171,7 @@ in the manifest.
 
 ### Domain intelligence
 
-Skills, invoked in conversation: `hotfix`, `prd`, `legal`, `monetize`, `seo`,
+Skills, invoked in conversation: `hotfix`, `prd`, `legal`, `seo`,
 `review-content`, `agent-browser`.
 
 Agents: `business-panel-experts`, `competitive-analyst`, `critic`,
@@ -198,19 +198,18 @@ Codex from a curated allowlist. Internal implementation skills use
 
 **Engineering** — `quality` (tier-aware provider review + quota fallback),
 `diagnosing-bugs`, `codebase-design`, `test-strategy`, `error-handling`,
-`api-conventions`, `recover`, `cleanup`, `scrub`, `deps`, `status`, `workflow`,
-`healthcheck`
+`api-conventions`, `recover`, `scrub`, `deps`, `status`, `workflow`
 
 **Build quality** — `frontend-design` (Apache 2.0 + attributed MIT-derived
-guidance), `ui-reviewer`, `visualise`
+guidance), `ui-reviewer`
 
 **Autonomous & strategy** — `ralph`, `strategy`, `review`, `prd`, `backlog`,
 `sota`, `steward`, `triage`, `patterns`, `recover-quality`, `verify-claim`
 
-**Domain** — `legal`, `monetize`, `seo`, `review-content`,
+**Domain** — `legal`, `seo`, `review-content`,
 `agent-browser`
 
-Just ask: `"Run the quality skill"`, `"Use the visualise skill to diagram this"`.
+Just ask: `"Run the quality skill"` or `"Review this artifact"`.
 
 ## Agents
 

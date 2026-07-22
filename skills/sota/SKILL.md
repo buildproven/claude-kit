@@ -4,7 +4,7 @@ description: SOTA system assessment skill. Auto-invokes when user asks "how's my
 user-invocable: false
 ---
 
-# /bs:sota - System SOTA Assessment + Self-Heal
+# SOTA — System Assessment + Self-Heal
 
 **Arguments received:** $ARGUMENTS
 
