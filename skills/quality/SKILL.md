@@ -320,6 +320,12 @@ campaign's selected risk tier. `Quality-Head` and `Quality-Base` bind the
 evidence to the reviewed revision. The parenthetical `Reviewed-By` form is
 legacy reader compatibility only and must not be emitted.
 
+For compatibility with legacy readers, the historical neutral form was
+`Reviewed-By: quality (tier=<tier>, reviewer=<provider>, primary=<provider>,
+fallback=<provider-or-none>, findings=0, head=<reviewed-head>, base=<base-sha>)`.
+It documents how old readers interpret the canonical fields above; new quality
+campaigns emit only the `Quality-*` schema.
+
 ```bash
 QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
 bash "$QUALITY_SCRIPTS_DIR/quality-stamp-and-merge.sh" \
