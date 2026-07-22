@@ -200,6 +200,7 @@ function normalizeGovernor(manifest) {
 function normalizeManifestCollections(manifest) {
   manifest.reviews ??= [];
   manifest.gates ??= [];
+  manifest.mutation ??= null;
   manifest.merge ??= {};
   manifest.merge.invalidatedStamps ??= [];
   normalizeGovernor(manifest);
@@ -2193,6 +2194,11 @@ function reviewCoverage(manifest) {
     throw new Error("review provider evidence is incomplete");
   }
   verifyGateEvidence(manifest);
+  if (!mutationEvidenceValid(manifest)) {
+    throw new Error(
+      "required high/critical mutation evidence is missing, stale, or invalid",
+    );
+  }
   return {
     base: manifest.revisions.baseSha,
     head: manifest.revisions.currentHead,
@@ -2396,6 +2402,85 @@ function verifyGateEvidence(manifest) {
       );
     }
   }
+}
+
+function validMutationPaths(paths) {
+  return Boolean(
+    Array.isArray(paths) &&
+    paths.length > 0 &&
+    paths.every(
+      (candidate) =>
+        typeof candidate === "string" &&
+        candidate !== "" &&
+        !path.isAbsolute(candidate) &&
+        !candidate.split(/[\\/]+/).includes(".."),
+    ),
+  );
+}
+
+function validMutationArtifact(manifest, artifact) {
+  return [
+    artifact.schemaVersion === 1,
+    artifact.invocationId === manifest.invocationId,
+    artifact.base === manifest.revisions.baseSha,
+    artifact.head === manifest.revisions.currentHead,
+    artifact.tier === manifest.risk.tier,
+    ["revert-diff", "stryker"].includes(artifact.method),
+    validMutationPaths(artifact.mutatedPaths),
+    artifact.testFailureObserved === true,
+  ].every(Boolean);
+}
+
+function mutationEvidenceValid(manifest) {
+  const tier = manifest.risk?.tier;
+  if (["low", "medium"].includes(tier)) return true;
+  if (!["high", "critical"].includes(tier)) return false;
+  const mutation = manifest.mutation;
+  if (!mutation || mutation.head !== manifest.revisions.currentHead) {
+    return false;
+  }
+  if (!fs.existsSync(mutation.artifactPath)) return false;
+  if (sha256File(mutation.artifactPath) !== mutation.artifactSha256) {
+    return false;
+  }
+  try {
+    const artifact = parseJson(
+      fs.readFileSync(mutation.artifactPath, "utf8"),
+      "mutation evidence artifact",
+    );
+    return validMutationArtifact(manifest, artifact);
+  } catch {
+    return false;
+  }
+}
+
+function recordMutation(manifest, options) {
+  if (!["high", "critical"].includes(manifest.risk?.tier)) {
+    throw new Error(
+      "mutation evidence is only required for high or critical campaigns",
+    );
+  }
+  if (!options.artifact) {
+    throw new Error("mutation evidence requires a structured --artifact");
+  }
+  const artifactPath = path.resolve(options.artifact);
+  const stat = fs.lstatSync(artifactPath);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error("mutation evidence artifact must be a regular file");
+  }
+  const artifact = parseJson(
+    fs.readFileSync(artifactPath, "utf8"),
+    "mutation evidence artifact",
+  );
+  if (!validMutationArtifact(manifest, artifact)) {
+    throw new Error("mutation evidence artifact identity or result is invalid");
+  }
+  manifest.mutation = {
+    head: manifest.revisions.currentHead,
+    artifactPath,
+    artifactSha256: sha256File(artifactPath),
+    recordedAt: new Date().toISOString(),
+  };
 }
 
 function reviewTrailers(manifest) {
@@ -2612,6 +2697,10 @@ const COMMANDS = {
     mutate(manifestArg, (locked) => recordJudge(locked, parseOptions(rawArgs))),
   "gate-run": ({ manifestArg, rawArgs }) =>
     mutate(manifestArg, (locked) => runGate(locked, parseOptions(rawArgs))),
+  "mutation-record": ({ manifestArg, rawArgs }) =>
+    mutate(manifestArg, (locked) =>
+      recordMutation(locked, parseOptions(rawArgs)),
+    ),
   "gate-plan": ({ manifest, rawArgs }) => {
     const options = parseOptions(rawArgs);
     const required = manifest.requiredGates.find(
@@ -2740,6 +2829,7 @@ module.exports = {
   recordReview,
   recordJudge,
   recordGate,
+  recordMutation,
   runGate,
   recordStamp,
   judgeContext,
@@ -2751,6 +2841,7 @@ module.exports = {
   setAgents,
   setRisk,
   reviewAuthorization,
+  mutationEvidenceValid,
   verifyReviewArtifact,
   writeArtifactInventory,
   validateIdentity,
