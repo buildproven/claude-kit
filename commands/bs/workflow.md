@@ -41,16 +41,16 @@ locked, dirty, unpushed, open-PR, recent, and inconclusive worktrees. Use
 `migrate --dry-run` before adopting legacy layouts and `repair --apply` after
 an explicitly reviewed repository move or rename.
 
-If auto risk resolves to critical, approve exactly one PR revision with:
+Quality merges autonomously at every risk tier once all revision-bound review,
+gate, CI, and base-freshness evidence is clean. Critical changes get deeper
+review; they do not require a routine approval command. A run stops for human
+direction only when the evidence is unresolved (for example, actionable
+findings, malformed or inconclusive review output, stale identity, or failed
+CI).
 
-```bash
-/bs:quality approve --pr 14 --head <exact-40-character-sha>
-```
-
-Approval is signed and expiring. A genuine new commit invalidates it; a
-rebase onto a newer base with no content change (patch-id identical) does
-not — that resumes without a fresh review cycle.
-
+Repositories that explicitly set `scorePolicy.mergeAuthority` to
+`"human-required"` retain the legacy signed, expiring approval command; it is
+invalidated by any genuine HEAD change.
 Check an in-flight or stalled campaign's state on demand (gates, provider
 review, break-glass, CI) without waiting for a failure:
 

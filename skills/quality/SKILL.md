@@ -101,15 +101,18 @@ eligible routing without weakening path or security floors; feature work keeps
 the standard floor; bug-fix and performance work receive the high-review floor.
 The initial task type remains bound to the campaign so a later remediation
 commit named `fix` cannot mint a stronger campaign or reset its budget.
-Critical review requires a signed break-glass capability created by
-the outer wrapper and bound to repository, PR, HEAD, invocation, approver, and
-expiry identity. The wrapper pins its verification key into the invocation
-before attachment; artifacts cannot supply or replace their own trust key.
-Approval is accepted only from the outer wrapper, either through
-`/bs:quality approve --pr <number> --head <exact-sha>` or the backward-compatible
-outer `BREAK_GLASS_APPROVED=true` environment channel. Nested quality processes
-cannot mint approval for an existing invocation. A changed HEAD or
-expired/replaced capability invalidates approval.
+Critical review increases review depth; it does not require routine human
+approval. New campaigns persist `mergeAuthority=autonomous` and merge when
+their revision-bound gates, review evidence, CI, and base freshness are clean.
+Actionable findings, malformed or inconclusive provider output, stale review
+coverage, and CI failures remain terminal blocked states—the only cases that
+need human direction because quality cannot mechanically converge.
+
+Repositories may explicitly set `scorePolicy.mergeAuthority` to
+`human-required`. That legacy opt-in requires a signed break-glass capability
+created only by the outer wrapper and bound to repository, PR, HEAD,
+invocation, approver, and expiry identity. Nested quality processes cannot mint
+it; a changed HEAD or expired/replaced capability invalidates it.
 
 ## 3. Automated gates and formatting
 
@@ -314,7 +317,8 @@ Merge is forbidden when:
 - BLOCKING findings remain;
 - manifest identity does not match the current repository/revision;
 - review coverage is stale or discontinuous;
-- required break-glass approval is absent/stale;
+- `mergeAuthority=human-required` and its required break-glass approval is
+  absent or stale;
 - CI is failing, except on a plan-proven unprotectable private repository
   during an active operator-authorized GitHub billing window where every failed
   Actions job is exact-HEAD, acquired no runner, ran zero steps, and terminated

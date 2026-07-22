@@ -1229,6 +1229,16 @@ function applyRuntimeGovernor(manifest, options, runtime) {
     governor.startedAtEpoch + runtime.campaignSeconds;
 }
 
+function parseMergeAuthority(value) {
+  // Risk resolution always persists an explicit authority. A direct/legacy
+  // caller that omits it must not mint autonomous merge authority.
+  const mergeAuthority = value || "human-required";
+  if (!["autonomous", "human-required"].includes(mergeAuthority)) {
+    throw new Error(`invalid merge authority '${mergeAuthority}'`);
+  }
+  return mergeAuthority;
+}
+
 function setRisk(manifest, options) {
   const tier = options.tier;
   if (!["low", "medium", "high", "critical"].includes(tier)) {
@@ -1242,6 +1252,7 @@ function setRisk(manifest, options) {
     );
   }
   const taskType = options["task-type"] || "unknown";
+  const mergeAuthority = parseMergeAuthority(options["merge-authority"]);
   if (
     ![
       "unknown",
@@ -1260,6 +1271,7 @@ function setRisk(manifest, options) {
     requestedLevel: manifest.risk.requestedLevel,
     resolved: true,
     tier,
+    mergeAuthority,
     taskType,
     score:
       options.score === undefined || options.score === ""

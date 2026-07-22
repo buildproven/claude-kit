@@ -31,13 +31,17 @@ records its exact `from..to` range and diff hash, allowing fix rounds to review
 only `previousReviewedHead..currentHead` while final evidence remains bound to
 the complete base/final-HEAD relationship.
 
-Break-glass approval is a signed outer-wrapper capability bound to repository
-key, PR, HEAD, invocation ID, approver, issue time, and expiry. The manifest
-pins the wrapper verification key before attachment and re-verifies the exact
-artifact; artifact-supplied keys are rejected. Approval travels only through
-the outer `BREAK_GLASS_APPROVED=true` environment channel, not command argv.
-Nested autonomous quality processes have no approval-mint command. HEAD
-changes and expiry fail closed.
+Merge authority is distinct from review depth and is persisted in the manifest
+at risk resolution. The global default is `autonomous`: a clean critical review
+merges without a human hop. Quality stops rather than merges when findings,
+provider output, CI, revision identity, or review coverage are unresolved.
+
+Repositories that need manual governance can explicitly set
+`scorePolicy.mergeAuthority` to `human-required`. Only that opt-in enables
+break-glass approval: a signed outer-wrapper capability bound to repository key,
+PR, HEAD, invocation ID, approver, issue time, and expiry. Nested autonomous
+quality processes have no approval-mint command. HEAD changes and expiry fail
+closed.
 
 **Bug fixed 2026-05-11**: when invoked as `/bs:quality --merge` with PR
 context in the natural-language args (e.g. `#410`, `codex/foo`, or a
@@ -90,8 +94,8 @@ reviewed again. Bootstrap clears this state for every new invocation.
 
 When structured exhaustion metadata includes a reset timestamp, quality prints
 that timestamp and the exact manifest-bound retry command. The terminal
-diagnosis reports repository gates, provider checkpoint, break-glass, and
-GitHub CI separately; it does not flatten quota, parser, billing/auth,
+diagnosis reports repository gates, provider checkpoint, merge-authority state,
+and GitHub CI separately; it does not flatten quota, parser, billing/auth,
 code-finding, and CI failures into one generic merge message.
 
 ## Regression History
@@ -231,7 +235,7 @@ auto-fix loop, re-run `npm test` to verify they pass before continuing.
 | `--merge`                            | false   | Auto-merge PR after quality                                                                 |
 | `--skip-tests`                       | false   | Skip hard test gate (config-only repos)                                                     |
 | `--pr <number>`                      | -       | Bind to one open PR                                                                         |
-| `approve --pr <number> --head <sha>` | -       | Mint outer signed break-glass approval for one exact PR/HEAD and continue the run           |
+| `approve --pr <number> --head <sha>` | -       | Legacy `human-required` policy only: mint signed approval for one exact PR/HEAD             |
 | `--manifest <path>`                  | -       | Resume one exact persisted invocation; accepts no other flags                               |
 | `--target-dir <path>`                | -       | Run against this repo (use when invoking from a forked/agent context with no inherited cwd) |
 
@@ -335,7 +339,7 @@ When `harness-config.json` exists in the repo root, the skill reads the resolved
 | `low`      | focused regression         | 75s            |
 | `medium`   | broad correctness/security | 120s           |
 | `high`     | deep adversarial           | 180s           |
-| `critical` | release-veto + break-glass | 540s           |
+| `critical` | release-veto review        | 540s           |
 
 Workload can raise these limits, but the complete default campaign remains
 bounded at 5–15 minutes. Provider fallback has an independent bounded window

@@ -340,6 +340,15 @@ function priorFindingsFrom(state) {
  * consistent with every other "the breaker's own inputs are untrustworthy"
  * case here.
  */
+function initialReviewIsEligible({
+  roundsUsed,
+  commitTripped,
+  wallTripped,
+  roundTripped,
+}) {
+  return roundsUsed === 1 && commitTripped && !wallTripped && !roundTripped;
+}
+
 function evaluateBudget(state, { nowEpoch, commitCount }) {
   // `start_commit_count` is only required on legacy sentinels (no SHA baseline);
   // a SHA-baselined sentinel measures `<sha>..HEAD` directly and doesn't need it.
@@ -394,8 +403,22 @@ function evaluateBudget(state, { nowEpoch, commitCount }) {
   // rounds 1 and 2 and refuse round 3 — i.e. strictly-greater-than, not >=.
   // (`>=` here would allow only max-1 rounds: a cap of 2 blocked round 2.)
   const roundTripped = roundsUsed > state.max_review_rounds;
+  // A campaign cannot safely skip its first provider review merely because a
+  // prerequisite gate required a correction before any review had run. The
+  // one-fix budget still prevents a later re-review loop: this exception is
+  // limited to the 1-based initial review round and never overrides time or
+  // round limits.
+  const initialReviewEligible = initialReviewIsEligible({
+    roundsUsed,
+    commitTripped,
+    wallTripped,
+    roundTripped,
+  });
   return {
-    ok: !wallTripped && !commitTripped && !roundTripped,
+    ok:
+      !wallTripped &&
+      !roundTripped &&
+      (!commitTripped || initialReviewEligible),
     configInvalid: false,
     elapsedSeconds,
     commitsUsed,
@@ -406,6 +429,7 @@ function evaluateBudget(state, { nowEpoch, commitCount }) {
     wallTripped,
     commitTripped,
     roundTripped,
+    initialReviewEligible,
   };
 }
 

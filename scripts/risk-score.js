@@ -8,13 +8,16 @@
  * the quality skill can scale machine-review depth (Claude agent count, Codex
  * effort, Codex rounds) proportionally. Works in ANY repo with zero per-repo
  * setup: built-in defaults cover the common cases; a repo's harness-config.json
- * (scorePolicy/securityFloor) is merged over the defaults when present.
+ * (scorePolicy/securityFloor/mergeAuthority) is merged over the defaults when
+ * present.
  *
  * Why this exists: review is machine-only (Claude finds, Codex verifies) on
  * flat-rate subscriptions, so the real cost is wall-clock. Running the full
  * 6-agent + Codex-adversarial pass on a one-line comment change is pure waste;
  * skipping depth on a security-surface change is dangerous. The score scales
- * depth between those — but never to zero (there is no human floor).
+ * depth between those — but never to zero. Merge authority is a separate,
+ * explicit policy: autonomous by default, with manual governance available as
+ * an opt-in for repositories that need it.
  *
  * Design constraints:
  *   - Zero runtime dependencies (must run in 23 repos with no node_modules).
@@ -48,6 +51,12 @@ const CRITICAL_RISK_SCORE = 75;
 // ---------------------------------------------------------------------------
 
 const DEFAULTS = {
+  // Review risk controls how deeply the system verifies a change; it is not a
+  // proxy for whether an operator must type an approval command. New quality
+  // campaigns merge autonomously once their revision-bound evidence is clean.
+  // A repository can explicitly retain the legacy signed human capability by
+  // setting scorePolicy.mergeAuthority to "human-required".
+  mergeAuthority: "autonomous",
   // Path → base score. First matching tier wins (most-sensitive first).
   // Security surface pins a high floor regardless of change nature.
   securityFloor: [
@@ -119,17 +128,11 @@ const DEFAULTS = {
     "**/.env*",
     "**/harness-config.json",
   ],
-  // The ALWAYS-HUMAN subset of the security floor. Even on a repo that cannot be
-  // server-side enforced (private, no Pro) — where critical tier otherwise
-  // accepts clean review + green gates in lieu of a human break-glass — a change
-  // touching these paths STILL requires a human capability. Rationale (research
-  // 2026-07: agent security PRs get heightened human scrutiny, median review
-  // 3.92h vs 0.11h): secrets, credentials, keys, auth, licensing, deploy, and
-  // webhooks are where an autonomous miss is unrecoverable. Deliberately NARROWER
-  // than securityFloor: workflows/husky/install.sh are your own config and go
-  // through the autonomous path on unprotectable repos. Repositories may EXTEND
-  // this list via scorePolicy.humanFloor, but cannot remove the built-in minimum:
-  // policy from the reviewed revision must never be able to authorize itself.
+  // The legacy manual-governance subset of the security floor. It is evaluated
+  // only when a repository explicitly selects mergeAuthority=human-required.
+  // Repositories may EXTEND this list via scorePolicy.humanFloor, but cannot
+  // remove the built-in minimum: policy from the reviewed revision must never
+  // relax its own manually governed surface.
   // Matched CASE-INSENSITIVELY (see touchesHumanFloor) so AUTH/, .PEM, .Env
   // cannot evade by casing. Token-broad on purpose: a floor that misses id_rsa,
   // .p12, oauth, or password is not a floor (Codex + security-auditor review).
@@ -1246,6 +1249,11 @@ function validateCurve(curve) {
 }
 
 function validateScoreConfig(cfg) {
+  if (!["autonomous", "human-required"].includes(cfg?.mergeAuthority)) {
+    throw new Error(
+      "mergeAuthority must be either 'autonomous' or 'human-required'",
+    );
+  }
   for (const name of ["securityFloor", "humanFloor", "high", "low"]) {
     requirePatternList(cfg?.[name], name);
   }
@@ -1325,6 +1333,7 @@ function score({
     const knobs = scoreToKnobs(100, cfg);
     return {
       riskScore: 100,
+      mergeAuthority: cfg.mergeAuthority,
       taskType: "unknown",
       changeNature: "unknown",
       diffStats: { files: 0, lines: 0 },
@@ -1356,6 +1365,7 @@ function score({
   const knobs = scoreToKnobs(scored.riskScore, cfg);
   return {
     ...scored,
+    mergeAuthority: cfg.mergeAuthority,
     taskType,
     diffStats,
     knobs,
@@ -1403,10 +1413,10 @@ function main() {
 if (require.main === module) main();
 
 /**
- * True when ANY changed file matches the always-human security subset
- * (`humanFloor`). Such a change requires a human break-glass capability even on
- * an unprotectable repo where critical tier otherwise auto-approves on clean
- * review. `files` is repo-relative paths; `cfg` is the effective scoring config.
+ * True when ANY changed file matches the legacy manual-governance subset
+ * (`humanFloor`). `quality-authorize-merge.sh` evaluates this only when the
+ * persisted policy explicitly selects human-required merge authority. `files`
+ * is repo-relative paths; `cfg` is the effective scoring config.
  */
 function touchesHumanFloor(files, cfg = DEFAULTS) {
   // Case-INSENSITIVE, normalized matching: an attacker/agent must not evade the
