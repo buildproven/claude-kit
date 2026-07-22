@@ -15,6 +15,7 @@ Invoke the `merge-train` skill with all provided arguments.
 /bs:merge-train --repos-root a:b:c    # Project roots to scan (default: $BS_MERGE_TRAIN_ROOTS)
 /bs:merge-train --dry-run             # Status report only, no merges
 /bs:merge-train --max-diff 50         # Auto-merge cap (lines); larger PRs surface for review
+/bs:merge-train --max-quality-minutes 45 # One shared quality budget for the complete batch
 /bs:merge-train --no-cleanup          # Skip post-merge branch deletion
 /bs:merge-train --linear-team NAME    # Linear team for residual tickets (default: $BS_MERGE_TRAIN_LINEAR_TEAM)
 ```
@@ -22,7 +23,7 @@ Invoke the `merge-train` skill with all provided arguments.
 **What it does**:
 
 1. Discovers open PRs across configured repos in parallel (one Task agent per repo, isolated worktree)
-2. Each worker runs `/bs:quality --merge` (lint, tests, agent reviews, Codex stamp)
+2. Each worker fetches and reconciles its PR/base snapshot before any expensive gate, then runs `/bs:quality --merge` against that exact target
 3. Delegates each eligible merge exclusively to `/bs:quality --merge`; flags larger diffs for manual review
 4. Reconciles the assigned worktree after quality-owned merge cleanup
 5. Surfaces residual issues as Linear tickets, if a Linear team is configured (otherwise logs to `data/merge-train-residuals.jsonl`)
@@ -33,3 +34,4 @@ Invoke the `merge-train` skill with all provided arguments.
 - Never skips pre-existing broken CI (per workflow rule)
 - Worktree isolation prevents the parallel-session conflicts that have bitten this fleet before
 - Workers never invoke `gh pr merge` or check out the primary branch directly
+- One shared batch budget admits panels; a critical minimum panel that cannot finish is deferred, and any reduced non-critical panel is visibly incomplete
