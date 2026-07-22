@@ -328,7 +328,7 @@ describe("autonomous-loop runtime", () => {
     );
     const fakeClaude = executable(
       join(fx.root, "claude"),
-      `echo provider-output; node -e 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify({ argv: process.argv.slice(2), session: process.env.CLAUDE_CODE_SESSION_ID || null }))' '${capture}' "$@"`,
+      `node -e 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify({ argv: process.argv.slice(2), session: process.env.CLAUDE_CODE_SESSION_ID || null }))' '${capture}' "$@"; printf '%s' '{"is_error":false,"result":"started"}'`,
     );
 
     const result = runtime(
@@ -359,6 +359,39 @@ describe("autonomous-loop runtime", () => {
     expect(launched.argv).not.toContain("--fork-session");
     expect(launched.argv.at(-1)).toContain(handoff);
     expect(JSON.parse(readFileSync(handoff, "utf8"))).not.toHaveProperty(
+      "continuation",
+    );
+  });
+
+  it("keeps the handoff when a fresh provider exits cleanly without a success result", () => {
+    const fx = fixture();
+    const handoff = join(fx.root, "handoff.json");
+    writeFileSync(
+      handoff,
+      JSON.stringify({ continuation: { reason: "context-cap" } }),
+    );
+    const invalidClaude = executable(
+      join(fx.root, "invalid-claude"),
+      "printf '%s' '{\"is_error\":false,\"result\":null}'",
+    );
+
+    const result = runtime([
+      "fresh-launch",
+      "--handoff",
+      handoff,
+      "--target-dir",
+      fx.root,
+      "--workflow",
+      "ralph",
+      "--claude-bin",
+      invalidClaude,
+    ]);
+
+    expect(response(result)).toMatchObject({
+      ok: false,
+      code: "LAUNCH_FAILED",
+    });
+    expect(JSON.parse(readFileSync(handoff, "utf8"))).toHaveProperty(
       "continuation",
     );
   });

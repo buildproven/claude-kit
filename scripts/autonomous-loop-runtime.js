@@ -109,6 +109,26 @@ function writeJsonAtomically(file, value) {
   fs.renameSync(temporary, file);
 }
 
+function writeJsonExclusively(file, value) {
+  const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  try {
+    fs.linkSync(temporary, file);
+  } catch (error) {
+    if (error.code === "EEXIST") {
+      throw new RuntimeError(
+        "this autonomous loop is already admitted",
+        "ALREADY_ADMITTED",
+      );
+    }
+    throw error;
+  } finally {
+    fs.unlinkSync(temporary);
+  }
+}
+
 function readJson(file) {
   const stat = fs.lstatSync(file);
   if (stat.isSymbolicLink()) {
@@ -154,6 +174,16 @@ function withGlobalLock(directory, callback) {
   }
 }
 
+function processStartedAt(pid) {
+  const result = spawnSync("ps", ["-p", String(pid), "-o", "lstart="], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.error || result.status !== 0) return null;
+  const marker = result.stdout.trim();
+  return marker || null;
+}
+
 function isLive(record) {
   if (
     !record ||
@@ -164,7 +194,8 @@ function isLive(record) {
   }
   try {
     process.kill(record.pid, 0);
-    return true;
+    if (!record.processStartedAt) return true;
+    return processStartedAt(record.pid) === record.processStartedAt;
   } catch (error) {
     return error.code !== "ESRCH";
   }
@@ -278,12 +309,40 @@ function admit(options, environment = process.env) {
       "OWNER_NOT_LIVE",
     );
   }
+  const ownerStartedAt = processStartedAt(ownerPid);
+  if (!ownerStartedAt) {
+    throw new RuntimeError(
+      "--owner-pid must identify a readable local process",
+      "OWNER_NOT_LIVE",
+    );
+  }
   const directory = options["state-dir"]
     ? path.resolve(options["state-dir"])
     : runtimeDirectory(environment);
   const idHash = hash(id);
 
   return withGlobalLock(directory, () => {
+    const active = activeRecords(directory);
+    const recordFile = path.join(directory, `${idHash}.json`);
+    if (active.some((record) => record.file === recordFile)) {
+      throw new RuntimeError(
+        "this autonomous loop is already admitted",
+        "ALREADY_ADMITTED",
+      );
+    }
+    if (active.length >= maxLoops) {
+      appendTelemetry(directory, {
+        event: "admission",
+        result: "concurrency-cap",
+        kind,
+        idHash,
+        activeLoops: active.length,
+      });
+      throw new RuntimeError(
+        `global autonomous-loop cap reached (${active.length}/${maxLoops})`,
+        "CONCURRENCY_CAP",
+      );
+    }
     let usage;
     try {
       usage = usageFromAdapter(adapter);
@@ -311,27 +370,6 @@ function admit(options, environment = process.env) {
         "USAGE_CAP",
       );
     }
-    const active = activeRecords(directory);
-    const recordFile = path.join(directory, `${idHash}.json`);
-    if (active.some((record) => record.file === recordFile)) {
-      throw new RuntimeError(
-        "this autonomous loop is already admitted",
-        "ALREADY_ADMITTED",
-      );
-    }
-    if (active.length >= maxLoops) {
-      appendTelemetry(directory, {
-        event: "admission",
-        result: "concurrency-cap",
-        kind,
-        idHash,
-        activeLoops: active.length,
-      });
-      throw new RuntimeError(
-        `global autonomous-loop cap reached (${active.length}/${maxLoops})`,
-        "CONCURRENCY_CAP",
-      );
-    }
     const record = {
       schemaVersion: 1,
       kind,
@@ -341,13 +379,11 @@ function admit(options, environment = process.env) {
       // exits, defeating the cross-repository cap. The parent is the loop
       // owner unless a launcher supplies its exact PID explicitly.
       pid: ownerPid,
+      processStartedAt: ownerStartedAt,
       hostname: os.hostname(),
       admittedAt: new Date().toISOString(),
     };
-    fs.writeFileSync(recordFile, `${JSON.stringify(record, null, 2)}\n`, {
-      flag: "wx",
-      mode: 0o600,
-    });
+    writeJsonExclusively(recordFile, record);
     appendTelemetry(directory, {
       event: "admission",
       result: "admitted",
@@ -500,7 +536,7 @@ function freshLaunch(options, environment = process.env) {
       encoding: "utf8",
       // The CLI itself has a JSON stdout contract. Keep provider output from
       // interleaving with the final runtime result while preserving diagnostics.
-      stdio: ["ignore", "ignore", "inherit"],
+      stdio: ["ignore", "pipe", "inherit"],
     },
   );
   if (result.error) {
@@ -512,6 +548,21 @@ function freshLaunch(options, environment = process.env) {
   if (result.status !== 0) {
     throw new RuntimeError(
       `fresh Claude campaign exited with status ${result.status}`,
+      "LAUNCH_FAILED",
+    );
+  }
+  let providerResponse;
+  try {
+    providerResponse = JSON.parse(result.stdout);
+  } catch {
+    throw new RuntimeError(
+      "fresh Claude campaign returned invalid JSON",
+      "LAUNCH_FAILED",
+    );
+  }
+  if (providerResponse.is_error === true || providerResponse.result == null) {
+    throw new RuntimeError(
+      "fresh Claude campaign did not report a successful result",
       "LAUNCH_FAILED",
     );
   }
