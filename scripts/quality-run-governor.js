@@ -340,6 +340,15 @@ function priorFindingsFrom(state) {
  * consistent with every other "the breaker's own inputs are untrustworthy"
  * case here.
  */
+function initialReviewIsEligible({
+  roundsUsed,
+  commitTripped,
+  wallTripped,
+  roundTripped,
+}) {
+  return roundsUsed === 1 && commitTripped && !wallTripped && !roundTripped;
+}
+
 function evaluateBudget(state, { nowEpoch, commitCount }) {
   // `start_commit_count` is only required on legacy sentinels (no SHA baseline);
   // a SHA-baselined sentinel measures `<sha>..HEAD` directly and doesn't need it.
@@ -399,8 +408,12 @@ function evaluateBudget(state, { nowEpoch, commitCount }) {
   // one-fix budget still prevents a later re-review loop: this exception is
   // limited to the 1-based initial review round and never overrides time or
   // round limits.
-  const initialReviewEligible =
-    roundsUsed === 1 && commitTripped && !wallTripped && !roundTripped;
+  const initialReviewEligible = initialReviewIsEligible({
+    roundsUsed,
+    commitTripped,
+    wallTripped,
+    roundTripped,
+  });
   return {
     ok:
       !wallTripped &&
