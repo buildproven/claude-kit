@@ -190,7 +190,9 @@ describe("quality terminal diagnosis", () => {
     ).toBe(0);
 
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    manifest.risk.tier = "critical"; // force breakGlassStatus's approved branch
+    manifest.risk.tier = "critical";
+    // Legacy signed approval is relevant only for an explicit manual policy.
+    manifest.risk.mergeAuthority = "human-required";
     const output = buildDiagnosis(manifestPath, manifest, {});
     expect(output).toMatch(
       new RegExp(
