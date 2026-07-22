@@ -3022,6 +3022,19 @@ exit 1
     expect(context.findings).toEqual([]);
   });
 
+  it("accepts a bare exact no-findings marker from a reviewer", () => {
+    const root = repo("bare-clean-sentinel");
+    const manifest = create(root);
+    prepareCodexReview(root, manifest, [], "NO FINDINGS\n");
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toEqual([]);
+  });
+
   it("exposes persisted judge dispositions to targeted verification", () => {
     const root = repo("prior-judge-dispositions");
     const manifest = create(root);
