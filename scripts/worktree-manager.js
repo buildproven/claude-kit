@@ -1143,10 +1143,23 @@ function removeRecord(options) {
       terminal: true,
     });
   }
+  let forcedForSubmodules = false;
   try {
     git(repoRoot, ["worktree", "remove", record.path]);
   } catch (error) {
-    if (recoveryOwner) {
+    // Git refuses an otherwise clean, eligible linked worktree when it has
+    // initialized submodules. All lifecycle, ownership, dirtiness, push, and
+    // PR checks above have already passed, so retry only this known Git refusal
+    // with the narrowly scoped force flag. Do not use force for any other
+    // removal error.
+    if (
+      /work(ing)? trees? containing submodules cannot be moved or removed/i.test(
+        error.message,
+      )
+    ) {
+      git(repoRoot, ["worktree", "remove", "--force", record.path]);
+      forcedForSubmodules = true;
+    } else if (recoveryOwner) {
       try {
         lockRecord(
           repoRoot,
@@ -1167,8 +1180,10 @@ function removeRecord(options) {
           { worktreePath: record.path, owner: recoveryOwner },
         );
       }
+      throw error;
+    } else {
+      throw error;
     }
-    throw error;
   }
   git(repoRoot, ["worktree", "prune", "--expire", "now"]);
   let branchDeleted = false;
@@ -1204,6 +1219,7 @@ function removeRecord(options) {
     branch: record.branch,
     branchDeleted,
     branchDeletionError,
+    forcedForSubmodules,
     recoverableAs: record.branch,
   };
 }
