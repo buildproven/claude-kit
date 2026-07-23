@@ -465,20 +465,88 @@ function hasPythonTool(pyproject, tool) {
   return new RegExp(`^\\s*\\[tool\\.${tool}(?:[.\\]]|$)`, "m").test(pyproject);
 }
 
+function committedFiles(root, head) {
+  try {
+    return git(root, ["ls-tree", "-r", "--name-only", head])
+      .split("\n")
+      .filter(Boolean)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
 function isPythonRepository(root, head, pyproject) {
   if (pyproject !== "") return true;
-  return [
-    "requirements*.txt",
-    "requirements*.in",
-    "setup.py",
-    "setup.cfg",
-    "Pipfile",
-    "Pipfile.lock",
-    "poetry.lock",
-    "uv.lock",
-    "pytest.ini",
-    "tox.ini",
-  ].some((pathspec) => committedPathExists(root, head, pathspec));
+  return committedFiles(root, head).some(
+    (file) =>
+      /^requirements[^/]*\.(?:txt|in)$/.test(file) ||
+      [
+        "setup.py",
+        "setup.cfg",
+        "Pipfile",
+        "Pipfile.lock",
+        "poetry.lock",
+        "uv.lock",
+        "pytest.ini",
+        "tox.ini",
+      ].includes(file),
+  );
+}
+
+function pythonEnvironment(root, head, pyproject) {
+  if (committedFile(root, head, "uv.lock") !== null) return "uv";
+  if (
+    committedFile(root, head, "poetry.lock") !== null ||
+    hasPythonTool(pyproject, "poetry")
+  ) {
+    return "poetry";
+  }
+  if (
+    committedFile(root, head, "Pipfile") !== null ||
+    committedFile(root, head, "Pipfile.lock") !== null
+  ) {
+    return "pipenv";
+  }
+  return null;
+}
+
+function pythonDirectGate({
+  root,
+  head,
+  pyproject,
+  name,
+  tool,
+  args,
+  allowSkip,
+}) {
+  const environment = pythonEnvironment(root, head, pyproject);
+  return environment
+    ? directGate(
+        name,
+        `python:${tool}`,
+        environment,
+        ["run", tool, ...args],
+        allowSkip,
+      )
+    : directGate(name, `python:${tool}`, tool, args, allowSkip);
+}
+
+function pythonAuditArgs(root, head, pyproject) {
+  const requirements = committedFiles(root, head).filter((file) =>
+    /^requirements[^/]*\.(?:txt|in)$/.test(file),
+  );
+  if (requirements.length > 0) {
+    return requirements.flatMap((file) => ["-r", file]);
+  }
+  if (pyproject !== "") return ["."];
+  if (
+    committedFile(root, head, "Pipfile") !== null ||
+    committedFile(root, head, "Pipfile.lock") !== null
+  ) {
+    return [];
+  }
+  return null;
 }
 
 function pythonGate({
@@ -491,7 +559,15 @@ function pythonGate({
 }) {
   if (!pythonRepository) return null;
   if (name === "lint" && hasPythonTool(pyproject, "ruff")) {
-    return directGate(name, "python:ruff", "ruff", ["check", "."], allowSkip);
+    return pythonDirectGate({
+      root,
+      head,
+      pyproject,
+      name,
+      tool: "ruff",
+      args: ["check", "."],
+      allowSkip,
+    });
   }
   if (
     name === "test" &&
@@ -500,13 +576,40 @@ function pythonGate({
       committedFile(root, head, "tox.ini") !== null ||
       committedPathExists(root, head, "tests"))
   ) {
-    return directGate(name, "python:pytest", "pytest", [], allowSkip);
+    return pythonDirectGate({
+      root,
+      head,
+      pyproject,
+      name,
+      tool: "pytest",
+      args: [],
+      allowSkip,
+    });
   }
   if (name === "security") {
-    return directGate(name, "python:pip-audit", "pip-audit", [], allowSkip);
+    const args = pythonAuditArgs(root, head, pyproject);
+    return args === null
+      ? null
+      : pythonDirectGate({
+          root,
+          head,
+          pyproject,
+          name,
+          tool: "pip-audit",
+          args,
+          allowSkip,
+        });
   }
   if (name === "type" && hasPythonTool(pyproject, "mypy")) {
-    return directGate(name, "python:mypy", "mypy", ["."], allowSkip);
+    return pythonDirectGate({
+      root,
+      head,
+      pyproject,
+      name,
+      tool: "mypy",
+      args: ["."],
+      allowSkip,
+    });
   }
   return null;
 }

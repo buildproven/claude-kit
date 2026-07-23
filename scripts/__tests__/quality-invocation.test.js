@@ -3536,7 +3536,7 @@ exit 1
           name: "security",
           source: "python:pip-audit",
           executable: "pip-audit",
-          args: [],
+          args: ["."],
         }),
         expect.objectContaining({
           name: "type",
@@ -3546,6 +3546,85 @@ exit 1
         }),
       ]),
     );
+  });
+
+  it.each([
+    ["uv.lock", "uv"],
+    ["poetry.lock", "poetry"],
+  ])(
+    "runs inferred Python tools through the %s project environment",
+    (lockfile, executable) => {
+      const root = repo(`managed-python-${executable}-gate-discovery`);
+      git(root, ["rm", "package.json"]);
+      writeFileSync(
+        path.join(root, "pyproject.toml"),
+        "[tool.ruff]\n\n[tool.pytest.ini_options]\n\n[tool.mypy]\n",
+      );
+      writeFileSync(path.join(root, lockfile), "version = 1\n");
+      mkdirSync(path.join(root, "tests"));
+      writeFileSync(
+        path.join(root, "tests", "test_example.py"),
+        "def test_ok():\n  assert True\n",
+      );
+      git(root, ["add", "pyproject.toml", lockfile, "tests/test_example.py"]);
+      git(root, ["commit", "-q", "-m", "add managed Python quality gates"]);
+
+      const manifest = create(root);
+      const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+      expect(required).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "lint",
+            executable,
+            args: ["run", "ruff", "check", "."],
+          }),
+          expect.objectContaining({
+            name: "test",
+            executable,
+            args: ["run", "pytest"],
+          }),
+          expect.objectContaining({
+            name: "security",
+            executable,
+            args: ["run", "pip-audit", "."],
+          }),
+          expect.objectContaining({
+            name: "type",
+            executable,
+            args: ["run", "mypy", "."],
+          }),
+        ]),
+      );
+    },
+  );
+
+  it("binds inferred Python security gates to committed requirements", () => {
+    const root = repo("python-requirements-security-gate");
+    git(root, ["rm", "package.json"]);
+    writeFileSync(path.join(root, "requirements.txt"), "requests==2.32.4\n");
+    writeFileSync(
+      path.join(root, ".quality-gates.json"),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          lint: { executable: "python3", args: ["-m", "compileall", "."] },
+          test: { executable: "python3", args: ["-m", "unittest"] },
+        },
+      }),
+    );
+    git(root, ["add", "requirements.txt", ".quality-gates.json"]);
+    git(root, ["commit", "-q", "-m", "add requirements security gate"]);
+
+    const manifest = create(root);
+    expect(
+      JSON.parse(readFileSync(manifest, "utf8")).requiredGates.find(
+        (gate) => gate.name === "security",
+      ),
+    ).toMatchObject({
+      source: "python:pip-audit",
+      executable: "pip-audit",
+      args: ["-r", "requirements.txt"],
+    });
   });
 
   it("does not invent Python gates from a non-Python tests directory", () => {
