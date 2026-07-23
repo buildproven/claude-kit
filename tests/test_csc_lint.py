@@ -56,6 +56,13 @@ def test_overrides_md_is_exempt_from_command_contract(tmp_path: Path) -> None:
     assert rep.violations == [], [v.detail for v in rep.violations]
 
 
+def test_nested_overrides_md_is_still_a_command(tmp_path: Path) -> None:
+    _mk(tmp_path, "commands/bs/OVERRIDES.md", "# Not the registry\n")
+    rep = csc_lint.lint(tmp_path)
+    assert rep.commands == 1
+    assert any(v.rule == "R1" for v in rep.violations)
+
+
 def test_r1_delegation_prose_is_sufficient(tmp_path: Path) -> None:
     # R1 used to demand an `invokes:` frontmatter key. Claude Code DOES NOT PARSE
     # that field (verified against the 2.1.207 binary: `allowed-tools`,
