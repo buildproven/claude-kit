@@ -449,6 +449,13 @@ describe("quality invocation manifest", () => {
     ).toThrow(/review arm 'bespoke' conflicts with primary provider 'codex'/);
   });
 
+  it("rejects an explicit experiment arm without a bound primary provider", () => {
+    const root = repo("unbound-review-arm");
+    expect(() => create(root, ["--review-arm", "native"])).toThrow(
+      /explicit review arm requires a primary provider/,
+    );
+  });
+
   it("resumes after review without treating provider evidence as configuration drift", () => {
     const root = repo("reviewed-provider-identity");
     const env = {

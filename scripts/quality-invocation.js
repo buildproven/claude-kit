@@ -883,6 +883,9 @@ function reviewArm(options, provider) {
   if (!["bespoke", "native"].includes(arm)) {
     throw new Error("review arm must be bespoke or native");
   }
+  if (explicit && !primary) {
+    throw new Error("an explicit review arm requires a primary provider");
+  }
   if (
     (arm === "bespoke" && primary && primary !== "claude") ||
     (arm === "native" && primary === "claude")
