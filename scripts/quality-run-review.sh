@@ -466,6 +466,43 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
 fi
 
 if [ "$PROVIDER_RC" -ne 0 ]; then
+  # Deterministic, revision-bound gates remain the merge authority for a
+  # genuinely low-risk diff. Provider availability is advisory only after the
+  # normal primary/fallback path above is exhausted; malformed output and
+  # generic runner errors remain fail-closed because they are not availability
+  # evidence. Higher tiers are deliberately unchanged.
+  if [ "$TIER" = low ]; then
+    case "$PROVIDER_RC" in
+      2) ADVISORY_FAILURE_CATEGORY=provider-unavailable ;;
+      75) ADVISORY_FAILURE_CATEGORY=provider-exhaustion ;;
+      79) ADVISORY_FAILURE_CATEGORY=provider-billing ;;
+      76) ADVISORY_FAILURE_CATEGORY=provider-timeout ;;
+      *) ADVISORY_FAILURE_CATEGORY="" ;;
+    esac
+    if [ -n "$ADVISORY_FAILURE_CATEGORY" ]; then
+      printf '%s\n' \
+        "NO FINDINGS. Verdict: pass. AI review unavailable; deterministic gates provide low-risk merge evidence." \
+        > "$REVIEW_OUT/ci-only.findings.txt"
+      DIFF_SHA="$(shasum -a 256 "$REVIEW_OUT/diff.txt" | awk '{print $1}')"
+      node "$SCRIPT_DIR/quality-invocation.js" inventory "$MANIFEST" \
+        --artifact-dir "$REVIEW_OUT" --provider "$REVIEW_PROVIDER" --advisory || exit 1
+      node "$SCRIPT_DIR/quality-invocation.js" record-advisory-review "$MANIFEST" \
+        --from "$REVIEW_DIFF_BASE" \
+        --to "$REVIEWED_HEAD" \
+        --primary "$QUALITY_PRIMARY" \
+        --fallback "$QUALITY_FALLBACK" \
+        --failed-provider "$REVIEW_PROVIDER" \
+        --failure-category "$ADVISORY_FAILURE_CATEGORY" \
+        --artifact-dir "$REVIEW_OUT" \
+        --diff-sha "$DIFF_SHA" || exit 1
+      echo "⚠️  [quality] low-risk AI review unavailable; proceeding with required deterministic gate evidence." >&2
+      echo "REVIEW_OUT=$REVIEW_OUT"
+      echo "REVIEW_BASE=$RESOLVED_BASE"
+      echo "REVIEW_DIFF_BASE=$REVIEW_DIFF_BASE"
+      echo "REVIEW_PROVIDER=ci-only"
+      exit 0
+    fi
+  fi
   # Only claim the fallback is missing when it actually is. When a fallback ran
   # and also failed, saying "no usable fallback is configured" sends the reader
   # to check their config instead of the second provider's evidence.
