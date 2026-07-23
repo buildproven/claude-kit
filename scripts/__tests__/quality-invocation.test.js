@@ -237,6 +237,76 @@ function prepareCodexReview(
   return info;
 }
 
+function prepareAdvisoryReview(root, manifestPath, failureCategory) {
+  execFileSync("node", [GOVERNOR, "bump-round", manifestPath], { cwd: root });
+  const info = JSON.parse(
+    execFileSync("node", [INVOCATION, "review-info", manifestPath], {
+      cwd: root,
+      encoding: "utf8",
+    }),
+  );
+  mkdirSync(info.artifactDir, { recursive: true });
+  writeFileSync(
+    path.join(info.artifactDir, "diff.txt"),
+    execFileSync("git", ["diff", `${info.from}..${info.to}`], { cwd: root }),
+  );
+  writeFileSync(
+    path.join(info.artifactDir, "identity.json"),
+    execFileSync("node", [INVOCATION, "review-identity", manifestPath], {
+      cwd: root,
+    }),
+  );
+  writeFileSync(
+    path.join(info.artifactDir, "ci-only.findings.txt"),
+    "NO FINDINGS. Verdict: pass. AI review unavailable; deterministic gates provide low-risk merge evidence.\n",
+  );
+  execFileSync(
+    "node",
+    [
+      INVOCATION,
+      "inventory",
+      manifestPath,
+      "--artifact-dir",
+      info.artifactDir,
+      "--provider",
+      "ci-only",
+    ],
+    { cwd: root },
+  );
+  const diffSha = createHash("sha256")
+    .update(readFileSync(path.join(info.artifactDir, "diff.txt")))
+    .digest("hex");
+  execFileSync(
+    "node",
+    [
+      INVOCATION,
+      "record-advisory-review",
+      manifestPath,
+      "--from",
+      info.from,
+      "--to",
+      info.to,
+      "--primary",
+      "codex",
+      "--fallback",
+      "claude",
+      "--failed-provider",
+      "claude",
+      "--failure-category",
+      failureCategory,
+      "--artifact-dir",
+      info.artifactDir,
+      "--diff-sha",
+      diffSha,
+    ],
+    { cwd: root },
+  );
+  for (const name of ["lint", "test", "security"]) {
+    recordGateFixture(manifestPath, name);
+  }
+  return info;
+}
+
 function recordJudgeArtifact(root, manifest, dispositions = []) {
   const artifact = path.join(path.dirname(manifest), "judge-input.json");
   const context = JSON.parse(
@@ -2283,6 +2353,71 @@ exit 1
     );
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/2 unresolved BLOCKING/);
+  });
+
+  it("authorizes typed unavailable AI review as CI-only coverage at low risk", () => {
+    const root = repo("low-risk-advisory-review");
+    git(root, ["reset", "--hard", "-q", "origin/main"]);
+    writeFileSync(path.join(root, "README.md"), "# Documentation\n");
+    git(root, ["add", "README.md"]);
+    git(root, ["commit", "-q", "-m", "docs: update readme"]);
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "low",
+        taskType: "docs",
+        score: 5,
+        agents: 2,
+        "codex-depth": "low",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["reviewer-a", "reviewer-b"]);
+    });
+    prepareAdvisoryReview(root, manifest, "provider-unavailable");
+    recordJudgeArtifact(root, manifest);
+
+    expect(() =>
+      execFileSync("node", [INVOCATION, "review-authorization", manifest], {
+        cwd: root,
+      }),
+    ).not.toThrow();
+    const saved = invocation.loadManifest(manifest).manifest;
+    expect(saved.reviews).toEqual([
+      expect.objectContaining({
+        status: "advisory",
+        provider: "ci-only",
+        failureCategory: "provider-unavailable",
+      }),
+    ]);
+  });
+
+  it("rejects advisory review coverage above the low risk tier", () => {
+    const root = repo("high-risk-advisory-review");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 2,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["reviewer-a", "reviewer-b"]);
+    });
+    const result = spawnSync(
+      "node",
+      [
+        INVOCATION,
+        "record-advisory-review",
+        manifest,
+        "--failure-category",
+        "provider-unavailable",
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/only at the low risk tier/);
   });
 
   it("rejects a caller-supplied diff and matching hash that omit the Git delta", () => {

@@ -34,6 +34,12 @@ function providerStatus(manifest, failure) {
   const successfulReviews = (manifest.reviews || []).filter(
     (review) => review.status === "success",
   );
+  const advisoryReviews = (manifest.reviews || []).filter(
+    (review) => review.status === "advisory",
+  );
+  if (advisoryReviews.length > 0) {
+    return `${advisoryReviews.length} CI-only advisory checkpoint(s) complete`;
+  }
   return successfulReviews.length > 0
     ? `${successfulReviews.length} checkpoint(s) complete`
     : "not completed";

@@ -1634,17 +1634,15 @@ function authorizeProviderAttempt(manifest, options) {
 }
 
 function reviewInfo(manifest) {
-  const successful = manifest.reviews.filter(
-    (review) => review.status === "success",
-  );
-  const previous = successful.at(-1);
+  const covered = coveredReviews(manifest);
+  const previous = covered.at(-1);
   if (previous?.to === manifest.revisions.currentHead) {
     throw new Error(
       "review retry requires a descendant HEAD; the current HEAD is already reviewed",
     );
   }
   return {
-    round: successful.length + 1,
+    round: covered.length + 1,
     attempt: manifest.governor.roundsUsed,
     from: previous?.to || manifest.revisions.baseSha,
     to: manifest.revisions.currentHead,
@@ -1653,9 +1651,15 @@ function reviewInfo(manifest) {
       manifest.stateRoot,
       "reviews",
       manifest.revisions.currentHead,
-      `round-${successful.length + 1}-attempt-${manifest.governor.roundsUsed}`,
+      `round-${covered.length + 1}-attempt-${manifest.governor.roundsUsed}`,
     ),
   };
+}
+
+function coveredReviews(manifest) {
+  return manifest.reviews.filter((review) =>
+    ["success", "advisory"].includes(review.status),
+  );
 }
 
 function agentsSha256(manifest) {
@@ -1684,8 +1688,7 @@ function reviewIdentity(manifest) {
 }
 
 function reviewedEvidence(manifest) {
-  return manifest.reviews
-    .filter((review) => review.status === "success")
+  return coveredReviews(manifest)
     .map((review) => review.inventorySha256)
     .join(":");
 }
@@ -1769,17 +1772,13 @@ function recordJudge(manifest, options) {
     invocationId: context.invocationId,
     repositoryKey: context.repositoryKey,
     head: authorization.head,
-    reviewCount: manifest.reviews.filter(
-      (review) => review.status === "success",
-    ).length,
+    reviewCount: coveredReviews(manifest).length,
     evidenceSha256,
     findings: input.findings,
   });
   manifest.judge = {
     head: authorization.head,
-    reviewCount: manifest.reviews.filter(
-      (review) => review.status === "success",
-    ).length,
+    reviewCount: coveredReviews(manifest).length,
     blockingCount,
     evidenceSha256,
     artifactPath,
@@ -1790,9 +1789,7 @@ function recordJudge(manifest, options) {
 
 function providerFindings(manifest) {
   const findings = [];
-  for (const review of manifest.reviews.filter(
-    (item) => item.status === "success",
-  )) {
+  for (const review of coveredReviews(manifest)) {
     const reviewFindingsStart = findings.length;
     const inventory = parseJson(
       fs.readFileSync(path.join(review.artifactDir, "artifact-inventory.json")),
@@ -1915,9 +1912,7 @@ function judgeContext(manifest) {
     invocationId: manifest.invocationId,
     repositoryKey: manifest.repo.key,
     head: authorization.head,
-    reviewCount: manifest.reviews.filter(
-      (review) => review.status === "success",
-    ).length,
+    reviewCount: coveredReviews(manifest).length,
     evidenceSha256: crypto
       .createHash("sha256")
       .update(reviewedEvidence(manifest))
@@ -1984,6 +1979,78 @@ function recordReview(manifest, options) {
     reviewer: options.provider,
   };
   authorizedAttempt.consumedAt = new Date().toISOString();
+}
+
+const ADVISORY_FAILURE_CATEGORIES = new Set([
+  "provider-unavailable",
+  "provider-exhaustion",
+  "provider-billing",
+  "provider-timeout",
+]);
+
+function recordAdvisoryReview(manifest, options) {
+  if (manifest.risk.tier !== "low") {
+    throw new Error("AI review may be advisory only at the low risk tier");
+  }
+  if (!ADVISORY_FAILURE_CATEGORIES.has(options["failure-category"])) {
+    throw new Error(
+      "advisory review requires a typed provider availability failure",
+    );
+  }
+  if (
+    !options.primary ||
+    options.fallback === undefined ||
+    ![options.primary, options.fallback].includes(options["failed-provider"])
+  ) {
+    throw new Error(
+      "advisory review must name the configured provider that became unavailable",
+    );
+  }
+  const expected = reviewInfo(manifest);
+  if (
+    options.from !== expected.from ||
+    options.to !== expected.to ||
+    path.resolve(options["artifact-dir"]) !== path.resolve(expected.artifactDir)
+  ) {
+    throw new Error("review artifact identity does not match manifest");
+  }
+  const boundExpected = {
+    ...expected,
+    tier: manifest.risk.tier,
+    agentsSha256: agentsSha256(manifest),
+    artifactDir: options["artifact-dir"],
+    diffSha256: options["diff-sha"],
+    provider: "ci-only",
+  };
+  verifyReviewArtifact(manifest, boundExpected);
+  manifest.reviews.push({
+    round: expected.round,
+    attempt: expected.attempt,
+    from: options.from,
+    to: options.to,
+    provider: "ci-only",
+    diffSha256: options["diff-sha"],
+    inventorySha256: sha256File(
+      path.join(
+        path.resolve(options["artifact-dir"]),
+        "artifact-inventory.json",
+      ),
+    ),
+    artifactDir: path.resolve(options["artifact-dir"]),
+    status: "advisory",
+    failureCategory: options["failure-category"],
+    failedProvider: options["failed-provider"],
+    tier: boundExpected.tier,
+    agentsSha256: boundExpected.agentsSha256,
+    incompletePanel: false,
+    completedAt: new Date().toISOString(),
+  });
+  manifest.provider = {
+    ...manifest.provider,
+    primary: options.primary,
+    fallback: options.fallback,
+    reviewer: "ci-only",
+  };
 }
 
 function sha256File(file) {
@@ -2171,27 +2238,39 @@ function verifyReviewArtifact(manifest, review) {
   verifyInventory(manifest, review, inventoryFile, artifactDir);
 }
 
-function reviewCoverage(manifest) {
-  const successful = manifest.reviews.filter(
-    (review) => review.status === "success",
+function verifyReviewAuthorization(manifest, review) {
+  if (review.status === "advisory") {
+    if (
+      manifest.risk.tier !== "low" ||
+      review.provider !== "ci-only" ||
+      !ADVISORY_FAILURE_CATEGORIES.has(review.failureCategory)
+    ) {
+      throw new Error("invalid advisory review coverage");
+    }
+    return;
+  }
+  const authorizedAttempt = manifest.governor.authorizedAttempts.find(
+    (attempt) =>
+      attempt.token === review.governorAttemptToken &&
+      attempt.head === review.to &&
+      attempt.consumedAt !== null &&
+      !attempt.invalidatedAt,
   );
-  if (successful.length === 0) throw new Error("no successful review coverage");
+  if (!authorizedAttempt) {
+    throw new Error("review lacks an authorized governor attempt");
+  }
+}
+
+function reviewCoverage(manifest) {
+  const covered = coveredReviews(manifest);
+  if (covered.length === 0) throw new Error("no review coverage");
   let expectedFrom = manifest.revisions.baseSha;
-  for (const review of successful) {
+  for (const review of covered) {
     if (review.from !== expectedFrom) {
       throw new Error("review coverage is not contiguous");
     }
     verifyReviewArtifact(manifest, review);
-    const authorizedAttempt = manifest.governor.authorizedAttempts.find(
-      (attempt) =>
-        attempt.token === review.governorAttemptToken &&
-        attempt.head === review.to &&
-        attempt.consumedAt !== null &&
-        !attempt.invalidatedAt,
-    );
-    if (!authorizedAttempt) {
-      throw new Error("review lacks an authorized governor attempt");
-    }
+    verifyReviewAuthorization(manifest, review);
     if (review.incompletePanel) {
       throw new Error(
         "an incomplete reduced panel cannot satisfy merge review coverage",
@@ -2200,7 +2279,7 @@ function reviewCoverage(manifest) {
     expectedFrom = review.to;
   }
   if (expectedFrom !== manifest.revisions.currentHead) {
-    throw new Error("final HEAD has not been successfully reviewed");
+    throw new Error("final HEAD has not been covered by review evidence");
   }
   if (
     !manifest.provider?.reviewer ||
@@ -2436,16 +2515,14 @@ function reviewAuthorization(manifest) {
   // authorize review artifacts produced under a stale, weaker risk contract.
   assertCurrentReviewStrength(manifest, manifest.repo.realpath);
   const authorization = reviewCoverage(manifest);
-  const successful = manifest.reviews.filter(
-    (review) => review.status === "success",
-  );
+  const covered = coveredReviews(manifest);
   const evidenceSha256 = crypto
     .createHash("sha256")
     .update(reviewedEvidence(manifest))
     .digest("hex");
   if (
     manifest.judge?.head !== manifest.revisions.currentHead ||
-    manifest.judge?.reviewCount !== successful.length ||
+    manifest.judge?.reviewCount !== covered.length ||
     manifest.judge?.evidenceSha256 !== evidenceSha256
   ) {
     throw new Error(
@@ -2464,7 +2541,7 @@ function reviewAuthorization(manifest) {
     judgeArtifact.head !== manifest.revisions.currentHead ||
     judgeArtifact.invocationId !== manifest.invocationId ||
     judgeArtifact.repositoryKey !== manifest.repo.key ||
-    judgeArtifact.reviewCount !== successful.length ||
+    judgeArtifact.reviewCount !== covered.length ||
     judgeArtifact.evidenceSha256 !== evidenceSha256 ||
     persistedBlockingCount !== manifest.judge.blockingCount
   ) {
@@ -2628,6 +2705,10 @@ const COMMANDS = {
     mutate(manifestArg, (locked) =>
       recordReview(locked, parseOptions(rawArgs)),
     ),
+  "record-advisory-review": ({ manifestArg, rawArgs }) =>
+    mutate(manifestArg, (locked) =>
+      recordAdvisoryReview(locked, parseOptions(rawArgs)),
+    ),
   judge: ({ manifestArg, rawArgs }) =>
     mutate(manifestArg, (locked) => recordJudge(locked, parseOptions(rawArgs))),
   "gate-run": ({ manifestArg, rawArgs }) =>
@@ -2655,9 +2736,7 @@ const COMMANDS = {
   get: ({ manifest, rawArgs }) => printValue(getPath(manifest, rawArgs[0])),
   field: ({ manifest, rawArgs }) => printValue(getPath(manifest, rawArgs[0])),
   "verify-artifacts": ({ manifest }) => {
-    for (const review of manifest.reviews.filter(
-      (item) => item.status === "success",
-    )) {
+    for (const review of coveredReviews(manifest)) {
       verifyReviewArtifact(manifest, review);
     }
   },
@@ -2758,6 +2837,7 @@ module.exports = {
   parseOptions,
   parseJson,
   recordReview,
+  recordAdvisoryReview,
   recordJudge,
   recordGate,
   runGate,

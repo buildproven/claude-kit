@@ -106,7 +106,12 @@ approval. New campaigns persist `mergeAuthority=autonomous` and merge when
 their revision-bound gates, review evidence, CI, and base freshness are clean.
 Actionable findings, malformed or inconclusive provider output, stale review
 coverage, and CI failures remain terminal blocked states—the only cases that
-need human direction because quality cannot mechanically converge.
+need human direction because quality cannot mechanically converge. The one
+exception is a low-risk campaign whose provider is unavailable after the
+configured primary/fallback path: typed unavailability, exhaustion, billing,
+or bounded-timeout evidence records a revision-bound `ci-only` advisory
+checkpoint and proceeds only when every required deterministic gate is clean.
+Medium, high, and critical tiers remain fail-closed for AI-review failure.
 
 Repositories may explicitly set `scorePolicy.mergeAuthority` to
 `human-required`. That legacy opt-in requires a signed break-glass capability
@@ -238,6 +243,10 @@ Gemini parser result — both report the same structured rc=4 — gets exactly o
 bounded fallback attempt. Claude's currently bundled inconclusive result
 remains fail-closed until its timeout, parser, and unresolved agent causes are
 typed separately; an inconclusive fallback also remains fail-closed.
+At the low risk tier alone, a terminal typed provider availability failure
+(unavailable, exhaustion, billing, or timeout) after that configured fallback
+path records `ci-only` coverage; it does not treat malformed or inconclusive
+output as a pass, and it never weakens medium, high, or critical review.
 
 Runtime is derived from both risk and actual diff workload. Risk controls
 depth; changed lines plus per-file overhead control the clock. The complete
@@ -280,7 +289,10 @@ node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" judge \
   gates, then run the incremental review.
 - If the incremental verification finds a blocker, stop and report it. Never
   mutate the reviewed HEAD after the second review in the same campaign.
-- An inconclusive or malformed provider response blocks merge.
+- An inconclusive or malformed provider response blocks merge. At the low risk
+  tier only, typed provider unavailability after the configured fallback path
+  instead records CI-only advisory coverage; required deterministic gates and
+  their revision-bound evidence remain mandatory.
 
 Before a terminal stop for remaining code findings, print the separated
 diagnosis:
