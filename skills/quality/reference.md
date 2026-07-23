@@ -87,6 +87,13 @@ primary that exhausts its bounded review clock without converging (a degraded
 primary shouldn't block a merge while a healthy fallback is idle). It does NOT
 run when the primary reports code findings.
 
+For the Wave 3 comparison, `--review-arm native` assigns Codex primary with
+Claude fallback and `--review-arm bespoke` assigns Claude primary with Codex
+fallback. Bootstrap persists both the assigned arm and resolved provider order
+at campaign creation. Telemetry records the assigned arm, actual reviewer,
+effort, and nullable token count separately; provider fallback therefore does
+not corrupt intent-to-treat attribution.
+
 Claude panels share a cancellation sentinel: the first exhausted reviewer
 causes sibling process groups to terminate. A successful review records HEAD;
 later fix rounds use that SHA as their diff base so unchanged commits are not

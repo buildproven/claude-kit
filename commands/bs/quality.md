@@ -1,7 +1,7 @@
 ---
 name: bs:quality
 description: Autonomous quality loop with configurable thoroughness. Runs checks, revision-bound review, remediation, CI, and optional merge.
-argument-hint: "[status --manifest <path>] [--level auto|95|98] [--scope branch] [--merge] [--pr <number>] [--manifest <path>] [--target-dir <path>]"
+argument-hint: "[status --manifest <path>] [--level auto|95|98] [--scope branch] [--review-arm native|bespoke] [--merge] [--pr <number>] [--manifest <path>] [--target-dir <path>]"
 tags: [quality, ci, review]
 category: quality
 ---
@@ -72,6 +72,13 @@ changes the depth of review; it never creates a routine human approval step.
 The run stops instead when its revision-bound evidence is unresolved: blocking
 findings, malformed or inconclusive review output, stale identity, or failed
 CI all remain hard merge blocks.
+
+`--review-arm native|bespoke` is the bounded Wave 3 experiment control.
+`native` assigns Codex's provider-native structured review with Claude fallback;
+`bespoke` assigns the Claude companion panel with Codex fallback. The assigned
+arm and actual reviewer are recorded separately, so a fallback stays visible
+without relabeling the experiment treatment. Without this flag, bootstrap
+resolves the configured provider policy once and infers the matching arm.
 
 Repositories that explicitly set `scorePolicy.mergeAuthority` to
 `"human-required"` retain the legacy signed break-glass capability. Only in

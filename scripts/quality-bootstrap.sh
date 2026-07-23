@@ -86,7 +86,7 @@ for ((argument_index = 0; argument_index < ${#BOOTSTRAP_ARGS[@]}; argument_index
       echo "❌ --merge accepts only the bare flag or --merge=true" >&2
       exit 1
       ;;
-    --level|--scope|--target-dir|--target|--worktree|--pr|--pull|--pull-request|--branch|--head|--head-ref)
+    --level|--scope|--review-arm|--target-dir|--target|--worktree|--pr|--pull|--pull-request|--branch|--head|--head-ref)
       case "$argument" in
         --target-dir|--target|--worktree|--pr|--pull|--pull-request|--branch|--head|--head-ref)
           EXPLICIT_TARGET=true
@@ -100,7 +100,7 @@ for ((argument_index = 0; argument_index < ${#BOOTSTRAP_ARGS[@]}; argument_index
         exit 1
       }
       ;;
-    --level=*|--scope=*|--target-dir=*|--target=*|--worktree=*|--pr=*|--pull=*|--pull-request=*|--branch=*|--head=*|--head-ref=*)
+    --level=*|--scope=*|--review-arm=*|--target-dir=*|--target=*|--worktree=*|--pr=*|--pull=*|--pull-request=*|--branch=*|--head=*|--head-ref=*)
       case "$argument" in
         --target-dir=*|--target=*|--worktree=*|--pr=*|--pull=*|--pull-request=*|--branch=*|--head=*|--head-ref=*)
           EXPLICIT_TARGET=true
@@ -439,6 +439,34 @@ done
 
 CREATE_ARGS=(create --repo "$GIT_ROOT" --base-ref "$BASE_REF" \
   --level "$LEVEL_ARG" --scope "$SCOPE_ARG")
+# Load the shared provider helpers without forcing CLI discovery for an
+# explicitly assigned experiment arm.
+# shellcheck source=provider-policy.sh
+source "$SCRIPT_DIR/provider-policy.sh" || exit 1
+case "$REVIEW_ARM_ARG" in
+  "")
+    # Resolve the ordinary provider policy once at campaign creation so
+    # attribution and execution cannot drift if configuration changes later.
+    # shellcheck source=quality-provider-policy.sh
+    source "$SCRIPT_DIR/quality-provider-policy.sh" || exit 1
+    ;;
+  bespoke)
+    QUALITY_PRIMARY=claude
+    QUALITY_FALLBACK=codex
+    QUALITY_PROVIDER_CONFIG="${BS_QUALITY_PROVIDER_CONFIG:-$(bs_provider_default_config)}"
+    ;;
+  native)
+    QUALITY_PRIMARY=codex
+    QUALITY_FALLBACK=claude
+    QUALITY_PROVIDER_CONFIG="${BS_QUALITY_PROVIDER_CONFIG:-$(bs_provider_default_config)}"
+    ;;
+  *)
+    echo "quality-bootstrap: --review-arm must be bespoke or native" >&2
+    exit 1
+    ;;
+esac
+CREATE_ARGS+=(--primary "$QUALITY_PRIMARY" --fallback "$QUALITY_FALLBACK" \
+  --provider-config "$QUALITY_PROVIDER_CONFIG")
 [ -n "$REVIEW_ARM_ARG" ] && CREATE_ARGS+=(--review-arm "$REVIEW_ARM_ARG")
 # Prefer the freshly-verified base tip (FRESH_BASE_OID, see the base-drift
 # guard above) over the gh-pr-view snapshot (PR_BASE_OID) when both are

@@ -221,10 +221,16 @@ function identityFields(manifest) {
 
 function reviewFields(manifest) {
   const provider = manifest.provider || {};
+  const inferredArm =
+    provider.reviewer === "claude"
+      ? "bespoke"
+      : ["codex", "gemini"].includes(provider.reviewer)
+        ? "native"
+        : null;
   return {
     // Older manifests predate the experiment and remain reportable as null.
     // All newly-created manifests persist one of these arms at creation time.
-    reviewArm: manifest.options?.reviewArm ?? null,
+    reviewArm: manifest.options?.reviewArm ?? inferredArm,
     reviewProvider: provider.reviewer ?? null,
     reviewEffort: provider.effort ?? null,
     // Provider CLIs do not expose a stable cross-provider token counter yet.
@@ -234,7 +240,9 @@ function reviewFields(manifest) {
 }
 
 function validateRecord(record) {
-  const validArm = ["bespoke", "native"].includes(record.reviewArm);
+  const validArm =
+    record.reviewArm === null ||
+    ["bespoke", "native"].includes(record.reviewArm);
   const validTokens =
     record.reviewTokens === null ||
     (Number.isInteger(record.reviewTokens) && record.reviewTokens >= 0);

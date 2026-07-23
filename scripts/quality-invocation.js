@@ -865,14 +865,31 @@ function buildProvider(options) {
   };
 }
 
-function reviewArm(options) {
-  const arm = firstValue(
+function reviewArm(options, provider) {
+  const explicit = firstValue(
     options["review-arm"],
     process.env.BS_QUALITY_REVIEW_ARM,
-    "bespoke",
+    "",
   );
+  const primary = provider.primaryOverride;
+  const inferred =
+    primary === "claude"
+      ? "bespoke"
+      : ["codex", "gemini"].includes(primary)
+        ? "native"
+        : null;
+  const arm = explicit || inferred;
+  if (arm === null) return null;
   if (!["bespoke", "native"].includes(arm)) {
     throw new Error("review arm must be bespoke or native");
+  }
+  if (
+    (arm === "bespoke" && primary && primary !== "claude") ||
+    (arm === "native" && primary === "claude")
+  ) {
+    throw new Error(
+      `review arm '${arm}' conflicts with primary provider '${primary}'`,
+    );
   }
   return arm;
 }
@@ -1094,14 +1111,14 @@ function createManifest(options) {
     throw new Error("create does not accept a custom manifest path");
   }
   const baseHeadSha = firstValue(options["base-head-sha"], baseSha);
+  const provider = buildProvider(options);
   const manifestOptions = {
     merge: options.merge === true,
     level: firstValue(options.level, "auto"),
     scope,
     skipTests: options["skip-tests"] === true,
-    reviewArm: reviewArm(options),
+    reviewArm: reviewArm(options, provider),
   };
-  const provider = buildProvider(options);
   const campaignIdentity = {
     executionBudgetVersion: EXECUTION_BUDGET_VERSION,
     root,

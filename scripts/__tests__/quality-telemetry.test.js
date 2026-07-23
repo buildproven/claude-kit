@@ -185,7 +185,30 @@ describe("buildRecord", () => {
     expect(validateRecord({ ...record, reviewArm: "unknown" })).toBe(false);
   });
 
-  it("keeps legacy records readable without treating them as current schema", () => {
+  it("infers an arm for pre-attribution manifests from the actual reviewer", () => {
+    const record = buildRecord(
+      baseManifest({
+        options: { merge: false },
+        provider: { reviewer: "codex", effort: "high" },
+      }),
+      { execFileSync: NO_FILES, nowIso: NOW },
+    );
+    expect(record.reviewArm).toBe("native");
+    expect(validateRecord(record)).toBe(true);
+  });
+
+  it("keeps unattributed and legacy records readable without counting them as an arm", () => {
+    const unattributed = buildRecord(
+      baseManifest({
+        options: { merge: false },
+        provider: {},
+        reviews: [],
+      }),
+      { execFileSync: NO_FILES, nowIso: NOW },
+    );
+    expect(unattributed.reviewArm).toBeNull();
+    expect(validateRecord(unattributed)).toBe(true);
+
     const legacy = { telemetrySchemaVersion: 1, invocationId: "legacy" };
     expect(validateRecord(legacy)).toBe(false);
   });
