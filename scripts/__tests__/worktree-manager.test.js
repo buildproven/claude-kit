@@ -20,6 +20,18 @@ const MANAGER = path.join(ROOT, "scripts", "worktree-manager.js");
 const COMMIT_GUARD = path.join(ROOT, "scripts", "block-commit-main.sh");
 const temporaryRoots = [];
 
+function trackTemporaryRoot(root) {
+  const resolved = path.resolve(root);
+  const allowedPrefixes = [
+    path.join(os.tmpdir(), "wt-manager-"),
+    path.join(ROOT, ".hook test-"),
+  ];
+  if (!allowedPrefixes.some((prefix) => resolved.startsWith(prefix))) {
+    throw new Error(`refusing to clean unsafe test path: ${resolved}`);
+  }
+  temporaryRoots.push(resolved);
+}
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
@@ -59,7 +71,7 @@ function git(repo, ...args) {
 
 function fixture(name = "repo") {
   const parent = mkdtempSync(path.join(os.tmpdir(), "wt-manager-"));
-  temporaryRoots.push(parent);
+  trackTemporaryRoot(parent);
   const repo = path.join(parent, name);
   const remote = path.join(parent, "remote.git");
   mkdirSync(repo);
@@ -80,7 +92,7 @@ function fixture(name = "repo") {
 
 function persistentFixture() {
   const repo = mkdtempSync(path.join(ROOT, ".hook test-"));
-  temporaryRoots.push(repo);
+  trackTemporaryRoot(repo);
   run("git", ["init", "--initial-branch=main", repo]);
   git(repo, "config", "user.email", "tests@example.com");
   git(repo, "config", "user.name", "Worktree Tests");
@@ -236,7 +248,7 @@ describe("worktree-manager public CLI", () => {
     // Advance the remote past local main without updating local main or its
     // remote-tracking ref, reproducing "nobody's run git pull recently".
     const clone = mkdtempSync(path.join(os.tmpdir(), "wt-manager-clone-"));
-    temporaryRoots.push(path.dirname(clone));
+    trackTemporaryRoot(clone);
     run("git", ["clone", "--quiet", remote, clone]);
     git(clone, "config", "user.email", "tests@example.com");
     git(clone, "config", "user.name", "Worktree Tests");
