@@ -678,7 +678,7 @@ function parseOptions(args) {
     const equals = token.indexOf("=");
     const name = equals === -1 ? token : token.slice(0, equals);
     const inlineValue = equals === -1 ? null : token.slice(equals + 1);
-    if (["--merge", "--skip-tests", "--skip"].includes(name)) {
+    if (["--merge", "--skip-tests", "--skip", "--advisory"].includes(name)) {
       if (inlineValue !== null && !["true", "false"].includes(inlineValue)) {
         throw new Error(`${name} accepts only true or false`);
       }
@@ -2021,6 +2021,8 @@ function recordAdvisoryReview(manifest, options) {
     artifactDir: options["artifact-dir"],
     diffSha256: options["diff-sha"],
     provider: "ci-only",
+    status: "advisory",
+    failedProvider: options["failed-provider"],
   };
   verifyReviewArtifact(manifest, boundExpected);
   manifest.reviews.push({
@@ -2060,7 +2062,12 @@ function sha256File(file) {
     .digest("hex");
 }
 
-function writeArtifactInventory(manifest, artifactDir, provider) {
+function writeArtifactInventory(
+  manifest,
+  artifactDir,
+  provider,
+  { advisory = false } = {},
+) {
   const resolved = path.resolve(artifactDir);
   const info = reviewInfo(manifest);
   if (resolved !== path.resolve(info.artifactDir)) {
@@ -2087,7 +2094,11 @@ function writeArtifactInventory(manifest, artifactDir, provider) {
   ) {
     throw new Error("inconclusive provider findings cannot be inventoried");
   }
-  if (provider === "claude" && findings.length !== manifest.agents.length) {
+  if (
+    provider === "claude" &&
+    !advisory &&
+    findings.length !== manifest.agents.length
+  ) {
     throw new Error(
       "Claude findings inventory does not cover the mandatory panel",
     );
@@ -2184,7 +2195,8 @@ function verifyInventory(manifest, review, inventoryFile, artifactDir) {
   const identityMatches =
     inventory.invocationId === manifest.invocationId &&
     inventory.headSha === review.to &&
-    inventory.provider === review.provider;
+    inventory.provider ===
+      (review.status === "advisory" ? review.failedProvider : review.provider);
   const usable =
     inventory.status === "success" &&
     Array.isArray(inventory.files) &&
@@ -2731,7 +2743,14 @@ const COMMANDS = {
     ),
   inventory: ({ manifest, rawArgs }) => {
     const options = parseOptions(rawArgs);
-    writeArtifactInventory(manifest, options["artifact-dir"], options.provider);
+    writeArtifactInventory(
+      manifest,
+      options["artifact-dir"],
+      options.provider,
+      {
+        advisory: options.advisory === true,
+      },
+    );
   },
   get: ({ manifest, rawArgs }) => printValue(getPath(manifest, rawArgs[0])),
   field: ({ manifest, rawArgs }) => printValue(getPath(manifest, rawArgs[0])),

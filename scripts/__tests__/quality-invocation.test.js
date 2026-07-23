@@ -269,7 +269,8 @@ function prepareAdvisoryReview(root, manifestPath, failureCategory) {
       "--artifact-dir",
       info.artifactDir,
       "--provider",
-      "ci-only",
+      "claude",
+      "--advisory",
     ],
     { cwd: root },
   );

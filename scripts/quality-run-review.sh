@@ -471,7 +471,7 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
         > "$REVIEW_OUT/ci-only.findings.txt"
       DIFF_SHA="$(shasum -a 256 "$REVIEW_OUT/diff.txt" | awk '{print $1}')"
       node "$SCRIPT_DIR/quality-invocation.js" inventory "$MANIFEST" \
-        --artifact-dir "$REVIEW_OUT" --provider ci-only || exit 1
+        --artifact-dir "$REVIEW_OUT" --provider "$REVIEW_PROVIDER" --advisory || exit 1
       node "$SCRIPT_DIR/quality-invocation.js" record-advisory-review "$MANIFEST" \
         --from "$REVIEW_DIFF_BASE" \
         --to "$REVIEWED_HEAD" \
