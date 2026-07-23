@@ -130,6 +130,16 @@ describe("evaluateBudget", () => {
     expect(result.commitsUsed).toBe(1);
   });
 
+  it("does not charge idle lifecycle time to active provider execution", () => {
+    const result = evaluateBudget(
+      { ...baseState, execution_seconds_used: 120 },
+      { nowEpoch: 1000 + 86_400, commitCount: 6 },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.elapsedSeconds).toBe(120);
+    expect(result.wallTripped).toBe(false);
+  });
+
   it("trips on wall-clock even with zero commits", () => {
     const result = evaluateBudget(baseState, {
       nowEpoch: 1000 + 1800,
@@ -167,6 +177,26 @@ describe("evaluateBudget", () => {
     });
     expect(result.commitsUsed).toBe(4);
     expect(result.commitTripped).toBe(true);
+  });
+
+  it("permits the first review after a prerequisite fix consumes the commit budget", () => {
+    const result = evaluateBudget(
+      { ...baseState, max_fix_commits: 1, rounds_used: 1 },
+      { nowEpoch: 1100, commitCount: 6 },
+    );
+    expect(result.commitTripped).toBe(true);
+    expect(result.initialReviewEligible).toBe(true);
+    expect(result.ok).toBe(true);
+  });
+
+  it("does not extend the exception to a verification review", () => {
+    const result = evaluateBudget(
+      { ...baseState, max_fix_commits: 1, rounds_used: 2 },
+      { nowEpoch: 1100, commitCount: 6 },
+    );
+    expect(result.commitTripped).toBe(true);
+    expect(result.initialReviewEligible).toBe(false);
+    expect(result.ok).toBe(false);
   });
 
   it("fails CLOSED (trips) when state is null (unreadable sentinel)", () => {

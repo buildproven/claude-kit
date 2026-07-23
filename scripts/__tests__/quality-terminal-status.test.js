@@ -45,7 +45,7 @@ describe("quality terminal diagnosis", () => {
       ],
       revisions: { currentHead: "abc" },
       reviews: [],
-      risk: { tier: "critical" },
+      risk: { tier: "critical", mergeAuthority: "human-required" },
       approval: { approved: false },
     };
     const output = buildDiagnosis("/tmp/exact/invocation.json", manifest, {
@@ -64,6 +64,40 @@ describe("quality terminal diagnosis", () => {
     expect(output).toContain("GitHub CI: not checked by this failure path");
     expect(output).toContain(
       "Retry/resume: /bs:quality --manifest /tmp/exact/invocation.json",
+    );
+  });
+
+  it("reports autonomous authority at critical tier without asking for break-glass", () => {
+    const output = buildDiagnosis(
+      "/tmp/exact/invocation.json",
+      {
+        requiredGates: [],
+        gates: [],
+        revisions: { currentHead: "abc" },
+        reviews: [],
+        risk: { tier: "critical", mergeAuthority: "autonomous" },
+      },
+      {},
+    );
+    expect(output).toContain(
+      "Break-glass: not required (autonomous merge authority)",
+    );
+  });
+
+  it("does not claim approval is required for a non-critical manual campaign", () => {
+    const output = buildDiagnosis(
+      "/tmp/exact/invocation.json",
+      {
+        requiredGates: [],
+        gates: [],
+        revisions: { currentHead: "abc" },
+        reviews: [],
+        risk: { tier: "high", mergeAuthority: "human-required" },
+      },
+      {},
+    );
+    expect(output).toContain(
+      "Break-glass: not required unless the manual security floor applies",
     );
   });
 
@@ -173,7 +207,9 @@ describe("quality terminal diagnosis", () => {
     ).toBe(0);
 
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    manifest.risk.tier = "critical"; // force breakGlassStatus's approved branch
+    manifest.risk.tier = "critical";
+    // Legacy signed approval is relevant only for an explicit manual policy.
+    manifest.risk.mergeAuthority = "human-required";
     const output = buildDiagnosis(manifestPath, manifest, {});
     expect(output).toMatch(
       new RegExp(

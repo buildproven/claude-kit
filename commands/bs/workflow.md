@@ -41,16 +41,16 @@ locked, dirty, unpushed, open-PR, recent, and inconclusive worktrees. Use
 `migrate --dry-run` before adopting legacy layouts and `repair --apply` after
 an explicitly reviewed repository move or rename.
 
-If auto risk resolves to critical, approve exactly one PR revision with:
+Quality merges autonomously at every risk tier once all revision-bound review,
+gate, CI, and base-freshness evidence is clean. Critical changes get deeper
+review; they do not require a routine approval command. A run stops for human
+direction only when the evidence is unresolved (for example, actionable
+findings, malformed or inconclusive review output, stale identity, or failed
+CI).
 
-```bash
-/bs:quality approve --pr 14 --head <exact-40-character-sha>
-```
-
-Approval is signed and expiring. A genuine new commit invalidates it; a
-rebase onto a newer base with no content change (patch-id identical) does
-not — that resumes without a fresh review cycle.
-
+Repositories that explicitly set `scorePolicy.mergeAuthority` to
+`"human-required"` retain the legacy signed, expiring approval command; it is
+invalidated by any genuine HEAD change.
 Check an in-flight or stalled campaign's state on demand (gates, provider
 review, break-glass, CI) without waiting for a failure:
 
@@ -111,6 +111,18 @@ contract so the branch stays green.
 /bs:ralph
 ```
 
+### Bounded merge sweep
+
+```bash
+/bs:merge-train --max-quality-minutes 45
+```
+
+Merge train fetches and reconciles each PR with its current base before it
+spends gate or provider time. Every ready PR reserves from one shared batch
+budget; a critical panel that cannot finish is deferred, while a deliberately
+reduced non-critical panel is recorded as incomplete and cannot authorize a
+merge.
+
 ### Emergency fix
 
 ```bash
@@ -126,16 +138,17 @@ contract so the branch stays green.
 
 ## Command quick reference
 
-| Command       | Use For                         |
-| ------------- | ------------------------------- |
-| `/bs:dev`     | Start feature work              |
-| `/bs:test`    | Tight test feedback loop        |
-| `/bs:quality` | Quality gate before PR or merge |
-| `/bs:plan`    | Lightweight multi-repo planning |
-| `/bs:prd`     | Strict PRD + vertical slices    |
-| `/bs:ralph`   | Autonomous backlog execution    |
-| `/bs:backlog` | Prioritization                  |
-| `/bs:help`    | Full command lookup             |
+| Command           | Use For                         |
+| ----------------- | ------------------------------- |
+| `/bs:dev`         | Start feature work              |
+| `/bs:test`        | Tight test feedback loop        |
+| `/bs:quality`     | Quality gate before PR or merge |
+| `/bs:plan`        | Lightweight multi-repo planning |
+| `/bs:prd`         | Strict PRD + vertical slices    |
+| `/bs:ralph`       | Autonomous backlog execution    |
+| `/bs:merge-train` | Bounded cross-repo merge sweep  |
+| `/bs:backlog`     | Prioritization                  |
+| `/bs:help`        | Full command lookup             |
 
 ## Notes
 

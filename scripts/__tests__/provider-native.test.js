@@ -49,6 +49,34 @@ describe("provider-native platform", () => {
     expect(invocation).toMatch(/-s "\$SANDBOX"/);
   });
 
+  it("starts Claude provider work without resuming a parent transcript", () => {
+    const source = readFileSync(PROVIDER_RUN, "utf8");
+    const invocation = source
+      .split("\n")
+      .find((line) => line.includes('claude -p "$(cat "$PROMPT_FILE")"'));
+    expect(invocation).toContain("--no-session-persistence");
+    expect(invocation).not.toContain("--resume");
+    expect(invocation).not.toContain("--continue");
+    expect(invocation).not.toContain("--fork-session");
+  });
+
+  it("keeps cc:update-claudemd bounded and avoids no-op commits", () => {
+    const command = readFileSync(
+      path.join(ROOT, "commands", "cc", "update-claudemd.md"),
+      "utf8",
+    );
+    expect(command).toContain("wc -l CLAUDE.md");
+    expect(command).toMatch(/\*\*at most \+10 lines\*\*/);
+    expect(command).toMatch(
+      /make no\s+edit and do not create an empty documentation commit/i,
+    );
+    expect(command).toMatch(/replace, consolidate, or remove/i);
+    expect(command).toContain("if git diff --quiet -- CLAUDE.md; then");
+    expect(command).toMatch(
+      /No stable CLAUDE\.md update; nothing to commit\.[\s\S]*else[\s\S]*git add CLAUDE\.md[\s\S]*git commit/,
+    );
+  });
+
   it("classifies every Claude skill and keeps Ralph discoverable", () => {
     const settings = JSON.parse(
       readFileSync(path.join(ROOT, "config", "settings.json"), "utf8"),
@@ -61,6 +89,11 @@ describe("provider-native platform", () => {
       .sort();
     expect(Object.keys(settings.skillOverrides).sort()).toEqual(names);
     expect(settings.skillOverrides.ralph).toBe("on");
+    for (const skill of ["ralph", "quality", "merge-train"]) {
+      expect(
+        readFileSync(path.join(ROOT, "skills", skill, "SKILL.md"), "utf8"),
+      ).not.toMatch(/^context: fork$/m);
+    }
     expect(settings.hooks.PreCompact).toBeUndefined();
     expect(settings.hooks.PostToolUse).toHaveLength(1);
   });

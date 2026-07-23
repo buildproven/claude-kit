@@ -2,11 +2,13 @@
 "use strict";
 
 /**
- * Convert change risk and workload into one bounded quality-run plan.
+ * Convert change risk and workload into bounded per-phase allowances.
  *
  * Risk controls depth. Workload controls time. Keeping those dimensions
  * separate prevents a one-line security edit from receiving a huge-change
- * clock, while still giving a broad low-risk diff enough time to be read.
+ * allowance, while still giving a broad low-risk diff enough time to be read.
+ * `campaignSeconds` remains compatibility planning metadata; execution is
+ * metered only by the manifest's gate and provider ledgers.
  */
 
 const {
@@ -74,9 +76,9 @@ const RISK_FLOORS = {
   medium: { campaignSeconds: 420, reviewSeconds: 120 },
   high: { campaignSeconds: 540, reviewSeconds: 180 },
   // Empirical floor: an xhigh Codex pass over a 1.2k-line security diff took
-  // longer than the old 330s "large" allowance. Keep the whole campaign capped
-  // at 15 minutes, but reserve nine minutes for the only provider pass that can
-  // produce the mandatory critical review evidence.
+  // longer than the old 330s "large" allowance. Keep the planning envelope
+  // capped at 15 minutes, but reserve nine minutes for the only provider pass
+  // that can produce the mandatory critical review evidence.
   critical: { campaignSeconds: 900, reviewSeconds: 540 },
 };
 
@@ -195,6 +197,7 @@ function main() {
   });
   const result = {
     ...plan,
+    mergeAuthority: scored.mergeAuthority,
     taskType: scored.taskType,
     changeNature: scored.changeNature,
     reasons: scored.reasons,
