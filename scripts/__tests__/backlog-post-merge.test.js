@@ -1,4 +1,10 @@
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,6 +12,13 @@ import { describe, expect, it } from "vitest";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const SCRIPT = path.join(ROOT, "scripts", "backlog-post-merge.sh");
+const PR_TEMPLATE = path.join(ROOT, ".github", "PULL_REQUEST_TEMPLATE.md");
+const CUSTOM_WORKFLOW = path.join(
+  ROOT,
+  ".github",
+  "workflows",
+  "linear-post-merge.yml",
+);
 
 function fixture() {
   const root = mkdtempSync(path.join(tmpdir(), "backlog-post-merge-"));
@@ -47,6 +60,11 @@ esac
 }
 
 describe("backlog-post-merge", () => {
+  it("uses the native Linear integration contract for hosted merges", () => {
+    expect(existsSync(CUSTOM_WORKFLOW)).toBe(false);
+    expect(readFileSync(PR_TEMPLATE, "utf8")).toContain("Closes TEAM-123");
+  });
+
   it("closes every unique identifier supplied by a bundled merge", () => {
     const fx = fixture();
     const result = spawnSync("bash", [SCRIPT], {
