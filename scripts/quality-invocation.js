@@ -182,8 +182,7 @@ function atomicCreate(file, value) {
   }
 }
 
-function normalizeGovernor(manifest) {
-  manifest.governor ??= {};
+function normalizeExecutionGovernor(manifest) {
   if (manifest.governor.executionBudgetVersion === undefined) {
     Object.defineProperty(manifest, NEEDS_EXECUTION_BUDGET_MIGRATION, {
       value: true,
@@ -205,6 +204,11 @@ function normalizeGovernor(manifest) {
   manifest.governor.providerSecondsLimit ??= 15 * 60;
   manifest.governor.providerSecondsUsed ??= 0;
   manifest.governor.activeExecution ??= null;
+}
+
+function normalizeGovernor(manifest) {
+  manifest.governor ??= {};
+  normalizeExecutionGovernor(manifest);
   manifest.governor.authorizedAttempts ??= [];
   manifest.governor.maxProviderAttempts ??= 6;
   manifest.governor.providerWindowSeconds ??= 3600;

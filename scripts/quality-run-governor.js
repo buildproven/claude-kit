@@ -737,23 +737,41 @@ function startRemediationClock(sentinelPath) {
   }
 }
 
+function remainingBudgetConfigValid(
+  state,
+  { nowEpoch, reserveSeconds, capSeconds },
+  metersExecution,
+) {
+  if (!state) return false;
+  if (
+    ![state.start_epoch, state.deadline_epoch, state.max_wall_seconds].every(
+      Number.isFinite,
+    )
+  ) {
+    return false;
+  }
+  if (
+    !metersExecution &&
+    state.deadline_epoch !== state.start_epoch + state.max_wall_seconds
+  ) {
+    return false;
+  }
+  if (![nowEpoch, reserveSeconds, capSeconds].every(Number.isFinite)) {
+    return false;
+  }
+  return reserveSeconds >= 0 && capSeconds > 0;
+}
+
 function remainingBudget(
   state,
   { nowEpoch, reserveSeconds = 0, capSeconds = Number.MAX_SAFE_INTEGER },
 ) {
   const metersExecution = Number.isFinite(state?.execution_seconds_used);
-  const valid =
-    state &&
-    Number.isFinite(state.start_epoch) &&
-    Number.isFinite(state.deadline_epoch) &&
-    Number.isFinite(state.max_wall_seconds) &&
-    (metersExecution ||
-      state.deadline_epoch === state.start_epoch + state.max_wall_seconds) &&
-    Number.isFinite(nowEpoch) &&
-    Number.isFinite(reserveSeconds) &&
-    reserveSeconds >= 0 &&
-    Number.isFinite(capSeconds) &&
-    capSeconds > 0;
+  const valid = remainingBudgetConfigValid(
+    state,
+    { nowEpoch, reserveSeconds, capSeconds },
+    metersExecution,
+  );
   if (!valid) return { ok: false, seconds: 0, valid: false };
   const available = metersExecution
     ? state.max_wall_seconds - state.execution_seconds_used - reserveSeconds
