@@ -169,6 +169,29 @@ bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
   --manifest "<exact-manifest-path>" --name security
 ```
 
+After the persisted test gate succeeds, high and critical campaigns must also
+produce red-capable evidence. This runs the exact persisted test argv in a
+detached temporary worktree after a bounded revert of changed executable source
+files; it never modifies the reviewed checkout. Low and medium campaigns omit
+this check by policy.
+
+```bash
+QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
+TIER="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" field "<exact-manifest-path>" risk.tier)"
+case "$TIER" in
+  high|critical)
+    bash "$QUALITY_SCRIPTS_DIR/quality-mutation-check.sh" \
+      --manifest "<exact-manifest-path>"
+    ;;
+  low|medium) ;;
+  *) echo "quality risk tier is unresolved" >&2; exit 1 ;;
+esac
+```
+
+The manifest binds the resulting artifact to the exact base, HEAD, tier, and
+campaign identity. Review authorization rejects high/critical campaigns with
+missing, stale, or tampered mutation evidence.
+
 The runner resolves commands only from the revision-bound `requiredGates`
 policy and executes and records each result atomically. It rejects caller
 commands. Cross-repository PRs fail during bootstrap until trusted CI-evidence

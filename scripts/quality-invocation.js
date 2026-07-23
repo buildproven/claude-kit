@@ -222,6 +222,7 @@ function normalizeGovernor(manifest) {
 function normalizeManifestCollections(manifest) {
   manifest.reviews ??= [];
   manifest.gates ??= [];
+  manifest.mutation ??= null;
   manifest.merge ??= {};
   manifest.merge.invalidatedStamps ??= [];
   normalizeGovernor(manifest);
@@ -1999,6 +2000,47 @@ function completeProviderAttempt(manifest, options) {
   completeActiveExecution(manifest, "provider", Date.now(), measuredSeconds);
 }
 
+function authorizeMutationAttempt(manifest, options) {
+  if (!["high", "critical"].includes(manifest.risk?.tier)) {
+    throw new Error(
+      "mutation execution is only available for high or critical campaigns",
+    );
+  }
+  reconcileAbandonedExecution(manifest);
+  const remaining = executionRemaining(manifest, "gate");
+  const runtime = manifest.risk?.runtime;
+  const requestedTimeout = parseInteger(
+    options["requested-timeout"] ||
+      String(
+        (runtime?.checkSeconds ?? 300) + (runtime?.checkReserveSeconds ?? 0),
+      ),
+    "requested mutation timeout",
+    { minimum: 1 },
+  );
+  const timeoutSeconds = Math.min(requestedTimeout, remaining);
+  if (timeoutSeconds < 1) {
+    throw new Error("total gate execution budget is exhausted");
+  }
+  const startedAt = new Date().toISOString();
+  manifest.governor.activeExecution = {
+    kind: "gate",
+    name: "mutation",
+    startedAt,
+    timeoutSeconds,
+  };
+  manifest.governor.lastActivityAt = startedAt;
+  return { startedAt, remainingSeconds: timeoutSeconds };
+}
+
+function completeMutationAttempt(manifest) {
+  const active = manifest.governor.activeExecution;
+  if (!active) return;
+  if (active.kind !== "gate" || active.name !== "mutation") {
+    throw new Error("active gate execution does not belong to 'mutation'");
+  }
+  completeActiveExecution(manifest, "gate");
+}
+
 function reviewInfo(manifest) {
   const successful = manifest.reviews.filter(
     (review) => review.status === "success",
@@ -2838,6 +2880,99 @@ function verifyGateEvidence(manifest) {
   }
 }
 
+function validMutationPaths(paths) {
+  return Boolean(
+    Array.isArray(paths) &&
+    paths.length > 0 &&
+    paths.every(
+      (candidate) =>
+        typeof candidate === "string" &&
+        candidate !== "" &&
+        !path.isAbsolute(candidate) &&
+        !candidate.split(/[\\/]+/).includes(".."),
+    ),
+  );
+}
+
+function validMutationArtifact(manifest, artifact) {
+  return [
+    artifact.schemaVersion === 1,
+    artifact.invocationId === manifest.invocationId,
+    artifact.base === manifest.revisions.baseSha,
+    artifact.head === manifest.revisions.currentHead,
+    artifact.tier === manifest.risk.tier,
+    ["revert-diff", "stryker"].includes(artifact.method),
+    validMutationPaths(artifact.mutatedPaths),
+    artifact.testFailureObserved === true,
+  ].every(Boolean);
+}
+
+function mutationEvidenceValid(manifest) {
+  // Creation begins with an unresolved risk contract. The normal quality flow
+  // cannot select agents or record reviews in that state, but fixture and
+  // inspection callers can still ask whether their existing evidence is
+  // coherent. Mutation proof is a requirement of a *resolved* high/critical
+  // contract, not a substitute for resolving that contract in the first
+  // place.
+  if (manifest.risk?.resolved !== true) return true;
+  const tier = manifest.risk?.tier;
+  if (["low", "medium"].includes(tier)) return true;
+  if (!["high", "critical"].includes(tier)) return false;
+  const mutation = manifest.mutation;
+  if (!mutation || mutation.head !== manifest.revisions.currentHead) {
+    return false;
+  }
+  if (!fs.existsSync(mutation.artifactPath)) return false;
+  if (sha256File(mutation.artifactPath) !== mutation.artifactSha256) {
+    return false;
+  }
+  try {
+    const artifact = parseJson(
+      fs.readFileSync(mutation.artifactPath, "utf8"),
+      "mutation evidence artifact",
+    );
+    return validMutationArtifact(manifest, artifact);
+  } catch {
+    return false;
+  }
+}
+
+function assertMutationEvidence(manifest) {
+  if (mutationEvidenceValid(manifest)) return;
+  throw new Error(
+    "required high/critical mutation evidence is missing, stale, or invalid",
+  );
+}
+
+function recordMutation(manifest, options) {
+  if (!["high", "critical"].includes(manifest.risk?.tier)) {
+    throw new Error(
+      "mutation evidence is only required for high or critical campaigns",
+    );
+  }
+  if (!options.artifact) {
+    throw new Error("mutation evidence requires a structured --artifact");
+  }
+  const artifactPath = path.resolve(options.artifact);
+  const stat = fs.lstatSync(artifactPath);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error("mutation evidence artifact must be a regular file");
+  }
+  const artifact = parseJson(
+    fs.readFileSync(artifactPath, "utf8"),
+    "mutation evidence artifact",
+  );
+  if (!validMutationArtifact(manifest, artifact)) {
+    throw new Error("mutation evidence artifact identity or result is invalid");
+  }
+  manifest.mutation = {
+    head: manifest.revisions.currentHead,
+    artifactPath,
+    artifactSha256: sha256File(artifactPath),
+    recordedAt: new Date().toISOString(),
+  };
+}
+
 function reviewTrailers(manifest) {
   const authorization = reviewAuthorization(manifest);
   return [
@@ -2898,6 +3033,7 @@ function reviewAuthorization(manifest) {
       `${manifest.judge.blockingCount} unresolved BLOCKING finding(s)`,
     );
   }
+  assertMutationEvidence(manifest);
   return { ...authorization, blockingCount: manifest.judge.blockingCount };
 }
 
@@ -3080,6 +3216,19 @@ const COMMANDS = {
     mutate(manifestArg, (locked) =>
       runGate(locked, parseOptions(rawArgs), manifestArg),
     ),
+  "mutation-record": ({ manifestArg, rawArgs }) =>
+    mutate(manifestArg, (locked) =>
+      recordMutation(locked, parseOptions(rawArgs)),
+    ),
+  "mutation-attempt": ({ manifestArg, rawArgs }) => {
+    let result;
+    mutate(manifestArg, (locked) => {
+      result = authorizeMutationAttempt(locked, parseOptions(rawArgs));
+    });
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+  },
+  "mutation-complete": ({ manifestArg }) =>
+    mutate(manifestArg, (locked) => completeMutationAttempt(locked)),
   "gate-plan": ({ manifest, rawArgs }) => {
     const options = parseOptions(rawArgs);
     const required = manifest.requiredGates.find(
@@ -3204,8 +3353,10 @@ module.exports = {
   approvalValid,
   armApprovalChallenge,
   attachApproval,
+  authorizeMutationAttempt,
   authorizeProviderAttempt,
   completeActiveExecution,
+  completeMutationAttempt,
   completeProviderAttempt,
   atomicWrite,
   canonicalRoot,
@@ -3219,6 +3370,7 @@ module.exports = {
   recordReview,
   recordJudge,
   recordGate,
+  recordMutation,
   reconcileAbandonedExecution,
   executionRemaining,
   runGate,
@@ -3232,6 +3384,7 @@ module.exports = {
   setAgents,
   setRisk,
   reviewAuthorization,
+  mutationEvidenceValid,
   verifyReviewArtifact,
   writeArtifactInventory,
   validateIdentity,
