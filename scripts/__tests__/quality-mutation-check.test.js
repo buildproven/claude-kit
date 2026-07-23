@@ -27,10 +27,19 @@ function fixture(label, testBody, options = {}) {
       },
     }),
   );
-  writeFileSync(
-    path.join(root, "logic.js"),
-    "exports.isAllowed = () => false;\n",
-  );
+  const source = options.shellSource
+    ? "policy.sh"
+    : options.addedSource
+      ? "policy.js"
+      : "logic.js";
+  if (!options.addedSource) {
+    writeFileSync(
+      path.join(root, source),
+      options.shellSource
+        ? "is_allowed() { return 1; }\n"
+        : "exports.isAllowed = () => false;\n",
+    );
+  }
   writeFileSync(path.join(root, "logic.test.js"), testBody);
   git(root, ["add", "."]);
   git(root, ["commit", "-q", "-m", "base"]);
@@ -44,10 +53,11 @@ function fixture(label, testBody, options = {}) {
     );
     git(root, ["add", "aaa-uncovered.js"]);
   }
-  const source = options.addedSource ? "policy.js" : "logic.js";
   writeFileSync(
     path.join(root, source),
-    "exports.isAllowed = (role) => role === 'admin';\n",
+    options.shellSource
+      ? "is_allowed() { return 0; }\n"
+      : "exports.isAllowed = (role) => role === 'admin';\n",
   );
   git(root, ["add", source]);
   git(root, ["commit", "-qm", "feat: authorize admin"]);
@@ -165,6 +175,42 @@ describe("quality-mutation-check", () => {
       readFileSync(path.join(stateRoot, "mutation", `${head}.json`), "utf8"),
     );
     expect(artifact.mutatedPaths).toEqual(["policy.js"]);
+  });
+
+  it("records evidence for a behavioral test of changed shell source", () => {
+    const { root, manifest } = fixture(
+      "shell-meaningful",
+      "const { spawnSync } = require('node:child_process');\nconst result = spawnSync('bash', ['-c', 'source ./policy.sh; is_allowed']);\nif (result.status !== 0) process.exit(1);\n",
+      { shellSource: true },
+    );
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+    const stateRoot = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "stateRoot"],
+      { encoding: "utf8" },
+    ).trim();
+    const head = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "revisions.currentHead"],
+      { encoding: "utf8" },
+    ).trim();
+    const artifact = JSON.parse(
+      readFileSync(path.join(stateRoot, "mutation", `${head}.json`), "utf8"),
+    );
+    expect(artifact.mutatedPaths).toEqual(["policy.sh"]);
+  });
+
+  it("rejects a vacuous shell test that stays green after the revert", () => {
+    const { root, manifest } = fixture(
+      "shell-vacuous",
+      "const { existsSync } = require('node:fs');\nif (!existsSync('policy.sh')) process.exit(1);\n",
+      { shellSource: true },
+    );
+    expect(() => runMutation(root, manifest)).toThrow(
+      /no red-capable evidence/,
+    );
   });
 
   it("records only the candidate whose revert made the tests turn red", () => {

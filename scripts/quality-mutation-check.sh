@@ -81,7 +81,7 @@ done < <(
   git -C "$ROOT" diff --name-only --diff-filter=AM "$BASE..$HEAD" -- \
     | awk '
       /(^|\/)(test|tests|spec|__tests__)(\/|$)/ { next }
-      /\.(js|cjs|mjs|jsx|ts|tsx|py|rb|go|java|kt|rs|c|cc|cpp|h)$/ { print }
+      /\.(js|cjs|mjs|jsx|ts|tsx|py|rb|go|java|kt|rs|c|cc|cpp|h|sh|bash|zsh)$/ { print }
     '
 )
 
