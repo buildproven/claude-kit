@@ -268,6 +268,15 @@ describe("worktree-manager public CLI", () => {
     );
   });
 
+  it("does not silently fall back when a configured origin cannot refresh", () => {
+    const { parent, repo } = fixture();
+    git(repo, "remote", "set-url", "origin", path.join(parent, "missing.git"));
+
+    expect(() => create(repo, "feature/failed-refresh")).toThrow(
+      /git -C .* fetch origin --quiet failed/,
+    );
+  });
+
   it("creates once and reuses the registered branch worktree", () => {
     const { repo } = fixture();
     const first = create(repo, "feature/reuse");

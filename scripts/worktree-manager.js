@@ -425,9 +425,13 @@ function defaultBranch(repoRoot) {
 function resolveBase(repoRoot, requested) {
   if (!requested) {
     // Refresh remote-tracking refs before branching from the default branch so a
-    // stale local origin/<default> (nobody's fetched recently) can't silently
-    // become the base for a new worktree.
-    git(repoRoot, ["fetch", "origin", "--quiet"], { allowFailure: true });
+    // stale local origin/<default> (nobody's fetched recently) can't become
+    // the base for a new worktree. A configured origin must refresh
+    // successfully; otherwise continuing could silently select stale history.
+    const origin = git(repoRoot, ["remote", "get-url", "origin"], {
+      allowFailure: true,
+    }).stdout;
+    if (origin) git(repoRoot, ["fetch", "origin", "--quiet"]);
   }
   const candidates = requested
     ? [requested]
