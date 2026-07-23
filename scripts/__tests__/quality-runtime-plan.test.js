@@ -143,4 +143,68 @@ describe("quality runtime planning", () => {
     expect(huge.workload).toBe("huge");
     expect(huge.campaignSeconds).toBe(900);
   });
+
+  it("includes an initialized submodule's expanded delta in its workload", () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "quality-submodule-"));
+    const submodule = path.join(parent, "core");
+    const repo = path.join(parent, "consumer");
+    fs.mkdirSync(submodule);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: submodule });
+    execFileSync("git", ["config", "user.name", "test"], { cwd: submodule });
+    execFileSync("git", ["config", "user.email", "test@example.com"], {
+      cwd: submodule,
+    });
+    fs.writeFileSync(path.join(submodule, "README.md"), "base\n");
+    execFileSync("git", ["add", "README.md"], { cwd: submodule });
+    execFileSync("git", ["commit", "-q", "-m", "base"], { cwd: submodule });
+    const previous = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: submodule,
+      encoding: "utf8",
+    }).trim();
+    fs.writeFileSync(
+      path.join(submodule, "expanded.md"),
+      "line\n".repeat(1000),
+    );
+    execFileSync("git", ["add", "expanded.md"], { cwd: submodule });
+    execFileSync("git", ["commit", "-q", "-m", "expanded"], { cwd: submodule });
+    const current = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: submodule,
+      encoding: "utf8",
+    }).trim();
+
+    fs.mkdirSync(repo);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "test"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "test@example.com"], {
+      cwd: repo,
+    });
+    fs.cpSync(submodule, path.join(repo, "core"), { recursive: true });
+    execFileSync(
+      "git",
+      ["update-index", "--add", "--cacheinfo", `160000,${previous},core`],
+      { cwd: repo },
+    );
+    execFileSync("git", ["commit", "-q", "-m", "base pointer"], {
+      cwd: repo,
+    });
+    execFileSync("git", ["switch", "-q", "-c", "feature"], { cwd: repo });
+    execFileSync(
+      "git",
+      ["update-index", "--cacheinfo", `160000,${current},core`],
+      {
+        cwd: repo,
+      },
+    );
+    execFileSync("git", ["commit", "-q", "-m", "bump core"], { cwd: repo });
+
+    const plan = JSON.parse(
+      execFileSync("node", [PLANNER, "--base", "main", "--json"], {
+        cwd: repo,
+        encoding: "utf8",
+      }),
+    );
+    expect(plan.diffStats.files).toBeGreaterThan(1);
+    expect(plan.diffStats.lines).toBeGreaterThanOrEqual(1000);
+    expect(plan.workload).toBe("medium");
+  });
 });

@@ -475,6 +475,7 @@ function collectDescriptors(base, gitRunner) {
 
   const statuses = parseNameStatusZ(nameStatus);
   const stats = parseNumstatZ(numstat);
+  const submoduleStats = collectSubmoduleDiffStats(mergeBase, gitRunner);
 
   let totalLines = 0;
   const descriptors = [];
@@ -506,9 +507,78 @@ function collectDescriptors(base, gitRunner) {
 
   return {
     descriptors,
-    diffStats: { files: descriptors.length, lines: totalLines },
+    diffStats: {
+      files: descriptors.length + submoduleStats.files,
+      lines: totalLines + submoduleStats.lines,
+    },
     mergeBase,
   };
+}
+
+function collectSubmoduleDiffStats(mergeBase, gitRunner) {
+  // A gitlink's numstat is "-\t-\tpath", so it otherwise contributes zero
+  // workload even though review expands the referenced submodule history. Read
+  // the raw object IDs and, when the submodule checkout and both pinned commits
+  // are available, include its own base..head numstat in the parent workload.
+  // This is deliberately best-effort: an uninitialized/deleted submodule must
+  // never make risk scoring fail or invent a size estimate.
+  const raw = safeGit(gitRunner, [
+    "diff",
+    "--raw",
+    "--no-abbrev",
+    "-z",
+    `${mergeBase}...HEAD`,
+  ]);
+  let files = 0;
+  let lines = 0;
+  for (const entry of parseRawZ(raw)) {
+    if (
+      entry.oldMode !== "160000" ||
+      entry.newMode !== "160000" ||
+      isNullObjectId(entry.oldObject) ||
+      isNullObjectId(entry.newObject)
+    ) {
+      continue;
+    }
+    const nested = safeGit(gitRunner, [
+      "-C",
+      entry.file,
+      "diff",
+      "--numstat",
+      `${entry.oldObject}..${entry.newObject}`,
+    ]);
+    for (const stat of parseNumstatZ(nested)) {
+      const added = Number.parseInt(stat.add, 10) || 0;
+      const deleted = Number.parseInt(stat.del, 10) || 0;
+      lines += added + deleted;
+      files += 1;
+    }
+  }
+  return { files, lines };
+}
+
+function parseRawZ(raw) {
+  const tokens = String(raw).split("\0");
+  const rows = [];
+  for (let index = 0; index < tokens.length;) {
+    const header = tokens[index++];
+    if (!header) continue;
+    const match = header.match(
+      /^:(\d{6}) (\d{6}) ([0-9a-f]+) ([0-9a-f]+) ([A-Z][0-9]*)$/,
+    );
+    if (!match) continue;
+    const [, oldMode, newMode, oldObject, newObject, status] = match;
+    const baseFile = tokens[index++] || "";
+    const file = ["R", "C"].includes(status[0])
+      ? tokens[index++] || ""
+      : baseFile;
+    rows.push({ oldMode, newMode, oldObject, newObject, file });
+  }
+  return rows;
+}
+
+function isNullObjectId(objectId) {
+  return !objectId || /^0+$/.test(objectId);
 }
 
 const TASK_TYPE_RANK = {
