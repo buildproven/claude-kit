@@ -64,6 +64,20 @@ describe("quality runtime planning", () => {
     expect(plan(100, 500, 100000).campaignSeconds).toBe(900);
   });
 
+  it("reserves every required gate before the mandatory discovery review", () => {
+    const plan = planRuntime({
+      riskScore: 60,
+      diffStats: { files: 2, lines: 12 },
+      gateCount: 3,
+    });
+
+    expect(plan.gateReserveSeconds).toBe(360);
+    expect(plan.campaignSeconds).toBe(600);
+    expect(plan.campaignSeconds).toBeGreaterThanOrEqual(
+      plan.gateReserveSeconds + plan.reviewSeconds,
+    );
+  });
+
   it("lets explicit quality levels raise depth without erasing size scaling", () => {
     const level95 = planRuntime({
       riskScore: 5,

@@ -106,7 +106,12 @@ approval. New campaigns persist `mergeAuthority=autonomous` and merge when
 their revision-bound gates, review evidence, CI, and base freshness are clean.
 Actionable findings, malformed or inconclusive provider output, stale review
 coverage, and CI failures remain terminal blocked states—the only cases that
-need human direction because quality cannot mechanically converge.
+need human direction because quality cannot mechanically converge. The one
+exception is a low-risk campaign whose provider is unavailable after the
+configured primary/fallback path: typed unavailability, exhaustion, billing,
+or bounded-timeout evidence records a revision-bound `ci-only` advisory
+checkpoint and proceeds only when every required deterministic gate is clean.
+Medium, high, and critical tiers remain fail-closed for AI-review failure.
 
 Repositories may explicitly set `scorePolicy.mergeAuthority` to
 `human-required`. That legacy opt-in requires a signed break-glass capability
@@ -153,10 +158,11 @@ unless the manifest's
 `options.skipTests` is true for a config-only repository. Execute the mandatory
 categories through the evidence-recording runner:
 
-The invocation persists a campaign deadline and absolute attempt cap. Each
-provider gets one bounded phase window within the remaining campaign deadline;
-a fallback does not inherit an already-expired primary window, but neither
-provider can extend the campaign or mint additional attempts.
+The invocation persists absolute attempt caps plus cumulative active-execution
+budgets. Every required gate has a strict per-attempt timeout and all gates
+share the remaining gate ledger. Provider attempts likewise keep their
+risk-adjusted timeout while primary and fallback providers share one provider
+ledger; changing providers cannot mint more execution time.
 
 ```bash
 QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
@@ -167,6 +173,29 @@ bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
 bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
   --manifest "<exact-manifest-path>" --name security
 ```
+
+After the persisted test gate succeeds, high and critical campaigns must also
+produce red-capable evidence. This runs the exact persisted test argv in a
+detached temporary worktree after a bounded revert of changed executable source
+files; it never modifies the reviewed checkout. Low and medium campaigns omit
+this check by policy.
+
+```bash
+QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
+TIER="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" field "<exact-manifest-path>" risk.tier)"
+case "$TIER" in
+  high|critical)
+    bash "$QUALITY_SCRIPTS_DIR/quality-mutation-check.sh" \
+      --manifest "<exact-manifest-path>"
+    ;;
+  low|medium) ;;
+  *) echo "quality risk tier is unresolved" >&2; exit 1 ;;
+esac
+```
+
+The manifest binds the resulting artifact to the exact base, HEAD, tier, and
+campaign identity. Review authorization rejects high/critical campaigns with
+missing, stale, or tampered mutation evidence.
 
 The runner resolves commands only from the revision-bound `requiredGates`
 policy and executes and records each result atomically. It rejects caller
@@ -238,15 +267,33 @@ Gemini parser result — both report the same structured rc=4 — gets exactly o
 bounded fallback attempt. Claude's currently bundled inconclusive result
 remains fail-closed until its timeout, parser, and unresolved agent causes are
 typed separately; an inconclusive fallback also remains fail-closed.
+At the low risk tier alone, a terminal typed provider availability failure
+(unavailable, exhaustion, billing, or timeout) after that configured fallback
+path records `ci-only` coverage; it does not treat malformed or inconclusive
+output as a pass, and it never weakens medium, high, or critical review.
 
 Runtime is derived from both risk and actual diff workload. Risk controls
-depth; changed lines plus per-file overhead control the clock. The complete
-default campaign is capped at 15 minutes. Critical review receives a 9-minute
-provider floor because measured xhigh review of a roughly 1,200-line security
-change exceeded the former 330-second large-diff window. Lower-risk windows
-remain workload-scaled. If discovery requires a fix, the remaining campaign
-budget reserves affected gates and one targeted verification; there is no
-recursive third round.
+depth; changed lines plus per-file overhead control each provider attempt.
+Critical review receives a 9-minute provider floor because measured xhigh
+review of a roughly 1,200-line security change exceeded the former 330-second
+large-diff window. Lower-risk windows remain workload-scaled.
+
+Execution and lifecycle use separate clocks. Required gates share 10 minutes
+of measured subprocess time and provider attempts share 15 minutes; waiting
+for CI, human approval, user input, or another turn consumes neither budget.
+The manifest persists an active start only while a gate or provider subprocess
+is running, then adds its bounded elapsed time to the corresponding ledger.
+Every gate and provider attempt retains its own strict timeout, so a hang is
+still killed even though idle lifecycle time is free.
+
+A manifest becomes stale after 24 hours without activity. Resume it only by
+passing the exact manifest back through bootstrap, which re-resolves repository,
+PR, base, and HEAD identity before preserving the unused execution ledgers.
+Bootstrap and downstream authorization revalidate review, CI, stamp, and
+approval evidence against the resolved revision; there is no unlimited pause
+switch.
+If discovery requires a fix, one fix commit and one targeted verification are
+allowed; there is no recursive third round.
 
 One campaign permits exactly one discovery review, one batched fix commit, and
 one targeted verification review. A verification finding is a terminal
@@ -280,7 +327,10 @@ node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" judge \
   gates, then run the incremental review.
 - If the incremental verification finds a blocker, stop and report it. Never
   mutate the reviewed HEAD after the second review in the same campaign.
-- An inconclusive or malformed provider response blocks merge.
+- An inconclusive or malformed provider response blocks merge. At the low risk
+  tier only, typed provider unavailability after the configured fallback path
+  instead records CI-only advisory coverage; required deterministic gates and
+  their revision-bound evidence remain mandatory.
 
 Before a terminal stop for remaining code findings, print the separated
 diagnosis:

@@ -93,7 +93,8 @@ terminal_diagnosis() {
 authorize_provider_attempt() {
   local provider="$1" requested_timeout="$2" authorization remaining
   authorization="$(node "$SCRIPT_DIR/quality-invocation.js" provider-attempt \
-    "$MANIFEST" --provider "$provider")" || return 77
+    "$MANIFEST" --provider "$provider" \
+    --requested-timeout "$requested_timeout")" || return 77
   remaining="$(printf '%s' "$authorization" | jq -r '.remainingSeconds')"
   [ "$remaining" -gt 0 ] || return 77
   if [ "$requested_timeout" -lt "$remaining" ]; then
@@ -103,8 +104,15 @@ authorize_provider_attempt() {
   fi
 }
 
+complete_provider_attempt() {
+  local provider="$1" started_at="$2" elapsed
+  elapsed=$((SECONDS - started_at))
+  node "$SCRIPT_DIR/quality-invocation.js" provider-complete \
+    "$MANIFEST" --provider "$provider" --elapsed-seconds "$elapsed"
+}
+
 run_claude_review() {
-  local agents_csv rc attempt_timeout
+  local agents_csv rc attempt_timeout attempt_started
   local companion_args=()
   command -v claude >/dev/null 2>&1 || return 2
   claude auth status --json 2>/dev/null | jq -e '.loggedIn == true' >/dev/null 2>&1 || return 2
@@ -126,8 +134,10 @@ run_claude_review() {
     companion_args+=(--review-mode verification \
       --prior-findings-file "$PRIOR_FINDINGS_FILE")
   fi
+  attempt_started=$SECONDS
   bash "$SCRIPT_DIR/claude-review-companion.sh" "${companion_args[@]}"
   rc=$?
+  complete_provider_attempt claude "$attempt_started" || return 1
   return "$rc"
 }
 
@@ -161,7 +171,7 @@ classify_structured_provider_failure() {
 
 run_codex_review() {
   local bounded normalizer schema raw_file normalized_file error_file rc pass pass_timeout
-  local auth_output prompt_file
+  local auth_output prompt_file attempt_started
   local review_selector review_selector_value
   bounded="$SCRIPT_DIR/quality-run-bounded.sh"
   normalizer="$SCRIPT_DIR/quality-normalize-codex-review.sh"
@@ -200,6 +210,7 @@ run_codex_review() {
     fi
     pass_timeout="$(authorize_provider_attempt codex "$pass_timeout")" \
       || return 77
+    attempt_started=$SECONDS
     if [ "$REVIEW_ROUND" -eq 1 ]; then
       bash "$bounded" --timeout "$pass_timeout" -- \
         codex exec --ephemeral -s read-only --json \
@@ -226,6 +237,7 @@ run_codex_review() {
         > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file"
     fi
     rc=$?
+    complete_provider_attempt codex "$attempt_started" || return 1
     if [ "$rc" -ne 0 ]; then
       [ "$rc" -eq 124 ] && return 76
       if node "$SCRIPT_DIR/quality-provider-error.js" \
@@ -258,7 +270,7 @@ run_codex_review() {
 
 run_gemini_review() {
   local bounded normalizer schema raw_file normalized_file error_file
-  local prompt_file rc pass pass_timeout focus failure_rc
+  local prompt_file rc pass pass_timeout focus failure_rc attempt_started
   bounded="$SCRIPT_DIR/quality-run-bounded.sh"
   normalizer="$SCRIPT_DIR/quality-normalize-gemini-review.js"
   schema="$SCRIPT_DIR/schemas/quality-review-output.schema.json"
@@ -308,11 +320,13 @@ run_gemini_review() {
     } > "$prompt_file"
     pass_timeout="$(authorize_provider_attempt gemini "$pass_timeout")" \
       || return 77
+    attempt_started=$SECONDS
     bash "$bounded" --timeout "$pass_timeout" -- \
       gemini --skip-trust --approval-mode plan --output-format json \
         -p "Perform the bounded static review supplied on stdin. Return only a JSON response instance with exactly verdict, summary, and findings; never echo or merge the JSON Schema definition." \
         < "$prompt_file" > "$raw_file" 2> "$error_file"
     rc=$?
+    complete_provider_attempt gemini "$attempt_started" || return 1
     classify_structured_provider_failure gemini "$raw_file"
     failure_rc=$?
     case "$failure_rc" in 75|79) return "$failure_rc" ;; esac
@@ -396,10 +410,10 @@ PROVIDER_RC=$?
 # not promoted to a clean result: the fallback must independently complete,
 # and an inconclusive fallback remains terminal below. The fallback attempt
 # cannot overrun the invocation: authorize_provider_attempt caps it against
-# the absolute campaign deadline and returns 77 when no budget remains.
+# the cumulative active-provider ledger and returns 77 when no budget remains.
 #
 # rc=77 from the PRIMARY (BUI-348): authorize_provider_attempt already
-# refuses to LAUNCH a provider once campaign budget is too tight — this is
+# refuses to LAUNCH a provider once provider budget is too tight — this is
 # the scope-degradation signal, not a guillotine, because nothing was ever
 # started. Before this fallback triggered on 77, a primary that correctly
 # declined to start (e.g. Claude skipping its panel because too little
@@ -436,7 +450,7 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
   elif [ "$PROVIDER_RC" -eq 76 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY exceeded its review budget without converging; failing over to $QUALITY_FALLBACK (BS_QUALITY_FALLBACK_ON_TIMEOUT=0 to disable)." >&2
   elif [ "$PROVIDER_RC" -eq 77 ]; then
-    echo "⚠️  [quality] $QUALITY_PRIMARY declined to start — too little campaign budget remained; trying $QUALITY_FALLBACK instead of blocking outright." >&2
+    echo "⚠️  [quality] $QUALITY_PRIMARY declined to start — too little provider execution budget remained; trying $QUALITY_FALLBACK instead of blocking outright." >&2
   fi
   # Preserve failed-primary diagnostics without discarding conclusive findings
   # from an earlier successful pass when a later pass becomes inconclusive.
@@ -452,6 +466,43 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
 fi
 
 if [ "$PROVIDER_RC" -ne 0 ]; then
+  # Deterministic, revision-bound gates remain the merge authority for a
+  # genuinely low-risk diff. Provider availability is advisory only after the
+  # normal primary/fallback path above is exhausted; malformed output and
+  # generic runner errors remain fail-closed because they are not availability
+  # evidence. Higher tiers are deliberately unchanged.
+  if [ "$TIER" = low ]; then
+    case "$PROVIDER_RC" in
+      2) ADVISORY_FAILURE_CATEGORY=provider-unavailable ;;
+      75) ADVISORY_FAILURE_CATEGORY=provider-exhaustion ;;
+      79) ADVISORY_FAILURE_CATEGORY=provider-billing ;;
+      76) ADVISORY_FAILURE_CATEGORY=provider-timeout ;;
+      *) ADVISORY_FAILURE_CATEGORY="" ;;
+    esac
+    if [ -n "$ADVISORY_FAILURE_CATEGORY" ]; then
+      printf '%s\n' \
+        "NO FINDINGS. Verdict: pass. AI review unavailable; deterministic gates provide low-risk merge evidence." \
+        > "$REVIEW_OUT/ci-only.findings.txt"
+      DIFF_SHA="$(shasum -a 256 "$REVIEW_OUT/diff.txt" | awk '{print $1}')"
+      node "$SCRIPT_DIR/quality-invocation.js" inventory "$MANIFEST" \
+        --artifact-dir "$REVIEW_OUT" --provider "$REVIEW_PROVIDER" --advisory || exit 1
+      node "$SCRIPT_DIR/quality-invocation.js" record-advisory-review "$MANIFEST" \
+        --from "$REVIEW_DIFF_BASE" \
+        --to "$REVIEWED_HEAD" \
+        --primary "$QUALITY_PRIMARY" \
+        --fallback "$QUALITY_FALLBACK" \
+        --failed-provider "$REVIEW_PROVIDER" \
+        --failure-category "$ADVISORY_FAILURE_CATEGORY" \
+        --artifact-dir "$REVIEW_OUT" \
+        --diff-sha "$DIFF_SHA" || exit 1
+      echo "⚠️  [quality] low-risk AI review unavailable; proceeding with required deterministic gate evidence." >&2
+      echo "REVIEW_OUT=$REVIEW_OUT"
+      echo "REVIEW_BASE=$RESOLVED_BASE"
+      echo "REVIEW_DIFF_BASE=$REVIEW_DIFF_BASE"
+      echo "REVIEW_PROVIDER=ci-only"
+      exit 0
+    fi
+  fi
   # Only claim the fallback is missing when it actually is. When a fallback ran
   # and also failed, saying "no usable fallback is configured" sends the reader
   # to check their config instead of the second provider's evidence.
@@ -506,6 +557,7 @@ node "$SCRIPT_DIR/quality-invocation.js" record-review "$MANIFEST" \
   --provider "$REVIEW_PROVIDER" \
   --primary "$QUALITY_PRIMARY" \
   --fallback "$QUALITY_FALLBACK" \
+  --effort "$QUALITY_REVIEW_DEPTH" \
   --artifact-dir "$REVIEW_OUT" \
   --diff-sha "$DIFF_SHA" || exit 1
 

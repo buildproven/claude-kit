@@ -23,6 +23,7 @@ fi
 LEVEL="$(field risk.level)"
 [ -n "$LEVEL" ] || LEVEL="$(field options.level)"
 RESOLVED_BASE="$(field revisions.baseRef)"
+GATE_COUNT="$(field requiredGates | jq 'length')"
 cd "$GIT_ROOT" || exit 1
 
 case "$LEVEL" in
@@ -36,7 +37,8 @@ case "$LEVEL" in
 esac
 
 PLAN_JSON="$(node "$SCRIPT_DIR/quality-runtime-plan.js" \
-  --base "$RESOLVED_BASE" --minimum-risk "$MINIMUM_RISK")" || exit 1
+  --base "$RESOLVED_BASE" --minimum-risk "$MINIMUM_RISK" \
+  --gate-count "$GATE_COUNT")" || exit 1
 RISK_SCORE="$(printf '%s' "$PLAN_JSON" | jq -r '.riskScore')"
 TIER="$(printf '%s' "$PLAN_JSON" | jq -r '.tier')"
 AGENT_TARGET="$(printf '%s' "$PLAN_JSON" | jq -r '.agents')"
@@ -65,4 +67,4 @@ node "$SCRIPT_DIR/quality-invocation.js" risk "$MANIFEST" \
   --check-reserve-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.checkReserveSeconds')" \
   --level "$LEVEL" || exit 1
 
-echo "🧭 Risk: ${RISK_SCORE}/100 (${TASK_TYPE}/${NATURE}), $(printf '%s' "$PLAN_JSON" | jq -r '"\(.workload): \(.diffStats.files) files/\(.diffStats.lines) lines"') → ${AGENT_TARGET} agents, Codex ${CODEX_DEPTH}×${CODEX_ROUNDS} [${TIER}], $(printf '%s' "$PLAN_JSON" | jq -r '.campaignSeconds')s campaign"
+echo "🧭 Risk: ${RISK_SCORE}/100 (${TASK_TYPE}/${NATURE}), $(printf '%s' "$PLAN_JSON" | jq -r '"\(.workload): \(.diffStats.files) files/\(.diffStats.lines) lines"') → ${AGENT_TARGET} agents, Codex ${CODEX_DEPTH}×${CODEX_ROUNDS} [${TIER}], $(printf '%s' "$PLAN_JSON" | jq -r '.campaignSeconds')s workload plan"

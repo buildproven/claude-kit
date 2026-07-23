@@ -41,7 +41,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const TELEMETRY_SCHEMA_VERSION = 1;
+const TELEMETRY_SCHEMA_VERSION = 2;
 
 /**
  * Read a finished invocation manifest for summarization.
@@ -219,17 +219,57 @@ function identityFields(manifest) {
   };
 }
 
+function reviewFields(manifest) {
+  const provider = manifest.provider || {};
+  const inferredArm =
+    provider.reviewer === "claude"
+      ? "bespoke"
+      : ["codex", "gemini"].includes(provider.reviewer)
+        ? "native"
+        : null;
+  return {
+    // Older manifests predate the experiment and remain reportable as null.
+    // All newly-created manifests persist one of these arms at creation time.
+    reviewArm: manifest.options?.reviewArm ?? inferredArm,
+    reviewProvider: provider.reviewer ?? null,
+    reviewEffort: provider.effort ?? null,
+    // Provider CLIs do not expose a stable cross-provider token counter yet.
+    // Preserve the absence explicitly rather than estimating from wall time.
+    reviewTokens: null,
+  };
+}
+
+function validateRecord(record) {
+  const validArm =
+    record.reviewArm === null ||
+    ["bespoke", "native"].includes(record.reviewArm);
+  const validTokens =
+    record.reviewTokens === null ||
+    (Number.isInteger(record.reviewTokens) && record.reviewTokens >= 0);
+  return Boolean(
+    record.telemetrySchemaVersion === TELEMETRY_SCHEMA_VERSION &&
+    typeof record.invocationId === "string" &&
+    typeof record.recordedAt === "string" &&
+    validArm &&
+    (record.reviewProvider === null ||
+      typeof record.reviewProvider === "string") &&
+    (record.reviewEffort === null || typeof record.reviewEffort === "string") &&
+    validTokens,
+  );
+}
+
 /**
  * Build the one telemetry record for a finished campaign. Pure given a manifest
  * and a git runner (injected for testability). All fields trace to the manifest.
  */
 function buildRecord(manifest, { execFileSync, nowIso }) {
   const judge = manifest.judge || {};
-  return {
+  const record = {
     telemetrySchemaVersion: TELEMETRY_SCHEMA_VERSION,
     invocationId: manifest.invocationId,
     recordedAt: nowIso,
     ...identityFields(manifest),
+    ...reviewFields(manifest),
     durationSeconds: campaignDuration(manifest, nowIso),
     reviewRounds: successfulReviewCount(manifest),
     agentsRun: Array.isArray(manifest.agents) ? manifest.agents.length : 0,
@@ -240,6 +280,10 @@ function buildRecord(manifest, { execFileSync, nowIso }) {
     verdict: deriveVerdict(manifest),
     coveredFiles: coveredFiles(manifest, execFileSync),
   };
+  if (!validateRecord(record)) {
+    throw new Error("quality telemetry record is missing required attribution");
+  }
+  return record;
 }
 
 /**
@@ -329,6 +373,7 @@ module.exports = {
   coveredFiles,
   deriveVerdict,
   buildRecord,
+  validateRecord,
   alreadyRecorded,
   recordCampaign,
 };

@@ -16,7 +16,8 @@
  *
  *   - review-round count (panels run since the run started)
  *   - fix-commit count (commits made since the run started)
- *   - wall-clock elapsed since the run started
+ *   - active provider execution for manifests (legacy sentinels retain their
+ *     original wall-clock contract)
  *   - repeated-finding-shape detection (same root-cause shape recurring
  *     across rounds, independent of which file it shows up in — see
  *     findingShapeKey), so a run doing N narrow variants of the same fix at
@@ -237,14 +238,16 @@ function loadState(sentinelPath) {
     const parsed = JSON.parse(raw);
     if (parsed.schemaVersion === 1 && parsed.governor) {
       const governor = parsed.governor;
+      if (governor.executionBudgetVersion !== 1) return null;
       return {
-        // The workload plan is an end-to-end campaign bound. Provider,
-        // orchestration, and remediation time all consume the same clock.
-        start_epoch: governor.startedAtEpoch,
-        deadline_epoch: governor.startedAtEpoch + governor.campaignSeconds,
+        // Review governance meters active provider execution. Idle lifecycle
+        // time is governed separately by the manifest TTL and revalidation.
+        start_epoch: 0,
+        deadline_epoch: governor.providerSecondsLimit,
         start_commit_sha: governor.startCommitSha,
         max_fix_commits: governor.maxFixCommits,
-        max_wall_seconds: governor.campaignSeconds,
+        max_wall_seconds: governor.providerSecondsLimit,
+        execution_seconds_used: governor.providerSecondsUsed,
         max_rereview_reserve_seconds: governor.reReviewReserveSeconds,
         max_review_rounds: governor.maxReviewRounds,
         rounds_used: governor.roundsUsed,
@@ -381,7 +384,9 @@ function evaluateBudget(state, { nowEpoch, commitCount }) {
     };
   }
 
-  const elapsedSeconds = nowEpoch - state.start_epoch;
+  const elapsedSeconds = Number.isFinite(state.execution_seconds_used)
+    ? state.execution_seconds_used
+    : nowEpoch - state.start_epoch;
   // With a SHA baseline, `commitCount` is ALREADY the run-scoped `<sha>..HEAD`
   // count (commits made during the run), so use it directly. Without one (a
   // legacy sentinel), it's the total-ancestry HEAD count and we subtract the
@@ -484,10 +489,10 @@ function replaceAuthorization(state, head, reusableAttempt) {
 
 function reconcileManifestRounds(sentinelPath) {
   withManifestLock(sentinelPath, (manifest) => {
-    const successful = manifest.reviews.filter(
-      (review) => review.status === "success",
+    const covered = manifest.reviews.filter((review) =>
+      ["success", "advisory"].includes(review.status),
     );
-    const rounds = [...new Set(successful.map((review) => review.round))].sort(
+    const rounds = [...new Set(covered.map((review) => review.round))].sort(
       (left, right) => left - right,
     );
     rounds.forEach((round, index) => {
@@ -495,7 +500,13 @@ function reconcileManifestRounds(sentinelPath) {
         throw new Error("successful review rounds are not contiguous");
       }
     });
-    for (const review of successful) {
+    for (const review of covered) {
+      if (review.status === "advisory") {
+        if (manifest.risk?.tier !== "low" || review.provider !== "ci-only") {
+          throw new Error("invalid advisory review round");
+        }
+        continue;
+      }
       const authorization = manifest.governor.authorizedAttempts.find(
         (attempt) =>
           attempt.token === review.governorAttemptToken &&
@@ -505,7 +516,7 @@ function reconcileManifestRounds(sentinelPath) {
       );
       if (!authorization) {
         throw new Error(
-          `successful review round ${review.round} lacks consumed governor authorization`,
+          `review round ${review.round} lacks consumed governor authorization`,
         );
       }
     }
@@ -542,7 +553,7 @@ function mandatoryValidationHasReservedBudget(
     ) {
       return false;
     }
-    if (!validationDeadlineIsActive(manifest)) {
+    if (!providerBudgetIsActive(manifest)) {
       return false;
     }
     execFileSync(
@@ -561,14 +572,10 @@ function mandatoryValidationHasReservedBudget(
   }
 }
 
-function validationDeadlineIsActive(manifest) {
-  const deadline = manifest.governor.validationDeadlineEpoch;
-  const campaignDeadline = manifest.governor.campaignDeadlineEpoch;
-  return (
-    Number.isInteger(deadline) &&
-    Number.isInteger(campaignDeadline) &&
-    Math.floor(Date.now() / 1000) < Math.min(deadline, campaignDeadline)
-  );
+function providerBudgetIsActive(manifest) {
+  const used = manifest.governor.providerSecondsUsed;
+  const limit = manifest.governor.providerSecondsLimit;
+  return Number.isFinite(used) && Number.isFinite(limit) && used < limit;
 }
 
 function loadReconciledState(sentinelPath) {
@@ -653,8 +660,9 @@ function reviewBudgetDecision(context, sentinelPath) {
   if (result.ok || mandatoryOverride) {
     return { result, mandatoryOverride };
   }
+  const elapsedLabel = state._manifest ? "provider execution" : "wall-clock";
   const wall = result.wallTripped
-    ? `wall-clock ${result.elapsedSeconds}s >= ${result.maxWallSeconds}s `
+    ? `${elapsedLabel} ${result.elapsedSeconds}s >= ${result.maxWallSeconds}s `
     : "";
   const commits = result.commitTripped
     ? `fix-commits ${result.commitsUsed} >= ${result.maxFixCommits}`
@@ -735,26 +743,46 @@ function startRemediationClock(sentinelPath) {
   }
 }
 
+function remainingBudgetConfigValid(
+  state,
+  { nowEpoch, reserveSeconds, capSeconds },
+  metersExecution,
+) {
+  if (!state) return false;
+  if (
+    ![state.start_epoch, state.deadline_epoch, state.max_wall_seconds].every(
+      Number.isFinite,
+    )
+  ) {
+    return false;
+  }
+  if (
+    !metersExecution &&
+    state.deadline_epoch !== state.start_epoch + state.max_wall_seconds
+  ) {
+    return false;
+  }
+  if (![nowEpoch, reserveSeconds, capSeconds].every(Number.isFinite)) {
+    return false;
+  }
+  return reserveSeconds >= 0 && capSeconds > 0;
+}
+
 function remainingBudget(
   state,
   { nowEpoch, reserveSeconds = 0, capSeconds = Number.MAX_SAFE_INTEGER },
 ) {
-  const valid =
-    state &&
-    Number.isFinite(state.start_epoch) &&
-    Number.isFinite(state.deadline_epoch) &&
-    Number.isFinite(state.max_wall_seconds) &&
-    state.deadline_epoch === state.start_epoch + state.max_wall_seconds &&
-    Number.isFinite(nowEpoch) &&
-    Number.isFinite(reserveSeconds) &&
-    reserveSeconds >= 0 &&
-    Number.isFinite(capSeconds) &&
-    capSeconds > 0;
-  if (!valid) return { ok: false, seconds: 0, valid: false };
-  const seconds = Math.max(
-    0,
-    Math.min(capSeconds, state.deadline_epoch - nowEpoch - reserveSeconds),
+  const metersExecution = Number.isFinite(state?.execution_seconds_used);
+  const valid = remainingBudgetConfigValid(
+    state,
+    { nowEpoch, reserveSeconds, capSeconds },
+    metersExecution,
   );
+  if (!valid) return { ok: false, seconds: 0, valid: false };
+  const available = metersExecution
+    ? state.max_wall_seconds - state.execution_seconds_used - reserveSeconds
+    : state.deadline_epoch - nowEpoch - reserveSeconds;
+  const seconds = Math.max(0, Math.min(capSeconds, available));
   return { ok: seconds > 0, seconds, valid: true };
 }
 
