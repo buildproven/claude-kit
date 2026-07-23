@@ -2000,6 +2000,47 @@ function completeProviderAttempt(manifest, options) {
   completeActiveExecution(manifest, "provider", Date.now(), measuredSeconds);
 }
 
+function authorizeMutationAttempt(manifest, options) {
+  if (!["high", "critical"].includes(manifest.risk?.tier)) {
+    throw new Error(
+      "mutation execution is only available for high or critical campaigns",
+    );
+  }
+  reconcileAbandonedExecution(manifest);
+  const remaining = executionRemaining(manifest, "gate");
+  const runtime = manifest.risk?.runtime;
+  const requestedTimeout = parseInteger(
+    options["requested-timeout"] ||
+      String(
+        (runtime?.checkSeconds ?? 300) + (runtime?.checkReserveSeconds ?? 0),
+      ),
+    "requested mutation timeout",
+    { minimum: 1 },
+  );
+  const timeoutSeconds = Math.min(requestedTimeout, remaining);
+  if (timeoutSeconds < 1) {
+    throw new Error("total gate execution budget is exhausted");
+  }
+  const startedAt = new Date().toISOString();
+  manifest.governor.activeExecution = {
+    kind: "gate",
+    name: "mutation",
+    startedAt,
+    timeoutSeconds,
+  };
+  manifest.governor.lastActivityAt = startedAt;
+  return { startedAt, remainingSeconds: timeoutSeconds };
+}
+
+function completeMutationAttempt(manifest) {
+  const active = manifest.governor.activeExecution;
+  if (!active) return;
+  if (active.kind !== "gate" || active.name !== "mutation") {
+    throw new Error("active gate execution does not belong to 'mutation'");
+  }
+  completeActiveExecution(manifest, "gate");
+}
+
 function reviewInfo(manifest) {
   const successful = manifest.reviews.filter(
     (review) => review.status === "success",
@@ -3179,6 +3220,15 @@ const COMMANDS = {
     mutate(manifestArg, (locked) =>
       recordMutation(locked, parseOptions(rawArgs)),
     ),
+  "mutation-attempt": ({ manifestArg, rawArgs }) => {
+    let result;
+    mutate(manifestArg, (locked) => {
+      result = authorizeMutationAttempt(locked, parseOptions(rawArgs));
+    });
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+  },
+  "mutation-complete": ({ manifestArg }) =>
+    mutate(manifestArg, (locked) => completeMutationAttempt(locked)),
   "gate-plan": ({ manifest, rawArgs }) => {
     const options = parseOptions(rawArgs);
     const required = manifest.requiredGates.find(
@@ -3303,8 +3353,10 @@ module.exports = {
   approvalValid,
   armApprovalChallenge,
   attachApproval,
+  authorizeMutationAttempt,
   authorizeProviderAttempt,
   completeActiveExecution,
+  completeMutationAttempt,
   completeProviderAttempt,
   atomicWrite,
   canonicalRoot,

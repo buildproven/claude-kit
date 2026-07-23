@@ -12,7 +12,7 @@ function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
-function fixture(label, testBody) {
+function fixture(label, testBody, options = {}) {
   const root = mkdtempSync(path.join(tmpdir(), `quality-mutation-${label}-`));
   git(root, ["init", "-q", "-b", "main"]);
   git(root, ["config", "user.name", "Quality Test"]);
@@ -37,11 +37,13 @@ function fixture(label, testBody) {
   git(root, ["remote", "add", "origin", root]);
   git(root, ["fetch", "-q", "origin", "main"]);
   git(root, ["switch", "-q", "-c", "feature"]);
+  const source = options.addedSource ? "policy.js" : "logic.js";
   writeFileSync(
-    path.join(root, "logic.js"),
+    path.join(root, source),
     "exports.isAllowed = (role) => role === 'admin';\n",
   );
-  git(root, ["commit", "-qam", "feat: authorize admin"]);
+  git(root, ["add", source]);
+  git(root, ["commit", "-qm", "feat: authorize admin"]);
   const manifest = execFileSync(
     "node",
     [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
@@ -68,6 +70,12 @@ function fixture(label, testBody) {
     ],
     { cwd: root },
   );
+  if (options.checkSeconds) {
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    state.risk.runtime.checkSeconds = options.checkSeconds;
+    state.risk.runtime.checkReserveSeconds = 0;
+    writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
+  }
   return { root, manifest };
 }
 
@@ -122,5 +130,48 @@ describe("quality-mutation-check", () => {
       mutatedPaths: ["logic.js"],
       testFailureObserved: true,
     });
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.governor.activeExecution).toBeNull();
+    expect(state.governor.gateSecondsUsed).toBeGreaterThanOrEqual(1);
+  });
+
+  it("removes an added source file to produce revision-bound evidence", () => {
+    const { root, manifest } = fixture(
+      "added-source",
+      "const { isAllowed } = require('./policy');\nif (!isAllowed('admin')) process.exit(1);\n",
+      { addedSource: true },
+    );
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+    const stateRoot = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "stateRoot"],
+      { encoding: "utf8" },
+    ).trim();
+    const head = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "revisions.currentHead"],
+      { encoding: "utf8" },
+    ).trim();
+    const artifact = JSON.parse(
+      readFileSync(path.join(stateRoot, "mutation", `${head}.json`), "utf8"),
+    );
+    expect(artifact.mutatedPaths).toEqual(["policy.js"]);
+  });
+
+  it("rejects a timed-out test instead of recording a hang as red evidence", () => {
+    const { root, manifest } = fixture(
+      "hang",
+      "setInterval(() => {}, 1000);\n",
+      { checkSeconds: 1 },
+    );
+    expect(() => runMutation(root, manifest)).toThrow(
+      /a hang is not red-capable evidence/,
+    );
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.mutation).toBeNull();
+    expect(state.governor.activeExecution).toBeNull();
+    expect(state.governor.gateSecondsUsed).toBe(1);
   });
 });

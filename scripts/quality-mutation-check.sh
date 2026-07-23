@@ -45,13 +45,23 @@ TEST_PLAN="$(node "$SCRIPT_DIR/quality-invocation.js" gate-plan "$MANIFEST" --na
 TEST_EXECUTABLE="$(printf '%s' "$TEST_PLAN" | jq -r '.executable')"
 TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/quality-mutation.XXXXXX")"
 ARTIFACT="$STATE_ROOT/mutation/$HEAD.json"
-DEADLINE=$(( $(date +%s) + CHECK_SECONDS ))
+MUTATION_ACTIVE=false
 
 cleanup() {
+  STATUS=$?
   if [ -d "$TEMP_ROOT/worktree" ]; then
     git -C "$ROOT" worktree remove --force "$TEMP_ROOT/worktree" >/dev/null 2>&1 || true
   fi
   rmdir "$TEMP_ROOT" >/dev/null 2>&1 || true
+  if [ "$MUTATION_ACTIVE" = true ]; then
+    MUTATION_ACTIVE=false
+    if ! node "$SCRIPT_DIR/quality-invocation.js" mutation-complete "$MANIFEST"; then
+      echo "quality-mutation-check: failed to close mutation execution budget" >&2
+      STATUS=1
+    fi
+  fi
+  trap - EXIT
+  exit "$STATUS"
 }
 trap cleanup EXIT
 
@@ -75,10 +85,24 @@ done < <(
     '
 )
 
+MUTATION_AUTHORIZATION="$(
+  node "$SCRIPT_DIR/quality-invocation.js" mutation-attempt "$MANIFEST"
+)"
+CHECK_SECONDS="$(
+  printf '%s' "$MUTATION_AUTHORIZATION" | jq -er '.remainingSeconds'
+)"
+MUTATION_ACTIVE=true
+DEADLINE=$(( $(date +%s) + CHECK_SECONDS ))
+
 mkdir -p "$(dirname "$ARTIFACT")"
 MUTATED_PATHS=()
 TEST_FAILURE_OBSERVED=false
 MAX_ATTEMPTS=3
+
+complete_mutation_execution() {
+  node "$SCRIPT_DIR/quality-invocation.js" mutation-complete "$MANIFEST"
+  MUTATION_ACTIVE=false
+}
 
 record_evidence() {
   METHOD="$1"
@@ -91,6 +115,7 @@ record_evidence() {
     --argjson mutatedPaths "$(printf '%s\n' "${MUTATED_PATHS[@]}" | jq -R . | jq -s .)" \
     '{schemaVersion: 1, invocationId: $invocationId, base: $base, head: $head, tier: $tier, method: $method, mutatedPaths: $mutatedPaths, testFailureObserved: true}' \
     > "$ARTIFACT"
+  complete_mutation_execution
   node "$SCRIPT_DIR/quality-invocation.js" mutation-record "$MANIFEST" \
     --artifact "$ARTIFACT"
   bash "$SCRIPT_DIR/quality-assert-clean.sh" \
@@ -146,7 +171,11 @@ for CANDIDATE in "${CANDIDATES[@]}"; do
   if [ -d "$ROOT/node_modules" ] && [ ! -e "$SANDBOX/node_modules" ]; then
     ln -s "$ROOT/node_modules" "$SANDBOX/node_modules"
   fi
-  git -C "$SANDBOX" restore --source "$BASE" -- "$CANDIDATE"
+  if git -C "$ROOT" cat-file -e "$BASE:$CANDIDATE" 2>/dev/null; then
+    git -C "$SANDBOX" restore --source "$BASE" -- "$CANDIDATE"
+  else
+    git -C "$SANDBOX" rm -q -- "$CANDIDATE"
+  fi
   MUTATED_PATHS+=("$CANDIDATE")
   LOG="$STATE_ROOT/mutation/${HEAD}.$(basename "$CANDIDATE").log"
 
@@ -158,6 +187,10 @@ for CANDIDATE in "${CANDIDATES[@]}"; do
   set -e
   cd "$ROOT"
   git -C "$ROOT" worktree remove --force "$SANDBOX" >/dev/null
+  if [ "$RESULT" -eq 124 ]; then
+    echo "quality-mutation-check: controlled revert test timed out; a hang is not red-capable evidence" >&2
+    exit 1
+  fi
   if [ "$RESULT" -ne 0 ]; then
     TEST_FAILURE_OBSERVED=true
     break
