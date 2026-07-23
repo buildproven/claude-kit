@@ -71,6 +71,10 @@ describe("provider-native platform", () => {
       /make no\s+edit and do not create an empty documentation commit/i,
     );
     expect(command).toMatch(/replace, consolidate, or remove/i);
+    expect(command).toContain("if git diff --quiet -- CLAUDE.md; then");
+    expect(command).toMatch(
+      /No stable CLAUDE\.md update; nothing to commit\.[\s\S]*else[\s\S]*git add CLAUDE\.md[\s\S]*git commit/,
+    );
   });
 
   it("classifies every Claude skill and keeps Ralph discoverable", () => {

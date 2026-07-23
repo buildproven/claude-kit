@@ -80,8 +80,12 @@ Structure:
 ## Step 5: Commit
 
 ```bash
-git add CLAUDE.md
-git commit -m "docs: update CLAUDE.md with recent learnings"
+if git diff --quiet -- CLAUDE.md; then
+  echo "No stable CLAUDE.md update; nothing to commit."
+else
+  git add CLAUDE.md
+  git commit -m "docs: update CLAUDE.md with recent learnings"
+fi
 ```
 
 ## Guidelines
