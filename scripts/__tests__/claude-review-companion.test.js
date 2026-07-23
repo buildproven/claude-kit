@@ -216,6 +216,7 @@ describe("claude-review-companion.sh", () => {
       // The sentinel must be set on the child `claude` invocation so the skill
       // can hard-refuse re-entry (fork→child→fork recursion, 2026-06-04 incident).
       expect(src).toMatch(/BS_QUALITY_HEADLESS=1[\s\S]*claude -p/);
+      expect(src).toMatch(/claude -p[\s\S]*--no-session-persistence/);
     });
   });
 

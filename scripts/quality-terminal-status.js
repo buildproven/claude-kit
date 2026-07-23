@@ -40,7 +40,18 @@ function providerStatus(manifest, failure) {
 }
 
 function breakGlassStatus(manifest) {
-  if (manifest.risk?.tier !== "critical") return "not required";
+  // A manifest created before mergeAuthority was introduced must report the
+  // same manual-governance requirement that final authorization enforces.
+  const mergeAuthority = manifest.risk?.mergeAuthority || "human-required";
+  if (mergeAuthority !== "human-required") {
+    return "not required (autonomous merge authority)";
+  }
+  if (manifest.risk?.tier !== "critical") {
+    // The terminal diagnosis does not re-run the authoritative floor matcher;
+    // avoid claiming routine manual-governance campaigns need approval when
+    // only an exceptional human-floor path could require it.
+    return "not required unless the manual security floor applies";
+  }
   if (
     manifest.approval?.approved === true &&
     invocation.approvalValid(manifest, manifest.repo.realpath)

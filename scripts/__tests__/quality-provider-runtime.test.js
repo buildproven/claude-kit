@@ -31,6 +31,31 @@ const NORMALIZE_GEMINI_REVIEW = path.join(
 );
 
 describe("provider review runtime", () => {
+  it("documents the exact Quality-* schema emitted by the runtime", () => {
+    const skill = readFileSync(
+      path.join(ROOT, "skills", "quality", "SKILL.md"),
+      "utf8",
+    );
+    const runtime = readFileSync(
+      path.join(ROOT, "scripts", "quality-invocation.js"),
+      "utf8",
+    );
+    const keys = [
+      "Tier",
+      "Reviewer",
+      "Primary",
+      "Fallback",
+      "Findings",
+      "Head",
+      "Base",
+    ];
+    for (const key of keys) {
+      expect(skill).toMatch(new RegExp(`^Quality-${key}:`, "m"));
+      expect(runtime).toContain(`Quality-${key}:`);
+    }
+    expect(skill).toMatch(/parenthetical[\s\S]*legacy/i);
+  });
+
   it.each([
     ["low", "120", "Focused"],
     ["medium", "480", "Broad"],

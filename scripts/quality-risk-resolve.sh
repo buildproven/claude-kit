@@ -47,6 +47,7 @@ TASK_TYPE="$(printf '%s' "$PLAN_JSON" | jq -r '.taskType')"
 
 node "$SCRIPT_DIR/quality-invocation.js" risk "$MANIFEST" \
   --tier "$TIER" \
+  --merge-authority "$(printf '%s' "$PLAN_JSON" | jq -r '.mergeAuthority')" \
   --task-type "$TASK_TYPE" \
   --score "$RISK_SCORE" \
   --agents "$AGENT_TARGET" \
@@ -64,4 +65,4 @@ node "$SCRIPT_DIR/quality-invocation.js" risk "$MANIFEST" \
   --check-reserve-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.checkReserveSeconds')" \
   --level "$LEVEL" || exit 1
 
-echo "🧭 Risk: ${RISK_SCORE}/100 (${TASK_TYPE}/${NATURE}), $(printf '%s' "$PLAN_JSON" | jq -r '"\(.workload): \(.diffStats.files) files/\(.diffStats.lines) lines"') → ${AGENT_TARGET} agents, Codex ${CODEX_DEPTH}×${CODEX_ROUNDS} [${TIER}], $(printf '%s' "$PLAN_JSON" | jq -r '.campaignSeconds')s campaign"
+echo "🧭 Risk: ${RISK_SCORE}/100 (${TASK_TYPE}/${NATURE}), $(printf '%s' "$PLAN_JSON" | jq -r '"\(.workload): \(.diffStats.files) files/\(.diffStats.lines) lines"') → ${AGENT_TARGET} agents, Codex ${CODEX_DEPTH}×${CODEX_ROUNDS} [${TIER}], $(printf '%s' "$PLAN_JSON" | jq -r '.campaignSeconds')s workload plan"

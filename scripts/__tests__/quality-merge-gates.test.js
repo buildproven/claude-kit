@@ -106,11 +106,21 @@ describe("quality merge gates", () => {
     expect(AUTHORIZE).toMatch(/strict_required_status_checks_policy == true/);
   });
 
-  it("checks critical approval during non-mutating preflight", () => {
-    const approval = AUTHORIZE.indexOf('if [ "$TIER" = critical ]');
+  it("requires approval only for an explicit human-required policy during preflight", () => {
+    const authority = AUTHORIZE.indexOf('MERGE_AUTHORITY="$(node');
+    const approval = AUTHORIZE.indexOf(
+      '[ "$MERGE_AUTHORITY" = human-required ]',
+    );
     const preflight = AUTHORIZE.lastIndexOf('[ "$PREFLIGHT" = false ]');
+    expect(authority).toBeGreaterThan(-1);
     expect(approval).toBeGreaterThan(-1);
     expect(preflight).toBeGreaterThan(approval);
+    expect(AUTHORIZE).toMatch(
+      /\[ -n "\$MERGE_AUTHORITY" \] \|\| MERGE_AUTHORITY=human-required/,
+    );
+    expect(AUTHORIZE).toMatch(
+      /autonomous campaigns merge once their revision-bound review, CI, base, and/,
+    );
   });
 
   it("documents only persisted-policy gate invocations", () => {

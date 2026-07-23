@@ -69,7 +69,7 @@ run_one() {
       if (
         cd "$TARGET_DIR"
         python3 "$DEADLINE" --timeout-seconds "$TIMEOUT_SECONDS" -- \
-          claude -p "$(cat "$PROMPT_FILE")" --dangerously-skip-permissions
+          claude -p "$(cat "$PROMPT_FILE")" --no-session-persistence --dangerously-skip-permissions
       ) > "$stdout_file" 2> "$stderr_file"; then
         rc=0
       else
