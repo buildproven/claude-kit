@@ -2191,8 +2191,10 @@ function providerFindings(manifest) {
       const cleanLines = text.split(/\r?\n/);
       const isClean = cleanLines.every(
         (line) =>
-          /^NO FINDINGS\.?$/.test(line) ||
-          /^NO FINDINGS\. Verdict: (?:approve|pass)\. [^\r\n]+$/.test(line),
+          /^NO FINDINGS\.?$/i.test(line.trim()) ||
+          /^NO FINDINGS\. Verdict: (?:approve|pass)\. [^\r\n]+$/i.test(
+            line.trim(),
+          ),
       );
       if (!text || isClean) continue;
       findings.push({
