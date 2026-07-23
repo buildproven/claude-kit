@@ -9,7 +9,11 @@ const { execFileSync, spawnSync } = require("child_process");
 const riskScore = require("./risk-score.js");
 
 const SCHEMA_VERSION = 1;
+const EXECUTION_BUDGET_VERSION = 1;
 const REQUIRED_GATES_POLICY_VERSION = 2;
+const NEEDS_EXECUTION_BUDGET_MIGRATION = Symbol(
+  "needs-execution-budget-migration",
+);
 const NEEDS_REQUIRED_GATES_MIGRATION = Symbol("needs-required-gates-migration");
 
 function parseJson(raw, label) {
@@ -180,21 +184,35 @@ function atomicCreate(file, value) {
 
 function normalizeGovernor(manifest) {
   manifest.governor ??= {};
+  if (manifest.governor.executionBudgetVersion === undefined) {
+    Object.defineProperty(manifest, NEEDS_EXECUTION_BUDGET_MIGRATION, {
+      value: true,
+      writable: true,
+    });
+  } else if (
+    manifest.governor.executionBudgetVersion !== EXECUTION_BUDGET_VERSION
+  ) {
+    throw new Error(
+      `unsupported execution budget version ${manifest.governor.executionBudgetVersion}`,
+    );
+  }
+  manifest.governor.lifecycleTTLSeconds ??= 24 * 60 * 60;
+  manifest.governor.lastActivityAt ??= new Date(
+    (manifest.governor.startedAtEpoch || Math.floor(Date.now() / 1000)) * 1000,
+  ).toISOString();
+  manifest.governor.gateSecondsLimit ??= 10 * 60;
+  manifest.governor.gateSecondsUsed ??= 0;
+  manifest.governor.providerSecondsLimit ??= 15 * 60;
+  manifest.governor.providerSecondsUsed ??= 0;
+  manifest.governor.activeExecution ??= null;
   manifest.governor.authorizedAttempts ??= [];
   manifest.governor.maxProviderAttempts ??= 6;
   manifest.governor.providerWindowSeconds ??= 3600;
-  manifest.governor.providerDeadlineEpoch ??=
-    manifest.governor.startedAtEpoch + manifest.governor.providerWindowSeconds;
-  manifest.governor.providerDeadlineHead ??= null;
-  manifest.governor.providerDeadlineProvider ??= null;
   manifest.governor.providerAttempts ??= [];
   manifest.governor.campaignSeconds ??=
     manifest.governor.providerWindowSeconds +
     manifest.governor.remediationSeconds +
     manifest.governor.reReviewReserveSeconds;
-  manifest.governor.campaignDeadlineEpoch ??=
-    manifest.governor.startedAtEpoch + manifest.governor.campaignSeconds;
-  manifest.governor.validationDeadlineEpoch ??= null;
 }
 
 function normalizeManifestCollections(manifest) {
@@ -620,6 +638,29 @@ function buildGovernor(head) {
   );
   return {
     startedAtEpoch,
+    executionBudgetVersion: EXECUTION_BUDGET_VERSION,
+    lifecycleTTLSeconds: governorInteger(
+      "BS_QUALITY_LIFECYCLE_TTL_SECONDS",
+      String(24 * 60 * 60),
+      "lifecycle TTL seconds",
+      1,
+    ),
+    lastActivityAt: new Date().toISOString(),
+    gateSecondsLimit: governorInteger(
+      "BS_QUALITY_MAX_GATE_SECONDS",
+      String(10 * 60),
+      "total gate seconds",
+      1,
+    ),
+    gateSecondsUsed: 0,
+    providerSecondsLimit: governorInteger(
+      "BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS",
+      String(15 * 60),
+      "total provider seconds",
+      1,
+    ),
+    providerSecondsUsed: 0,
+    activeExecution: null,
     maxFixCommits: governorInteger(
       "BS_QUALITY_MAX_FIX_COMMITS",
       "4",
@@ -654,12 +695,8 @@ function buildGovernor(head) {
       1,
     ),
     providerWindowSeconds: providerDeadlineSeconds,
-    providerDeadlineEpoch: startedAtEpoch + providerDeadlineSeconds,
-    providerDeadlineHead: head,
     providerAttempts: [],
     campaignSeconds: providerDeadlineSeconds,
-    campaignDeadlineEpoch: startedAtEpoch + providerDeadlineSeconds,
-    validationDeadlineEpoch: null,
     remediationStartedAtEpoch: null,
     findingsSeen: [],
     startCommitSha: head,
@@ -756,6 +793,7 @@ function resolvePrIdentity(options) {
 function existingCampaign(manifestPath, campaignIdentity) {
   const existing = loadManifest(manifestPath).manifest;
   const existingIdentity = {
+    executionBudgetVersion: existing.governor?.executionBudgetVersion ?? 0,
     root: existing.repo.realpath,
     gitCommonDir: existing.repo.gitCommonDir,
     origin: existing.repo.origin,
@@ -809,6 +847,7 @@ function createManifest(options) {
   };
   const provider = buildProvider(options);
   const campaignIdentity = {
+    executionBudgetVersion: EXECUTION_BUDGET_VERSION,
     root,
     gitCommonDir: gitCommonDir(root),
     origin: originIdentity(root),
@@ -1221,12 +1260,8 @@ function applyRuntimeGovernor(manifest, options, runtime) {
   }
   if (process.env.BS_QUALITY_MAX_PROVIDER_SECONDS === undefined) {
     governor.providerWindowSeconds = runtime.reviewSeconds;
-    governor.providerDeadlineEpoch =
-      governor.startedAtEpoch + runtime.reviewSeconds;
   }
   governor.campaignSeconds = runtime.campaignSeconds;
-  governor.campaignDeadlineEpoch =
-    governor.startedAtEpoch + runtime.campaignSeconds;
 }
 
 function parseMergeAuthority(value) {
@@ -1565,12 +1600,59 @@ function armApprovalChallenge(manifest, options) {
   };
 }
 
-function providerPhaseDeadline(manifest) {
-  const validation = manifest.governor.validationDeadlineEpoch;
-  const campaign = manifest.governor.campaignDeadlineEpoch;
-  return manifest.reviews.length > 0 && Number.isInteger(validation)
-    ? Math.min(validation, campaign)
-    : campaign;
+function executionRemaining(manifest, kind) {
+  const governor = manifest.governor;
+  const limit =
+    kind === "gate" ? governor.gateSecondsLimit : governor.providerSecondsLimit;
+  const used =
+    kind === "gate" ? governor.gateSecondsUsed : governor.providerSecondsUsed;
+  if (!Number.isInteger(limit) || limit < 1 || !Number.isFinite(used)) {
+    throw new Error(`${kind} execution budget is missing or invalid`);
+  }
+  return Math.max(0, limit - used);
+}
+
+function completeActiveExecution(
+  manifest,
+  expectedKind,
+  now = Date.now(),
+  measuredSeconds = null,
+) {
+  const active = manifest.governor.activeExecution;
+  if (!active) return 0;
+  if (active.kind !== expectedKind) {
+    throw new Error(
+      `cannot complete ${expectedKind} execution while ${active.kind} is active`,
+    );
+  }
+  const started = Date.parse(active.startedAt);
+  const measured = Number.isFinite(measuredSeconds)
+    ? Math.max(1, Math.ceil(measuredSeconds))
+    : Number.isFinite(started)
+      ? Math.max(1, Math.ceil((now - started) / 1000))
+      : active.timeoutSeconds;
+  const elapsed = Math.min(active.timeoutSeconds, measured);
+  if (expectedKind === "gate") {
+    manifest.governor.gateSecondsUsed += elapsed;
+  } else {
+    manifest.governor.providerSecondsUsed += elapsed;
+  }
+  manifest.governor.activeExecution = null;
+  manifest.governor.lastActivityAt = new Date(now).toISOString();
+  return elapsed;
+}
+
+function reconcileAbandonedExecution(manifest, now = Date.now()) {
+  const active = manifest.governor.activeExecution;
+  if (!active) return;
+  const started = Date.parse(active.startedAt);
+  const deadline = started + active.timeoutSeconds * 1000;
+  if (!Number.isFinite(deadline) || now < deadline) {
+    throw new Error(
+      `${active.kind} execution '${active.name}' is already active`,
+    );
+  }
+  completeActiveExecution(manifest, active.kind, now);
 }
 
 function providerPhaseSeconds(manifest) {
@@ -1586,37 +1668,26 @@ function authorizeProviderAttempt(manifest, options) {
     throw new Error(`invalid review provider '${provider}'`);
   }
   const governor = manifest.governor;
-  const now = Math.floor(Date.now() / 1000);
   if (
     !Number.isInteger(governor.maxProviderAttempts) ||
-    !Number.isInteger(governor.providerDeadlineEpoch) ||
     !Array.isArray(governor.providerAttempts)
   ) {
     throw new Error("provider attempt governor is missing or invalid");
   }
+  reconcileAbandonedExecution(manifest);
   const currentHead = manifest.revisions.currentHead;
-  const phaseDeadline = providerPhaseDeadline(manifest);
-  const firstAttemptForProvider = !governor.providerAttempts.some(
-    (attempt) =>
-      attempt.head === currentHead &&
-      attempt.provider === provider &&
-      attempt.reviewCount === manifest.reviews.length,
-  );
-  if (firstAttemptForProvider) {
-    const phaseSeconds = providerPhaseSeconds(manifest);
-    governor.providerDeadlineEpoch = Math.min(
-      now + phaseSeconds,
-      phaseDeadline,
-    );
-    governor.providerDeadlineHead = currentHead;
-    governor.providerDeadlineProvider = provider;
-  }
-  const deadline = Math.min(governor.providerDeadlineEpoch, phaseDeadline);
-  if (now >= deadline) {
-    throw new Error("absolute provider deadline exhausted");
-  }
   if (governor.providerAttempts.length >= governor.maxProviderAttempts) {
     throw new Error("absolute provider attempt cap exhausted");
+  }
+  const remaining = executionRemaining(manifest, "provider");
+  const requestedTimeout = parseInteger(
+    options["requested-timeout"] || String(providerPhaseSeconds(manifest)),
+    "requested provider timeout",
+    { minimum: 1 },
+  );
+  const timeoutSeconds = Math.min(requestedTimeout, remaining);
+  if (timeoutSeconds < 1) {
+    throw new Error("total provider execution budget is exhausted");
   }
   const attempt = {
     number: governor.providerAttempts.length + 1,
@@ -1624,13 +1695,36 @@ function authorizeProviderAttempt(manifest, options) {
     head: currentHead,
     reviewCount: manifest.reviews.length,
     startedAt: new Date().toISOString(),
+    timeoutSeconds,
   };
   governor.providerAttempts.push(attempt);
+  governor.activeExecution = {
+    kind: "provider",
+    name: provider,
+    attempt: attempt.number,
+    startedAt: attempt.startedAt,
+    timeoutSeconds,
+  };
+  governor.lastActivityAt = attempt.startedAt;
   return {
     ...attempt,
-    remainingSeconds: deadline - now,
+    remainingSeconds: timeoutSeconds,
     maxAttempts: governor.maxProviderAttempts,
   };
+}
+
+function completeProviderAttempt(manifest, options) {
+  const provider = options.provider;
+  if (!manifest.governor.activeExecution) return;
+  if (manifest.governor.activeExecution.name !== provider)
+    throw new Error(
+      `active provider execution does not belong to '${provider}'`,
+    );
+  const measuredSeconds =
+    options["elapsed-seconds"] === undefined
+      ? null
+      : parseInteger(options["elapsed-seconds"], "provider elapsed seconds");
+  completeActiveExecution(manifest, "provider", Date.now(), measuredSeconds);
 }
 
 function reviewInfo(manifest) {
@@ -1927,6 +2021,9 @@ function judgeContext(manifest) {
 }
 
 function recordReview(manifest, options) {
+  if (manifest.governor.activeExecution?.kind === "provider") {
+    completeActiveExecution(manifest, "provider");
+  }
   const expected = reviewInfo(manifest);
   const authorizedAttempt = manifest.governor.authorizedAttempts.find(
     (attempt) =>
@@ -2293,42 +2390,61 @@ function recordSkippedGate(manifest, required, name, log, options) {
   });
 }
 
-function executeGate(manifest, required, name, log) {
+function executeGate(manifest, required, name, log, manifestPath) {
   const runtime = manifest.risk?.runtime;
   const gateSeconds = runtime?.checkSeconds ?? 300;
   const gateReserveSeconds = runtime?.checkReserveSeconds ?? 0;
-  const validationGate =
-    manifest.reviews.length > 0 &&
-    Number.isInteger(manifest.governor.validationDeadlineEpoch);
-  const boundedGateSeconds = validationGate
-    ? gateReserveSeconds
-    : gateSeconds + gateReserveSeconds;
-  const phaseDeadline = providerPhaseDeadline(manifest);
-  const campaignRemaining = phaseDeadline
-    ? phaseDeadline - Math.floor(Date.now() / 1000)
-    : boundedGateSeconds;
-  if (campaignRemaining <= 0) {
-    throw new Error(`campaign budget is exhausted before gate '${name}'`);
+  reconcileAbandonedExecution(manifest);
+  const gateRemaining = executionRemaining(manifest, "gate");
+  if (gateRemaining <= 0) {
+    throw new Error(
+      `total gate execution budget is exhausted before '${name}'`,
+    );
   }
-  const timeoutSeconds = Math.min(boundedGateSeconds, campaignRemaining);
-  const boundedRunner = path.join(__dirname, "quality-run-bounded.sh");
-  const result = spawnSync(
-    "bash",
-    [
-      boundedRunner,
-      "--timeout",
-      String(timeoutSeconds),
-      "--",
-      required.executable,
-      ...required.args,
-    ],
-    {
-      cwd: manifest.repo.realpath,
-      encoding: "utf8",
-      env: process.env,
-      maxBuffer: 64 * 1024 * 1024,
-    },
+  const timeoutSeconds = Math.min(
+    gateSeconds + gateReserveSeconds,
+    gateRemaining,
   );
+  manifest.governor.activeExecution = {
+    kind: "gate",
+    name,
+    startedAt: new Date().toISOString(),
+    timeoutSeconds,
+  };
+  manifest.governor.lastActivityAt =
+    manifest.governor.activeExecution.startedAt;
+  atomicWrite(manifestPath, manifest);
+  const boundedRunner = path.join(__dirname, "quality-run-bounded.sh");
+  const monotonicStartedAt = process.hrtime.bigint();
+  let result;
+  try {
+    result = spawnSync(
+      "bash",
+      [
+        boundedRunner,
+        "--timeout",
+        String(timeoutSeconds),
+        "--",
+        required.executable,
+        ...required.args,
+      ],
+      {
+        cwd: manifest.repo.realpath,
+        encoding: "utf8",
+        env: process.env,
+        maxBuffer: 64 * 1024 * 1024,
+      },
+    );
+  } finally {
+    const elapsedNanoseconds = process.hrtime.bigint() - monotonicStartedAt;
+    completeActiveExecution(
+      manifest,
+      "gate",
+      Date.now(),
+      Number(elapsedNanoseconds) / 1_000_000_000,
+    );
+    atomicWrite(manifestPath, manifest);
+  }
   const output = `${result.stdout || ""}${result.stderr || ""}`;
   fs.writeFileSync(log, output, { mode: 0o600 });
   if (result.status === 124) {
@@ -2344,7 +2460,7 @@ function executeGate(manifest, required, name, log) {
   return output;
 }
 
-function runGate(manifest, options) {
+function runGate(manifest, options, manifestPath) {
   if (manifest.repo.isCrossRepository === true) {
     throw new Error(
       "cross-repository PR gates must run in isolated CI; host execution is forbidden",
@@ -2364,7 +2480,7 @@ function runGate(manifest, options) {
     recordSkippedGate(manifest, required, name, log, options);
     return;
   }
-  const output = executeGate(manifest, required, name, log);
+  const output = executeGate(manifest, required, name, log, manifestPath);
   recordGate(manifest, {
     name,
     source: required.source,
@@ -2544,8 +2660,27 @@ function mutate(manifestArg, operation) {
   return withManifestLock(manifestArg, (locked) => {
     validateIdentity(locked, locked.repo.realpath);
     operation(locked);
+    locked.governor.lastActivityAt = new Date().toISOString();
   });
 }
+
+function lifecycleStale(manifest, now = Date.now()) {
+  const lastActivity = Date.parse(manifest.governor.lastActivityAt);
+  const ttlMilliseconds = manifest.governor.lifecycleTTLSeconds * 1000;
+  return (
+    !Number.isFinite(lastActivity) ||
+    !Number.isFinite(ttlMilliseconds) ||
+    now - lastActivity >= ttlMilliseconds
+  );
+}
+
+const STALE_READ_COMMANDS = new Set([
+  "field",
+  "get",
+  "review-identity",
+  "review-info",
+  "validate",
+]);
 
 // Repo-relative files changed across the reviewed base..head, quoted-path safe.
 function reviewedChangedFiles(manifest) {
@@ -2628,6 +2763,10 @@ const COMMANDS = {
     });
     process.stdout.write(`${JSON.stringify(result)}\n`);
   },
+  "provider-complete": ({ manifestArg, rawArgs }) =>
+    mutate(manifestArg, (locked) =>
+      completeProviderAttempt(locked, parseOptions(rawArgs)),
+    ),
   "review-info": ({ manifest }) =>
     process.stdout.write(`${JSON.stringify(reviewInfo(manifest))}\n`),
   "review-identity": ({ manifest }) =>
@@ -2639,7 +2778,9 @@ const COMMANDS = {
   judge: ({ manifestArg, rawArgs }) =>
     mutate(manifestArg, (locked) => recordJudge(locked, parseOptions(rawArgs))),
   "gate-run": ({ manifestArg, rawArgs }) =>
-    mutate(manifestArg, (locked) => runGate(locked, parseOptions(rawArgs))),
+    mutate(manifestArg, (locked) =>
+      runGate(locked, parseOptions(rawArgs), manifestArg),
+    ),
   "gate-plan": ({ manifest, rawArgs }) => {
     const options = parseOptions(rawArgs);
     const required = manifest.requiredGates.find(
@@ -2684,9 +2825,15 @@ const COMMANDS = {
 function runAdvance(manifestArg, manifest, rawArgs) {
   const options = parseOptions(rawArgs);
   const updated = withManifestLock(manifestArg, (locked) => {
+    if (locked[NEEDS_EXECUTION_BUDGET_MIGRATION]) {
+      throw new Error(
+        "legacy manifest cannot reconstruct active execution usage; start a fresh quality campaign",
+      );
+    }
+    reconcileAbandonedExecution(locked);
     validateIdentity(locked, manifest.repo.realpath, { requireHead: false });
     bindPrRepositoryIdentity(locked, options);
-    const advanced = advanceHead(locked, manifest.repo.realpath);
+    advanceHead(locked, manifest.repo.realpath);
     validateIdentity(locked, manifest.repo.realpath);
     const discovered = discoverRequiredGates(
       locked.repo.realpath,
@@ -2698,18 +2845,7 @@ function runAdvance(manifestArg, manifest, rawArgs) {
       : unionRequiredGates(locked.requiredGates, discovered);
     locked.requiredGatesPolicyVersion = REQUIRED_GATES_POLICY_VERSION;
     locked[NEEDS_REQUIRED_GATES_MIGRATION] = false;
-    if (
-      advanced &&
-      locked.reviews.length > 0 &&
-      locked.governor.providerDeadlineHead !== locked.revisions.currentHead
-    ) {
-      locked.governor.validationDeadlineEpoch = Math.min(
-        locked.governor.campaignDeadlineEpoch,
-        Math.floor(Date.now() / 1000) +
-          (locked.risk?.runtime?.checkReserveSeconds ?? 300) +
-          (locked.risk?.runtime?.reviewReserveSeconds ?? 300),
-      );
-    }
+    locked.governor.lastActivityAt = new Date().toISOString();
   });
   process.stdout.write(`${updated.revisions.currentHead}\n`);
 }
@@ -2728,6 +2864,19 @@ function runCommand(command, rawArgs) {
     return;
   }
   if (command === "advance") return runAdvance(manifestArg, manifest, rawArgs);
+  if (
+    manifest[NEEDS_EXECUTION_BUDGET_MIGRATION] &&
+    !STALE_READ_COMMANDS.has(command)
+  ) {
+    throw new Error(
+      "legacy manifest cannot reconstruct active execution usage; start a fresh quality campaign",
+    );
+  }
+  if (lifecycleStale(manifest) && !STALE_READ_COMMANDS.has(command)) {
+    throw new Error(
+      "quality manifest is stale; resume through bootstrap to revalidate base and HEAD",
+    );
+  }
   if (manifest[NEEDS_REQUIRED_GATES_MIGRATION]) {
     throw new Error(
       "legacy manifest requires an explicit advance before gate evaluation",
@@ -2757,17 +2906,22 @@ module.exports = {
   armApprovalChallenge,
   attachApproval,
   authorizeProviderAttempt,
+  completeActiveExecution,
+  completeProviderAttempt,
   atomicWrite,
   canonicalRoot,
   computePatchId,
   currentPatchId,
   createManifest,
   loadManifest,
+  lifecycleStale,
   parseOptions,
   parseJson,
   recordReview,
   recordJudge,
   recordGate,
+  reconcileAbandonedExecution,
+  executionRemaining,
   runGate,
   recordStamp,
   judgeContext,
