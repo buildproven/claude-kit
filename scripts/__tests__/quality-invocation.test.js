@@ -3508,12 +3508,18 @@ exit 1
       path.join(root, "pyproject.toml"),
       "[tool.ruff]\n\n[tool.pytest.ini_options]\n\n[tool.mypy]\n",
     );
+    writeFileSync(path.join(root, "requirements-dev.txt"), "pytest==9.0.2\n");
     mkdirSync(path.join(root, "tests"));
     writeFileSync(
       path.join(root, "tests", "test_example.py"),
       "def test_ok():\n  assert True\n",
     );
-    git(root, ["add", "pyproject.toml", "tests/test_example.py"]);
+    git(root, [
+      "add",
+      "pyproject.toml",
+      "requirements-dev.txt",
+      "tests/test_example.py",
+    ]);
     git(root, ["commit", "-q", "-m", "add Python quality gates"]);
 
     const manifest = create(root);

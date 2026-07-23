@@ -533,13 +533,13 @@ function pythonDirectGate({
 }
 
 function pythonAuditArgs(root, head, pyproject) {
+  if (pyproject !== "") return ["."];
   const requirements = committedFiles(root, head).filter((file) =>
     /^requirements[^/]*\.(?:txt|in)$/.test(file),
   );
   if (requirements.length > 0) {
     return requirements.flatMap((file) => ["-r", file]);
   }
-  if (pyproject !== "") return ["."];
   if (
     committedFile(root, head, "Pipfile") !== null ||
     committedFile(root, head, "Pipfile.lock") !== null
