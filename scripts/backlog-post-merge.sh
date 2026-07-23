@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # backlog-post-merge.sh - Close every Linear issue cited by a merged change.
 #
-# Run locally from a post-merge hook or from .github/workflows/linear-post-merge.yml.
-# In Actions, GitHub's commit-to-pull-request endpoint contributes the PR body so
-# bundled fixes can cite more than one issue with `Closes BUI-123, BUI-456`.
+# Run manually or from a local post-merge hook when native Linear integration is
+# unavailable. The hosted claude-kit repository uses Linear's native GitHub
+# integration and explicit `Closes TEAM-123` statements in pull request bodies.
 
 set -euo pipefail
 
