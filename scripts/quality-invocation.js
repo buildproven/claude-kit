@@ -1144,6 +1144,8 @@ function createManifest(options) {
   delete campaignKeyIdentity.provider;
   delete campaignKeyIdentity.root;
   delete campaignKeyIdentity.gitCommonDir;
+  campaignKeyIdentity.options = { ...campaignKeyIdentity.options };
+  delete campaignKeyIdentity.options.reviewArm;
   const invocationId = deterministicInvocationId(campaignKeyIdentity);
   if (
     options["invocation-id"] !== undefined &&
