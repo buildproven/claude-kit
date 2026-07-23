@@ -81,6 +81,7 @@ const RISK_FLOORS = {
   // that can produce the mandatory critical review evidence.
   critical: { campaignSeconds: 900, reviewSeconds: 540 },
 };
+const ORCHESTRATION_SECONDS = 60;
 
 function riskTier(riskScore) {
   if (riskScore >= CRITICAL_RISK_SCORE) return "critical";
@@ -126,6 +127,7 @@ function planRuntime({
   mode = "discovery",
   knobs = null,
   minimumRisk = 0,
+  gateCount = 0,
 }) {
   if (!["discovery", "verification"].includes(mode)) {
     throw new Error(`invalid review mode: ${mode}`);
@@ -141,6 +143,19 @@ function planRuntime({
   );
   const reviewSeconds =
     mode === "verification" ? band.verificationSeconds : discoverySeconds;
+  // Required gates run before the first provider pass. Reserve their bounded
+  // allowance up front so a small diff cannot consume its entire campaign
+  // before the review evidence required for merge can even begin.
+  const requiredGateCount = Math.max(0, Number(gateCount) || 0);
+  const gateReserveSeconds = requiredGateCount * band.checkSeconds;
+  const campaignSeconds = Math.min(
+    900,
+    Math.max(
+      band.campaignSeconds,
+      riskFloor.campaignSeconds,
+      gateReserveSeconds + reviewSeconds + ORCHESTRATION_SECONDS,
+    ),
+  );
 
   return {
     riskScore: normalizedRisk,
@@ -152,10 +167,12 @@ function planRuntime({
       lines: Math.max(0, Number(diffStats?.lines) || 0),
     },
     mode,
-    campaignSeconds: Math.max(band.campaignSeconds, riskFloor.campaignSeconds),
+    campaignSeconds,
     reviewSeconds,
     verificationSeconds: band.verificationSeconds,
     checkSeconds: band.checkSeconds,
+    gateCount: requiredGateCount,
+    gateReserveSeconds,
     reviewReserveSeconds: band.reviewReserveSeconds,
     checkReserveSeconds: band.checkReserveSeconds,
     agents: resolvedKnobs.agents,
@@ -169,6 +186,7 @@ function parseArgs(argv) {
     base: null,
     mode: "discovery",
     minimumRisk: 0,
+    gateCount: 0,
     json: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -178,6 +196,8 @@ function parseArgs(argv) {
       args.mode = argv[++index];
     } else if (argv[index] === "--minimum-risk" && argv[index + 1]) {
       args.minimumRisk = Number(argv[++index]);
+    } else if (argv[index] === "--gate-count" && argv[index + 1]) {
+      args.gateCount = Number(argv[++index]);
     } else if (argv[index] === "--json") {
       args.json = true;
     }
@@ -194,6 +214,7 @@ function main() {
     mode: args.mode,
     knobs: scored.knobs,
     minimumRisk: args.minimumRisk,
+    gateCount: args.gateCount,
   });
   const result = {
     ...plan,
