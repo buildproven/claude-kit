@@ -3229,6 +3229,26 @@ exit 1
     expect(context.findings).toEqual([]);
   });
 
+  it("accepts documented no-findings marker variants from reviewers", () => {
+    for (const [index, marker] of [
+      "NO FINDINGS\n",
+      "NO FINDINGS.\n",
+      " no findings \n",
+      "\tNo Findings.\t\r\n",
+    ].entries()) {
+      const root = repo(`clean-sentinel-${index}`);
+      const manifest = create(root);
+      prepareCodexReview(root, manifest, [], marker);
+      const context = JSON.parse(
+        execFileSync("node", [INVOCATION, "judge-context", manifest], {
+          cwd: root,
+          encoding: "utf8",
+        }),
+      );
+      expect(context.findings).toEqual([]);
+    }
+  });
+
   it("exposes persisted judge dispositions to targeted verification", () => {
     const root = repo("prior-judge-dispositions");
     const manifest = create(root);
