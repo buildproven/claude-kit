@@ -92,7 +92,9 @@ Claude fallback and `--review-arm bespoke` assigns Claude primary with Codex
 fallback. Bootstrap persists both the assigned arm and resolved provider order
 at campaign creation. Telemetry records the assigned arm, actual reviewer,
 effort, and nullable token count separately; provider fallback therefore does
-not corrupt intent-to-treat attribution.
+not corrupt intent-to-treat attribution. Campaigns without an explicit arm
+keep ordinary provider policy and infer the received arm from the actual
+reviewer.
 
 Claude panels share a cancellation sentinel: the first exhausted reviewer
 causes sibling process groups to terminate. A successful review records HEAD;

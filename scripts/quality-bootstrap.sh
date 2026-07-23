@@ -439,23 +439,18 @@ done
 
 CREATE_ARGS=(create --repo "$GIT_ROOT" --base-ref "$BASE_REF" \
   --level "$LEVEL_ARG" --scope "$SCOPE_ARG")
-# Load the shared provider helpers without forcing CLI discovery for an
-# explicitly assigned experiment arm.
-# shellcheck source=provider-policy.sh
-source "$SCRIPT_DIR/provider-policy.sh" || exit 1
 case "$REVIEW_ARM_ARG" in
-  "")
-    # Resolve the ordinary provider policy once at campaign creation so
-    # attribution and execution cannot drift if configuration changes later.
-    # shellcheck source=quality-provider-policy.sh
-    source "$SCRIPT_DIR/quality-provider-policy.sh" || exit 1
-    ;;
+  "") ;;
   bespoke)
+    # shellcheck source=provider-policy.sh
+    source "$SCRIPT_DIR/provider-policy.sh" || exit 1
     QUALITY_PRIMARY=claude
     QUALITY_FALLBACK=codex
     QUALITY_PROVIDER_CONFIG="${BS_QUALITY_PROVIDER_CONFIG:-$(bs_provider_default_config)}"
     ;;
   native)
+    # shellcheck source=provider-policy.sh
+    source "$SCRIPT_DIR/provider-policy.sh" || exit 1
     QUALITY_PRIMARY=codex
     QUALITY_FALLBACK=claude
     QUALITY_PROVIDER_CONFIG="${BS_QUALITY_PROVIDER_CONFIG:-$(bs_provider_default_config)}"
@@ -465,9 +460,10 @@ case "$REVIEW_ARM_ARG" in
     exit 1
     ;;
 esac
-CREATE_ARGS+=(--primary "$QUALITY_PRIMARY" --fallback "$QUALITY_FALLBACK" \
-  --provider-config "$QUALITY_PROVIDER_CONFIG")
-[ -n "$REVIEW_ARM_ARG" ] && CREATE_ARGS+=(--review-arm "$REVIEW_ARM_ARG")
+if [ -n "$REVIEW_ARM_ARG" ]; then
+  CREATE_ARGS+=(--primary "$QUALITY_PRIMARY" --fallback "$QUALITY_FALLBACK" \
+    --provider-config "$QUALITY_PROVIDER_CONFIG" --review-arm "$REVIEW_ARM_ARG")
+fi
 # Prefer the freshly-verified base tip (FRESH_BASE_OID, see the base-drift
 # guard above) over the gh-pr-view snapshot (PR_BASE_OID) when both are
 # available — it's the authoritative value the fetch was actually checked

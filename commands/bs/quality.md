@@ -77,8 +77,9 @@ CI all remain hard merge blocks.
 `native` assigns Codex's provider-native structured review with Claude fallback;
 `bespoke` assigns the Claude companion panel with Codex fallback. The assigned
 arm and actual reviewer are recorded separately, so a fallback stays visible
-without relabeling the experiment treatment. Without this flag, bootstrap
-resolves the configured provider policy once and infers the matching arm.
+without relabeling the experiment treatment. Without this flag, ordinary
+provider policy remains unchanged and telemetry infers the received arm from
+the actual reviewer.
 
 Repositories that explicitly set `scorePolicy.mergeAuthority` to
 `"human-required"` retain the legacy signed break-glass capability. Only in
