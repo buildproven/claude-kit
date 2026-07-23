@@ -396,16 +396,6 @@ function committedFile(root, head, file) {
   }
 }
 
-function committedPathExists(root, head, pathspec) {
-  try {
-    return (
-      git(root, ["ls-tree", "-r", "--name-only", head, "--", pathspec]) !== ""
-    );
-  } catch {
-    return false;
-  }
-}
-
 function packageManagerAt(root, head, packageJson) {
   const declared = String(packageJson.packageManager || "").split("@")[0];
   if (["npm", "pnpm", "yarn", "bun"].includes(declared)) return declared;
@@ -549,6 +539,12 @@ function pythonAuditArgs(root, head, pyproject) {
   return null;
 }
 
+function hasCommittedPythonTests(root, head) {
+  return committedFiles(root, head).some((file) =>
+    /(?:^|\/)(?:test_[^/]+|[^/]+_test)\.py$/.test(file),
+  );
+}
+
 function pythonGate({
   root,
   head,
@@ -574,7 +570,7 @@ function pythonGate({
     (hasPythonTool(pyproject, "pytest") ||
       committedFile(root, head, "pytest.ini") !== null ||
       committedFile(root, head, "tox.ini") !== null ||
-      committedPathExists(root, head, "tests"))
+      hasCommittedPythonTests(root, head))
   ) {
     return pythonDirectGate({
       root,

@@ -3647,9 +3647,11 @@ exit 1
     mkdirSync(path.join(root, "tests"));
     writeFileSync(path.join(root, "tests", "example.test.js"), "// test\n");
     writeFileSync(path.join(root, "tests", "example.py"), "# fixture\n");
+    writeFileSync(path.join(root, "requirements.txt"), "requests==2.32.4\n");
     git(root, [
       "add",
       "package.json",
+      "requirements.txt",
       "tests/example.test.js",
       "tests/example.py",
     ]);
