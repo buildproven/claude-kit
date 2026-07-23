@@ -96,6 +96,7 @@ DEADLINE=$(( $(date +%s) + CHECK_SECONDS ))
 
 mkdir -p "$(dirname "$ARTIFACT")"
 MUTATED_PATHS=()
+ATTEMPTED_PATHS=()
 TEST_FAILURE_OBSERVED=false
 MAX_ATTEMPTS=3
 
@@ -159,7 +160,7 @@ if [ "${#CANDIDATES[@]}" -eq 0 ]; then
 fi
 
 for CANDIDATE in "${CANDIDATES[@]}"; do
-  [ "${#MUTATED_PATHS[@]}" -lt "$MAX_ATTEMPTS" ] || break
+  [ "${#ATTEMPTED_PATHS[@]}" -lt "$MAX_ATTEMPTS" ] || break
   REMAINING=$(( DEADLINE - $(date +%s) ))
   if [ "$REMAINING" -le 0 ]; then
     echo "quality-mutation-check: ${CHECK_SECONDS}s mutation budget exhausted before producing evidence" >&2
@@ -176,7 +177,7 @@ for CANDIDATE in "${CANDIDATES[@]}"; do
   else
     git -C "$SANDBOX" rm -q -- "$CANDIDATE"
   fi
-  MUTATED_PATHS+=("$CANDIDATE")
+  ATTEMPTED_PATHS+=("$CANDIDATE")
   LOG="$STATE_ROOT/mutation/${HEAD}.$(basename "$CANDIDATE").log"
 
   set +e
@@ -192,13 +193,14 @@ for CANDIDATE in "${CANDIDATES[@]}"; do
     exit 1
   fi
   if [ "$RESULT" -ne 0 ]; then
+    MUTATED_PATHS=("$CANDIDATE")
     TEST_FAILURE_OBSERVED=true
     break
   fi
 done
 
 if [ "$TEST_FAILURE_OBSERVED" != true ]; then
-  echo "quality-mutation-check: persisted tests remained green after ${#MUTATED_PATHS[@]} controlled revert(s); no red-capable evidence" >&2
+  echo "quality-mutation-check: persisted tests remained green after ${#ATTEMPTED_PATHS[@]} controlled revert(s); no red-capable evidence" >&2
   exit 1
 fi
 

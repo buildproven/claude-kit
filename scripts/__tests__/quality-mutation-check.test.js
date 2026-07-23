@@ -37,6 +37,13 @@ function fixture(label, testBody, options = {}) {
   git(root, ["remote", "add", "origin", root]);
   git(root, ["fetch", "-q", "origin", "main"]);
   git(root, ["switch", "-q", "-c", "feature"]);
+  if (options.uncoveredSource) {
+    writeFileSync(
+      path.join(root, "aaa-uncovered.js"),
+      "exports.uncovered = true;\n",
+    );
+    git(root, ["add", "aaa-uncovered.js"]);
+  }
   const source = options.addedSource ? "policy.js" : "logic.js";
   writeFileSync(
     path.join(root, source),
@@ -158,6 +165,31 @@ describe("quality-mutation-check", () => {
       readFileSync(path.join(stateRoot, "mutation", `${head}.json`), "utf8"),
     );
     expect(artifact.mutatedPaths).toEqual(["policy.js"]);
+  });
+
+  it("records only the candidate whose revert made the tests turn red", () => {
+    const { root, manifest } = fixture(
+      "proven-path",
+      "const { isAllowed } = require('./logic');\nif (!isAllowed('admin')) process.exit(1);\n",
+      { uncoveredSource: true },
+    );
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+    const stateRoot = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "stateRoot"],
+      { encoding: "utf8" },
+    ).trim();
+    const head = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "revisions.currentHead"],
+      { encoding: "utf8" },
+    ).trim();
+    const artifact = JSON.parse(
+      readFileSync(path.join(stateRoot, "mutation", `${head}.json`), "utf8"),
+    );
+    expect(artifact.mutatedPaths).toEqual(["logic.js"]);
   });
 
   it("rejects a timed-out test instead of recording a hang as red evidence", () => {
