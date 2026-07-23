@@ -1,7 +1,6 @@
 ---
 name: ralph
 description: "Autonomous backlog execution with reflection, evidence, worktree isolation, and /bs:quality --merge"
-context: fork
 # Runs unattended (forked, no user in the loop). AskUserQuestion here would
 # block forever with nobody to answer it — remove the tool, don't just ask it
 # nicely not to. https://code.claude.com/docs/en/skills
@@ -27,6 +26,71 @@ category: development
 State machine: `PICK -> IMPLEMENT -> QUALITY -> REFLECT -> DECIDE`
 
 **Arguments received:** $ARGUMENTS
+
+## Fresh-campaign and budget contract
+
+Do not fork this long-running loop from the caller's transcript. The initial
+invocation runs in its current session; unattended runners start one fresh,
+non-persistent provider process per item through `scripts/provider-run.sh`.
+That runner uses `codex exec --ephemeral` or Claude's
+`--no-session-persistence`, so an item receives only its explicit prompt and
+the persisted backlog/quality state—not its parent's session history.
+
+Before an unattended run, acquire operator-scoped admission with
+`scripts/autonomous-loop-runtime.js admit`. Its launcher **must** pass
+`--owner-pid` for the long-lived loop process (for Bash, `"$$"`); the runtime
+rejects an omitted owner rather than guessing from the short-lived `node`
+child. It also requires a local, user-configured usage adapter that prints
+only this JSON shape:
+
+```json
+{ "fiveHourPercent": 12, "sevenDayPercent": 18 }
+```
+
+For a Bash-launched Ralph loop, the admission must bind the slot to that
+launcher's PID, not the `node` child that evaluates the command:
+
+```bash
+node "$AUTONOMOUS_RUNTIME" admit \
+  --kind ralph \
+  --id "$LOOP_ID" \
+  --owner-pid "$$" \
+  --usage-command "$CLAUDE_USAGE_COMMAND"
+```
+
+The default gate refuses a new loop at 70% on either window, refuses a third
+loop across all repositories for the operator, and records only sanitized
+percentages/outcomes under `$XDG_STATE_HOME/claude-kit/autonomous-loops/`.
+Never put account credentials, raw usage responses, or that telemetry in a
+repository.
+
+If the runtime reports corrupt admission state, stop the affected loop and use
+its exact ID—or the 64-character hash in the corrupt record's filename—to
+perform the explicit, audited repair below. This command refuses to remove a
+readable record, so it cannot silently free a live loop:
+
+```bash
+node "$AUTONOMOUS_RUNTIME" repair \
+  --id "$LOOP_ID" \
+  --confirm remove-corrupt-record
+```
+
+After each completed item, if the runtime reports observed transcript/context
+tokens at or above `RALPH_CONTEXT_CAP_TOKENS` (default 80000), atomically mark
+the exact state file for a fresh handoff:
+
+```bash
+AUTONOMOUS_RUNTIME="$(dirname "$SCRIPT")/autonomous-loop-runtime.js"
+node "$AUTONOMOUS_RUNTIME" context-break \
+  --state "$EVIDENCE_DIR/state.json" \
+  --observed-tokens "$OBSERVED_CONTEXT_TOKENS" \
+  --cap-tokens "${RALPH_CONTEXT_CAP_TOKENS:-80000}"
+```
+
+When that returns `"breakRequired":true`, stop this campaign after state is
+written; do not compact and continue. Launch a new process through
+`autonomous-loop-runtime.js fresh-launch` with the state file and target
+directory. The new agent reads only that handoff and resumes remaining items.
 
 ## Execution
 
@@ -348,17 +412,17 @@ if [ -f "$SOTA_HISTORY" ]; then
     LAST_EPOCH=$(date -j -f "%Y-%m-%d" "${LAST_DATE%T*}" "+%s" 2>/dev/null || date -d "$LAST_DATE" "+%s")
     DAYS_AGO=$(( ($(date "+%s") - LAST_EPOCH) / 86400 ))
     if [ "$DAYS_AGO" -gt 7 ]; then
-      echo "⚠️  SOTA last run ${DAYS_AGO} days ago — auto-running /bs:sota"
+      echo "⚠️  SOTA last run ${DAYS_AGO} days ago — run the SOTA skill before the main loop"
     fi
   else
-    echo "⚠️  SOTA never run — auto-running /bs:sota"
+    echo "⚠️  SOTA never run — run the SOTA skill before the main loop"
   fi
 else
-  echo "⚠️  SOTA history missing — auto-running /bs:sota"
+  echo "⚠️  SOTA history missing — run the SOTA skill before the main loop"
 fi
 ```
 
-If SOTA is stale (>7 days or never run), invoke `/bs:sota` before starting the main loop. Skip if `--dry-run` or if all items are inline (since inline runs are typically short ad-hoc batches).
+If SOTA is stale (>7 days or never run), invoke the `sota` skill before starting the main loop. Skip if `--dry-run` or if all items are inline (since inline runs are typically short ad-hoc batches).
 
 ### Step 1: Git Hygiene
 

@@ -1,4 +1,9 @@
 {
+  "policy": {
+    "summary": "Codex receives reusable engineering workflows that do not require Claude-only product integrations. Native Agent Skills are the sole Codex parity surface; legacy /prompts adapters are retired.",
+    "include": "Development, quality, maintenance, review, and repository workflows that operate from the checked-out project and documented CLI/MCP capabilities.",
+    "exclude": "Claude-only content and idea workflows that depend on unavailable product integrations or are intentionally provider-specific. An exclusion must be recorded here before it is omitted from the manifest."
+  },
   "skills": [
     "backlog",
     "deps",
@@ -20,6 +25,11 @@
     "error-handling",
     "test-strategy",
     "verify-claim",
-    "patterns"
+    "patterns",
+    "merge-train",
+    "scrub",
+    "strategy",
+    "sota",
+    "recover-quality"
   ]
 }

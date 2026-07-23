@@ -70,6 +70,11 @@ done < <(find ~/Projects -maxdepth 2 -mindepth 2 -type d 2>/dev/null)
 
 ## Phase 2: Systemic Fixes
 
+**Status: these are templates, not existing infrastructure.** Neither
+`~/.claude/hooks/pre-commit` nor `scripts/auto-regression-test.sh` exists until
+this phase writes them. Generate each file from the snippet below when Phase 2
+runs; do not assume either is already wired up on a fresh recovery pass.
+
 ### Fix 1: Pre-Commit Quality Gate (Prevents Category D)
 
 **File**: `~/.claude/hooks/pre-commit`

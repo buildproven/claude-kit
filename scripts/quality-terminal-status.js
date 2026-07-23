@@ -34,16 +34,33 @@ function providerStatus(manifest, failure) {
   const successfulReviews = (manifest.reviews || []).filter(
     (review) => review.status === "success",
   );
+  const advisoryReviews = (manifest.reviews || []).filter(
+    (review) => review.status === "advisory",
+  );
+  if (advisoryReviews.length > 0) {
+    return `${advisoryReviews.length} CI-only advisory checkpoint(s) complete`;
+  }
   return successfulReviews.length > 0
     ? `${successfulReviews.length} checkpoint(s) complete`
     : "not completed";
 }
 
 function breakGlassStatus(manifest) {
-  if (manifest.risk?.tier !== "critical") return "not required";
+  // A manifest created before mergeAuthority was introduced must report the
+  // same manual-governance requirement that final authorization enforces.
+  const mergeAuthority = manifest.risk?.mergeAuthority || "human-required";
+  if (mergeAuthority !== "human-required") {
+    return "not required (autonomous merge authority)";
+  }
+  if (manifest.risk?.tier !== "critical") {
+    // The terminal diagnosis does not re-run the authoritative floor matcher;
+    // avoid claiming routine manual-governance campaigns need approval when
+    // only an exceptional human-floor path could require it.
+    return "not required unless the manual security floor applies";
+  }
   if (
     manifest.approval?.approved === true &&
-    invocation.approvalValid(manifest)
+    invocation.approvalValid(manifest, manifest.repo.realpath)
   ) {
     return `approved through ${manifest.approval.expiresAt}`;
   }

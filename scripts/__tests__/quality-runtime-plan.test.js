@@ -64,6 +64,20 @@ describe("quality runtime planning", () => {
     expect(plan(100, 500, 100000).campaignSeconds).toBe(900);
   });
 
+  it("reserves every required gate before the mandatory discovery review", () => {
+    const plan = planRuntime({
+      riskScore: 60,
+      diffStats: { files: 2, lines: 12 },
+      gateCount: 3,
+    });
+
+    expect(plan.gateReserveSeconds).toBe(360);
+    expect(plan.campaignSeconds).toBe(600);
+    expect(plan.campaignSeconds).toBeGreaterThanOrEqual(
+      plan.gateReserveSeconds + plan.reviewSeconds,
+    );
+  });
+
   it("lets explicit quality levels raise depth without erasing size scaling", () => {
     const level95 = planRuntime({
       riskScore: 5,
@@ -106,10 +120,16 @@ describe("quality runtime planning", () => {
     expect(micro.taskType).toBe("docs");
     expect(micro.campaignSeconds).toBe(300);
 
+    // BUI-381: the security floor on .github/workflows/** is content-aware —
+    // a file with only a `name:` header would now score `high`, not
+    // `critical` (see scripts/__tests__/risk-score.test.js for that case in
+    // isolation). Use genuinely risk-bearing content (permissions: + run:)
+    // here so this end-to-end CLI-seam test still exercises the critical
+    // path it's named for.
     fs.mkdirSync(path.join(repo, ".github", "workflows"), { recursive: true });
     fs.writeFileSync(
       path.join(repo, ".github", "workflows", "quality.yml"),
-      "name: quality\n",
+      "name: quality\npermissions:\n  contents: write\njobs:\n  build:\n    steps:\n      - run: ./deploy.sh\n",
     );
     execFileSync("git", ["add", ".github/workflows/quality.yml"], {
       cwd: repo,
@@ -136,5 +156,69 @@ describe("quality runtime planning", () => {
     );
     expect(huge.workload).toBe("huge");
     expect(huge.campaignSeconds).toBe(900);
+  });
+
+  it("includes an initialized submodule's expanded delta in its workload", () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "quality-submodule-"));
+    const submodule = path.join(parent, "core");
+    const repo = path.join(parent, "consumer");
+    fs.mkdirSync(submodule);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: submodule });
+    execFileSync("git", ["config", "user.name", "test"], { cwd: submodule });
+    execFileSync("git", ["config", "user.email", "test@example.com"], {
+      cwd: submodule,
+    });
+    fs.writeFileSync(path.join(submodule, "README.md"), "base\n");
+    execFileSync("git", ["add", "README.md"], { cwd: submodule });
+    execFileSync("git", ["commit", "-q", "-m", "base"], { cwd: submodule });
+    const previous = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: submodule,
+      encoding: "utf8",
+    }).trim();
+    fs.writeFileSync(
+      path.join(submodule, "expanded.md"),
+      "line\n".repeat(1000),
+    );
+    execFileSync("git", ["add", "expanded.md"], { cwd: submodule });
+    execFileSync("git", ["commit", "-q", "-m", "expanded"], { cwd: submodule });
+    const current = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: submodule,
+      encoding: "utf8",
+    }).trim();
+
+    fs.mkdirSync(repo);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "test"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "test@example.com"], {
+      cwd: repo,
+    });
+    fs.cpSync(submodule, path.join(repo, "core"), { recursive: true });
+    execFileSync(
+      "git",
+      ["update-index", "--add", "--cacheinfo", `160000,${previous},core`],
+      { cwd: repo },
+    );
+    execFileSync("git", ["commit", "-q", "-m", "base pointer"], {
+      cwd: repo,
+    });
+    execFileSync("git", ["switch", "-q", "-c", "feature"], { cwd: repo });
+    execFileSync(
+      "git",
+      ["update-index", "--cacheinfo", `160000,${current},core`],
+      {
+        cwd: repo,
+      },
+    );
+    execFileSync("git", ["commit", "-q", "-m", "bump core"], { cwd: repo });
+
+    const plan = JSON.parse(
+      execFileSync("node", [PLANNER, "--base", "main", "--json"], {
+        cwd: repo,
+        encoding: "utf8",
+      }),
+    );
+    expect(plan.diffStats.files).toBeGreaterThan(1);
+    expect(plan.diffStats.lines).toBeGreaterThanOrEqual(1000);
+    expect(plan.workload).toBe("medium");
   });
 });

@@ -28,7 +28,11 @@ function fixture() {
   mkdirSync(target);
   mkdirSync(bin);
   copyFileSync(deadline, join(setup, "scripts/run-with-deadline.py"));
-  for (const name of ["provider-run.sh", "provider-policy.sh"]) {
+  for (const name of [
+    "provider-run.sh",
+    "provider-policy.sh",
+    "autonomous-loop-runtime.js",
+  ]) {
     copyFileSync(join(repo, "scripts", name), join(setup, "scripts", name));
     chmodSync(join(setup, "scripts", name), 0o755);
   }
@@ -41,7 +45,12 @@ function fixture() {
   execFileSync("git", ["add", "README.md"], { cwd: target });
   execFileSync("git", ["commit", "-m", "chore: initial"], { cwd: target });
   executable(join(bin, "claude"), "echo claude-must-not-run >&2; exit 91");
-  return { root, setup, target, bin };
+  const usage = join(bin, "claude-usage");
+  executable(
+    usage,
+    "printf '%s' '{\"fiveHourPercent\":10,\"sevenDayPercent\":20}'",
+  );
+  return { root, setup, target, bin, usage };
 }
 
 describe("overnight loop", () => {
@@ -89,6 +98,7 @@ describe("overnight loop", () => {
           SETUP_REPO: fx.setup,
           CURL_BIN: join(fx.bin, "curl"),
           LINEAR_API_KEY: "test-token",
+          CLAUDE_USAGE_COMMAND: fx.usage,
           TMPDIR: fx.root,
         },
       },

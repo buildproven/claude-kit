@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import {
   appendFileSync,
+  readFileSync,
   mkdtempSync,
   mkdirSync,
   writeFileSync,
@@ -14,6 +15,11 @@ import { describe, expect, it } from "vitest";
 
 const SCRIPT = path.resolve(import.meta.dirname, "..", "setup-claude-sync.sh");
 const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..");
+const LINK_MANIFEST = path.join(
+  REPO_ROOT,
+  "scripts",
+  "claude-link-manifest.sh",
+);
 
 /** Run the sync script against a throwaway config dir. Never touches a real $HOME. */
 function run(args, configDir, scriptPath = SCRIPT, setCodexTarget = true) {
@@ -47,6 +53,21 @@ const sandbox = () =>
   path.join(mkdtempSync(path.join(tmpdir(), "kit-sync-")), ".claude");
 
 describe("setup-claude-sync.sh", () => {
+  it("uses the same declared installation surface as install.sh", () => {
+    const manifest = readFileSync(LINK_MANIFEST, "utf8");
+    const install = readFileSync(path.join(REPO_ROOT, "install.sh"), "utf8");
+    const sync = readFileSync(SCRIPT, "utf8");
+    expect(manifest).toContain(
+      "CLAUDE_LINK_DIRS=(commands skills agents scripts)",
+    );
+    expect(install).toContain(
+      'source "$PROJECT_DIR/scripts/claude-link-manifest.sh"',
+    );
+    expect(sync).toContain(
+      'source "$REPO_ROOT/scripts/claude-link-manifest.sh"',
+    );
+  });
+
   it("--repair links all four dirs and every hook resolves", () => {
     const cfg = sandbox();
     const { code, stdout } = run(["--repair"], cfg);

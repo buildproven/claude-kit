@@ -142,7 +142,39 @@ describe("quality-run-governor CLI", () => {
   it("remaining: fails closed without a consistent deadline", () => {
     const state = healthy();
     delete state.deadline_epoch;
-    expect(run(["remaining", sentinel(state)]).code).not.toBe(0);
+    expect(run(["remaining", sentinel(state)]).code).toBe(2);
+  });
+
+  it("remaining: derives a valid deadline from an invocation manifest governor", () => {
+    const startedAtEpoch = Math.floor(Date.now() / 1000);
+    const manifest = sentinel({
+      schemaVersion: 1,
+      governor: {
+        executionBudgetVersion: 1,
+        startedAtEpoch,
+        providerSecondsLimit: 900,
+        providerSecondsUsed: 850,
+        startCommitSha: "abc123",
+        maxFixCommits: 1,
+        reReviewReserveSeconds: 60,
+        maxReviewRounds: 2,
+        roundsUsed: 0,
+      },
+    });
+    const { code, out } = run(["remaining", manifest, "--cap", "60"]);
+    expect(code).toBe(0);
+    expect(Number(out.trim())).toBe(50);
+  });
+
+  it("remaining: fails closed for a legacy wall-clock manifest", () => {
+    const manifest = sentinel({
+      schemaVersion: 1,
+      governor: {
+        startedAtEpoch: Math.floor(Date.now() / 1000),
+        campaignSeconds: 3600,
+      },
+    });
+    expect(run(["remaining", manifest, "--cap", "60"]).code).not.toBe(0);
   });
 
   it("record-finding persists the exact set for targeted verification", () => {

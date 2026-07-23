@@ -20,6 +20,18 @@ const MANAGER = path.join(ROOT, "scripts", "worktree-manager.js");
 const COMMIT_GUARD = path.join(ROOT, "scripts", "block-commit-main.sh");
 const temporaryRoots = [];
 
+function trackTemporaryRoot(root) {
+  const resolved = path.resolve(root);
+  const allowedPrefixes = [
+    path.join(os.tmpdir(), "wt-manager-"),
+    path.join(ROOT, ".hook test-"),
+  ];
+  if (!allowedPrefixes.some((prefix) => resolved.startsWith(prefix))) {
+    throw new Error(`refusing to clean unsafe test path: ${resolved}`);
+  }
+  temporaryRoots.push(resolved);
+}
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
@@ -59,7 +71,7 @@ function git(repo, ...args) {
 
 function fixture(name = "repo") {
   const parent = mkdtempSync(path.join(os.tmpdir(), "wt-manager-"));
-  temporaryRoots.push(parent);
+  trackTemporaryRoot(parent);
   const repo = path.join(parent, name);
   const remote = path.join(parent, "remote.git");
   mkdirSync(repo);
@@ -80,7 +92,7 @@ function fixture(name = "repo") {
 
 function persistentFixture() {
   const repo = mkdtempSync(path.join(ROOT, ".hook test-"));
-  temporaryRoots.push(repo);
+  trackTemporaryRoot(repo);
   run("git", ["init", "--initial-branch=main", repo]);
   git(repo, "config", "user.email", "tests@example.com");
   git(repo, "config", "user.name", "Worktree Tests");
@@ -231,6 +243,40 @@ describe("worktree-manager public CLI", () => {
     },
   );
 
+  it("bases a new worktree on origin's tip even when local default-branch is stale", () => {
+    const { repo, remote } = fixture();
+    // Advance the remote past local main without updating local main or its
+    // remote-tracking ref, reproducing "nobody's run git pull recently".
+    const clone = mkdtempSync(path.join(os.tmpdir(), "wt-manager-clone-"));
+    trackTemporaryRoot(clone);
+    run("git", ["clone", "--quiet", remote, clone]);
+    git(clone, "config", "user.email", "tests@example.com");
+    git(clone, "config", "user.name", "Worktree Tests");
+    writeFileSync(path.join(clone, "OVERRIDES.md"), "new file\n");
+    git(clone, "add", "OVERRIDES.md");
+    git(clone, "commit", "-m", "add file only present upstream");
+    git(clone, "push", "origin", "main");
+    const staleTip = git(repo, "rev-parse", "origin/main");
+    const freshTip = git(clone, "rev-parse", "main");
+    expect(staleTip).not.toBe(freshTip);
+
+    const created = create(repo, "feature/from-fresh-origin");
+
+    expect(git(created.worktreePath, "rev-parse", "HEAD")).toBe(freshTip);
+    expect(existsSync(path.join(created.worktreePath, "OVERRIDES.md"))).toBe(
+      true,
+    );
+  });
+
+  it("does not silently fall back when a configured origin cannot refresh", () => {
+    const { parent, repo } = fixture();
+    git(repo, "remote", "set-url", "origin", path.join(parent, "missing.git"));
+
+    expect(() => create(repo, "feature/failed-refresh")).toThrow(
+      /git -C .* fetch origin --quiet failed/,
+    );
+  });
+
   it("creates once and reuses the registered branch worktree", () => {
     const { repo } = fixture();
     const first = create(repo, "feature/reuse");
@@ -238,6 +284,46 @@ describe("worktree-manager public CLI", () => {
     expect(first.reused).toBe(false);
     expect(second.reused).toBe(true);
     expect(second.worktreePath).toBe(first.worktreePath);
+  });
+
+  it("always produces a genuine linked worktree, never a relabeled primary checkout", () => {
+    const { repo } = fixture();
+    const primaryGitDir = git(
+      repo,
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-dir",
+    );
+    const commonDirBefore = git(
+      repo,
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-common-dir",
+    );
+    expect(primaryGitDir).toBe(commonDirBefore);
+
+    const created = create(repo, "feature/real-worktree");
+
+    const worktreeGitDir = git(
+      created.worktreePath,
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-dir",
+    );
+    const worktreeCommonDir = git(
+      created.worktreePath,
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-common-dir",
+    );
+    expect(worktreeGitDir).not.toBe(worktreeCommonDir);
+    expect(created.worktreePath).not.toBe(realpathSync(repo));
+    // The primary checkout itself must remain untouched: still on main, still
+    // its own common dir (not relabeled as the new branch's worktree).
+    expect(git(repo, "branch", "--show-current")).toBe("main");
+    expect(
+      git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+    ).toBe(commonDirBefore);
   });
 
   it("refuses to reuse a worktree owned by another invocation", () => {
@@ -282,6 +368,139 @@ describe("worktree-manager public CLI", () => {
     expect(output.removedPath).toBe(worktree.worktreePath);
     expect(output.branchDeleted).toBe(true);
     expect(existsSync(worktree.worktreePath)).toBe(false);
+  });
+
+  it("removes an eligible merged worktree with initialized submodules", () => {
+    const { parent, repo } = fixture();
+    const submoduleSource = path.join(parent, "submodule-source");
+    const submoduleRemote = path.join(parent, "submodule.git");
+    mkdirSync(submoduleSource);
+    run("git", ["init", "--initial-branch=main", submoduleSource]);
+    git(submoduleSource, "config", "user.email", "tests@example.com");
+    git(submoduleSource, "config", "user.name", "Worktree Tests");
+    writeFileSync(path.join(submoduleSource, "README.md"), "submodule\n");
+    git(submoduleSource, "add", "README.md");
+    git(submoduleSource, "commit", "-m", "initial submodule");
+    run("git", ["init", "--bare", submoduleRemote]);
+    run("git", [
+      "--git-dir",
+      submoduleRemote,
+      "symbolic-ref",
+      "HEAD",
+      "refs/heads/main",
+    ]);
+    git(submoduleSource, "remote", "add", "origin", submoduleRemote);
+    git(submoduleSource, "push", "-u", "origin", "main");
+
+    run("git", [
+      "-C",
+      repo,
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      submoduleRemote,
+      "vendor/submodule",
+    ]);
+    git(repo, "commit", "-am", "add submodule");
+    git(repo, "push", "origin", "main");
+
+    const worktree = create(repo, "feature/submodule-cleanup");
+    run("git", [
+      "-C",
+      worktree.worktreePath,
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "update",
+      "--init",
+      "--recursive",
+    ]);
+    const output = manager([
+      "remove",
+      "--repo",
+      repo,
+      "--branch",
+      "feature/submodule-cleanup",
+      "--delete-branch",
+    ]).json;
+
+    expect(output.removedPath).toBe(worktree.worktreePath);
+    expect(output.forcedForSubmodules).toBe(true);
+    expect(output.branchDeleted).toBe(true);
+    expect(existsSync(worktree.worktreePath)).toBe(false);
+  });
+
+  it("refuses ignored submodule dirt before force removal", () => {
+    const { parent, repo } = fixture();
+    const submoduleSource = path.join(parent, "ignored-submodule-source");
+    const submoduleRemote = path.join(parent, "ignored-submodule.git");
+    mkdirSync(submoduleSource);
+    run("git", ["init", "--initial-branch=main", submoduleSource]);
+    git(submoduleSource, "config", "user.email", "tests@example.com");
+    git(submoduleSource, "config", "user.name", "Worktree Tests");
+    writeFileSync(path.join(submoduleSource, "README.md"), "submodule\n");
+    git(submoduleSource, "add", "README.md");
+    git(submoduleSource, "commit", "-m", "initial submodule");
+    run("git", ["init", "--bare", submoduleRemote]);
+    run("git", [
+      "--git-dir",
+      submoduleRemote,
+      "symbolic-ref",
+      "HEAD",
+      "refs/heads/main",
+    ]);
+    git(submoduleSource, "remote", "add", "origin", submoduleRemote);
+    git(submoduleSource, "push", "-u", "origin", "main");
+
+    run("git", [
+      "-C",
+      repo,
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      submoduleRemote,
+      "vendor/submodule",
+    ]);
+    git(repo, "commit", "-am", "add submodule");
+    git(repo, "push", "origin", "main");
+
+    const worktree = create(repo, "feature/ignored-submodule-dirt");
+    run("git", [
+      "-C",
+      worktree.worktreePath,
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "update",
+      "--init",
+      "--recursive",
+    ]);
+    git(
+      worktree.worktreePath,
+      "config",
+      "submodule.vendor/submodule.ignore",
+      "all",
+    );
+    writeFileSync(
+      path.join(worktree.worktreePath, "vendor", "submodule", "dirty.txt"),
+      "dirty\n",
+    );
+
+    const { json } = manager(
+      [
+        "remove",
+        "--repo",
+        repo,
+        "--branch",
+        "feature/ignored-submodule-dirt",
+        "--delete-branch",
+      ],
+      { ok: false },
+    );
+    expect(json.code).toBe("DIRTY");
+    expect(existsSync(worktree.worktreePath)).toBe(true);
   });
 
   it("refuses dirty worktrees", () => {
@@ -459,6 +678,59 @@ esac
     );
     expect(state.locked).toBe(true);
     expect(state.lockReason).toBe("owner-20");
+  });
+
+  it("restores ownership when a forced submodule retry fails", () => {
+    const { parent, repo } = fixture();
+    const worktree = create(repo, "feature/forced-remove-rollback", [
+      "--lock-reason",
+      "owner-22",
+    ]);
+    const bin = path.join(parent, "force-remove-bin");
+    mkdirSync(bin);
+    const realGit = spawnSync("which", ["git"], {
+      encoding: "utf8",
+    }).stdout.trim();
+    writeFileSync(
+      path.join(bin, "git"),
+      `#!/bin/sh
+case "$*" in
+  *"worktree remove --force"*) echo "simulated forced removal failure" >&2; exit 2 ;;
+  *"worktree remove"*) echo "working trees containing submodules cannot be moved or removed" >&2; exit 2 ;;
+  *) exec "${realGit}" "$@" ;;
+esac
+`,
+    );
+    chmodSync(path.join(bin, "git"), 0o755);
+    const { json } = manager(
+      [
+        "remove",
+        "--repo",
+        repo,
+        "--branch",
+        "feature/forced-remove-rollback",
+        "--recover",
+        "--owner",
+        "owner-22",
+        "--skip-pr-check",
+      ],
+      {
+        ok: false,
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+    expect(json.code).toBe("COMMAND_FAILED");
+    expect(existsSync(worktree.worktreePath)).toBe(true);
+    const state = manager([
+      "status",
+      "--repo",
+      repo,
+      "--skip-pr-check",
+    ]).json.worktrees.find(
+      (candidate) => candidate.branch === "feature/forced-remove-rollback",
+    );
+    expect(state.locked).toBe(true);
+    expect(state.lockReason).toBe("owner-22");
   });
 
   it("records explicit recovery evidence when removal and relocking both fail", () => {
@@ -1113,9 +1385,14 @@ describe("canonical-source contract", () => {
     expect(files).toEqual([]);
   });
 
-  it("contains no force worktree removal, recursive deletion, or force branch deletion", () => {
+  it("limits force removal to the initialized-submodule recovery path", () => {
     const source = readFileSync(MANAGER, "utf8");
-    expect(source).not.toMatch(/worktree["',\s]+remove["',\s]+--force/);
+    expect(source).toMatch(
+      /submodules cannot be moved or removed[\s\S]*worktree", "remove", "--force", record\.path/,
+    );
+    expect(
+      source.match(/worktree", "remove", "--force", record\.path/g),
+    ).toHaveLength(1);
     expect(source).not.toContain("rm -rf");
     expect(source).not.toMatch(/branch["',\s]+-D/);
   });

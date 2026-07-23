@@ -44,6 +44,18 @@ def test_clean_pair_has_no_violations(tmp_path: Path) -> None:
     assert rep.violations == [], [v.detail for v in rep.violations]
 
 
+def test_overrides_md_is_exempt_from_command_contract(tmp_path: Path) -> None:
+    # commands/OVERRIDES.md is drift-tracking documentation (see
+    # check-command-drift.sh), not an invokable command — it has no frontmatter
+    # and delegates to nothing, by design. It must live at exactly this path for
+    # the drift-guard script to find it, so exclude it by name rather than
+    # requiring callers to relocate it out of commands/.
+    _mk(tmp_path, "commands/OVERRIDES.md", "# Command overrides\n\nJust a table.\n")
+    rep = csc_lint.lint(tmp_path)
+    assert rep.commands == 0
+    assert rep.violations == [], [v.detail for v in rep.violations]
+
+
 def test_r1_delegation_prose_is_sufficient(tmp_path: Path) -> None:
     # R1 used to demand an `invokes:` frontmatter key. Claude Code DOES NOT PARSE
     # that field (verified against the 2.1.207 binary: `allowed-tools`,

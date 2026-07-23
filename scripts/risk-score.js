@@ -8,13 +8,16 @@
  * the quality skill can scale machine-review depth (Claude agent count, Codex
  * effort, Codex rounds) proportionally. Works in ANY repo with zero per-repo
  * setup: built-in defaults cover the common cases; a repo's harness-config.json
- * (scorePolicy/securityFloor) is merged over the defaults when present.
+ * (scorePolicy/securityFloor/mergeAuthority) is merged over the defaults when
+ * present.
  *
  * Why this exists: review is machine-only (Claude finds, Codex verifies) on
  * flat-rate subscriptions, so the real cost is wall-clock. Running the full
  * 6-agent + Codex-adversarial pass on a one-line comment change is pure waste;
  * skipping depth on a security-surface change is dangerous. The score scales
- * depth between those — but never to zero (there is no human floor).
+ * depth between those — but never to zero. Merge authority is a separate,
+ * explicit policy: autonomous by default, with manual governance available as
+ * an opt-in for repositories that need it.
  *
  * Design constraints:
  *   - Zero runtime dependencies (must run in 23 repos with no node_modules).
@@ -48,6 +51,12 @@ const CRITICAL_RISK_SCORE = 75;
 // ---------------------------------------------------------------------------
 
 const DEFAULTS = {
+  // Review risk controls how deeply the system verifies a change; it is not a
+  // proxy for whether an operator must type an approval command. New quality
+  // campaigns merge autonomously once their revision-bound evidence is clean.
+  // A repository can explicitly retain the legacy signed human capability by
+  // setting scorePolicy.mergeAuthority to "human-required".
+  mergeAuthority: "autonomous",
   // Path → base score. First matching tier wins (most-sensitive first).
   // Security surface pins a high floor regardless of change nature.
   securityFloor: [
@@ -119,17 +128,11 @@ const DEFAULTS = {
     "**/.env*",
     "**/harness-config.json",
   ],
-  // The ALWAYS-HUMAN subset of the security floor. Even on a repo that cannot be
-  // server-side enforced (private, no Pro) — where critical tier otherwise
-  // accepts clean review + green gates in lieu of a human break-glass — a change
-  // touching these paths STILL requires a human capability. Rationale (research
-  // 2026-07: agent security PRs get heightened human scrutiny, median review
-  // 3.92h vs 0.11h): secrets, credentials, keys, auth, licensing, deploy, and
-  // webhooks are where an autonomous miss is unrecoverable. Deliberately NARROWER
-  // than securityFloor: workflows/husky/install.sh are your own config and go
-  // through the autonomous path on unprotectable repos. Repositories may EXTEND
-  // this list via scorePolicy.humanFloor, but cannot remove the built-in minimum:
-  // policy from the reviewed revision must never be able to authorize itself.
+  // The legacy manual-governance subset of the security floor. It is evaluated
+  // only when a repository explicitly selects mergeAuthority=human-required.
+  // Repositories may EXTEND this list via scorePolicy.humanFloor, but cannot
+  // remove the built-in minimum: policy from the reviewed revision must never
+  // relax its own manually governed surface.
   // Matched CASE-INSENSITIVELY (see touchesHumanFloor) so AUTH/, .PEM, .Env
   // cannot evade by casing. Token-broad on purpose: a floor that misses id_rsa,
   // .p12, oauth, or password is not a floor (Codex + security-auditor review).
@@ -219,6 +222,14 @@ const DEFAULTS = {
     medium: 35, // default for unclassified source
     low: 10,
   },
+  // Path patterns from securityFloor whose floor classification is
+  // content-gated rather than an unconditional path pin (BUI-381). A file
+  // matching one of these still starts in securityFloor's path tier, but is
+  // only actually HELD at the floor score if its diff touches risk-bearing
+  // content (see workflowDiffIsRiskBearing); otherwise it is downgraded to
+  // the `high` tier so a one-line comment/version-pin edit doesn't force the
+  // same critical-tier review as a permissions/secrets/run: rewrite.
+  contentAwareFloor: ["**/.github/workflows/**"],
   mechanicalDelta: -25, // bounded subtraction for mechanical changes
   magnitude: {
     // Diff size adds risk and caps how far mechanical can subtract.
@@ -464,6 +475,7 @@ function collectDescriptors(base, gitRunner) {
 
   const statuses = parseNameStatusZ(nameStatus);
   const stats = parseNumstatZ(numstat);
+  const submoduleStats = collectSubmoduleDiffStats(mergeBase, gitRunner);
 
   let totalLines = 0;
   const descriptors = [];
@@ -495,9 +507,78 @@ function collectDescriptors(base, gitRunner) {
 
   return {
     descriptors,
-    diffStats: { files: descriptors.length, lines: totalLines },
+    diffStats: {
+      files: descriptors.length + submoduleStats.files,
+      lines: totalLines + submoduleStats.lines,
+    },
     mergeBase,
   };
+}
+
+function collectSubmoduleDiffStats(mergeBase, gitRunner) {
+  // A gitlink's numstat is "-\t-\tpath", so it otherwise contributes zero
+  // workload even though review expands the referenced submodule history. Read
+  // the raw object IDs and, when the submodule checkout and both pinned commits
+  // are available, include its own base..head numstat in the parent workload.
+  // This is deliberately best-effort: an uninitialized/deleted submodule must
+  // never make risk scoring fail or invent a size estimate.
+  const raw = safeGit(gitRunner, [
+    "diff",
+    "--raw",
+    "--no-abbrev",
+    "-z",
+    `${mergeBase}...HEAD`,
+  ]);
+  let files = 0;
+  let lines = 0;
+  for (const entry of parseRawZ(raw)) {
+    if (
+      entry.oldMode !== "160000" ||
+      entry.newMode !== "160000" ||
+      isNullObjectId(entry.oldObject) ||
+      isNullObjectId(entry.newObject)
+    ) {
+      continue;
+    }
+    const nested = safeGit(gitRunner, [
+      "-C",
+      entry.file,
+      "diff",
+      "--numstat",
+      `${entry.oldObject}..${entry.newObject}`,
+    ]);
+    for (const stat of parseNumstatZ(nested)) {
+      const added = Number.parseInt(stat.add, 10) || 0;
+      const deleted = Number.parseInt(stat.del, 10) || 0;
+      lines += added + deleted;
+      files += 1;
+    }
+  }
+  return { files, lines };
+}
+
+function parseRawZ(raw) {
+  const tokens = String(raw).split("\0");
+  const rows = [];
+  for (let index = 0; index < tokens.length;) {
+    const header = tokens[index++];
+    if (!header) continue;
+    const match = header.match(
+      /^:(\d{6}) (\d{6}) ([0-9a-f]+) ([0-9a-f]+) ([A-Z][0-9]*)$/,
+    );
+    if (!match) continue;
+    const [, oldMode, newMode, oldObject, newObject, status] = match;
+    const baseFile = tokens[index++] || "";
+    const file = ["R", "C"].includes(status[0])
+      ? tokens[index++] || ""
+      : baseFile;
+    rows.push({ oldMode, newMode, oldObject, newObject, file });
+  }
+  return rows;
+}
+
+function isNullObjectId(objectId) {
+  return !objectId || /^0+$/.test(objectId);
 }
 
 const TASK_TYPE_RANK = {
@@ -974,12 +1055,54 @@ function manifestRisk(descriptor, cfg = DEFAULTS) {
   return { ...highest, fields };
 }
 
+// Risk-bearing GitHub Actions diff hunk content (BUI-381): a workflow diff
+// that ONLY touches version pins, comments, `on:` triggers, or job/step
+// names is not the same risk as one that touches permissions, secrets, or
+// what actually executes. Conservative by construction — added OR removed
+// lines matching any of these patterns are enough to keep the floor; only a
+// diff with NONE of these signals downgrades. An unparsable/empty patch
+// (e.g. binary, truncated >200KB) is treated as risk-bearing (fail closed).
+const WORKFLOW_RISK_PATTERNS = [
+  /^permissions\s*:/i, // top-level or job-level permissions block
+  /permissions\s*:\s*\{/i, // inline permissions map
+  /\bsecrets\s*\.\s*[A-Z0-9_]+/, // secrets.FOO reference (added or removed)
+  /\bsecrets\s*:/i, // secrets: passthrough block (reusable workflow calls)
+  /^\s*run\s*:/i, // run: shell step content
+  /^\s*uses\s*:/i, // any uses: line change — new action pin or reference swap
+  /\benv\s*:\s*$/i, // env: block header (new/changed env injection point)
+  /\bGITHUB_TOKEN\b/,
+  /\bpull_request_target\b/i, // notoriously unsafe trigger
+];
+
+function workflowDiffIsRiskBearing(patch) {
+  if (!patch || !patch.trim()) return true; // fail closed on empty/unreadable
+  for (const line of patch.split("\n")) {
+    if (!(line.startsWith("+") || line.startsWith("-"))) continue;
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    const content = line.slice(1);
+    if (WORKFLOW_RISK_PATTERNS.some((pattern) => pattern.test(content))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function descriptorBaseRisk(descriptor, cfg) {
   if (
     matchesPattern(descriptor.file, ["**/package.json"]) &&
     !matchesSecurityFloor(descriptor.file, cfg)
   ) {
     return manifestRisk(descriptor, cfg);
+  }
+  if (
+    matchesPattern(descriptor.file, cfg.contentAwareFloor || []) &&
+    !workflowDiffIsRiskBearing(descriptor.patch)
+  ) {
+    return {
+      score: cfg.base.high,
+      reason:
+        "workflow diff touches only version pins/comments/triggers → high, not security floor",
+    };
   }
   return { score: pathBase(descriptor.file, cfg), reason: "" };
 }
@@ -1006,9 +1129,21 @@ function computeScore(descriptors, diffStats, cfg) {
       topReason = risk.reason;
     }
   }
-  const touchesFloor = descriptors.some((d) =>
-    matchesSecurityFloor(d.file, cfg),
-  );
+  // A file matches the (additive, repo-extensible) security floor by path
+  // but is excluded from touchesFloor when it is ALSO in contentAwareFloor
+  // (currently just workflow YAML) AND its own diff is provably not
+  // risk-bearing (BUI-381). Any other floor file (secrets, auth, deploy,
+  // install.sh, humanFloor, a repo's own extensions, etc.) is an
+  // unconditional path pin, unchanged. This must mirror descriptorBaseRisk's
+  // downgrade exactly, or a downgraded file's score could still get
+  // re-pinned to the floor right back here.
+  const touchesFloor = descriptors.some((d) => {
+    if (!matchesSecurityFloor(d.file, cfg)) return false;
+    if (matchesPattern(d.file, cfg.contentAwareFloor || [])) {
+      return workflowDiffIsRiskBearing(d.patch);
+    }
+    return true;
+  });
   reasons.push(`path base ${base} (most-sensitive: ${topFile || "n/a"})`);
   if (topReason) reasons.push(topReason);
 
@@ -1184,6 +1319,11 @@ function validateCurve(curve) {
 }
 
 function validateScoreConfig(cfg) {
+  if (!["autonomous", "human-required"].includes(cfg?.mergeAuthority)) {
+    throw new Error(
+      "mergeAuthority must be either 'autonomous' or 'human-required'",
+    );
+  }
   for (const name of ["securityFloor", "humanFloor", "high", "low"]) {
     requirePatternList(cfg?.[name], name);
   }
@@ -1263,6 +1403,7 @@ function score({
     const knobs = scoreToKnobs(100, cfg);
     return {
       riskScore: 100,
+      mergeAuthority: cfg.mergeAuthority,
       taskType: "unknown",
       changeNature: "unknown",
       diffStats: { files: 0, lines: 0 },
@@ -1294,6 +1435,7 @@ function score({
   const knobs = scoreToKnobs(scored.riskScore, cfg);
   return {
     ...scored,
+    mergeAuthority: cfg.mergeAuthority,
     taskType,
     diffStats,
     knobs,
@@ -1341,10 +1483,10 @@ function main() {
 if (require.main === module) main();
 
 /**
- * True when ANY changed file matches the always-human security subset
- * (`humanFloor`). Such a change requires a human break-glass capability even on
- * an unprotectable repo where critical tier otherwise auto-approves on clean
- * review. `files` is repo-relative paths; `cfg` is the effective scoring config.
+ * True when ANY changed file matches the legacy manual-governance subset
+ * (`humanFloor`). `quality-authorize-merge.sh` evaluates this only when the
+ * persisted policy explicitly selects human-required merge authority. `files`
+ * is repo-relative paths; `cfg` is the effective scoring config.
  */
 function touchesHumanFloor(files, cfg = DEFAULTS) {
   // Case-INSENSITIVE, normalized matching: an attacker/agent must not evade the
@@ -1374,6 +1516,8 @@ module.exports = {
   matchesPattern,
   globToRegExp,
   fileIsMechanical,
+  workflowDiffIsRiskBearing,
+  descriptorBaseRisk,
   isForcedLogic,
   matchesSecurityFloor,
   touchesHumanFloor,

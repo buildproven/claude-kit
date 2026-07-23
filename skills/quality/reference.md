@@ -31,13 +31,17 @@ records its exact `from..to` range and diff hash, allowing fix rounds to review
 only `previousReviewedHead..currentHead` while final evidence remains bound to
 the complete base/final-HEAD relationship.
 
-Break-glass approval is a signed outer-wrapper capability bound to repository
-key, PR, HEAD, invocation ID, approver, issue time, and expiry. The manifest
-pins the wrapper verification key before attachment and re-verifies the exact
-artifact; artifact-supplied keys are rejected. Approval travels only through
-the outer `BREAK_GLASS_APPROVED=true` environment channel, not command argv.
-Nested autonomous quality processes have no approval-mint command. HEAD
-changes and expiry fail closed.
+Merge authority is distinct from review depth and is persisted in the manifest
+at risk resolution. The global default is `autonomous`: a clean critical review
+merges without a human hop. Quality stops rather than merges when findings,
+provider output, CI, revision identity, or review coverage are unresolved.
+
+Repositories that need manual governance can explicitly set
+`scorePolicy.mergeAuthority` to `human-required`. Only that opt-in enables
+break-glass approval: a signed outer-wrapper capability bound to repository key,
+PR, HEAD, invocation ID, approver, issue time, and expiry. Nested autonomous
+quality processes have no approval-mint command. HEAD changes and expiry fail
+closed.
 
 **Bug fixed 2026-05-11**: when invoked as `/bs:quality --merge` with PR
 context in the natural-language args (e.g. `#410`, `codex/foo`, or a
@@ -83,6 +87,15 @@ primary that exhausts its bounded review clock without converging (a degraded
 primary shouldn't block a merge while a healthy fallback is idle). It does NOT
 run when the primary reports code findings.
 
+For the Wave 3 comparison, `--review-arm native` assigns Codex primary with
+Claude fallback and `--review-arm bespoke` assigns Claude primary with Codex
+fallback. Bootstrap persists both the assigned arm and resolved provider order
+at campaign creation. Telemetry records the assigned arm, actual reviewer,
+effort, and nullable token count separately; provider fallback therefore does
+not corrupt intent-to-treat attribution. Campaigns without an explicit arm
+keep ordinary provider policy and infer the received arm from the actual
+reviewer.
+
 Claude panels share a cancellation sentinel: the first exhausted reviewer
 causes sibling process groups to terminate. A successful review records HEAD;
 later fix rounds use that SHA as their diff base so unchanged commits are not
@@ -90,8 +103,8 @@ reviewed again. Bootstrap clears this state for every new invocation.
 
 When structured exhaustion metadata includes a reset timestamp, quality prints
 that timestamp and the exact manifest-bound retry command. The terminal
-diagnosis reports repository gates, provider checkpoint, break-glass, and
-GitHub CI separately; it does not flatten quota, parser, billing/auth,
+diagnosis reports repository gates, provider checkpoint, merge-authority state,
+and GitHub CI separately; it does not flatten quota, parser, billing/auth,
 code-finding, and CI failures into one generic merge message.
 
 ## Regression History
@@ -231,7 +244,7 @@ auto-fix loop, re-run `npm test` to verify they pass before continuing.
 | `--merge`                            | false   | Auto-merge PR after quality                                                                 |
 | `--skip-tests`                       | false   | Skip hard test gate (config-only repos)                                                     |
 | `--pr <number>`                      | -       | Bind to one open PR                                                                         |
-| `approve --pr <number> --head <sha>` | -       | Mint outer signed break-glass approval for one exact PR/HEAD and continue the run           |
+| `approve --pr <number> --head <sha>` | -       | Legacy `human-required` policy only: mint signed approval for one exact PR/HEAD             |
 | `--manifest <path>`                  | -       | Resume one exact persisted invocation; accepts no other flags                               |
 | `--target-dir <path>`                | -       | Run against this repo (use when invoking from a forked/agent context with no inherited cwd) |
 
@@ -335,7 +348,7 @@ When `harness-config.json` exists in the repo root, the skill reads the resolved
 | `low`      | focused regression         | 75s            |
 | `medium`   | broad correctness/security | 120s           |
 | `high`     | deep adversarial           | 180s           |
-| `critical` | release-veto + break-glass | 540s           |
+| `critical` | release-veto review        | 540s           |
 
 Workload can raise these limits, but the complete default campaign remains
 bounded at 5–15 minutes. Provider fallback has an independent bounded window
@@ -383,15 +396,27 @@ unstructured output.
 ## Trailer Convention
 
 ```
-Reviewed-By: quality (tier=high, reviewer=codex, primary=codex, fallback=claude, findings=0, head=<SHA>, base=<SHA>)
-Reviewed-By: codex (tier=high, findings=0, head=<SHA>, base=<SHA>)
+Reviewed-By: quality
+Reviewed-By: codex
+Quality-Tier: high
+Quality-Reviewer: codex
+Quality-Primary: codex
+Quality-Fallback: claude
+Quality-Findings: 0
+Quality-Head: <SHA>
+Quality-Base: <SHA>
 ```
 
 - `Reviewed-By: quality` is the provider-neutral authorization record.
-- The provider-specific trailer records which reviewer actually completed; it
-  can differ from `primary` when fallback was required.
-- `head` must equal HEAD or HEAD~1 (a dedicated stamp commit), and `base` must
-  equal the current merge-base. Any later code commit invalidates the stamp.
+- `Quality-Reviewer` records which reviewer actually completed; it can differ
+  from `Quality-Primary` when fallback was required.
+- Every `Quality-*` trailer is required exactly once. `Quality-Findings` is the
+  integer `0`, and `Quality-Tier` must meet the selected risk tier.
+- `Quality-Head` must equal HEAD or HEAD~1 (a dedicated stamp commit), and
+  `Quality-Base` must equal the current merge-base. Any later code commit
+  invalidates the stamp.
+- Parenthetical `Reviewed-By` metadata is legacy reader compatibility only and
+  must not be emitted by new quality campaigns.
 
 ## Deep Review Mode (`--audit --deep`)
 

@@ -51,6 +51,30 @@ function recordGateFixture(manifestPath, name, overrides = {}) {
   });
 }
 
+function recordMutationFixture(manifestPath) {
+  invocation.withManifestLock(manifestPath, (manifest) => {
+    if (!["high", "critical"].includes(manifest.risk?.tier)) return;
+    const artifact = path.join(
+      path.dirname(manifestPath),
+      `${manifest.revisions.currentHead}.mutation.json`,
+    );
+    writeFileSync(
+      artifact,
+      JSON.stringify({
+        schemaVersion: 1,
+        invocationId: manifest.invocationId,
+        base: manifest.revisions.baseSha,
+        head: manifest.revisions.currentHead,
+        tier: manifest.risk.tier,
+        method: "revert-diff",
+        mutatedPaths: ["file.js"],
+        testFailureObserved: true,
+      }),
+    );
+    invocation.recordMutation(manifest, { artifact });
+  });
+}
+
 function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
@@ -234,6 +258,78 @@ function prepareCodexReview(
   for (const name of ["lint", "test", "security"]) {
     recordGateFixture(manifestPath, name);
   }
+  recordMutationFixture(manifestPath);
+  return info;
+}
+
+function prepareAdvisoryReview(root, manifestPath, failureCategory) {
+  execFileSync("node", [GOVERNOR, "bump-round", manifestPath], { cwd: root });
+  const info = JSON.parse(
+    execFileSync("node", [INVOCATION, "review-info", manifestPath], {
+      cwd: root,
+      encoding: "utf8",
+    }),
+  );
+  mkdirSync(info.artifactDir, { recursive: true });
+  writeFileSync(
+    path.join(info.artifactDir, "diff.txt"),
+    execFileSync("git", ["diff", `${info.from}..${info.to}`], { cwd: root }),
+  );
+  writeFileSync(
+    path.join(info.artifactDir, "identity.json"),
+    execFileSync("node", [INVOCATION, "review-identity", manifestPath], {
+      cwd: root,
+    }),
+  );
+  writeFileSync(
+    path.join(info.artifactDir, "ci-only.findings.txt"),
+    "NO FINDINGS. Verdict: pass. AI review unavailable; deterministic gates provide low-risk merge evidence.\n",
+  );
+  execFileSync(
+    "node",
+    [
+      INVOCATION,
+      "inventory",
+      manifestPath,
+      "--artifact-dir",
+      info.artifactDir,
+      "--provider",
+      "claude",
+      "--advisory",
+    ],
+    { cwd: root },
+  );
+  const diffSha = createHash("sha256")
+    .update(readFileSync(path.join(info.artifactDir, "diff.txt")))
+    .digest("hex");
+  execFileSync(
+    "node",
+    [
+      INVOCATION,
+      "record-advisory-review",
+      manifestPath,
+      "--from",
+      info.from,
+      "--to",
+      info.to,
+      "--primary",
+      "codex",
+      "--fallback",
+      "claude",
+      "--failed-provider",
+      "claude",
+      "--failure-category",
+      failureCategory,
+      "--artifact-dir",
+      info.artifactDir,
+      "--diff-sha",
+      diffSha,
+    ],
+    { cwd: root },
+  );
+  for (const name of ["lint", "test", "security"]) {
+    recordGateFixture(manifestPath, name);
+  }
   return info;
 }
 
@@ -256,6 +352,7 @@ function recordJudgeArtifact(root, manifest, dispositions = []) {
     [INVOCATION, "judge", manifest, "--artifact", artifact],
     { cwd: root },
   );
+  recordMutationFixture(manifest);
 }
 
 function fakeGh(root, head) {
@@ -343,6 +440,22 @@ describe("quality invocation manifest", () => {
     expect(create(root, args)).not.toBe(first);
   });
 
+  it("creates active-execution manifests without wall-clock deadlines", () => {
+    const root = repo("execution-budget-schema");
+    const manifest = JSON.parse(readFileSync(create(root), "utf8"));
+    expect(manifest.governor).toMatchObject({
+      executionBudgetVersion: 1,
+      gateSecondsLimit: 600,
+      gateSecondsUsed: 0,
+      providerSecondsLimit: 900,
+      providerSecondsUsed: 0,
+      activeExecution: null,
+    });
+    expect(manifest.governor).not.toHaveProperty("campaignDeadlineEpoch");
+    expect(manifest.governor).not.toHaveProperty("providerDeadlineEpoch");
+    expect(manifest.governor).not.toHaveProperty("validationDeadlineEpoch");
+  });
+
   it("authorizes Gemini inside the existing provider attempt budget", () => {
     const root = repo("gemini-provider-attempt");
     const manifest = create(root, []);
@@ -381,6 +494,75 @@ describe("quality invocation manifest", () => {
     expect(changedPolicy.stderr).toMatch(
       /deterministic quality campaign identity collision/,
     );
+  });
+
+  it("binds review-arm attribution to the assigned primary provider", () => {
+    const nativeRoot = repo("native-review-arm");
+    const nativeManifest = JSON.parse(
+      readFileSync(
+        create(nativeRoot, [
+          "--primary",
+          "codex",
+          "--fallback",
+          "claude",
+          "--review-arm",
+          "native",
+        ]),
+        "utf8",
+      ),
+    );
+    expect(nativeManifest.options.reviewArm).toBe("native");
+    expect(nativeManifest.provider.primaryOverride).toBe("codex");
+
+    const bespokeRoot = repo("bespoke-review-arm");
+    const bespokeManifest = JSON.parse(
+      readFileSync(
+        create(bespokeRoot, [
+          "--primary",
+          "claude",
+          "--fallback",
+          "codex",
+          "--review-arm",
+          "bespoke",
+        ]),
+        "utf8",
+      ),
+    );
+    expect(bespokeManifest.options.reviewArm).toBe("bespoke");
+    expect(bespokeManifest.provider.primaryOverride).toBe("claude");
+  });
+
+  it("rejects an arm label that conflicts with its primary provider", () => {
+    const root = repo("conflicting-review-arm");
+    expect(() =>
+      create(root, [
+        "--primary",
+        "codex",
+        "--fallback",
+        "claude",
+        "--review-arm",
+        "bespoke",
+      ]),
+    ).toThrow(/review arm 'bespoke' conflicts with primary provider 'codex'/);
+  });
+
+  it("rejects an explicit experiment arm without a bound primary provider", () => {
+    const root = repo("unbound-review-arm");
+    expect(() => create(root, ["--review-arm", "native"])).toThrow(
+      /explicit review arm requires a primary provider/,
+    );
+  });
+
+  it("does not turn an ordinary provider override into an experiment assignment", () => {
+    const root = repo("ordinary-provider-attribution");
+    const manifest = JSON.parse(
+      readFileSync(
+        create(root, ["--primary", "codex", "--fallback", "claude"]),
+        "utf8",
+      ),
+    );
+    expect(manifest.options.reviewArm).toBeNull();
+    expect(manifest.provider.primaryOverride).toBe("codex");
   });
 
   it("resumes after review without treating provider evidence as configuration drift", () => {
@@ -454,7 +636,15 @@ describe("quality invocation manifest", () => {
         BOOTSTRAP,
         root,
       ],
-      { cwd: root, encoding: "utf8" },
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          BS_QUALITY_PRIMARY: "codex",
+          BS_QUALITY_FALLBACK: "claude",
+        },
+      },
     );
     expect(result.status, result.stderr).toBe(0);
     const manifestPath = result.stdout
@@ -467,6 +657,35 @@ describe("quality invocation manifest", () => {
     expect(manifest.revisions.currentHead).toBe(
       git(root, ["rev-parse", "HEAD"]),
     );
+    expect(manifest.options.reviewArm).toBeNull();
+    expect(manifest.provider.primaryOverride).toBe("codex");
+    expect(manifest.provider.fallbackOverride).toBe("claude");
+  }, 120_000);
+
+  it("routes an explicit bespoke experiment arm through the companion provider", () => {
+    const root = repo("bootstrap-bespoke-arm");
+    const result = spawnSync(
+      "bash",
+      [
+        BOOTSTRAP,
+        "--target-dir",
+        root,
+        "--level",
+        "auto",
+        "--review-arm",
+        "bespoke",
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const manifestPath = result.stdout
+      .split("\n")
+      .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
+      ?.slice("BS_QUALITY_MANIFEST=".length);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifest.options.reviewArm).toBe("bespoke");
+    expect(manifest.provider.primaryOverride).toBe("claude");
+    expect(manifest.provider.fallbackOverride).toBe("codex");
   }, 120_000);
 
   it("binds a non-merge PR bootstrap to the PR base branch and base SHA", () => {
@@ -519,6 +738,115 @@ exit 1
     expect(manifest.revisions.baseHeadSha).toBe(base);
   }, 120_000);
 
+  it("does not false-positive 'base changed during bootstrap' on a stale gh pr view cache (BUI-382)", () => {
+    const root = repo("pr-bootstrap-stale-cache");
+    const staleBase = git(root, ["rev-parse", "origin/main"]);
+    git(root, ["branch", "release", staleBase]);
+    // Advance the release branch on the remote (= this same repo, self-added
+    // as origin — see repo()) AFTER capturing staleBase, simulating a real
+    // commit landing on the PR's base branch. The gh stub below still
+    // reports staleBase as baseRefOid — exactly what a lagging GitHub API
+    // cache would return. A fresh `git ls-remote`/fetch will see the real,
+    // newer tip; the fix must trust that live read over the stale gh field.
+    const worktree = mkdtempSync(path.join(tmpdir(), "quality-release-wt-"));
+    git(root, ["worktree", "add", "-q", worktree, "release"]);
+    writeFileSync(path.join(worktree, "release-only.txt"), "landed\n");
+    git(worktree, ["add", "."]);
+    git(worktree, ["commit", "-q", "-m", "real commit landed on release"]);
+    const freshBase = git(worktree, ["rev-parse", "HEAD"]);
+    expect(freshBase).not.toBe(staleBase);
+
+    const bin = mkdtempSync(path.join(tmpdir(), "quality-bootstrap-gh-"));
+    const gh = path.join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s\\n' '{"number":9,"headRefName":"feature","headRefOid":"${git(root, ["rev-parse", "HEAD"])}","headRepository":{"nameWithOwner":"owner/repo"},"isCrossRepository":false,"baseRefName":"release","baseRefOid":"${staleBase}"}'
+  exit 0
+fi
+if [ "$1 $2" = "repo view" ]; then
+  printf '%s\\n' 'owner/repo'
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(gh, 0o755);
+    const result = spawnSync(
+      "bash",
+      [BOOTSTRAP, "--pr", "9", "--level", "auto"],
+      {
+        cwd: root,
+        env: {
+          ...process.env,
+          CLAUDE_SETUP_ROOT: ROOT,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+        encoding: "utf8",
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).not.toMatch(/base changed during bootstrap/);
+    const manifestPath = result.stdout
+      .split("\n")
+      .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
+      ?.slice("BS_QUALITY_MANIFEST=".length);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifest.revisions.baseRef).toBe("origin/release");
+    // baseHeadSha must reflect the fresh, real tip — not the stale gh
+    // pr view snapshot — so the merge-time freshness gate anchors on truth.
+    expect(manifest.revisions.baseHeadSha).toBe(freshBase);
+  }, 120_000);
+
+  it("still blocks on a genuine base race (fresh ls-remote differs from the post-fetch tip)", () => {
+    // This is a synthetic reproduction of a true TOCTOU race: something
+    // else advances the base AFTER we've already read the live tip via
+    // ls-remote but BEFORE our fetch completes. We simulate it directly by
+    // asserting the guard's structure rather than winning an actual race
+    // window (not reliably reproducible in a test): call git-bootstrap with
+    // a base name that maps to a moving target where the ls-remote read and
+    // the fetched ref genuinely disagree, using two different remotes.
+    const root = repo("pr-bootstrap-genuine-race");
+    const base = git(root, ["rev-parse", "origin/main"]);
+    git(root, ["branch", "release", base]);
+    const bin = mkdtempSync(path.join(tmpdir(), "quality-bootstrap-gh-"));
+    const gh = path.join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s\\n' '{"number":11,"headRefName":"feature","headRefOid":"${git(root, ["rev-parse", "HEAD"])}","headRepository":{"nameWithOwner":"owner/repo"},"isCrossRepository":false,"baseRefName":"nonexistent-branch","baseRefOid":"${base}"}'
+  exit 0
+fi
+if [ "$1 $2" = "repo view" ]; then
+  printf '%s\\n' 'owner/repo'
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(gh, 0o755);
+    const result = spawnSync(
+      "bash",
+      [BOOTSTRAP, "--pr", "11", "--level", "auto"],
+      {
+        cwd: root,
+        env: {
+          ...process.env,
+          CLAUDE_SETUP_ROOT: ROOT,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+        encoding: "utf8",
+      },
+    );
+    // A base branch that doesn't exist on the remote resolves to an empty
+    // ls-remote read, which the guard correctly refuses rather than
+    // silently treating as "no base to check".
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/could not resolve the live PR base tip/);
+  }, 120_000);
+
   it("survives a zsh parent and separate Bash processes", () => {
     const root = repo("zsh");
     git(root, ["commit", "--amend", "-q", "-m", "fix: correct value"]);
@@ -548,10 +876,47 @@ printf '%s\\n' "$manifest"
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     expect(manifest.risk.resolved).toBe(true);
     expect(manifest.risk.tier).not.toBe("auto");
+    expect(manifest.risk.mergeAuthority).toBe("autonomous");
     expect(manifest.risk.taskType).toBe("bugfix");
     expect(manifest.risk.score).toBeGreaterThanOrEqual(60);
     expect(manifest.agents.length).toBeGreaterThanOrEqual(2);
   }, 120_000);
+
+  it("persists an explicit human-required policy in the immutable risk contract", () => {
+    const root = repo("human-required-authority");
+    writeFileSync(
+      path.join(root, "harness-config.json"),
+      JSON.stringify({ scorePolicy: { mergeAuthority: "human-required" } }),
+    );
+    git(root, ["add", "harness-config.json"]);
+    git(root, ["commit", "-qm", "configure manual governance"]);
+    const manifestPath = create(root);
+    const result = spawnSync("bash", [RISK, "--manifest", manifestPath], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifest.risk.mergeAuthority).toBe("human-required");
+  });
+
+  it("fails closed to human-required when a direct risk write omits authority", () => {
+    const root = repo("legacy-risk-authority");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 2,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+    });
+    expect(
+      invocation.loadManifest(manifestPath).manifest.risk.mergeAuthority,
+    ).toBe("human-required");
+  });
 
   it("locates an explicit target manifest without trusting the caller cwd", () => {
     const first = repo("first");
@@ -802,6 +1167,163 @@ exit 1
     ).toBe(0);
   });
 
+  it("carries a valid break-glass approval across a rebase-only HEAD change with no new diff (BUI-380)", () => {
+    const root = repo("approval-rebase-carry");
+    const wrapped = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+      cwd: root,
+      input: JSON.stringify({
+        argv: ["--target-dir", root, "--level", "98"],
+      }),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BREAK_GLASS_APPROVED: "true",
+        BREAK_GLASS_APPROVER: "brett",
+      },
+    });
+    expect(wrapped.status, wrapped.stderr).toBe(0);
+    const manifest = wrapped.stdout
+      .split("\n")
+      .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
+      ?.slice("BS_QUALITY_MANIFEST=".length);
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", manifest], {
+        cwd: root,
+      }).status,
+    ).toBe(0);
+    const beforeState = JSON.parse(readFileSync(manifest, "utf8"));
+    const priorHead = beforeState.revisions.currentHead;
+
+    // Advance main with an unrelated commit, then rebase the feature branch
+    // onto it. This rewrites the feature commit (new SHA, new parent) but
+    // the diff content (file.js: 1 -> 2) is byte-identical.
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(path.join(root, "unrelated.js"), "export const u = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "unrelated main change"]);
+    git(root, ["push", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["rebase", "-q", "origin/main"]);
+    const rebasedHead = git(root, ["rev-parse", "HEAD"]);
+    expect(rebasedHead).not.toBe(priorHead);
+    expect(
+      spawnSync(
+        "git",
+        ["merge-base", "--is-ancestor", priorHead, rebasedHead],
+        {
+          cwd: root,
+        },
+      ).status,
+    ).not.toBe(0); // confirm this is a real rewrite, not a fast-forward
+
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    const afterState = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(afterState.revisions.currentHead).toBe(rebasedHead);
+    expect(afterState.approval.approved).toBe(true);
+    expect(afterState.approval.rebaseCarriedHead).toBe(rebasedHead);
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", manifest], {
+        cwd: root,
+      }).status,
+    ).toBe(0);
+
+    // baseHeadSha (quality-authorize-merge.sh's live-freshness anchor at
+    // merge time, EXPECTED_BASE_OID) must advance with the rebase too, or
+    // merge authorization would keep comparing against the pre-rebase base
+    // forever and wrongly block an up-to-date branch with "PR base changed
+    // after review" even though nothing unreviewed landed.
+    const newMainHead = git(root, ["rev-parse", "origin/main"]);
+    expect(afterState.revisions.baseHeadSha).toBe(newMainHead);
+    expect(afterState.revisions.baseRebaseCarry).toMatchObject({
+      head: rebasedHead,
+      baseSha: newMainHead,
+    });
+    expect(
+      spawnSync(
+        "git",
+        [
+          "merge-base",
+          "--is-ancestor",
+          afterState.revisions.baseHeadSha,
+          rebasedHead,
+        ],
+        { cwd: root },
+      ).status,
+    ).toBe(0);
+
+    // A genuine new content change after the rebase must still invalidate
+    // the carried approval — rebase tolerance must never become a blanket
+    // pass.
+    writeFileSync(path.join(root, "file.js"), "export const value = 3;\n");
+    git(root, ["commit", "-qam", "real content change"]);
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    const finalState = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(finalState.approval.approved).toBe(false);
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", manifest], {
+        cwd: root,
+      }).status,
+    ).not.toBe(0);
+  }, 120_000);
+
+  it("never carries a non-string-patchId approval across a rebase-only HEAD change", () => {
+    // invalidateOrCarryApproval() now guards manifest.approval.patchId with
+    // typeof === "string" before comparing to currentPatchId(), mirroring
+    // the sibling approvalHeadCarriedByRebase() guard, instead of relying
+    // on plain `===` to fail safe by accident of JS equality (null !==
+    // "realhash"). Locks in that a missing/non-string recorded patchId is
+    // never treated as a proven patch-id match, even across a genuine
+    // rebase-only replay.
+    const root = repo("approval-null-patchid");
+    const wrapped = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+      cwd: root,
+      input: JSON.stringify({
+        argv: ["--target-dir", root, "--level", "98"],
+      }),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BREAK_GLASS_APPROVED: "true",
+        BREAK_GLASS_APPROVER: "brett",
+      },
+    });
+    expect(wrapped.status, wrapped.stderr).toBe(0);
+    const manifest = wrapped.stdout
+      .split("\n")
+      .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
+      ?.slice("BS_QUALITY_MANIFEST=".length);
+    const priorHead = JSON.parse(readFileSync(manifest, "utf8")).revisions
+      .currentHead;
+
+    // Simulate an approval record that never got a patchId (e.g. from a
+    // pre-BUI-380 signer): null it out before the rebase.
+    invocation.withManifestLock(manifest, (state) => {
+      state.approval.patchId = null;
+    });
+
+    // Genuine rebase-only replay: rewrite history via an unrelated main
+    // commit + rebase, same as the BUI-380 carry test above.
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(path.join(root, "unrelated.js"), "export const u = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "unrelated main change"]);
+    git(root, ["push", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["rebase", "-q", "origin/main"]);
+    const rebasedHead = git(root, ["rev-parse", "HEAD"]);
+    expect(rebasedHead).not.toBe(priorHead);
+
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    const afterState = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(afterState.revisions.currentHead).toBe(rebasedHead);
+    // A non-string patchId must never be treated as a proven patch-id
+    // match: the approval must be invalidated, not silently carried.
+    expect(afterState.approval.approved).toBe(false);
+    expect(afterState.approval.rebaseCarriedHead).toBeUndefined();
+  });
+
   it("rejects approve commands from nested or headless quality children", () => {
     const root = repo("approval-command-child");
     const head = git(root, ["rev-parse", "HEAD"]);
@@ -849,11 +1371,11 @@ exit 1
     expect(readFileSync(manifest, "utf8")).toBe(before);
   });
 
-  it("persists an invocation-wide provider attempt cap and deadline", () => {
+  it("persists provider attempt and cumulative execution caps", () => {
     const root = repo("provider-attempt-cap");
     const manifest = create(root, [], {
       BS_QUALITY_MAX_PROVIDER_ATTEMPTS: "2",
-      BS_QUALITY_MAX_PROVIDER_SECONDS: "120",
+      BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS: "120",
     });
     for (const provider of ["claude", "codex"]) {
       const result = spawnSync(
@@ -863,6 +1385,11 @@ exit 1
       );
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout).remainingSeconds).toBeGreaterThan(0);
+      execFileSync(
+        "node",
+        [INVOCATION, "provider-complete", manifest, "--provider", provider],
+        { cwd: root },
+      );
     }
     const exhausted = spawnSync(
       "node",
@@ -873,11 +1400,10 @@ exit 1
     expect(exhausted.stderr).toMatch(/absolute provider attempt cap exhausted/);
     const state = JSON.parse(readFileSync(manifest, "utf8"));
     expect(state.governor.providerAttempts).toHaveLength(2);
-    expect(state.governor.providerDeadlineEpoch).toBe(
-      state.governor.startedAtEpoch + 120,
-    );
+    expect(state.governor.providerSecondsLimit).toBe(120);
     state.governor.providerAttempts = [state.governor.providerAttempts[0]];
-    state.governor.providerDeadlineEpoch = Math.floor(Date.now() / 1000) - 1;
+    state.governor.activeExecution = null;
+    state.governor.providerSecondsUsed = 120;
     writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
     const pastDeadline = spawnSync(
       "node",
@@ -885,37 +1411,85 @@ exit 1
       { cwd: root, encoding: "utf8" },
     );
     expect(pastDeadline.status).not.toBe(0);
-    expect(pastDeadline.stderr).toMatch(/absolute provider deadline exhausted/);
+    expect(pastDeadline.stderr).toMatch(
+      /provider execution budget is exhausted/,
+    );
   });
 
-  it("opens one bounded provider window for each advanced review head", () => {
+  it("rejects overlapping execution and reconciles an abandoned timeout", () => {
+    const root = repo("provider-active-state");
+    const manifestPath = create(root, [], {
+      BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS: "120",
+    });
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "provider-attempt",
+        manifestPath,
+        "--provider",
+        "codex",
+        "--requested-timeout",
+        "60",
+      ],
+      { cwd: root },
+    );
+
+    const overlapping = spawnSync(
+      "node",
+      [INVOCATION, "provider-attempt", manifestPath, "--provider", "claude"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(overlapping.status).not.toBe(0);
+    expect(overlapping.stderr).toMatch(
+      /provider execution 'codex' is already active/,
+    );
+
+    const abandoned = JSON.parse(readFileSync(manifestPath, "utf8"));
+    abandoned.governor.activeExecution.startedAt = new Date(
+      Date.now() - 61_000,
+    ).toISOString();
+    writeFileSync(manifestPath, `${JSON.stringify(abandoned, null, 2)}\n`);
+    const resumed = JSON.parse(
+      execFileSync(
+        "node",
+        [INVOCATION, "provider-attempt", manifestPath, "--provider", "claude"],
+        { cwd: root, encoding: "utf8" },
+      ),
+    );
+    expect(resumed.remainingSeconds).toBe(60);
+    const state = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(state.governor.providerSecondsUsed).toBe(60);
+    expect(state.governor.activeExecution.name).toBe("claude");
+  });
+
+  it("does not reset provider execution usage when the review head advances", () => {
     const root = repo("provider-window");
     const manifestPath = create(root, [], {
-      BS_QUALITY_MAX_PROVIDER_SECONDS: "120",
+      BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS: "120",
     });
     execFileSync(
       "node",
       [INVOCATION, "provider-attempt", manifestPath, "--provider", "codex"],
       { cwd: root },
     );
-    const initial = JSON.parse(readFileSync(manifestPath, "utf8"));
-    initial.governor.providerDeadlineEpoch = Math.floor(Date.now() / 1000) - 1;
-    initial.governor.campaignDeadlineEpoch =
-      Math.floor(Date.now() / 1000) + 600;
-    writeFileSync(manifestPath, `${JSON.stringify(initial, null, 2)}\n`);
+    execFileSync(
+      "node",
+      [INVOCATION, "provider-complete", manifestPath, "--provider", "codex"],
+      { cwd: root },
+    );
+    const usedBeforeAdvance = JSON.parse(readFileSync(manifestPath, "utf8"))
+      .governor.providerSecondsUsed;
 
     writeFileSync(path.join(root, "next-head.js"), "export const next = 1;\n");
     git(root, ["add", "."]);
     git(root, ["commit", "-q", "-m", "fix: advance provider window"]);
-    execFileSync("node", [INVOCATION, "advance", manifestPath], { cwd: root });
-    let current = JSON.parse(readFileSync(manifestPath, "utf8"));
-    expect(current.governor.providerDeadlineEpoch).toBe(
-      initial.governor.providerDeadlineEpoch,
-    );
-    expect(current.governor.campaignDeadlineEpoch).toBe(
-      initial.governor.campaignDeadlineEpoch,
-    );
-    expect(current.governor.validationDeadlineEpoch).toBeNull();
+    execFileSync("bash", [BOOTSTRAP, "--manifest", manifestPath], {
+      cwd: root,
+    });
+    const current = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(current.governor.providerSecondsUsed).toBe(usedBeforeAdvance);
+    expect(current.governor.providerSecondsLimit).toBe(120);
     const authorization = JSON.parse(
       execFileSync(
         "node",
@@ -923,30 +1497,26 @@ exit 1
         { cwd: root, encoding: "utf8" },
       ),
     );
-    current = JSON.parse(readFileSync(manifestPath, "utf8"));
-    expect(current.governor.providerDeadlineHead).toBe(
-      git(root, ["rev-parse", "HEAD"]),
-    );
     expect(authorization.remainingSeconds).toBeGreaterThan(0);
-    expect(current.governor.campaignDeadlineEpoch).toBeGreaterThan(
-      current.governor.providerDeadlineEpoch,
-    );
+    expect(authorization.remainingSeconds).toBeLessThan(120);
   });
 
-  it("reserves an independent bounded window for a different fallback provider", () => {
+  it("shares cumulative execution time across fallback providers", () => {
     const root = repo("provider-fallback-window");
     const manifest = create(root, [], {
       BS_QUALITY_MAX_PROVIDER_SECONDS: "120",
+      BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS: "120",
     });
     execFileSync(
       "node",
       [INVOCATION, "provider-attempt", manifest, "--provider", "codex"],
       { cwd: root },
     );
-    const state = JSON.parse(readFileSync(manifest, "utf8"));
-    state.governor.providerDeadlineEpoch = Math.floor(Date.now() / 1000) - 1;
-    state.governor.campaignDeadlineEpoch = Math.floor(Date.now() / 1000) + 600;
-    writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
+    execFileSync(
+      "node",
+      [INVOCATION, "provider-complete", manifest, "--provider", "codex"],
+      { cwd: root },
+    );
 
     const fallback = spawnSync(
       "node",
@@ -955,6 +1525,7 @@ exit 1
     );
     expect(fallback.status, fallback.stderr).toBe(0);
     expect(JSON.parse(fallback.stdout).remainingSeconds).toBeGreaterThan(0);
+    expect(JSON.parse(fallback.stdout).remainingSeconds).toBeLessThan(120);
   });
 
   it("reports exact-head successful gate evidence as reusable", () => {
@@ -989,14 +1560,13 @@ exit 1
     ).toBe(1);
   });
 
-  it("starts the provider phase clock at the first attempt, not bootstrap", () => {
+  it("does not charge idle time before the first provider attempt", () => {
     const root = repo("provider-phase-start");
     const manifest = create(root, [], {
       BS_QUALITY_MAX_PROVIDER_SECONDS: "120",
     });
     const state = JSON.parse(readFileSync(manifest, "utf8"));
-    state.governor.providerDeadlineEpoch = Math.floor(Date.now() / 1000) - 1;
-    state.governor.campaignDeadlineEpoch = Math.floor(Date.now() / 1000) + 600;
+    state.governor.startedAtEpoch = Math.floor(Date.now() / 1000) - 600;
     writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
 
     const authorization = JSON.parse(
@@ -1023,14 +1593,12 @@ exit 1
     expect(result.stderr).toMatch(/unexpected quality argument/);
   });
 
-  it("counts provider and orchestration time against the campaign budget", () => {
+  it("stops review when cumulative provider execution is exhausted", () => {
     const root = repo("provider-budget");
     const manifest = create(root);
     const state = JSON.parse(readFileSync(manifest, "utf8"));
-    state.governor.campaignSeconds = 2;
-    state.governor.startedAtEpoch = Math.floor(Date.now() / 1000) - 3;
-    state.governor.campaignDeadlineEpoch =
-      state.governor.startedAtEpoch + state.governor.campaignSeconds;
+    state.governor.providerSecondsLimit = 2;
+    state.governor.providerSecondsUsed = 2;
     writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
 
     expect(
@@ -1386,7 +1954,7 @@ exit 1
     expect(plan.args.slice(0, 2)).toEqual(["x", "prettier"]);
   });
 
-  it("does not let verification extend an expired campaign clock", () => {
+  it("does not charge an expired legacy campaign clock to execution", () => {
     const root = repo("reserve");
     const manifest = create(root, [], {
       BS_QUALITY_MAX_REMEDIATION_SECONDS: "1",
@@ -1406,23 +1974,11 @@ exit 1
     writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
     expect(
       spawnSync("node", [GOVERNOR, "check", manifest], { cwd: root }).status,
-    ).not.toBe(0);
+    ).toBe(0);
     expect(
       spawnSync("node", [GOVERNOR, "bump-round", manifest], { cwd: root })
         .status,
-    ).not.toBe(0);
-    expect(
-      spawnSync(
-        "node",
-        [INVOCATION, "provider-attempt", manifest, "--provider", "codex"],
-        { cwd: root },
-      ).status,
-    ).not.toBe(0);
-    expect(
-      spawnSync("bash", [RUN_GATE, "--manifest", manifest, "--name", "lint"], {
-        cwd: root,
-      }).status,
-    ).not.toBe(0);
+    ).toBe(0);
   });
 
   it("passes a structured wrapper argv without executing spaces or metacharacters", () => {
@@ -1603,31 +2159,16 @@ exit 99
     writeFileSync(path.join(root, "fix.js"), "export const fixed = true;\n");
     git(root, ["add", "."]);
     git(root, ["commit", "-q", "-m", "fix"]);
-    const advanceStarted = Math.floor(Date.now() / 1000);
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
     const validationState = JSON.parse(readFileSync(manifest, "utf8"));
-    const earliestValidationDeadline = Math.min(
-      validationState.governor.campaignDeadlineEpoch,
-      advanceStarted +
-        validationState.risk.runtime.checkReserveSeconds +
-        validationState.risk.runtime.reviewReserveSeconds,
-    );
-    expect(
-      validationState.governor.validationDeadlineEpoch,
-    ).toBeGreaterThanOrEqual(earliestValidationDeadline);
-    expect(
-      validationState.governor.validationDeadlineEpoch,
-    ).toBeLessThanOrEqual(
-      Math.min(
-        validationState.governor.campaignDeadlineEpoch,
-        earliestValidationDeadline + 2,
-      ),
-    );
+    expect(validationState.governor.gateSecondsUsed).toBe(0);
+    expect(validationState.governor.providerSecondsUsed).toBe(0);
+    expect(validationState.governor.gateSecondsLimit).toBe(600);
+    expect(validationState.governor.providerSecondsLimit).toBe(900);
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
     expect(
-      JSON.parse(readFileSync(manifest, "utf8")).governor
-        .validationDeadlineEpoch,
-    ).toBe(validationState.governor.validationDeadlineEpoch);
+      JSON.parse(readFileSync(manifest, "utf8")).governor.providerSecondsUsed,
+    ).toBe(validationState.governor.providerSecondsUsed);
     const second = prepareCodexReview(root, manifest);
     expect(second.from).toBe(first.to);
     recordJudgeArtifact(root, manifest);
@@ -1982,6 +2523,71 @@ exit 1
     expect(result.stderr).toMatch(/2 unresolved BLOCKING/);
   });
 
+  it("authorizes typed unavailable AI review as CI-only coverage at low risk", () => {
+    const root = repo("low-risk-advisory-review");
+    git(root, ["reset", "--hard", "-q", "origin/main"]);
+    writeFileSync(path.join(root, "README.md"), "# Documentation\n");
+    git(root, ["add", "README.md"]);
+    git(root, ["commit", "-q", "-m", "docs: update readme"]);
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "low",
+        taskType: "docs",
+        score: 5,
+        agents: 2,
+        "codex-depth": "low",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["reviewer-a", "reviewer-b"]);
+    });
+    prepareAdvisoryReview(root, manifest, "provider-unavailable");
+    recordJudgeArtifact(root, manifest);
+
+    expect(() =>
+      execFileSync("node", [INVOCATION, "review-authorization", manifest], {
+        cwd: root,
+      }),
+    ).not.toThrow();
+    const saved = invocation.loadManifest(manifest).manifest;
+    expect(saved.reviews).toEqual([
+      expect.objectContaining({
+        status: "advisory",
+        provider: "ci-only",
+        failureCategory: "provider-unavailable",
+      }),
+    ]);
+  });
+
+  it("rejects advisory review coverage above the low risk tier", () => {
+    const root = repo("high-risk-advisory-review");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 2,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["reviewer-a", "reviewer-b"]);
+    });
+    const result = spawnSync(
+      "node",
+      [
+        INVOCATION,
+        "record-advisory-review",
+        manifest,
+        "--failure-category",
+        "provider-unavailable",
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/only at the low risk tier/);
+  });
+
   it("rejects a caller-supplied diff and matching hash that omit the Git delta", () => {
     const root = repo("partial-diff");
     const manifest = create(root);
@@ -2113,6 +2719,91 @@ exit 1
       resolved: true,
       tier: "high",
     });
+  });
+
+  it("records a deliberately reduced panel as incomplete and never authorizes it as full coverage", () => {
+    const root = repo("reduced-panel");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 4,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(manifest, ["reviewer-a", "reviewer-b"], {
+        incomplete: true,
+      });
+    });
+
+    prepareCodexReview(root, manifestPath);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const inventory = JSON.parse(
+      readFileSync(
+        path.join(manifest.reviews[0].artifactDir, "artifact-inventory.json"),
+        "utf8",
+      ),
+    );
+    expect(manifest.panel).toEqual({
+      requiredAgents: 4,
+      selectedAgents: 2,
+      incomplete: true,
+    });
+    expect(manifest.reviews[0].incompletePanel).toBe(true);
+    expect(inventory.panel).toEqual(manifest.panel);
+    expect(() => invocation.reviewAuthorization(manifest)).toThrow(
+      /incomplete reduced panel cannot satisfy merge review coverage/,
+    );
+  });
+
+  it("persists a merge-train panel cap visibly through the selector seam", () => {
+    const root = repo("reduced-panel-selector");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 4,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+    });
+    execFileSync("bash", [SELECT, "--manifest", manifestPath], {
+      cwd: root,
+      env: { ...process.env, BS_QUALITY_PANEL_AGENTS: "2" },
+    });
+    expect(JSON.parse(readFileSync(manifestPath, "utf8")).panel).toEqual({
+      requiredAgents: 4,
+      selectedAgents: 2,
+      incomplete: true,
+    });
+  });
+
+  it("refuses to reduce a critical panel through the selector seam", () => {
+    const root = repo("critical-panel-selector");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "critical",
+        taskType: "bugfix",
+        score: 80,
+        agents: 4,
+        "codex-depth": "xhigh",
+        "codex-rounds": 1,
+      });
+    });
+    const result = spawnSync("bash", [SELECT, "--manifest", manifestPath], {
+      cwd: root,
+      env: { ...process.env, BS_QUALITY_PANEL_AGENTS: "2" },
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(
+      /critical reviews require the full 4-agent panel/,
+    );
   });
 
   it("rejects a resumed HEAD whose complete diff requires stronger review", () => {
@@ -2299,16 +2990,16 @@ exit 1
     git(root, ["add", "package.json"]);
     git(root, ["commit", "-q", "-m", "test-only package"]);
     expect(() => create(root)).toThrow(
-      /executable repository scripts for: lint, security/,
+      /executable npm or Python repository gates for: lint, security/,
     );
 
     writeFileSync(path.join(root, "package.json"), JSON.stringify({}));
     git(root, ["commit", "-qam", "remove tests"]);
     expect(() => create(root)).toThrow(
-      /executable repository scripts for: lint, security, test/,
+      /executable npm or Python repository gates for: lint, security, test/,
     );
     expect(() => create(root, ["--skip-tests"])).toThrow(
-      /executable repository scripts for: lint, security/,
+      /executable npm or Python repository gates for: lint, security/,
     );
   });
 
@@ -2424,6 +3115,7 @@ exit 1
       reason: "config-only fixture has no executable tests",
     });
     recordJudgeArtifact(root, manifest, []);
+    recordMutationFixture(manifest);
     expect(() =>
       execFileSync("node", [INVOCATION, "review-authorization", manifest], {
         cwd: root,
@@ -2496,6 +3188,295 @@ exit 1
     ).not.toThrow();
   });
 
+  it("inventories preserved Codex findings with a complete Claude fallback panel", () => {
+    const root = repo("fallback-inventory");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 2,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(manifest, ["reviewer-a", "reviewer-b"]);
+      manifest.provider.primary = "codex";
+      manifest.provider.fallback = "claude";
+    });
+    const manifest = invocation.loadManifest(manifestPath).manifest;
+    const artifactDir = invocation.reviewInfo(manifest).artifactDir;
+    mkdirSync(artifactDir, { recursive: true });
+    writeFileSync(
+      path.join(artifactDir, "primary-codex-1.result.json"),
+      JSON.stringify({
+        verdict: "needs-attention",
+        summary: "preserved primary pass",
+        findings: [
+          {
+            severity: "high",
+            title: "preserved primary finding",
+            body: "must remain authoritative",
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      path.join(artifactDir, "reviewer-a.findings.txt"),
+      "NO FINDINGS.\n",
+    );
+    writeFileSync(
+      path.join(artifactDir, "reviewer-b.findings.txt"),
+      "NO FINDINGS.\n",
+    );
+
+    expect(() =>
+      invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
+    ).not.toThrow();
+    const inventory = JSON.parse(
+      readFileSync(path.join(artifactDir, "artifact-inventory.json"), "utf8"),
+    );
+    expect(inventory.provider).toBe("claude");
+    expect(inventory.files).toEqual([
+      expect.objectContaining({
+        name: "primary-codex-1.result.json",
+        provider: "codex",
+      }),
+      expect.objectContaining({
+        name: "reviewer-a.findings.txt",
+        provider: "claude",
+      }),
+      expect.objectContaining({
+        name: "reviewer-b.findings.txt",
+        provider: "claude",
+      }),
+    ]);
+
+    writeFileSync(
+      path.join(artifactDir, "reviewer-a.findings.txt"),
+      "NO FINDINGS.\nINCONCLUSIVE: later pass\n",
+    );
+    expect(() =>
+      invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
+    ).toThrow(/inconclusive provider findings/);
+  });
+
+  it("excludes stale fallback artifacts when a retry succeeds with Codex", () => {
+    const root = repo("retry-inventory-provider-isolation");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 2,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(manifest, ["reviewer-a", "reviewer-b"]);
+    });
+    const manifest = invocation.loadManifest(manifestPath).manifest;
+    const artifactDir = invocation.reviewInfo(manifest).artifactDir;
+    mkdirSync(artifactDir, { recursive: true });
+    writeFileSync(
+      path.join(artifactDir, "codex.findings.txt"),
+      "NO FINDINGS.\n",
+    );
+    writeFileSync(
+      path.join(artifactDir, "codex-1.normalized.json"),
+      JSON.stringify({
+        verdict: "approve",
+        summary: "retry completed",
+        findings: [],
+      }),
+    );
+    writeFileSync(
+      path.join(artifactDir, "reviewer-a.findings.txt"),
+      "INCONCLUSIVE: stale fallback attempt\n",
+    );
+    writeFileSync(
+      path.join(artifactDir, "reviewer-a.result.json"),
+      JSON.stringify({ is_error: true }),
+    );
+
+    expect(() =>
+      invocation.writeArtifactInventory(manifest, artifactDir, "codex"),
+    ).not.toThrow();
+    const inventory = JSON.parse(
+      readFileSync(path.join(artifactDir, "artifact-inventory.json"), "utf8"),
+    );
+    expect(inventory.files.map((item) => item.name)).toEqual([
+      "codex-1.normalized.json",
+      "codex.findings.txt",
+    ]);
+  });
+
+  it("attributes preserved primary evidence from the filename on a campaign's first round, before manifest.provider.primary is populated", () => {
+    // recordReview() is what sets manifest.provider.primary, and it only
+    // runs AFTER a review round completes. On a campaign's very first round
+    // (primary fails mid-pass, fallback picks up), writeArtifactInventory
+    // runs with manifest.provider.primary still unset — attribution must not
+    // depend on it.
+    const root = repo("fallback-inventory-first-round");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 2,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(manifest, ["reviewer-a", "reviewer-b"]);
+      // Deliberately NOT setting manifest.provider.primary — this is the
+      // first-round state the real pipeline is in when inventory is written.
+    });
+    const manifest = invocation.loadManifest(manifestPath).manifest;
+    expect(manifest.provider?.primary).toBeUndefined();
+    const artifactDir = invocation.reviewInfo(manifest).artifactDir;
+    mkdirSync(artifactDir, { recursive: true });
+    writeFileSync(
+      path.join(artifactDir, "primary-codex-1.result.json"),
+      JSON.stringify({
+        verdict: "needs-attention",
+        summary: "preserved primary pass",
+        findings: [
+          {
+            severity: "high",
+            title: "preserved primary finding",
+            body: "must remain authoritative",
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      path.join(artifactDir, "reviewer-a.findings.txt"),
+      "NO FINDINGS.\n",
+    );
+    writeFileSync(
+      path.join(artifactDir, "reviewer-b.findings.txt"),
+      "NO FINDINGS.\n",
+    );
+
+    invocation.writeArtifactInventory(manifest, artifactDir, "claude");
+    const inventory = JSON.parse(
+      readFileSync(path.join(artifactDir, "artifact-inventory.json"), "utf8"),
+    );
+    expect(inventory.files).toContainEqual(
+      expect.objectContaining({
+        name: "primary-codex-1.result.json",
+        provider: "codex",
+      }),
+    );
+  });
+
+  it("does not double-count a Gemini pass's findings between the raw and normalized JSON (not just Codex)", () => {
+    // The raw-vs-normalized dedup filter in providerFindings() only matched
+    // codex-(\d+)\.json, so a raw gemini-1.json and its gemini-1.normalized.json
+    // sibling both got counted as separate findings sources — doubling every
+    // Gemini finding. This mirrors the existing (implicit) Codex coverage from
+    // prepareCodexReview, which always writes both codex-1.json and
+    // codex-1.normalized.json and relies on the dedup to avoid double-counting.
+    const root = repo("gemini-raw-normalized-dedup");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 2,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["reviewer-a", "reviewer-b"]);
+    });
+    execFileSync("node", [GOVERNOR, "bump-round", manifest], { cwd: root });
+    const loaded = invocation.loadManifest(manifest).manifest;
+    const info = invocation.reviewInfo(loaded);
+    mkdirSync(info.artifactDir, { recursive: true });
+    writeFileSync(
+      path.join(info.artifactDir, "diff.txt"),
+      execFileSync("git", ["diff", `${info.from}..${info.to}`], { cwd: root }),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "identity.json"),
+      execFileSync("node", [INVOCATION, "review-identity", manifest], {
+        cwd: root,
+      }),
+    );
+    const geminiResult = {
+      verdict: "needs-attention",
+      summary: "gemini findings",
+      findings: [{ severity: "high", title: "the one real finding" }],
+    };
+    writeFileSync(
+      path.join(info.artifactDir, "gemini-1.json"),
+      JSON.stringify(geminiResult),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "gemini-1.normalized.json"),
+      JSON.stringify(geminiResult),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "gemini.findings.txt"),
+      "HIGH: the one real finding\n",
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "reviewer-a.findings.txt"),
+      "NO FINDINGS.\n",
+    );
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "inventory",
+        manifest,
+        "--artifact-dir",
+        info.artifactDir,
+        "--provider",
+        "gemini",
+      ],
+      { cwd: root },
+    );
+    const diffSha = createHash("sha256")
+      .update(readFileSync(path.join(info.artifactDir, "diff.txt")))
+      .digest("hex");
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "record-review",
+        manifest,
+        "--from",
+        info.from,
+        "--to",
+        info.to,
+        "--provider",
+        "gemini",
+        "--primary",
+        "gemini",
+        "--fallback",
+        "none",
+        "--artifact-dir",
+        info.artifactDir,
+        "--diff-sha",
+        diffSha,
+      ],
+      { cwd: root },
+    );
+    for (const name of ["lint", "test", "security"]) {
+      recordGateFixture(manifest, name);
+    }
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toHaveLength(1);
+  });
+
   it("treats trailing text after a clean sentinel as blocking evidence", () => {
     const root = repo("contradictory-clean-sentinel");
     const manifest = create(root);
@@ -2531,6 +3512,26 @@ exit 1
       }),
     );
     expect(context.findings).toEqual([]);
+  });
+
+  it("accepts documented no-findings marker variants from reviewers", () => {
+    for (const [index, marker] of [
+      "NO FINDINGS\n",
+      "NO FINDINGS.\n",
+      " no findings \n",
+      "\tNo Findings.\t\r\n",
+    ].entries()) {
+      const root = repo(`clean-sentinel-${index}`);
+      const manifest = create(root);
+      prepareCodexReview(root, manifest, [], marker);
+      const context = JSON.parse(
+        execFileSync("node", [INVOCATION, "judge-context", manifest], {
+          cwd: root,
+          encoding: "utf8",
+        }),
+      );
+      expect(context.findings).toEqual([]);
+    }
   });
 
   it("exposes persisted judge dispositions to targeted verification", () => {
@@ -2633,6 +3634,7 @@ exit 1
     for (const name of ["build", "type", "consumer"])
       recordGateFixture(manifest, name);
     recordJudgeArtifact(root, manifest);
+    recordMutationFixture(manifest);
     expect(() =>
       execFileSync("node", [INVOCATION, "review-authorization", manifest], {
         cwd: root,
@@ -2805,6 +3807,183 @@ exit 1
     });
   });
 
+  it("discovers executable Python gates when package scripts are absent", () => {
+    const root = repo("python-gate-discovery");
+    git(root, ["rm", "package.json"]);
+    writeFileSync(
+      path.join(root, "pyproject.toml"),
+      "[tool.ruff]\n\n[tool.pytest.ini_options]\n\n[tool.mypy]\n",
+    );
+    writeFileSync(path.join(root, "requirements-dev.txt"), "pytest==9.0.2\n");
+    mkdirSync(path.join(root, "tests"));
+    writeFileSync(
+      path.join(root, "tests", "test_example.py"),
+      "def test_ok():\n  assert True\n",
+    );
+    git(root, [
+      "add",
+      "pyproject.toml",
+      "requirements-dev.txt",
+      "tests/test_example.py",
+    ]);
+    git(root, ["commit", "-q", "-m", "add Python quality gates"]);
+
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "lint",
+          source: "python:ruff",
+          executable: "ruff",
+          args: ["check", "."],
+        }),
+        expect.objectContaining({
+          name: "test",
+          source: "python:pytest",
+          executable: "pytest",
+          args: [],
+        }),
+        expect.objectContaining({
+          name: "security",
+          source: "python:pip-audit",
+          executable: "pip-audit",
+          args: ["."],
+        }),
+        expect.objectContaining({
+          name: "type",
+          source: "python:mypy",
+          executable: "mypy",
+          args: ["."],
+        }),
+      ]),
+    );
+  });
+
+  it.each([
+    ["uv.lock", "uv"],
+    ["poetry.lock", "poetry"],
+  ])(
+    "runs inferred Python tools through the %s project environment",
+    (lockfile, executable) => {
+      const root = repo(`managed-python-${executable}-gate-discovery`);
+      git(root, ["rm", "package.json"]);
+      writeFileSync(
+        path.join(root, "pyproject.toml"),
+        "[tool.ruff]\n\n[tool.pytest.ini_options]\n\n[tool.mypy]\n",
+      );
+      writeFileSync(path.join(root, lockfile), "version = 1\n");
+      mkdirSync(path.join(root, "tests"));
+      writeFileSync(
+        path.join(root, "tests", "test_example.py"),
+        "def test_ok():\n  assert True\n",
+      );
+      git(root, ["add", "pyproject.toml", lockfile, "tests/test_example.py"]);
+      git(root, ["commit", "-q", "-m", "add managed Python quality gates"]);
+
+      const manifest = create(root);
+      const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+      expect(required).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "lint",
+            executable,
+            args: ["run", "ruff", "check", "."],
+          }),
+          expect.objectContaining({
+            name: "test",
+            executable,
+            args: ["run", "pytest"],
+          }),
+          expect.objectContaining({
+            name: "security",
+            executable,
+            args: ["run", "pip-audit", "."],
+          }),
+          expect.objectContaining({
+            name: "type",
+            executable,
+            args: ["run", "mypy", "."],
+          }),
+        ]),
+      );
+    },
+  );
+
+  it("binds inferred Python security gates to committed requirements", () => {
+    const root = repo("python-requirements-security-gate");
+    git(root, ["rm", "package.json"]);
+    writeFileSync(path.join(root, "requirements.txt"), "requests==2.32.4\n");
+    writeFileSync(
+      path.join(root, ".quality-gates.json"),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          lint: { executable: "python3", args: ["-m", "compileall", "."] },
+          test: { executable: "python3", args: ["-m", "unittest"] },
+        },
+      }),
+    );
+    git(root, ["add", "requirements.txt", ".quality-gates.json"]);
+    git(root, ["commit", "-q", "-m", "add requirements security gate"]);
+
+    const manifest = create(root);
+    expect(
+      JSON.parse(readFileSync(manifest, "utf8")).requiredGates.find(
+        (gate) => gate.name === "security",
+      ),
+    ).toMatchObject({
+      source: "python:pip-audit",
+      executable: "pip-audit",
+      args: ["-r", "requirements.txt"],
+    });
+  });
+
+  it("does not invent Python gates from a non-Python tests directory", () => {
+    const root = repo("non-python-gate-discovery");
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: {
+          lint: "true",
+          "security:audit": "true",
+        },
+      }),
+    );
+    mkdirSync(path.join(root, "tests"));
+    writeFileSync(path.join(root, "tests", "example.test.js"), "// test\n");
+    writeFileSync(path.join(root, "tests", "example.py"), "# fixture\n");
+    writeFileSync(path.join(root, "requirements.txt"), "requests==2.32.4\n");
+    git(root, [
+      "add",
+      "package.json",
+      "requirements.txt",
+      "tests/example.test.js",
+      "tests/example.py",
+    ]);
+    git(root, ["commit", "-q", "-m", "add JavaScript tests"]);
+
+    expect(() => create(root)).toThrow(
+      /executable npm or Python repository gates for: test/,
+    );
+  });
+
+  it("prefers package scripts over Python fallbacks for mixed repositories", () => {
+    const root = repo("python-gate-precedence");
+    writeFileSync(path.join(root, "pyproject.toml"), "[tool.ruff]\n");
+    git(root, ["add", "pyproject.toml"]);
+    git(root, ["commit", "-q", "-m", "add Python tooling"]);
+
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.find((gate) => gate.name === "lint").source).toBe(
+      "package-script:lint",
+    );
+    expect(required.find((gate) => gate.name === "security").source).toBe(
+      "package-script:security:audit",
+    );
+  });
+
   it("binds optional gate evidence to the persisted trusted source and command", () => {
     const root = repo("trusted-gate-runner");
     const marker = path.join(tmpdir(), `quality-build-${process.pid}.marker`);
@@ -2918,6 +4097,158 @@ exit 1
     execFileSync("sleep", ["4"]);
     expect(existsSync(marker)).toBe(false);
   }, 10_000);
+
+  it("allows a slow gate to finish within its declared check reserve", () => {
+    const root = repo("gate-check-reserve");
+    const marker = path.join(tmpdir(), `quality-slow-gate-${process.pid}`);
+    const gateScript = path.join(root, "gate-slow.sh");
+    writeFileSync(
+      gateScript,
+      '#!/usr/bin/env bash\nsleep 2\nprintf passed > "$QUALITY_GATE_MARKER"\n',
+    );
+    chmodSync(gateScript, 0o755);
+    const packageFile = path.join(root, "package.json");
+    const packageJson = JSON.parse(readFileSync(packageFile, "utf8"));
+    packageJson.scripts.build = "bash gate-slow.sh";
+    writeFileSync(packageFile, JSON.stringify(packageJson));
+    git(root, ["add", "gate-slow.sh", "package.json"]);
+    git(root, ["commit", "-q", "-m", "add slow gate"]);
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.risk.runtime = { checkSeconds: 1, checkReserveSeconds: 2 };
+    manifest.governor.campaignDeadlineEpoch =
+      Math.floor(Date.now() / 1000) + 30;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const result = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
+      {
+        cwd: root,
+        env: { ...process.env, QUALITY_GATE_MARKER: marker },
+        encoding: "utf8",
+      },
+    );
+    expect(result.status).toBe(0);
+    expect(readFileSync(marker, "utf8")).toBe("passed");
+    const updated = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(updated.governor.gateSecondsUsed).toBeGreaterThanOrEqual(2);
+    expect(updated.governor.gateSecondsUsed).toBeLessThanOrEqual(3);
+    expect(updated.governor.activeExecution).toBeNull();
+    unlinkSync(marker);
+  }, 10_000);
+
+  it("shares one execution budget across the complete gate suite", () => {
+    const root = repo("gate-shared-budget");
+    const gateScript = path.join(root, "gate-too-slow.sh");
+    writeFileSync(gateScript, "#!/usr/bin/env bash\nsleep 3\n");
+    chmodSync(gateScript, 0o755);
+    const packageFile = path.join(root, "package.json");
+    const packageJson = JSON.parse(readFileSync(packageFile, "utf8"));
+    packageJson.scripts.build = "bash gate-too-slow.sh";
+    writeFileSync(packageFile, JSON.stringify(packageJson));
+    git(root, ["add", "gate-too-slow.sh", "package.json"]);
+    git(root, ["commit", "-q", "-m", "add validation gate"]);
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.risk.runtime = { checkSeconds: 1, checkReserveSeconds: 2 };
+    manifest.governor.gateSecondsLimit = 2;
+    manifest.governor.gateSecondsUsed = 0;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const result = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/exceeded its proportional 2s budget/);
+    const updated = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(updated.governor.gateSecondsUsed).toBe(2);
+    expect(updated.governor.activeExecution).toBeNull();
+  }, 10_000);
+
+  it("requires explicit revalidation after lifecycle inactivity", () => {
+    const root = repo("lifecycle-stale");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.governor.lifecycleTTLSeconds = 60;
+    manifest.governor.lastActivityAt = new Date(
+      Date.now() - 61_000,
+    ).toISOString();
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const stale = spawnSync(
+      "node",
+      [INVOCATION, "gate-plan", manifestPath, "--name", "lint"],
+      {
+        cwd: root,
+        encoding: "utf8",
+      },
+    );
+    expect(stale.status).not.toBe(0);
+    expect(stale.stderr).toMatch(/resume through bootstrap to revalidate/);
+
+    expect(
+      execFileSync(
+        "node",
+        [INVOCATION, "field", manifestPath, "repo.realpath"],
+        {
+          cwd: root,
+          encoding: "utf8",
+        },
+      ).trim(),
+    ).toBe(realpathSync(root));
+    const staleAuthorization = spawnSync(
+      "node",
+      [INVOCATION, "review-authorization", manifestPath],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(staleAuthorization.status).not.toBe(0);
+    expect(staleAuthorization.stderr).toMatch(
+      /resume through bootstrap to revalidate/,
+    );
+
+    execFileSync("bash", [BOOTSTRAP, "--manifest", manifestPath], {
+      cwd: root,
+    });
+    const resumed = spawnSync(
+      "node",
+      [INVOCATION, "gate-plan", manifestPath, "--name", "lint"],
+      {
+        cwd: root,
+        encoding: "utf8",
+      },
+    );
+    expect(resumed.status).toBe(0);
+  });
+
+  it("requires a fresh campaign for a legacy wall-clock manifest", () => {
+    const root = repo("legacy-execution-budget");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    delete manifest.governor.executionBudgetVersion;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(
+      execFileSync(
+        "node",
+        [INVOCATION, "field", manifestPath, "repo.realpath"],
+        {
+          cwd: root,
+          encoding: "utf8",
+        },
+      ).trim(),
+    ).toBe(realpathSync(root));
+    const resume = spawnSync("node", [INVOCATION, "advance", manifestPath], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(resume.status).not.toBe(0);
+    expect(resume.stderr).toMatch(
+      /legacy manifest cannot reconstruct active execution usage/,
+    );
+  });
 
   it("discovers committed gates on every advance and unions them monotonically", () => {
     const root = repo("monotonic-gates");

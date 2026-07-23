@@ -77,6 +77,7 @@ if [ -n "$MANIFEST_ARG" ] && [ "${#BOOTSTRAP_ARGS[@]}" -ne 0 ]; then
   echo "❌ quality resume accepts only --manifest <path>" >&2
   exit 1
 fi
+EXPLICIT_TARGET=false
 for ((argument_index = 0; argument_index < ${#BOOTSTRAP_ARGS[@]}; argument_index += 1)); do
   argument="${BOOTSTRAP_ARGS[$argument_index]}"
   case "$argument" in
@@ -85,7 +86,12 @@ for ((argument_index = 0; argument_index < ${#BOOTSTRAP_ARGS[@]}; argument_index
       echo "❌ --merge accepts only the bare flag or --merge=true" >&2
       exit 1
       ;;
-    --level|--scope|--target-dir|--target|--worktree|--pr|--pull|--pull-request|--branch|--head|--head-ref)
+    --level|--scope|--review-arm|--target-dir|--target|--worktree|--pr|--pull|--pull-request|--branch|--head|--head-ref)
+      case "$argument" in
+        --target-dir|--target|--worktree|--pr|--pull|--pull-request|--branch|--head|--head-ref)
+          EXPLICIT_TARGET=true
+          ;;
+      esac
       argument_index=$((argument_index + 1))
       [ "$argument_index" -lt "${#BOOTSTRAP_ARGS[@]}" ] &&
         [ -n "${BOOTSTRAP_ARGS[$argument_index]}" ] &&
@@ -94,20 +100,27 @@ for ((argument_index = 0; argument_index < ${#BOOTSTRAP_ARGS[@]}; argument_index
         exit 1
       }
       ;;
-    --level=*|--scope=*|--target-dir=*|--target=*|--worktree=*|--pr=*|--pull=*|--pull-request=*|--branch=*|--head=*|--head-ref=*)
+    --level=*|--scope=*|--review-arm=*|--target-dir=*|--target=*|--worktree=*|--pr=*|--pull=*|--pull-request=*|--branch=*|--head=*|--head-ref=*)
+      case "$argument" in
+        --target-dir=*|--target=*|--worktree=*|--pr=*|--pull=*|--pull-request=*|--branch=*|--head=*|--head-ref=*)
+          EXPLICIT_TARGET=true
+          ;;
+      esac
       [ -n "${argument#*=}" ] || {
         echo "❌ ${argument%%=*} requires a value" >&2
         exit 1
       }
       ;;
     \#*)
+      EXPLICIT_TARGET=true
       [[ "$argument" =~ ^\#[1-9][0-9]*$ ]] || {
         echo "❌ unexpected quality argument: $argument" >&2
         exit 1
       }
       ;;
-    /*|~/*|./*|../*) ;;
+    /*|~/*|./*|../*) EXPLICIT_TARGET=true ;;
     */*)
+      EXPLICIT_TARGET=true
       [[ "$argument" =~ ^[A-Za-z][A-Za-z0-9_.-]*/[A-Za-z0-9_./-]+$ ]] || {
         echo "❌ unexpected quality argument: $argument" >&2
         exit 1
@@ -194,7 +207,7 @@ if [ -z "$RESOLVER" ]; then
 else
   # Use the resolver. It returns a JSON plan we act on.
   PRIMARY_CHECKOUT=$(git worktree list --porcelain 2>/dev/null \
-    | awk '/^worktree / {p=$2} /^branch refs\/heads\/main$/ {print p; exit}')
+    | awk '/^worktree / {p=substr($0, 10)} /^branch refs\/heads\/main$/ {print p; exit}')
   CWD_INPUT=$(pwd)
 
   RESOLVER_STDERR=$(mktemp 2>/dev/null || echo "/tmp/quality-resolver-stderr.$$")
@@ -209,7 +222,7 @@ else
   # is how the "audited the wrong repo" class of bug happens. Only fall through
   # to cwd resolution when the caller passed no target token at all.
   if [ "$RESOLVER_RC" -ne 0 ]; then
-    if printf '%s\n' "$@" | grep -Eq '(^|[[:space:]])(#[0-9]+|--target-dir|--pr|--branch)([[:space:]]|=|$)'; then
+    if [ "$EXPLICIT_TARGET" = true ]; then
       echo "❌ /bs:quality target resolver crashed (exit $RESOLVER_RC) while a target was requested."
       echo "   Refusing to fall back to the current directory — that could audit the wrong repo."
       [ -s "$RESOLVER_STDERR" ] && { echo "   Resolver error:"; sed 's/^/     /' "$RESOLVER_STDERR"; }
@@ -367,9 +380,26 @@ fi
 
 BASE_REF=""
 if [ -n "${PR_BASE_NAME:-}" ]; then
+  # BUI-382: this used to compare the freshly-fetched base tip against
+  # $PR_BASE_OID — a value read from `gh pr view`'s cached baseRefOid field
+  # (above, potentially seconds stale relative to GitHub's own git backend).
+  # That produced false-positive "base changed" aborts on an active repo:
+  # the fetch would correctly reveal the true current tip, but comparing it
+  # to a stale API-cache snapshot looked identical to a genuine race. Take a
+  # fresh, authoritative read of the base tip via `git ls-remote` (bypasses
+  # GitHub's API response cache entirely — same pattern already used for the
+  # equivalent freshness check in quality-authorize-merge.sh) immediately
+  # before the fetch, and compare the fetch result against THAT instead.
+  # This still catches a genuine race (base moves between the ls-remote and
+  # the fetch), just without false-alarming on API cache lag.
+  FRESH_BASE_OID="$(git ls-remote origin "refs/heads/$PR_BASE_NAME" | awk '{print $1}')"
+  [ -n "$FRESH_BASE_OID" ] || {
+    echo "❌ /bs:quality could not resolve the live PR base tip." >&2
+    exit 1
+  }
   git fetch origin "$PR_BASE_NAME" -q || exit 1
   BASE_REF="origin/$PR_BASE_NAME"
-  [ "$(git rev-parse "$BASE_REF")" = "$PR_BASE_OID" ] || {
+  [ "$(git rev-parse "$BASE_REF")" = "$FRESH_BASE_OID" ] || {
     echo "❌ /bs:quality PR base changed during bootstrap." >&2
     exit 1
   }
@@ -388,24 +418,59 @@ done
 LEVEL_ARG=auto
 SCOPE_ARG=branch
 SKIP_TESTS=false
+REVIEW_ARM_ARG=""
 previous=""
 for argument in "$@"; do
   case "$previous" in
     --level) LEVEL_ARG="$argument"; previous=""; continue ;;
     --scope) SCOPE_ARG="$argument"; previous=""; continue ;;
+    --review-arm) REVIEW_ARM_ARG="$argument"; previous=""; continue ;;
   esac
   case "$argument" in
     --level) previous="--level" ;;
     --level=*) LEVEL_ARG="${argument#*=}" ;;
     --scope) previous="--scope" ;;
     --scope=*) SCOPE_ARG="${argument#*=}" ;;
+    --review-arm) previous="--review-arm" ;;
+    --review-arm=*) REVIEW_ARM_ARG="${argument#*=}" ;;
     --skip-tests) SKIP_TESTS=true ;;
   esac
 done
 
 CREATE_ARGS=(create --repo "$GIT_ROOT" --base-ref "$BASE_REF" \
   --level "$LEVEL_ARG" --scope "$SCOPE_ARG")
-[ -n "${PR_BASE_OID:-}" ] && CREATE_ARGS+=(--base-head-sha "$PR_BASE_OID")
+case "$REVIEW_ARM_ARG" in
+  "") ;;
+  bespoke)
+    # shellcheck source=provider-policy.sh
+    source "$SCRIPT_DIR/provider-policy.sh" || exit 1
+    QUALITY_PRIMARY=claude
+    QUALITY_FALLBACK=codex
+    QUALITY_PROVIDER_CONFIG="${BS_QUALITY_PROVIDER_CONFIG:-$(bs_provider_default_config)}"
+    ;;
+  native)
+    # shellcheck source=provider-policy.sh
+    source "$SCRIPT_DIR/provider-policy.sh" || exit 1
+    QUALITY_PRIMARY=codex
+    QUALITY_FALLBACK=claude
+    QUALITY_PROVIDER_CONFIG="${BS_QUALITY_PROVIDER_CONFIG:-$(bs_provider_default_config)}"
+    ;;
+  *)
+    echo "quality-bootstrap: --review-arm must be bespoke or native" >&2
+    exit 1
+    ;;
+esac
+if [ -n "$REVIEW_ARM_ARG" ]; then
+  CREATE_ARGS+=(--primary "$QUALITY_PRIMARY" --fallback "$QUALITY_FALLBACK" \
+    --provider-config "$QUALITY_PROVIDER_CONFIG" --review-arm "$REVIEW_ARM_ARG")
+fi
+# Prefer the freshly-verified base tip (FRESH_BASE_OID, see the base-drift
+# guard above) over the gh-pr-view snapshot (PR_BASE_OID) when both are
+# available — it's the authoritative value the fetch was actually checked
+# against, so persisting it as baseHeadSha keeps the merge-time freshness
+# gate (quality-authorize-merge.sh) anchored on real git state.
+BASE_HEAD_SHA_ARG="${FRESH_BASE_OID:-${PR_BASE_OID:-}}"
+[ -n "$BASE_HEAD_SHA_ARG" ] && CREATE_ARGS+=(--base-head-sha "$BASE_HEAD_SHA_ARG")
 [ "$ARGS_MERGE" = true ] && CREATE_ARGS+=(--merge)
 [ "$SKIP_TESTS" = true ] && CREATE_ARGS+=(--skip-tests)
 [ -n "${RES_PR:-}" ] && CREATE_ARGS+=(--pr "$RES_PR")
