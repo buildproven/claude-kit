@@ -343,6 +343,22 @@ describe("quality invocation manifest", () => {
     expect(create(root, args)).not.toBe(first);
   });
 
+  it("creates active-execution manifests without wall-clock deadlines", () => {
+    const root = repo("execution-budget-schema");
+    const manifest = JSON.parse(readFileSync(create(root), "utf8"));
+    expect(manifest.governor).toMatchObject({
+      executionBudgetVersion: 1,
+      gateSecondsLimit: 600,
+      gateSecondsUsed: 0,
+      providerSecondsLimit: 900,
+      providerSecondsUsed: 0,
+      activeExecution: null,
+    });
+    expect(manifest.governor).not.toHaveProperty("campaignDeadlineEpoch");
+    expect(manifest.governor).not.toHaveProperty("providerDeadlineEpoch");
+    expect(manifest.governor).not.toHaveProperty("validationDeadlineEpoch");
+  });
+
   it("authorizes Gemini inside the existing provider attempt budget", () => {
     const root = repo("gemini-provider-attempt");
     const manifest = create(root, []);
@@ -1152,11 +1168,11 @@ exit 1
     expect(readFileSync(manifest, "utf8")).toBe(before);
   });
 
-  it("persists an invocation-wide provider attempt cap and deadline", () => {
+  it("persists provider attempt and cumulative execution caps", () => {
     const root = repo("provider-attempt-cap");
     const manifest = create(root, [], {
       BS_QUALITY_MAX_PROVIDER_ATTEMPTS: "2",
-      BS_QUALITY_MAX_PROVIDER_SECONDS: "120",
+      BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS: "120",
     });
     for (const provider of ["claude", "codex"]) {
       const result = spawnSync(
@@ -1166,6 +1182,11 @@ exit 1
       );
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout).remainingSeconds).toBeGreaterThan(0);
+      execFileSync(
+        "node",
+        [INVOCATION, "provider-complete", manifest, "--provider", provider],
+        { cwd: root },
+      );
     }
     const exhausted = spawnSync(
       "node",
@@ -1176,11 +1197,10 @@ exit 1
     expect(exhausted.stderr).toMatch(/absolute provider attempt cap exhausted/);
     const state = JSON.parse(readFileSync(manifest, "utf8"));
     expect(state.governor.providerAttempts).toHaveLength(2);
-    expect(state.governor.providerDeadlineEpoch).toBe(
-      state.governor.startedAtEpoch + 120,
-    );
+    expect(state.governor.providerSecondsLimit).toBe(120);
     state.governor.providerAttempts = [state.governor.providerAttempts[0]];
-    state.governor.providerDeadlineEpoch = Math.floor(Date.now() / 1000) - 1;
+    state.governor.activeExecution = null;
+    state.governor.providerSecondsUsed = 120;
     writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
     const pastDeadline = spawnSync(
       "node",
@@ -1188,37 +1208,85 @@ exit 1
       { cwd: root, encoding: "utf8" },
     );
     expect(pastDeadline.status).not.toBe(0);
-    expect(pastDeadline.stderr).toMatch(/absolute provider deadline exhausted/);
+    expect(pastDeadline.stderr).toMatch(
+      /provider execution budget is exhausted/,
+    );
   });
 
-  it("opens one bounded provider window for each advanced review head", () => {
+  it("rejects overlapping execution and reconciles an abandoned timeout", () => {
+    const root = repo("provider-active-state");
+    const manifestPath = create(root, [], {
+      BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS: "120",
+    });
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "provider-attempt",
+        manifestPath,
+        "--provider",
+        "codex",
+        "--requested-timeout",
+        "60",
+      ],
+      { cwd: root },
+    );
+
+    const overlapping = spawnSync(
+      "node",
+      [INVOCATION, "provider-attempt", manifestPath, "--provider", "claude"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(overlapping.status).not.toBe(0);
+    expect(overlapping.stderr).toMatch(
+      /provider execution 'codex' is already active/,
+    );
+
+    const abandoned = JSON.parse(readFileSync(manifestPath, "utf8"));
+    abandoned.governor.activeExecution.startedAt = new Date(
+      Date.now() - 61_000,
+    ).toISOString();
+    writeFileSync(manifestPath, `${JSON.stringify(abandoned, null, 2)}\n`);
+    const resumed = JSON.parse(
+      execFileSync(
+        "node",
+        [INVOCATION, "provider-attempt", manifestPath, "--provider", "claude"],
+        { cwd: root, encoding: "utf8" },
+      ),
+    );
+    expect(resumed.remainingSeconds).toBe(60);
+    const state = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(state.governor.providerSecondsUsed).toBe(60);
+    expect(state.governor.activeExecution.name).toBe("claude");
+  });
+
+  it("does not reset provider execution usage when the review head advances", () => {
     const root = repo("provider-window");
     const manifestPath = create(root, [], {
-      BS_QUALITY_MAX_PROVIDER_SECONDS: "120",
+      BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS: "120",
     });
     execFileSync(
       "node",
       [INVOCATION, "provider-attempt", manifestPath, "--provider", "codex"],
       { cwd: root },
     );
-    const initial = JSON.parse(readFileSync(manifestPath, "utf8"));
-    initial.governor.providerDeadlineEpoch = Math.floor(Date.now() / 1000) - 1;
-    initial.governor.campaignDeadlineEpoch =
-      Math.floor(Date.now() / 1000) + 600;
-    writeFileSync(manifestPath, `${JSON.stringify(initial, null, 2)}\n`);
+    execFileSync(
+      "node",
+      [INVOCATION, "provider-complete", manifestPath, "--provider", "codex"],
+      { cwd: root },
+    );
+    const usedBeforeAdvance = JSON.parse(readFileSync(manifestPath, "utf8"))
+      .governor.providerSecondsUsed;
 
     writeFileSync(path.join(root, "next-head.js"), "export const next = 1;\n");
     git(root, ["add", "."]);
     git(root, ["commit", "-q", "-m", "fix: advance provider window"]);
-    execFileSync("node", [INVOCATION, "advance", manifestPath], { cwd: root });
-    let current = JSON.parse(readFileSync(manifestPath, "utf8"));
-    expect(current.governor.providerDeadlineEpoch).toBe(
-      initial.governor.providerDeadlineEpoch,
-    );
-    expect(current.governor.campaignDeadlineEpoch).toBe(
-      initial.governor.campaignDeadlineEpoch,
-    );
-    expect(current.governor.validationDeadlineEpoch).toBeNull();
+    execFileSync("bash", [BOOTSTRAP, "--manifest", manifestPath], {
+      cwd: root,
+    });
+    const current = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(current.governor.providerSecondsUsed).toBe(usedBeforeAdvance);
+    expect(current.governor.providerSecondsLimit).toBe(120);
     const authorization = JSON.parse(
       execFileSync(
         "node",
@@ -1226,30 +1294,26 @@ exit 1
         { cwd: root, encoding: "utf8" },
       ),
     );
-    current = JSON.parse(readFileSync(manifestPath, "utf8"));
-    expect(current.governor.providerDeadlineHead).toBe(
-      git(root, ["rev-parse", "HEAD"]),
-    );
     expect(authorization.remainingSeconds).toBeGreaterThan(0);
-    expect(current.governor.campaignDeadlineEpoch).toBeGreaterThan(
-      current.governor.providerDeadlineEpoch,
-    );
+    expect(authorization.remainingSeconds).toBeLessThan(120);
   });
 
-  it("reserves an independent bounded window for a different fallback provider", () => {
+  it("shares cumulative execution time across fallback providers", () => {
     const root = repo("provider-fallback-window");
     const manifest = create(root, [], {
       BS_QUALITY_MAX_PROVIDER_SECONDS: "120",
+      BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS: "120",
     });
     execFileSync(
       "node",
       [INVOCATION, "provider-attempt", manifest, "--provider", "codex"],
       { cwd: root },
     );
-    const state = JSON.parse(readFileSync(manifest, "utf8"));
-    state.governor.providerDeadlineEpoch = Math.floor(Date.now() / 1000) - 1;
-    state.governor.campaignDeadlineEpoch = Math.floor(Date.now() / 1000) + 600;
-    writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
+    execFileSync(
+      "node",
+      [INVOCATION, "provider-complete", manifest, "--provider", "codex"],
+      { cwd: root },
+    );
 
     const fallback = spawnSync(
       "node",
@@ -1258,6 +1322,7 @@ exit 1
     );
     expect(fallback.status, fallback.stderr).toBe(0);
     expect(JSON.parse(fallback.stdout).remainingSeconds).toBeGreaterThan(0);
+    expect(JSON.parse(fallback.stdout).remainingSeconds).toBeLessThan(120);
   });
 
   it("reports exact-head successful gate evidence as reusable", () => {
@@ -1292,14 +1357,13 @@ exit 1
     ).toBe(1);
   });
 
-  it("starts the provider phase clock at the first attempt, not bootstrap", () => {
+  it("does not charge idle time before the first provider attempt", () => {
     const root = repo("provider-phase-start");
     const manifest = create(root, [], {
       BS_QUALITY_MAX_PROVIDER_SECONDS: "120",
     });
     const state = JSON.parse(readFileSync(manifest, "utf8"));
-    state.governor.providerDeadlineEpoch = Math.floor(Date.now() / 1000) - 1;
-    state.governor.campaignDeadlineEpoch = Math.floor(Date.now() / 1000) + 600;
+    state.governor.startedAtEpoch = Math.floor(Date.now() / 1000) - 600;
     writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
 
     const authorization = JSON.parse(
@@ -1326,14 +1390,12 @@ exit 1
     expect(result.stderr).toMatch(/unexpected quality argument/);
   });
 
-  it("counts provider and orchestration time against the campaign budget", () => {
+  it("stops review when cumulative provider execution is exhausted", () => {
     const root = repo("provider-budget");
     const manifest = create(root);
     const state = JSON.parse(readFileSync(manifest, "utf8"));
-    state.governor.campaignSeconds = 2;
-    state.governor.startedAtEpoch = Math.floor(Date.now() / 1000) - 3;
-    state.governor.campaignDeadlineEpoch =
-      state.governor.startedAtEpoch + state.governor.campaignSeconds;
+    state.governor.providerSecondsLimit = 2;
+    state.governor.providerSecondsUsed = 2;
     writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
 
     expect(
@@ -1689,7 +1751,7 @@ exit 1
     expect(plan.args.slice(0, 2)).toEqual(["x", "prettier"]);
   });
 
-  it("does not let verification extend an expired campaign clock", () => {
+  it("does not charge an expired legacy campaign clock to execution", () => {
     const root = repo("reserve");
     const manifest = create(root, [], {
       BS_QUALITY_MAX_REMEDIATION_SECONDS: "1",
@@ -1709,23 +1771,11 @@ exit 1
     writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
     expect(
       spawnSync("node", [GOVERNOR, "check", manifest], { cwd: root }).status,
-    ).not.toBe(0);
+    ).toBe(0);
     expect(
       spawnSync("node", [GOVERNOR, "bump-round", manifest], { cwd: root })
         .status,
-    ).not.toBe(0);
-    expect(
-      spawnSync(
-        "node",
-        [INVOCATION, "provider-attempt", manifest, "--provider", "codex"],
-        { cwd: root },
-      ).status,
-    ).not.toBe(0);
-    expect(
-      spawnSync("bash", [RUN_GATE, "--manifest", manifest, "--name", "lint"], {
-        cwd: root,
-      }).status,
-    ).not.toBe(0);
+    ).toBe(0);
   });
 
   it("passes a structured wrapper argv without executing spaces or metacharacters", () => {
@@ -1906,31 +1956,16 @@ exit 99
     writeFileSync(path.join(root, "fix.js"), "export const fixed = true;\n");
     git(root, ["add", "."]);
     git(root, ["commit", "-q", "-m", "fix"]);
-    const advanceStarted = Math.floor(Date.now() / 1000);
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
     const validationState = JSON.parse(readFileSync(manifest, "utf8"));
-    const earliestValidationDeadline = Math.min(
-      validationState.governor.campaignDeadlineEpoch,
-      advanceStarted +
-        validationState.risk.runtime.checkReserveSeconds +
-        validationState.risk.runtime.reviewReserveSeconds,
-    );
-    expect(
-      validationState.governor.validationDeadlineEpoch,
-    ).toBeGreaterThanOrEqual(earliestValidationDeadline);
-    expect(
-      validationState.governor.validationDeadlineEpoch,
-    ).toBeLessThanOrEqual(
-      Math.min(
-        validationState.governor.campaignDeadlineEpoch,
-        earliestValidationDeadline + 2,
-      ),
-    );
+    expect(validationState.governor.gateSecondsUsed).toBe(0);
+    expect(validationState.governor.providerSecondsUsed).toBe(0);
+    expect(validationState.governor.gateSecondsLimit).toBe(600);
+    expect(validationState.governor.providerSecondsLimit).toBe(900);
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
     expect(
-      JSON.parse(readFileSync(manifest, "utf8")).governor
-        .validationDeadlineEpoch,
-    ).toBe(validationState.governor.validationDeadlineEpoch);
+      JSON.parse(readFileSync(manifest, "utf8")).governor.providerSecondsUsed,
+    ).toBe(validationState.governor.providerSecondsUsed);
     const second = prepareCodexReview(root, manifest);
     expect(second.from).toBe(first.to);
     recordJudgeArtifact(root, manifest);
@@ -2941,6 +2976,56 @@ exit 1
     ).toThrow(/inconclusive provider findings/);
   });
 
+  it("excludes stale fallback artifacts when a retry succeeds with Codex", () => {
+    const root = repo("retry-inventory-provider-isolation");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 2,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(manifest, ["reviewer-a", "reviewer-b"]);
+    });
+    const manifest = invocation.loadManifest(manifestPath).manifest;
+    const artifactDir = invocation.reviewInfo(manifest).artifactDir;
+    mkdirSync(artifactDir, { recursive: true });
+    writeFileSync(
+      path.join(artifactDir, "codex.findings.txt"),
+      "NO FINDINGS.\n",
+    );
+    writeFileSync(
+      path.join(artifactDir, "codex-1.normalized.json"),
+      JSON.stringify({
+        verdict: "approve",
+        summary: "retry completed",
+        findings: [],
+      }),
+    );
+    writeFileSync(
+      path.join(artifactDir, "reviewer-a.findings.txt"),
+      "INCONCLUSIVE: stale fallback attempt\n",
+    );
+    writeFileSync(
+      path.join(artifactDir, "reviewer-a.result.json"),
+      JSON.stringify({ is_error: true }),
+    );
+
+    expect(() =>
+      invocation.writeArtifactInventory(manifest, artifactDir, "codex"),
+    ).not.toThrow();
+    const inventory = JSON.parse(
+      readFileSync(path.join(artifactDir, "artifact-inventory.json"), "utf8"),
+    );
+    expect(inventory.files.map((item) => item.name)).toEqual([
+      "codex-1.normalized.json",
+      "codex.findings.txt",
+    ]);
+  });
+
   it("attributes preserved primary evidence from the filename on a campaign's first round, before manifest.provider.primary is populated", () => {
     // recordReview() is what sets manifest.provider.primary, and it only
     // runs AFTER a review round completes. On a campaign's very first round
@@ -3592,6 +3677,158 @@ exit 1
     execFileSync("sleep", ["4"]);
     expect(existsSync(marker)).toBe(false);
   }, 10_000);
+
+  it("allows a slow gate to finish within its declared check reserve", () => {
+    const root = repo("gate-check-reserve");
+    const marker = path.join(tmpdir(), `quality-slow-gate-${process.pid}`);
+    const gateScript = path.join(root, "gate-slow.sh");
+    writeFileSync(
+      gateScript,
+      '#!/usr/bin/env bash\nsleep 2\nprintf passed > "$QUALITY_GATE_MARKER"\n',
+    );
+    chmodSync(gateScript, 0o755);
+    const packageFile = path.join(root, "package.json");
+    const packageJson = JSON.parse(readFileSync(packageFile, "utf8"));
+    packageJson.scripts.build = "bash gate-slow.sh";
+    writeFileSync(packageFile, JSON.stringify(packageJson));
+    git(root, ["add", "gate-slow.sh", "package.json"]);
+    git(root, ["commit", "-q", "-m", "add slow gate"]);
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.risk.runtime = { checkSeconds: 1, checkReserveSeconds: 2 };
+    manifest.governor.campaignDeadlineEpoch =
+      Math.floor(Date.now() / 1000) + 30;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const result = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
+      {
+        cwd: root,
+        env: { ...process.env, QUALITY_GATE_MARKER: marker },
+        encoding: "utf8",
+      },
+    );
+    expect(result.status).toBe(0);
+    expect(readFileSync(marker, "utf8")).toBe("passed");
+    const updated = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(updated.governor.gateSecondsUsed).toBeGreaterThanOrEqual(2);
+    expect(updated.governor.gateSecondsUsed).toBeLessThanOrEqual(3);
+    expect(updated.governor.activeExecution).toBeNull();
+    unlinkSync(marker);
+  }, 10_000);
+
+  it("shares one execution budget across the complete gate suite", () => {
+    const root = repo("gate-shared-budget");
+    const gateScript = path.join(root, "gate-too-slow.sh");
+    writeFileSync(gateScript, "#!/usr/bin/env bash\nsleep 3\n");
+    chmodSync(gateScript, 0o755);
+    const packageFile = path.join(root, "package.json");
+    const packageJson = JSON.parse(readFileSync(packageFile, "utf8"));
+    packageJson.scripts.build = "bash gate-too-slow.sh";
+    writeFileSync(packageFile, JSON.stringify(packageJson));
+    git(root, ["add", "gate-too-slow.sh", "package.json"]);
+    git(root, ["commit", "-q", "-m", "add validation gate"]);
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.risk.runtime = { checkSeconds: 1, checkReserveSeconds: 2 };
+    manifest.governor.gateSecondsLimit = 2;
+    manifest.governor.gateSecondsUsed = 0;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const result = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/exceeded its proportional 2s budget/);
+    const updated = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(updated.governor.gateSecondsUsed).toBe(2);
+    expect(updated.governor.activeExecution).toBeNull();
+  }, 10_000);
+
+  it("requires explicit revalidation after lifecycle inactivity", () => {
+    const root = repo("lifecycle-stale");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.governor.lifecycleTTLSeconds = 60;
+    manifest.governor.lastActivityAt = new Date(
+      Date.now() - 61_000,
+    ).toISOString();
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const stale = spawnSync(
+      "node",
+      [INVOCATION, "gate-plan", manifestPath, "--name", "lint"],
+      {
+        cwd: root,
+        encoding: "utf8",
+      },
+    );
+    expect(stale.status).not.toBe(0);
+    expect(stale.stderr).toMatch(/resume through bootstrap to revalidate/);
+
+    expect(
+      execFileSync(
+        "node",
+        [INVOCATION, "field", manifestPath, "repo.realpath"],
+        {
+          cwd: root,
+          encoding: "utf8",
+        },
+      ).trim(),
+    ).toBe(realpathSync(root));
+    const staleAuthorization = spawnSync(
+      "node",
+      [INVOCATION, "review-authorization", manifestPath],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(staleAuthorization.status).not.toBe(0);
+    expect(staleAuthorization.stderr).toMatch(
+      /resume through bootstrap to revalidate/,
+    );
+
+    execFileSync("bash", [BOOTSTRAP, "--manifest", manifestPath], {
+      cwd: root,
+    });
+    const resumed = spawnSync(
+      "node",
+      [INVOCATION, "gate-plan", manifestPath, "--name", "lint"],
+      {
+        cwd: root,
+        encoding: "utf8",
+      },
+    );
+    expect(resumed.status).toBe(0);
+  });
+
+  it("requires a fresh campaign for a legacy wall-clock manifest", () => {
+    const root = repo("legacy-execution-budget");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    delete manifest.governor.executionBudgetVersion;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(
+      execFileSync(
+        "node",
+        [INVOCATION, "field", manifestPath, "repo.realpath"],
+        {
+          cwd: root,
+          encoding: "utf8",
+        },
+      ).trim(),
+    ).toBe(realpathSync(root));
+    const resume = spawnSync("node", [INVOCATION, "advance", manifestPath], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(resume.status).not.toBe(0);
+    expect(resume.stderr).toMatch(
+      /legacy manifest cannot reconstruct active execution usage/,
+    );
+  });
 
   it("discovers committed gates on every advance and unions them monotonically", () => {
     const root = repo("monotonic-gates");

@@ -153,10 +153,11 @@ unless the manifest's
 `options.skipTests` is true for a config-only repository. Execute the mandatory
 categories through the evidence-recording runner:
 
-The invocation persists a campaign deadline and absolute attempt cap. Each
-provider gets one bounded phase window within the remaining campaign deadline;
-a fallback does not inherit an already-expired primary window, but neither
-provider can extend the campaign or mint additional attempts.
+The invocation persists absolute attempt caps plus cumulative active-execution
+budgets. Every required gate has a strict per-attempt timeout and all gates
+share the remaining gate ledger. Provider attempts likewise keep their
+risk-adjusted timeout while primary and fallback providers share one provider
+ledger; changing providers cannot mint more execution time.
 
 ```bash
 QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
@@ -240,13 +241,27 @@ remains fail-closed until its timeout, parser, and unresolved agent causes are
 typed separately; an inconclusive fallback also remains fail-closed.
 
 Runtime is derived from both risk and actual diff workload. Risk controls
-depth; changed lines plus per-file overhead control the clock. The complete
-default campaign is capped at 15 minutes. Critical review receives a 9-minute
-provider floor because measured xhigh review of a roughly 1,200-line security
-change exceeded the former 330-second large-diff window. Lower-risk windows
-remain workload-scaled. If discovery requires a fix, the remaining campaign
-budget reserves affected gates and one targeted verification; there is no
-recursive third round.
+depth; changed lines plus per-file overhead control each provider attempt.
+Critical review receives a 9-minute provider floor because measured xhigh
+review of a roughly 1,200-line security change exceeded the former 330-second
+large-diff window. Lower-risk windows remain workload-scaled.
+
+Execution and lifecycle use separate clocks. Required gates share 10 minutes
+of measured subprocess time and provider attempts share 15 minutes; waiting
+for CI, human approval, user input, or another turn consumes neither budget.
+The manifest persists an active start only while a gate or provider subprocess
+is running, then adds its bounded elapsed time to the corresponding ledger.
+Every gate and provider attempt retains its own strict timeout, so a hang is
+still killed even though idle lifecycle time is free.
+
+A manifest becomes stale after 24 hours without activity. Resume it only by
+passing the exact manifest back through bootstrap, which re-resolves repository,
+PR, base, and HEAD identity before preserving the unused execution ledgers.
+Bootstrap and downstream authorization revalidate review, CI, stamp, and
+approval evidence against the resolved revision; there is no unlimited pause
+switch.
+If discovery requires a fix, one fix commit and one targeted verification are
+allowed; there is no recursive third round.
 
 One campaign permits exactly one discovery review, one batched fix commit, and
 one targeted verification review. A verification finding is a terminal

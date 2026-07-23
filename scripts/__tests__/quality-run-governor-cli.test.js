@@ -150,8 +150,10 @@ describe("quality-run-governor CLI", () => {
     const manifest = sentinel({
       schemaVersion: 1,
       governor: {
+        executionBudgetVersion: 1,
         startedAtEpoch,
-        campaignSeconds: 3600,
+        providerSecondsLimit: 900,
+        providerSecondsUsed: 850,
         startCommitSha: "abc123",
         maxFixCommits: 1,
         reReviewReserveSeconds: 60,
@@ -161,7 +163,18 @@ describe("quality-run-governor CLI", () => {
     });
     const { code, out } = run(["remaining", manifest, "--cap", "60"]);
     expect(code).toBe(0);
-    expect(Number(out.trim())).toBe(60);
+    expect(Number(out.trim())).toBe(50);
+  });
+
+  it("remaining: fails closed for a legacy wall-clock manifest", () => {
+    const manifest = sentinel({
+      schemaVersion: 1,
+      governor: {
+        startedAtEpoch: Math.floor(Date.now() / 1000),
+        campaignSeconds: 3600,
+      },
+    });
+    expect(run(["remaining", manifest, "--cap", "60"]).code).not.toBe(0);
   });
 
   it("record-finding persists the exact set for targeted verification", () => {
