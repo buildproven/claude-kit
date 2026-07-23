@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+# Proves that a high/critical campaign's persisted test command can turn red
+# for the reviewed diff. The source worktree is never mutated: every candidate
+# revert runs in a detached, short-lived worktree at the exact reviewed HEAD.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+MANIFEST=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --manifest) MANIFEST="${2:-}"; shift 2 ;;
+    *) echo "usage: quality-mutation-check.sh --manifest <path>" >&2; exit 2 ;;
+  esac
+done
+
+[ -n "$MANIFEST" ] || {
+  echo "quality-mutation-check: --manifest is required" >&2
+  exit 2
+}
+
+ROOT="$(node "$SCRIPT_DIR/quality-invocation.js" locate "$MANIFEST")" || exit 1
+TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"
+case "$TIER" in
+  low|medium)
+    echo "[quality] mutation gate omitted for ${TIER} campaign"
+    exit 0
+    ;;
+  high|critical) ;;
+  *)
+    echo "quality-mutation-check: risk tier must be resolved before mutation checking" >&2
+    exit 1
+    ;;
+esac
+
+bash "$SCRIPT_DIR/quality-assert-clean.sh" \
+  --manifest "$MANIFEST" --phase "mutation check" || exit 1
+
+BASE="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseSha)"
+HEAD="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.currentHead)"
+STATE_ROOT="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" stateRoot)"
+INVOCATION_ID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" invocationId)"
+CHECK_SECONDS="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.runtime.checkSeconds)"
+TEST_PLAN="$(node "$SCRIPT_DIR/quality-invocation.js" gate-plan "$MANIFEST" --name test)"
+TEST_EXECUTABLE="$(printf '%s' "$TEST_PLAN" | jq -r '.executable')"
+TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/quality-mutation.XXXXXX")"
+ARTIFACT="$STATE_ROOT/mutation/$HEAD.json"
+MUTATION_ACTIVE=false
+
+cleanup() {
+  STATUS=$?
+  if [ -d "$TEMP_ROOT/worktree" ]; then
+    git -C "$ROOT" worktree remove --force "$TEMP_ROOT/worktree" >/dev/null 2>&1 || true
+  fi
+  rmdir "$TEMP_ROOT" >/dev/null 2>&1 || true
+  if [ "$MUTATION_ACTIVE" = true ]; then
+    MUTATION_ACTIVE=false
+    if ! node "$SCRIPT_DIR/quality-invocation.js" mutation-complete "$MANIFEST"; then
+      echo "quality-mutation-check: failed to close mutation execution budget" >&2
+      STATUS=1
+    fi
+  fi
+  trap - EXIT
+  exit "$STATUS"
+}
+trap cleanup EXIT
+
+printf '%s' "$TEST_PLAN" | jq -e '.args | type == "array" and all(.[]; type == "string")' >/dev/null || {
+  echo "quality-mutation-check: persisted test command is invalid" >&2
+  exit 1
+}
+TEST_ARGS=()
+while IFS= read -r ARGUMENT; do
+  TEST_ARGS+=("$ARGUMENT")
+done < <(printf '%s' "$TEST_PLAN" | jq -r '.args[]')
+
+CANDIDATES=()
+while IFS= read -r CANDIDATE; do
+  CANDIDATES+=("$CANDIDATE")
+done < <(
+  git -C "$ROOT" diff --name-only --diff-filter=AM "$BASE..$HEAD" -- \
+    | awk '
+      /(^|\/)(test|tests|spec|__tests__)(\/|$)/ { next }
+      /\.(js|cjs|mjs|jsx|ts|tsx|py|rb|go|java|kt|rs|c|cc|cpp|h|sh|bash|zsh)$/ { print }
+    '
+)
+
+MUTATION_AUTHORIZATION="$(
+  node "$SCRIPT_DIR/quality-invocation.js" mutation-attempt "$MANIFEST"
+)"
+CHECK_SECONDS="$(
+  printf '%s' "$MUTATION_AUTHORIZATION" | jq -er '.remainingSeconds'
+)"
+MUTATION_ACTIVE=true
+DEADLINE=$(( $(date +%s) + CHECK_SECONDS ))
+
+mkdir -p "$(dirname "$ARTIFACT")"
+MUTATED_PATHS=()
+ATTEMPTED_PATHS=()
+TEST_FAILURE_OBSERVED=false
+MAX_ATTEMPTS=3
+
+complete_mutation_execution() {
+  node "$SCRIPT_DIR/quality-invocation.js" mutation-complete "$MANIFEST"
+  MUTATION_ACTIVE=false
+}
+
+record_evidence() {
+  METHOD="$1"
+  jq -n \
+    --arg invocationId "$INVOCATION_ID" \
+    --arg base "$BASE" \
+    --arg head "$HEAD" \
+    --arg tier "$TIER" \
+    --arg method "$METHOD" \
+    --argjson mutatedPaths "$(printf '%s\n' "${MUTATED_PATHS[@]}" | jq -R . | jq -s .)" \
+    '{schemaVersion: 1, invocationId: $invocationId, base: $base, head: $head, tier: $tier, method: $method, mutatedPaths: $mutatedPaths, testFailureObserved: true}' \
+    > "$ARTIFACT"
+  complete_mutation_execution
+  node "$SCRIPT_DIR/quality-invocation.js" mutation-record "$MANIFEST" \
+    --artifact "$ARTIFACT"
+  bash "$SCRIPT_DIR/quality-assert-clean.sh" \
+    --manifest "$MANIFEST" --phase "mutation check completion"
+}
+
+STRYKER_CONFIG=""
+for CANDIDATE_CONFIG in stryker.conf.json stryker.conf.js stryker.conf.cjs; do
+  if [ -f "$ROOT/$CANDIDATE_CONFIG" ] && [ -x "$ROOT/node_modules/.bin/stryker" ]; then
+    STRYKER_CONFIG="$CANDIDATE_CONFIG"
+    break
+  fi
+done
+if [ -n "$STRYKER_CONFIG" ] && \
+  git -C "$ROOT" show "$HEAD:package.json" | jq -e '.scripts["test:mutation"] | type == "string" and length > 0' >/dev/null; then
+  MUTATED_PATHS=("$STRYKER_CONFIG")
+  SANDBOX="$TEMP_ROOT/worktree"
+  git -C "$ROOT" worktree add --detach --quiet "$SANDBOX" "$HEAD"
+  ln -s "$ROOT/node_modules" "$SANDBOX/node_modules"
+  LOG="$STATE_ROOT/mutation/${HEAD}.stryker.log"
+  set +e
+  cd "$SANDBOX"
+  bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CHECK_SECONDS" -- \
+    "$TEST_EXECUTABLE" run test:mutation > "$LOG" 2>&1
+  RESULT=$?
+  set -e
+  cd "$ROOT"
+  git -C "$ROOT" worktree remove --force "$SANDBOX" >/dev/null
+  if [ "$RESULT" -ne 0 ] || ! grep -qi "killed" "$LOG"; then
+    echo "quality-mutation-check: revision-bound Stryker run did not prove a killed mutant; see $LOG" >&2
+    exit 1
+  fi
+  record_evidence "stryker"
+  echo "[quality] mutation evidence: Stryker -> $ARTIFACT"
+  exit 0
+fi
+
+if [ "${#CANDIDATES[@]}" -eq 0 ]; then
+  echo "quality-mutation-check: no changed executable source file can be reverted; add a behavioral test or declare a supported Stryker configuration" >&2
+  exit 1
+fi
+
+for CANDIDATE in "${CANDIDATES[@]}"; do
+  [ "${#ATTEMPTED_PATHS[@]}" -lt "$MAX_ATTEMPTS" ] || break
+  REMAINING=$(( DEADLINE - $(date +%s) ))
+  if [ "$REMAINING" -le 0 ]; then
+    echo "quality-mutation-check: ${CHECK_SECONDS}s mutation budget exhausted before producing evidence" >&2
+    exit 1
+  fi
+
+  SANDBOX="$TEMP_ROOT/worktree"
+  git -C "$ROOT" worktree add --detach --quiet "$SANDBOX" "$HEAD"
+  if [ -d "$ROOT/node_modules" ] && [ ! -e "$SANDBOX/node_modules" ]; then
+    ln -s "$ROOT/node_modules" "$SANDBOX/node_modules"
+  fi
+  if git -C "$ROOT" cat-file -e "$BASE:$CANDIDATE" 2>/dev/null; then
+    git -C "$SANDBOX" restore --source "$BASE" -- "$CANDIDATE"
+  else
+    git -C "$SANDBOX" rm -q -- "$CANDIDATE"
+  fi
+  ATTEMPTED_PATHS+=("$CANDIDATE")
+  LOG="$STATE_ROOT/mutation/${HEAD}.$(basename "$CANDIDATE").log"
+
+  set +e
+  cd "$SANDBOX"
+  bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$REMAINING" -- \
+    "$TEST_EXECUTABLE" "${TEST_ARGS[@]}" > "$LOG" 2>&1
+  RESULT=$?
+  set -e
+  cd "$ROOT"
+  git -C "$ROOT" worktree remove --force "$SANDBOX" >/dev/null
+  if [ "$RESULT" -eq 124 ]; then
+    echo "quality-mutation-check: controlled revert test timed out; a hang is not red-capable evidence" >&2
+    exit 1
+  fi
+  if [ "$RESULT" -ne 0 ]; then
+    MUTATED_PATHS=("$CANDIDATE")
+    TEST_FAILURE_OBSERVED=true
+    break
+  fi
+done
+
+if [ "$TEST_FAILURE_OBSERVED" != true ]; then
+  echo "quality-mutation-check: persisted tests remained green after ${#ATTEMPTED_PATHS[@]} controlled revert(s); no red-capable evidence" >&2
+  exit 1
+fi
+
+record_evidence "revert-diff"
+echo "[quality] mutation evidence: revert-diff caught by ${MUTATED_PATHS[${#MUTATED_PATHS[@]}-1]} -> $ARTIFACT"

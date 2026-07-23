@@ -75,10 +75,16 @@ def classify(repos: list[dict[str, object]], minimum: int) -> list[dict[str, obj
     for repo in repos:
         if repo.get("isArchived"):
             continue
-        commits = repo.get("commits") or []
-        prs = repo.get("pullRequests") or []
-        non_bot = sum(1 for commit in commits if isinstance(commit, dict) and not is_bot(commit))
-        active_prs = sum(1 for pr in prs if isinstance(pr, dict) and not pr.get("isDraft"))
+        commits_value = repo.get("commits")
+        prs_value = repo.get("pullRequests")
+        commits = commits_value if isinstance(commits_value, list) else []
+        prs = prs_value if isinstance(prs_value, list) else []
+        non_bot = sum(
+            1 for commit in commits if isinstance(commit, dict) and not is_bot(commit)
+        )
+        active_prs = sum(
+            1 for pr in prs if isinstance(pr, dict) and not pr.get("isDraft")
+        )
         if (len(commits) >= minimum and non_bot >= 1) or active_prs:
             item = dict(repo)
             item["commitCount"] = len(commits)
@@ -90,7 +96,9 @@ def classify(repos: list[dict[str, object]], minimum: int) -> list[dict[str, obj
 
 def collect(config: dict[str, object], since: str) -> list[dict[str, object]]:
     repos: list[dict[str, object]] = []
-    for owner in config.get("owners", []):
+    owners_value = config.get("owners")
+    owners = owners_value if isinstance(owners_value, list) else []
+    for owner in owners:
         owner_repos = run_json(
             [
                 "gh",

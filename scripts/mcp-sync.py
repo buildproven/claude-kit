@@ -31,6 +31,13 @@ def has_server(listing: str, name: str) -> bool:
     return False
 
 
+def string_list(value: object, label: str) -> list[str]:
+    if not isinstance(value, list):
+        message = f"{label} must be a list"
+        raise SystemExit(message)
+    return [str(item) for item in value]
+
+
 def add_claude(server: dict[str, object]) -> None:
     name = str(server["name"])
     transport = str(server.get("transport", "stdio"))
@@ -47,9 +54,19 @@ def add_claude(server: dict[str, object]) -> None:
             str(server["url"]),
         ]
     else:
-        args = ["claude", "mcp", "add", "--scope", "user", "--transport", "stdio", name, "--"]
+        args = [
+            "claude",
+            "mcp",
+            "add",
+            "--scope",
+            "user",
+            "--transport",
+            "stdio",
+            name,
+            "--",
+        ]
         args.append(str(server["command"]))
-        args.extend(str(value) for value in server.get("args", []))
+        args.extend(string_list(server.get("args", []), f"{name}: args"))
     run(args)
 
 
@@ -78,9 +95,8 @@ def add_codex(server: dict[str, object]) -> None:
         with config_path.open("a", encoding="utf8") as config:
             config.write("\n".join(lines) + "\n")
         return
-    else:
-        args = ["codex", "mcp", "add", name, "--", str(server["command"])]
-        args.extend(str(value) for value in server.get("args", []))
+    args = ["codex", "mcp", "add", name, "--", str(server["command"])]
+    args.extend(string_list(server.get("args", []), f"{name}: args"))
     run(args)
 
 

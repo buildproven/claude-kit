@@ -130,6 +130,16 @@ describe("evaluateBudget", () => {
     expect(result.commitsUsed).toBe(1);
   });
 
+  it("does not charge idle lifecycle time to active provider execution", () => {
+    const result = evaluateBudget(
+      { ...baseState, execution_seconds_used: 120 },
+      { nowEpoch: 1000 + 86_400, commitCount: 6 },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.elapsedSeconds).toBe(120);
+    expect(result.wallTripped).toBe(false);
+  });
+
   it("trips on wall-clock even with zero commits", () => {
     const result = evaluateBudget(baseState, {
       nowEpoch: 1000 + 1800,
