@@ -423,6 +423,12 @@ function defaultBranch(repoRoot) {
 }
 
 function resolveBase(repoRoot, requested) {
+  if (!requested) {
+    // Refresh remote-tracking refs before branching from the default branch so a
+    // stale local origin/<default> (nobody's fetched recently) can't silently
+    // become the base for a new worktree.
+    git(repoRoot, ["fetch", "origin", "--quiet"], { allowFailure: true });
+  }
   const candidates = requested
     ? [requested]
     : [`origin/${defaultBranch(repoRoot)}`, defaultBranch(repoRoot)];
