@@ -251,9 +251,9 @@ describe("worktree-manager public CLI", () => {
     const created = create(repo, "feature/from-fresh-origin");
 
     expect(git(created.worktreePath, "rev-parse", "HEAD")).toBe(freshTip);
-    expect(
-      existsSync(path.join(created.worktreePath, "OVERRIDES.md")),
-    ).toBe(true);
+    expect(existsSync(path.join(created.worktreePath, "OVERRIDES.md"))).toBe(
+      true,
+    );
   });
 
   it("creates once and reuses the registered branch worktree", () => {
@@ -267,7 +267,12 @@ describe("worktree-manager public CLI", () => {
 
   it("always produces a genuine linked worktree, never a relabeled primary checkout", () => {
     const { repo } = fixture();
-    const primaryGitDir = git(repo, "rev-parse", "--path-format=absolute", "--git-dir");
+    const primaryGitDir = git(
+      repo,
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-dir",
+    );
     const commonDirBefore = git(
       repo,
       "rev-parse",
