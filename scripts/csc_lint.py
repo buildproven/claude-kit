@@ -246,11 +246,12 @@ def _find_command_files(root: Path) -> list[Path]:
             continue
         # OVERRIDES.md is drift-tracking documentation (see check-command-drift.sh),
         # not an invokable command, but must live at commands/OVERRIDES.md so that
-        # script can find it — so exclude it by name rather than relocating it.
+        # script can find it — exclude only that root-level registry rather than
+        # every nested file with the same name.
         out += [
             p
             for p in d.rglob("*.md")
-            if p.name not in ("README.md", "OVERRIDES.md")
+            if p.name != "README.md" and p != d / "OVERRIDES.md"
         ]
     return out
 
