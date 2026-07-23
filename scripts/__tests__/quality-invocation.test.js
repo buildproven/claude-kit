@@ -399,6 +399,75 @@ describe("quality invocation manifest", () => {
     );
   });
 
+  it("binds review-arm attribution to the assigned primary provider", () => {
+    const nativeRoot = repo("native-review-arm");
+    const nativeManifest = JSON.parse(
+      readFileSync(
+        create(nativeRoot, [
+          "--primary",
+          "codex",
+          "--fallback",
+          "claude",
+          "--review-arm",
+          "native",
+        ]),
+        "utf8",
+      ),
+    );
+    expect(nativeManifest.options.reviewArm).toBe("native");
+    expect(nativeManifest.provider.primaryOverride).toBe("codex");
+
+    const bespokeRoot = repo("bespoke-review-arm");
+    const bespokeManifest = JSON.parse(
+      readFileSync(
+        create(bespokeRoot, [
+          "--primary",
+          "claude",
+          "--fallback",
+          "codex",
+          "--review-arm",
+          "bespoke",
+        ]),
+        "utf8",
+      ),
+    );
+    expect(bespokeManifest.options.reviewArm).toBe("bespoke");
+    expect(bespokeManifest.provider.primaryOverride).toBe("claude");
+  });
+
+  it("rejects an arm label that conflicts with its primary provider", () => {
+    const root = repo("conflicting-review-arm");
+    expect(() =>
+      create(root, [
+        "--primary",
+        "codex",
+        "--fallback",
+        "claude",
+        "--review-arm",
+        "bespoke",
+      ]),
+    ).toThrow(/review arm 'bespoke' conflicts with primary provider 'codex'/);
+  });
+
+  it("rejects an explicit experiment arm without a bound primary provider", () => {
+    const root = repo("unbound-review-arm");
+    expect(() => create(root, ["--review-arm", "native"])).toThrow(
+      /explicit review arm requires a primary provider/,
+    );
+  });
+
+  it("does not turn an ordinary provider override into an experiment assignment", () => {
+    const root = repo("ordinary-provider-attribution");
+    const manifest = JSON.parse(
+      readFileSync(
+        create(root, ["--primary", "codex", "--fallback", "claude"]),
+        "utf8",
+      ),
+    );
+    expect(manifest.options.reviewArm).toBeNull();
+    expect(manifest.provider.primaryOverride).toBe("codex");
+  });
+
   it("resumes after review without treating provider evidence as configuration drift", () => {
     const root = repo("reviewed-provider-identity");
     const env = {
@@ -470,7 +539,15 @@ describe("quality invocation manifest", () => {
         BOOTSTRAP,
         root,
       ],
-      { cwd: root, encoding: "utf8" },
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          BS_QUALITY_PRIMARY: "codex",
+          BS_QUALITY_FALLBACK: "claude",
+        },
+      },
     );
     expect(result.status, result.stderr).toBe(0);
     const manifestPath = result.stdout
@@ -483,6 +560,35 @@ describe("quality invocation manifest", () => {
     expect(manifest.revisions.currentHead).toBe(
       git(root, ["rev-parse", "HEAD"]),
     );
+    expect(manifest.options.reviewArm).toBeNull();
+    expect(manifest.provider.primaryOverride).toBe("codex");
+    expect(manifest.provider.fallbackOverride).toBe("claude");
+  }, 120_000);
+
+  it("routes an explicit bespoke experiment arm through the companion provider", () => {
+    const root = repo("bootstrap-bespoke-arm");
+    const result = spawnSync(
+      "bash",
+      [
+        BOOTSTRAP,
+        "--target-dir",
+        root,
+        "--level",
+        "auto",
+        "--review-arm",
+        "bespoke",
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const manifestPath = result.stdout
+      .split("\n")
+      .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
+      ?.slice("BS_QUALITY_MANIFEST=".length);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifest.options.reviewArm).toBe("bespoke");
+    expect(manifest.provider.primaryOverride).toBe("claude");
+    expect(manifest.provider.fallbackOverride).toBe("codex");
   }, 120_000);
 
   it("binds a non-merge PR bootstrap to the PR base branch and base SHA", () => {

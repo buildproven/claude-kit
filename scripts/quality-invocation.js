@@ -865,6 +865,32 @@ function buildProvider(options) {
   };
 }
 
+function reviewArm(options, provider) {
+  const explicit = firstValue(
+    options["review-arm"],
+    process.env.BS_QUALITY_REVIEW_ARM,
+    "",
+  );
+  const primary = provider.primaryOverride;
+  if (!explicit) return null;
+  const arm = explicit;
+  if (!["bespoke", "native"].includes(arm)) {
+    throw new Error("review arm must be bespoke or native");
+  }
+  if (explicit && !primary) {
+    throw new Error("an explicit review arm requires a primary provider");
+  }
+  if (
+    (arm === "bespoke" && primary && primary !== "claude") ||
+    (arm === "native" && primary === "claude")
+  ) {
+    throw new Error(
+      `review arm '${arm}' conflicts with primary provider '${primary}'`,
+    );
+  }
+  return arm;
+}
+
 function governorInteger(name, fallback, label, minimum = 0) {
   return parseInteger(firstValue(process.env[name], fallback), label, {
     minimum,
@@ -1082,13 +1108,14 @@ function createManifest(options) {
     throw new Error("create does not accept a custom manifest path");
   }
   const baseHeadSha = firstValue(options["base-head-sha"], baseSha);
+  const provider = buildProvider(options);
   const manifestOptions = {
     merge: options.merge === true,
     level: firstValue(options.level, "auto"),
     scope,
     skipTests: options["skip-tests"] === true,
+    reviewArm: reviewArm(options, provider),
   };
-  const provider = buildProvider(options);
   const campaignIdentity = {
     executionBudgetVersion: EXECUTION_BUDGET_VERSION,
     root,
@@ -1114,6 +1141,8 @@ function createManifest(options) {
   delete campaignKeyIdentity.provider;
   delete campaignKeyIdentity.root;
   delete campaignKeyIdentity.gitCommonDir;
+  campaignKeyIdentity.options = { ...campaignKeyIdentity.options };
+  delete campaignKeyIdentity.options.reviewArm;
   const invocationId = deterministicInvocationId(campaignKeyIdentity);
   if (
     options["invocation-id"] !== undefined &&
@@ -2324,6 +2353,7 @@ function recordReview(manifest, options) {
     primary: options.primary,
     fallback: options.fallback,
     reviewer: options.provider,
+    effort: options.effort || null,
   };
   authorizedAttempt.consumedAt = new Date().toISOString();
 }

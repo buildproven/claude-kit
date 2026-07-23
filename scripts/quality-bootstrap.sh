@@ -86,7 +86,7 @@ for ((argument_index = 0; argument_index < ${#BOOTSTRAP_ARGS[@]}; argument_index
       echo "❌ --merge accepts only the bare flag or --merge=true" >&2
       exit 1
       ;;
-    --level|--scope|--target-dir|--target|--worktree|--pr|--pull|--pull-request|--branch|--head|--head-ref)
+    --level|--scope|--review-arm|--target-dir|--target|--worktree|--pr|--pull|--pull-request|--branch|--head|--head-ref)
       case "$argument" in
         --target-dir|--target|--worktree|--pr|--pull|--pull-request|--branch|--head|--head-ref)
           EXPLICIT_TARGET=true
@@ -100,7 +100,7 @@ for ((argument_index = 0; argument_index < ${#BOOTSTRAP_ARGS[@]}; argument_index
         exit 1
       }
       ;;
-    --level=*|--scope=*|--target-dir=*|--target=*|--worktree=*|--pr=*|--pull=*|--pull-request=*|--branch=*|--head=*|--head-ref=*)
+    --level=*|--scope=*|--review-arm=*|--target-dir=*|--target=*|--worktree=*|--pr=*|--pull=*|--pull-request=*|--branch=*|--head=*|--head-ref=*)
       case "$argument" in
         --target-dir=*|--target=*|--worktree=*|--pr=*|--pull=*|--pull-request=*|--branch=*|--head=*|--head-ref=*)
           EXPLICIT_TARGET=true
@@ -418,23 +418,52 @@ done
 LEVEL_ARG=auto
 SCOPE_ARG=branch
 SKIP_TESTS=false
+REVIEW_ARM_ARG=""
 previous=""
 for argument in "$@"; do
   case "$previous" in
     --level) LEVEL_ARG="$argument"; previous=""; continue ;;
     --scope) SCOPE_ARG="$argument"; previous=""; continue ;;
+    --review-arm) REVIEW_ARM_ARG="$argument"; previous=""; continue ;;
   esac
   case "$argument" in
     --level) previous="--level" ;;
     --level=*) LEVEL_ARG="${argument#*=}" ;;
     --scope) previous="--scope" ;;
     --scope=*) SCOPE_ARG="${argument#*=}" ;;
+    --review-arm) previous="--review-arm" ;;
+    --review-arm=*) REVIEW_ARM_ARG="${argument#*=}" ;;
     --skip-tests) SKIP_TESTS=true ;;
   esac
 done
 
 CREATE_ARGS=(create --repo "$GIT_ROOT" --base-ref "$BASE_REF" \
   --level "$LEVEL_ARG" --scope "$SCOPE_ARG")
+case "$REVIEW_ARM_ARG" in
+  "") ;;
+  bespoke)
+    # shellcheck source=provider-policy.sh
+    source "$SCRIPT_DIR/provider-policy.sh" || exit 1
+    QUALITY_PRIMARY=claude
+    QUALITY_FALLBACK=codex
+    QUALITY_PROVIDER_CONFIG="${BS_QUALITY_PROVIDER_CONFIG:-$(bs_provider_default_config)}"
+    ;;
+  native)
+    # shellcheck source=provider-policy.sh
+    source "$SCRIPT_DIR/provider-policy.sh" || exit 1
+    QUALITY_PRIMARY=codex
+    QUALITY_FALLBACK=claude
+    QUALITY_PROVIDER_CONFIG="${BS_QUALITY_PROVIDER_CONFIG:-$(bs_provider_default_config)}"
+    ;;
+  *)
+    echo "quality-bootstrap: --review-arm must be bespoke or native" >&2
+    exit 1
+    ;;
+esac
+if [ -n "$REVIEW_ARM_ARG" ]; then
+  CREATE_ARGS+=(--primary "$QUALITY_PRIMARY" --fallback "$QUALITY_FALLBACK" \
+    --provider-config "$QUALITY_PROVIDER_CONFIG" --review-arm "$REVIEW_ARM_ARG")
+fi
 # Prefer the freshly-verified base tip (FRESH_BASE_OID, see the base-drift
 # guard above) over the gh-pr-view snapshot (PR_BASE_OID) when both are
 # available — it's the authoritative value the fetch was actually checked
