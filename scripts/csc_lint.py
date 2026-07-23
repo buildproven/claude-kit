@@ -244,7 +244,14 @@ def _find_command_files(root: Path) -> list[Path]:
     for d in root.rglob("commands"):
         if not d.is_dir() or _is_excluded_root(d, root, submodules):
             continue
-        out += [p for p in d.rglob("*.md") if p.name not in ("README.md",)]
+        # OVERRIDES.md is drift-tracking documentation (see check-command-drift.sh),
+        # not an invokable command, but must live at commands/OVERRIDES.md so that
+        # script can find it — so exclude it by name rather than relocating it.
+        out += [
+            p
+            for p in d.rglob("*.md")
+            if p.name not in ("README.md", "OVERRIDES.md")
+        ]
     return out
 
 
