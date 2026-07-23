@@ -119,5 +119,7 @@ printf '%s\\n' '{"response":"{\\"verdict\\":\\"approve\\",\\"summary\\":\\"No ac
       status: "success",
     });
     expect(body.governor.providerAttempts).toHaveLength(1);
+    expect(body.governor.providerSecondsUsed).toBeGreaterThanOrEqual(1);
+    expect(body.governor.activeExecution).toBeNull();
   }, 30_000);
 });
