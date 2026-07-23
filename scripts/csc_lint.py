@@ -149,8 +149,8 @@ class Report:
     commands: int = 0
     skills: int = 0
 
-    def add(self, *a, **k) -> None:
-        self.violations.append(Violation(*a, **k))
+    def add(self, rule: str, severity: str, name: str, detail: str) -> None:
+        self.violations.append(Violation(rule, severity, name, detail))
 
 
 def _parse_frontmatter(text: str) -> dict[str, str]:
@@ -273,7 +273,7 @@ def _find_dependency_skill_names(root: Path) -> set[str]:
     in R1/R3 resolution because overlay commands may legitimately delegate to
     core skills.
     """
-    names = set()
+    names: set[str] = set()
     for submodule in _submodule_paths(root):
         submodule_root = root.joinpath(*submodule)
         if not submodule_root.is_dir():

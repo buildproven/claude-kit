@@ -3542,7 +3542,7 @@ exit 1
           name: "type",
           source: "python:mypy",
           executable: "mypy",
-          args: [],
+          args: ["."],
         }),
       ]),
     );

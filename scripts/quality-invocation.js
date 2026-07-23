@@ -506,7 +506,7 @@ function pythonGate({
     return directGate(name, "python:pip-audit", "pip-audit", [], allowSkip);
   }
   if (name === "type" && hasPythonTool(pyproject, "mypy")) {
-    return directGate(name, "python:mypy", "mypy", [], allowSkip);
+    return directGate(name, "python:mypy", "mypy", ["."], allowSkip);
   }
   return null;
 }
