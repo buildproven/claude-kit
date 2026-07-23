@@ -25,7 +25,7 @@ function preflightRecord(reviewArm, recordedAt) {
     riskScore: null,
     requestedLevel: null,
     reviewArm,
-    reviewProvider: "codex",
+    reviewProvider: reviewArm === "native" ? "codex" : "claude",
     reviewEffort: "high",
     reviewTokens: null,
     durationSeconds: null,

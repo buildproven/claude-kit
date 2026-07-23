@@ -872,14 +872,8 @@ function reviewArm(options, provider) {
     "",
   );
   const primary = provider.primaryOverride;
-  const inferred =
-    primary === "claude"
-      ? "bespoke"
-      : ["codex", "gemini"].includes(primary)
-        ? "native"
-        : null;
-  const arm = explicit || inferred;
-  if (arm === null) return null;
+  if (!explicit) return null;
+  const arm = explicit;
   if (!["bespoke", "native"].includes(arm)) {
     throw new Error("review arm must be bespoke or native");
   }

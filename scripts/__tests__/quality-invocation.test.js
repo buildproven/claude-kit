@@ -456,6 +456,18 @@ describe("quality invocation manifest", () => {
     );
   });
 
+  it("does not turn an ordinary provider override into an experiment assignment", () => {
+    const root = repo("ordinary-provider-attribution");
+    const manifest = JSON.parse(
+      readFileSync(
+        create(root, ["--primary", "codex", "--fallback", "claude"]),
+        "utf8",
+      ),
+    );
+    expect(manifest.options.reviewArm).toBeNull();
+    expect(manifest.provider.primaryOverride).toBe("codex");
+  });
+
   it("resumes after review without treating provider evidence as configuration drift", () => {
     const root = repo("reviewed-provider-identity");
     const env = {
@@ -548,7 +560,7 @@ describe("quality invocation manifest", () => {
     expect(manifest.revisions.currentHead).toBe(
       git(root, ["rev-parse", "HEAD"]),
     );
-    expect(manifest.options.reviewArm).toBe("native");
+    expect(manifest.options.reviewArm).toBeNull();
     expect(manifest.provider.primaryOverride).toBe("codex");
     expect(manifest.provider.fallbackOverride).toBe("claude");
   }, 120_000);

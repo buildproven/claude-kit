@@ -13,6 +13,15 @@ describe("quality telemetry preflight", () => {
       "bespoke",
       "native",
     ]);
+    expect(
+      records.map(({ reviewArm, reviewProvider }) => [
+        reviewArm,
+        reviewProvider,
+      ]),
+    ).toEqual([
+      ["bespoke", "claude"],
+      ["native", "codex"],
+    ]);
     for (const record of records) {
       expect(validateRecord(record)).toBe(true);
       expect(record).toMatchObject({ preflight: true, verdict: null });
