@@ -438,6 +438,232 @@ function baselineGate(name, scripts, candidates, manager, allowSkip = false) {
     : null;
 }
 
+function directGate(name, source, executable, args, allowSkip = false) {
+  return {
+    name,
+    source,
+    command: [executable, ...args]
+      .map((part) => JSON.stringify(part))
+      .join(" "),
+    executable,
+    args,
+    allowSkip,
+  };
+}
+
+function hasPythonTool(pyproject, tool) {
+  return new RegExp(`^\\s*\\[tool\\.${tool}(?:[.\\]]|$)`, "m").test(pyproject);
+}
+
+function committedFiles(root, head) {
+  try {
+    return git(root, ["ls-tree", "-r", "--name-only", head])
+      .split("\n")
+      .filter(Boolean)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+function isPythonRepository(root, head, pyproject) {
+  if (pyproject !== "") return true;
+  return committedFiles(root, head).some(
+    (file) =>
+      /^requirements[^/]*\.(?:txt|in)$/.test(file) ||
+      [
+        "setup.py",
+        "setup.cfg",
+        "Pipfile",
+        "Pipfile.lock",
+        "poetry.lock",
+        "uv.lock",
+        "pytest.ini",
+        "tox.ini",
+      ].includes(file),
+  );
+}
+
+function pythonEnvironment(root, head, pyproject) {
+  if (committedFile(root, head, "uv.lock") !== null) return "uv";
+  if (
+    committedFile(root, head, "poetry.lock") !== null ||
+    hasPythonTool(pyproject, "poetry")
+  ) {
+    return "poetry";
+  }
+  if (
+    committedFile(root, head, "Pipfile") !== null ||
+    committedFile(root, head, "Pipfile.lock") !== null
+  ) {
+    return "pipenv";
+  }
+  return null;
+}
+
+function pythonDirectGate({
+  root,
+  head,
+  pyproject,
+  name,
+  tool,
+  args,
+  allowSkip,
+}) {
+  const environment = pythonEnvironment(root, head, pyproject);
+  return environment
+    ? directGate(
+        name,
+        `python:${tool}`,
+        environment,
+        ["run", tool, ...args],
+        allowSkip,
+      )
+    : directGate(name, `python:${tool}`, tool, args, allowSkip);
+}
+
+function pythonAuditArgs(root, head, pyproject) {
+  if (pyproject !== "") return ["."];
+  const requirements = committedFiles(root, head).filter((file) =>
+    /^requirements[^/]*\.(?:txt|in)$/.test(file),
+  );
+  if (requirements.length > 0) {
+    return requirements.flatMap((file) => ["-r", file]);
+  }
+  if (
+    committedFile(root, head, "Pipfile") !== null ||
+    committedFile(root, head, "Pipfile.lock") !== null
+  ) {
+    return [];
+  }
+  return null;
+}
+
+function hasCommittedPythonTests(root, head) {
+  return committedFiles(root, head).some((file) =>
+    /(?:^|\/)(?:test_[^/]+|[^/]+_test)\.py$/.test(file),
+  );
+}
+
+function pythonGate({
+  root,
+  head,
+  name,
+  pyproject,
+  pythonRepository,
+  allowSkip = false,
+}) {
+  if (!pythonRepository) return null;
+  if (name === "lint" && hasPythonTool(pyproject, "ruff")) {
+    return pythonDirectGate({
+      root,
+      head,
+      pyproject,
+      name,
+      tool: "ruff",
+      args: ["check", "."],
+      allowSkip,
+    });
+  }
+  if (
+    name === "test" &&
+    (hasPythonTool(pyproject, "pytest") ||
+      committedFile(root, head, "pytest.ini") !== null ||
+      committedFile(root, head, "tox.ini") !== null ||
+      hasCommittedPythonTests(root, head))
+  ) {
+    return pythonDirectGate({
+      root,
+      head,
+      pyproject,
+      name,
+      tool: "pytest",
+      args: [],
+      allowSkip,
+    });
+  }
+  if (name === "security") {
+    const args = pythonAuditArgs(root, head, pyproject);
+    return args === null
+      ? null
+      : pythonDirectGate({
+          root,
+          head,
+          pyproject,
+          name,
+          tool: "pip-audit",
+          args,
+          allowSkip,
+        });
+  }
+  if (name === "type" && hasPythonTool(pyproject, "mypy")) {
+    return pythonDirectGate({
+      root,
+      head,
+      pyproject,
+      name,
+      tool: "mypy",
+      args: ["."],
+      allowSkip,
+    });
+  }
+  return null;
+}
+
+function preferredRequiredGate({
+  root,
+  head,
+  nativeGates,
+  scripts,
+  manager,
+  pyproject,
+  pythonRepository,
+  name,
+  candidates,
+  allowSkip = false,
+}) {
+  if (nativeGates.has(name)) {
+    return nativeGate(name, nativeGates.get(name), allowSkip);
+  }
+  return (
+    baselineGate(name, scripts, candidates, manager, allowSkip) ||
+    pythonGate({
+      root,
+      head,
+      name,
+      pyproject,
+      pythonRepository,
+      allowSkip,
+    })
+  );
+}
+
+function optionalTypeGate({
+  root,
+  head,
+  nativeGates,
+  scripts,
+  manager,
+  pyproject,
+  pythonRepository,
+}) {
+  if (nativeGates.has("type")) {
+    return nativeGate("type", nativeGates.get("type"));
+  }
+  const typeScript = ["type-check:all", "type-check", "typecheck"].find(
+    (name) => typeof scripts[name] === "string",
+  );
+  return typeScript
+    ? scriptGate("type", typeScript, manager)
+    : pythonGate({
+        root,
+        head,
+        name: "type",
+        pyproject,
+        pythonRepository,
+      });
+}
+
 const NATIVE_GATES_FILE = ".quality-gates.json";
 const NATIVE_GATE_NAMES = new Set([
   "lint",
@@ -530,11 +756,22 @@ function discoverRequiredGates(
     scripts = packageJson.scripts || {};
   }
   const manager = packageManagerAt(root, head, packageJson);
+  const pyproject = committedFile(root, head, "pyproject.toml") || "";
+  const pythonRepository = isPythonRepository(root, head, pyproject);
   const nativeGates = discoverNativeGates(root, head);
   const requiredGate = (name, candidates, allowSkip = false) =>
-    nativeGates.has(name)
-      ? nativeGate(name, nativeGates.get(name), allowSkip)
-      : baselineGate(name, scripts, candidates, manager, allowSkip);
+    preferredRequiredGate({
+      root,
+      head,
+      nativeGates,
+      scripts,
+      manager,
+      pyproject,
+      pythonRepository,
+      name,
+      candidates,
+      allowSkip,
+    });
   const required = [
     requiredGate("lint", ["lint", "lint:check"]),
     requiredGate(
@@ -555,7 +792,7 @@ function discoverRequiredGates(
   }
   if (missing.length > 0) {
     throw new Error(
-      `quality requires executable repository scripts for: ${missing.join(", ")}`,
+      `quality requires executable npm or Python repository gates for: ${missing.join(", ")}`,
     );
   }
   if (nativeGates.has("build")) {
@@ -563,14 +800,16 @@ function discoverRequiredGates(
   } else if (typeof scripts.build === "string") {
     required.push(scriptGate("build", "build", manager));
   }
-  const typeScript = ["type-check:all", "type-check", "typecheck"].find(
-    (name) => typeof scripts[name] === "string",
-  );
-  if (nativeGates.has("type")) {
-    required.push(nativeGate("type", nativeGates.get("type")));
-  } else if (typeScript) {
-    required.push(scriptGate("type", typeScript, manager));
-  }
+  const typeGate = optionalTypeGate({
+    root,
+    head,
+    nativeGates,
+    scripts,
+    manager,
+    pyproject,
+    pythonRepository,
+  });
+  if (typeGate) required.push(typeGate);
   const consumerScript = Object.keys(scripts).find((name) =>
     /^test:consumer(?:$|[-:])/.test(name),
   );
