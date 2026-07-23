@@ -2094,6 +2094,29 @@ function sha256File(file) {
     .digest("hex");
 }
 
+function providerEvidenceName(name, provider) {
+  if (/^primary-(?:codex|gemini|claude)-/.test(name)) return true;
+  if (provider === "codex") {
+    return (
+      name === "codex.findings.txt" ||
+      /^codex-\d+(?:\.normalized)?\.json$/.test(name)
+    );
+  }
+  if (provider === "gemini") {
+    return (
+      name === "gemini.findings.txt" ||
+      /^gemini-\d+(?:\.normalized)?\.json$/.test(name)
+    );
+  }
+  if (provider === "claude") {
+    return (
+      (name.endsWith(".findings.txt") || name.endsWith(".result.json")) &&
+      !/^(?:codex|gemini)(?:-|\.)/.test(name)
+    );
+  }
+  throw new Error(`unsupported review provider '${provider}'`);
+}
+
 function writeArtifactInventory(manifest, artifactDir, provider) {
   const resolved = path.resolve(artifactDir);
   const info = reviewInfo(manifest);
@@ -2108,6 +2131,7 @@ function writeArtifactInventory(manifest, artifactDir, provider) {
         name.endsWith(".result.json") ||
         /^(?:codex|gemini)-\d+(?:\.normalized)?\.json$/.test(name),
     )
+    .filter((name) => providerEvidenceName(name, provider))
     .sort();
   const findings = names.filter((name) => name.endsWith(".findings.txt"));
   if (findings.length === 0) throw new Error("provider findings are missing");

@@ -2976,6 +2976,56 @@ exit 1
     ).toThrow(/inconclusive provider findings/);
   });
 
+  it("excludes stale fallback artifacts when a retry succeeds with Codex", () => {
+    const root = repo("retry-inventory-provider-isolation");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 2,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(manifest, ["reviewer-a", "reviewer-b"]);
+    });
+    const manifest = invocation.loadManifest(manifestPath).manifest;
+    const artifactDir = invocation.reviewInfo(manifest).artifactDir;
+    mkdirSync(artifactDir, { recursive: true });
+    writeFileSync(
+      path.join(artifactDir, "codex.findings.txt"),
+      "NO FINDINGS.\n",
+    );
+    writeFileSync(
+      path.join(artifactDir, "codex-1.normalized.json"),
+      JSON.stringify({
+        verdict: "approve",
+        summary: "retry completed",
+        findings: [],
+      }),
+    );
+    writeFileSync(
+      path.join(artifactDir, "reviewer-a.findings.txt"),
+      "INCONCLUSIVE: stale fallback attempt\n",
+    );
+    writeFileSync(
+      path.join(artifactDir, "reviewer-a.result.json"),
+      JSON.stringify({ is_error: true }),
+    );
+
+    expect(() =>
+      invocation.writeArtifactInventory(manifest, artifactDir, "codex"),
+    ).not.toThrow();
+    const inventory = JSON.parse(
+      readFileSync(path.join(artifactDir, "artifact-inventory.json"), "utf8"),
+    );
+    expect(inventory.files.map((item) => item.name)).toEqual([
+      "codex-1.normalized.json",
+      "codex.findings.txt",
+    ]);
+  });
+
   it("attributes preserved primary evidence from the filename on a campaign's first round, before manifest.provider.primary is populated", () => {
     // recordReview() is what sets manifest.provider.primary, and it only
     // runs AFTER a review round completes. On a campaign's very first round
