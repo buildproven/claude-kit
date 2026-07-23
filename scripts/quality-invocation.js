@@ -465,7 +465,31 @@ function hasPythonTool(pyproject, tool) {
   return new RegExp(`^\\s*\\[tool\\.${tool}(?:[.\\]]|$)`, "m").test(pyproject);
 }
 
-function pythonGate(root, head, name, pyproject, allowSkip = false) {
+function isPythonRepository(root, head, pyproject) {
+  if (pyproject !== "") return true;
+  return [
+    "requirements*.txt",
+    "requirements*.in",
+    "setup.py",
+    "setup.cfg",
+    "Pipfile",
+    "Pipfile.lock",
+    "poetry.lock",
+    "uv.lock",
+    "pytest.ini",
+    "tox.ini",
+  ].some((pathspec) => committedPathExists(root, head, pathspec));
+}
+
+function pythonGate({
+  root,
+  head,
+  name,
+  pyproject,
+  pythonRepository,
+  allowSkip = false,
+}) {
+  if (!pythonRepository) return null;
   if (name === "lint" && hasPythonTool(pyproject, "ruff")) {
     return directGate(name, "python:ruff", "ruff", ["check", "."], allowSkip);
   }
@@ -494,6 +518,7 @@ function preferredRequiredGate({
   scripts,
   manager,
   pyproject,
+  pythonRepository,
   name,
   candidates,
   allowSkip = false,
@@ -503,7 +528,14 @@ function preferredRequiredGate({
   }
   return (
     baselineGate(name, scripts, candidates, manager, allowSkip) ||
-    pythonGate(root, head, name, pyproject, allowSkip)
+    pythonGate({
+      root,
+      head,
+      name,
+      pyproject,
+      pythonRepository,
+      allowSkip,
+    })
   );
 }
 
@@ -514,6 +546,7 @@ function optionalTypeGate({
   scripts,
   manager,
   pyproject,
+  pythonRepository,
 }) {
   if (nativeGates.has("type")) {
     return nativeGate("type", nativeGates.get("type"));
@@ -523,7 +556,13 @@ function optionalTypeGate({
   );
   return typeScript
     ? scriptGate("type", typeScript, manager)
-    : pythonGate(root, head, "type", pyproject);
+    : pythonGate({
+        root,
+        head,
+        name: "type",
+        pyproject,
+        pythonRepository,
+      });
 }
 
 const NATIVE_GATES_FILE = ".quality-gates.json";
@@ -619,6 +658,7 @@ function discoverRequiredGates(
   }
   const manager = packageManagerAt(root, head, packageJson);
   const pyproject = committedFile(root, head, "pyproject.toml") || "";
+  const pythonRepository = isPythonRepository(root, head, pyproject);
   const nativeGates = discoverNativeGates(root, head);
   const requiredGate = (name, candidates, allowSkip = false) =>
     preferredRequiredGate({
@@ -628,6 +668,7 @@ function discoverRequiredGates(
       scripts,
       manager,
       pyproject,
+      pythonRepository,
       name,
       candidates,
       allowSkip,
@@ -667,6 +708,7 @@ function discoverRequiredGates(
     scripts,
     manager,
     pyproject,
+    pythonRepository,
   });
   if (typeGate) required.push(typeGate);
   const consumerScript = Object.keys(scripts).find((name) =>

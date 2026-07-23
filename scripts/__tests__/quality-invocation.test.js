@@ -2706,16 +2706,16 @@ exit 1
     git(root, ["add", "package.json"]);
     git(root, ["commit", "-q", "-m", "test-only package"]);
     expect(() => create(root)).toThrow(
-      /executable repository scripts for: lint, security/,
+      /executable npm or Python repository gates for: lint, security/,
     );
 
     writeFileSync(path.join(root, "package.json"), JSON.stringify({}));
     git(root, ["commit", "-qam", "remove tests"]);
     expect(() => create(root)).toThrow(
-      /executable repository scripts for: lint, security, test/,
+      /executable npm or Python repository gates for: lint, security, test/,
     );
     expect(() => create(root, ["--skip-tests"])).toThrow(
-      /executable repository scripts for: lint, security/,
+      /executable npm or Python repository gates for: lint, security/,
     );
   });
 
@@ -3545,6 +3545,33 @@ exit 1
           args: [],
         }),
       ]),
+    );
+  });
+
+  it("does not invent Python gates from a non-Python tests directory", () => {
+    const root = repo("non-python-gate-discovery");
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: {
+          lint: "true",
+          "security:audit": "true",
+        },
+      }),
+    );
+    mkdirSync(path.join(root, "tests"));
+    writeFileSync(path.join(root, "tests", "example.test.js"), "// test\n");
+    writeFileSync(path.join(root, "tests", "example.py"), "# fixture\n");
+    git(root, [
+      "add",
+      "package.json",
+      "tests/example.test.js",
+      "tests/example.py",
+    ]);
+    git(root, ["commit", "-q", "-m", "add JavaScript tests"]);
+
+    expect(() => create(root)).toThrow(
+      /executable npm or Python repository gates for: test/,
     );
   });
 
