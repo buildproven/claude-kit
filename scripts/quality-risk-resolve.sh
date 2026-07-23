@@ -28,6 +28,10 @@ cd "$GIT_ROOT" || exit 1
 
 case "$LEVEL" in
   auto) MINIMUM_RISK=0 ;;
+  low) MINIMUM_RISK=0 ;;
+  medium) MINIMUM_RISK=20 ;;
+  high) MINIMUM_RISK=50 ;;
+  critical) MINIMUM_RISK=75 ;;
   95) MINIMUM_RISK=50 ;;
   98) MINIMUM_RISK=75 ;;
   *)
