@@ -571,6 +571,28 @@ describe("quality merge gates", () => {
     );
   });
 
+  it("permits CI-only coverage only for typed low-risk provider unavailability", () => {
+    expect(RUN_REVIEW).toMatch(/if \[ "\$TIER" = low \]; then/);
+    expect(RUN_REVIEW).toMatch(
+      /2\) ADVISORY_FAILURE_CATEGORY=provider-unavailable/,
+    );
+    expect(RUN_REVIEW).toMatch(
+      /75\) ADVISORY_FAILURE_CATEGORY=provider-exhaustion/,
+    );
+    expect(RUN_REVIEW).toMatch(
+      /79\) ADVISORY_FAILURE_CATEGORY=provider-billing/,
+    );
+    expect(RUN_REVIEW).toMatch(
+      /76\) ADVISORY_FAILURE_CATEGORY=provider-timeout/,
+    );
+    expect(RUN_REVIEW).toMatch(/record-advisory-review/);
+    expect(RUN_REVIEW).not.toMatch(/4\) ADVISORY_FAILURE_CATEGORY=/);
+    expect(RUN_REVIEW).not.toMatch(/77\) ADVISORY_FAILURE_CATEGORY=/);
+    expect(RUN_REVIEW.indexOf('if [ "$TIER" = low ]; then')).toBeLessThan(
+      RUN_REVIEW.indexOf("❌ MERGE BLOCKED"),
+    );
+  });
+
   it("preserves conclusive findings when a later primary pass is inconclusive", () => {
     const reviewOut = mkdtempSync(path.join(tmpdir(), "quality-evidence-"));
     writeFileSync(

@@ -489,10 +489,10 @@ function replaceAuthorization(state, head, reusableAttempt) {
 
 function reconcileManifestRounds(sentinelPath) {
   withManifestLock(sentinelPath, (manifest) => {
-    const successful = manifest.reviews.filter(
-      (review) => review.status === "success",
+    const covered = manifest.reviews.filter((review) =>
+      ["success", "advisory"].includes(review.status),
     );
-    const rounds = [...new Set(successful.map((review) => review.round))].sort(
+    const rounds = [...new Set(covered.map((review) => review.round))].sort(
       (left, right) => left - right,
     );
     rounds.forEach((round, index) => {
@@ -500,7 +500,13 @@ function reconcileManifestRounds(sentinelPath) {
         throw new Error("successful review rounds are not contiguous");
       }
     });
-    for (const review of successful) {
+    for (const review of covered) {
+      if (review.status === "advisory") {
+        if (manifest.risk?.tier !== "low" || review.provider !== "ci-only") {
+          throw new Error("invalid advisory review round");
+        }
+        continue;
+      }
       const authorization = manifest.governor.authorizedAttempts.find(
         (attempt) =>
           attempt.token === review.governorAttemptToken &&
@@ -510,7 +516,7 @@ function reconcileManifestRounds(sentinelPath) {
       );
       if (!authorization) {
         throw new Error(
-          `successful review round ${review.round} lacks consumed governor authorization`,
+          `review round ${review.round} lacks consumed governor authorization`,
         );
       }
     }
