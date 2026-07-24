@@ -115,10 +115,46 @@ node "$SCRIPT_DIR/quality-invocation.js" record-stamp-published "$MANIFEST" \
   --head "$STAMP_HEAD" --remote "$HEAD_REMOTE" \
   --previous-head "$PREFLIGHT_PR_HEAD" >/dev/null
 
-PR_HEAD="$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
-  --json headRefOid --jq .headRefOid)"
+# GitHub's PR API can briefly lag a just-completed push (read-after-write
+# consistency delay), which produced a false MERGE BLOCKED on this exact
+# check twice in one session (BUI-462) even though the push had already
+# landed and a manual retry seconds later showed matching SHAs both times.
+# Retry a few times with a short backoff before treating a mismatch as real;
+# a genuine divergence (someone else pushed to the branch) still fails after
+# the retry window exhausts.
+PR_HEAD_RETRIES="${QUALITY_STAMP_PR_HEAD_RETRIES:-3}"
+PR_HEAD_RETRY_DELAY="${QUALITY_STAMP_PR_HEAD_RETRY_DELAY:-3}"
+PR_HEAD=""
+PR_HEAD_ERR_FILE="$(mktemp)"
+attempt=1
+while [ "$attempt" -le "$PR_HEAD_RETRIES" ]; do
+  # `gh pr view` failing outright (network blip, auth hiccup, rate limit) is
+  # a different flavor of the same transient-flakiness problem this retry
+  # loop exists for — under `set -e` an unguarded failure here would abort
+  # the whole script on attempt 1 and silently defeat the retry entirely.
+  # Tolerate a failed call the same way as a mismatched SHA: log it and retry.
+  # Capture stdout and stderr SEPARATELY in ONE call (5 review agents, two
+  # rounds): a merged `2>&1` capture corrupts PR_HEAD with benign stderr
+  # noise (e.g. a gh update nag) even on success — the exact false-mismatch
+  # bug this fix exists to eliminate. A prior version re-ran the command a
+  # second time on failure just to get a clean error message, which doubled
+  # API calls on exactly the rate-limit path this fix is meant to tolerate;
+  # route stderr to a scratch file instead so one call covers both.
+  if ! PR_HEAD="$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
+    --json headRefOid --jq .headRefOid 2>"$PR_HEAD_ERR_FILE")"; then
+    echo "[quality] gh pr view failed on attempt $attempt/$PR_HEAD_RETRIES: $(cat "$PR_HEAD_ERR_FILE")" >&2
+    PR_HEAD=""
+  fi
+  [ "$PR_HEAD" = "$STAMP_HEAD" ] && break
+  if [ "$attempt" -lt "$PR_HEAD_RETRIES" ]; then
+    echo "[quality] PR HEAD mismatch on attempt $attempt/$PR_HEAD_RETRIES (got $PR_HEAD, want $STAMP_HEAD) — retrying in ${PR_HEAD_RETRY_DELAY}s, likely GitHub API lag" >&2
+    sleep "$PR_HEAD_RETRY_DELAY"
+  fi
+  attempt=$((attempt + 1))
+done
+rm -f "$PR_HEAD_ERR_FILE"
 [ "$PR_HEAD" = "$STAMP_HEAD" ] || {
-  echo "❌ MERGE BLOCKED: pushed PR HEAD does not match persisted stamp $STAMP_HEAD." >&2
+  echo "❌ MERGE BLOCKED: pushed PR HEAD does not match persisted stamp $STAMP_HEAD after $PR_HEAD_RETRIES attempts." >&2
   exit 1
 }
 CI_TIMEOUT="${QUALITY_STAMP_CI_TIMEOUT:-900}"
