@@ -92,7 +92,6 @@ if [ "${#CANDIDATES[@]}" -eq 0 ]; then
   DIFF_ENTRY_COUNT="$(printf '%s\n' "$DIFF_RAW" | grep -c . || true)"
   GITLINK_ENTRY_COUNT="$(printf '%s\n' "$DIFF_RAW" | awk '$1 == ":160000" && $2 == "160000"' | wc -l | tr -d ' ')"
   if [ "$DIFF_ENTRY_COUNT" -gt 0 ] && [ "$DIFF_ENTRY_COUNT" -eq "$GITLINK_ENTRY_COUNT" ]; then
-    echo "[quality] mutation gate omitted: diff touches only submodule pointers (gitlinks), no source to mutate"
     mkdir -p "$(dirname "$ARTIFACT")"
     jq -n \
       --arg invocationId "$INVOCATION_ID" \
@@ -107,7 +106,7 @@ if [ "${#CANDIDATES[@]}" -eq 0 ]; then
       --artifact "$ARTIFACT"
     bash "$SCRIPT_DIR/quality-assert-clean.sh" \
       --manifest "$MANIFEST" --phase "mutation check completion"
-    echo "[quality] mutation evidence: gitlink-skip -> $ARTIFACT"
+    echo "[quality] mutation gate omitted: diff touches only submodule pointers (gitlinks), no source to mutate; evidence -> $ARTIFACT"
     exit 0
   fi
 fi
