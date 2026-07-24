@@ -211,6 +211,10 @@ function reserveAdmission(state, request) {
   }
   const existing = current.reservations[id];
   if (existing) {
+    // A re-plan (SKILL.md recomputes reservedSeconds after a worker reports
+    // elapsed time) can retry the same reservationId with a different value;
+    // callers branch on `reason` in the admit() CLI output to tell this
+    // apart from ordinary budget/deadline exhaustion.
     if (existing.reservedSeconds !== reservedSeconds) {
       return {
         state: current,
