@@ -2559,6 +2559,41 @@ exit 1
     ]);
   });
 
+  it("BUI-454: CI-only advisory authorization stamps a distinct Quality-Reviewer trailer value", () => {
+    // Merge evidence must record which authorization path produced a merge
+    // (full AI review vs CI-only advisory) so it's queryable via a plain
+    // `git log --grep` over trailers without a new telemetry subsystem.
+    const root = repo("advisory-trailer-value");
+    git(root, ["reset", "--hard", "-q", "origin/main"]);
+    writeFileSync(path.join(root, "README.md"), "# Documentation\n");
+    git(root, ["add", "README.md"]);
+    git(root, ["commit", "-q", "-m", "docs: update readme"]);
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "low",
+        taskType: "docs",
+        score: 5,
+        agents: 2,
+        "codex-depth": "low",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["reviewer-a", "reviewer-b"]);
+    });
+    for (const name of ["lint", "test", "security"]) {
+      recordGateFixture(manifest, name);
+    }
+    prepareAdvisoryReview(root, manifest, "provider-unavailable");
+    recordJudgeArtifact(root, manifest);
+
+    const trailers = execFileSync("node", [INVOCATION, "trailers", manifest], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(trailers).toMatch(/^Quality-Reviewer: ci-only$/m);
+    expect(trailers).not.toMatch(/^Quality-Reviewer: (claude|codex|gemini)$/m);
+  });
+
   it("rejects advisory review coverage above the low risk tier", () => {
     const root = repo("high-risk-advisory-review");
     const manifest = create(root);

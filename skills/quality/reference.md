@@ -417,6 +417,13 @@ Quality-Base: <SHA>
   invalidates the stamp.
 - Parenthetical `Reviewed-By` metadata is legacy reader compatibility only and
   must not be emitted by new quality campaigns.
+- **Authorization path is queryable from the trailer, no separate telemetry
+  needed.** At low risk tier, a merge authorized on CI-only evidence (AI
+  review unavailable after the configured fallback path) stamps
+  `Quality-Reviewer: ci-only` — a distinct value from an actual completed
+  review (`Quality-Reviewer: claude` / `codex` / `gemini`). Find how often the
+  advisory path fired across recent merges with:
+  `git log --all --grep="Quality-Reviewer: ci-only"`.
 
 ## Deep Review Mode (`--audit --deep`)
 
