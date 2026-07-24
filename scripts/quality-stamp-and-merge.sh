@@ -127,8 +127,16 @@ PR_HEAD_RETRY_DELAY="${QUALITY_STAMP_PR_HEAD_RETRY_DELAY:-3}"
 PR_HEAD=""
 attempt=1
 while [ "$attempt" -le "$PR_HEAD_RETRIES" ]; do
-  PR_HEAD="$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
-    --json headRefOid --jq .headRefOid)"
+  # `gh pr view` failing outright (network blip, auth hiccup, rate limit) is
+  # a different flavor of the same transient-flakiness problem this retry
+  # loop exists for — under `set -e` an unguarded failure here would abort
+  # the whole script on attempt 1 and silently defeat the retry entirely.
+  # Tolerate a failed call the same way as a mismatched SHA: log it and retry.
+  if ! PR_HEAD="$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
+    --json headRefOid --jq .headRefOid 2>&1)"; then
+    echo "[quality] gh pr view failed on attempt $attempt/$PR_HEAD_RETRIES: $PR_HEAD" >&2
+    PR_HEAD=""
+  fi
   [ "$PR_HEAD" = "$STAMP_HEAD" ] && break
   if [ "$attempt" -lt "$PR_HEAD_RETRIES" ]; then
     echo "[quality] PR HEAD mismatch on attempt $attempt/$PR_HEAD_RETRIES (got $PR_HEAD, want $STAMP_HEAD) — retrying in ${PR_HEAD_RETRY_DELAY}s, likely GitHub API lag" >&2

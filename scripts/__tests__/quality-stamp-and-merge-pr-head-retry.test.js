@@ -120,4 +120,40 @@ echo "matching000000000000000000000000000000"
     expect(result.status).toBe(0);
     expect(result.stderr).not.toContain("retrying");
   });
+
+  it("tolerates gh itself failing (network/auth/rate-limit) and retries rather than aborting", () => {
+    // silent-failure-hunter caught this in review: under `set -e` (active in
+    // the real script), an unguarded `gh pr view` failure on attempt 1 would
+    // abort the whole script instead of retrying — defeating the retry loop
+    // for exactly the kind of transient API flakiness this fix targets.
+    const { bin } = harness(`
+COUNT_FILE="\${QUALITY_TEST_COUNT_FILE}"
+count=0
+[ -f "$COUNT_FILE" ] && count=$(cat "$COUNT_FILE")
+count=$((count + 1))
+echo "$count" > "$COUNT_FILE"
+if [ "$count" -lt 2 ]; then
+  echo "gh: rate limit exceeded" >&2
+  exit 1
+else
+  echo "matching000000000000000000000000000000"
+fi
+`);
+    const countFile = path.join(bin, "..", "count");
+    const result = runRetryLoop({
+      bin,
+      stampHead: "matching000000000000000000000000000000",
+      pr: "42",
+      repository: "buildproven/claude-kit",
+      countFile,
+    });
+    if (result.status !== 0) {
+      console.error(result.stdout, result.stderr);
+    }
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "RETRY_LOOP_RESULT=matching000000000000000000000000000000",
+    );
+    expect(result.stderr).toContain("gh pr view failed on attempt 1");
+  });
 });
