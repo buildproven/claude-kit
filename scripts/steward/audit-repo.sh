@@ -23,7 +23,7 @@ if command -v gh >/dev/null 2>&1; then
   fi
 fi
 instruction_ok=false
-if [ -f "$REPO/CLAUDE.md" ] && [ -L "$REPO/AGENTS.md" ] && [ "$(readlink "$REPO/AGENTS.md")" = "CLAUDE.md" ]; then
+if [ -f "$REPO/AGENTS.md" ] && [ -L "$REPO/CLAUDE.md" ] && [ "$(readlink "$REPO/CLAUDE.md")" = "AGENTS.md" ]; then
   instruction_ok=true
 fi
 
