@@ -333,6 +333,58 @@ describe("quality-mutation-check", () => {
     );
   });
 
+  it("does not abort on a diff with zero added/modified entries", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "quality-mutation-delonly-"));
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.name", "Quality Test"]);
+    git(root, ["config", "user.email", "quality@example.com"]);
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: { lint: "true", test: "true", "security:audit": "true" },
+      }),
+    );
+    writeFileSync(path.join(root, "obsolete.js"), "exports.x = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "base"]);
+    git(root, ["remote", "add", "origin", root]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "-c", "feature"]);
+    git(root, ["rm", "-q", "obsolete.js"]);
+    git(root, ["commit", "-qm", "chore: remove obsolete.js"]);
+
+    const manifest = execFileSync(
+      "node",
+      [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
+      { cwd: root, encoding: "utf8" },
+    ).trim();
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "risk",
+        manifest,
+        "--tier",
+        "high",
+        "--task-type",
+        "feature",
+        "--score",
+        "50",
+        "--agents",
+        "2",
+        "--codex-depth",
+        "high",
+        "--codex-rounds",
+        "1",
+      ],
+      { cwd: root },
+    );
+
+    expect(() => runMutation(root, manifest)).toThrow(
+      /no changed executable source file can be reverted/,
+    );
+  });
+
   it("rejects a timed-out test instead of recording a hang as red evidence", () => {
     const { root, manifest } = fixture(
       "hang",
