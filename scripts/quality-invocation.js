@@ -2261,15 +2261,19 @@ function providerFindings(manifest) {
         /^NO FINDINGS\. Verdict: (?:approve|pass)\. [^\r\n]+$/i.test(
           line.trim(),
         );
-      // A reviewer commonly prefaces a clean verdict with a one-line
+      // A reviewer commonly prefaces a clean verdict with a single-line
       // rationale ("Bare submodule bump, nothing to review here.\n\nNO
-      // FINDINGS") — that preamble is legitimate content, not a finding.
-      // Require only the LAST non-blank line to be the sentinel rather than
-      // every line, so prose-then-sentinel isn't misclassified as blocking
-      // (BUI-463).
+      // FINDINGS") — that preamble is legitimate content, not a finding
+      // (BUI-463). But a real multi-line findings write-up can legitimately
+      // END with a line that happens to match the sentinel pattern (e.g. it
+      // quotes or discusses the literal "NO FINDINGS" string) — three
+      // independent review agents flagged this risk during BUI-463's own
+      // review. Bound the tolerance to exactly one preamble line so genuine
+      // findings prose (which is never this short) still fails the check.
       const nonBlankLines = text.split(/\r?\n/).filter((line) => line.trim());
       const isClean =
         nonBlankLines.length > 0 &&
+        nonBlankLines.length <= 2 &&
         isNoFindingsSentinel(nonBlankLines[nonBlankLines.length - 1]);
       if (!text || isClean) continue;
       findings.push({
