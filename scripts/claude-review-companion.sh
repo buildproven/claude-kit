@@ -162,8 +162,17 @@ CTX_FILE="$OUT_DIR/review-context.txt"
   cat "$DIFF_FILE"
   echo
   echo "Return your findings as a concise list. For each: file:line, severity"
-  echo "(BLOCKING|WARNING), what's wrong, and the concrete fix. If nothing is"
-  echo "wrong, say exactly: NO FINDINGS."
+  echo "(BLOCKING|WARNING), what's wrong, and the concrete fix."
+  echo
+  echo "End your entire response with exactly one of these two lines, and"
+  echo "nothing else on that line — no punctuation, no extra words:"
+  echo '  <<<NO FINDINGS>>>'
+  echo "if there is nothing to report, or:"
+  echo '  <<<FINDINGS REPORTED>>>'
+  echo "if you listed at least one finding above. Any discussion, rationale,"
+  echo "or commentary belongs BEFORE this final delimited line, never inside"
+  echo "or after it — the delimiter itself must never appear anywhere else"
+  echo "in your response, including when explaining what it means."
 } > "$CTX_FILE"
 
 # --- hard timeout that actually kills ----------------------------------------

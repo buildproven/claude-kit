@@ -2256,29 +2256,38 @@ function providerFindings(manifest) {
       const text = fs
         .readFileSync(path.join(review.artifactDir, item.name), "utf8")
         .trim();
-      const isNoFindingsSentinel = (line) =>
-        /^NO FINDINGS\.?$/i.test(line.trim()) ||
-        /^NO FINDINGS\. Verdict: (?:approve|pass)\. [^\r\n]+$/i.test(
-          line.trim(),
-        );
-      // A reviewer commonly prefaces a clean verdict with a rationale line
-      // ("Bare submodule bump, nothing to review here.\n\nNO FINDINGS") —
-      // that preamble is legitimate content, not a finding (BUI-463). Any
-      // bound purely on line count is gameable: a real finding can quote or
-      // discuss the literal sentinel string as its own closing line, at any
-      // length (two independent review rounds on this exact fix confirmed
-      // that risk). Close the ambiguity class instead of bounding it: the
-      // LAST line must be the sentinel, AND no earlier line may itself
-      // contain the sentinel substring — a genuine preamble explains why
-      // there's nothing to review without needing to mention "NO FINDINGS"
-      // itself, so this rejects exactly the cases that could be confused
-      // with a real finding quoting or discussing the sentinel.
-      const nonBlankLines = text.split(/\r?\n/).filter((line) => line.trim());
-      const preambleLines = nonBlankLines.slice(0, -1);
-      const isClean =
-        nonBlankLines.length > 0 &&
-        isNoFindingsSentinel(nonBlankLines[nonBlankLines.length - 1]) &&
-        preambleLines.every((line) => !/NO FINDINGS/i.test(line));
+      // BUI-463: prose-based sentinel detection (matching "NO FINDINGS" text
+      // anywhere in a reviewer's free-text response) is structurally
+      // ambiguous — three review rounds on earlier attempts at this exact
+      // fix confirmed real reviewers legitimately preface, discuss, or quote
+      // that phrase without meaning it as their verdict. The delimited
+      // marker below is unambiguous by construction: reviewers are
+      // instructed (claude-review-companion.sh) to emit it ONLY as their
+      // final, isolated line, never elsewhere — so its mere presence
+      // anywhere in the text is authoritative, no prose-content heuristics
+      // needed.
+      const hasDelimitedMarker = (marker) =>
+        text.split(/\r?\n/).some((line) => line.trim() === marker);
+      let isClean;
+      if (hasDelimitedMarker("<<<NO FINDINGS>>>")) {
+        isClean = true;
+      } else if (hasDelimitedMarker("<<<FINDINGS REPORTED>>>")) {
+        isClean = false;
+      } else {
+        // Legacy fallback for responses that predate the delimited-marker
+        // instruction (older prompt version, or Codex/Gemini's own
+        // JSON-derived summary text) — the bare-sentinel-with-no-preamble
+        // form only, since that's the one shape that was never ambiguous.
+        isClean = text
+          .split(/\r?\n/)
+          .every(
+            (line) =>
+              /^NO FINDINGS\.?$/i.test(line.trim()) ||
+              /^NO FINDINGS\. Verdict: (?:approve|pass)\. [^\r\n]+$/i.test(
+                line.trim(),
+              ),
+          );
+      }
       if (!text || isClean) continue;
       findings.push({
         id: crypto

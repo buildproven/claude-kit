@@ -3569,20 +3569,29 @@ exit 1
     }
   });
 
-  it("BUI-463: accepts a no-findings sentinel preceded by a one-line rationale", () => {
-    // A reviewer commonly explains why there's nothing to review before the
-    // sentinel (e.g. a bare submodule-pointer bump) — that prose is
-    // legitimate content, not itself a finding. Only every-line-must-match
-    // used to be accepted, which misclassified this as a single blocking
-    // finding whose title was the rationale sentence.
-    for (const [index, marker] of [
-      "Bare submodule pointer bump with no visible content diff to review.\n\nNO FINDINGS",
-      "This diff is a bare submodule pointer bump with no source visible — nothing to review at this layer.\nNO FINDINGS.\n",
-      "Submodule bump with no application-code changes to review here; the actual content lives in the submodule's own history.\n\nNO FINDINGS\n",
+  it("BUI-463: delimited <<<NO FINDINGS>>> marker is authoritative regardless of preceding prose", () => {
+    // Prose-based sentinel detection is structurally ambiguous — three
+    // review rounds on earlier attempts confirmed real reviewers legitimately
+    // preface, discuss, or quote the phrase "NO FINDINGS" without meaning it
+    // as their verdict (e.g. explaining why a submodule bump has nothing to
+    // review, or a self-referential review of this exact parsing logic).
+    // The delimited marker is unambiguous by construction: reviewers are
+    // instructed to emit it ONLY as an isolated final line, so its presence
+    // is authoritative no matter what prose precedes it — no line-count or
+    // substring heuristics needed.
+    for (const [index, text] of [
+      "<<<NO FINDINGS>>>",
+      "Bare submodule pointer bump, nothing to review at this layer.\n\n<<<NO FINDINGS>>>",
+      // Prose that itself discusses/quotes "NO FINDINGS" no longer matters —
+      // only the delimited line is examined.
+      'Reviewing the sentinel-detection logic: the marker "NO FINDINGS" must ' +
+        "appear delimited, not as bare prose. No invalid-state issues found.\n\n" +
+        "<<<NO FINDINGS>>>",
+      "Full test suite passed. Review complete: NO FINDINGS.\n\n<<<NO FINDINGS>>>",
     ].entries()) {
-      const root = repo(`clean-sentinel-preamble-${index}`);
+      const root = repo(`delimited-clean-${index}`);
       const manifest = create(root);
-      prepareCodexReview(root, manifest, [], marker);
+      prepareCodexReview(root, manifest, [], text);
       const context = JSON.parse(
         execFileSync("node", [INVOCATION, "judge-context", manifest], {
           cwd: root,
@@ -3593,8 +3602,40 @@ exit 1
     }
   });
 
-  it("BUI-463: still flags real findings text that does not end with the sentinel", () => {
-    const root = repo("real-findings-not-sentinel");
+  it("BUI-463: delimited <<<FINDINGS REPORTED>>> marker is authoritative even if prose says NO FINDINGS", () => {
+    const root = repo("delimited-findings-reported");
+    const manifest = create(root);
+    prepareCodexReview(
+      root,
+      manifest,
+      [],
+      "file.js:12 BLOCKING: retry loop never breaks on success.\n\n<<<FINDINGS REPORTED>>>",
+    );
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toHaveLength(1);
+    expect(context.findings[0].severity).toBe("blocking");
+  });
+
+  it("BUI-463: legacy bare sentinel with no preamble still classifies clean (pre-delimiter compat)", () => {
+    const root = repo("legacy-bare-sentinel");
+    const manifest = create(root);
+    prepareCodexReview(root, manifest, [], "NO FINDINGS\n");
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toEqual([]);
+  });
+
+  it("BUI-463: legacy text without a delimiter or bare sentinel still flags as a finding", () => {
+    const root = repo("legacy-real-finding-no-delimiter");
     const manifest = create(root);
     prepareCodexReview(
       root,
@@ -3610,43 +3651,6 @@ exit 1
     );
     expect(context.findings).toHaveLength(1);
     expect(context.findings[0].severity).toBe("blocking");
-  });
-
-  it("BUI-463: flags a multi-line real finding even if its last line matches the sentinel pattern", () => {
-    // Independent review agents flagged this exact risk during BUI-463's
-    // own review: a genuine finding that discusses or quotes the literal
-    // "NO FINDINGS" string as its closing line must not be silently
-    // swallowed by the sentinel relaxation, at ANY preamble length — a
-    // line-count bound is gameable since the quoted string is fixed-length,
-    // not the surrounding prose. Reject whenever any line before the last
-    // one already contains "NO FINDINGS" as a substring.
-    for (const [index, text] of [
-      [
-        "Found a real issue in the sentinel parser.",
-        "The last-line-only check can be tricked by a finding whose",
-        "closing line happens to read: NO FINDINGS",
-      ].join("\n"),
-      // The sharper 2-line case a second review round specifically caught:
-      // one preamble line that itself mentions the sentinel substring.
-      [
-        "This finding's text happens to end with the string NO FINDINGS",
-        "NO FINDINGS",
-      ].join("\n"),
-    ].entries()) {
-      const root = repo(
-        `multiline-finding-ending-in-sentinel-lookalike-${index}`,
-      );
-      const manifest = create(root);
-      prepareCodexReview(root, manifest, [], text);
-      const context = JSON.parse(
-        execFileSync("node", [INVOCATION, "judge-context", manifest], {
-          cwd: root,
-          encoding: "utf8",
-        }),
-      );
-      expect(context.findings).toHaveLength(1);
-      expect(context.findings[0].severity).toBe("blocking");
-    }
   });
 
   it("exposes persisted judge dispositions to targeted verification", () => {
