@@ -3032,12 +3032,27 @@ function validMutationPaths(paths) {
 }
 
 function validMutationArtifact(manifest, artifact) {
-  return [
+  const identityValid = [
     artifact.schemaVersion === 1,
     artifact.invocationId === manifest.invocationId,
     artifact.base === manifest.revisions.baseSha,
     artifact.head === manifest.revisions.currentHead,
     artifact.tier === manifest.risk.tier,
+  ].every(Boolean);
+  if (!identityValid) return false;
+  if (artifact.method === "gitlink-skip") {
+    // A diff whose entire change set is submodule/gitlink pointer bumps has
+    // no executable source to mutate. This is a distinct, legitimately
+    // evidenced outcome from a revert that failed to prove anything —
+    // testFailureObserved is false because no revert was attempted, and
+    // mutatedPaths is empty because nothing was reverted.
+    return (
+      Array.isArray(artifact.mutatedPaths) &&
+      artifact.mutatedPaths.length === 0 &&
+      artifact.testFailureObserved === false
+    );
+  }
+  return [
     ["revert-diff", "stryker"].includes(artifact.method),
     validMutationPaths(artifact.mutatedPaths),
     artifact.testFailureObserved === true,
