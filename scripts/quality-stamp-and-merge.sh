@@ -132,9 +132,16 @@ while [ "$attempt" -le "$PR_HEAD_RETRIES" ]; do
   # loop exists for — under `set -e` an unguarded failure here would abort
   # the whole script on attempt 1 and silently defeat the retry entirely.
   # Tolerate a failed call the same way as a mismatched SHA: log it and retry.
+  # Capture stdout and stderr SEPARATELY (4 review agents caught this): a
+  # merged `2>&1` capture corrupts PR_HEAD with benign stderr noise (e.g. a
+  # gh update nag) even on a successful call — exactly the false-mismatch
+  # bug this fix exists to eliminate. On failure, re-run once discarding
+  # stdout to get a clean stderr-only message for the log line.
   if ! PR_HEAD="$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
-    --json headRefOid --jq .headRefOid 2>&1)"; then
-    echo "[quality] gh pr view failed on attempt $attempt/$PR_HEAD_RETRIES: $PR_HEAD" >&2
+    --json headRefOid --jq .headRefOid 2>/dev/null)"; then
+    GH_ERR="$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
+      --json headRefOid --jq .headRefOid 2>&1 >/dev/null || true)"
+    echo "[quality] gh pr view failed on attempt $attempt/$PR_HEAD_RETRIES: $GH_ERR" >&2
     PR_HEAD=""
   fi
   [ "$PR_HEAD" = "$STAMP_HEAD" ] && break

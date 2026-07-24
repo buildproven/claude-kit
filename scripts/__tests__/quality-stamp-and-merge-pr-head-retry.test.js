@@ -156,4 +156,30 @@ fi
     );
     expect(result.stderr).toContain("gh pr view failed on attempt 1");
   });
+
+  it("does not let benign stderr noise on a successful call corrupt the captured SHA", () => {
+    // 4 review agents converged on this in one round: an earlier version of
+    // this fix captured stdout and stderr together (`2>&1`), so a `gh`
+    // deprecation notice or update nag printed to stderr on an otherwise
+    // successful call got concatenated into PR_HEAD — reintroducing the
+    // exact false-mismatch failure this whole PR exists to eliminate.
+    const { bin } = harness(`
+echo "gh: a new release of gh is available" >&2
+echo "matching000000000000000000000000000000"
+`);
+    const result = runRetryLoop({
+      bin,
+      stampHead: "matching000000000000000000000000000000",
+      pr: "42",
+      repository: "buildproven/claude-kit",
+    });
+    if (result.status !== 0) {
+      console.error(result.stdout, result.stderr);
+    }
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "RETRY_LOOP_RESULT=matching000000000000000000000000000000",
+    );
+    expect(result.stderr).not.toContain("retrying");
+  });
 });
