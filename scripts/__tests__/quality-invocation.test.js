@@ -3569,6 +3569,49 @@ exit 1
     }
   });
 
+  it("BUI-463: accepts a no-findings sentinel preceded by a one-line rationale", () => {
+    // A reviewer commonly explains why there's nothing to review before the
+    // sentinel (e.g. a bare submodule-pointer bump) — that prose is
+    // legitimate content, not itself a finding. Only every-line-must-match
+    // used to be accepted, which misclassified this as a single blocking
+    // finding whose title was the rationale sentence.
+    for (const [index, marker] of [
+      "Bare submodule pointer bump with no visible content diff to review.\n\nNO FINDINGS",
+      "This diff is a bare submodule pointer bump with no source visible — nothing to review at this layer.\nNO FINDINGS.\n",
+      "Submodule bump with no application-code changes to review here; the actual content lives in the submodule's own history.\n\nNO FINDINGS\n",
+    ].entries()) {
+      const root = repo(`clean-sentinel-preamble-${index}`);
+      const manifest = create(root);
+      prepareCodexReview(root, manifest, [], marker);
+      const context = JSON.parse(
+        execFileSync("node", [INVOCATION, "judge-context", manifest], {
+          cwd: root,
+          encoding: "utf8",
+        }),
+      );
+      expect(context.findings).toEqual([]);
+    }
+  });
+
+  it("BUI-463: still flags real findings text that does not end with the sentinel", () => {
+    const root = repo("real-findings-not-sentinel");
+    const manifest = create(root);
+    prepareCodexReview(
+      root,
+      manifest,
+      [],
+      "Found an issue: the retry loop never breaks on success.\n",
+    );
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toHaveLength(1);
+    expect(context.findings[0].severity).toBe("blocking");
+  });
+
   it("exposes persisted judge dispositions to targeted verification", () => {
     const root = repo("prior-judge-dispositions");
     const manifest = create(root);

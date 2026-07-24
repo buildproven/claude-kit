@@ -2256,14 +2256,21 @@ function providerFindings(manifest) {
       const text = fs
         .readFileSync(path.join(review.artifactDir, item.name), "utf8")
         .trim();
-      const cleanLines = text.split(/\r?\n/);
-      const isClean = cleanLines.every(
-        (line) =>
-          /^NO FINDINGS\.?$/i.test(line.trim()) ||
-          /^NO FINDINGS\. Verdict: (?:approve|pass)\. [^\r\n]+$/i.test(
-            line.trim(),
-          ),
-      );
+      const isNoFindingsSentinel = (line) =>
+        /^NO FINDINGS\.?$/i.test(line.trim()) ||
+        /^NO FINDINGS\. Verdict: (?:approve|pass)\. [^\r\n]+$/i.test(
+          line.trim(),
+        );
+      // A reviewer commonly prefaces a clean verdict with a one-line
+      // rationale ("Bare submodule bump, nothing to review here.\n\nNO
+      // FINDINGS") — that preamble is legitimate content, not a finding.
+      // Require only the LAST non-blank line to be the sentinel rather than
+      // every line, so prose-then-sentinel isn't misclassified as blocking
+      // (BUI-463).
+      const nonBlankLines = text.split(/\r?\n/).filter((line) => line.trim());
+      const isClean =
+        nonBlankLines.length > 0 &&
+        isNoFindingsSentinel(nonBlankLines[nonBlankLines.length - 1]);
       if (!text || isClean) continue;
       findings.push({
         id: crypto
