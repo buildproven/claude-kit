@@ -661,6 +661,52 @@ describe("deepMerge / override", () => {
   });
 });
 
+// ─── low/medium tier boundary regression (BUI-453) ──────────────────────────
+//
+// BUI-452 made the low/medium boundary load-bearing: a diff scoring < 20
+// authorizes merge on CI-only evidence when AI review is unavailable, so a
+// silent shift of this boundary now changes merge authorization, not just
+// review depth. These fixtures pin concrete example diffs on both sides of
+// the score-20 curve edge (scripts/risk-score.js DEFAULTS.curve[0].maxScore)
+// so a future scorer change that drifts the boundary fails loudly here
+// instead of surfacing as a production merge-authorization regression.
+describe("low/medium risk tier boundary (BUI-453)", () => {
+  const LOW_MEDIUM_BOUNDARY = 20;
+
+  it("a 300-line docs-only diff stays low risk (score 19, just under the boundary)", () => {
+    const r = scoreOf([
+      d("docs/big.md", "M", Array(300).fill("+x").join("\n"), 300),
+    ]);
+    expect(r.riskScore).toBe(19);
+    expect(r.riskScore).toBeLessThan(LOW_MEDIUM_BOUNDARY);
+  });
+
+  it("a 340-line docs-only diff crosses into medium risk (score 21, just over the boundary)", () => {
+    const r = scoreOf([
+      d("docs/big.md", "M", Array(340).fill("+x").join("\n"), 340),
+    ]);
+    expect(r.riskScore).toBe(21);
+    expect(r.riskScore).toBeGreaterThanOrEqual(LOW_MEDIUM_BOUNDARY);
+  });
+
+  it("a comment-only edit to an unclassified source file stays low risk regardless of size", () => {
+    // src/*.js is base-35 "medium" by path, but a mechanical (comment-only)
+    // change is discounted down to the low-risk floor — content, not just
+    // path, determines the tier.
+    const r = scoreOf([
+      d("src/util.js", "M", Array(50).fill("+ // comment").join("\n"), 50),
+    ]);
+    expect(r.riskScore).toBe(10);
+    expect(r.riskScore).toBeLessThan(LOW_MEDIUM_BOUNDARY);
+  });
+
+  it("a small logic change to an unclassified source file is medium risk, not low", () => {
+    const r = scoreOf([d("src/util.js", "M", "+ const x = 1;", 5)]);
+    expect(r.riskScore).toBe(35);
+    expect(r.riskScore).toBeGreaterThanOrEqual(LOW_MEDIUM_BOUNDARY);
+  });
+});
+
 // ─── helpers exposed for reuse ───────────────────────────────────────────────
 
 describe("isForcedLogic / fileIsMechanical", () => {
