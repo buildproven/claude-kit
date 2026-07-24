@@ -125,6 +125,7 @@ node "$SCRIPT_DIR/quality-invocation.js" record-stamp-published "$MANIFEST" \
 PR_HEAD_RETRIES="${QUALITY_STAMP_PR_HEAD_RETRIES:-3}"
 PR_HEAD_RETRY_DELAY="${QUALITY_STAMP_PR_HEAD_RETRY_DELAY:-3}"
 PR_HEAD=""
+PR_HEAD_ERR_FILE="$(mktemp)"
 attempt=1
 while [ "$attempt" -le "$PR_HEAD_RETRIES" ]; do
   # `gh pr view` failing outright (network blip, auth hiccup, rate limit) is
@@ -132,16 +133,16 @@ while [ "$attempt" -le "$PR_HEAD_RETRIES" ]; do
   # loop exists for — under `set -e` an unguarded failure here would abort
   # the whole script on attempt 1 and silently defeat the retry entirely.
   # Tolerate a failed call the same way as a mismatched SHA: log it and retry.
-  # Capture stdout and stderr SEPARATELY (4 review agents caught this): a
-  # merged `2>&1` capture corrupts PR_HEAD with benign stderr noise (e.g. a
-  # gh update nag) even on a successful call — exactly the false-mismatch
-  # bug this fix exists to eliminate. On failure, re-run once discarding
-  # stdout to get a clean stderr-only message for the log line.
+  # Capture stdout and stderr SEPARATELY in ONE call (5 review agents, two
+  # rounds): a merged `2>&1` capture corrupts PR_HEAD with benign stderr
+  # noise (e.g. a gh update nag) even on success — the exact false-mismatch
+  # bug this fix exists to eliminate. A prior version re-ran the command a
+  # second time on failure just to get a clean error message, which doubled
+  # API calls on exactly the rate-limit path this fix is meant to tolerate;
+  # route stderr to a scratch file instead so one call covers both.
   if ! PR_HEAD="$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
-    --json headRefOid --jq .headRefOid 2>/dev/null)"; then
-    GH_ERR="$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
-      --json headRefOid --jq .headRefOid 2>&1 >/dev/null || true)"
-    echo "[quality] gh pr view failed on attempt $attempt/$PR_HEAD_RETRIES: $GH_ERR" >&2
+    --json headRefOid --jq .headRefOid 2>"$PR_HEAD_ERR_FILE")"; then
+    echo "[quality] gh pr view failed on attempt $attempt/$PR_HEAD_RETRIES: $(cat "$PR_HEAD_ERR_FILE")" >&2
     PR_HEAD=""
   fi
   [ "$PR_HEAD" = "$STAMP_HEAD" ] && break
@@ -151,6 +152,7 @@ while [ "$attempt" -le "$PR_HEAD_RETRIES" ]; do
   fi
   attempt=$((attempt + 1))
 done
+rm -f "$PR_HEAD_ERR_FILE"
 [ "$PR_HEAD" = "$STAMP_HEAD" ] || {
   echo "❌ MERGE BLOCKED: pushed PR HEAD does not match persisted stamp $STAMP_HEAD after $PR_HEAD_RETRIES attempts." >&2
   exit 1

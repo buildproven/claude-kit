@@ -182,4 +182,31 @@ echo "matching000000000000000000000000000000"
     );
     expect(result.stderr).not.toContain("retrying");
   });
+
+  it("calls gh exactly once per attempt, even on failure, not twice", () => {
+    // 5 review agents converged on this: a prior version re-ran gh a second
+    // time on failure just to get a clean stderr message, doubling API
+    // calls on exactly the rate-limit path this fix exists to tolerate.
+    const { bin } = harness(`
+COUNT_FILE="\${QUALITY_TEST_COUNT_FILE}"
+count=0
+[ -f "$COUNT_FILE" ] && count=$(cat "$COUNT_FILE")
+count=$((count + 1))
+echo "$count" > "$COUNT_FILE"
+echo "gh: rate limit exceeded" >&2
+exit 1
+`);
+    const countFile = path.join(bin, "..", "count");
+    const result = runRetryLoop({
+      bin,
+      stampHead: "matching000000000000000000000000000000",
+      pr: "42",
+      repository: "buildproven/claude-kit",
+      countFile,
+    });
+    expect(result.status).not.toBe(0);
+    // 3 attempts total (PR_HEAD_RETRIES default), one gh call each — not 2x.
+    expect(readFileSync(countFile, "utf8").trim()).toBe("3");
+    expect(result.stderr).toContain("rate limit exceeded");
+  });
 });
