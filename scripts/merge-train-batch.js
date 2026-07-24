@@ -212,9 +212,12 @@ function reserveAdmission(state, request) {
   const existing = current.reservations[id];
   if (existing) {
     if (existing.reservedSeconds !== reservedSeconds) {
-      throw new Error(
-        "reservation id was already admitted with a different budget",
-      );
+      return {
+        state: current,
+        admitted: false,
+        reason: "reservation-mismatch",
+        remainingSeconds: budgetSeconds - reservedTotal(current),
+      };
     }
     return {
       state: current,

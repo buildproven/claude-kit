@@ -153,6 +153,29 @@ describe("merge-train batch controller", () => {
     ).toMatchObject({ admitted: false, reason: "shared-budget-reserved" });
   });
 
+  it("rejects a retry with a different budget for the same reservation id instead of throwing", () => {
+    const request = {
+      deadlineEpoch: 2_000,
+      budgetSeconds: 300,
+      nowEpoch: 1_500,
+      reservationId: "buildproven/kit#42",
+      reservedSeconds: 180,
+    };
+    const first = reserveAdmission(null, request);
+    const retry = reserveAdmission(first.state, {
+      ...request,
+      reservedSeconds: 90,
+    });
+    expect(retry).toMatchObject({
+      admitted: false,
+      reason: "reservation-mismatch",
+      remainingSeconds: 120,
+    });
+    expect(retry.state.reservations["buildproven/kit#42"]).toMatchObject({
+      reservedSeconds: 180,
+    });
+  });
+
   it("stops new admissions at the common deadline without revoking a lease", () => {
     const result = reserveAdmission(
       {
