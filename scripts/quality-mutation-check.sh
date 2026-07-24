@@ -86,8 +86,9 @@ done < <(
 )
 
 if [ "${#CANDIDATES[@]}" -eq 0 ]; then
-  DIFF_ENTRY_COUNT="$(git -C "$ROOT" diff --raw --diff-filter=AM "$BASE..$HEAD" -- | wc -l | tr -d ' ')"
-  GITLINK_ENTRY_COUNT="$(git -C "$ROOT" diff --raw --diff-filter=AM "$BASE..$HEAD" -- | awk '$1 == ":160000" && $2 == "160000"' | wc -l | tr -d ' ')"
+  DIFF_RAW="$(git -C "$ROOT" diff --raw --diff-filter=AM "$BASE..$HEAD" --)"
+  DIFF_ENTRY_COUNT="$(printf '%s\n' "$DIFF_RAW" | grep -c .)"
+  GITLINK_ENTRY_COUNT="$(printf '%s\n' "$DIFF_RAW" | awk '$1 == ":160000" && $2 == "160000"' | wc -l | tr -d ' ')"
   if [ "$DIFF_ENTRY_COUNT" -gt 0 ] && [ "$DIFF_ENTRY_COUNT" -eq "$GITLINK_ENTRY_COUNT" ]; then
     echo "[quality] mutation gate omitted: diff touches only submodule pointers (gitlinks), no source to mutate"
     exit 0
