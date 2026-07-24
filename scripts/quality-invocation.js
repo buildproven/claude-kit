@@ -2261,20 +2261,24 @@ function providerFindings(manifest) {
         /^NO FINDINGS\. Verdict: (?:approve|pass)\. [^\r\n]+$/i.test(
           line.trim(),
         );
-      // A reviewer commonly prefaces a clean verdict with a single-line
-      // rationale ("Bare submodule bump, nothing to review here.\n\nNO
-      // FINDINGS") — that preamble is legitimate content, not a finding
-      // (BUI-463). But a real multi-line findings write-up can legitimately
-      // END with a line that happens to match the sentinel pattern (e.g. it
-      // quotes or discusses the literal "NO FINDINGS" string) — three
-      // independent review agents flagged this risk during BUI-463's own
-      // review. Bound the tolerance to exactly one preamble line so genuine
-      // findings prose (which is never this short) still fails the check.
+      // A reviewer commonly prefaces a clean verdict with a rationale line
+      // ("Bare submodule bump, nothing to review here.\n\nNO FINDINGS") —
+      // that preamble is legitimate content, not a finding (BUI-463). Any
+      // bound purely on line count is gameable: a real finding can quote or
+      // discuss the literal sentinel string as its own closing line, at any
+      // length (two independent review rounds on this exact fix confirmed
+      // that risk). Close the ambiguity class instead of bounding it: the
+      // LAST line must be the sentinel, AND no earlier line may itself
+      // contain the sentinel substring — a genuine preamble explains why
+      // there's nothing to review without needing to mention "NO FINDINGS"
+      // itself, so this rejects exactly the cases that could be confused
+      // with a real finding quoting or discussing the sentinel.
       const nonBlankLines = text.split(/\r?\n/).filter((line) => line.trim());
+      const preambleLines = nonBlankLines.slice(0, -1);
       const isClean =
         nonBlankLines.length > 0 &&
-        nonBlankLines.length <= 2 &&
-        isNoFindingsSentinel(nonBlankLines[nonBlankLines.length - 1]);
+        isNoFindingsSentinel(nonBlankLines[nonBlankLines.length - 1]) &&
+        preambleLines.every((line) => !/NO FINDINGS/i.test(line));
       if (!text || isClean) continue;
       findings.push({
         id: crypto

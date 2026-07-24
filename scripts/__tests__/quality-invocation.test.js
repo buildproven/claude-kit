@@ -3614,30 +3614,39 @@ exit 1
 
   it("BUI-463: flags a multi-line real finding even if its last line matches the sentinel pattern", () => {
     // Independent review agents flagged this exact risk during BUI-463's
-    // own review: a genuine multi-paragraph finding that discusses or
-    // quotes the literal "NO FINDINGS" string as its closing line must not
-    // be silently swallowed by the last-line relaxation. Bound the
-    // tolerance to at most one preamble line so this stays caught.
-    const root = repo("multiline-finding-ending-in-sentinel-lookalike");
-    const manifest = create(root);
-    prepareCodexReview(
-      root,
-      manifest,
-      [],
+    // own review: a genuine finding that discusses or quotes the literal
+    // "NO FINDINGS" string as its closing line must not be silently
+    // swallowed by the sentinel relaxation, at ANY preamble length — a
+    // line-count bound is gameable since the quoted string is fixed-length,
+    // not the surrounding prose. Reject whenever any line before the last
+    // one already contains "NO FINDINGS" as a substring.
+    for (const [index, text] of [
       [
         "Found a real issue in the sentinel parser.",
         "The last-line-only check can be tricked by a finding whose",
         "closing line happens to read: NO FINDINGS",
       ].join("\n"),
-    );
-    const context = JSON.parse(
-      execFileSync("node", [INVOCATION, "judge-context", manifest], {
-        cwd: root,
-        encoding: "utf8",
-      }),
-    );
-    expect(context.findings).toHaveLength(1);
-    expect(context.findings[0].severity).toBe("blocking");
+      // The sharper 2-line case a second review round specifically caught:
+      // one preamble line that itself mentions the sentinel substring.
+      [
+        "This finding's text happens to end with the string NO FINDINGS",
+        "NO FINDINGS",
+      ].join("\n"),
+    ].entries()) {
+      const root = repo(
+        `multiline-finding-ending-in-sentinel-lookalike-${index}`,
+      );
+      const manifest = create(root);
+      prepareCodexReview(root, manifest, [], text);
+      const context = JSON.parse(
+        execFileSync("node", [INVOCATION, "judge-context", manifest], {
+          cwd: root,
+          encoding: "utf8",
+        }),
+      );
+      expect(context.findings).toHaveLength(1);
+      expect(context.findings[0].severity).toBe("blocking");
+    }
   });
 
   it("exposes persisted judge dispositions to targeted verification", () => {
