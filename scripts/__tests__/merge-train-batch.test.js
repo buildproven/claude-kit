@@ -6,7 +6,7 @@ const {
   reserveAdmission,
 } = require("../merge-train-batch");
 const { spawn } = require("node:child_process");
-const { mkdtempSync, writeFileSync } = require("node:fs");
+const { mkdtempSync, mkdirSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 
@@ -249,5 +249,32 @@ describe("merge-train batch controller", () => {
     ]);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/not valid JSON/);
+  });
+
+  it("reclaims an admission lock abandoned by a dead process instead of wedging forever", async () => {
+    const stateFile = path.join(
+      mkdtempSync(path.join(tmpdir(), "merge-train-")),
+      "state.json",
+    );
+    const lockDirectory = `${stateFile}.lock`;
+    mkdirSync(lockDirectory, { mode: 0o700 });
+    writeFileSync(
+      path.join(lockDirectory, "owner.json"),
+      JSON.stringify({ pid: 999_999, acquiredAtEpoch: Date.now() }),
+    );
+    const result = await admit([
+      "--state-file",
+      stateFile,
+      "--deadline-epoch",
+      String(Math.floor(Date.now() / 1000) + 60),
+      "--budget-seconds",
+      "300",
+      "--reserved-seconds",
+      "180",
+      "--reservation-id",
+      "buildproven/kit#42",
+    ]);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ admitted: true });
   });
 });
