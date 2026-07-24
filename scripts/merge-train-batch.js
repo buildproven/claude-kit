@@ -273,6 +273,8 @@ function pause(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
+// Serializes concurrent merge-train workers' admission checks against one
+// state file via a directory-based mutex (mkdir is atomic across processes).
 function withAdmissionLock(stateFile, callback) {
   const resolved = path.resolve(stateFile);
   const directory = path.dirname(resolved);
