@@ -3645,6 +3645,37 @@ exit 1
     expect(context.findings[0].title.trim()).not.toBe("");
   });
 
+  it("BUI-463: stripping the delimiter preserves paragraph breaks between multiple findings", () => {
+    // 3 review agents converged on this: the earlier fix rebuilt the body
+    // from a blank-line-FILTERED array, which silently collapsed paragraph
+    // spacing between separate findings into a run-on block. The delimiter
+    // must be stripped from the original line array instead.
+    const root = repo("multi-finding-body-preserves-blank-lines");
+    const manifest = create(root);
+    prepareCodexReview(
+      root,
+      manifest,
+      [],
+      [
+        "file.js:12 BLOCKING: issue one.",
+        "",
+        "file.js:30 BLOCKING: issue two.",
+        "",
+        "<<<FINDINGS REPORTED>>>",
+      ].join("\n"),
+    );
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toHaveLength(1);
+    expect(context.findings[0].body).toBe(
+      "file.js:12 BLOCKING: issue one.\n\nfile.js:30 BLOCKING: issue two.",
+    );
+  });
+
   it("BUI-463: only the ACTUAL final line is authoritative, not any earlier mention of either marker", () => {
     // 4 independent review agents converged on this exact bug in an earlier
     // version of this fix: checking marker presence "anywhere in the text"
