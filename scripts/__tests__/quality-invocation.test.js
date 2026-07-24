@@ -3619,6 +3619,62 @@ exit 1
     );
     expect(context.findings).toHaveLength(1);
     expect(context.findings[0].severity).toBe("blocking");
+    // The delimiter line itself must not leak into the finding body shown
+    // to a human or the judge.
+    expect(context.findings[0].body).not.toContain("<<<FINDINGS REPORTED>>>");
+  });
+
+  it("BUI-463: only the ACTUAL final line is authoritative, not any earlier mention of either marker", () => {
+    // 4 independent review agents converged on this exact bug in an earlier
+    // version of this fix: checking marker presence "anywhere in the text"
+    // let permitted pre-delimiter commentary that quotes/discusses the
+    // marker override the real, later verdict. Only the true final line
+    // counts.
+    const root = repo("both-markers-present-final-line-wins");
+    const manifest = create(root);
+    prepareCodexReview(
+      root,
+      manifest,
+      [],
+      [
+        "Explaining the sign-off convention: reviewers emit <<<NO FINDINGS>>>",
+        "when clean, or <<<FINDINGS REPORTED>>> when not.",
+        "",
+        "file.js:12 BLOCKING: retry loop never breaks on success.",
+        "<<<FINDINGS REPORTED>>>",
+      ].join("\n"),
+    );
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toHaveLength(1);
+    expect(context.findings[0].severity).toBe("blocking");
+  });
+
+  it("BUI-463: a mention of <<<NO FINDINGS>>> that is not the final line does not suppress a real finding", () => {
+    const root = repo("no-findings-marker-mentioned-not-final");
+    const manifest = create(root);
+    prepareCodexReview(
+      root,
+      manifest,
+      [],
+      [
+        "This diff introduces the <<<NO FINDINGS>>> delimiter as an example.",
+        "file.js:12 BLOCKING: retry loop never breaks on success.",
+        "<<<FINDINGS REPORTED>>>",
+      ].join("\n"),
+    );
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toHaveLength(1);
+    expect(context.findings[0].severity).toBe("blocking");
   });
 
   it("BUI-463: legacy bare sentinel with no preamble still classifies clean (pre-delimiter compat)", () => {

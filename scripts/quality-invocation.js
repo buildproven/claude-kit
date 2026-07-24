@@ -2260,18 +2260,20 @@ function providerFindings(manifest) {
       // anywhere in a reviewer's free-text response) is structurally
       // ambiguous — three review rounds on earlier attempts at this exact
       // fix confirmed real reviewers legitimately preface, discuss, or quote
-      // that phrase without meaning it as their verdict. The delimited
-      // marker below is unambiguous by construction: reviewers are
-      // instructed (claude-review-companion.sh) to emit it ONLY as their
-      // final, isolated line, never elsewhere — so its mere presence
-      // anywhere in the text is authoritative, no prose-content heuristics
-      // needed.
-      const hasDelimitedMarker = (marker) =>
-        text.split(/\r?\n/).some((line) => line.trim() === marker);
+      // that phrase without meaning it as their verdict. Reviewers are
+      // instructed (claude-review-companion.sh) to emit a delimited marker
+      // ONLY as their final, isolated line. The marker is authoritative ONLY
+      // when it is that actual final line — checking for its presence
+      // "anywhere in the text" (an earlier version of this fix's own bug,
+      // caught by 4 independent review agents during this exact round) would
+      // let permitted pre-delimiter commentary that quotes or discusses the
+      // marker string silently override the real, later verdict.
+      const nonBlankLines = text.split(/\r?\n/).filter((line) => line.trim());
+      const lastLine = nonBlankLines[nonBlankLines.length - 1]?.trim();
       let isClean;
-      if (hasDelimitedMarker("<<<NO FINDINGS>>>")) {
+      if (lastLine === "<<<NO FINDINGS>>>") {
         isClean = true;
-      } else if (hasDelimitedMarker("<<<FINDINGS REPORTED>>>")) {
+      } else if (lastLine === "<<<FINDINGS REPORTED>>>") {
         isClean = false;
       } else {
         // Legacy fallback for responses that predate the delimited-marker
@@ -2289,14 +2291,21 @@ function providerFindings(manifest) {
           );
       }
       if (!text || isClean) continue;
+      // Strip the trailing <<<FINDINGS REPORTED>>> delimiter line (if that's
+      // how this text was classified as non-clean) so it doesn't leak into
+      // the finding body shown to a human or the judge.
+      const body =
+        lastLine === "<<<FINDINGS REPORTED>>>"
+          ? nonBlankLines.slice(0, -1).join("\n")
+          : text;
       findings.push({
         id: crypto
           .createHash("sha256")
           .update(`${review.inventorySha256}:${item.name}:${text}`)
           .digest("hex"),
         severity: "blocking",
-        title: text.split("\n")[0],
-        body: text,
+        title: body.split("\n")[0],
+        body,
         source: item.name,
       });
     }
