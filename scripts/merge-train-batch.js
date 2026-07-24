@@ -294,9 +294,18 @@ function withAdmissionLock(stateFile, callback) {
     }
   }
   try {
-    const current = fs.existsSync(resolved)
-      ? JSON.parse(fs.readFileSync(resolved, "utf8"))
-      : null;
+    let current = null;
+    if (fs.existsSync(resolved)) {
+      const raw = fs.readFileSync(resolved, "utf8");
+      try {
+        current = JSON.parse(raw);
+      } catch (error) {
+        throw new Error(
+          `merge-train admission state at ${resolved} is not valid JSON`,
+          { cause: error },
+        );
+      }
+    }
     const result = callback(current);
     const temporary = path.join(
       directory,

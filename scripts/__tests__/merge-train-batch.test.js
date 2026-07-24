@@ -6,7 +6,7 @@ const {
   reserveAdmission,
 } = require("../merge-train-batch");
 const { spawn } = require("node:child_process");
-const { mkdtempSync } = require("node:fs");
+const { mkdtempSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 
@@ -204,5 +204,27 @@ describe("merge-train batch controller", () => {
       admitted: true,
       remainingSeconds: 120,
     });
+  });
+
+  it("fails with a descriptive error instead of an uncaught exception on a corrupted state file", async () => {
+    const stateFile = path.join(
+      mkdtempSync(path.join(tmpdir(), "merge-train-")),
+      "state.json",
+    );
+    writeFileSync(stateFile, "{not valid json");
+    const result = await admit([
+      "--state-file",
+      stateFile,
+      "--deadline-epoch",
+      String(Math.floor(Date.now() / 1000) + 60),
+      "--budget-seconds",
+      "300",
+      "--reserved-seconds",
+      "180",
+      "--reservation-id",
+      "buildproven/kit#42",
+    ]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/not valid JSON/);
   });
 });
