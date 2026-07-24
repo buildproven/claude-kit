@@ -101,6 +101,8 @@ if [ "${#CANDIDATES[@]}" -eq 0 ]; then
       --arg tier "$TIER" \
       '{schemaVersion: 1, invocationId: $invocationId, base: $base, head: $head, tier: $tier, method: "gitlink-skip", mutatedPaths: [], testFailureObserved: false}' \
       > "$ARTIFACT"
+    # set -euo pipefail (line 5) means a non-zero exit from either call below
+    # aborts the script before the success echo/exit 0 can be reached.
     node "$SCRIPT_DIR/quality-invocation.js" mutation-record "$MANIFEST" \
       --artifact "$ARTIFACT"
     bash "$SCRIPT_DIR/quality-assert-clean.sh" \
