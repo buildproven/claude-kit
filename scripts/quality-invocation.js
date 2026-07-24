@@ -2293,11 +2293,17 @@ function providerFindings(manifest) {
       if (!text || isClean) continue;
       // Strip the trailing <<<FINDINGS REPORTED>>> delimiter line (if that's
       // how this text was classified as non-clean) so it doesn't leak into
-      // the finding body shown to a human or the judge.
-      const body =
+      // the finding body shown to a human or the judge. If that leaves
+      // nothing (a reviewer emitted only the delimiter with no findings
+      // text above it — a malformed response, not a real finding
+      // description), fall back to the raw text so the finding is never
+      // silently empty; a human/judge seeing the bare delimiter as the body
+      // is a clear signal something is wrong with the provider's output.
+      const strippedBody =
         lastLine === "<<<FINDINGS REPORTED>>>"
           ? nonBlankLines.slice(0, -1).join("\n")
           : text;
+      const body = strippedBody.trim() ? strippedBody : text;
       findings.push({
         id: crypto
           .createHash("sha256")

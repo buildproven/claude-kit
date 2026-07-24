@@ -3624,6 +3624,27 @@ exit 1
     expect(context.findings[0].body).not.toContain("<<<FINDINGS REPORTED>>>");
   });
 
+  it("BUI-463: a bare <<<FINDINGS REPORTED>>> with no preceding text never produces an empty finding body", () => {
+    // All 6 review agents converged on this exact edge case in one round:
+    // stripping the delimiter line from a response that consists of ONLY
+    // that delimiter (a malformed provider response) left an empty body,
+    // which is silently useless to a human or the judge. Fall back to the
+    // raw text so the finding is never empty.
+    const root = repo("bare-findings-reported-delimiter-only");
+    const manifest = create(root);
+    prepareCodexReview(root, manifest, [], "<<<FINDINGS REPORTED>>>");
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toHaveLength(1);
+    expect(context.findings[0].severity).toBe("blocking");
+    expect(context.findings[0].body.trim()).not.toBe("");
+    expect(context.findings[0].title.trim()).not.toBe("");
+  });
+
   it("BUI-463: only the ACTUAL final line is authoritative, not any earlier mention of either marker", () => {
     // 4 independent review agents converged on this exact bug in an earlier
     // version of this fix: checking marker presence "anywhere in the text"
