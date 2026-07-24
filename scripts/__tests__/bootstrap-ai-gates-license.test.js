@@ -1,4 +1,6 @@
 // Regression coverage for bootstrap-ai-gates.sh Gate 8 (license compliance).
+//
+// See BUI-473 for the underlying vulnerable-dependency fix this test guards.
 // Before this test, the script's license-checker-rseidelsohn references had
 // zero test coverage, so a revert of the BUI-473 package-rename fix could not
 // produce red-capable mutation evidence. Runs the real script against a
