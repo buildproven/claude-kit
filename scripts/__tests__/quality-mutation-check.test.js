@@ -238,6 +238,101 @@ describe("quality-mutation-check", () => {
     expect(artifact.mutatedPaths).toEqual(["logic.js"]);
   });
 
+  it("skips the gate when the diff touches only a submodule pointer bump", () => {
+    const submodule = mkdtempSync(
+      path.join(tmpdir(), "quality-mutation-gitlink-submodule-"),
+    );
+    git(submodule, ["init", "-q", "-b", "main"]);
+    git(submodule, ["config", "user.name", "Quality Test"]);
+    git(submodule, ["config", "user.email", "quality@example.com"]);
+    writeFileSync(path.join(submodule, "file.txt"), "v1\n");
+    git(submodule, ["add", "."]);
+    git(submodule, ["commit", "-q", "-m", "v1"]);
+    writeFileSync(path.join(submodule, "file.txt"), "v2\n");
+    git(submodule, ["add", "."]);
+    git(submodule, ["commit", "-q", "-m", "v2"]);
+
+    const root = mkdtempSync(path.join(tmpdir(), "quality-mutation-gitlink-"));
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.name", "Quality Test"]);
+    git(root, ["config", "user.email", "quality@example.com"]);
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: { lint: "true", test: "true", "security:audit": "true" },
+      }),
+    );
+    git(root, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      submodule,
+      "sub",
+    ]);
+    git(root, [
+      "-C",
+      "sub",
+      "checkout",
+      "-q",
+      execFileSync(
+        "git",
+        ["-C", submodule, "rev-list", "--max-parents=0", "HEAD"],
+        {
+          encoding: "utf8",
+        },
+      ).trim(),
+    ]);
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "base"]);
+    git(root, ["remote", "add", "origin", root]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "-c", "feature"]);
+    git(root, [
+      "-c",
+      "protocol.file.allow=always",
+      "-C",
+      "sub",
+      "pull",
+      "-q",
+      "origin",
+      "main",
+    ]);
+    git(root, ["add", "sub"]);
+    git(root, ["commit", "-qm", "chore: bump sub submodule"]);
+
+    const manifest = execFileSync(
+      "node",
+      [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
+      { cwd: root, encoding: "utf8" },
+    ).trim();
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "risk",
+        manifest,
+        "--tier",
+        "high",
+        "--task-type",
+        "feature",
+        "--score",
+        "50",
+        "--agents",
+        "2",
+        "--codex-depth",
+        "high",
+        "--codex-rounds",
+        "1",
+      ],
+      { cwd: root },
+    );
+
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation gate omitted: diff touches only submodule pointers/,
+    );
+  });
+
   it("rejects a timed-out test instead of recording a hang as red evidence", () => {
     const { root, manifest } = fixture(
       "hang",
