@@ -3569,6 +3569,198 @@ exit 1
     }
   });
 
+  it("BUI-463: delimited <<<NO FINDINGS>>> marker is authoritative regardless of preceding prose", () => {
+    // Prose-based sentinel detection is structurally ambiguous — three
+    // review rounds on earlier attempts confirmed real reviewers legitimately
+    // preface, discuss, or quote the phrase "NO FINDINGS" without meaning it
+    // as their verdict (e.g. explaining why a submodule bump has nothing to
+    // review, or a self-referential review of this exact parsing logic).
+    // The delimited marker is unambiguous by construction: reviewers are
+    // instructed to emit it ONLY as an isolated final line, so its presence
+    // is authoritative no matter what prose precedes it — no line-count or
+    // substring heuristics needed.
+    for (const [index, text] of [
+      "<<<NO FINDINGS>>>",
+      "Bare submodule pointer bump, nothing to review at this layer.\n\n<<<NO FINDINGS>>>",
+      // Prose that itself discusses/quotes "NO FINDINGS" no longer matters —
+      // only the delimited line is examined.
+      'Reviewing the sentinel-detection logic: the marker "NO FINDINGS" must ' +
+        "appear delimited, not as bare prose. No invalid-state issues found.\n\n" +
+        "<<<NO FINDINGS>>>",
+      "Full test suite passed. Review complete: NO FINDINGS.\n\n<<<NO FINDINGS>>>",
+    ].entries()) {
+      const root = repo(`delimited-clean-${index}`);
+      const manifest = create(root);
+      prepareCodexReview(root, manifest, [], text);
+      const context = JSON.parse(
+        execFileSync("node", [INVOCATION, "judge-context", manifest], {
+          cwd: root,
+          encoding: "utf8",
+        }),
+      );
+      expect(context.findings).toEqual([]);
+    }
+  });
+
+  it("BUI-463: delimited <<<FINDINGS REPORTED>>> marker is authoritative even if prose says NO FINDINGS", () => {
+    const root = repo("delimited-findings-reported");
+    const manifest = create(root);
+    prepareCodexReview(
+      root,
+      manifest,
+      [],
+      "file.js:12 BLOCKING: retry loop never breaks on success.\n\n<<<FINDINGS REPORTED>>>",
+    );
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toHaveLength(1);
+    expect(context.findings[0].severity).toBe("blocking");
+    // The delimiter line itself must not leak into the finding body shown
+    // to a human or the judge.
+    expect(context.findings[0].body).not.toContain("<<<FINDINGS REPORTED>>>");
+  });
+
+  it("BUI-463: a bare <<<FINDINGS REPORTED>>> with no preceding text never produces an empty finding body", () => {
+    // All 6 review agents converged on this exact edge case in one round:
+    // stripping the delimiter line from a response that consists of ONLY
+    // that delimiter (a malformed provider response) left an empty body,
+    // which is silently useless to a human or the judge. Fall back to the
+    // raw text so the finding is never empty.
+    const root = repo("bare-findings-reported-delimiter-only");
+    const manifest = create(root);
+    prepareCodexReview(root, manifest, [], "<<<FINDINGS REPORTED>>>");
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toHaveLength(1);
+    expect(context.findings[0].severity).toBe("blocking");
+    expect(context.findings[0].body.trim()).not.toBe("");
+    expect(context.findings[0].title.trim()).not.toBe("");
+  });
+
+  it("BUI-463: stripping the delimiter preserves paragraph breaks between multiple findings", () => {
+    // 3 review agents converged on this: the earlier fix rebuilt the body
+    // from a blank-line-FILTERED array, which silently collapsed paragraph
+    // spacing between separate findings into a run-on block. The delimiter
+    // must be stripped from the original line array instead.
+    const root = repo("multi-finding-body-preserves-blank-lines");
+    const manifest = create(root);
+    prepareCodexReview(
+      root,
+      manifest,
+      [],
+      [
+        "file.js:12 BLOCKING: issue one.",
+        "",
+        "file.js:30 BLOCKING: issue two.",
+        "",
+        "<<<FINDINGS REPORTED>>>",
+      ].join("\n"),
+    );
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toHaveLength(1);
+    expect(context.findings[0].body).toBe(
+      "file.js:12 BLOCKING: issue one.\n\nfile.js:30 BLOCKING: issue two.",
+    );
+  });
+
+  it("BUI-463: only the ACTUAL final line is authoritative, not any earlier mention of either marker", () => {
+    // 4 independent review agents converged on this exact bug in an earlier
+    // version of this fix: checking marker presence "anywhere in the text"
+    // let permitted pre-delimiter commentary that quotes/discusses the
+    // marker override the real, later verdict. Only the true final line
+    // counts.
+    const root = repo("both-markers-present-final-line-wins");
+    const manifest = create(root);
+    prepareCodexReview(
+      root,
+      manifest,
+      [],
+      [
+        "Explaining the sign-off convention: reviewers emit <<<NO FINDINGS>>>",
+        "when clean, or <<<FINDINGS REPORTED>>> when not.",
+        "",
+        "file.js:12 BLOCKING: retry loop never breaks on success.",
+        "<<<FINDINGS REPORTED>>>",
+      ].join("\n"),
+    );
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toHaveLength(1);
+    expect(context.findings[0].severity).toBe("blocking");
+  });
+
+  it("BUI-463: a mention of <<<NO FINDINGS>>> that is not the final line does not suppress a real finding", () => {
+    const root = repo("no-findings-marker-mentioned-not-final");
+    const manifest = create(root);
+    prepareCodexReview(
+      root,
+      manifest,
+      [],
+      [
+        "This diff introduces the <<<NO FINDINGS>>> delimiter as an example.",
+        "file.js:12 BLOCKING: retry loop never breaks on success.",
+        "<<<FINDINGS REPORTED>>>",
+      ].join("\n"),
+    );
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toHaveLength(1);
+    expect(context.findings[0].severity).toBe("blocking");
+  });
+
+  it("BUI-463: legacy bare sentinel with no preamble still classifies clean (pre-delimiter compat)", () => {
+    const root = repo("legacy-bare-sentinel");
+    const manifest = create(root);
+    prepareCodexReview(root, manifest, [], "NO FINDINGS\n");
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toEqual([]);
+  });
+
+  it("BUI-463: legacy text without a delimiter or bare sentinel still flags as a finding", () => {
+    const root = repo("legacy-real-finding-no-delimiter");
+    const manifest = create(root);
+    prepareCodexReview(
+      root,
+      manifest,
+      [],
+      "Found an issue: the retry loop never breaks on success.\n",
+    );
+    const context = JSON.parse(
+      execFileSync("node", [INVOCATION, "judge-context", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(context.findings).toHaveLength(1);
+    expect(context.findings[0].severity).toBe("blocking");
+  });
+
   it("exposes persisted judge dispositions to targeted verification", () => {
     const root = repo("prior-judge-dispositions");
     const manifest = create(root);

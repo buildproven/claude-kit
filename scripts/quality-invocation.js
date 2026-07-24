@@ -2256,23 +2256,69 @@ function providerFindings(manifest) {
       const text = fs
         .readFileSync(path.join(review.artifactDir, item.name), "utf8")
         .trim();
-      const cleanLines = text.split(/\r?\n/);
-      const isClean = cleanLines.every(
-        (line) =>
-          /^NO FINDINGS\.?$/i.test(line.trim()) ||
-          /^NO FINDINGS\. Verdict: (?:approve|pass)\. [^\r\n]+$/i.test(
-            line.trim(),
-          ),
-      );
+      // BUI-463: prose-based sentinel detection (matching "NO FINDINGS" text
+      // anywhere in a reviewer's free-text response) is structurally
+      // ambiguous — three review rounds on earlier attempts at this exact
+      // fix confirmed real reviewers legitimately preface, discuss, or quote
+      // that phrase without meaning it as their verdict. Reviewers are
+      // instructed (claude-review-companion.sh) to emit a delimited marker
+      // ONLY as their final, isolated line. The marker is authoritative ONLY
+      // when it is that actual final line — checking for its presence
+      // "anywhere in the text" (an earlier version of this fix's own bug,
+      // caught by 4 independent review agents during this exact round) would
+      // let permitted pre-delimiter commentary that quotes or discusses the
+      // marker string silently override the real, later verdict.
+      const nonBlankLines = text.split(/\r?\n/).filter((line) => line.trim());
+      const lastLine = nonBlankLines[nonBlankLines.length - 1]?.trim();
+      let isClean;
+      if (lastLine === "<<<NO FINDINGS>>>") {
+        isClean = true;
+      } else if (lastLine === "<<<FINDINGS REPORTED>>>") {
+        isClean = false;
+      } else {
+        // Legacy fallback for responses that predate the delimited-marker
+        // instruction (older prompt version, or Codex/Gemini's own
+        // JSON-derived summary text) — the bare-sentinel-with-no-preamble
+        // form only, since that's the one shape that was never ambiguous.
+        isClean = text
+          .split(/\r?\n/)
+          .every(
+            (line) =>
+              /^NO FINDINGS\.?$/i.test(line.trim()) ||
+              /^NO FINDINGS\. Verdict: (?:approve|pass)\. [^\r\n]+$/i.test(
+                line.trim(),
+              ),
+          );
+      }
       if (!text || isClean) continue;
+      // Strip the trailing <<<FINDINGS REPORTED>>> delimiter line (if that's
+      // how this text was classified as non-clean) so it doesn't leak into
+      // the finding body shown to a human or the judge. Slice the ORIGINAL
+      // (blank-line-preserving) lines up to the delimiter, not
+      // `nonBlankLines` — reusing the already-blank-filtered array would
+      // silently collapse paragraph spacing between multiple findings (3
+      // review agents caught this in one round). If stripping leaves
+      // nothing (a reviewer emitted only the delimiter with no findings
+      // text above it — a malformed response, not a real finding
+      // description), fall back to the raw text so the finding is never
+      // silently empty.
+      const allLines = text.split(/\r?\n/);
+      const strippedBody =
+        lastLine === "<<<FINDINGS REPORTED>>>"
+          ? allLines
+              .slice(0, allLines.length - 1)
+              .join("\n")
+              .replace(/\n+$/, "")
+          : text;
+      const body = strippedBody.trim() ? strippedBody : text;
       findings.push({
         id: crypto
           .createHash("sha256")
           .update(`${review.inventorySha256}:${item.name}:${text}`)
           .digest("hex"),
         severity: "blocking",
-        title: text.split("\n")[0],
-        body: text,
+        title: body.split("\n")[0],
+        body,
         source: item.name,
       });
     }
