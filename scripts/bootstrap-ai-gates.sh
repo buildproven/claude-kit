@@ -583,22 +583,24 @@ fi
 echo ""
 echo -e "${BOLD}Gate 8: License compliance${NC}"
 
-# Install license-checker
-if grep -q '"license-checker"' "$TARGET_DIR/package.json" 2>/dev/null; then
-  log_skip "license-checker already in package.json"
+# Install license-checker-rseidelsohn (maintained fork; the original
+# license-checker's dependency chain has an unfixable transitive brace-expansion
+# advisory — see BUI-473)
+if grep -q '"license-checker-rseidelsohn"' "$TARGET_DIR/package.json" 2>/dev/null; then
+  log_skip "license-checker-rseidelsohn already in package.json"
 else
   if [[ "$DRY_RUN" == "true" ]]; then
-    log_info "[dry-run] Would install license-checker"
+    log_info "[dry-run] Would install license-checker-rseidelsohn"
   elif [[ "$SKIP_INSTALL" == "true" ]]; then
-    log_warn "Skipping license-checker install (--skip-install)"
+    log_warn "Skipping license-checker-rseidelsohn install (--skip-install)"
   else
-    log_info "Installing license-checker..."
+    log_info "Installing license-checker-rseidelsohn..."
     case $PKG_MGR in
-      pnpm) pnpm add -D license-checker ;;
-      yarn) yarn add -D license-checker ;;
-      *)    npm install -D license-checker ;;
+      pnpm) pnpm add -D license-checker-rseidelsohn ;;
+      yarn) yarn add -D license-checker-rseidelsohn ;;
+      *)    npm install -D license-checker-rseidelsohn ;;
     esac
-    log_ok "license-checker installed"
+    log_ok "license-checker-rseidelsohn installed"
   fi
 fi
 
@@ -613,7 +615,7 @@ else
       const fs = require('fs');
       const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
       if (!pkg.scripts) pkg.scripts = {};
-      pkg.scripts['license:check'] = 'license-checker --onlyAllow \"MIT;ISC;BSD-2-Clause;BSD-3-Clause;Apache-2.0;0BSD;BlueOak-1.0.0;CC0-1.0;CC-BY-3.0;CC-BY-4.0;Unlicense;Python-2.0;MPL-2.0\" --excludePrivatePackages';
+      pkg.scripts['license:check'] = 'license-checker-rseidelsohn --onlyAllow \"MIT;ISC;BSD-2-Clause;BSD-3-Clause;Apache-2.0;0BSD;BlueOak-1.0.0;CC0-1.0;CC-BY-3.0;CC-BY-4.0;Unlicense;Python-2.0;MPL-2.0\" --excludePrivatePackages';
       fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
     "
     log_ok "Added license:check script to package.json"
