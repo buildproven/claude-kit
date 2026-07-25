@@ -232,6 +232,16 @@ function normalizeTokens(rawArgs) {
  */
 // --- resolver helpers (extracted to keep complexity per function low) ---
 
+// Expands a leading `~` (home directory shorthand) in a path. If HOME is
+// unset, leaves the path unchanged rather than substituting the literal
+// string "~" back in — a no-op substitution would silently leave the tilde
+// unresolved and cause downstream lookups (dirExists, getRepoForDir) to
+// fail against a nonexistent literal `~`-prefixed path.
+function expandHome(inputPath) {
+  if (!process.env.HOME) return inputPath;
+  return inputPath.replace(/^~(?=$|\/)/, process.env.HOME);
+}
+
 function resolveByPr(parsed, ctx) {
   const { findWorktreeForBranch, dirExists, lookupPr, getRepoForDir } = ctx;
 
@@ -241,9 +251,29 @@ function resolveByPr(parsed, ctx) {
   // resolves against whatever repo its ambient cwd/config points at, which
   // can silently disagree with the repo the caller named via --target-dir.
   let expectedRepo = null;
+  let repoUnresolved = false;
   if (parsed.path && getRepoForDir) {
-    const expanded = parsed.path.replace(/^~(?=$|\/)/, process.env.HOME || "~");
+    const expanded = expandHome(parsed.path);
     expectedRepo = getRepoForDir(expanded);
+    // --target-dir was supplied but its repo could not be determined (no
+    // origin remote, non-GitHub remote URL, or the dir isn't a git checkout).
+    // Fail closed: refuse rather than silently falling through to unscoped
+    // ambient-cwd resolution, which is the exact collision bug BUI-391 fixes.
+    repoUnresolved = expectedRepo === null;
+  }
+
+  if (repoUnresolved) {
+    return {
+      ok: false,
+      reason:
+        `Could not determine the GitHub repository for --target-dir ` +
+        `'${parsed.path}' (no origin remote, non-GitHub remote URL, or not ` +
+        `a git checkout). Refusing to resolve --pr ${parsed.pr} unscoped — ` +
+        `that is the wrong-repo collision this check exists to prevent.`,
+      resolution: "pr",
+      warnings: [],
+      targetPr: parsed.pr,
+    };
   }
 
   const pr = lookupPr ? lookupPr(parsed.pr, expectedRepo) : null;
@@ -265,15 +295,21 @@ function resolveByPr(parsed, ctx) {
   // fully prevent a wrong-repo resolution (e.g. a lookupPr implementation
   // that ignores the repo hint, or a future code path that bypasses it).
   // Silent wrong-repo resolution is the dangerous failure mode — hard-error
-  // instead of proceeding.
-  if (expectedRepo && pr.repo && pr.repo !== expectedRepo) {
+  // instead of proceeding. A null pr.repo (lookupPr could not independently
+  // confirm which repo `gh` actually resolved against) is treated the same
+  // as a mismatch: "unknown" must never be accepted as "confirmed same repo".
+  if (expectedRepo && pr.repo !== expectedRepo) {
     return {
       ok: false,
-      reason:
-        `PR #${parsed.pr} resolved to repository '${pr.repo}', which does ` +
-        `not match --target-dir's repository '${expectedRepo}'. Refusing ` +
-        `to audit the wrong repo — pass a --pr that belongs to ` +
-        `'${expectedRepo}', or point --target-dir at '${pr.repo}'.`,
+      reason: pr.repo
+        ? `PR #${parsed.pr} resolved to repository '${pr.repo}', which does ` +
+          `not match --target-dir's repository '${expectedRepo}'. Refusing ` +
+          `to audit the wrong repo — pass a --pr that belongs to ` +
+          `'${expectedRepo}', or point --target-dir at '${pr.repo}'.`
+        : `PR #${parsed.pr} lookup did not return a verifiable repository ` +
+          `(gh returned an unrecognized URL format). Refusing to trust an ` +
+          `unscoped resolution against --target-dir's repository ` +
+          `'${expectedRepo}'.`,
       resolution: "pr",
       warnings: [],
       targetPr: parsed.pr,
@@ -329,7 +365,7 @@ function resolveByBranch(parsed, ctx) {
 }
 
 function resolveByPath(parsed, ctx) {
-  const expanded = parsed.path.replace(/^~(?=$|\/)/, process.env.HOME || "~");
+  const expanded = expandHome(parsed.path);
   if (ctx.dirExists(expanded)) {
     return { ok: true, targetPath: expanded, resolution: "path", warnings: [] };
   }
@@ -383,6 +419,7 @@ module.exports = {
   parseArgs,
   resolveTarget,
   parseOwnerRepo,
+  expandHome,
   // exposed for completeness / tests
   PR_PATTERNS,
   BRANCH_REGEX,
@@ -464,11 +501,16 @@ if (require.main === module) {
       if (!parsed || !parsed.headRefName) return null;
       // Derive owner/repo from the PR's own URL so resolveByPr's cross-check
       // is comparing against what `gh` actually resolved, not just echoing
-      // back the --repo we passed in.
+      // back the --repo we passed in. If the URL doesn't match the expected
+      // GitHub.com form (e.g. GitHub Enterprise, or a future `gh` response
+      // shape), report the repo as unknown (null) rather than falling back
+      // to the --repo hint — echoing it back would make resolveByPr's
+      // cross-check a tautology (pr.repo === expectedRepo is always true)
+      // and silently defeat the exact collision check this exists for.
       const urlMatch =
         typeof parsed.url === "string" &&
         parsed.url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\//i);
-      parsed.repo = urlMatch ? `${urlMatch[1]}/${urlMatch[2]}` : repo || null;
+      parsed.repo = urlMatch ? `${urlMatch[1]}/${urlMatch[2]}` : null;
       return parsed;
     } catch {
       return null;

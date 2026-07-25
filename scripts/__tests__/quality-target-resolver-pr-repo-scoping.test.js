@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { createRequire } from "module";
 
 const require = createRequire(import.meta.url);
@@ -6,6 +6,7 @@ const {
   parseArgs,
   resolveTarget,
   parseOwnerRepo,
+  expandHome,
 } = require("../quality-target-resolver.js");
 
 // BUI-391: resolving `--pr <n>` without `--repo` scoping can silently pick
@@ -14,6 +15,45 @@ const {
 // simulate two different --target-dir checkouts, each with its own origin
 // remote, both being asked to resolve "the same" PR number, and assert each
 // resolves against ITS OWN repo — never cross-contaminating.
+
+describe("expandHome", () => {
+  const originalHome = process.env.HOME;
+
+  afterEach(() => {
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+  });
+
+  it("expands a leading ~ to HOME", () => {
+    process.env.HOME = "/Users/example";
+    expect(expandHome("~/repos/claude-kit")).toBe(
+      "/Users/example/repos/claude-kit",
+    );
+    expect(expandHome("~")).toBe("/Users/example");
+  });
+
+  it("leaves a bare tilde path unchanged when HOME is unset", () => {
+    // Regression: substituting the literal string "~" back in for a missing
+    // HOME is a silent no-op that looks like it worked but leaves the path
+    // unresolved, causing downstream lookups to fail against a nonexistent
+    // literal `~`-prefixed directory.
+    delete process.env.HOME;
+    expect(expandHome("~/repos/claude-kit")).toBe("~/repos/claude-kit");
+  });
+
+  it("does not touch a path without a leading ~", () => {
+    process.env.HOME = "/Users/example";
+    expect(expandHome("/repos/claude-kit")).toBe("/repos/claude-kit");
+  });
+
+  it("does not expand a ~ that isn't at the start of the path", () => {
+    process.env.HOME = "/Users/example";
+    expect(expandHome("/repos/~claude-kit")).toBe("/repos/~claude-kit");
+  });
+});
 
 describe("parseOwnerRepo", () => {
   it("parses an https remote URL", () => {
@@ -242,5 +282,64 @@ describe("resolveTarget / resolveByPr — cross-repo PR-number collision (BUI-39
     });
 
     expect(called).toBe(false);
+  });
+
+  it("fails closed when --target-dir is supplied but its repo cannot be determined", () => {
+    // getRepoForDir returns null for /repos/no-origin (e.g. a checkout with
+    // no origin remote, or a non-GitHub remote URL). The old behavior was to
+    // silently fall through to unscoped ambient resolution here — exactly
+    // the collision bug BUI-391 exists to prevent. It must now refuse.
+    const { lookupPr, dirExists } = makeMockRepos();
+    const parsed = parseArgs([
+      "--pr",
+      "141",
+      "--target-dir",
+      "/repos/no-origin",
+    ]);
+    const result = resolveTarget(parsed, {
+      cwd: "/somewhere",
+      primaryCheckout: null,
+      findWorktreeForBranch: () => null,
+      dirExists,
+      lookupPr,
+      getRepoForDir: () => null,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.resolution).toBe("pr");
+    expect(result.reason).toMatch(/could not determine.*repository/i);
+    expect(result.reason).toContain("/repos/no-origin");
+  });
+
+  it("fails closed when lookupPr cannot independently confirm the resolved repo", () => {
+    // Simulates gh returning a PR URL in an unrecognized format (e.g. GitHub
+    // Enterprise), so lookupPr reports repo: null instead of echoing back
+    // the --repo hint it was scoped with. The cross-check must treat "unknown"
+    // as untrustworthy, not as "confirmed same repo".
+    const { getRepoForDir, dirExists } = makeMockRepos();
+    const unverifiableLookupPr = () => ({
+      headRefName: "fix/enterprise-thing",
+      url: "https://github.mycompany.com/buildproven/claude-setup/pull/141",
+      repo: null,
+    });
+
+    const parsed = parseArgs([
+      "--pr",
+      "141",
+      "--target-dir",
+      "/repos/claude-setup",
+    ]);
+    const result = resolveTarget(parsed, {
+      cwd: "/somewhere",
+      primaryCheckout: null,
+      findWorktreeForBranch: () => null,
+      dirExists,
+      lookupPr: unverifiableLookupPr,
+      getRepoForDir,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.resolution).toBe("pr");
+    expect(result.reason).toMatch(/not return a verifiable repository/i);
   });
 });
