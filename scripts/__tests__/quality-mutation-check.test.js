@@ -331,6 +331,18 @@ describe("quality-mutation-check", () => {
     expect(runMutation(root, manifest)).toMatch(
       /mutation gate omitted: diff touches only submodule pointers/,
     );
+
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.mutation).not.toBeNull();
+    expect(state.mutation.head).toBe(state.revisions.currentHead);
+    const artifact = JSON.parse(
+      readFileSync(state.mutation.artifactPath, "utf8"),
+    );
+    expect(artifact).toMatchObject({
+      method: "gitlink-skip",
+      mutatedPaths: [],
+      testFailureObserved: false,
+    });
   });
 
   it("does not abort on a diff with zero added/modified entries", () => {
