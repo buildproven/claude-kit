@@ -152,6 +152,29 @@ function detectMerge(tokens) {
   return tokens.some((t) => t === "--merge" || t.startsWith("--merge="));
 }
 
+/**
+ * Parse `owner/repo` out of a GitHub remote URL, handling both HTTPS
+ * (`https://github.com/owner/repo.git`) and SSH
+ * (`git@github.com:owner/repo.git`, `ssh://git@github.com/owner/repo.git`)
+ * forms, with or without a trailing `.git`. Returns null for anything else.
+ *
+ * @param {string|null|undefined} remoteUrl
+ * @returns {string|null}
+ */
+function parseOwnerRepo(remoteUrl) {
+  if (!remoteUrl || typeof remoteUrl !== "string") return null;
+  const trimmed = remoteUrl.trim().replace(/\.git$/, "");
+  const httpsMatch = trimmed.match(/^https?:\/\/[^/]+\/([^/]+)\/([^/]+)$/i);
+  if (httpsMatch) return `${httpsMatch[1]}/${httpsMatch[2]}`;
+  const sshMatch = trimmed.match(/^git@[^:]+:([^/]+)\/([^/]+)$/i);
+  if (sshMatch) return `${sshMatch[1]}/${sshMatch[2]}`;
+  const sshSchemeMatch = trimmed.match(
+    /^ssh:\/\/git@[^/]+\/([^/]+)\/([^/]+)$/i,
+  );
+  if (sshSchemeMatch) return `${sshSchemeMatch[1]}/${sshSchemeMatch[2]}`;
+  return null;
+}
+
 function parseArgs(rawArgs) {
   const tokens = normalizeTokens(rawArgs);
   const text = tokens.join(" ");
@@ -192,7 +215,11 @@ function normalizeTokens(rawArgs) {
  * @param {string|null} ctx.primaryCheckout
  * @param {(branch: string) => string|null} ctx.findWorktreeForBranch
  * @param {(p: string) => boolean} ctx.dirExists
- * @param {(pr: number) => { headRefName: string } | null} ctx.lookupPr
+ * @param {(pr: number, repo?: string|null) => { headRefName: string, headRepositoryOwnerLogin?: string, headRepositoryName?: string } | null} ctx.lookupPr
+ * @param {(dir: string) => string|null} [ctx.getRepoForDir] - resolves
+ *   `owner/repo` for a worktree/checkout path (e.g. via `git -C <dir> remote
+ *   get-url origin`). Used to scope `--pr` lookups to the repo named by
+ *   `--target-dir` and to fail closed on cross-repo PR-number collisions.
  * @returns {{
  *   ok: boolean,
  *   reason?: string,
@@ -206,17 +233,53 @@ function normalizeTokens(rawArgs) {
 // --- resolver helpers (extracted to keep complexity per function low) ---
 
 function resolveByPr(parsed, ctx) {
-  const { findWorktreeForBranch, dirExists, lookupPr } = ctx;
-  const pr = lookupPr ? lookupPr(parsed.pr) : null;
+  const { findWorktreeForBranch, dirExists, lookupPr, getRepoForDir } = ctx;
+
+  // When --target-dir is also supplied, derive the expected owner/repo from
+  // it and scope the `gh pr view` lookup to that repo explicitly. This is
+  // the fix for the PR-number-collision bug: without --repo scoping, `gh`
+  // resolves against whatever repo its ambient cwd/config points at, which
+  // can silently disagree with the repo the caller named via --target-dir.
+  let expectedRepo = null;
+  if (parsed.path && getRepoForDir) {
+    const expanded = parsed.path.replace(/^~(?=$|\/)/, process.env.HOME || "~");
+    expectedRepo = getRepoForDir(expanded);
+  }
+
+  const pr = lookupPr ? lookupPr(parsed.pr, expectedRepo) : null;
   if (!pr || !pr.headRefName) {
     return {
       ok: false,
-      reason: `Could not resolve PR #${parsed.pr} (gh pr view failed or returned no headRefName).`,
+      reason: expectedRepo
+        ? `Could not resolve PR #${parsed.pr} in ${expectedRepo} (gh pr view --repo ${expectedRepo} failed or returned no headRefName).`
+        : `Could not resolve PR #${parsed.pr} (gh pr view failed or returned no headRefName).`,
       resolution: "pr",
       warnings: [],
       targetPr: parsed.pr,
     };
   }
+
+  // Fail-closed cross-check: if the caller supplied both --pr and
+  // --target-dir, the resolved PR's repository MUST match the target-dir's
+  // repository. This catches any path where --repo scoping above didn't
+  // fully prevent a wrong-repo resolution (e.g. a lookupPr implementation
+  // that ignores the repo hint, or a future code path that bypasses it).
+  // Silent wrong-repo resolution is the dangerous failure mode — hard-error
+  // instead of proceeding.
+  if (expectedRepo && pr.repo && pr.repo !== expectedRepo) {
+    return {
+      ok: false,
+      reason:
+        `PR #${parsed.pr} resolved to repository '${pr.repo}', which does ` +
+        `not match --target-dir's repository '${expectedRepo}'. Refusing ` +
+        `to audit the wrong repo — pass a --pr that belongs to ` +
+        `'${expectedRepo}', or point --target-dir at '${pr.repo}'.`,
+      resolution: "pr",
+      warnings: [],
+      targetPr: parsed.pr,
+    };
+  }
+
   const wtPath = findWorktreeForBranch
     ? findWorktreeForBranch(pr.headRefName)
     : null;
@@ -319,6 +382,7 @@ function resolveTarget(parsed, ctx) {
 module.exports = {
   parseArgs,
   resolveTarget,
+  parseOwnerRepo,
   // exposed for completeness / tests
   PR_PATTERNS,
   BRANCH_REGEX,
@@ -375,20 +439,37 @@ if (require.main === module) {
     return null;
   };
 
-  const lookupPr = (n) => {
+  // Resolve `owner/repo` for a worktree/checkout path via
+  // `git -C <dir> remote get-url origin`. Returns null if the dir isn't a
+  // git checkout, has no origin remote, or the remote URL isn't recognized
+  // as a GitHub URL.
+  const getRepoForDir = (dir) => {
+    if (!dir) return null;
+    const out = runGit(["-C", dir, "remote", "get-url", "origin"]);
+    if (!out) return null;
+    return parseOwnerRepo(out);
+  };
+
+  const lookupPr = (n, repo) => {
     if (!Number.isInteger(n) || n <= 0) return null;
     try {
-      const out = execFileSync(
-        "gh",
-        ["pr", "view", String(n), "--json", "headRefName,baseRefName"],
-        {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "ignore"],
-        },
-      );
+      const args = ["pr", "view", String(n)];
+      if (repo) args.push("--repo", repo);
+      args.push("--json", "headRefName,baseRefName,url");
+      const out = execFileSync("gh", args, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
       const parsed = JSON.parse(out);
-      if (parsed && parsed.headRefName) return parsed;
-      return null;
+      if (!parsed || !parsed.headRefName) return null;
+      // Derive owner/repo from the PR's own URL so resolveByPr's cross-check
+      // is comparing against what `gh` actually resolved, not just echoing
+      // back the --repo we passed in.
+      const urlMatch =
+        typeof parsed.url === "string" &&
+        parsed.url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\//i);
+      parsed.repo = urlMatch ? `${urlMatch[1]}/${urlMatch[2]}` : repo || null;
+      return parsed;
     } catch {
       return null;
     }
@@ -401,6 +482,7 @@ if (require.main === module) {
     findWorktreeForBranch,
     dirExists,
     lookupPr,
+    getRepoForDir,
   });
 
   process.stdout.write(JSON.stringify(result) + "\n");
