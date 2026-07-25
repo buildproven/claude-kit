@@ -10,7 +10,7 @@ module.exports = {
     // trace these shell entry points when an explicit project graph is used.
     "@commitlint/cli",
     "husky",
-    "license-checker",
+    "license-checker-rseidelsohn",
     "lint-staged",
     "prettier",
   ],
@@ -19,7 +19,7 @@ module.exports = {
     "eslint",
     "husky",
     "knip",
-    "license-checker",
+    "license-checker-rseidelsohn",
     "prettier",
     "vitest",
     // Shell-boundary regression fixtures exercise both parent shells and
