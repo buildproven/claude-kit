@@ -246,8 +246,19 @@ run_agent() {
   out="$OUT_DIR/${agent##*:}.findings.txt"
   stderr_file="$OUT_DIR/${agent##*:}.stderr"
   if ! sysfile="$(resolve_agent_file "$agent")"; then
-    echo "claude-review-companion: agent file for '$agent' not found (kit agents/ or pr-review-toolkit)" >&2
-    echo "INCONCLUSIVE: agent definition '$agent' could not be resolved — human review required" > "$out"
+    # Loud and specific (BUI-461): a missing agent DEFINITION is a different
+    # failure than a timeout or parse error — it means review coverage is
+    # silently reduced, possibly for the whole panel run, not just this one
+    # attempt. Name both search locations so the fix is obvious: either the
+    # agent .md belongs in kit-local agents/, or the pr-review-toolkit plugin
+    # (which supplies agents like code-simplifier) isn't installed/updated in
+    # this environment.
+    echo "claude-review-companion: WARNING — agent definition for '$agent' UNRESOLVED." >&2
+    echo "claude-review-companion:   searched: $KIT_ROOT/agents/${agent##*:}.md" >&2
+    echo "claude-review-companion:   searched: $PLUGIN_AGENTS_GLOB/${agent##*:}.md" >&2
+    echo "claude-review-companion:   review coverage for this agent is DEGRADED (not silently skipped — this run is marked INCONCLUSIVE)." >&2
+    echo "claude-review-companion:   fix: add the .md to kit agents/, or install/update the pr-review-toolkit plugin." >&2
+    echo "INCONCLUSIVE: agent definition '$agent' could not be resolved (searched $KIT_ROOT/agents/ and $PLUGIN_AGENTS_GLOB) — human review required" > "$out"
     return 3
   fi
 
@@ -352,6 +363,7 @@ fi
 # review is degraded — exit 4 so the caller can block the merge rather than
 # treat "N inconclusive files" as a clean pass.
 inconclusive=0
+unresolved_agents=()
 provider_failure_rc=0
 for pid in "${pids[@]}"; do
   wait "$pid"
@@ -362,6 +374,21 @@ for pid in "${pids[@]}"; do
     inconclusive=$((inconclusive + 1))
   fi
 done
+
+# Cross-check findings files for the specific "could not be resolved" marker
+# (BUI-461) so the campaign-visible summary line names WHICH agents are
+# missing a definition entirely, distinct from ordinary timeouts/parse
+# errors — a reader shouldn't have to open per-agent findings files to learn
+# that review coverage is silently down an agent.
+for f in "$OUT_DIR"/*.findings.txt; do
+  [ -f "$f" ] || continue
+  if grep -q "could not be resolved" "$f" 2>/dev/null; then
+    unresolved_agents+=("$(basename "$f" .findings.txt)")
+  fi
+done
+if [ "${#unresolved_agents[@]}" -gt 0 ]; then
+  echo "claude-review-companion: WARNING — ${#unresolved_agents[@]} agent(s) have NO resolvable definition (kit agents/ nor pr-review-toolkit plugin): ${unresolved_agents[*]}" >&2
+fi
 
 if [ "$provider_failure_rc" -ne 0 ] || [ -f "$EXHAUSTED_FILE" ]; then
   cat "$EXHAUSTED_FILE" >&2 2>/dev/null || true

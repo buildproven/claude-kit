@@ -152,6 +152,127 @@ describe("claude-review-companion.sh", () => {
     expect(fs.readFileSync(f, "utf8")).toMatch(/INCONCLUSIVE/);
   });
 
+  describe("unresolved agent definition (BUI-461: loud, not silent)", () => {
+    // A missing agent DEFINITION (e.g. the file genuinely doesn't exist in
+    // kit agents/ or the pr-review-toolkit plugin) is a distinct failure mode
+    // from a timeout or an unparseable response: it means review coverage is
+    // silently reduced for that agent on every run, not just this attempt.
+    // This must be visibly different in stderr, not just another generic
+    // "INCONCLUSIVE" line indistinguishable from a transient failure.
+    it("names the agent and BOTH search locations loudly in stderr", () => {
+      const d = tmpdir();
+      fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+      const out = path.join(d, "o");
+      const r = run([
+        "--dry-run",
+        "--diff-file",
+        path.join(d, "diff.txt"),
+        "--out-dir",
+        out,
+        "--agents",
+        "totally-nonexistent-agent",
+      ]);
+      expect(r.stderr).toMatch(/WARNING.*UNRESOLVED/);
+      expect(r.stderr).toMatch(/totally-nonexistent-agent/);
+      expect(r.stderr).toMatch(/agents\/totally-nonexistent-agent\.md/);
+      expect(r.stderr).toMatch(/pr-review-toolkit\/agents/);
+      expect(r.stderr).toMatch(/DEGRADED/);
+    });
+
+    it("findings file names both searched locations, not just a generic marker", () => {
+      const d = tmpdir();
+      fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+      const out = path.join(d, "o");
+      run([
+        "--dry-run",
+        "--diff-file",
+        path.join(d, "diff.txt"),
+        "--out-dir",
+        out,
+        "--agents",
+        "totally-nonexistent-agent",
+      ]);
+      const findings = fs.readFileSync(
+        path.join(out, "totally-nonexistent-agent.findings.txt"),
+        "utf8",
+      );
+      expect(findings).toMatch(/could not be resolved/);
+      expect(findings).toMatch(/searched .*agents\//);
+      expect(findings).toMatch(/pr-review-toolkit/);
+    });
+
+    it("summary line tallies unresolved-definition agents by name across a multi-agent panel", () => {
+      const d = tmpdir();
+      fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+      const out = path.join(d, "o");
+      // Mix a real (kit-local) agent with two unresolvable ones — the summary
+      // must call out the unresolved ones by name, not just a bare count.
+      const r = run([
+        "--dry-run",
+        "--diff-file",
+        path.join(d, "diff.txt"),
+        "--out-dir",
+        out,
+        "--agents",
+        "code-reviewer,bogus-one,bogus-two",
+      ]);
+      expect(r.code).toBe(4); // panel is still degraded (2/3 inconclusive)
+      expect(r.stderr).toMatch(
+        /WARNING — 2 agent\(s\) have NO resolvable definition/,
+      );
+      expect(r.stderr).toMatch(/bogus-one/);
+      expect(r.stderr).toMatch(/bogus-two/);
+    });
+
+    it("resolves code-simplifier from the pr-review-toolkit plugin path when present", () => {
+      // Regression guard for BUI-461's actual finding: code-simplifier has no
+      // core/agents/ file by design — it is meant to resolve from an
+      // installed pr-review-toolkit plugin. Simulate that plugin layout via
+      // a fake $HOME so the test doesn't depend on the real machine's plugin
+      // install state.
+      const fakeHome = tmpdir();
+      const pluginDir = path.join(
+        fakeHome,
+        ".claude",
+        "plugins",
+        "marketplaces",
+        "some-marketplace",
+        "plugins",
+        "pr-review-toolkit",
+        "agents",
+      );
+      fs.mkdirSync(pluginDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(pluginDir, "code-simplifier.md"),
+        "# code-simplifier system prompt\n",
+      );
+
+      const d = tmpdir();
+      fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+      const out = path.join(d, "o");
+      const r = run(
+        [
+          "--dry-run",
+          "--diff-file",
+          path.join(d, "diff.txt"),
+          "--out-dir",
+          out,
+          "--agents",
+          "code-simplifier",
+        ],
+        { env: { HOME: fakeHome } },
+      );
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stderr).not.toMatch(/UNRESOLVED/);
+      const f = fs.readFileSync(
+        path.join(out, "code-simplifier.findings.txt"),
+        "utf8",
+      );
+      expect(f).toMatch(/DRY-RUN: would review with agent 'code-simplifier'/);
+      expect(f).toContain(path.join(pluginDir, "code-simplifier.md"));
+    });
+  });
+
   it("resolves a real agent to its .md system prompt (--dry-run)", () => {
     const d = tmpdir();
     fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
