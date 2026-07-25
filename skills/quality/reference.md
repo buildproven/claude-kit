@@ -262,6 +262,45 @@ auto-fix loop, re-run `npm test` to verify they pass before continuing.
 | `BS_QUALITY_MAX_REMEDIATION_SECONDS`  | planned | Batched-fix allowance remaining after proportional discovery and verification reserves.                                                            |
 | `BS_QUALITY_REREVIEW_RESERVE_SECONDS` | planned | Workload-scaled allowance for one targeted validation review after fixes.                                                                          |
 | `BS_QUALITY_TELEMETRY_FILE`           | -       | Absolute path for the campaign telemetry log. Default: operator state under `$XDG_STATE_HOME/claude-kit/quality-telemetry/` (or `~/.local/state`). |
+| `BS_QUALITY_ALLOW_UNPROTECTABLE_BASE` | `false` | Accepts non-atomic base freshness on a private repo whose plan cannot enforce branch protection at all. See below.                                 |
+
+### `BS_QUALITY_ALLOW_UNPROTECTABLE_BASE` (base-protection escape hatch)
+
+`scripts/quality-authorize-merge.sh` normally requires the PR base to carry
+server-enforced strict required-status checks (classic branch protection or an
+equivalent ruleset) before it will authorize a merge. That guarantee is
+**atomic**: GitHub itself refuses to advance the base out from under the merge,
+so the reviewed diff and the merged diff are provably identical.
+
+Some plans can't supply that guarantee at all — most commonly a **private**
+repo without the GitHub tier/rulesets needed to configure required-status
+checks. On such a repo, strict protection isn't "unconfigured", it's
+unconfigurable, and the gate would block every merge forever.
+
+Setting `BS_QUALITY_ALLOW_UNPROTECTABLE_BASE=true` lets `quality-authorize-merge.sh`
+proceed anyway, but only after it proves the repo genuinely can't protect the
+branch — never merely that protection is off. That classification runs in
+`scripts/quality-base-protectability.sh`, which requires all of:
+
+- the repo is private (`gh api repos/<repo>` `.private == true`) — a public repo
+  can always be protected, so this alone fails closed;
+- the branch-protection API call itself failed (non-zero `gh` exit status);
+- the failure body is a genuine plan-limit response, parsed by
+  `scripts/quality-parse-plan-limit.js` from a STDOUT-only capture (stderr is
+  never merged in, so a malformed or injected body can't be recovered into a
+  well-formed one).
+
+Any other outcome — API error, rate limit, ambiguous body, unreadable
+response — is treated as "protectable or unknown" and the merge stays
+blocked. The classifier fails closed on every ambiguity by design.
+
+**What's weakened when it's on:** the base-freshness check becomes
+best-effort instead of atomic. The base branch can advance between the
+review and the merge landing, so the diff GitHub actually merges is no
+longer guaranteed identical to the diff that was reviewed. This is an
+accepted, narrowly-scoped trade for repos with no other option — leave it
+unset unless `quality-authorize-merge.sh` reports the base as unprotectable
+on your plan.
 
 ### Run Governor (runaway-loop guardrails)
 
@@ -461,6 +500,42 @@ not expose `--teams`.
 2. Wait for CI (unless `--skip-ci`)
 3. Auto-merge via `gh pr merge --squash`
 4. Manually verify the deployed system using your normal deployment tooling
+
+### Worktree lifecycle locks: recovering a stale cross-host lock
+
+`scripts/worktree-manager.js` serializes create/lock/unlock/remove/reconcile
+operations per worktree with a directory-based lock
+(`withLifecycleLock`) at:
+
+```
+<repo-common-dir>/worktree-manager/locks/<hash-of-branch>.lock/
+  owner.json   # { pid, hostname, operation, key, createdAt }
+```
+
+On a stuck lock, `worktree-manager.js` can only prove the owning process is
+dead when `owner.hostname` matches the current machine's `os.hostname()` — it
+then signals the recorded `pid` with `kill(pid, 0)` and reclaims the lock if
+that fails with `ESRCH`. If the lock was left by a process on a **different
+host** (e.g. that host crashed, or the lock was created in CI or another
+worktree environment before the box died), there is no way to verify
+liveness, so the lock is deliberately retained forever rather than guessed
+stale — every lifecycle operation on that worktree fails with
+`LIFECYCLE_BUSY` until it's cleared. This is a conservative choice (never
+falsely reclaim a lock that might still be held), not a data-loss risk.
+
+**Manual recovery**: once you've independently confirmed the owning host/process
+is actually gone, remove the stale lock directory directly:
+
+```bash
+rm -rf "<repo-common-dir>/worktree-manager/locks/<hash>.lock"
+# or, to clear every lock for the repo:
+rm -rf "<repo-common-dir>/worktree-manager/locks"
+```
+
+`<repo-common-dir>` is `git rev-parse --git-common-dir` for the repo (the
+shared `.git` dir, not a linked worktree's private gitdir). There is currently
+no CLI flag for this — `worktree-manager.js help` does not mention the lock
+directory, and removal is a manual filesystem operation only.
 
 ## Next-Step Suggestions (CS-046)
 
