@@ -98,18 +98,32 @@ describe("provider-native platform", () => {
     expect(settings.hooks.PostToolUse).toHaveLength(1);
   });
 
-  it("falls back immediately on a surfaced quota response", () => {
+  it("falls back immediately on a structured quota error event (BUI-325)", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "provider-native-"));
     const bin = path.join(dir, "bin");
     const output = path.join(dir, "output");
     const prompt = path.join(dir, "prompt");
     mkdirSync(bin);
     writeFileSync(prompt, "review this\n");
+    // Real codex --json emits a typed error EVENT on stdout, not free text;
+    // classification must key off that structured envelope, not a grep of
+    // the transcript.
     executable(
       path.join(bin, "codex"),
-      'echo "HTTP 429: weekly usage limit; try again at tomorrow" >&2; exit 1',
+      [
+        'for arg in "$@"; do',
+        '  if [ "$arg" = "-o" ]; then shift_next=1; continue; fi',
+        '  if [ "${shift_next:-0}" = 1 ]; then last_message="$arg"; shift_next=0; fi',
+        "done",
+        'echo "final answer text" > "$last_message"',
+        'echo \'{"type":"error","message":"You\\u0027ve hit your usage limit. Purchase more credits or try again at Jul 25th, 2026 10:57 AM."}\'',
+        "exit 1",
+      ].join("\n"),
     );
-    executable(path.join(bin, "claude"), 'echo "claude fallback completed"');
+    executable(
+      path.join(bin, "claude"),
+      'echo \'{"is_error":false,"result":"claude fallback completed"}\'',
+    );
 
     const result = spawnSync(
       "bash",
@@ -138,6 +152,61 @@ describe("provider-native platform", () => {
     expect(result.stdout).toContain("claude fallback completed");
     expect(readFileSync(path.join(output, "provider"), "utf8").trim()).toBe(
       "claude",
+    );
+  });
+
+  it("does not classify incidental exhaustion-marker text in the transcript as exhaustion (BUI-325)", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "provider-native-fp-"));
+    const bin = path.join(dir, "bin");
+    const output = path.join(dir, "output");
+    const prompt = path.join(dir, "prompt");
+    mkdirSync(bin);
+    writeFileSync(prompt, "review this\n");
+    // A successful codex run whose transcript (tool output / agent message)
+    // happens to mention "429" and "weekly usage limits" — e.g. because the
+    // agent read this repo's own quality docs — must NOT be classified as
+    // exhausted. Only a typed error event on a failed run may do that.
+    executable(
+      path.join(bin, "codex"),
+      [
+        'for arg in "$@"; do',
+        '  if [ "$arg" = "-o" ]; then shift_next=1; continue; fi',
+        '  if [ "${shift_next:-0}" = 1 ]; then last_message="$arg"; shift_next=0; fi',
+        "done",
+        'echo "Docs mention HTTP 429 and weekly usage limits; nothing wrong here." > "$last_message"',
+        'echo \'{"type":"item.completed","item":{"type":"agent_message","text":"HTTP 429 weekly usage limits quota exhausted rate limit"}}\'',
+        "exit 0",
+      ].join("\n"),
+    );
+
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--target-dir",
+        dir,
+        "--provider",
+        "codex",
+        "--fallback",
+        "none",
+        "--output-dir",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("exhausted");
+    expect(result.stdout).toContain(
+      "Docs mention HTTP 429 and weekly usage limits",
+    );
+    expect(readFileSync(path.join(output, "provider"), "utf8").trim()).toBe(
+      "codex",
     );
   });
 

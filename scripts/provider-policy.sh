@@ -67,10 +67,6 @@ bs_provider_load() {
   printf '%s %s\n' "$primary" "$fallback"
 }
 
-bs_provider_exhausted() {
-  grep -Eiq '(^|[^0-9])429([^0-9]|$)|weekly (usage )?limit|usage limit|rate.?limit|quota (exceeded|exhausted)|too many requests|try again at' "$1" 2>/dev/null
-}
-
 bs_provider_unavailable() {
   grep -Eiq 'command not found|not authenticated|not logged in|login required|setup required|no such file or directory|connection (refused|failed)|service unavailable|(^|[^0-9])5(02|03|04)([^0-9]|$)' "$1" 2>/dev/null
 }
