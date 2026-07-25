@@ -88,36 +88,38 @@ describe("install.sh upgrade path (BUI-444)", () => {
   it("self-heals by pulling when PROJECT_DIR is a real git checkout missing the manifest", () => {
     const { home, projectDir } = sandbox();
 
-    // Bare "origin" seeded from the pre-manifest commit (parent of #149),
-    // and a shallow local clone of it standing in for the user's stale
-    // checkout — exactly what re-running curl|bash against an old `git
-    // clone`d install looks like.
+    // A synthetic two-commit "origin" standing in for the real claude-kit
+    // history around PR #149: commit 1 has no manifest (pre-#149), commit 2
+    // adds it (post-#149). Built entirely from local content rather than by
+    // walking REPO_ROOT's real git history, so this is deterministic and
+    // works whether REPO_ROOT itself is a full or CI-shallow checkout.
     const bareRemote = `${projectDir}-origin.git`;
-    const preManifestRef = execFileSync(
-      "git",
-      [
-        "-C",
-        REPO_ROOT,
-        "log",
-        "--format=%H",
-        "-1",
-        "--follow",
-        "--diff-filter=A",
-        "--",
-        "scripts/claude-link-manifest.sh",
-      ],
-      { encoding: "utf8" },
-    ).trim();
-    const parentRef = execFileSync(
-      "git",
-      ["-C", REPO_ROOT, "rev-parse", `${preManifestRef}^`],
-      { encoding: "utf8" },
-    ).trim();
+    const seedRepo = `${projectDir}-seed`;
+    seedPreManifestCheckout(seedRepo);
+
+    execFileSync("git", ["init", "--initial-branch=main", seedRepo]);
+    execFileSync("git", [
+      "-C",
+      seedRepo,
+      "config",
+      "user.email",
+      "test@example.com",
+    ]);
+    execFileSync("git", ["-C", seedRepo, "config", "user.name", "Test"]);
+    execFileSync("git", ["-C", seedRepo, "add", "-A"]);
+    execFileSync("git", ["-C", seedRepo, "commit", "-q", "-m", "pre-manifest"]);
+
+    cpSync(
+      path.join(REPO_ROOT, "scripts", "claude-link-manifest.sh"),
+      path.join(seedRepo, "scripts", "claude-link-manifest.sh"),
+    );
+    execFileSync("git", ["-C", seedRepo, "add", "-A"]);
+    execFileSync("git", ["-C", seedRepo, "commit", "-q", "-m", "add manifest"]);
 
     execFileSync("git", [
       "clone",
       "--no-local",
-      REPO_ROOT,
+      seedRepo,
       bareRemote,
       "--bare",
     ]);
@@ -125,7 +127,7 @@ describe("install.sh upgrade path (BUI-444)", () => {
     // Rewind the local branch to the pre-manifest commit but keep it
     // tracking origin/main, exactly like a stale `git clone`d checkout that
     // simply hasn't been pulled since before PR #149 landed.
-    execFileSync("git", ["-C", projectDir, "reset", "--hard", parentRef]);
+    execFileSync("git", ["-C", projectDir, "reset", "--hard", "HEAD^"]);
 
     expect(
       existsSync(path.join(projectDir, "scripts", "claude-link-manifest.sh")),
