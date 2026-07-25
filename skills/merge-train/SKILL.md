@@ -59,7 +59,25 @@ Skip repos with zero open PRs. Skip individual PRs in draft state.
 
 ## Phase 2: Parallel Workers (one per repo)
 
-**Sweep budget (enforce before and during dispatch):** record one sweep start time. Before dispatching any worker, build one ordered plan using `scripts/merge-train-batch.js`; it reserves from the same remaining wall-clock budget for every ready PR. Never give each campaign a new 15-minute allowance. Re-plan after a worker reports its actual elapsed time, and stop dispatching as soon as the shared budget is exhausted. Let in-flight workers finish, and collect every not-yet-started PR as **deferred (sweep budget)** in the Phase 3 summary (with a Linear ticket, same as manual-review). Emit a progress line as each campaign starts — `[merge-train] repo N/M (<name>), <elapsed>m/<budget>m elapsed` — so a long sweep is visibly "K bounded campaigns," not one opaque hang.
+**Sweep budget (enforce before and during dispatch):** record one sweep start time and absolute deadline. Before each worker starts `/bs:quality`, claim the planned `reservedSeconds` under a shared state file; planning alone is not admission. The claim is atomic across workers:
+
+```bash
+ADMISSION="$(node scripts/merge-train-batch.js admit \
+  --state-file "$TRAIN_STATE_FILE" \
+  --deadline-epoch "$TRAIN_DEADLINE_EPOCH" \
+  --budget-seconds "$TRAIN_BUDGET_SECONDS" \
+  --reservation-id "$REPOSITORY#$PR_NUMBER" \
+  --reserved-seconds "$PLANNED_RESERVED_SECONDS")" || {
+  # Exit 2 means deferred: shared deadline or reservation budget is exhausted.
+  echo "deferred (sweep budget)"
+  continue
+}
+export BS_QUALITY_SHARED_DEADLINE_EPOCH="$(printf '%s' "$ADMISSION" | jq -er '.environment.BS_QUALITY_SHARED_DEADLINE_EPOCH')"
+export BS_QUALITY_TRAIN_RESERVATION_SECONDS="$(printf '%s' "$ADMISSION" | jq -er '.environment.BS_QUALITY_TRAIN_RESERVATION_SECONDS')"
+export BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS="$(printf '%s' "$ADMISSION" | jq -er '.environment.BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS')"
+```
+
+The quality governor records the common deadline and caps cumulative provider execution at this reservation. It refuses a provider pass that has not begun by the deadline, but never interrupts an already admitted pass; that preserves the policy that budgets limit planned scope rather than guillotining useful review. Stop dispatching after a failed admission and collect all not-yet-started PRs as **deferred (sweep budget)** in the Phase 3 summary (with a Linear ticket, same as manual-review). Emit a progress line as each campaign starts — `[merge-train] repo N/M (<name>), <elapsed>m/<budget>m elapsed` — so a long sweep is visibly "K bounded campaigns," not one opaque hang.
 
 **Freshness reconciliation (mandatory before expensive work):** a worker must fetch both the current PR head and its current base, then re-read `headRefOid` and `baseRefOid` with `gh pr view`. Compare that current snapshot with discovery through `merge-train-batch.js` **before** it runs local gates or a provider panel. If either SHA changed, discard any prior review evidence and create a new quality campaign for the new exact head/base pair. If the PR is behind its base, use the repository's approved update-branch/rebase path, re-fetch, and re-read the PR snapshot before continuing; a conflict is a visible `deferred (base reconciliation conflict)` result, not a reason to run gates against a stale branch. Do not auto-push a local rebase.
 

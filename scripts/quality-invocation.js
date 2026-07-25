@@ -906,6 +906,29 @@ function buildGovernor(head) {
     "provider deadline seconds",
     1,
   );
+  const sharedDeadlineEpoch = process.env.BS_QUALITY_SHARED_DEADLINE_EPOCH
+    ? governorInteger(
+        "BS_QUALITY_SHARED_DEADLINE_EPOCH",
+        "0",
+        "shared merge-train deadline epoch",
+        1,
+      )
+    : null;
+  const trainReservationSeconds = process.env
+    .BS_QUALITY_TRAIN_RESERVATION_SECONDS
+    ? governorInteger(
+        "BS_QUALITY_TRAIN_RESERVATION_SECONDS",
+        "0",
+        "shared merge-train reservation seconds",
+        1,
+      )
+    : null;
+  const providerSecondsLimit = governorInteger(
+    "BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS",
+    String(15 * 60),
+    "total provider seconds",
+    1,
+  );
   return {
     startedAtEpoch,
     executionBudgetVersion: EXECUTION_BUDGET_VERSION,
@@ -923,13 +946,12 @@ function buildGovernor(head) {
       1,
     ),
     gateSecondsUsed: 0,
-    providerSecondsLimit: governorInteger(
-      "BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS",
-      String(15 * 60),
-      "total provider seconds",
-      1,
-    ),
+    providerSecondsLimit: trainReservationSeconds
+      ? Math.min(providerSecondsLimit, trainReservationSeconds)
+      : providerSecondsLimit,
     providerSecondsUsed: 0,
+    sharedDeadlineEpoch,
+    trainReservationSeconds,
     activeExecution: null,
     maxFixCommits: governorInteger(
       "BS_QUALITY_MAX_FIX_COMMITS",
@@ -1941,6 +1963,15 @@ function authorizeProviderAttempt(manifest, options) {
     throw new Error(`invalid review provider '${provider}'`);
   }
   const governor = manifest.governor;
+  if (
+    governor.sharedDeadlineEpoch !== null &&
+    governor.sharedDeadlineEpoch !== undefined &&
+    Math.floor(Date.now() / 1000) >= governor.sharedDeadlineEpoch
+  ) {
+    throw new Error(
+      "shared merge-train deadline has elapsed; no new provider attempt may start",
+    );
+  }
   if (
     !Number.isInteger(governor.maxProviderAttempts) ||
     !Array.isArray(governor.providerAttempts)

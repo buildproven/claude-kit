@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 "use strict";
 
+const fs = require("node:fs");
+const path = require("node:path");
+
 /**
  * Deterministic admission planning for a merge-train batch.
  *
@@ -159,7 +162,264 @@ function planBatch({ startedAtEpoch, budgetSeconds, nowEpoch, candidates }) {
   return { remainingSeconds: remaining, candidates: planned };
 }
 
+function reservationId(value) {
+  if (typeof value !== "string" || value.trim() === "" || value.length > 512) {
+    throw new Error(
+      "reservationId must be a non-empty string up to 512 characters",
+    );
+  }
+  return value;
+}
+
+/**
+ * Apply one merge-train reservation to a durable admission ledger. This is
+ * deliberately separate from `planBatch`: plans are advisory snapshots,
+ * while every worker must make this state transition under the file lock
+ * below before it can launch a quality campaign.
+ *
+ * A granted reservation is not revoked at the wall-clock deadline. BUI-348
+ * makes that an important semantic boundary: the shared budget constrains new
+ * work, not an already useful provider pass in flight.
+ */
+function reserveAdmission(state, request) {
+  const deadlineEpoch = integer(request.deadlineEpoch, "deadlineEpoch", {
+    minimum: 1,
+  });
+  const budgetSeconds = integer(request.budgetSeconds, "budgetSeconds", {
+    minimum: 1,
+  });
+  const nowEpoch = integer(request.nowEpoch, "nowEpoch", { minimum: 0 });
+  const id = reservationId(request.reservationId);
+  const reservedSeconds = integer(request.reservedSeconds, "reservedSeconds", {
+    minimum: 1,
+  });
+  const current = state || {
+    schemaVersion: 1,
+    deadlineEpoch,
+    budgetSeconds,
+    reservations: {},
+  };
+  if (
+    current.schemaVersion !== 1 ||
+    current.deadlineEpoch !== deadlineEpoch ||
+    current.budgetSeconds !== budgetSeconds ||
+    !current.reservations ||
+    typeof current.reservations !== "object" ||
+    Array.isArray(current.reservations)
+  ) {
+    throw new Error("merge-train admission state does not match this sweep");
+  }
+  const existing = current.reservations[id];
+  if (existing) {
+    // A re-plan (SKILL.md recomputes reservedSeconds after a worker reports
+    // elapsed time) can retry the same reservationId with a different value;
+    // callers branch on `reason` in the admit() CLI output to tell this
+    // apart from ordinary budget/deadline exhaustion.
+    if (existing.reservedSeconds !== reservedSeconds) {
+      return {
+        state: current,
+        admitted: false,
+        reason: "reservation-mismatch",
+        remainingSeconds: budgetSeconds - reservedTotal(current),
+      };
+    }
+    return {
+      state: current,
+      admitted: true,
+      reused: true,
+      reservation: existing,
+      remainingSeconds: budgetSeconds - reservedTotal(current),
+    };
+  }
+  if (nowEpoch >= deadlineEpoch) {
+    return {
+      state: current,
+      admitted: false,
+      reason: "shared-deadline-exhausted",
+      remainingSeconds: budgetSeconds - reservedTotal(current),
+    };
+  }
+  const used = reservedTotal(current);
+  if (used + reservedSeconds > budgetSeconds) {
+    return {
+      state: current,
+      admitted: false,
+      reason: "shared-budget-reserved",
+      remainingSeconds: budgetSeconds - used,
+    };
+  }
+  const reservation = {
+    reservedSeconds,
+    admittedAtEpoch: nowEpoch,
+  };
+  current.reservations[id] = reservation;
+  return {
+    state: current,
+    admitted: true,
+    reused: false,
+    reservation,
+    remainingSeconds: budgetSeconds - reservedTotal(current),
+  };
+}
+
+function reservedTotal(state) {
+  return Object.values(state.reservations || {}).reduce(
+    (total, reservation) => {
+      return (
+        total +
+        integer(reservation.reservedSeconds, "reservation.reservedSeconds", {
+          minimum: 1,
+        })
+      );
+    },
+    0,
+  );
+}
+
+function pause(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+const LOCK_STALE_MS = 60_000;
+
+// A missing or unparsable owner.json means either a lock still being
+// acquired (mkdir succeeded, the marker write hasn't landed yet — a window
+// of milliseconds) or a lock predating this reclaim mechanism. Fall back to
+// the lock directory's own mtime, which mkdir sets unconditionally, so a
+// genuinely abandoned lock is still reclaimable after LOCK_STALE_MS even
+// without a marker file, while the brief acquisition race stays safe.
+function isLockOwnerAlive(lockDirectory) {
+  let owner;
+  try {
+    owner = JSON.parse(
+      fs.readFileSync(path.join(lockDirectory, "owner.json"), "utf8"),
+    );
+  } catch {
+    const stat = fs.statSync(lockDirectory, { throwIfNoEntry: false });
+    return !stat || Date.now() - stat.mtimeMs <= LOCK_STALE_MS;
+  }
+  if (
+    typeof owner.pid !== "number" ||
+    typeof owner.acquiredAtEpoch !== "number"
+  ) {
+    return true;
+  }
+  if (Date.now() - owner.acquiredAtEpoch > LOCK_STALE_MS) {
+    return false;
+  }
+  try {
+    process.kill(owner.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Serializes concurrent merge-train workers' admission checks against one
+// state file via a directory-based mutex (mkdir is atomic across processes).
+// A worker killed mid-hold (crash, OOM, agent timeout — the isolated-Task-
+// agent model this feature targets) would otherwise wedge every later
+// admission indefinitely; a dead-PID or stale-timestamp lock is reclaimable.
+function withAdmissionLock(stateFile, callback) {
+  const resolved = path.resolve(stateFile);
+  const directory = path.dirname(resolved);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const lockDirectory = `${resolved}.lock`;
+  const expiresAt = Date.now() + 10_000;
+  for (;;) {
+    try {
+      fs.mkdirSync(lockDirectory, { mode: 0o700 });
+      fs.writeFileSync(
+        path.join(lockDirectory, "owner.json"),
+        JSON.stringify({ pid: process.pid, acquiredAtEpoch: Date.now() }),
+        { mode: 0o600 },
+      );
+      break;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      if (!isLockOwnerAlive(lockDirectory)) {
+        fs.rmSync(lockDirectory, { recursive: true, force: true });
+        continue;
+      }
+      if (Date.now() >= expiresAt) {
+        throw new Error("timed out waiting for merge-train admission lock", {
+          cause: error,
+        });
+      }
+      pause(25);
+    }
+  }
+  try {
+    let current = null;
+    if (fs.existsSync(resolved)) {
+      const raw = fs.readFileSync(resolved, "utf8");
+      try {
+        current = JSON.parse(raw);
+      } catch (error) {
+        throw new Error(
+          `merge-train admission state at ${resolved} is not valid JSON`,
+          { cause: error },
+        );
+      }
+    }
+    const result = callback(current);
+    const temporary = path.join(
+      directory,
+      `.${path.basename(resolved)}.${process.pid}.${Date.now()}.tmp`,
+    );
+    fs.writeFileSync(temporary, `${JSON.stringify(result.state, null, 2)}\n`, {
+      mode: 0o600,
+    });
+    fs.renameSync(temporary, resolved);
+    fs.chmodSync(resolved, 0o600);
+    return result;
+  } finally {
+    fs.rmSync(lockDirectory, { recursive: true, force: true });
+  }
+}
+
+function readOption(args, name) {
+  const index = args.indexOf(name);
+  if (index === -1 || !args[index + 1]) {
+    throw new Error(`${name} is required`);
+  }
+  return args[index + 1];
+}
+
+function admit(args) {
+  const stateFile = readOption(args, "--state-file");
+  const request = {
+    deadlineEpoch: readOption(args, "--deadline-epoch"),
+    budgetSeconds: readOption(args, "--budget-seconds"),
+    reservationId: readOption(args, "--reservation-id"),
+    reservedSeconds: readOption(args, "--reserved-seconds"),
+    nowEpoch: Math.floor(Date.now() / 1000),
+  };
+  const result = withAdmissionLock(stateFile, (state) =>
+    reserveAdmission(state, request),
+  );
+  const output = {
+    admitted: result.admitted,
+    reused: result.reused || false,
+    reason: result.reason || null,
+    remainingSeconds: result.remainingSeconds,
+  };
+  if (result.admitted) {
+    output.environment = {
+      BS_QUALITY_SHARED_DEADLINE_EPOCH: String(request.deadlineEpoch),
+      BS_QUALITY_TRAIN_RESERVATION_SECONDS: String(request.reservedSeconds),
+      BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS: String(request.reservedSeconds),
+    };
+  }
+  process.stdout.write(`${JSON.stringify(output)}\n`);
+  return result.admitted ? 0 : 2;
+}
+
 function main() {
+  if (process.argv[2] === "admit") {
+    process.exitCode = admit(process.argv.slice(3));
+    return;
+  }
   let input;
   try {
     input = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
@@ -184,4 +444,6 @@ module.exports = {
   remainingBudget,
   planPanel,
   planBatch,
+  reserveAdmission,
+  reservedTotal,
 };

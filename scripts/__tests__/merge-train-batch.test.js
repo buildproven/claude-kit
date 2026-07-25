@@ -3,9 +3,34 @@ const {
   remainingBudget,
   planPanel,
   planBatch,
+  reserveAdmission,
 } = require("../merge-train-batch");
+const { spawn } = require("node:child_process");
+const { mkdtempSync, mkdirSync, writeFileSync } = require("node:fs");
+const { tmpdir } = require("node:os");
+const path = require("node:path");
 
 const sha = (character) => character.repeat(40);
+
+function admit(args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [
+      path.resolve(__dirname, "..", "merge-train-batch.js"),
+      "admit",
+      ...args,
+    ]);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (status) => resolve({ status, stdout, stderr }));
+  });
+}
 
 describe("merge-train batch controller", () => {
   it("requires a fresh exact-HEAD review when either the PR code or base moved", () => {
@@ -97,5 +122,159 @@ describe("merge-train batch controller", () => {
       reservedSeconds: 180,
       incomplete: true,
     });
+  });
+
+  it("atomically models a shared reservation as a one-time admission", () => {
+    const request = {
+      deadlineEpoch: 2_000,
+      budgetSeconds: 300,
+      nowEpoch: 1_500,
+      reservationId: "buildproven/kit#42",
+      reservedSeconds: 180,
+    };
+    const first = reserveAdmission(null, request);
+    expect(first).toMatchObject({
+      admitted: true,
+      reused: false,
+      remainingSeconds: 120,
+    });
+    const retry = reserveAdmission(first.state, request);
+    expect(retry).toMatchObject({
+      admitted: true,
+      reused: true,
+      remainingSeconds: 120,
+    });
+    expect(
+      reserveAdmission(first.state, {
+        ...request,
+        reservationId: "buildproven/setup#11",
+        reservedSeconds: 121,
+      }),
+    ).toMatchObject({ admitted: false, reason: "shared-budget-reserved" });
+  });
+
+  it("rejects a retry with a different budget for the same reservation id instead of throwing", () => {
+    const request = {
+      deadlineEpoch: 2_000,
+      budgetSeconds: 300,
+      nowEpoch: 1_500,
+      reservationId: "buildproven/kit#42",
+      reservedSeconds: 180,
+    };
+    const first = reserveAdmission(null, request);
+    const retry = reserveAdmission(first.state, {
+      ...request,
+      reservedSeconds: 90,
+    });
+    expect(retry).toMatchObject({
+      admitted: false,
+      reason: "reservation-mismatch",
+      remainingSeconds: 120,
+    });
+    expect(retry.state.reservations["buildproven/kit#42"]).toMatchObject({
+      reservedSeconds: 180,
+    });
+  });
+
+  it("stops new admissions at the common deadline without revoking a lease", () => {
+    const result = reserveAdmission(
+      {
+        schemaVersion: 1,
+        deadlineEpoch: 2_000,
+        budgetSeconds: 300,
+        reservations: { "buildproven/kit#42": { reservedSeconds: 180 } },
+      },
+      {
+        deadlineEpoch: 2_000,
+        budgetSeconds: 300,
+        nowEpoch: 2_000,
+        reservationId: "buildproven/setup#11",
+        reservedSeconds: 60,
+      },
+    );
+    expect(result).toMatchObject({
+      admitted: false,
+      reason: "shared-deadline-exhausted",
+      remainingSeconds: 120,
+    });
+    expect(result.state.reservations["buildproven/kit#42"]).toMatchObject({
+      reservedSeconds: 180,
+    });
+  });
+
+  it("serializes simultaneous worker admissions through the shared ledger", async () => {
+    const stateFile = path.join(
+      mkdtempSync(path.join(tmpdir(), "merge-train-")),
+      "state.json",
+    );
+    const shared = [
+      "--state-file",
+      stateFile,
+      "--deadline-epoch",
+      String(Math.floor(Date.now() / 1000) + 60),
+      "--budget-seconds",
+      "300",
+      "--reserved-seconds",
+      "180",
+    ];
+    const [first, second] = await Promise.all([
+      admit([...shared, "--reservation-id", "buildproven/kit#42"]),
+      admit([...shared, "--reservation-id", "buildproven/setup#11"]),
+    ]);
+    expect([first.status, second.status].sort()).toEqual([0, 2]);
+    const admitted = [first, second].find((result) => result.status === 0);
+    expect(JSON.parse(admitted.stdout)).toMatchObject({
+      admitted: true,
+      remainingSeconds: 120,
+    });
+  });
+
+  it("fails with a descriptive error instead of an uncaught exception on a corrupted state file", async () => {
+    const stateFile = path.join(
+      mkdtempSync(path.join(tmpdir(), "merge-train-")),
+      "state.json",
+    );
+    writeFileSync(stateFile, "{not valid json");
+    const result = await admit([
+      "--state-file",
+      stateFile,
+      "--deadline-epoch",
+      String(Math.floor(Date.now() / 1000) + 60),
+      "--budget-seconds",
+      "300",
+      "--reserved-seconds",
+      "180",
+      "--reservation-id",
+      "buildproven/kit#42",
+    ]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/not valid JSON/);
+  });
+
+  it("reclaims an admission lock abandoned by a dead process instead of wedging forever", async () => {
+    const stateFile = path.join(
+      mkdtempSync(path.join(tmpdir(), "merge-train-")),
+      "state.json",
+    );
+    const lockDirectory = `${stateFile}.lock`;
+    mkdirSync(lockDirectory, { mode: 0o700 });
+    writeFileSync(
+      path.join(lockDirectory, "owner.json"),
+      JSON.stringify({ pid: 999_999, acquiredAtEpoch: Date.now() }),
+    );
+    const result = await admit([
+      "--state-file",
+      stateFile,
+      "--deadline-epoch",
+      String(Math.floor(Date.now() / 1000) + 60),
+      "--budget-seconds",
+      "300",
+      "--reserved-seconds",
+      "180",
+      "--reservation-id",
+      "buildproven/kit#42",
+    ]);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ admitted: true });
   });
 });

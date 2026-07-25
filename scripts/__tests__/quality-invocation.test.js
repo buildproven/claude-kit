@@ -456,6 +456,31 @@ describe("quality invocation manifest", () => {
     expect(manifest.governor).not.toHaveProperty("validationDeadlineEpoch");
   });
 
+  it("records a merge-train lease and refuses provider starts after its shared deadline", () => {
+    const root = repo("merge-train-lease");
+    const deadline = Math.floor(Date.now() / 1000) + 60;
+    const manifestPath = create(root, [], {
+      BS_QUALITY_SHARED_DEADLINE_EPOCH: String(deadline),
+      BS_QUALITY_TRAIN_RESERVATION_SECONDS: "120",
+      BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS: "300",
+    });
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifest.governor).toMatchObject({
+      sharedDeadlineEpoch: deadline,
+      trainReservationSeconds: 120,
+      providerSecondsLimit: 120,
+    });
+    manifest.governor.sharedDeadlineEpoch = Math.floor(Date.now() / 1000);
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const result = spawnSync(
+      "node",
+      [INVOCATION, "provider-attempt", manifestPath, "--provider", "codex"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/shared merge-train deadline has elapsed/);
+  });
+
   it("authorizes Gemini inside the existing provider attempt budget", () => {
     const root = repo("gemini-provider-attempt");
     const manifest = create(root, []);
