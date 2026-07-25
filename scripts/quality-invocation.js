@@ -911,7 +911,7 @@ function buildGovernor(head) {
         "BS_QUALITY_SHARED_DEADLINE_EPOCH",
         "0",
         "shared merge-train deadline epoch",
-        startedAtEpoch,
+        1,
       )
     : null;
   const trainReservationSeconds = process.env
