@@ -223,7 +223,7 @@ describe("provider-native platform", () => {
     executable(
       path.join(bin, "claude"),
       [
-        "echo '{\"is_error\":true,\"result\":\"You have hit your usage limit. Try again at Jul 25th, 2026 10:57 AM.\"}'",
+        'echo \'{"is_error":true,"result":"You have hit your usage limit. Try again at Jul 25th, 2026 10:57 AM."}\'',
         "exit 0",
       ].join("\n"),
     );
@@ -262,7 +262,7 @@ describe("provider-native platform", () => {
     writeFileSync(prompt, "review this\n");
     executable(
       path.join(bin, "claude"),
-      "echo '{\"is_error\":false,\"result\":\"claude completed cleanly\"}'",
+      'echo \'{"is_error":false,"result":"claude completed cleanly"}\'',
     );
 
     const result = spawnSync(
