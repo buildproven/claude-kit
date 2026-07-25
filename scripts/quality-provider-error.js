@@ -47,6 +47,12 @@ function errorMessage(event) {
   if (!isErrorEvent(event)) return "";
   if (typeof event.message === "string") return event.message;
   if (typeof event.error?.message === "string") return event.error.message;
+  // Claude's CLI JSON envelope reports the error text in `.result` rather
+  // than `.message` (e.g. {"is_error":true,"result":"...usage limit..."}).
+  // Only trust it once isErrorEvent() has already confirmed this is an
+  // error envelope, so ordinary successful-run text in `.result` is never
+  // misread as an exhaustion message.
+  if (typeof event.result === "string") return event.result;
   return "";
 }
 

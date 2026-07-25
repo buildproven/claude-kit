@@ -210,6 +210,90 @@ describe("provider-native platform", () => {
     );
   });
 
+  it("classifies claude exhaustion from a status-0 error envelope (BUI-325)", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "provider-native-claude-exh-"));
+    const bin = path.join(dir, "bin");
+    const output = path.join(dir, "output");
+    const prompt = path.join(dir, "prompt");
+    mkdirSync(bin);
+    writeFileSync(prompt, "review this\n");
+    // Some provider CLIs report is_error inside a status-0 JSON envelope
+    // rather than a nonzero exit code. The claude branch must classify from
+    // that structured envelope even when rc=0, not just from rc alone.
+    executable(
+      path.join(bin, "claude"),
+      [
+        "echo '{\"is_error\":true,\"result\":\"You have hit your usage limit. Try again at Jul 25th, 2026 10:57 AM.\"}'",
+        "exit 0",
+      ].join("\n"),
+    );
+
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--target-dir",
+        dir,
+        "--provider",
+        "claude",
+        "--fallback",
+        "none",
+        "--output-dir",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("claude exhausted");
+  });
+
+  it("does not classify a successful claude status-0 envelope as exhausted (BUI-325)", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "provider-native-claude-ok-"));
+    const bin = path.join(dir, "bin");
+    const output = path.join(dir, "output");
+    const prompt = path.join(dir, "prompt");
+    mkdirSync(bin);
+    writeFileSync(prompt, "review this\n");
+    executable(
+      path.join(bin, "claude"),
+      "echo '{\"is_error\":false,\"result\":\"claude completed cleanly\"}'",
+    );
+
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--target-dir",
+        dir,
+        "--provider",
+        "claude",
+        "--fallback",
+        "none",
+        "--output-dir",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("exhausted");
+    expect(result.stdout).toContain("claude completed cleanly");
+    expect(readFileSync(path.join(output, "provider"), "utf8").trim()).toBe(
+      "claude",
+    );
+  });
+
   it("installs only allowlisted native Codex skills and detects drift", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "codex-skills-"));
     const source = path.join(dir, "source");
