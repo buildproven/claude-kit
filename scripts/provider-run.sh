@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=provider-policy.sh
 source "$SCRIPT_DIR/provider-policy.sh"
+PROVIDER_ERROR_JS="$SCRIPT_DIR/quality-provider-error.js"
 
 PROVIDER=""
 FALLBACK=""
@@ -47,8 +48,24 @@ OUTPUT_DIR="${OUTPUT_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/provider-run.XXXXXX")}"
 mkdir -p "$OUTPUT_DIR"
 DEADLINE="$SCRIPT_DIR/run-with-deadline.py"
 
+# Classify a provider failure from STRUCTURED error metadata only — never by
+# grepping the raw transcript (BUI-325). Model output can legitimately contain
+# incidental exhaustion-marker text (this repo's own quality docs mention
+# "429" and "weekly usage limits"), so scanning stdout/stderr text as a whole
+# false-positives whenever an agentic run reads a file containing those
+# strings. `quality-provider-error.js` only matches typed error events (a
+# `{"type":"error",...}` / `{"is_error":true,...}` envelope with a numeric
+# status/code, or Codex's own typed usage-limit message) and ignores ordinary
+# review/tool-output text — same contract as claude-review-companion.sh and
+# quality-run-review.sh use for the blocking review path.
+classify_provider_failure() {
+  local evidence="$1" failure_json
+  failure_json="$(node "$PROVIDER_ERROR_JS" describe "$evidence" 2>/dev/null)" || return 1
+  printf '%s' "$failure_json" | jq -r '.category'
+}
+
 run_one() {
-  local provider="$1" rc detail
+  local provider="$1" rc last_message_file events_file result category detail
   local stdout_file="$OUTPUT_DIR/$provider.stdout"
   local stderr_file="$OUTPUT_DIR/$provider.stderr"
   : > "$stdout_file"
@@ -56,37 +73,68 @@ run_one() {
   case "$provider" in
     codex)
       command -v codex >/dev/null 2>&1 || return 74
+      last_message_file="$OUTPUT_DIR/$provider.last-message"
+      events_file="$OUTPUT_DIR/$provider.events.jsonl"
+      : > "$last_message_file"
       if python3 "$DEADLINE" --timeout-seconds "$TIMEOUT_SECONDS" -- \
-        codex exec --ephemeral -C "$TARGET_DIR" -s "$SANDBOX" - \
-        < "$PROMPT_FILE" > "$stdout_file" 2> "$stderr_file"; then
+        codex exec --ephemeral -C "$TARGET_DIR" -s "$SANDBOX" --json \
+        -o "$last_message_file" - \
+        < "$PROMPT_FILE" > "$events_file" 2> "$stderr_file"; then
         rc=0
       else
         rc=$?
       fi
+      cp "$last_message_file" "$stdout_file"
+      [ "$rc" -eq 0 ] && return 0
+      [ "$rc" -eq 124 ] && return 76
+      # The JSONL event stream is the provider's own structured status
+      # channel; classify from it (and stderr) instead of the last-message
+      # transcript, which is model output and may contain arbitrary text.
+      category="$(classify_provider_failure "$events_file")" || category=""
+      [ -n "$category" ] || category="$(classify_provider_failure "$stderr_file")" || category=""
+      if [ "$category" = provider-exhaustion ]; then
+        detail=$(node "$PROVIDER_ERROR_JS" describe "$events_file" 2>/dev/null | jq -r '.resetAt // empty' || true)
+        [ -n "$detail" ] || detail=$(node "$PROVIDER_ERROR_JS" describe "$stderr_file" 2>/dev/null | jq -r '.resetAt // empty' || true)
+        echo "$provider exhausted${detail:+: reset $detail}" >&2
+        return 75
+      fi
+      if bs_provider_unavailable "$stderr_file"; then return 74; fi
+      return "$rc"
       ;;
     claude)
       command -v claude >/dev/null 2>&1 || return 74
       if (
         cd "$TARGET_DIR"
         python3 "$DEADLINE" --timeout-seconds "$TIMEOUT_SECONDS" -- \
-          claude -p "$(cat "$PROMPT_FILE")" --no-session-persistence --dangerously-skip-permissions
+          claude -p "$(cat "$PROMPT_FILE")" --no-session-persistence \
+            --dangerously-skip-permissions --output-format json
       ) > "$stdout_file" 2> "$stderr_file"; then
         rc=0
       else
         rc=$?
       fi
+      # The CLI's JSON envelope is authoritative even when the process exits
+      # 0 (some provider CLIs report is_error inside a status-0 envelope);
+      # classify it before trusting rc alone.
+      category="$(classify_provider_failure "$stdout_file")" || category=""
+      [ -n "$category" ] || { [ "$rc" -ne 0 ] && category="$(classify_provider_failure "$stderr_file")"; } || category=""
+      if [ "$category" = provider-exhaustion ]; then
+        detail=$(node "$PROVIDER_ERROR_JS" describe "$stdout_file" 2>/dev/null | jq -r '.resetAt // empty' || true)
+        [ -n "$detail" ] || detail=$(node "$PROVIDER_ERROR_JS" describe "$stderr_file" 2>/dev/null | jq -r '.resetAt // empty' || true)
+        echo "$provider exhausted${detail:+: reset $detail}" >&2
+        return 75
+      fi
+      if [ "$rc" -eq 0 ]; then
+        result="$(jq -r 'if (.is_error == true) or (.result == null) then empty else .result end' "$stdout_file" 2>/dev/null || true)"
+        [ -n "$result" ] && printf '%s\n' "$result" > "$stdout_file"
+        return 0
+      fi
+      [ "$rc" -eq 124 ] && return 76
+      if bs_provider_unavailable "$stdout_file" || bs_provider_unavailable "$stderr_file"; then return 74; fi
+      return "$rc"
       ;;
     *) return 74 ;;
   esac
-  [ "$rc" -eq 0 ] && return 0
-  if bs_provider_exhausted "$stdout_file" || bs_provider_exhausted "$stderr_file"; then
-    detail=$(grep -Eih 'reset|429|weekly (usage )?limit|usage limit|rate.?limit|quota|try again at' "$stdout_file" "$stderr_file" 2>/dev/null | head -1 || true)
-    echo "$provider exhausted${detail:+: $detail}" >&2
-    return 75
-  fi
-  [ "$rc" -eq 124 ] && return 76
-  if bs_provider_unavailable "$stdout_file" || bs_provider_unavailable "$stderr_file"; then return 74; fi
-  return "$rc"
 }
 
 set +e
