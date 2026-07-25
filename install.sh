@@ -39,6 +39,20 @@ if [[ ! -d "$PROJECT_DIR" ]]; then
     success "Cloned to $PROJECT_DIR"
 else
     log "Found existing install at $PROJECT_DIR"
+    # Re-running the curl|bash installer against an existing checkout only
+    # downloads the latest install.sh — it does not update PROJECT_DIR. A
+    # checkout from before claude-link-manifest.sh existed (pre PR #149)
+    # would otherwise abort at the `source` below under set -e. Bring the
+    # checkout current so the manifest this install.sh depends on is there.
+    # Never touch a dirty working tree — a re-run must not silently pull
+    # upstream changes on top of a user's uncommitted local edits.
+    if [[ -d "$PROJECT_DIR/.git" ]]; then
+        if [[ -n "$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null)" ]]; then
+            warn "Local changes in $PROJECT_DIR — skipping auto-pull"
+        elif ! git -C "$PROJECT_DIR" pull --ff-only >/dev/null 2>&1; then
+            warn "Could not fast-forward $PROJECT_DIR — continuing with checkout as-is"
+        fi
+    fi
 fi
 
 # Ensure ~/.claude exists
@@ -48,8 +62,20 @@ mkdir -p "$CODEX_DIR"
 # Keep first-run installation and later /bs:sync repair on one declared
 # surface. The manifest is deliberately shell-native so this curl|bash
 # installer has no JSON-parser dependency before Node tooling is installed.
-# shellcheck source=scripts/claude-link-manifest.sh
-source "$PROJECT_DIR/scripts/claude-link-manifest.sh"
+if [[ -f "$PROJECT_DIR/scripts/claude-link-manifest.sh" ]]; then
+    # shellcheck source=scripts/claude-link-manifest.sh
+    source "$PROJECT_DIR/scripts/claude-link-manifest.sh"
+else
+    # Compatible fallback for a checkout the pull above couldn't update
+    # (e.g. offline, diverged history, or a non-git PROJECT_DIR) — this is
+    # the pre-PR-#149 link list, kept identical to CLAUDE_LINK_DIRS/FILES.
+    warn "scripts/claude-link-manifest.sh not found — using built-in fallback link list"
+    CLAUDE_LINK_DIRS=(commands skills agents scripts)
+    CLAUDE_LINK_FILES=(
+        "settings.json:config/settings.json"
+        "CLAUDE.md:config/CLAUDE.md"
+    )
+fi
 
 # Symlink commands, skills, agents, scripts.
 # `scripts` is load-bearing: config/settings.json wires command hooks to
