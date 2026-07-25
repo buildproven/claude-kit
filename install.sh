@@ -44,8 +44,14 @@ else
     # checkout from before claude-link-manifest.sh existed (pre PR #149)
     # would otherwise abort at the `source` below under set -e. Bring the
     # checkout current so the manifest this install.sh depends on is there.
-    if [[ -d "$PROJECT_DIR/.git" ]] && ! git -C "$PROJECT_DIR" pull --ff-only >/dev/null 2>&1; then
-        warn "Could not fast-forward $PROJECT_DIR — continuing with checkout as-is"
+    # Never touch a dirty working tree — a re-run must not silently pull
+    # upstream changes on top of a user's uncommitted local edits.
+    if [[ -d "$PROJECT_DIR/.git" ]]; then
+        if [[ -n "$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null)" ]]; then
+            warn "Local changes in $PROJECT_DIR — skipping auto-pull"
+        elif ! git -C "$PROJECT_DIR" pull --ff-only >/dev/null 2>&1; then
+            warn "Could not fast-forward $PROJECT_DIR — continuing with checkout as-is"
+        fi
     fi
 fi
 

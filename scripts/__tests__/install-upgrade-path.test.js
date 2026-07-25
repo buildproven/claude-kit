@@ -147,4 +147,62 @@ describe("install.sh upgrade path (BUI-444)", () => {
       );
     }
   });
+
+  it("skips the auto-pull when PROJECT_DIR has uncommitted local changes", () => {
+    const { home, projectDir } = sandbox();
+
+    const bareRemote = `${projectDir}-origin.git`;
+    const seedRepo = `${projectDir}-seed`;
+    seedPreManifestCheckout(seedRepo);
+
+    execFileSync("git", ["init", "--initial-branch=main", seedRepo]);
+    execFileSync("git", [
+      "-C",
+      seedRepo,
+      "config",
+      "user.email",
+      "test@example.com",
+    ]);
+    execFileSync("git", ["-C", seedRepo, "config", "user.name", "Test"]);
+    execFileSync("git", ["-C", seedRepo, "add", "-A"]);
+    execFileSync("git", ["-C", seedRepo, "commit", "-q", "-m", "pre-manifest"]);
+
+    cpSync(
+      path.join(REPO_ROOT, "scripts", "claude-link-manifest.sh"),
+      path.join(seedRepo, "scripts", "claude-link-manifest.sh"),
+    );
+    execFileSync("git", ["-C", seedRepo, "add", "-A"]);
+    execFileSync("git", ["-C", seedRepo, "commit", "-q", "-m", "add manifest"]);
+
+    execFileSync("git", [
+      "clone",
+      "--no-local",
+      seedRepo,
+      bareRemote,
+      "--bare",
+    ]);
+    execFileSync("git", ["clone", bareRemote, projectDir]);
+    execFileSync("git", ["-C", projectDir, "reset", "--hard", "HEAD^"]);
+
+    // Simulate a user's uncommitted local edit sitting in the checkout.
+    cpSync(
+      path.join(seedRepo, "install.sh"),
+      path.join(projectDir, "install.sh"),
+    );
+    execFileSync("bash", [
+      "-c",
+      `printf '\\n# local edit\\n' >> ${JSON.stringify(path.join(projectDir, "install.sh"))}`,
+    ]);
+
+    const { code, stdout } = run({ home, projectDir });
+
+    expect(code).toBe(0);
+    expect(stdout).toMatch(/Local changes in .* — skipping auto-pull/);
+    // The pull never ran, so the manifest still doesn't exist and the
+    // fallback link list kicks in instead.
+    expect(
+      existsSync(path.join(projectDir, "scripts", "claude-link-manifest.sh")),
+    ).toBe(false);
+    expect(stdout).toMatch(/built-in fallback link list/);
+  });
 });
