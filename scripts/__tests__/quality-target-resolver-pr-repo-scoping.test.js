@@ -86,6 +86,32 @@ describe("parseOwnerRepo", () => {
     expect(parseOwnerRepo(null)).toBeNull();
     expect(parseOwnerRepo(undefined)).toBeNull();
   });
+
+  it("parses a credential-embedded https github.com URL", () => {
+    expect(
+      parseOwnerRepo("https://x-access-token:tok@github.com/buildproven/claude-kit.git"),
+    ).toBe("buildproven/claude-kit");
+  });
+
+  // Regression: the shape `host.tld/owner/repo` matches GitLab, Bitbucket,
+  // and self-hosted git servers just as readily as github.com. Accepting any
+  // host here would let getRepoForDir resolve a non-GitHub checkout to an
+  // `owner/repo` string that then gets fed into `gh pr view --repo`, which
+  // always queries GitHub — silently auditing an unrelated same-named repo
+  // instead of failing closed as BUI-391 requires.
+  it("returns null for a same-shaped URL on a non-github.com host (https)", () => {
+    expect(parseOwnerRepo("https://gitlab.com/buildproven/claude-kit.git")).toBeNull();
+    expect(
+      parseOwnerRepo("https://github.com.attacker.io/buildproven/claude-kit"),
+    ).toBeNull();
+  });
+
+  it("returns null for a same-shaped URL on a non-github.com host (ssh)", () => {
+    expect(parseOwnerRepo("git@gitlab.com:buildproven/claude-kit.git")).toBeNull();
+    expect(
+      parseOwnerRepo("ssh://git@bitbucket.org/buildproven/claude-kit.git"),
+    ).toBeNull();
+  });
 });
 
 // Simulates two mock repo checkouts with different origin remotes, and a
@@ -309,6 +335,36 @@ describe("resolveTarget / resolveByPr — cross-repo PR-number collision (BUI-39
     expect(result.resolution).toBe("pr");
     expect(result.reason).toMatch(/could not determine.*repository/i);
     expect(result.reason).toContain("/repos/no-origin");
+  });
+
+  it("fails closed when --target-dir is supplied but ctx.getRepoForDir is omitted entirely", () => {
+    // Regression: `if (parsed.path && getRepoForDir)` used to gate the whole
+    // cross-check on getRepoForDir being truthy. A caller (this resolver
+    // module is exported and documented to accept an optional
+    // ctx.getRepoForDir) that supplies --pr + --target-dir but doesn't wire
+    // up getRepoForDir at all — as opposed to wiring it up and having it
+    // return null — silently skipped the check and fell through to unscoped
+    // resolution, reopening the exact BUI-391 collision. Omitting the
+    // function must fail closed identically to it returning null.
+    const { lookupPr, dirExists } = makeMockRepos();
+    const parsed = parseArgs([
+      "--pr",
+      "141",
+      "--target-dir",
+      "/repos/claude-setup",
+    ]);
+    const result = resolveTarget(parsed, {
+      cwd: "/somewhere",
+      primaryCheckout: null,
+      findWorktreeForBranch: () => null,
+      dirExists,
+      lookupPr,
+      // getRepoForDir intentionally omitted from ctx.
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.resolution).toBe("pr");
+    expect(result.reason).toMatch(/could not determine.*repository/i);
   });
 
   it("fails closed when lookupPr cannot independently confirm the resolved repo", () => {

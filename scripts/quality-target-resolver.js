@@ -161,15 +161,28 @@ function detectMerge(tokens) {
  * @param {string|null|undefined} remoteUrl
  * @returns {string|null}
  */
+// Constrained to github.com specifically. A remote URL shaped like
+// `host.tld/owner/repo` but pointing at GitLab, Bitbucket, or a self-hosted
+// git server must NOT be accepted as a GitHub owner/repo — feeding a
+// same-shaped-but-unrelated host's path segments into `gh pr view --repo`
+// would query an unrelated GitHub repo of the same name, defeating the
+// fail-closed intent this resolver exists for (BUI-391).
 function parseOwnerRepo(remoteUrl) {
   if (!remoteUrl || typeof remoteUrl !== "string") return null;
   const trimmed = remoteUrl.trim().replace(/\.git$/, "");
-  const httpsMatch = trimmed.match(/^https?:\/\/[^/]+\/([^/]+)\/([^/]+)$/i);
+  // Strip an optional `user:pass@` / `token@` credential prefix before
+  // matching the host, rather than folding it into the match regex itself
+  // (an optional credential group ahead of a literal host trips
+  // eslint-plugin-security's unsafe-regex heuristic).
+  const withoutCreds = trimmed.replace(/^(https?:\/\/)[^@/]+@/i, "$1");
+  const httpsMatch = withoutCreds.match(
+    /^https?:\/\/github\.com\/([^/]+)\/([^/]+)$/i,
+  );
   if (httpsMatch) return `${httpsMatch[1]}/${httpsMatch[2]}`;
-  const sshMatch = trimmed.match(/^git@[^:]+:([^/]+)\/([^/]+)$/i);
+  const sshMatch = trimmed.match(/^git@github\.com:([^/]+)\/([^/]+)$/i);
   if (sshMatch) return `${sshMatch[1]}/${sshMatch[2]}`;
   const sshSchemeMatch = trimmed.match(
-    /^ssh:\/\/git@[^/]+\/([^/]+)\/([^/]+)$/i,
+    /^ssh:\/\/git@github\.com\/([^/]+)\/([^/]+)$/i,
   );
   if (sshSchemeMatch) return `${sshSchemeMatch[1]}/${sshSchemeMatch[2]}`;
   return null;
@@ -252,13 +265,17 @@ function resolveByPr(parsed, ctx) {
   // can silently disagree with the repo the caller named via --target-dir.
   let expectedRepo = null;
   let repoUnresolved = false;
-  if (parsed.path && getRepoForDir) {
-    const expanded = expandHome(parsed.path);
-    expectedRepo = getRepoForDir(expanded);
+  if (parsed.path) {
+    // getRepoForDir must actually be supplied whenever --target-dir is. A
+    // caller (this CLI today, but the module is exported and documented to
+    // accept an optional ctx.getRepoForDir) that omits it must not silently
+    // fall through to unscoped ambient resolution — that's the exact
+    // collision bug BUI-391 fixes, just reached via a missing ctx field
+    // instead of an unresolvable repo.
+    expectedRepo = getRepoForDir ? getRepoForDir(expandHome(parsed.path)) : null;
     // --target-dir was supplied but its repo could not be determined (no
-    // origin remote, non-GitHub remote URL, or the dir isn't a git checkout).
-    // Fail closed: refuse rather than silently falling through to unscoped
-    // ambient-cwd resolution, which is the exact collision bug BUI-391 fixes.
+    // origin remote, non-GitHub remote URL, or the dir isn't a git checkout)
+    // — or getRepoForDir itself wasn't provided. Fail closed either way.
     repoUnresolved = expectedRepo === null;
   }
 
