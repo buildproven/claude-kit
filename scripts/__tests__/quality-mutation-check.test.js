@@ -426,6 +426,177 @@ describe("quality-mutation-check", () => {
     });
   });
 
+  it("proves evidence by reverting a config file its test guards", () => {
+    // A workflow/policy file plus the test that guards it has no executable
+    // source to revert, but a behavioral check exists: revert the config and
+    // the test must go red. The config is promoted to a candidate so the
+    // normal revert-diff loop proves it (BUI-511).
+    const root = mkdtempSync(path.join(tmpdir(), "quality-mutation-config-"));
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.name", "Quality Test"]);
+    git(root, ["config", "user.email", "quality@example.com"]);
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: {
+          lint: "true",
+          test: "node run-policy-test.js",
+          "security:audit": "true",
+        },
+      }),
+    );
+    // Test lives under __tests__/ so it is excluded from CANDIDATES; the
+    // runner shim at the root keeps the package.json test command simple.
+    execFileSync("mkdir", ["-p", path.join(root, "__tests__")]);
+    writeFileSync(
+      path.join(root, "run-policy-test.js"),
+      "require('./__tests__/policy.test.js');\n",
+    );
+    const guardTest =
+      "const fs=require('node:fs');\nconst s=fs.readFileSync(__dirname+'/../policy.yml','utf8');\nif(!s.includes('beta')) process.exit(1);\n";
+    writeFileSync(path.join(root, "policy.yml"), "allow:\n  - alpha\n");
+    writeFileSync(path.join(root, "__tests__", "policy.test.js"), guardTest);
+    git(root, ["add", "."]);
+    // Base must be green: add beta later, so seed the test as a no-op first.
+    writeFileSync(
+      path.join(root, "__tests__", "policy.test.js"),
+      "process.exit(0);\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "base"]);
+    git(root, ["remote", "add", "origin", root]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "-c", "feature"]);
+
+    // Config gains 'beta'; its guarding test is tightened alongside.
+    writeFileSync(
+      path.join(root, "policy.yml"),
+      "allow:\n  - alpha\n  - beta\n",
+    );
+    writeFileSync(path.join(root, "__tests__", "policy.test.js"), guardTest);
+    git(root, ["add", "."]);
+    git(root, ["commit", "-qm", "feat: allow beta"]);
+
+    const manifest = execFileSync(
+      "node",
+      [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
+      { cwd: root, encoding: "utf8" },
+    ).trim();
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "risk",
+        manifest,
+        "--tier",
+        "high",
+        "--task-type",
+        "feature",
+        "--score",
+        "50",
+        "--agents",
+        "2",
+        "--codex-depth",
+        "high",
+        "--codex-rounds",
+        "1",
+      ],
+      { cwd: root },
+    );
+
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    const artifact = JSON.parse(
+      readFileSync(state.mutation.artifactPath, "utf8"),
+    );
+    expect(artifact).toMatchObject({
+      method: "revert-diff",
+      mutatedPaths: ["policy.yml"],
+      testFailureObserved: true,
+    });
+  });
+
+  it("still fails closed when a config change has no covering test", () => {
+    // The promoted-config path must still demand real evidence: if reverting
+    // the config leaves the suite green, the test never covered it.
+    const root = mkdtempSync(path.join(tmpdir(), "quality-mutation-cfgvac-"));
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.name", "Quality Test"]);
+    git(root, ["config", "user.email", "quality@example.com"]);
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: {
+          lint: "true",
+          test: "node run-policy-test.js",
+          "security:audit": "true",
+        },
+      }),
+    );
+    execFileSync("mkdir", ["-p", path.join(root, "__tests__")]);
+    writeFileSync(
+      path.join(root, "run-policy-test.js"),
+      "require('./__tests__/policy.test.js');\n",
+    );
+    writeFileSync(path.join(root, "policy.yml"), "allow:\n  - alpha\n");
+    writeFileSync(
+      path.join(root, "__tests__", "policy.test.js"),
+      "process.exit(0);\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "base"]);
+    git(root, ["remote", "add", "origin", root]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "-c", "feature"]);
+
+    writeFileSync(
+      path.join(root, "policy.yml"),
+      "allow:\n  - alpha\n  - beta\n",
+    );
+    // The test file DOES change (so the config gets promoted), but the new
+    // assertion is vacuous: it passes regardless of policy.yml content.
+    writeFileSync(
+      path.join(root, "__tests__", "policy.test.js"),
+      "const fs=require('node:fs');\nfs.readFileSync(__dirname+'/../policy.yml','utf8');\nprocess.exit(0);\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-qm", "feat: allow beta"]);
+
+    const manifest = execFileSync(
+      "node",
+      [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
+      { cwd: root, encoding: "utf8" },
+    ).trim();
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "risk",
+        manifest,
+        "--tier",
+        "high",
+        "--task-type",
+        "feature",
+        "--score",
+        "50",
+        "--agents",
+        "2",
+        "--codex-depth",
+        "high",
+        "--codex-rounds",
+        "1",
+      ],
+      { cwd: root },
+    );
+
+    expect(() => runMutation(root, manifest)).toThrow();
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.mutation).toBeNull();
+  });
+
   it("still runs the gate when the diff changes only test files", () => {
     // The candidate filter drops test paths, so a test-only diff also yields
     // zero candidates. It must NOT be waved through as "no mutable source" —
