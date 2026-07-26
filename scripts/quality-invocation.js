@@ -3071,12 +3071,19 @@ function validMutationArtifact(manifest, artifact) {
     artifact.tier === manifest.risk.tier,
   ].every(Boolean);
   if (!identityValid) return false;
-  if (artifact.method === "gitlink-skip") {
-    // A diff whose entire change set is submodule/gitlink pointer bumps has
-    // no executable source to mutate. This is a distinct, legitimately
-    // evidenced outcome from a revert that failed to prove anything —
-    // testFailureObserved is false because no revert was attempted, and
-    // mutatedPaths is empty because nothing was reverted.
+  if (["gitlink-skip", "no-mutable-source"].includes(artifact.method)) {
+    // A diff with no executable source to mutate. This is a distinct,
+    // legitimately evidenced outcome from a revert that failed to prove
+    // anything — testFailureObserved is false because no revert was
+    // attempted, and mutatedPaths is empty because nothing was reverted.
+    //
+    //   gitlink-skip       every entry is a submodule/gitlink pointer bump
+    //   no-mutable-source  entries exist but none is executable source, e.g.
+    //                      a dependency bump touching only package.json and
+    //                      package-lock.json
+    //
+    // The emitting gate only reaches either branch when its executable-source
+    // candidate set is empty, so neither can mask a real mutation failure.
     return (
       Array.isArray(artifact.mutatedPaths) &&
       artifact.mutatedPaths.length === 0 &&
