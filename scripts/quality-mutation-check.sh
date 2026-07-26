@@ -91,14 +91,37 @@ if [ "${#CANDIDATES[@]}" -eq 0 ]; then
   # (e.g. a delete-only diff) from aborting the script under set -e.
   DIFF_ENTRY_COUNT="$(printf '%s\n' "$DIFF_RAW" | grep -c . || true)"
   GITLINK_ENTRY_COUNT="$(printf '%s\n' "$DIFF_RAW" | awk '$1 == ":160000" && $2 == "160000"' | wc -l | tr -d ' ')"
+  # A diff with nothing mutable in it must record a skip rather than fail
+  # closed: there is no source to revert, so no possible run could satisfy
+  # the gate. Two disjoint shapes qualify, and both are reported distinctly
+  # so the evidence says which one applied:
+  #
+  #   gitlink-skip       every entry is a submodule pointer (:160000)
+  #   no-mutable-source  entries exist but none is executable source, e.g. a
+  #                      dependency bump touching only package.json +
+  #                      package-lock.json, or a docs/config-only change
+  #
+  # This is gated on CANDIDATES being empty, so it can never mask a real
+  # mutation failure: when executable source did change, the gate still runs
+  # and a failed run still exits non-zero below.
+  SKIP_METHOD=""
+  SKIP_REASON=""
   if [ "$DIFF_ENTRY_COUNT" -gt 0 ] && [ "$DIFF_ENTRY_COUNT" -eq "$GITLINK_ENTRY_COUNT" ]; then
+    SKIP_METHOD="gitlink-skip"
+    SKIP_REASON="diff touches only submodule pointers (gitlinks), no source to mutate"
+  elif [ "$DIFF_ENTRY_COUNT" -gt 0 ]; then
+    SKIP_METHOD="no-mutable-source"
+    SKIP_REASON="diff contains no executable source file to mutate"
+  fi
+  if [ -n "$SKIP_METHOD" ]; then
     mkdir -p "$(dirname "$ARTIFACT")"
     jq -n \
       --arg invocationId "$INVOCATION_ID" \
       --arg base "$BASE" \
       --arg head "$HEAD" \
       --arg tier "$TIER" \
-      '{schemaVersion: 1, invocationId: $invocationId, base: $base, head: $head, tier: $tier, method: "gitlink-skip", mutatedPaths: [], testFailureObserved: false}' \
+      --arg method "$SKIP_METHOD" \
+      '{schemaVersion: 1, invocationId: $invocationId, base: $base, head: $head, tier: $tier, method: $method, mutatedPaths: [], testFailureObserved: false}' \
       > "$ARTIFACT"
     # set -euo pipefail (line 5) means a non-zero exit from either call below
     # aborts the script before the success echo/exit 0 can be reached.
@@ -106,7 +129,7 @@ if [ "${#CANDIDATES[@]}" -eq 0 ]; then
       --artifact "$ARTIFACT"
     bash "$SCRIPT_DIR/quality-assert-clean.sh" \
       --manifest "$MANIFEST" --phase "mutation check completion"
-    echo "[quality] mutation gate omitted: diff touches only submodule pointers (gitlinks), no source to mutate; evidence -> $ARTIFACT"
+    echo "[quality] mutation gate omitted: $SKIP_REASON; evidence -> $ARTIFACT"
     exit 0
   fi
 fi
