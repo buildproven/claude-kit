@@ -116,9 +116,47 @@ if [ "${#CANDIDATES[@]}" -eq 0 ]; then
       ' \
       | grep -c . || true
   )"
+  # When the ONLY changed source is a test, and what that test guards is a
+  # config file the extension filter does not recognize (a workflow YAML, a
+  # JSON policy), a behavioral check still exists: revert the config and the
+  # test must go red. Promote those config files to candidates so the normal
+  # revert-diff loop below proves it, instead of failing closed (BUI-511).
+  #
+  # Deliberately narrow. Reached only when CANDIDATES is empty (no executable
+  # source changed) AND at least one changed file is a test. A diff touching
+  # only tests, with no config subject, promotes nothing and still fails
+  # closed — the BUI-483 review finding stays fixed.
+  CHANGED_TEST_COUNT="$(
+    git -C "$ROOT" diff --name-only --diff-filter=AM "$BASE..$HEAD" -- \
+      | awk '/(^|\/)(test|tests|spec|__tests__)(\/|$)/ { print }' \
+      | grep -c . || true
+  )"
+  # Dependency manifests and lockfiles are excluded. Reverting package.json
+  # mid-run would change the very test command the sandbox is about to
+  # execute, and a routine dependency bump that happens to touch any test file
+  # would be misread as a guarded-config change. Those diffs are already
+  # served by the no-mutable-source path below.
+  if [ "$CHANGED_TEST_COUNT" -gt 0 ]; then
+    while IFS= read -r CONFIG_CANDIDATE; do
+      CANDIDATES+=("$CONFIG_CANDIDATE")
+    done < <(
+      git -C "$ROOT" diff --name-only --diff-filter=AM "$BASE..$HEAD" -- \
+        | awk '
+          /(^|\/)(test|tests|spec|__tests__)(\/|$)/ { next }
+          /(^|\/)(package|package-lock|npm-shrinkwrap|composer|Cargo|Gemfile|go)\.(json|lock|toml|sum)$/ { next }
+          /(^|\/)(yarn|poetry|uv|pnpm-lock|pnpm-workspace)\.(lock|toml|ya?ml)$/ { next }
+          /\.(ya?ml|json|toml|ini|cfg|conf)$/ { print }
+        '
+    )
+  fi
+
   SKIP_METHOD=""
   SKIP_REASON=""
-  if [ "$DIFF_ENTRY_COUNT" -gt 0 ] && [ "$DIFF_ENTRY_COUNT" -eq "$GITLINK_ENTRY_COUNT" ]; then
+  if [ "${#CANDIDATES[@]}" -gt 0 ]; then
+    # A config subject was promoted: fall through to the revert-diff loop,
+    # which demands real red-capable evidence rather than recording a skip.
+    :
+  elif [ "$DIFF_ENTRY_COUNT" -gt 0 ] && [ "$DIFF_ENTRY_COUNT" -eq "$GITLINK_ENTRY_COUNT" ]; then
     SKIP_METHOD="gitlink-skip"
     SKIP_REASON="diff touches only submodule pointers (gitlinks), no source to mutate"
   elif [ "$DIFF_ENTRY_COUNT" -gt 0 ] && [ "$SOURCE_ENTRY_COUNT" -eq 0 ]; then

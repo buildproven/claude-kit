@@ -108,6 +108,66 @@ function runMutation(root, manifest) {
   }
 }
 
+describe("config-promotion filter", () => {
+  // Exercises the awk filter from quality-mutation-check.sh directly: cheap
+  // coverage of every lockfile spelling, which full fixtures cannot afford.
+  // A wrong pattern here silently promotes a lockfile, and reverting one
+  // mid-run changes the test command the sandbox is about to execute.
+  function promote(paths) {
+    const script = readFileSync(MUTATION, "utf8");
+    const block =
+      /\/\(\^\|\\\/\)\(test\|tests\|spec\|__tests__\)[\s\S]*?\{ print \}/.exec(
+        script.slice(script.indexOf("CONFIG_CANDIDATE")),
+      );
+    if (!block) throw new Error("config-promotion awk block not found");
+    return execFileSync("awk", [block[0]], {
+      input: `${paths.join("\n")}\n`,
+      encoding: "utf8",
+    })
+      .split("\n")
+      .filter(Boolean);
+  }
+
+  it("excludes every dependency manifest and lockfile spelling", () => {
+    expect(
+      promote([
+        "package.json",
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "poetry.lock",
+        "uv.lock",
+        "Cargo.toml",
+        "Cargo.lock",
+        "composer.json",
+        "go.sum",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("still promotes genuine config files", () => {
+    expect(
+      promote([
+        "policy.yml",
+        "tsconfig.json",
+        ".github/workflows/ci.yml",
+        "ruff.toml",
+      ]),
+    ).toEqual([
+      "policy.yml",
+      "tsconfig.json",
+      ".github/workflows/ci.yml",
+      "ruff.toml",
+    ]);
+  });
+
+  it("never promotes a test path", () => {
+    expect(promote(["__tests__/fixture.json", "spec/config.yml"])).toEqual([]);
+  });
+});
+
 describe("quality-mutation-check", () => {
   it("fails when a vacuous test stays green after the changed behavior is reverted", () => {
     const { root, manifest } = fixture(
@@ -424,6 +484,267 @@ describe("quality-mutation-check", () => {
       mutatedPaths: [],
       testFailureObserved: false,
     });
+  });
+
+  it("proves evidence by reverting a config file its test guards", () => {
+    // A workflow/policy file plus the test that guards it has no executable
+    // source to revert, but a behavioral check exists: revert the config and
+    // the test must go red. The config is promoted to a candidate so the
+    // normal revert-diff loop proves it (BUI-511).
+    const root = mkdtempSync(path.join(tmpdir(), "quality-mutation-config-"));
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.name", "Quality Test"]);
+    git(root, ["config", "user.email", "quality@example.com"]);
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: {
+          lint: "true",
+          test: "node run-policy-test.js",
+          "security:audit": "true",
+        },
+      }),
+    );
+    // Test lives under __tests__/ so it is excluded from CANDIDATES; the
+    // runner shim at the root keeps the package.json test command simple.
+    execFileSync("mkdir", ["-p", path.join(root, "__tests__")]);
+    writeFileSync(
+      path.join(root, "run-policy-test.js"),
+      "require('./__tests__/policy.test.js');\n",
+    );
+    const guardTest =
+      "const fs=require('node:fs');\nconst s=fs.readFileSync(__dirname+'/../policy.yml','utf8');\nif(!s.includes('beta')) process.exit(1);\n";
+    writeFileSync(path.join(root, "policy.yml"), "allow:\n  - alpha\n");
+    writeFileSync(path.join(root, "__tests__", "policy.test.js"), guardTest);
+    git(root, ["add", "."]);
+    // Base must be green: add beta later, so seed the test as a no-op first.
+    writeFileSync(
+      path.join(root, "__tests__", "policy.test.js"),
+      "process.exit(0);\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "base"]);
+    git(root, ["remote", "add", "origin", root]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "-c", "feature"]);
+
+    // Config gains 'beta'; its guarding test is tightened alongside.
+    writeFileSync(
+      path.join(root, "policy.yml"),
+      "allow:\n  - alpha\n  - beta\n",
+    );
+    writeFileSync(path.join(root, "__tests__", "policy.test.js"), guardTest);
+    git(root, ["add", "."]);
+    git(root, ["commit", "-qm", "feat: allow beta"]);
+
+    const manifest = execFileSync(
+      "node",
+      [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
+      { cwd: root, encoding: "utf8" },
+    ).trim();
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "risk",
+        manifest,
+        "--tier",
+        "high",
+        "--task-type",
+        "feature",
+        "--score",
+        "50",
+        "--agents",
+        "2",
+        "--codex-depth",
+        "high",
+        "--codex-rounds",
+        "1",
+      ],
+      { cwd: root },
+    );
+
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    const artifact = JSON.parse(
+      readFileSync(state.mutation.artifactPath, "utf8"),
+    );
+    expect(artifact).toMatchObject({
+      method: "revert-diff",
+      mutatedPaths: ["policy.yml"],
+      testFailureObserved: true,
+    });
+  });
+
+  it("still fails closed when a config change has no covering test", () => {
+    // The promoted-config path must still demand real evidence: if reverting
+    // the config leaves the suite green, the test never covered it.
+    const root = mkdtempSync(path.join(tmpdir(), "quality-mutation-cfgvac-"));
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.name", "Quality Test"]);
+    git(root, ["config", "user.email", "quality@example.com"]);
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: {
+          lint: "true",
+          test: "node run-policy-test.js",
+          "security:audit": "true",
+        },
+      }),
+    );
+    execFileSync("mkdir", ["-p", path.join(root, "__tests__")]);
+    writeFileSync(
+      path.join(root, "run-policy-test.js"),
+      "require('./__tests__/policy.test.js');\n",
+    );
+    writeFileSync(path.join(root, "policy.yml"), "allow:\n  - alpha\n");
+    writeFileSync(
+      path.join(root, "__tests__", "policy.test.js"),
+      "process.exit(0);\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "base"]);
+    git(root, ["remote", "add", "origin", root]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "-c", "feature"]);
+
+    writeFileSync(
+      path.join(root, "policy.yml"),
+      "allow:\n  - alpha\n  - beta\n",
+    );
+    // The test file DOES change (so the config gets promoted), but the new
+    // assertion is vacuous: it passes regardless of policy.yml content.
+    writeFileSync(
+      path.join(root, "__tests__", "policy.test.js"),
+      "const fs=require('node:fs');\nfs.readFileSync(__dirname+'/../policy.yml','utf8');\nprocess.exit(0);\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-qm", "feat: allow beta"]);
+
+    const manifest = execFileSync(
+      "node",
+      [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
+      { cwd: root, encoding: "utf8" },
+    ).trim();
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "risk",
+        manifest,
+        "--tier",
+        "high",
+        "--task-type",
+        "feature",
+        "--score",
+        "50",
+        "--agents",
+        "2",
+        "--codex-depth",
+        "high",
+        "--codex-rounds",
+        "1",
+      ],
+      { cwd: root },
+    );
+
+    // Assert the REASON, not merely that it threw — otherwise an unrelated
+    // crash would satisfy this test.
+    expect(() => runMutation(root, manifest)).toThrow(
+      /no red-capable evidence/,
+    );
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.mutation).toBeNull();
+  });
+
+  it("does not promote dependency manifests as config candidates", () => {
+    // A routine dependency bump that also touches a test file must NOT be
+    // read as a guarded-config change: reverting package.json mid-run would
+    // change the very test command the sandbox is about to execute. Such
+    // diffs belong to the no-mutable-source path instead.
+    const root = mkdtempSync(path.join(tmpdir(), "quality-mutation-deps-"));
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.name", "Quality Test"]);
+    git(root, ["config", "user.email", "quality@example.com"]);
+    const pkg = (dep) =>
+      JSON.stringify({
+        scripts: {
+          lint: "true",
+          test: "node __tests__/policy.test.js",
+          "security:audit": "true",
+        },
+        devDependencies: { "left-pad": dep },
+      });
+    writeFileSync(path.join(root, "package.json"), pkg("^1.0.0"));
+    writeFileSync(
+      path.join(root, "package-lock.json"),
+      JSON.stringify({ lockfileVersion: 3, packages: {} }),
+    );
+    execFileSync("mkdir", ["-p", path.join(root, "__tests__")]);
+    writeFileSync(
+      path.join(root, "__tests__", "policy.test.js"),
+      "process.exit(0);\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "base"]);
+    git(root, ["remote", "add", "origin", root]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "-c", "feature"]);
+
+    writeFileSync(path.join(root, "package.json"), pkg("^1.3.0"));
+    writeFileSync(
+      path.join(root, "package-lock.json"),
+      JSON.stringify({ lockfileVersion: 3, packages: { "": {} } }),
+    );
+    writeFileSync(
+      path.join(root, "__tests__", "policy.test.js"),
+      "// touched alongside the bump\nprocess.exit(0);\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-qm", "chore: bump left-pad"]);
+
+    const manifest = execFileSync(
+      "node",
+      [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
+      { cwd: root, encoding: "utf8" },
+    ).trim();
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "risk",
+        manifest,
+        "--tier",
+        "high",
+        "--task-type",
+        "feature",
+        "--score",
+        "50",
+        "--agents",
+        "2",
+        "--codex-depth",
+        "high",
+        "--codex-rounds",
+        "1",
+      ],
+      { cwd: root },
+    );
+
+    // package.json must NOT be promoted — reverting it would change the very
+    // test command the sandbox runs. With the manifest excluded and a changed
+    // test present, nothing is promoted and nothing is skipped: the gate fails
+    // closed, which is the correct conservative outcome for an ambiguous diff
+    // (consistent with the BUI-483 finding that changed tests must not be
+    // waved through). The assertion pins the reason, not merely the throw.
+    expect(() => runMutation(root, manifest)).toThrow(
+      /no changed executable source file can be reverted/,
+    );
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.mutation).toBeNull();
   });
 
   it("still runs the gate when the diff changes only test files", () => {
