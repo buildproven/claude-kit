@@ -108,6 +108,66 @@ function runMutation(root, manifest) {
   }
 }
 
+describe("config-promotion filter", () => {
+  // Exercises the awk filter from quality-mutation-check.sh directly: cheap
+  // coverage of every lockfile spelling, which full fixtures cannot afford.
+  // A wrong pattern here silently promotes a lockfile, and reverting one
+  // mid-run changes the test command the sandbox is about to execute.
+  function promote(paths) {
+    const script = readFileSync(MUTATION, "utf8");
+    const block =
+      /\/\(\^\|\\\/\)\(test\|tests\|spec\|__tests__\)[\s\S]*?\{ print \}/.exec(
+        script.slice(script.indexOf("CONFIG_CANDIDATE")),
+      );
+    if (!block) throw new Error("config-promotion awk block not found");
+    return execFileSync("awk", [block[0]], {
+      input: `${paths.join("\n")}\n`,
+      encoding: "utf8",
+    })
+      .split("\n")
+      .filter(Boolean);
+  }
+
+  it("excludes every dependency manifest and lockfile spelling", () => {
+    expect(
+      promote([
+        "package.json",
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "poetry.lock",
+        "uv.lock",
+        "Cargo.toml",
+        "Cargo.lock",
+        "composer.json",
+        "go.sum",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("still promotes genuine config files", () => {
+    expect(
+      promote([
+        "policy.yml",
+        "tsconfig.json",
+        ".github/workflows/ci.yml",
+        "ruff.toml",
+      ]),
+    ).toEqual([
+      "policy.yml",
+      "tsconfig.json",
+      ".github/workflows/ci.yml",
+      "ruff.toml",
+    ]);
+  });
+
+  it("never promotes a test path", () => {
+    expect(promote(["__tests__/fixture.json", "spec/config.yml"])).toEqual([]);
+  });
+});
+
 describe("quality-mutation-check", () => {
   it("fails when a vacuous test stays green after the changed behavior is reverted", () => {
     const { root, manifest } = fixture(

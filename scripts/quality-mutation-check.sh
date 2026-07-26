@@ -144,7 +144,7 @@ if [ "${#CANDIDATES[@]}" -eq 0 ]; then
         | awk '
           /(^|\/)(test|tests|spec|__tests__)(\/|$)/ { next }
           /(^|\/)(package|package-lock|npm-shrinkwrap|composer|Cargo|Gemfile|go)\.(json|lock|toml|sum)$/ { next }
-          /(^|\/)(yarn|pnpm-lock|poetry|uv)\.(lock|toml)$/ { next }
+          /(^|\/)(yarn|poetry|uv|pnpm-lock|pnpm-workspace)\.(lock|toml|ya?ml)$/ { next }
           /\.(ya?ml|json|toml|ini|cfg|conf)$/ { print }
         '
     )
