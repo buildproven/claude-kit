@@ -131,6 +131,11 @@ if [ "${#CANDIDATES[@]}" -eq 0 ]; then
       | awk '/(^|\/)(test|tests|spec|__tests__)(\/|$)/ { print }' \
       | grep -c . || true
   )"
+  # Dependency manifests and lockfiles are excluded. Reverting package.json
+  # mid-run would change the very test command the sandbox is about to
+  # execute, and a routine dependency bump that happens to touch any test file
+  # would be misread as a guarded-config change. Those diffs are already
+  # served by the no-mutable-source path below.
   if [ "$CHANGED_TEST_COUNT" -gt 0 ]; then
     while IFS= read -r CONFIG_CANDIDATE; do
       CANDIDATES+=("$CONFIG_CANDIDATE")
@@ -138,6 +143,8 @@ if [ "${#CANDIDATES[@]}" -eq 0 ]; then
       git -C "$ROOT" diff --name-only --diff-filter=AM "$BASE..$HEAD" -- \
         | awk '
           /(^|\/)(test|tests|spec|__tests__)(\/|$)/ { next }
+          /(^|\/)(package|package-lock|npm-shrinkwrap|composer|Cargo|Gemfile|go)\.(json|lock|toml|sum)$/ { next }
+          /(^|\/)(yarn|pnpm-lock|poetry|uv)\.(lock|toml)$/ { next }
           /\.(ya?ml|json|toml|ini|cfg|conf)$/ { print }
         '
     )
