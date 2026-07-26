@@ -89,7 +89,9 @@ describe("parseOwnerRepo", () => {
 
   it("parses a credential-embedded https github.com URL", () => {
     expect(
-      parseOwnerRepo("https://x-access-token:tok@github.com/buildproven/claude-kit.git"),
+      parseOwnerRepo(
+        "https://x-access-token:tok@github.com/buildproven/claude-kit.git",
+      ),
     ).toBe("buildproven/claude-kit");
   });
 
@@ -100,14 +102,18 @@ describe("parseOwnerRepo", () => {
   // always queries GitHub — silently auditing an unrelated same-named repo
   // instead of failing closed as BUI-391 requires.
   it("returns null for a same-shaped URL on a non-github.com host (https)", () => {
-    expect(parseOwnerRepo("https://gitlab.com/buildproven/claude-kit.git")).toBeNull();
+    expect(
+      parseOwnerRepo("https://gitlab.com/buildproven/claude-kit.git"),
+    ).toBeNull();
     expect(
       parseOwnerRepo("https://github.com.attacker.io/buildproven/claude-kit"),
     ).toBeNull();
   });
 
   it("returns null for a same-shaped URL on a non-github.com host (ssh)", () => {
-    expect(parseOwnerRepo("git@gitlab.com:buildproven/claude-kit.git")).toBeNull();
+    expect(
+      parseOwnerRepo("git@gitlab.com:buildproven/claude-kit.git"),
+    ).toBeNull();
     expect(
       parseOwnerRepo("ssh://git@bitbucket.org/buildproven/claude-kit.git"),
     ).toBeNull();

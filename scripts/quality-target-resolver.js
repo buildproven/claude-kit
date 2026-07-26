@@ -272,7 +272,9 @@ function resolveByPr(parsed, ctx) {
     // fall through to unscoped ambient resolution — that's the exact
     // collision bug BUI-391 fixes, just reached via a missing ctx field
     // instead of an unresolvable repo.
-    expectedRepo = getRepoForDir ? getRepoForDir(expandHome(parsed.path)) : null;
+    expectedRepo = getRepoForDir
+      ? getRepoForDir(expandHome(parsed.path))
+      : null;
     // --target-dir was supplied but its repo could not be determined (no
     // origin remote, non-GitHub remote URL, or the dir isn't a git checkout)
     // — or getRepoForDir itself wasn't provided. Fail closed either way.
