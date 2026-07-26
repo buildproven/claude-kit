@@ -410,7 +410,7 @@ describe("quality-mutation-check", () => {
     );
 
     expect(runMutation(root, manifest)).toMatch(
-      /mutation gate omitted: diff contains no executable source file to mutate/,
+      /mutation gate omitted: diff contains no source file to mutate/,
     );
 
     const state = JSON.parse(readFileSync(manifest, "utf8"));
@@ -424,6 +424,79 @@ describe("quality-mutation-check", () => {
       mutatedPaths: [],
       testFailureObserved: false,
     });
+  });
+
+  it("still runs the gate when the diff changes only test files", () => {
+    // The candidate filter drops test paths, so a test-only diff also yields
+    // zero candidates. It must NOT be waved through as "no mutable source" —
+    // otherwise weakening a test would bypass mutation verification.
+    const root = mkdtempSync(path.join(tmpdir(), "quality-mutation-testonly-"));
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.name", "Quality Test"]);
+    git(root, ["config", "user.email", "quality@example.com"]);
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        scripts: {
+          lint: "true",
+          test: "node __tests__/logic.test.js",
+          "security:audit": "true",
+        },
+      }),
+    );
+    writeFileSync(
+      path.join(root, "logic.js"),
+      "exports.isAllowed = () => 1;\n",
+    );
+    execFileSync("mkdir", ["-p", path.join(root, "__tests__")]);
+    writeFileSync(
+      path.join(root, "__tests__", "logic.test.js"),
+      "require('../logic');\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "base"]);
+    git(root, ["remote", "add", "origin", root]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "-c", "feature"]);
+
+    writeFileSync(
+      path.join(root, "__tests__", "logic.test.js"),
+      "const { isAllowed } = require('../logic');\nif (!isAllowed()) process.exit(1);\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-qm", "test: tighten logic coverage"]);
+
+    const manifest = execFileSync(
+      "node",
+      [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
+      { cwd: root, encoding: "utf8" },
+    ).trim();
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "risk",
+        manifest,
+        "--tier",
+        "high",
+        "--task-type",
+        "feature",
+        "--score",
+        "50",
+        "--agents",
+        "2",
+        "--codex-depth",
+        "high",
+        "--codex-rounds",
+        "1",
+      ],
+      { cwd: root },
+    );
+
+    expect(() => runMutation(root, manifest)).toThrow();
+
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.mutation).toBeNull();
   });
 
   it("still runs the gate when a manifest change also touches source", () => {

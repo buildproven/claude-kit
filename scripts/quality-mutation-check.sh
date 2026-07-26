@@ -104,14 +104,26 @@ if [ "${#CANDIDATES[@]}" -eq 0 ]; then
   # This is gated on CANDIDATES being empty, so it can never mask a real
   # mutation failure: when executable source did change, the gate still runs
   # and a failed run still exits non-zero below.
+  # An empty CANDIDATES set is NOT sufficient on its own: the filter above
+  # deliberately drops test paths, so a test-only diff also yields zero
+  # candidates. Skipping on that would let a weakened test bypass the gate,
+  # which previously failed closed. Recount the diff without the test
+  # exclusion and require that no source file of any kind changed.
+  SOURCE_ENTRY_COUNT="$(
+    git -C "$ROOT" diff --name-only --diff-filter=AM "$BASE..$HEAD" -- \
+      | awk '
+        /\.(js|cjs|mjs|jsx|ts|tsx|py|rb|go|java|kt|rs|c|cc|cpp|h|sh|bash|zsh)$/ { print }
+      ' \
+      | grep -c . || true
+  )"
   SKIP_METHOD=""
   SKIP_REASON=""
   if [ "$DIFF_ENTRY_COUNT" -gt 0 ] && [ "$DIFF_ENTRY_COUNT" -eq "$GITLINK_ENTRY_COUNT" ]; then
     SKIP_METHOD="gitlink-skip"
     SKIP_REASON="diff touches only submodule pointers (gitlinks), no source to mutate"
-  elif [ "$DIFF_ENTRY_COUNT" -gt 0 ]; then
+  elif [ "$DIFF_ENTRY_COUNT" -gt 0 ] && [ "$SOURCE_ENTRY_COUNT" -eq 0 ]; then
     SKIP_METHOD="no-mutable-source"
-    SKIP_REASON="diff contains no executable source file to mutate"
+    SKIP_REASON="diff contains no source file to mutate"
   fi
   if [ -n "$SKIP_METHOD" ]; then
     mkdir -p "$(dirname "$ARTIFACT")"
