@@ -1143,7 +1143,7 @@ wait
       gh,
       `#!/usr/bin/env bash
 if [ "$1 $2" = "pr view" ]; then
-  printf '%s\\n' '{"number":14,"headRefName":"feature","headRefOid":"${head}","headRepository":{"nameWithOwner":"owner/repo"},"isCrossRepository":false,"baseRefName":"main","baseRefOid":"${base}"}'
+  printf '%s\\n' '{"number":14,"headRefName":"feature","headRefOid":"${head}","headRepository":{"nameWithOwner":"owner/repo"},"isCrossRepository":false,"baseRefName":"main","baseRefOid":"${base}","url":"https://github.com/owner/repo/pull/14"}'
   exit 0
 fi
 if [ "$1 $2" = "repo view" ]; then
@@ -1154,6 +1154,27 @@ exit 1
 `,
     );
     chmodSync(gh, 0o755);
+    // quality-target-resolver.js's getRepoForDir requires a GitHub-shaped
+    // origin remote to resolve --target-dir's repo (BUI-391 fail-closed
+    // cross-check). The repo() fixture's real origin is a local filesystem
+    // path (so bootstrap's own fetch/ls-remote against it keep working); this
+    // `git` shim intercepts only `remote get-url origin` and reports a
+    // GitHub-shaped URL matching the mock `gh`'s repo, forwarding every other
+    // subcommand straight through to the real `git` on $PATH.
+    const gitShim = path.join(bin, "git");
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    writeFileSync(
+      gitShim,
+      `#!/usr/bin/env bash
+# quality-target-resolver.js calls: git -C <dir> remote get-url origin
+if [ "$1" = "-C" ] && [ "$3 $4 $5" = "remote get-url origin" ]; then
+  printf '%s\\n' "https://github.com/owner/repo.git"
+  exit 0
+fi
+exec "${realGit}" "$@"
+`,
+    );
+    chmodSync(gitShim, 0o755);
     const result = spawnSync("node", [WRAPPER, BOOTSTRAP], {
       cwd: root,
       input: JSON.stringify({
