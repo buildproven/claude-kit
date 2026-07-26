@@ -1567,6 +1567,9 @@ function help() {
       "worktree-manager migrate --repo <path> (--dry-run|--apply)",
       "worktree-manager repair --repo <path> [--primary <path>] [--old-repo-name <name>] [--apply]",
     ],
+    notes: [
+      "Lifecycle operations (create/lock/unlock/remove/reconcile) serialize per worktree via a lock directory at <git-common-dir>/worktree-manager/locks/<hash>.lock. A lock left by a crashed process on a DIFFERENT host cannot be verified dead (liveness checks only run when owner.hostname matches this machine) and is retained forever rather than guessed stale. If you've independently confirmed the owning host/process is gone, recover by manually deleting that lock directory (recursively) once you've verified it is safe to do so.",
+    ],
   };
 }
 
