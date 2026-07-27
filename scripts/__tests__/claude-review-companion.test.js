@@ -310,7 +310,42 @@ describe("claude-review-companion.sh", () => {
       "claude-sonnet-4-6[1m]",
     ]);
     expect(r.code).toBe(0);
-    expect(r.stderr).toMatch(/refusing to pin a 1M-context model/);
+    expect(r.stderr).toMatch(
+      /refusing 1M-context review model.*using claude-sonnet-5/,
+    );
+  });
+
+  it("uses a non-1M model instead of inheriting the parent session model", () => {
+    const d = tmpdir();
+    const bin = path.join(d, "bin");
+    const argsFile = path.join(d, "claude-args.txt");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+    fs.writeFileSync(path.join(d, "identity.json"), "{}\n");
+    fs.writeFileSync(
+      path.join(bin, "claude"),
+      `#!/usr/bin/env bash\nprintf '%s\\n' "$@" > "${argsFile}"\nprintf '%s\\n' '{"result":"No findings\\n<<<NO FINDINGS>>>","is_error":false,"stop_reason":"end_turn"}'\n`,
+      { mode: 0o755 },
+    );
+
+    const r = run(
+      [
+        "--diff-file",
+        path.join(d, "diff.txt"),
+        "--out-dir",
+        path.join(d, "out"),
+        "--agents",
+        "code-reviewer",
+        "--identity-file",
+        path.join(d, "identity.json"),
+      ],
+      { env: { PATH: `${bin}:${process.env.PATH}` } },
+    );
+
+    expect(r.code, r.stderr).toBe(0);
+    expect(fs.readFileSync(argsFile, "utf8")).toContain(
+      "--model\nclaude-sonnet-5\n",
+    );
   });
 
   describe("agent-file resolution (drift guard)", () => {
