@@ -2228,6 +2228,10 @@ function recordJudge(manifest, options) {
 
 function providerFindings(manifest) {
   const findings = [];
+  // BUI-521: agents whose findings artifact was a bare delimiter with no body.
+  // Collected across all covered reviews and raised as one malformed-output
+  // failure below, rather than silently dropped or counted as findings.
+  const inconclusiveAgents = [];
   for (const review of coveredReviews(manifest)) {
     const reviewFindingsStart = findings.length;
     const inventory = parseJson(
@@ -2328,11 +2332,7 @@ function providerFindings(manifest) {
       // (blank-line-preserving) lines up to the delimiter, not
       // `nonBlankLines` — reusing the already-blank-filtered array would
       // silently collapse paragraph spacing between multiple findings (3
-      // review agents caught this in one round). If stripping leaves
-      // nothing (a reviewer emitted only the delimiter with no findings
-      // text above it — a malformed response, not a real finding
-      // description), fall back to the raw text so the finding is never
-      // silently empty.
+      // review agents caught this in one round).
       const allLines = text.split(/\r?\n/);
       const strippedBody =
         lastLine === "<<<FINDINGS REPORTED>>>"
@@ -2341,7 +2341,26 @@ function providerFindings(manifest) {
               .join("\n")
               .replace(/\n+$/, "")
           : text;
-      const body = strippedBody.trim() ? strippedBody : text;
+      // BUI-521: a reviewer that emits ONLY the delimiter, with no finding
+      // text above it, produced a malformed response — not a finding. An
+      // earlier version fell back to the raw text "so the finding is never
+      // silently empty", which manufactured a BLOCKING finding whose entire
+      // body was the sentinel string. That is unfixable by construction: the
+      // campaign reports "actionable code findings remain" with nothing to
+      // act on, so it can never converge and can never merge. It also
+      // corrupts precision telemetry, scoring a malformed response as a
+      // caught defect.
+      //
+      // Malformed and inconclusive provider output is already a distinct,
+      // fail-closed diagnosis with bounded per-provider fallback. Route this
+      // there instead: still blocks the merge, but with the right reason and
+      // a retry path. Do NOT treat it as clean — absent findings text is not
+      // evidence of an absent finding.
+      if (!strippedBody.trim()) {
+        inconclusiveAgents.push(item.name);
+        continue;
+      }
+      const body = strippedBody;
       findings.push({
         id: crypto
           .createHash("sha256")
@@ -2353,6 +2372,15 @@ function providerFindings(manifest) {
         source: item.name,
       });
     }
+  }
+  // Fail closed, and distinctly from "actionable code findings remain" — the
+  // operator needs to know the panel produced no usable verdict, not hunt for
+  // a defect that was never described.
+  if (inconclusiveAgents.length) {
+    throw new Error(
+      `inconclusive provider findings: ${inconclusiveAgents.join(", ")} ` +
+        "reported findings but wrote no finding text (malformed review output)",
+    );
   }
   return findings;
 }
