@@ -3670,25 +3670,40 @@ exit 1
     expect(context.findings[0].body).not.toContain("<<<FINDINGS REPORTED>>>");
   });
 
-  it("BUI-463: a bare <<<FINDINGS REPORTED>>> with no preceding text never produces an empty finding body", () => {
-    // All 6 review agents converged on this exact edge case in one round:
-    // stripping the delimiter line from a response that consists of ONLY
-    // that delimiter (a malformed provider response) left an empty body,
-    // which is silently useless to a human or the judge. Fall back to the
-    // raw text so the finding is never empty.
+  it("BUI-521: a bare <<<FINDINGS REPORTED>>> is malformed output, not a blocking finding", () => {
+    // Supersedes the BUI-463 assertion that this shape must yield a
+    // non-empty finding body. That framing asked "is the body empty?" when
+    // the real question was "should a finding exist at all?" — six agents
+    // converged on the narrower question and shipped the bug.
+    //
+    // Falling back to the raw text made a BLOCKING finding whose entire body
+    // was the sentinel. Unfixable by construction: the campaign reports
+    // "actionable code findings remain" with nothing to act on, so it never
+    // converges and never merges (191 such phantom findings across 10+ PRs
+    // locally, incl. merged #633/#638). It also scored a malformed response
+    // as a caught defect in precision telemetry.
+    //
+    // Correct handling is the existing inconclusive path: still fail closed,
+    // but with a diagnosis that names the real problem and has a retry route.
     const root = repo("bare-findings-reported-delimiter-only");
     const manifest = create(root);
     prepareCodexReview(root, manifest, [], "<<<FINDINGS REPORTED>>>");
-    const context = JSON.parse(
-      execFileSync("node", [INVOCATION, "judge-context", manifest], {
-        cwd: root,
-        encoding: "utf8",
-      }),
-    );
-    expect(context.findings).toHaveLength(1);
-    expect(context.findings[0].severity).toBe("blocking");
-    expect(context.findings[0].body.trim()).not.toBe("");
-    expect(context.findings[0].title.trim()).not.toBe("");
+    let stderr = "";
+    expect(() => {
+      try {
+        execFileSync("node", [INVOCATION, "judge-context", manifest], {
+          cwd: root,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      } catch (err) {
+        stderr = err.stderr || "";
+        throw err;
+      }
+    }).toThrow();
+    // Named as inconclusive/malformed — NOT as an actionable code finding.
+    expect(stderr).toMatch(/inconclusive provider findings/);
+    expect(stderr).toMatch(/wrote no finding text/);
   });
 
   it("BUI-463: stripping the delimiter preserves paragraph breaks between multiple findings", () => {
