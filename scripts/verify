@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# The authoritative, non-mutating local quality gate.
+#
+# This is the one command that means "claude-kit is green". CI invokes this
+# script too, so the local and hosted definitions cannot drift apart. Keep
+# deterministic, inexpensive checks first; add any new required quality gate
+# here rather than directly to the workflow.
+set -uo pipefail
+
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+
+run_gate() {
+  local name="$1"
+  shift
+  local log
+  log="$(mktemp "${TMPDIR:-/tmp}/claude-kit-verify-${name}.XXXXXX")" || {
+    printf 'verify: could not create a temporary log for %s\n' "$name" >&2
+    return 1
+  }
+
+  printf '\n=== %s ===\n' "$name"
+  if "$@" >"$log" 2>&1; then
+    printf 'OK %s\n' "$name"
+  else
+    cat "$log"
+    printf 'FAIL %s\n' "$name" >&2
+    FAILED+=("$name")
+  fi
+  rm -f "$log"
+}
+
+FAILED=()
+run_gate format npm run --silent format:check
+run_gate lint npm run --silent lint
+run_gate shell-patterns npm run --silent test:patterns
+run_gate command-readme npm run --silent check:commands
+run_gate command-skill-contract python3 scripts/csc_lint.py --strict
+run_gate skill-size bash scripts/check-skill-size.sh
+run_gate plugin-manifest claude plugin validate .claude-plugin/plugin.json
+run_gate marketplace-manifest claude plugin validate .claude-plugin/marketplace.json
+run_gate tests npm test
+run_gate dependency-audit npm run --silent security:audit
+run_gate license-policy npm run --silent license:check
+run_gate semgrep npm run --silent security:scan:ci
+
+printf '\n'
+if [ "${#FAILED[@]}" -gt 0 ]; then
+  printf 'verify FAILED: %s\n' "${FAILED[*]}" >&2
+  exit 1
+fi
+
+printf 'verify passed — all required gates are green\n'

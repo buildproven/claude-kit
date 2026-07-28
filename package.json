@@ -12,6 +12,7 @@
     "url": "https://github.com/buildproven"
   },
   "scripts": {
+    "verify": "bash scripts/verify",
     "prepare": "[ \"$CI\" = \"true\" ] && echo 'Skipping Husky in CI' || husky",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

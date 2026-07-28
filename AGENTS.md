@@ -30,6 +30,10 @@ When editing, you are editing the source that both surfaces read. There is no bu
 # Install (symlink commands/skills/agents/scripts into ~/.claude/)
 ./install.sh
 
+# Definition of done — authoritative, non-mutating, and also run by CI
+./scripts/verify
+npm run verify
+
 # Lint (ESLint 9 flat config, security + defensive plugins)
 npm run lint
 npm run lint:fix

@@ -47,39 +47,7 @@ jobs:
       - name: Install Semgrep
         run: python -m pip install semgrep==1.168.0
 
-      # --- lint and format (was: lint-and-format) ---
-      - name: Format check
-        run: npm run format:check
-      - name: Lint
-        run: npm run lint
-      - name: Pattern checks
-        run: npm run test:patterns
-      - name: Command README sync
-        run: bash scripts/check-command-readme.sh
-      - name: CSC-1 command/skill contract (strict)
-        run: python3 scripts/csc_lint.py --strict
-
-      # Skills over ~5k tokens are SILENTLY TRUNCATED after compaction (only the
-      # first 5,000 tokens of each are re-attached). #70 split skills/quality
-      # back under budget — this is now a hard gate so the regression can't
-      # recur silently.
-      - name: Skill size (compaction re-attach budget)
-        run: bash scripts/check-skill-size.sh
       - name: Install Claude Code CLI
         run: npm install -g @anthropic-ai/claude-code
-      - name: Plugin manifest validation
-        run: |
-          claude plugin validate .claude-plugin/plugin.json
-          claude plugin validate .claude-plugin/marketplace.json
-
-      # --- tests (was: test) ---
-      - name: Run tests
-        run: npm test
-
-      # --- security (was: security) ---
-      - name: Dependency audit
-        run: npm audit --audit-level high
-      - name: License policy
-        run: npm run license:check
-      - name: Semgrep security scan
-        run: npm run security:scan:ci
+      - name: Authoritative verification
+        run: ./scripts/verify
