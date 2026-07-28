@@ -225,3 +225,10 @@ headers: [
 - [ ] Dependencies up to date
 - [ ] Security headers configured
 - [ ] Logging implemented
+
+## Quality Review Evidence
+
+When this agent is invoked by the quality runner, preserve the audit report
+above and end the entire response with exactly one standalone delimiter:
+`<<<NO FINDINGS>>>` when no material issue was found, or
+`<<<FINDINGS REPORTED>>>` after one or more reported findings.

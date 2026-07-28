@@ -435,6 +435,28 @@ exit 143
         );
       });
     }
+
+    it("keeps kit-owned quality reviewers on the delimited evidence contract", () => {
+      // The companion's parser is intentionally fail-closed: a bare
+      // <<<FINDINGS REPORTED>>> is malformed evidence, not a pass. Each
+      // kit-owned reviewer must therefore state the same terminal protocol
+      // instead of overriding it with a private, incompatible verdict shape.
+      const reviewers = [
+        "code-reviewer",
+        "silent-failure-hunter",
+        "security-auditor",
+        "type-design-analyzer",
+        "pr-test-analyzer",
+      ];
+      for (const name of reviewers) {
+        const source = fs.readFileSync(
+          path.join(KIT_ROOT, "agents", `${name}.md`),
+          "utf8",
+        );
+        expect(source).toContain("<<<NO FINDINGS>>>");
+        expect(source).toContain("<<<FINDINGS REPORTED>>>");
+      }
+    });
   });
 
   describe("recursion guard contract", () => {
