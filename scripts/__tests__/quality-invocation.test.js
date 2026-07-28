@@ -2520,7 +2520,7 @@ exit 1
     expect(calls.indexOf("pr checks 1 --required --watch")).toBeLessThan(
       calls.indexOf("pr merge 1"),
     );
-  }, 40_000);
+  }, 90_000);
 
   it("rejects cross-repository PRs before creating unusable state", () => {
     const root = repo("cross-repo");

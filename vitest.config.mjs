@@ -4,13 +4,17 @@ export default {
     environment: "node",
     // Many suites shell out to real bash and do filesystem work (symlinking 14
     // hooks, syncing skill trees, running install scripts). Under Vitest's
-    // parallel worker pool on a loaded machine that legitimately exceeds the
-    // 5000ms default, producing "Test timed out in 5000ms" flakes that pass in
-    // isolation and on CI (BUI-350). Give every test headroom so slow-but-
-    // correct work is never mistaken for a hang; a genuine deadlock still trips
-    // this bound.
-    testTimeout: 20_000,
-    hookTimeout: 20_000,
+    // parallel worker pool on a loaded machine can legitimately exceed the
+    // 5000ms default. The repository's integration-style tests invoke real
+    // Git, npm, and filesystem operations and have reached ~34s under load;
+    // give them sufficient headroom so slow-but-correct work is not mistaken
+    // for a hang. A genuine deadlock still trips this bounded timeout.
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
+    // These integration suites create Git repositories, worktrees, and npm
+    // subprocesses. A four-worker cap preserves parallel feedback without
+    // starving those child processes on a developer machine.
+    maxWorkers: 4,
     include: [
       "scripts/__tests__/**/*.test.js",
       "eslint-plugin-defensive/__tests__/**/*.test.js",
