@@ -103,7 +103,11 @@ printf '%s\\n' '{"response":"{\\"verdict\\":\\"approve\\",\\"summary\\":\\"No ac
       cwd: repo,
       env,
       encoding: "utf8",
-      timeout: 30_000,
+      // This integration test creates real Git repositories and invokes the
+      // governed shell review pipeline. Keep its subprocess cap consistent
+      // with vitest.config.mjs so a loaded machine is not misclassified as a
+      // Gemini outage before the runner's own bounded timeout can decide it.
+      timeout: 60_000,
     });
 
     expect(result.status).toBe(0);
@@ -121,5 +125,5 @@ printf '%s\\n' '{"response":"{\\"verdict\\":\\"approve\\",\\"summary\\":\\"No ac
     expect(body.governor.providerAttempts).toHaveLength(1);
     expect(body.governor.providerSecondsUsed).toBeGreaterThanOrEqual(1);
     expect(body.governor.activeExecution).toBeNull();
-  }, 30_000);
+  }, 60_000);
 });
