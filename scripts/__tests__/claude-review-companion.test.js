@@ -348,6 +348,39 @@ describe("claude-review-companion.sh", () => {
     );
   });
 
+  it("marks a bare findings-reported delimiter inconclusive before recording review evidence", () => {
+    const d = tmpdir();
+    const bin = path.join(d, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+    fs.writeFileSync(path.join(d, "identity.json"), "{}\n");
+    fs.writeFileSync(
+      path.join(bin, "claude"),
+      `#!/usr/bin/env bash\nprintf '%s\\n' '{"result":"<<<FINDINGS REPORTED>>>","is_error":false,"stop_reason":"end_turn"}'\n`,
+      { mode: 0o755 },
+    );
+
+    const out = path.join(d, "out");
+    const r = run(
+      [
+        "--diff-file",
+        path.join(d, "diff.txt"),
+        "--out-dir",
+        out,
+        "--agents",
+        "code-reviewer",
+        "--identity-file",
+        path.join(d, "identity.json"),
+      ],
+      { env: { PATH: `${bin}:${process.env.PATH}` } },
+    );
+
+    expect(r.code).toBe(4);
+    expect(
+      fs.readFileSync(path.join(out, "code-reviewer.findings.txt"), "utf8"),
+    ).toMatch(/INCONCLUSIVE: agent 'code-reviewer' reported findings without finding text/);
+  });
+
   describe("agent-file resolution (drift guard)", () => {
     // The whole design rests on pointing --append-system-prompt-file at the
     // REAL agent bodies (no inlined copies to drift). Assert the kit-local

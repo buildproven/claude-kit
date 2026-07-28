@@ -335,6 +335,24 @@ run_agent() {
   # mark INCONCLUSIVE rather than crash the merge or fake a clean review.
   if result="$(printf '%s' "$raw" | jq -r 'if (.is_error == true) or (.result == null) then empty else .result end' 2>/dev/null)" \
      && [ -n "$result" ]; then
+    # A bare "findings reported" delimiter is malformed, not a finding and
+    # not a successful review. Detect it at the producer boundary so the
+    # companion returns its existing inconclusive status; otherwise the later
+    # judge correctly rejects the artifact but cannot retry an already-recorded
+    # review checkpoint for the same HEAD.
+    if printf '%s\n' "$result" | awk '
+      { lines[NR] = $0; if ($0 ~ /[^[:space:]]/) last = NR }
+      END {
+        if (!last || lines[last] != "<<<FINDINGS REPORTED>>>") exit 1
+        for (i = 1; i < last; i++) {
+          if (lines[i] ~ /[^[:space:]]/) exit 1
+        }
+        exit 0
+      }
+    '; then
+      echo "INCONCLUSIVE: agent '$agent' reported findings without finding text — human review required" > "$out"
+      return 3
+    fi
     printf '%s\n' "$result" > "$out"
     return 0
   fi
