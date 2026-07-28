@@ -900,13 +900,22 @@ function governorInteger(name, fallback, label, minimum = 0) {
 
 function buildGovernor(head) {
   const startedAtEpoch = Math.floor(Date.now() / 1000);
+  const sharedDeadlineConfigured =
+    process.env.BS_QUALITY_SHARED_DEADLINE_EPOCH !== undefined;
+  const trainReservationConfigured =
+    process.env.BS_QUALITY_TRAIN_RESERVATION_SECONDS !== undefined;
+  if (sharedDeadlineConfigured !== trainReservationConfigured) {
+    throw new Error(
+      "BS_QUALITY_SHARED_DEADLINE_EPOCH and BS_QUALITY_TRAIN_RESERVATION_SECONDS must be set together",
+    );
+  }
   const providerDeadlineSeconds = governorInteger(
     "BS_QUALITY_MAX_PROVIDER_SECONDS",
     "3600",
     "provider deadline seconds",
     1,
   );
-  const sharedDeadlineEpoch = process.env.BS_QUALITY_SHARED_DEADLINE_EPOCH
+  const sharedDeadlineEpoch = sharedDeadlineConfigured
     ? governorInteger(
         "BS_QUALITY_SHARED_DEADLINE_EPOCH",
         "0",
@@ -914,8 +923,7 @@ function buildGovernor(head) {
         1,
       )
     : null;
-  const trainReservationSeconds = process.env
-    .BS_QUALITY_TRAIN_RESERVATION_SECONDS
+  const trainReservationSeconds = trainReservationConfigured
     ? governorInteger(
         "BS_QUALITY_TRAIN_RESERVATION_SECONDS",
         "0",

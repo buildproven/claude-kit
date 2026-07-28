@@ -481,6 +481,29 @@ describe("quality invocation manifest", () => {
     expect(result.stderr).toMatch(/shared merge-train deadline has elapsed/);
   });
 
+  it.each([
+    [
+      "BS_QUALITY_SHARED_DEADLINE_EPOCH",
+      String(Math.floor(Date.now() / 1000) + 60),
+    ],
+    ["BS_QUALITY_TRAIN_RESERVATION_SECONDS", "120"],
+  ])("rejects a partial merge-train lease environment: %s", (name, value) => {
+    const root = repo(`partial-merge-train-lease-${name}`);
+    const result = spawnSync(
+      "node",
+      [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: { ...process.env, [name]: value },
+      },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(
+      /BS_QUALITY_SHARED_DEADLINE_EPOCH and BS_QUALITY_TRAIN_RESERVATION_SECONDS must be set together/,
+    );
+  });
+
   it("authorizes Gemini inside the existing provider attempt budget", () => {
     const root = repo("gemini-provider-attempt");
     const manifest = create(root, []);

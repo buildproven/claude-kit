@@ -132,12 +132,21 @@ describe("merge-train batch controller", () => {
       reservationId: "buildproven/kit#42",
       reservedSeconds: 180,
     };
-    const first = reserveAdmission(null, request);
+    const initial = {
+      schemaVersion: 1,
+      deadlineEpoch: request.deadlineEpoch,
+      budgetSeconds: request.budgetSeconds,
+      reservations: {},
+    };
+    const first = reserveAdmission(initial, request);
     expect(first).toMatchObject({
       admitted: true,
       reused: false,
       remainingSeconds: 120,
     });
+    expect(first.state).not.toBe(initial);
+    expect(first.state.reservations).not.toBe(initial.reservations);
+    expect(initial.reservations).toEqual({});
     const retry = reserveAdmission(first.state, request);
     expect(retry).toMatchObject({
       admitted: true,

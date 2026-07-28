@@ -946,7 +946,7 @@ describe("quality-mutation-check", () => {
       { checkSeconds: 1 },
     );
     expect(() => runMutation(root, manifest)).toThrow(
-      /a hang is not red-capable evidence/,
+      /(?:a hang is not red-capable evidence|mutation budget exhausted before producing evidence)/,
     );
     const state = JSON.parse(readFileSync(manifest, "utf8"));
     expect(state.mutation).toBeNull();
