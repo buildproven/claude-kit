@@ -427,8 +427,14 @@ exit 143
     ).toMatchObject({
       agent: "code-reviewer",
       category: "marker-only-findings",
-      artifact: "code-reviewer.result.json",
+      artifact: "code-reviewer.marker-only.result.json",
     });
+    expect(
+      fs.readFileSync(
+        path.join(out, "code-reviewer.marker-only.result.json"),
+        "utf8",
+      ),
+    ).toContain('"result":"<<<FINDINGS REPORTED>>>"');
   });
 
   describe("agent-file resolution (drift guard)", () => {
