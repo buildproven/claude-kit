@@ -75,7 +75,7 @@ in every command. Never source or eval manifest content.
 Before a command block needs state, validate it and fetch only required fields:
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
+QUALITY_SCRIPTS_DIR="$(for helper in "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-runtime-dir.sh" "${CLAUDE_KIT_ROOT:-}/scripts/quality-runtime-dir.sh" "$HOME/.claude/scripts/quality-runtime-dir.sh" "./scripts/quality-runtime-dir.sh"; do [ -x "$helper" ] && { "$helper"; break; }; done)"
 bash "$QUALITY_SCRIPTS_DIR/quality-load-root.sh" \
   --manifest "<exact-manifest-path>"
 GIT_ROOT="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" \
@@ -88,7 +88,7 @@ Do not source Bash-only scripts from zsh.
 ## 2. Risk and agent contract
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
+QUALITY_SCRIPTS_DIR="$(for helper in "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-runtime-dir.sh" "${CLAUDE_KIT_ROOT:-}/scripts/quality-runtime-dir.sh" "$HOME/.claude/scripts/quality-runtime-dir.sh" "./scripts/quality-runtime-dir.sh"; do [ -x "$helper" ] && { "$helper"; break; }; done)"
 bash "$QUALITY_SCRIPTS_DIR/quality-risk-resolve.sh" \
   --manifest "<exact-manifest-path>"
 bash "$QUALITY_SCRIPTS_DIR/quality-select-agents.sh" \
@@ -165,7 +165,7 @@ risk-adjusted timeout while primary and fallback providers share one provider
 ledger; changing providers cannot mint more execution time.
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
+QUALITY_SCRIPTS_DIR="$(for helper in "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-runtime-dir.sh" "${CLAUDE_KIT_ROOT:-}/scripts/quality-runtime-dir.sh" "$HOME/.claude/scripts/quality-runtime-dir.sh" "./scripts/quality-runtime-dir.sh"; do [ -x "$helper" ] && { "$helper"; break; }; done)"
 bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
   --manifest "<exact-manifest-path>" --name lint
 bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
@@ -181,7 +181,7 @@ files; it never modifies the reviewed checkout. Low and medium campaigns omit
 this check by policy.
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
+QUALITY_SCRIPTS_DIR="$(for helper in "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-runtime-dir.sh" "${CLAUDE_KIT_ROOT:-}/scripts/quality-runtime-dir.sh" "$HOME/.claude/scripts/quality-runtime-dir.sh" "./scripts/quality-runtime-dir.sh"; do [ -x "$helper" ] && { "$helper"; break; }; done)"
 TIER="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" field "<exact-manifest-path>" risk.tier)"
 case "$TIER" in
   high|critical)
@@ -209,7 +209,7 @@ When `options.skipTests` is true, record the config-only decision explicitly
 instead of inventing a passing test command:
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
+QUALITY_SCRIPTS_DIR="$(for helper in "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-runtime-dir.sh" "${CLAUDE_KIT_ROOT:-}/scripts/quality-runtime-dir.sh" "$HOME/.claude/scripts/quality-runtime-dir.sh" "./scripts/quality-runtime-dir.sh"; do [ -x "$helper" ] && { "$helper"; break; }; done)"
 bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
   --manifest "<exact-manifest-path>" --name test --skip \
   --reason "config-only repository has no executable test suite"
@@ -222,7 +222,7 @@ behaving like branch scope.
 Formatting remediation must use:
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
+QUALITY_SCRIPTS_DIR="$(for helper in "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-runtime-dir.sh" "${CLAUDE_KIT_ROOT:-}/scripts/quality-runtime-dir.sh" "$HOME/.claude/scripts/quality-runtime-dir.sh" "./scripts/quality-runtime-dir.sh"; do [ -x "$helper" ] && { "$helper"; break; }; done)"
 node "$QUALITY_SCRIPTS_DIR/quality-format.js" \
   --manifest "<exact-manifest-path>" -- <changed-files...>
 ```
@@ -236,7 +236,7 @@ directly to Prettier.
 Before every review:
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
+QUALITY_SCRIPTS_DIR="$(for helper in "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-runtime-dir.sh" "${CLAUDE_KIT_ROOT:-}/scripts/quality-runtime-dir.sh" "$HOME/.claude/scripts/quality-runtime-dir.sh" "./scripts/quality-runtime-dir.sh"; do [ -x "$helper" ] && { "$helper"; break; }; done)"
 node "$QUALITY_SCRIPTS_DIR/quality-run-governor.js" \
   bump-round "<exact-manifest-path>" || exit 1
 bash "$QUALITY_SCRIPTS_DIR/quality-run-review.sh" \
@@ -311,7 +311,7 @@ The runtime rejects missing, extra, or stale finding IDs and derives the
 blocking count mechanically:
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
+QUALITY_SCRIPTS_DIR="$(for helper in "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-runtime-dir.sh" "${CLAUDE_KIT_ROOT:-}/scripts/quality-runtime-dir.sh" "$HOME/.claude/scripts/quality-runtime-dir.sh" "./scripts/quality-runtime-dir.sh"; do [ -x "$helper" ] && { "$helper"; break; }; done)"
 JUDGE_ARTIFACT="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" field \
   "<exact-manifest-path>" stateRoot)/judge-input.json"
 node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" judge-context \
@@ -336,7 +336,7 @@ Before a terminal stop for remaining code findings, print the separated
 diagnosis:
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-terminal-status.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
+QUALITY_SCRIPTS_DIR="$(for helper in "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-runtime-dir.sh" "${CLAUDE_KIT_ROOT:-}/scripts/quality-runtime-dir.sh" "$HOME/.claude/scripts/quality-runtime-dir.sh" "./scripts/quality-runtime-dir.sh"; do [ -x "$helper" ] && { "$helper"; break; }; done)"
 node "$QUALITY_SCRIPTS_DIR/quality-terminal-status.js" \
   --manifest "<exact-manifest-path>" --category code-findings
 ```
@@ -377,7 +377,7 @@ It documents how old readers interpret the canonical fields above; new quality
 campaigns emit only the `Quality-*` schema.
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
+QUALITY_SCRIPTS_DIR="$(for helper in "${CLAUDE_PLUGIN_ROOT:-}/scripts/quality-runtime-dir.sh" "${CLAUDE_KIT_ROOT:-}/scripts/quality-runtime-dir.sh" "$HOME/.claude/scripts/quality-runtime-dir.sh" "./scripts/quality-runtime-dir.sh"; do [ -x "$helper" ] && { "$helper"; break; }; done)"
 bash "$QUALITY_SCRIPTS_DIR/quality-stamp-and-merge.sh" \
   --manifest "<exact-manifest-path>"
 ```
