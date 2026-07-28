@@ -417,6 +417,18 @@ exit 143
     ).toMatch(
       /INCONCLUSIVE: agent 'code-reviewer' reported findings without finding text/,
     );
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(out, "code-reviewer.marker-only.json"),
+          "utf8",
+        ),
+      ),
+    ).toMatchObject({
+      agent: "code-reviewer",
+      category: "marker-only-findings",
+      artifact: "code-reviewer.result.json",
+    });
   });
 
   describe("agent-file resolution (drift guard)", () => {

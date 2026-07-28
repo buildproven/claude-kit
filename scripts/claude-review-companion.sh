@@ -363,6 +363,14 @@ run_agent() {
         exit 0
       }
     '; then
+      # Preserve a typed signal alongside the raw provider envelope. The
+      # caller may spend one separately governor-authorized panel retry only
+      # when every selected agent has this exact malformed-output shape.
+      jq -n \
+        --arg agent "$agent" \
+        --arg artifact "${agent##*:}.result.json" \
+        '{agent: $agent, category: "marker-only-findings", artifact: $artifact}' \
+        > "$OUT_DIR/${agent##*:}.marker-only.json"
       echo "INCONCLUSIVE: agent '$agent' reported findings without finding text — human review required" > "$out"
       return 3
     fi

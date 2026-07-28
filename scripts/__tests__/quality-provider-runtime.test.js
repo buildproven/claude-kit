@@ -136,6 +136,10 @@ describe("provider review runtime", () => {
 
   it("retries a marker-only Claude result once without weakening other failures", () => {
     const runner = readFileSync(RUN_REVIEW, "utf8");
+    const companion = readFileSync(
+      path.resolve(ROOT, "scripts", "claude-review-companion.sh"),
+      "utf8",
+    );
     expect(runner).toContain("claude_marker_only_result()");
     expect(runner).toContain(
       "Claude emitted a marker-only finding; retrying once",
@@ -143,15 +147,16 @@ describe("provider review runtime", () => {
     expect(runner).toContain(
       'if [ "$rc" -eq 4 ] && claude_marker_only_result; then',
     );
-    expect(runner).toContain("line=\"${line%$'\\r'}\"");
-    expect(runner).toContain("marker_only_seen=false");
     expect(runner).toContain(
-      "Retrying the full panel would overwrite that evidence.",
+      'marker_signal="${findings%.findings.txt}.marker-only.json"',
     );
+    expect(runner).toContain("marker_only_seen=false");
+    expect(runner).toContain("Retrying the full panel would overwrite it.");
     expect(runner).toContain(
       'if [ "${companion_args[$timeout_index]}" = "--timeout" ]; then',
     );
     expect(runner).toContain("any second malformed result remains fail-closed");
+    expect(companion).toContain('category: "marker-only-findings"');
   });
 
   it("kills the provider tree when the wrapper itself is cancelled", () => {

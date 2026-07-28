@@ -112,24 +112,16 @@ complete_provider_attempt() {
 }
 
 claude_marker_only_result() {
-  local findings last_nonblank nonempty_before line marker_only_seen
+  local findings marker_signal marker_only_seen
   marker_only_seen=false
   for findings in "$REVIEW_OUT"/*.findings.txt; do
     [ -f "$findings" ] || continue
-    last_nonblank=""
-    nonempty_before=false
-    while IFS= read -r line || [ -n "$line" ]; do
-      line="${line%$'\r'}"
-      [ -n "${line//[[:space:]]/}" ] || continue
-      if [ -n "$last_nonblank" ]; then nonempty_before=true; fi
-      last_nonblank="$line"
-    done < "$findings"
-    if [ "$last_nonblank" = "<<<FINDINGS REPORTED>>>" ] &&
-      [ "$nonempty_before" = false ]; then
+    marker_signal="${findings%.findings.txt}.marker-only.json"
+    if [ -f "$marker_signal" ]; then
       marker_only_seen=true
-    elif [ -n "$last_nonblank" ]; then
-      # Preserve any actual finding or clean structured result from another
-      # agent. Retrying the full panel would overwrite that evidence.
+    else
+      # Preserve any actual finding, clean result, timeout, or other failure
+      # from another agent. Retrying the full panel would overwrite it.
       return 1
     fi
   done
