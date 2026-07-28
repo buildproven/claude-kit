@@ -37,7 +37,10 @@ const WORKLOAD_BANDS = [
     verificationSeconds: 90,
     checkSeconds: 180,
     reviewReserveSeconds: 120,
-    checkReserveSeconds: 240,
+    // The kit's bounded integration suite performs real Git/npm work. Give a
+    // small change one six-minute overrun reserve so the executable quality
+    // gate can finish rather than terminating a still-progressing test run.
+    checkReserveSeconds: 360,
   },
   {
     name: "medium",

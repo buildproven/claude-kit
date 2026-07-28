@@ -31,6 +31,7 @@ describe("quality runtime planning", () => {
       large.reviewSeconds,
       huge.reviewSeconds,
     ]).toEqual([75, 120, 210, 330, 480]);
+    expect(small.checkReserveSeconds).toBe(360);
   });
 
   it("adds per-file overhead so scattered changes cost more than one file", () => {

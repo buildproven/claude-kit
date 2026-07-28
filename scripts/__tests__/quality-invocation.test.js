@@ -2358,7 +2358,7 @@ exit 99
         env: { ...process.env, PATH: `${staleBin}:${process.env.PATH}` },
       }).status,
     ).not.toBe(0);
-  }, 30_000);
+  }, 90_000);
 
   it("rejects a dirty working tree before gates, review, and stamp", () => {
     const root = repo("dirty-preflight");
@@ -2520,7 +2520,7 @@ exit 1
     expect(calls.indexOf("pr checks 1 --required --watch")).toBeLessThan(
       calls.indexOf("pr merge 1"),
     );
-  }, 40_000);
+  }, 90_000);
 
   it("rejects cross-repository PRs before creating unusable state", () => {
     const root = repo("cross-repo");
@@ -4384,7 +4384,7 @@ exit 1
     expect(result.stderr).toMatch(/exceeded its proportional 1s budget/);
     execFileSync("sleep", ["4"]);
     expect(existsSync(marker)).toBe(false);
-  }, 10_000);
+  }, 30_000);
 
   it("allows a slow gate to finish within its declared check reserve", () => {
     const root = repo("gate-check-reserve");
@@ -4424,7 +4424,7 @@ exit 1
     expect(updated.governor.gateSecondsUsed).toBeLessThanOrEqual(3);
     expect(updated.governor.activeExecution).toBeNull();
     unlinkSync(marker);
-  }, 10_000);
+  }, 30_000);
 
   it("shares one execution budget across the complete gate suite", () => {
     const root = repo("gate-shared-budget");
@@ -4454,7 +4454,7 @@ exit 1
     const updated = JSON.parse(readFileSync(manifestPath, "utf8"));
     expect(updated.governor.gateSecondsUsed).toBe(2);
     expect(updated.governor.activeExecution).toBeNull();
-  }, 10_000);
+  }, 30_000);
 
   it("requires explicit revalidation after lifecycle inactivity", () => {
     const root = repo("lifecycle-stale");

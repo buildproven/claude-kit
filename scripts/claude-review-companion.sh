@@ -31,9 +31,9 @@
 #   79 Claude billing/credits unavailable (safe to invoke fallback)
 #
 # Design invariants (each maps to a staff-engineer review finding):
-#   - MODEL: never pin a *[1m] model. Inherit by default (omit --model). Only
-#     pass --model when the caller supplies a NON-[1m] value. Pinning [1m] on a
-#     non-Opus session trips the Extra Usage billing gate.
+#   - MODEL: always pin a non-*\[1m\] review model. Inheriting the parent session
+#     can silently fan a 1M-context model out across every review agent;
+#     pinning a 1M variant can also trip the Extra Usage billing gate.
 #   - FIDELITY: use the real agent .md bodies via --append-system-prompt-file,
 #     never inlined summaries. Missing agent file => loud failure, not silent
 #     panel-shrink.
@@ -101,18 +101,20 @@ EXHAUSTED_FILE="$OUT_DIR/provider-exhausted"
 FAILURE_FILE="$OUT_DIR/provider-failure.json"
 rm -f "$CANCEL_FILE" "$EXHAUSTED_FILE" "$FAILURE_FILE"
 
-# --- MODEL guard: never pin a [1m] variant (Extra Usage billing gate) --------
-MODEL_ARGS=()
-if [ -n "$MODEL" ]; then
-  case "$MODEL" in
-    *"[1m]"*|*"-1m"*)
-      echo "claude-review-companion: refusing to pin a 1M-context model ($MODEL) — inheriting instead" >&2
-      ;;
-    *)
-      MODEL_ARGS=(--model "$MODEL")
-      ;;
-  esac
-fi
+# --- MODEL policy: never inherit or pin a [1m] variant -----------------------
+# Review agents receive a bounded, revision-specific diff and prompt. They do
+# not need to inherit the operator's long-context session, which would turn a
+# single 1M session into a costly panel-wide fan-out. Keep the default explicit
+# so the effective model is stable and visible in the child CLI invocation.
+DEFAULT_REVIEW_MODEL="claude-sonnet-5"
+EFFECTIVE_MODEL="${MODEL:-$DEFAULT_REVIEW_MODEL}"
+case "$EFFECTIVE_MODEL" in
+  *"[1m]"*|*"-1m"*)
+    echo "claude-review-companion: refusing 1M-context review model ($EFFECTIVE_MODEL) — using $DEFAULT_REVIEW_MODEL" >&2
+    EFFECTIVE_MODEL="$DEFAULT_REVIEW_MODEL"
+    ;;
+esac
+MODEL_ARGS=(--model "$EFFECTIVE_MODEL")
 
 # --- resolve an agent name to its .md system-prompt file ---------------------
 # Search order: kit-local agents/, then the pr-review-toolkit plugin. The
@@ -333,6 +335,24 @@ run_agent() {
   # mark INCONCLUSIVE rather than crash the merge or fake a clean review.
   if result="$(printf '%s' "$raw" | jq -r 'if (.is_error == true) or (.result == null) then empty else .result end' 2>/dev/null)" \
      && [ -n "$result" ]; then
+    # A bare "findings reported" delimiter is malformed, not a finding and
+    # not a successful review. Detect it at the producer boundary so the
+    # companion returns its existing inconclusive status; otherwise the later
+    # judge correctly rejects the artifact but cannot retry an already-recorded
+    # review checkpoint for the same HEAD.
+    if printf '%s\n' "$result" | awk '
+      { lines[NR] = $0; if ($0 ~ /[^[:space:]]/) last = NR }
+      END {
+        if (!last || lines[last] != "<<<FINDINGS REPORTED>>>") exit 1
+        for (i = 1; i < last; i++) {
+          if (lines[i] ~ /[^[:space:]]/) exit 1
+        }
+        exit 0
+      }
+    '; then
+      echo "INCONCLUSIVE: agent '$agent' reported findings without finding text — human review required" > "$out"
+      return 3
+    fi
     printf '%s\n' "$result" > "$out"
     return 0
   fi
