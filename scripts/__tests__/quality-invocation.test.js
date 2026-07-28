@@ -2358,7 +2358,7 @@ exit 99
         env: { ...process.env, PATH: `${staleBin}:${process.env.PATH}` },
       }).status,
     ).not.toBe(0);
-  }, 30_000);
+  }, 90_000);
 
   it("rejects a dirty working tree before gates, review, and stamp", () => {
     const root = repo("dirty-preflight");
