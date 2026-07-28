@@ -651,10 +651,13 @@ function strictestTaskType(types) {
 }
 
 function classifyTaskType(descriptors, subjects = []) {
-  const fromCommits = strictestTaskType(
-    subjects.map((subject) => conventionalTaskType(subject)),
+  // The first authored commit describes the requested change. Later commits
+  // commonly contain quality remediation (`fix:`), and must not escalate the
+  // campaign merely because the review loop wrote its own conventional commit.
+  const fromFirstCommit = conventionalTaskType(
+    subjects.find((subject) => String(subject || "").trim()),
   );
-  if (fromCommits !== "unknown") return fromCommits;
+  if (fromFirstCommit !== "unknown") return fromFirstCommit;
   if (descriptors.length === 0) return "unknown";
   const fromPaths = descriptors.map((descriptor) =>
     pathTaskType(descriptor.file),
@@ -675,13 +678,17 @@ function collectCommitSubjects(mergeBase, gitRunner) {
     .filter(Boolean);
 }
 
-function applyTaskTypeFloor(scored, taskType, cfg) {
+function applyTaskTypeFloor(scored, taskType, cfg, pathBaseMax) {
   const floors = {
     feature: cfg.base.medium,
     bugfix: cfg.base.high,
     performance: cfg.base.high,
   };
-  const floor = floors[taskType];
+  const requestedFloor = floors[taskType];
+  // Task type is supporting context, not permission to override the changed
+  // path's sensitivity. A `fix:` follow-up to documentation must not receive
+  // high-tier review solely because the remediation commit is named `fix`.
+  const floor = Math.min(requestedFloor, pathBaseMax);
   if (!Number.isFinite(floor) || scored.riskScore >= floor) return scored;
   return {
     ...scored,
@@ -690,7 +697,7 @@ function applyTaskTypeFloor(scored, taskType, cfg) {
       ...scored.reasons,
       `task type ${taskType} → ${
         taskType === "feature" ? "standard" : "high-review"
-      } floor ${floor}`,
+      } floor ${floor} (capped by path sensitivity ${pathBaseMax})`,
     ],
   };
 }
@@ -1190,7 +1197,7 @@ function computeScore(descriptors, diffStats, cfg) {
   } else {
     score = Math.max(0, Math.min(100, numericScore));
   }
-  return { riskScore: score, changeNature, reasons };
+  return { riskScore: score, changeNature, reasons, pathBaseMax: base };
 }
 
 function nonnegativeInteger(value) {
@@ -1427,11 +1434,12 @@ function score({
   const taskType =
     persistedTaskType ||
     classifyTaskType(descriptors, collectCommitSubjects(mergeBase, gitRunner));
-  const scored = applyTaskTypeFloor(
-    computeScore(descriptors, diffStats, cfg),
-    taskType,
+  const { pathBaseMax, ...baseScored } = computeScore(
+    descriptors,
+    diffStats,
     cfg,
   );
+  const scored = applyTaskTypeFloor(baseScored, taskType, cfg, pathBaseMax);
   const knobs = scoreToKnobs(scored.riskScore, cfg);
   return {
     ...scored,
@@ -1512,6 +1520,7 @@ module.exports = {
   classifyChangeNature,
   scoreToKnobs,
   classifyTaskType,
+  applyTaskTypeFloor,
   manifestRisk,
   matchesPattern,
   globToRegExp,

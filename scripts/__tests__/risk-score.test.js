@@ -3,6 +3,8 @@ const {
   computeScore,
   classifyChangeNature,
   scoreToKnobs,
+  classifyTaskType,
+  applyTaskTypeFloor,
   matchesPattern,
   isForcedLogic,
   deepMerge,
@@ -418,6 +420,29 @@ describe("computeScore — large mechanical diff is not low-risk", () => {
     // mechanical downgrade is suppressed above the cap, and magnitude adds.
     expect(r.changeNature).toBe("mechanical");
     expect(r.riskScore).toBeGreaterThan(20);
+  });
+});
+
+describe("task-type floors", () => {
+  it("uses the first authored commit rather than a later remediation fix", () => {
+    expect(
+      classifyTaskType(
+        [d("docs/guide.md")],
+        ["docs: explain installation", "fix: address review feedback"],
+      ),
+    ).toBe("docs");
+  });
+
+  it("cannot raise a documentation change above its path sensitivity", () => {
+    const result = applyTaskTypeFloor(
+      { riskScore: 0, changeNature: "mechanical", reasons: [] },
+      "bugfix",
+      DEFAULTS,
+      DEFAULTS.base.low,
+    );
+
+    expect(result.riskScore).toBe(DEFAULTS.base.low);
+    expect(result.riskScore).toBeLessThan(DEFAULTS.base.high);
   });
 });
 
