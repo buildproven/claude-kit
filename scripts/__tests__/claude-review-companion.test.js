@@ -348,6 +348,42 @@ describe("claude-review-companion.sh", () => {
     );
   });
 
+  it("preserves a complete review emitted just before watchdog termination", () => {
+    const d = tmpdir();
+    const bin = path.join(d, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+    fs.writeFileSync(path.join(d, "identity.json"), "{}\n");
+    fs.writeFileSync(
+      path.join(bin, "claude"),
+      `#!/usr/bin/env bash
+printf '%s\\n' '{"terminal_reason":"completed","result":"No findings\\n<<<NO FINDINGS>>>","is_error":false}'
+exit 143
+`,
+      { mode: 0o755 },
+    );
+
+    const out = path.join(d, "out");
+    const r = run(
+      [
+        "--diff-file",
+        path.join(d, "diff.txt"),
+        "--out-dir",
+        out,
+        "--agents",
+        "code-reviewer",
+        "--identity-file",
+        path.join(d, "identity.json"),
+      ],
+      { env: { PATH: `${bin}:${process.env.PATH}` } },
+    );
+
+    expect(r.code, r.stderr).toBe(0);
+    expect(
+      fs.readFileSync(path.join(out, "code-reviewer.findings.txt"), "utf8"),
+    ).toContain("<<<NO FINDINGS>>>");
+  });
+
   it("marks a bare findings-reported delimiter inconclusive before recording review evidence", () => {
     const d = tmpdir();
     const bin = path.join(d, "bin");
