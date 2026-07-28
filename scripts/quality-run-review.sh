@@ -111,6 +111,25 @@ complete_provider_attempt() {
     "$MANIFEST" --provider "$provider" --elapsed-seconds "$elapsed"
 }
 
+claude_marker_only_result() {
+  local findings last_nonblank nonempty_before line
+  for findings in "$REVIEW_OUT"/*.findings.txt; do
+    [ -f "$findings" ] || continue
+    last_nonblank=""
+    nonempty_before=false
+    while IFS= read -r line || [ -n "$line" ]; do
+      [ -n "${line//[[:space:]]/}" ] || continue
+      if [ -n "$last_nonblank" ]; then nonempty_before=true; fi
+      last_nonblank="$line"
+    done < "$findings"
+    if [ "$last_nonblank" = "<<<FINDINGS REPORTED>>>" ] &&
+      [ "$nonempty_before" = false ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 run_claude_review() {
   local agents_csv rc attempt_timeout attempt_started
   local companion_args=()
@@ -138,6 +157,19 @@ run_claude_review() {
   bash "$SCRIPT_DIR/claude-review-companion.sh" "${companion_args[@]}"
   rc=$?
   complete_provider_attempt claude "$attempt_started" || return 1
+  # A bare marker proves neither an approval nor a finding. Retry this one
+  # typed malformed-output case once with a new, governor-authorized Claude
+  # attempt; any second malformed result remains fail-closed.
+  if [ "$rc" -eq 4 ] && claude_marker_only_result; then
+    echo "⚠️  [quality] Claude emitted a marker-only finding; retrying once within the provider budget." >&2
+    attempt_timeout="$(authorize_provider_attempt claude "$QUALITY_REVIEW_TIMEOUT")" \
+      || return 77
+    companion_args[${#companion_args[@]}-1]="$attempt_timeout"
+    attempt_started=$SECONDS
+    bash "$SCRIPT_DIR/claude-review-companion.sh" "${companion_args[@]}"
+    rc=$?
+    complete_provider_attempt claude "$attempt_started" || return 1
+  fi
   return "$rc"
 }
 
