@@ -1090,6 +1090,30 @@ function resolvePrIdentity(options) {
   };
 }
 
+function identityWithoutProvider(identity) {
+  const result = { ...identity };
+  delete result.provider;
+  return result;
+}
+
+function canFailOverProvider(existing, existingIdentity, campaignIdentity) {
+  const sameWork =
+    JSON.stringify(canonicalJson(identityWithoutProvider(existingIdentity))) ===
+    JSON.stringify(canonicalJson(identityWithoutProvider(campaignIdentity)));
+  const attemptedProvider = Array.isArray(existing.governor?.providerAttempts)
+    ? existing.governor.providerAttempts.length > 0
+    : false;
+  return (
+    sameWork &&
+    existing.options?.reviewArm === null &&
+    campaignIdentity.options?.reviewArm === null &&
+    Array.isArray(existing.reviews) &&
+    existing.reviews.length === 0 &&
+    existing.governor?.activeExecution === null &&
+    attemptedProvider
+  );
+}
+
 function existingCampaign(manifestPath, campaignIdentity) {
   const existing = loadManifest(manifestPath).manifest;
   const existingIdentity = {
@@ -1117,7 +1141,30 @@ function existingCampaign(manifestPath, campaignIdentity) {
     JSON.stringify(canonicalJson(existingIdentity)) !==
     JSON.stringify(canonicalJson(campaignIdentity))
   ) {
-    throw new Error("deterministic quality campaign identity collision");
+    if (!canFailOverProvider(existing, existingIdentity, campaignIdentity)) {
+      throw new Error("deterministic quality campaign identity collision");
+    }
+    withManifestLock(manifestPath, (locked) => {
+      if (!canFailOverProvider(existing, existingIdentity, campaignIdentity)) {
+        throw new Error("deterministic quality campaign identity collision");
+      }
+      const previous = {
+        primaryOverride: locked.provider?.primaryOverride || "",
+        fallbackOverride: locked.provider?.fallbackOverride || "",
+        config: locked.provider?.config || "",
+      };
+      locked.provider = {
+        ...campaignIdentity.provider,
+        transitions: [
+          ...(locked.provider?.transitions || []),
+          {
+            from: previous,
+            to: campaignIdentity.provider,
+            at: new Date().toISOString(),
+          },
+        ],
+      };
+    });
   }
   return manifestPath;
 }

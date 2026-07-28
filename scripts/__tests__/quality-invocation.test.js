@@ -544,6 +544,41 @@ describe("quality invocation manifest", () => {
     );
   });
 
+  it("fails over an exhausted same-head campaign without resetting its budget", () => {
+    const root = repo("durable-provider-failover");
+    const manifest = create(root, [], {
+      BS_QUALITY_PRIMARY: "codex",
+      BS_QUALITY_FALLBACK: "claude",
+    });
+    invocation.withManifestLock(manifest, (state) => {
+      state.governor.providerAttempts.push({
+        number: 1,
+        provider: "claude",
+        head: state.revisions.currentHead,
+        reviewCount: 0,
+        startedAt: new Date().toISOString(),
+        timeoutSeconds: 60,
+      });
+      state.governor.providerSecondsUsed = 60;
+    });
+
+    expect(
+      create(root, [], {
+        BS_QUALITY_PRIMARY: "gemini",
+        BS_QUALITY_FALLBACK: "claude",
+      }),
+    ).toBe(manifest);
+    const resumed = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(resumed.invocationId).toBe(path.basename(path.dirname(manifest)));
+    expect(resumed.governor.providerSecondsUsed).toBe(60);
+    expect(resumed.provider.primaryOverride).toBe("gemini");
+    expect(resumed.provider.transitions).toHaveLength(1);
+    expect(resumed.provider.transitions[0]).toMatchObject({
+      from: { primaryOverride: "codex", fallbackOverride: "claude" },
+      to: { primaryOverride: "gemini", fallbackOverride: "claude" },
+    });
+  });
+
   it("binds review-arm attribution to the assigned primary provider", () => {
     const nativeRoot = repo("native-review-arm");
     const nativeManifest = JSON.parse(
