@@ -56,7 +56,9 @@ describe("hooks never destroy user work", () => {
     );
 
     expect(code).toBe(2); // deny, with a message back to Claude
-    expect(out).toMatch(/git checkout -b/);
+    expect(out).toContain(
+      "git fetch origin --quiet && git checkout -b feat/app origin/main",
+    );
     // It must NOT have moved the user off main itself.
     expect(git(root, "branch", "--show-current").trim()).toBe("main");
     expect(branches(root)).toEqual(["main"]);

@@ -63,7 +63,12 @@ BRANCH_NAME="feat/${SLUG}"
 cat >&2 <<MSG
 Refusing to edit on '$CURRENT_BRANCH'.
 
-Create a branch first, then retry the edit:
+Create a branch from the freshly fetched remote branch first, then retry the edit:
+
+    git fetch origin --quiet && git checkout -b $BRANCH_NAME origin/$CURRENT_BRANCH
+
+If this repository has no origin remote, create the branch from the current
+local branch instead:
 
     git checkout -b $BRANCH_NAME
 
