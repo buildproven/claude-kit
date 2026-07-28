@@ -37,25 +37,12 @@ That runner uses `codex exec --ephemeral` or Claude's
 the persisted backlog/quality state—not its parent's session history.
 
 Before an unattended run, acquire operator-scoped admission with
-`scripts/autonomous-loop-runtime.js admit`. Its launcher **must** pass
-`--owner-pid` for the long-lived loop process (for Bash, `"$$"`); the runtime
-rejects an omitted owner rather than guessing from the short-lived `node`
-child. It also requires a local, user-configured usage adapter that prints
-only this JSON shape:
+`scripts/autonomous-loop-runtime.js admit`. Its launcher **must** pass the
+long-lived loop's `--owner-pid` (Bash: `"$$"`), never the short-lived `node`
+child. It requires a local usage adapter that prints only:
 
 ```json
 { "fiveHourPercent": 12, "sevenDayPercent": 18 }
-```
-
-For a Bash-launched Ralph loop, the admission must bind the slot to that
-launcher's PID, not the `node` child that evaluates the command:
-
-```bash
-node "$AUTONOMOUS_RUNTIME" admit \
-  --kind ralph \
-  --id "$LOOP_ID" \
-  --owner-pid "$$" \
-  --usage-command "$CLAUDE_USAGE_COMMAND"
 ```
 
 The default gate refuses a new loop at 70% on either window, refuses a third
@@ -64,10 +51,9 @@ percentages/outcomes under `$XDG_STATE_HOME/claude-kit/autonomous-loops/`.
 Never put account credentials, raw usage responses, or that telemetry in a
 repository.
 
-If the runtime reports corrupt admission state, stop the affected loop and use
-its exact ID—or the 64-character hash in the corrupt record's filename—to
-perform the explicit, audited repair below. This command refuses to remove a
-readable record, so it cannot silently free a live loop:
+For corrupt admission state, stop that loop and use its exact ID (or the
+64-character filename hash) for this audited repair. It refuses readable
+records, so cannot silently free a live loop:
 
 ```bash
 node "$AUTONOMOUS_RUNTIME" repair \
@@ -177,11 +163,11 @@ Repos that have migrated to Linear (no `BACKLOG.md` in repo root) run in **Linea
 
 **Linear-only replacements:**
 
-| Legacy subcommand | Linear MCP replacement                                                                              |
-| ----------------- | --------------------------------------------------------------------------------------------------- |
-| `pick-items`      | `mcp__linear__list_issues({ filter: { state: { name: { eq: "Backlog" } } }, orderBy: "priority" })` |
-| `complete-item`   | `mcp__linear__update_issue({ id, state: "Done" })`                                                  |
-| `block-item`      | `mcp__linear__update_issue({ id, labels: ["blocked"] })`                                            |
+| Legacy subcommand | Linear MCP replacement          |
+| ----------------- | ------------------------------- |
+| `pick-items`      | list Backlog issues by priority |
+| `complete-item`   | update issue state to Done      |
+| `block-item`      | add the `blocked` label         |
 
 Trajectory logging (`log-traj`) and state updates (`update-item`) continue to work normally and should still be called for evidence-mode runs.
 
@@ -223,18 +209,18 @@ INIT -> PICK -> IMPLEMENT -> QUALITY -> REFLECT -> DECIDE
 
 ## State Responsibilities
 
-| State       | Action                                                                                                                                                                                                                                                                                                                 | Exit                                               |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| `INIT`      | Parse args, initialize state/evidence files, enforce git hygiene, preload learnings index. **Also detect inline backlog and synthesize ephemeral items.**                                                                                                                                                              | `PICK`                                             |
-| `PICK`      | Select highest-score unblocked, non-split-parent item matching filters (Linear OR inline). **Before selecting, check the aggregate quality-time spent against `--max-quality-minutes`; if exhausted, route all remaining items to `BLOCK` as `SWEEP_BUDGET_EXHAUSTED` and go to `END`.**                               | `IMPLEMENT` or `END`                               |
-| `IMPLEMENT` | Create branch, spawn implementation agent, apply targeted context from prior failures/learnings                                                                                                                                                                                                                        | `QUALITY`                                          |
-| `QUALITY`   | Record the quality run's start time; run `/bs:quality --merge --level <quality>`, collect CI/merge status, and add its elapsed wall-clock to the aggregate quality-time counter used by the `--max-quality-minutes` budget. Emit `[ralph] item K, quality Nm, budget Mm/45m` so a long run reads as bounded campaigns. | `REFLECT` or `DECIDE` (`QUALITY_INFRA_FAIL`)       |
-| `REFLECT`   | Classify failure type, compute trajectory score, write evidence files, summarize root cause                                                                                                                                                                                                                            | `DECIDE`                                           |
-| `DECIDE`    | Apply hard quality gate + retry matrix + budgets to choose next route                                                                                                                                                                                                                                                  | `PICK`, `IMPLEMENT`, `SPLIT`, `SPECULATE`, `BLOCK` |
-| `SPLIT`     | Create child backlog items and mark source item as `split-parent`. Inline items can split into more ephemeral items but never write to Linear.                                                                                                                                                                         | `PICK`                                             |
-| `SPECULATE` | Run 2 isolated worktree strategies; first passing branch wins, loser archived                                                                                                                                                                                                                                          | `QUALITY` or `BLOCK`                               |
-| `BLOCK`     | Quarantine item (`status=blocked`), create recovery branch + issue (Linear items only — inline blocks are logged to evidence and skipped), continue session                                                                                                                                                            | `PICK`                                             |
-| `END`       | Promote learnings, sync index, write final session stats                                                                                                                                                                                                                                                               | terminal                                           |
+| State       | Action                                                                                                          | Exit               |
+| ----------- | --------------------------------------------------------------------------------------------------------------- | ------------------ |
+| `INIT`      | Parse, initialise evidence, enforce git hygiene, preload learnings, detect inline items.                        | `PICK`             |
+| `PICK`      | Select a matching unblocked item. On exhausted quality budget, block the remainder as `SWEEP_BUDGET_EXHAUSTED`. | `IMPLEMENT`/`END`  |
+| `IMPLEMENT` | Isolated branch; apply relevant prior learning.                                                                 | `QUALITY`          |
+| `QUALITY`   | Time `/bs:quality --merge --level <quality>`, record CI/merge result and aggregate budget.                      | `REFLECT`/`DECIDE` |
+| `REFLECT`   | Classify, score, and write evidence.                                                                            | `DECIDE`           |
+| `DECIDE`    | Apply hard gate, retry matrix, and budgets.                                                                     | next route         |
+| `SPLIT`     | Create child items; inline children stay ephemeral.                                                             | `PICK`             |
+| `SPECULATE` | Two isolated strategies; first passing branch wins.                                                             | `QUALITY`/`BLOCK`  |
+| `BLOCK`     | Quarantine; file a recovery issue only for Linear items.                                                        | `PICK`             |
+| `END`       | Promote learnings and write session stats.                                                                      | terminal           |
 
 ## Trajectory Evaluation
 
@@ -277,12 +263,9 @@ score = (quality_coverage * 0.4) + (first_attempt * 0.2) + (duration_ratio * 0.2
 
 ## Backward Compatibility Contract
 
-1. Exact quality invocation shape remains `/bs:quality --merge --level [auto|95|98]`.
-2. Exactly one quality invocation per attempt.
-3. No concurrent quality invocation on the same branch/worktree.
-4. `--classic` never writes `.claude/ralph-next/*`.
-5. `--parallel` always uses worktree isolation; serial fallback items use standard Step 2 loop.
-6. **Inline backlog items NEVER write to Linear.** They exist only for the duration of the run.
+Use exactly one `/bs:quality --merge --level [auto|95|98]` per attempt and never
+concurrently on the same branch/worktree. `--classic` never writes next-mode
+state; parallel work uses worktrees; inline items never write to Linear.
 
 ## Implementation
 
@@ -359,7 +342,8 @@ MODE             (default: "next"; "--classic" sets "classic")
 INLINE_IS_LIST   (auto-detected; "--inline" forces true)
 ```
 
-**Classic mode**: If `--classic`, run simplified PICK→IMPLEMENT→QUALITY loop without reflection, evidence logging, or speculate. Same branch/quality/merge flow, just no REFLECT→DECIDE graph. Inline-list support still applies.
+**Classic mode**: PICK→IMPLEMENT→QUALITY only; no reflection, evidence, or
+speculation. Branch, quality, merge, and inline handling remain unchanged.
 
 ```bash
 bash "$SCRIPT" init \
@@ -422,7 +406,7 @@ else
 fi
 ```
 
-If SOTA is stale (>7 days or never run), invoke the `sota` skill before starting the main loop. Skip if `--dry-run` or if all items are inline (since inline runs are typically short ad-hoc batches).
+If SOTA is stale, invoke it before the loop; skip for `--dry-run` or all-inline runs.
 
 ### Step 1: Git Hygiene
 
