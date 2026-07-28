@@ -5,6 +5,8 @@ const { execFileSync } = require("node:child_process");
 
 const SCRIPT = path.join(__dirname, "..", "quality-adversarial-verify.sh");
 
+const scriptSource = () => fs.readFileSync(SCRIPT, "utf8");
+
 /**
  * Adversarial verification hands each finding to N skeptics whose only job is to
  * REFUTE it. It exists because "3 agents agreed" is not independent evidence —
@@ -77,6 +79,15 @@ const FINDING = {
 };
 
 describe("adversarial verification", () => {
+  it("pins the bounded adversarial pass to non-1M Opus at high effort", () => {
+    const source = scriptSource();
+    expect(source).toContain('DEFAULT_REVIEW_MODEL="opus"');
+    expect(source).toContain(
+      'MODEL_ARGS=(--model "$EFFECTIVE_MODEL" --effort high)',
+    );
+    expect(source).toMatch(/refusing 1M-context model/);
+  });
+
   it("emits a verdict per finding, with the vote split recorded", () => {
     const fx = fixture([FINDING]);
     const { code } = run([

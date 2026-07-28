@@ -9,6 +9,12 @@ model: haiku
 
 # Daily Development Workflow
 
+## Model routing
+
+Use each runtime's normal medium-effort profile for daily development. The
+quality workflow performs any bounded high-effort adversarial escalation; do
+not select Opus or a Codex power profile for ordinary commands.
+
 Quick reference for the public `claude-kit` workflow.
 
 ## Core loop
