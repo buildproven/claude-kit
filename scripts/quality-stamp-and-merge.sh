@@ -70,6 +70,18 @@ if [ -n "$STAMP_HEAD" ]; then
 else
   if [ "$LOCAL_HEAD" = "$REVIEWED_HEAD" ]; then
     TRAILERS="$(node "$SCRIPT_DIR/quality-invocation.js" trailers "$MANIFEST")"
+    if [ -n "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY:-}" ]; then
+      REVIEW_AUTHORIZATION="$(node "$SCRIPT_DIR/quality-invocation.js" review-authorization "$MANIFEST")"
+      REVIEW_BASE="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.base')"
+      REVIEW_TIER="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.tier')"
+      REVIEW_PROVIDER="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.provider')"
+      REVIEW_FINDINGS="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.blockingCount')"
+      REVIEW_SIGNATURE="$(node "$SCRIPT_DIR/quality-review-evidence.js" sign \
+        --head "$REVIEWED_HEAD" --base "$REVIEW_BASE" --tier "$REVIEW_TIER" \
+        --findings "$REVIEW_FINDINGS" --reviewer "$REVIEW_PROVIDER")"
+      TRAILERS="$TRAILERS
+Quality-Evidence-Signature: $REVIEW_SIGNATURE"
+    fi
     # HUSKY=0: this is quality's own empty stamp commit in the target repo. Its
     # husky pre-commit hooks would re-run lint/tests the pipeline just ran —
     # unbounded work outside the campaign governor, on a commit that changes no
