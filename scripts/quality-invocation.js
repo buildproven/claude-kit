@@ -1096,6 +1096,30 @@ function identityWithoutProvider(identity) {
   return result;
 }
 
+function manifestIdentity(manifest) {
+  return {
+    executionBudgetVersion: manifest.governor?.executionBudgetVersion ?? 0,
+    root: manifest.repo.realpath,
+    gitCommonDir: manifest.repo.gitCommonDir,
+    origin: manifest.repo.origin,
+    pr: manifest.repo.pr,
+    githubRepository: manifest.repo.githubRepository,
+    headRefName: manifest.repo.headRefName,
+    headRepository: manifest.repo.headRepository,
+    isCrossRepository: manifest.repo.isCrossRepository,
+    baseRef: manifest.revisions.baseRef,
+    baseSha: manifest.revisions.baseSha,
+    baseHeadSha: manifest.revisions.baseHeadSha,
+    head: manifest.revisions.currentHead,
+    options: manifest.options,
+    provider: {
+      primaryOverride: manifest.provider?.primaryOverride,
+      fallbackOverride: manifest.provider?.fallbackOverride,
+      config: manifest.provider?.config,
+    },
+  };
+}
+
 function canFailOverProvider(existing, existingIdentity, campaignIdentity) {
   const sameWork =
     JSON.stringify(canonicalJson(identityWithoutProvider(existingIdentity))) ===
@@ -1116,27 +1140,7 @@ function canFailOverProvider(existing, existingIdentity, campaignIdentity) {
 
 function existingCampaign(manifestPath, campaignIdentity) {
   const existing = loadManifest(manifestPath).manifest;
-  const existingIdentity = {
-    executionBudgetVersion: existing.governor?.executionBudgetVersion ?? 0,
-    root: existing.repo.realpath,
-    gitCommonDir: existing.repo.gitCommonDir,
-    origin: existing.repo.origin,
-    pr: existing.repo.pr,
-    githubRepository: existing.repo.githubRepository,
-    headRefName: existing.repo.headRefName,
-    headRepository: existing.repo.headRepository,
-    isCrossRepository: existing.repo.isCrossRepository,
-    baseRef: existing.revisions.baseRef,
-    baseSha: existing.revisions.baseSha,
-    baseHeadSha: existing.revisions.baseHeadSha,
-    head: existing.revisions.currentHead,
-    options: existing.options,
-    provider: {
-      primaryOverride: existing.provider?.primaryOverride,
-      fallbackOverride: existing.provider?.fallbackOverride,
-      config: existing.provider?.config,
-    },
-  };
+  const existingIdentity = manifestIdentity(existing);
   if (
     JSON.stringify(canonicalJson(existingIdentity)) !==
     JSON.stringify(canonicalJson(campaignIdentity))
@@ -1145,7 +1149,9 @@ function existingCampaign(manifestPath, campaignIdentity) {
       throw new Error("deterministic quality campaign identity collision");
     }
     withManifestLock(manifestPath, (locked) => {
-      if (!canFailOverProvider(existing, existingIdentity, campaignIdentity)) {
+      if (
+        !canFailOverProvider(locked, manifestIdentity(locked), campaignIdentity)
+      ) {
         throw new Error("deterministic quality campaign identity collision");
       }
       const previous = {

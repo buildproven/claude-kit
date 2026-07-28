@@ -143,6 +143,10 @@ describe("provider review runtime", () => {
     expect(runner).toContain(
       'if [ "$rc" -eq 4 ] && claude_marker_only_result; then',
     );
+    expect(runner).toContain("line=\"${line%$'\\r'}\"");
+    expect(runner).toContain(
+      'if [ "${companion_args[$timeout_index]}" = "--timeout" ]; then',
+    );
     expect(runner).toContain("any second malformed result remains fail-closed");
   });
 
