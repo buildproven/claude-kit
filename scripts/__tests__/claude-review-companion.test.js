@@ -378,7 +378,9 @@ describe("claude-review-companion.sh", () => {
     expect(r.code).toBe(4);
     expect(
       fs.readFileSync(path.join(out, "code-reviewer.findings.txt"), "utf8"),
-    ).toMatch(/INCONCLUSIVE: agent 'code-reviewer' reported findings without finding text/);
+    ).toMatch(
+      /INCONCLUSIVE: agent 'code-reviewer' reported findings without finding text/,
+    );
   });
 
   describe("agent-file resolution (drift guard)", () => {
