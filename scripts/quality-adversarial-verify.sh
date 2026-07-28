@@ -42,7 +42,7 @@ TIMEOUT=300
 # Adversarial verification is the deliberate Claude escalation: use Opus at
 # high effort for a bounded, revision-specific skeptic pass. Never inherit the
 # operator session model; that could silently reintroduce a long-context pin.
-DEFAULT_REVIEW_MODEL="opus"
+DEFAULT_REVIEW_MODEL="claude-opus-5"
 MODEL=""
 DRY_RUN=false
 # Governor integration: an absolute wall-clock deadline (epoch seconds) that the

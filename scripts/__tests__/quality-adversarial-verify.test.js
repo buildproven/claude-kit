@@ -81,7 +81,7 @@ const FINDING = {
 describe("adversarial verification", () => {
   it("pins the bounded adversarial pass to non-1M Opus at high effort", () => {
     const source = scriptSource();
-    expect(source).toContain('DEFAULT_REVIEW_MODEL="opus"');
+    expect(source).toContain('DEFAULT_REVIEW_MODEL="claude-opus-5"');
     expect(source).toContain(
       'MODEL_ARGS=(--model "$EFFECTIVE_MODEL" --effort high)',
     );
