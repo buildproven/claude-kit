@@ -447,6 +447,7 @@ exit 143
         "security-auditor",
         "type-design-analyzer",
         "pr-test-analyzer",
+        "architect-reviewer",
       ];
       for (const name of reviewers) {
         const source = fs.readFileSync(
@@ -456,6 +457,20 @@ exit 143
         expect(source).toContain("<<<NO FINDINGS>>>");
         expect(source).toContain("<<<FINDINGS REPORTED>>>");
       }
+    });
+
+    it("selects only read-only review roles for the six-agent high-tier panel", () => {
+      const selector = fs.readFileSync(
+        path.join(KIT_ROOT, "scripts", "quality-select-agents.sh"),
+        "utf8",
+      );
+      const panelStart = selector.indexOf("PANEL=(");
+      const panelEnd = selector.indexOf(")", panelStart);
+      const panel = selector.slice(panelStart, panelEnd);
+      expect(panel).toContain("pr-test-analyzer architect-reviewer");
+      expect(panel.indexOf("architect-reviewer")).toBeLessThan(
+        panel.indexOf("code-simplifier"),
+      );
     });
   });
 
