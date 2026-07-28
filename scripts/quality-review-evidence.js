@@ -5,6 +5,7 @@
 // deliberately external to the reviewed branch: the signing key stays with the
 // operator and CI receives only the configured public key.
 const crypto = require("crypto");
+const fs = require("fs");
 
 const FIELDS = ["head", "base", "tier", "findings", "reviewer"];
 const TIERS = new Set(["low", "medium", "high", "critical"]);
@@ -59,6 +60,19 @@ function decodeKey(encoded, type) {
   const key = Buffer.from(encoded, "base64");
   if (!key.length) throw new Error(`review-evidence ${type} key is invalid`);
   return key;
+}
+
+function signingKeyFromEnvironment() {
+  if (process.env.QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY) {
+    return process.env.QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY;
+  }
+  const file = process.env.QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY_FILE;
+  if (!file) {
+    throw new Error(
+      "review-evidence private key or QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY_FILE is required",
+    );
+  }
+  return fs.readFileSync(file, "utf8").trim();
 }
 
 function signEvidence(fields, privateKeyBase64) {
@@ -123,6 +137,7 @@ module.exports = {
   evidencePayload,
   signEvidence,
   verifyEvidence,
+  signingKeyFromEnvironment,
 };
 
 function cliFields(argv) {
@@ -144,7 +159,7 @@ if (require.main === module) {
     const fields = cliFields(argv);
     if (command === "sign") {
       process.stdout.write(
-        `${signEvidence(fields, process.env.QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY)}\n`,
+        `${signEvidence(fields, signingKeyFromEnvironment())}\n`,
       );
     } else if (command === "verify") {
       const signature = fields.signature;
