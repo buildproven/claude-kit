@@ -144,6 +144,10 @@ describe("provider review runtime", () => {
       'if [ "$rc" -eq 4 ] && claude_marker_only_result; then',
     );
     expect(runner).toContain("line=\"${line%$'\\r'}\"");
+    expect(runner).toContain("marker_only_seen=false");
+    expect(runner).toContain(
+      "Retrying the full panel would overwrite that evidence.",
+    );
     expect(runner).toContain(
       'if [ "${companion_args[$timeout_index]}" = "--timeout" ]; then',
     );

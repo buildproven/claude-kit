@@ -112,7 +112,8 @@ complete_provider_attempt() {
 }
 
 claude_marker_only_result() {
-  local findings last_nonblank nonempty_before line
+  local findings last_nonblank nonempty_before line marker_only_seen
+  marker_only_seen=false
   for findings in "$REVIEW_OUT"/*.findings.txt; do
     [ -f "$findings" ] || continue
     last_nonblank=""
@@ -125,10 +126,14 @@ claude_marker_only_result() {
     done < "$findings"
     if [ "$last_nonblank" = "<<<FINDINGS REPORTED>>>" ] &&
       [ "$nonempty_before" = false ]; then
-      return 0
+      marker_only_seen=true
+    elif [ -n "$last_nonblank" ]; then
+      # Preserve any actual finding or clean structured result from another
+      # agent. Retrying the full panel would overwrite that evidence.
+      return 1
     fi
   done
-  return 1
+  [ "$marker_only_seen" = true ]
 }
 
 run_claude_review() {
