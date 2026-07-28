@@ -134,6 +134,26 @@ describe("provider review runtime", () => {
     );
   });
 
+  it("retries a marker-only Claude result once without weakening other failures", () => {
+    const runner = readFileSync(RUN_REVIEW, "utf8");
+    expect(runner).toContain("claude_marker_only_result()");
+    expect(runner).toContain(
+      "Claude emitted a marker-only finding; retrying once",
+    );
+    expect(runner).toContain(
+      'if [ "$rc" -eq 4 ] && claude_marker_only_result; then',
+    );
+    expect(runner).toContain("line=\"${line%$'\\r'}\"");
+    expect(runner).toContain("marker_only_seen=false");
+    expect(runner).toContain(
+      "Retrying the full panel would overwrite that evidence.",
+    );
+    expect(runner).toContain(
+      'if [ "${companion_args[$timeout_index]}" = "--timeout" ]; then',
+    );
+    expect(runner).toContain("any second malformed result remains fail-closed");
+  });
+
   it("kills the provider tree when the wrapper itself is cancelled", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "bounded-cancel-"));
     const pidFile = path.join(dir, "child.pid");

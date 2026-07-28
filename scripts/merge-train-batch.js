@@ -252,13 +252,19 @@ function reserveAdmission(state, request) {
     reservedSeconds,
     admittedAtEpoch: nowEpoch,
   };
-  current.reservations[id] = reservation;
+  const next = {
+    ...current,
+    reservations: {
+      ...current.reservations,
+      [id]: reservation,
+    },
+  };
   return {
-    state: current,
+    state: next,
     admitted: true,
     reused: false,
     reservation,
-    remainingSeconds: budgetSeconds - reservedTotal(current),
+    remainingSeconds: budgetSeconds - reservedTotal(next),
   };
 }
 

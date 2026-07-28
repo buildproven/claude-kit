@@ -59,7 +59,16 @@ Skip repos with zero open PRs. Skip individual PRs in draft state.
 
 ## Phase 2: Parallel Workers (one per repo)
 
-**Sweep budget (enforce before and during dispatch):** record one sweep start time and absolute deadline. Before each worker starts `/bs:quality`, claim the planned `reservedSeconds` under a shared state file; planning alone is not admission. The claim is atomic across workers:
+**Sweep budget (enforce before and during dispatch):** set these four values once in the sweep controller, then pass/export the same values to every worker. `TRAIN_STATE_FILE` must be a single shared path accessible to every worker in this sweep; do not let workers invent their own path. Before each worker starts `/bs:quality`, claim the planned `reservedSeconds` under that shared state file; planning alone is not admission.
+
+```bash
+TRAIN_STARTED_EPOCH="$(date +%s)"
+TRAIN_BUDGET_SECONDS="$(( max_quality_minutes * 60 ))" # `max_quality_minutes` is the parsed --max-quality-minutes argument
+TRAIN_DEADLINE_EPOCH="$(( TRAIN_STARTED_EPOCH + TRAIN_BUDGET_SECONDS ))"
+TRAIN_STATE_FILE="${BS_MERGE_TRAIN_STATE_FILE:?set one shared state-file path before dispatch}"
+```
+
+The claim is atomic across workers:
 
 ```bash
 ADMISSION="$(node scripts/merge-train-batch.js admit \

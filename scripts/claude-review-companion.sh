@@ -323,7 +323,20 @@ run_agent() {
     return 78
   fi
 
-  if [ $rc -ne 0 ] || [ -z "$raw" ]; then
+  if [ -z "$raw" ]; then
+    echo "INCONCLUSIVE: agent '$agent' timed out or errored (rc=$rc) — human review required" > "$out"
+    return 3
+  fi
+
+  # The watchdog can deliver TERM in the narrow interval after Claude has
+  # emitted a complete JSON result but before this shell reaps it. Preserve
+  # that revision-bound evidence only when the envelope itself proves normal
+  # completion; a non-zero exit with partial/error output remains fail-closed.
+  if [ "$rc" -ne 0 ] && ! printf '%s' "$raw" | jq -e '
+    .is_error != true and .result != null and
+    (.terminal_reason == "completed" or
+      (.terminal_reason == null and .stop_reason == "end_turn"))
+  ' >/dev/null 2>&1; then
     echo "INCONCLUSIVE: agent '$agent' timed out or errored (rc=$rc) — human review required" > "$out"
     return 3
   fi

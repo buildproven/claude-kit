@@ -111,8 +111,33 @@ complete_provider_attempt() {
     "$MANIFEST" --provider "$provider" --elapsed-seconds "$elapsed"
 }
 
+claude_marker_only_result() {
+  local findings last_nonblank nonempty_before line marker_only_seen
+  marker_only_seen=false
+  for findings in "$REVIEW_OUT"/*.findings.txt; do
+    [ -f "$findings" ] || continue
+    last_nonblank=""
+    nonempty_before=false
+    while IFS= read -r line || [ -n "$line" ]; do
+      line="${line%$'\r'}"
+      [ -n "${line//[[:space:]]/}" ] || continue
+      if [ -n "$last_nonblank" ]; then nonempty_before=true; fi
+      last_nonblank="$line"
+    done < "$findings"
+    if [ "$last_nonblank" = "<<<FINDINGS REPORTED>>>" ] &&
+      [ "$nonempty_before" = false ]; then
+      marker_only_seen=true
+    elif [ -n "$last_nonblank" ]; then
+      # Preserve any actual finding or clean structured result from another
+      # agent. Retrying the full panel would overwrite that evidence.
+      return 1
+    fi
+  done
+  [ "$marker_only_seen" = true ]
+}
+
 run_claude_review() {
-  local agents_csv rc attempt_timeout attempt_started
+  local agents_csv rc attempt_timeout attempt_started timeout_index timeout_updated
   local companion_args=()
   command -v claude >/dev/null 2>&1 || return 2
   claude auth status --json 2>/dev/null | jq -e '.loggedIn == true' >/dev/null 2>&1 || return 2
@@ -138,6 +163,30 @@ run_claude_review() {
   bash "$SCRIPT_DIR/claude-review-companion.sh" "${companion_args[@]}"
   rc=$?
   complete_provider_attempt claude "$attempt_started" || return 1
+  # A bare marker proves neither an approval nor a finding. Retry this one
+  # typed malformed-output case once with a new, governor-authorized Claude
+  # attempt; any second malformed result remains fail-closed.
+  if [ "$rc" -eq 4 ] && claude_marker_only_result; then
+    echo "⚠️  [quality] Claude emitted a marker-only finding; retrying once within the provider budget." >&2
+    attempt_timeout="$(authorize_provider_attempt claude "$QUALITY_REVIEW_TIMEOUT")" \
+      || return 77
+    timeout_updated=false
+    for timeout_index in "${!companion_args[@]}"; do
+      if [ "${companion_args[$timeout_index]}" = "--timeout" ]; then
+        companion_args[$((timeout_index + 1))]="$attempt_timeout"
+        timeout_updated=true
+        break
+      fi
+    done
+    [ "$timeout_updated" = true ] || {
+      echo "quality: Claude review timeout argument is missing" >&2
+      return 1
+    }
+    attempt_started=$SECONDS
+    bash "$SCRIPT_DIR/claude-review-companion.sh" "${companion_args[@]}"
+    rc=$?
+    complete_provider_attempt claude "$attempt_started" || return 1
+  fi
   return "$rc"
 }
 

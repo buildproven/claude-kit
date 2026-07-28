@@ -481,6 +481,29 @@ describe("quality invocation manifest", () => {
     expect(result.stderr).toMatch(/shared merge-train deadline has elapsed/);
   });
 
+  it.each([
+    [
+      "BS_QUALITY_SHARED_DEADLINE_EPOCH",
+      String(Math.floor(Date.now() / 1000) + 60),
+    ],
+    ["BS_QUALITY_TRAIN_RESERVATION_SECONDS", "120"],
+  ])("rejects a partial merge-train lease environment: %s", (name, value) => {
+    const root = repo(`partial-merge-train-lease-${name}`);
+    const result = spawnSync(
+      "node",
+      [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: { ...process.env, [name]: value },
+      },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(
+      /BS_QUALITY_SHARED_DEADLINE_EPOCH and BS_QUALITY_TRAIN_RESERVATION_SECONDS must be set together/,
+    );
+  });
+
   it("authorizes Gemini inside the existing provider attempt budget", () => {
     const root = repo("gemini-provider-attempt");
     const manifest = create(root, []);
@@ -519,6 +542,41 @@ describe("quality invocation manifest", () => {
     expect(changedPolicy.stderr).toMatch(
       /deterministic quality campaign identity collision/,
     );
+  });
+
+  it("fails over an exhausted same-head campaign without resetting its budget", () => {
+    const root = repo("durable-provider-failover");
+    const manifest = create(root, [], {
+      BS_QUALITY_PRIMARY: "codex",
+      BS_QUALITY_FALLBACK: "claude",
+    });
+    invocation.withManifestLock(manifest, (state) => {
+      state.governor.providerAttempts.push({
+        number: 1,
+        provider: "claude",
+        head: state.revisions.currentHead,
+        reviewCount: 0,
+        startedAt: new Date().toISOString(),
+        timeoutSeconds: 60,
+      });
+      state.governor.providerSecondsUsed = 60;
+    });
+
+    expect(
+      create(root, [], {
+        BS_QUALITY_PRIMARY: "gemini",
+        BS_QUALITY_FALLBACK: "claude",
+      }),
+    ).toBe(manifest);
+    const resumed = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(resumed.invocationId).toBe(path.basename(path.dirname(manifest)));
+    expect(resumed.governor.providerSecondsUsed).toBe(60);
+    expect(resumed.provider.primaryOverride).toBe("gemini");
+    expect(resumed.provider.transitions).toHaveLength(1);
+    expect(resumed.provider.transitions[0]).toMatchObject({
+      from: { primaryOverride: "codex", fallbackOverride: "claude" },
+      to: { primaryOverride: "gemini", fallbackOverride: "claude" },
+    });
   });
 
   it("binds review-arm attribution to the assigned primary provider", () => {

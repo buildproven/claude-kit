@@ -900,13 +900,22 @@ function governorInteger(name, fallback, label, minimum = 0) {
 
 function buildGovernor(head) {
   const startedAtEpoch = Math.floor(Date.now() / 1000);
+  const sharedDeadlineConfigured =
+    process.env.BS_QUALITY_SHARED_DEADLINE_EPOCH !== undefined;
+  const trainReservationConfigured =
+    process.env.BS_QUALITY_TRAIN_RESERVATION_SECONDS !== undefined;
+  if (sharedDeadlineConfigured !== trainReservationConfigured) {
+    throw new Error(
+      "BS_QUALITY_SHARED_DEADLINE_EPOCH and BS_QUALITY_TRAIN_RESERVATION_SECONDS must be set together",
+    );
+  }
   const providerDeadlineSeconds = governorInteger(
     "BS_QUALITY_MAX_PROVIDER_SECONDS",
     "3600",
     "provider deadline seconds",
     1,
   );
-  const sharedDeadlineEpoch = process.env.BS_QUALITY_SHARED_DEADLINE_EPOCH
+  const sharedDeadlineEpoch = sharedDeadlineConfigured
     ? governorInteger(
         "BS_QUALITY_SHARED_DEADLINE_EPOCH",
         "0",
@@ -914,8 +923,7 @@ function buildGovernor(head) {
         1,
       )
     : null;
-  const trainReservationSeconds = process.env
-    .BS_QUALITY_TRAIN_RESERVATION_SECONDS
+  const trainReservationSeconds = trainReservationConfigured
     ? governorInteger(
         "BS_QUALITY_TRAIN_RESERVATION_SECONDS",
         "0",
@@ -1082,34 +1090,87 @@ function resolvePrIdentity(options) {
   };
 }
 
-function existingCampaign(manifestPath, campaignIdentity) {
-  const existing = loadManifest(manifestPath).manifest;
-  const existingIdentity = {
-    executionBudgetVersion: existing.governor?.executionBudgetVersion ?? 0,
-    root: existing.repo.realpath,
-    gitCommonDir: existing.repo.gitCommonDir,
-    origin: existing.repo.origin,
-    pr: existing.repo.pr,
-    githubRepository: existing.repo.githubRepository,
-    headRefName: existing.repo.headRefName,
-    headRepository: existing.repo.headRepository,
-    isCrossRepository: existing.repo.isCrossRepository,
-    baseRef: existing.revisions.baseRef,
-    baseSha: existing.revisions.baseSha,
-    baseHeadSha: existing.revisions.baseHeadSha,
-    head: existing.revisions.currentHead,
-    options: existing.options,
+function identityWithoutProvider(identity) {
+  const result = { ...identity };
+  delete result.provider;
+  return result;
+}
+
+function manifestIdentity(manifest) {
+  return {
+    executionBudgetVersion: manifest.governor?.executionBudgetVersion ?? 0,
+    root: manifest.repo.realpath,
+    gitCommonDir: manifest.repo.gitCommonDir,
+    origin: manifest.repo.origin,
+    pr: manifest.repo.pr,
+    githubRepository: manifest.repo.githubRepository,
+    headRefName: manifest.repo.headRefName,
+    headRepository: manifest.repo.headRepository,
+    isCrossRepository: manifest.repo.isCrossRepository,
+    baseRef: manifest.revisions.baseRef,
+    baseSha: manifest.revisions.baseSha,
+    baseHeadSha: manifest.revisions.baseHeadSha,
+    head: manifest.revisions.currentHead,
+    options: manifest.options,
     provider: {
-      primaryOverride: existing.provider?.primaryOverride,
-      fallbackOverride: existing.provider?.fallbackOverride,
-      config: existing.provider?.config,
+      primaryOverride: manifest.provider?.primaryOverride,
+      fallbackOverride: manifest.provider?.fallbackOverride,
+      config: manifest.provider?.config,
     },
   };
+}
+
+function canFailOverProvider(existing, existingIdentity, campaignIdentity) {
+  const sameWork =
+    JSON.stringify(canonicalJson(identityWithoutProvider(existingIdentity))) ===
+    JSON.stringify(canonicalJson(identityWithoutProvider(campaignIdentity)));
+  const attemptedProvider = Array.isArray(existing.governor?.providerAttempts)
+    ? existing.governor.providerAttempts.length > 0
+    : false;
+  return (
+    sameWork &&
+    existing.options?.reviewArm === null &&
+    campaignIdentity.options?.reviewArm === null &&
+    Array.isArray(existing.reviews) &&
+    existing.reviews.length === 0 &&
+    existing.governor?.activeExecution === null &&
+    attemptedProvider
+  );
+}
+
+function existingCampaign(manifestPath, campaignIdentity) {
+  const existing = loadManifest(manifestPath).manifest;
+  const existingIdentity = manifestIdentity(existing);
   if (
     JSON.stringify(canonicalJson(existingIdentity)) !==
     JSON.stringify(canonicalJson(campaignIdentity))
   ) {
-    throw new Error("deterministic quality campaign identity collision");
+    if (!canFailOverProvider(existing, existingIdentity, campaignIdentity)) {
+      throw new Error("deterministic quality campaign identity collision");
+    }
+    withManifestLock(manifestPath, (locked) => {
+      if (
+        !canFailOverProvider(locked, manifestIdentity(locked), campaignIdentity)
+      ) {
+        throw new Error("deterministic quality campaign identity collision");
+      }
+      const previous = {
+        primaryOverride: locked.provider?.primaryOverride || "",
+        fallbackOverride: locked.provider?.fallbackOverride || "",
+        config: locked.provider?.config || "",
+      };
+      locked.provider = {
+        ...campaignIdentity.provider,
+        transitions: [
+          ...(locked.provider?.transitions || []),
+          {
+            from: previous,
+            to: campaignIdentity.provider,
+            at: new Date().toISOString(),
+          },
+        ],
+      };
+    });
   }
   return manifestPath;
 }
