@@ -961,7 +961,8 @@ printf '%s\\n' "$manifest"
     expect(manifest.risk.tier).not.toBe("auto");
     expect(manifest.risk.mergeAuthority).toBe("autonomous");
     expect(manifest.risk.taskType).toBe("bugfix");
-    expect(manifest.risk.score).toBeGreaterThanOrEqual(60);
+    expect(manifest.risk.score).toBeGreaterThanOrEqual(35);
+    expect(manifest.risk.score).toBeLessThan(60);
     expect(manifest.agents.length).toBeGreaterThanOrEqual(2);
   }, 120_000);
 

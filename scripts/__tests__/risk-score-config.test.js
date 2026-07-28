@@ -323,7 +323,7 @@ describe("score — task-type risk routing", () => {
     expect(result.taskType).toBe(expected);
   });
 
-  it("routes bug fixes and performance work through the high-review floor", () => {
+  it("does not let bugfix/performance labels outrank source-path sensitivity", () => {
     for (const subject of [
       "fix: correct widget state",
       "perf: remove quadratic scan",
@@ -333,11 +333,9 @@ describe("score — task-type risk routing", () => {
         gitRunner: gitRunner(sourceChange, [subject]),
         config: DEFAULTS,
       });
-      expect(result.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.high);
-      expect(result.knobs.agents).toBeGreaterThanOrEqual(6);
-      expect(result.reasons).toContain(
-        `task type ${result.taskType} → high-review floor ${DEFAULTS.base.high}`,
-      );
+      expect(result.riskScore).toBe(DEFAULTS.base.medium);
+      expect(result.riskScore).toBeLessThan(DEFAULTS.base.high);
+      expect(result.knobs.agents).toBeLessThan(6);
     }
   });
 
@@ -388,7 +386,7 @@ describe("score — task-type risk routing", () => {
     expect(ci.riskScore).toBeLessThan(DEFAULTS.base.securityFloor);
   });
 
-  it("uses the strictest task type across a mixed commit range", () => {
+  it("uses the first authored task type, not a later remediation commit", () => {
     const result = score({
       base: "BASE",
       gitRunner: gitRunner(sourceChange, [
@@ -397,6 +395,6 @@ describe("score — task-type risk routing", () => {
       ]),
       config: DEFAULTS,
     });
-    expect(result.taskType).toBe("performance");
+    expect(result.taskType).toBe("feature");
   });
 });
