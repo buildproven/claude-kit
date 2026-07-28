@@ -405,7 +405,11 @@ echo "$items_json" | jq -r '.[] | "- \(.id) [\(.type)] [effort:\(.effort)] [scor
 **SOTA staleness check (auto-run if >7 days stale):**
 
 ```bash
-SOTA_HISTORY="$SETUP_REPO/data/sota-history.json"
+# SOTA records history in the repository being operated on. Do not depend on
+# an overlay-specific SETUP_REPO variable: public claude-kit installations do
+# not define it, which made this check silently inspect /data instead.
+PROJECT_ROOT=$(git rev-parse --show-toplevel)
+SOTA_HISTORY="$PROJECT_ROOT/.claude/sota-history.json"
 if [ -f "$SOTA_HISTORY" ]; then
   LAST_DATE=$(jq -r '.lastUpdated // empty' "$SOTA_HISTORY")
   if [ -n "$LAST_DATE" ]; then
