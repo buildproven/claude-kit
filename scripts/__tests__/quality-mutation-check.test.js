@@ -943,14 +943,17 @@ describe("quality-mutation-check", () => {
     const { root, manifest } = fixture(
       "hang",
       "setInterval(() => {}, 1000);\n",
-      { checkSeconds: 1 },
+      // Allow setup of the detached mutation worktree to complete before the
+      // test-run cap starts deciding the outcome. A one-second total budget
+      // races that setup and can exhaust before the hanging test is launched.
+      { checkSeconds: 5 },
     );
     expect(() => runMutation(root, manifest)).toThrow(
-      /(?:a hang is not red-capable evidence|mutation budget exhausted before producing evidence)/,
+      /a hang is not red-capable evidence/,
     );
     const state = JSON.parse(readFileSync(manifest, "utf8"));
     expect(state.mutation).toBeNull();
     expect(state.governor.activeExecution).toBeNull();
-    expect(state.governor.gateSecondsUsed).toBe(1);
+    expect(state.governor.gateSecondsUsed).toBe(5);
   });
 });
