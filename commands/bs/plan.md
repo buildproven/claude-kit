@@ -127,6 +127,26 @@ Create `$PLAN_FILE` with this structure:
 
 ---
 
+## Architecture Decision Gate (automatic)
+
+Evaluate before implementation:
+
+- [ ] Auth, authorization, billing, or payments
+- [ ] Durable data creation, migration, retention, or deletion
+- [ ] Public API, event schema, or external contract
+- [ ] Distributed consistency, retry, or failure-ownership change
+- [ ] Cross-repository dependency or another expensive-to-reverse boundary
+
+If every box is unchecked, record `Architecture decision: none required` and
+continue at the normal medium-effort runtime profile. If any box is checked,
+load `codebase-design`, create `docs/decisions/ADR-[slug].md`, and link it here.
+The ADR records the decision, alternatives, invariants, migration/rollback, and
+verification. Draft it at the normal profile; review only that ADR at high
+effort (Opus in Claude Code or Sol in Codex) before implementing the irreversible
+boundary. Do not escalate merely because a reversible refactor is large.
+
+---
+
 ## Implementation Plan
 
 ### Files to Modify
