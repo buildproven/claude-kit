@@ -315,11 +315,16 @@ ADR at `docs/decisions/ADR-<slug>.md`, and link it from the plan/PRD before
 coding. The ADR must state the decision, alternatives, invariants, migration or
 rollback, and verification. Draft it at the normal profile; run a bounded
 adversarial review of the ADR at high effort (Opus in Claude Code or the
-configured Codex power profile: `codex --profile power exec --ephemeral -s
-read-only -c 'model_reasoning_effort="high"' review --base <base>`) before
-implementing the irreversible boundary. Configure `power` to a current
-high-end model; large but reversible refactors do not satisfy this trigger by
-size alone.
+configured Codex power profile: `codex --profile power -c
+'model_reasoning_effort="high"' review --uncommitted`) before implementing the
+irreversible boundary. `--uncommitted` makes the newly written, not-yet-committed
+ADR the review subject. Configure `power` to a current high-end model.
+
+This is fail-closed: do not begin implementation while the ADR review has a
+blocking finding, an unresolved question, malformed/inconclusive output, or a
+provider failure. Revise the ADR, re-run the review, and record the clean result
+in the ADR before proceeding. Large but reversible refactors do not satisfy this
+trigger by size alone.
 
 ### Step 4.5: Auto-detect Parallelizable Subtasks (CS-164)
 

@@ -148,10 +148,13 @@ and continue at the normal medium-effort runtime profile. If any box is checked,
 load `codebase-design`, create `docs/decisions/ADR-[slug].md`, and link it here.
 The ADR records the decision, alternatives, invariants, migration/rollback, and
 verification. Draft it at the normal profile; review only that ADR at high
-effort (Opus in Claude Code or `codex --profile power exec --ephemeral -s
-read-only -c 'model_reasoning_effort="high"' review --base <base>`). The Codex
-`power` profile must pin a current high-end model. Do not escalate merely
-because a reversible refactor is large.
+effort (Opus in Claude Code or `codex --profile power -c
+'model_reasoning_effort="high"' review --uncommitted`). `--uncommitted` is
+required because the ADR is newly written during planning. The Codex `power`
+profile must pin a current high-end model. Do not approve implementation until
+the ADR review is clean; revise and re-review any blocking, unresolved,
+malformed, inconclusive, or unavailable result. Do not escalate merely because
+a reversible refactor is large.
 
 ---
 
