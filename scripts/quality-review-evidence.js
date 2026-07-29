@@ -54,6 +54,9 @@ function evidencePayload(fields) {
   if (!REVIEWERS.has(fields.fallback)) {
     throw new Error("evidence fallback reviewer is invalid");
   }
+  if (fields.primary === fields.fallback) {
+    throw new Error("evidence fallback reviewer must differ from primary");
+  }
   if (!Number.isInteger(fields.findings) || fields.findings < 0) {
     throw new Error("evidence findings must be a non-negative integer");
   }

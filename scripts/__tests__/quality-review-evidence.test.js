@@ -53,14 +53,33 @@ describe("quality review evidence signatures", () => {
 
   it("rejects a signature whose declared primary reviewer was rewritten", () => {
     const keys = keyPair();
-    const signature = signEvidence(fields, keys.privateKey);
+    const signed = { ...fields, primary: "claude", fallback: "ci-only" };
+    const signature = signEvidence(signed, keys.privateKey);
     expect(() =>
       verifyEvidence(
-        { ...fields, primary: "claude" },
+        { ...signed, primary: "codex" },
         signature,
         keys.publicKey,
       ),
     ).toThrow(/does not bind/);
+  });
+
+  it("rejects a signature whose declared fallback reviewer was rewritten", () => {
+    const keys = keyPair();
+    const signature = signEvidence(fields, keys.privateKey);
+    expect(() =>
+      verifyEvidence(
+        { ...fields, fallback: "ci-only" },
+        signature,
+        keys.publicKey,
+      ),
+    ).toThrow(/does not bind/);
+  });
+
+  it("rejects identical primary and fallback reviewers", () => {
+    expect(() =>
+      signEvidence({ ...fields, fallback: "codex" }, keyPair().privateKey),
+    ).toThrow(/fallback reviewer must differ/);
   });
 
   it("rejects a signature from an untrusted key", () => {
