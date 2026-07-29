@@ -27,6 +27,7 @@ const GOVERNOR = path.join(ROOT, "scripts", "quality-run-governor.js");
 const WRAPPER = path.join(ROOT, "scripts", "quality-wrapper.js");
 const AUTHORIZE = path.join(ROOT, "scripts", "quality-authorize-merge.sh");
 const RUN_GATE = path.join(ROOT, "scripts", "quality-run-gate.sh");
+const WORKTREE_MANAGER = path.join(ROOT, "scripts", "worktree-manager.js");
 const RUN_REVIEW = path.join(ROOT, "scripts", "quality-run-review.sh");
 const STAMP_AND_MERGE = path.join(
   ROOT,
@@ -4440,9 +4441,79 @@ exit 1
     );
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/exceeded its proportional 1s budget/);
+    const updated = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(updated.gates.find((gate) => gate.name === "build")).toMatchObject({
+      status: "timeout",
+      reason: "gate 'build' exceeded its proportional 1s budget",
+    });
     execFileSync("sleep", ["4"]);
     expect(existsSync(marker)).toBe(false);
   }, 30_000);
+
+  it("releases only its exact linked-worktree lock after a terminal gate failure", () => {
+    const primary = repo("terminal-gate-unlock");
+    const linked = mkdtempSync(path.join(tmpdir(), "quality-linked-gate-"));
+    git(primary, ["switch", "-q", "main"]);
+    git(primary, [
+      "worktree",
+      "add",
+      "-q",
+      "-b",
+      "quality-gate-failure",
+      linked,
+      "main",
+    ]);
+    const packageFile = path.join(linked, "package.json");
+    const packageJson = JSON.parse(readFileSync(packageFile, "utf8"));
+    packageJson.scripts.build = "false";
+    writeFileSync(packageFile, JSON.stringify(packageJson));
+    git(linked, ["add", "package.json"]);
+    git(linked, ["commit", "-q", "-m", "add failing build gate"]);
+
+    const manifestPath = create(linked, ["--merge"]);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    execFileSync(
+      "node",
+      [
+        WORKTREE_MANAGER,
+        "lock",
+        "--repo",
+        linked,
+        "--branch",
+        "quality-gate-failure",
+        "--reason",
+        `bs:quality/${manifest.invocationId}`,
+      ],
+      { encoding: "utf8" },
+    );
+
+    const result = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
+      { cwd: linked, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    const updated = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(updated.gates.find((gate) => gate.name === "build")).toMatchObject({
+      status: "failed",
+      reason: "gate 'build' failed with exit status 1",
+    });
+    const status = JSON.parse(
+      execFileSync(
+        "node",
+        [WORKTREE_MANAGER, "status", "--repo", linked, "--skip-pr-check"],
+        { encoding: "utf8" },
+      ),
+    );
+    expect(
+      status.worktrees.find(
+        (worktree) => worktree.branch === "quality-gate-failure",
+      ),
+    ).toMatchObject({
+      locked: false,
+      classification: "clean with unpushed commits",
+    });
+  });
 
   it("allows a slow gate to finish within its declared check reserve", () => {
     const root = repo("gate-check-reserve");
