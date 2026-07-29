@@ -2,7 +2,7 @@
 name: new
 description: Create new project with QA Architect quality automation (framework-agnostic)
 context: fork
-model: opus
+model: sonnet
 ---
 
 > **FORKED SKILL INVOCATION — RUN THE ARGS-FILE BRIDGE IMMEDIATELY.**
