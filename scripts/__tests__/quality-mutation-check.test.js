@@ -96,12 +96,13 @@ function fixture(label, testBody, options = {}) {
   return { root, manifest };
 }
 
-function runMutation(root, manifest) {
+function runMutation(root, manifest, env = {}) {
   try {
     return execFileSync("bash", [MUTATION, "--manifest", manifest], {
       cwd: root,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, ...env },
     });
   } catch (error) {
     throw new Error(error.stderr.toString(), { cause: error });
@@ -210,6 +211,27 @@ describe("quality-mutation-check", () => {
     const state = JSON.parse(readFileSync(manifest, "utf8"));
     expect(state.governor.activeExecution).toBeNull();
     expect(state.governor.gateSecondsUsed).toBeGreaterThanOrEqual(1);
+  });
+
+  it("runs reverted tests with a private HOME and XDG state", () => {
+    const witness = path.join(
+      mkdtempSync(path.join(tmpdir(), "quality-mutation-home-witness-")),
+      "home.txt",
+    );
+    const { root, manifest } = fixture(
+      "home-isolation",
+      "const { writeFileSync } = require('node:fs');\n"
+        + "const { isAllowed } = require('./logic');\n"
+        + "writeFileSync(process.env.MUTATION_HOME_WITNESS, process.env.HOME);\n"
+        + "if (!isAllowed('admin')) process.exit(1);\n",
+    );
+
+    expect(
+      runMutation(root, manifest, { MUTATION_HOME_WITNESS: witness }),
+    ).toMatch(/mutation evidence: revert-diff/);
+    const sandboxHome = readFileSync(witness, "utf8");
+    expect(sandboxHome).not.toBe(process.env.HOME);
+    expect(sandboxHome).toContain("quality-mutation.");
   });
 
   it("removes an added source file to produce revision-bound evidence", () => {
