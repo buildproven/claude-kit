@@ -314,9 +314,10 @@ If any answer is **yes**, automatically load `codebase-design`, write a short
 ADR at `docs/decisions/ADR-<slug>.md`, and link it from the plan/PRD before
 coding. The ADR must state the decision, alternatives, invariants, migration or
 rollback, and verification. Draft it at the normal profile; run a bounded
-adversarial review of the ADR at high effort (Opus in Claude Code or Sol in
-Codex) before implementing the irreversible boundary. Large but reversible
-refactors do not satisfy this trigger by size alone.
+adversarial review of the ADR at high effort (Opus in Claude Code or the
+configured Codex high-effort review profile) before implementing the
+irreversible boundary. Large but reversible refactors do not satisfy this
+trigger by size alone.
 
 ### Step 4.5: Auto-detect Parallelizable Subtasks (CS-164)
 
