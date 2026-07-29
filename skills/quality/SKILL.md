@@ -1,6 +1,6 @@
 ---
 name: quality
-description: Autonomous, revision-bound quality loop: deterministic gates, independent review, CI, and optional merge.
+description: "Autonomous, revision-bound quality loop: deterministic gates, independent review, CI, and optional merge."
 disallowed-tools: AskUserQuestion
 ---
 
