@@ -12,6 +12,7 @@ const SCHEMA_VERSION = 1;
 const DEFAULT_CONTAINER = ".worktrees";
 const DEFAULT_GRACE_HOURS = 24;
 const DEFAULT_RECENT_MINUTES = 30;
+const DEFAULT_QUALITY_LOCK_STALE_HOURS = 24;
 
 class ManagerError extends Error {
   constructor(message, code = "WORKTREE_ERROR", details = {}) {
@@ -985,6 +986,163 @@ function activityAgeMinutes(repoRoot, record) {
   return Math.max(0, (Date.now() - Math.max(...candidates)) / 60000);
 }
 
+function qualityLockInvocation(lockReason) {
+  const match = /^bs:quality\/([0-9a-f-]{36})$/i.exec(lockReason || "");
+  return match ? match[1] : null;
+}
+
+function qualityStateDirectory(repoRoot) {
+  try {
+    const temporaryRoot = fs.realpathSync(process.env.TMPDIR || os.tmpdir());
+    return path.join(
+      temporaryRoot,
+      "bs-quality",
+      crypto
+        .createHash("sha256")
+        .update(commonDir(repoRoot))
+        .digest("hex")
+        .slice(0, 16),
+    );
+  } catch {
+    return null;
+  }
+}
+
+function safeQualityDirectories(directory) {
+  try {
+    return fs
+      .readdirSync(directory, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink());
+  } catch {
+    return null;
+  }
+}
+
+function validateQualityManifest(repoRoot, invocation, manifestPath) {
+  let stat;
+  try {
+    stat = fs.lstatSync(manifestPath);
+  } catch {
+    return { state: "missing" };
+  }
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    return { state: "inconclusive", reason: "quality manifest is unsafe" };
+  }
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    if (manifest.invocationId !== invocation) {
+      return {
+        state: "inconclusive",
+        reason: "quality manifest invocation does not match the lock",
+      };
+    }
+    if (manifest.repo?.gitCommonDir !== commonDir(repoRoot)) {
+      return {
+        state: "inconclusive",
+        reason: "quality manifest repository does not match the lock",
+      };
+    }
+    if (path.resolve(manifest.stateRoot || "") !== path.dirname(manifestPath)) {
+      return {
+        state: "inconclusive",
+        reason: "quality manifest state path does not match the lock",
+      };
+    }
+    return { state: "present", manifest, manifestPath };
+  } catch {
+    return { state: "inconclusive", reason: "quality manifest is invalid" };
+  }
+}
+
+function manifestForQualityInvocation(repoRoot, invocation) {
+  const stateDirectory = qualityStateDirectory(repoRoot);
+  if (!stateDirectory || !fs.existsSync(stateDirectory)) {
+    return { state: "missing" };
+  }
+  const prDirectories = safeQualityDirectories(stateDirectory);
+  if (!prDirectories) {
+    return { state: "inconclusive", reason: "quality state cannot be read" };
+  }
+  for (const prDirectory of prDirectories) {
+    const prPath = path.join(stateDirectory, prDirectory.name);
+    const baseDirectories = safeQualityDirectories(prPath);
+    if (!baseDirectories) continue;
+    for (const baseDirectory of baseDirectories) {
+      const manifestPath = path.join(
+        prPath,
+        baseDirectory.name,
+        invocation,
+        "invocation.json",
+      );
+      const manifest = validateQualityManifest(
+        repoRoot,
+        invocation,
+        manifestPath,
+      );
+      if (manifest.state !== "missing") return manifest;
+    }
+  }
+  return { state: "missing" };
+}
+
+function qualityManifestReleaseState(manifest, now) {
+  const updatedAt = Date.parse(manifest.updatedAt || manifest.createdAt || "");
+  const stale =
+    Number.isFinite(updatedAt) &&
+    now - updatedAt >= DEFAULT_QUALITY_LOCK_STALE_HOURS * 3600000;
+  const terminal = (manifest.gates || []).some((gate) =>
+    ["failed", "timeout"].includes(gate.status),
+  );
+  if (terminal) {
+    return {
+      releasable: true,
+      reason: "quality manifest records a terminal gate failure",
+    };
+  }
+  if (stale) {
+    return {
+      releasable: true,
+      reason: `quality manifest is older than ${DEFAULT_QUALITY_LOCK_STALE_HOURS}h`,
+    };
+  }
+  return { releasable: false, reason: "quality manifest is still active" };
+}
+
+function qualityLockState(repoRoot, record, metadata, now = Date.now()) {
+  const invocation = qualityLockInvocation(record.lockReason);
+  if (!invocation) return null;
+  if (metadata?.invocation && metadata.invocation !== invocation) {
+    return {
+      releasable: false,
+      reason: "quality lock metadata invocation disagrees with the Git lock",
+    };
+  }
+  const manifest = manifestForQualityInvocation(repoRoot, invocation);
+  if (manifest.state === "inconclusive") {
+    return { releasable: false, reason: manifest.reason };
+  }
+  if (manifest.state === "present") {
+    return {
+      ...qualityManifestReleaseState(manifest.manifest, now),
+      manifestPath: manifest.manifestPath,
+    };
+  }
+  const metadataUpdatedAt = Date.parse(metadata?.updatedAt || "");
+  if (
+    Number.isFinite(metadataUpdatedAt) &&
+    now - metadataUpdatedAt >= DEFAULT_QUALITY_LOCK_STALE_HOURS * 3600000
+  ) {
+    return {
+      releasable: true,
+      reason: `quality manifest is missing and lock metadata is older than ${DEFAULT_QUALITY_LOCK_STALE_HOURS}h`,
+    };
+  }
+  return {
+    releasable: false,
+    reason: "quality manifest is missing but lock metadata is recent",
+  };
+}
+
 function classify(repoRoot, record, options = {}) {
   if (!fs.existsSync(record.path)) {
     return {
@@ -1005,11 +1163,22 @@ function classify(repoRoot, record, options = {}) {
     };
   }
   if (record.locked) {
+    const qualityLock = qualityLockState(repoRoot, record, metadata);
+    if (qualityLock?.releasable) {
+      return {
+        ...record,
+        classification: "stale quality lock",
+        removable: false,
+        releasable: true,
+        reason: qualityLock.reason,
+        qualityManifestPath: qualityLock.manifestPath || null,
+      };
+    }
     return {
       ...record,
       classification: "active and locked",
       removable: false,
-      reason: record.lockReason || "Git worktree lock",
+      reason: qualityLock?.reason || record.lockReason || "Git worktree lock",
     };
   }
   const cleanliness = inspectDirty(record);
@@ -1289,6 +1458,33 @@ function reconcile(options) {
   const results = [];
   for (const record of before) {
     const state = classify(repoRoot, record, options);
+    if (state.classification === "stale quality lock") {
+      if (options.apply) {
+        try {
+          const release = unlock({
+            repo: repoRoot,
+            path: record.path,
+            owner: record.lockReason,
+            terminal: true,
+          });
+          results.push({
+            ...state,
+            action: "released stale quality lock",
+            release,
+          });
+        } catch (error) {
+          results.push({
+            ...state,
+            action: "skipped",
+            error: error.message,
+            errorCode: error.code,
+          });
+        }
+      } else {
+        results.push({ ...state, action: "report" });
+      }
+      continue;
+    }
     if (state.classification === "stale/missing path") {
       if (options.apply || options.repairStale) {
         git(repoRoot, ["worktree", "prune", "--expire", "now"]);
