@@ -22,6 +22,17 @@ EXPECTED_HEAD_REF="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" 
 EXPECTED_HEAD_REPOSITORY="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" repo.headRepository)"
 LOCAL_HEAD="$(git rev-parse HEAD)"
 
+# Keep the private signer outside every repository.  An explicit environment
+# setting wins; the conventional local path makes autonomous quality runs work
+# without requiring each shell to source a secret-bearing dotfile.
+if [ -z "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY:-}" ] && \
+  [ -z "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY_FILE:-}" ]; then
+  DEFAULT_REVIEW_EVIDENCE_KEY="${XDG_CONFIG_HOME:-$HOME/.config}/claude-kit/quality-review-evidence.key"
+  if [ -r "$DEFAULT_REVIEW_EVIDENCE_KEY" ]; then
+    export QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY_FILE="$DEFAULT_REVIEW_EVIDENCE_KEY"
+  fi
+fi
+
 HEAD_REMOTE=""
 while IFS= read -r REMOTE; do
   [ -n "$REMOTE" ] || continue
