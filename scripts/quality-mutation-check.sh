@@ -44,8 +44,30 @@ CHECK_SECONDS="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk
 TEST_PLAN="$(node "$SCRIPT_DIR/quality-invocation.js" gate-plan "$MANIFEST" --name test)"
 TEST_EXECUTABLE="$(printf '%s' "$TEST_PLAN" | jq -r '.executable')"
 TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/quality-mutation.XXXXXX")"
+SANDBOX_HOME="$TEMP_ROOT/home"
+SANDBOX_XDG_CONFIG="$SANDBOX_HOME/.config"
+SANDBOX_XDG_CACHE="$SANDBOX_HOME/.cache"
+SANDBOX_XDG_STATE="$SANDBOX_HOME/.local/state"
+SANDBOX_TMP="$TEMP_ROOT/tmp"
 ARTIFACT="$STATE_ROOT/mutation/$HEAD.json"
 MUTATION_ACTIVE=false
+
+# A detached Git worktree isolates source changes, not host side effects.  Test
+# suites may invoke scripts that derive their runtime state from HOME (for
+# example, OpenClaw's self-heal controls).  Giving the reverted test command a
+# private HOME and XDG roots is therefore part of the mutation sandbox, not an
+# optional test convenience.  Never let a red-capability check touch operator
+# state just because it inherited the quality runner's environment.
+mkdir -p "$SANDBOX_XDG_CONFIG" "$SANDBOX_XDG_CACHE" "$SANDBOX_XDG_STATE" "$SANDBOX_TMP"
+
+run_sandbox_test() {
+  HOME="$SANDBOX_HOME" \
+  XDG_CONFIG_HOME="$SANDBOX_XDG_CONFIG" \
+  XDG_CACHE_HOME="$SANDBOX_XDG_CACHE" \
+  XDG_STATE_HOME="$SANDBOX_XDG_STATE" \
+  TMPDIR="$SANDBOX_TMP" \
+    "$@"
+}
 
 cleanup() {
   STATUS=$?
@@ -238,7 +260,7 @@ if [ -n "$STRYKER_CONFIG" ] && \
   LOG="$STATE_ROOT/mutation/${HEAD}.stryker.log"
   set +e
   cd "$SANDBOX"
-  bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CHECK_SECONDS" -- \
+  run_sandbox_test bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CHECK_SECONDS" -- \
     "$TEST_EXECUTABLE" run test:mutation > "$LOG" 2>&1
   RESULT=$?
   set -e
@@ -281,7 +303,7 @@ for CANDIDATE in "${CANDIDATES[@]}"; do
 
   set +e
   cd "$SANDBOX"
-  bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$REMAINING" -- \
+  run_sandbox_test bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$REMAINING" -- \
     "$TEST_EXECUTABLE" "${TEST_ARGS[@]}" > "$LOG" 2>&1
   RESULT=$?
   set -e
