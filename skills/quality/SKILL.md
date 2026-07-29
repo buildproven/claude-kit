@@ -105,8 +105,11 @@ Critical review increases review depth; it does not require routine human
 approval. New campaigns persist `mergeAuthority=autonomous` and merge when
 their revision-bound gates, review evidence, CI, and base freshness are clean.
 Actionable findings, malformed or inconclusive provider output, stale review
-coverage, and CI failures remain terminal blocked states—the only cases that
-need human direction because quality cannot mechanically converge. The one
+coverage, and CI failures remain terminal blocked states unless the outer
+operator issues the explicit, exact-identity `approve --override-quality`
+capability. That signed, expiring capability is auditable and preserves
+deterministic gates, CI, and base freshness; it never turns failed evidence
+into a clean review. The one
 exception is a low-risk campaign whose provider is unavailable after the
 configured primary/fallback path: typed unavailability, exhaustion, billing,
 or bounded-timeout evidence records a revision-bound `ci-only` advisory

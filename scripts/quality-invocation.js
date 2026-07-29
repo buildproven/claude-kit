@@ -1853,7 +1853,8 @@ function approvalValid(manifest, root) {
       payload?.head === approval.head &&
       payload?.invocationId === manifest.invocationId &&
       payload?.approver === approval.approver &&
-      payload?.expiresAt === approval.expiresAt;
+      payload?.expiresAt === approval.expiresAt &&
+      (payload?.scope || "standard") === (approval.scope || "standard");
     return identityMatches && capabilitySignatureValid(manifest, artifact);
   } catch {
     return false;
@@ -1920,6 +1921,7 @@ function attachApproval(manifest, options) {
     issuedAt: payload.issuedAt,
     expiresAt: payload.expiresAt,
     source: "outer-wrapper-capability",
+    scope: payload.scope || "standard",
     artifactPath,
     artifactSha256: sha256File(artifactPath),
     // Patch-id of the reviewed diff at approval time, cached so a later
@@ -3264,6 +3266,9 @@ function reviewTrailers(manifest) {
     `Quality-Findings: ${authorization.blockingCount}`,
     `Quality-Head: ${authorization.head}`,
     `Quality-Base: ${authorization.base}`,
+    ...(authorization.operatorOverride
+      ? ["Quality-Override: operator-quality-override"]
+      : []),
   ].join("\n");
 }
 
@@ -3272,6 +3277,26 @@ function reviewAuthorization(manifest) {
   // the strength assertion here so a caller cannot bypass resume/advance and
   // authorize review artifacts produced under a stale, weaker risk contract.
   assertCurrentReviewStrength(manifest, manifest.repo.realpath);
+  if (
+    approvalValid(manifest, manifest.repo.realpath) &&
+    manifest.approval?.scope === "operator-quality-override"
+  ) {
+    // This is a deliberately narrow operator decision: deterministic gates,
+    // PR identity/freshness, and CI still run in the merge scripts. It exists
+    // for a human to accept unavailable or malformed provider-review evidence
+    // without manufacturing a clean AI review or weakening the normal path.
+    verifyGateEvidence(manifest);
+    return {
+      base: manifest.revisions.baseSha,
+      head: manifest.revisions.currentHead,
+      provider: "operator-quality-override",
+      primary: manifest.provider?.primary || "unavailable",
+      fallback: manifest.provider?.fallback || "unavailable",
+      tier: manifest.risk.tier,
+      blockingCount: 0,
+      operatorOverride: true,
+    };
+  }
   const authorization = reviewCoverage(manifest);
   const covered = coveredReviews(manifest);
   const evidenceSha256 = crypto
