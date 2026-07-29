@@ -70,7 +70,8 @@ if [ -n "$STAMP_HEAD" ]; then
 else
   if [ "$LOCAL_HEAD" = "$REVIEWED_HEAD" ]; then
     TRAILERS="$(node "$SCRIPT_DIR/quality-invocation.js" trailers "$MANIFEST")"
-    if [ -n "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY:-}" ]; then
+    if [ -n "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY:-}" ] || \
+       [ -n "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY_FILE:-}" ]; then
       REVIEW_AUTHORIZATION="$(node "$SCRIPT_DIR/quality-invocation.js" review-authorization "$MANIFEST")"
       REVIEW_BASE="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.base')"
       REVIEW_TIER="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.tier')"

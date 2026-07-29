@@ -1,5 +1,12 @@
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 const { signEvidence, verifyEvidence } = require("../quality-review-evidence");
+
+const STAMP_AND_MERGE = fs.readFileSync(
+  path.join(__dirname, "..", "quality-stamp-and-merge.sh"),
+  "utf8",
+);
 
 const fields = {
   head: "a".repeat(40),
@@ -47,5 +54,11 @@ describe("quality review evidence signatures", () => {
     expect(() =>
       verifyEvidence(fields, signature, keyPair().publicKey),
     ).toThrow(/signature is invalid/);
+  });
+
+  it("requests a signature for either supported operator key source", () => {
+    expect(STAMP_AND_MERGE).toMatch(
+      /QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY:-.*QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY_FILE:-/s,
+    );
   });
 });
