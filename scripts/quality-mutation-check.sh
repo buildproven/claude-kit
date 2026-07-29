@@ -49,6 +49,11 @@ SANDBOX_XDG_CONFIG="$SANDBOX_HOME/.config"
 SANDBOX_XDG_CACHE="$SANDBOX_HOME/.cache"
 SANDBOX_XDG_STATE="$SANDBOX_HOME/.local/state"
 SANDBOX_TMP="$TEMP_ROOT/tmp"
+# Python's macOS cache normally lives outside XDG_CACHE_HOME.  It contains
+# downloaded wheels only, not runtime configuration or credentials.  Reusing
+# it avoids turning an otherwise bounded red-capability check into a network
+# bootstrap that can exhaust its evidence window.
+PIP_WHEEL_CACHE="${HOME}/Library/Caches/pip"
 ARTIFACT="$STATE_ROOT/mutation/$HEAD.json"
 MUTATION_ACTIVE=false
 
@@ -66,6 +71,7 @@ run_sandbox_test() {
   XDG_CACHE_HOME="$SANDBOX_XDG_CACHE" \
   XDG_STATE_HOME="$SANDBOX_XDG_STATE" \
   TMPDIR="$SANDBOX_TMP" \
+  PIP_CACHE_DIR="$PIP_WHEEL_CACHE" \
     "$@"
 }
 
