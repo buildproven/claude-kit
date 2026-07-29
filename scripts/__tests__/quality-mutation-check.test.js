@@ -220,10 +220,10 @@ describe("quality-mutation-check", () => {
     );
     const { root, manifest } = fixture(
       "home-isolation",
-      "const { writeFileSync } = require('node:fs');\n"
-        + "const { isAllowed } = require('./logic');\n"
-        + "writeFileSync(process.env.MUTATION_HOME_WITNESS, process.env.HOME);\n"
-        + "if (!isAllowed('admin')) process.exit(1);\n",
+      "const { writeFileSync } = require('node:fs');\n" +
+        "const { isAllowed } = require('./logic');\n" +
+        "writeFileSync(process.env.MUTATION_HOME_WITNESS, process.env.HOME);\n" +
+        "if (!isAllowed('admin')) process.exit(1);\n",
     );
 
     expect(
