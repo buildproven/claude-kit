@@ -111,7 +111,7 @@ For a specific Sentry issue ID:
 2. Find the repo + commit that shipped the regression (via release tag in Sentry)
 3. Create and lock the worktree through the shared manager:
    `node <kit-scripts>/worktree-manager.js create --repo <repo> --branch fix/sentry-<issue-id> --creator bs:triage --purpose <issue-id> --lock-reason bs:triage/<issue-id>`
-4. **HUMAN PAUSE GATE**: present a one-paragraph hypothesis of root cause. Generate it with a Sonnet-pinned subagent — reading a stack trace and proposing a root cause is analysis, not the coding work, so it does not need the session model's tier (matches the budget gate below: "hypothesis → Sonnet, fix → session/Opus"). The pin is a per-call `model` override, never a frontmatter pin, so it can't trip the 1M-context billing gate:
+4. **HUMAN PAUSE GATE**: present a one-paragraph hypothesis of root cause. Generate it with a Sonnet-pinned subagent — reading a stack trace and proposing a root cause is analysis, not the coding work, so it does not need the session model's tier. The fix returns to the normal runtime profile; escalate only if the diagnosis exposes an irreversible architecture decision.
 
    ```javascript
    Task(subagent_type: "general-purpose",
@@ -237,12 +237,12 @@ Per-call dollar cost is opaque and changes per plan. Gate by tier and wall-clock
 About to:
   1. Pull issue context           — Sentry MCP, ~5 tool calls
   2. Generate root-cause hypothesis — 1 model call (Sonnet, ~2k tokens)
-  3. Implement fix + regression test — coding loop in worktree (Opus, ~20k tokens, ≤10 min)
+  3. Implement fix + regression test — coding loop in worktree (normal runtime profile, ≤10 min)
   4. Run /bs:quality --merge       — quality tier 'auto' + Codex judge if high-risk (≤15 min)
 
 Budget caps:
   - max wall-clock: 30 min
-  - max model tier: Opus 4.7
+  - escalation: Opus/Sol high only for an explicit irreversible architecture decision
   - max judge tier: Codex high (if changed files match harness-config.json 'high'/'critical')
   - 7-day quota delta: ≤ 2% (read from ~/.claude/plugins/claude-hud/.usage-cache.json)
 

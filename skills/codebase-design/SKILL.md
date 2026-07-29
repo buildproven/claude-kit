@@ -56,6 +56,10 @@ Prefer accepting dependencies over constructing them invisibly, returning
 results over mutating distant state, and explicit failure modes over silent
 fallbacks.
 
+## Architecture escalation gate
+
+Draft at the normal runtime profile. Before implementation, create a short Architecture Decision Record when the change affects auth/payments, durable data/migration, public APIs/events, distributed consistency, cross-repository dependencies, or another expensive-to-reverse boundary. Record the decision, alternatives, invariants, rollback, and verification; review only that record in Opus/high (Claude Code) or Sol/high (Codex). Ordinary refactors do not escalate merely because they are large.
+
 ## Review questions
 
 - Can the interface expose fewer concepts?
