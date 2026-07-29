@@ -2515,6 +2515,10 @@ exit 1
       ...process.env,
       PATH: `${bin}:${process.env.PATH}`,
       QUALITY_STAMP_CI_TIMEOUT: "5",
+      // The operator key is intentionally discovered from the real XDG
+      // configuration directory. Keep this fixture hermetic so its mocked
+      // repository exercises the unsigned compatibility path.
+      XDG_CONFIG_HOME: path.join(harness, "xdg"),
     };
 
     const reviewedHead = git(root, ["rev-parse", "HEAD"]);
