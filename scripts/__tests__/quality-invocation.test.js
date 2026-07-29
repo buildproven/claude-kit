@@ -1238,6 +1238,7 @@ exec "${realGit}" "$@"
       input: JSON.stringify({
         argv: [
           "approve",
+          "--override-quality",
           "--target-dir",
           root,
           "--pr",
@@ -1269,6 +1270,20 @@ exec "${realGit}" "$@"
         cwd: root,
       }).status,
     ).toBe(0);
+    expect(JSON.parse(readFileSync(manifest, "utf8")).approval.scope).toBe(
+      "operator-quality-override",
+    );
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
+    for (const gate of JSON.parse(readFileSync(manifest, "utf8"))
+      .requiredGates) {
+      recordGateFixture(manifest, gate.name);
+    }
+    recordMutationFixture(manifest);
+    expect(() =>
+      execFileSync("node", [INVOCATION, "review-authorization", manifest], {
+        cwd: root,
+      }),
+    ).not.toThrow();
   });
 
   it("carries a valid break-glass approval across a rebase-only HEAD change with no new diff (BUI-380)", () => {
