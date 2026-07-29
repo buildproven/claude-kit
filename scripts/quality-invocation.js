@@ -1685,6 +1685,16 @@ function setRisk(manifest, options) {
   manifest.risk = resolved;
 }
 
+function panelSelectionError({ selectedAgents, target, incomplete }) {
+  if (incomplete && selectedAgents >= target) {
+    return "an incomplete panel must contain fewer agents than the resolved target";
+  }
+  if (!incomplete && selectedAgents !== target) {
+    return `a complete panel must contain exactly ${target} agents; use --incomplete for a deliberate reduction`;
+  }
+  return null;
+}
+
 function setAgents(manifest, names, { incomplete = false } = {}) {
   if (!manifest.risk?.resolved) {
     throw new Error("cannot select agents before risk resolution");
@@ -1692,6 +1702,13 @@ function setAgents(manifest, names, { incomplete = false } = {}) {
   if (names.length < 2) {
     throw new Error("quality agent floor requires at least two agents");
   }
+  const target = manifest.risk.agentTarget;
+  const selectionError = panelSelectionError({
+    selectedAgents: names.length,
+    target,
+    incomplete,
+  });
+  if (selectionError) throw new Error(selectionError);
   if (
     manifest.agents.length > 0 &&
     JSON.stringify(manifest.agents) === JSON.stringify(names) &&
@@ -1704,7 +1721,7 @@ function setAgents(manifest, names, { incomplete = false } = {}) {
   }
   manifest.agents = names;
   manifest.panel = {
-    requiredAgents: manifest.risk.agentTarget,
+    requiredAgents: target,
     selectedAgents: names.length,
     incomplete,
   };

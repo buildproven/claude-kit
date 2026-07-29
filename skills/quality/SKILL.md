@@ -98,9 +98,10 @@ bash "$QUALITY_SCRIPTS_DIR/quality-select-agents.sh" \
 Risk resolution must persist a concrete task type, tier, and numeric agent
 target before selection. Docs/CI/build/chore work receives the lightest
 eligible routing without weakening path or security floors; feature work keeps
-the standard floor; bug-fix and performance work receive the high-review floor.
-The initial task type remains bound to the campaign so a later remediation
-commit named `fix` cannot mint a stronger campaign or reset its budget.
+the standard floor. Bug-fix and performance labels remain review context, while
+path sensitivity, change nature, and magnitude determine review depth. The
+initial task type remains bound to the campaign so a later remediation commit
+cannot change the campaign's recorded context or reset its budget.
 Critical review increases review depth; it does not require routine human
 approval. New campaigns persist `mergeAuthority=autonomous` and merge when
 their revision-bound gates, review evidence, CI, and base freshness are clean.

@@ -27,7 +27,10 @@ PANEL=(code-reviewer silent-failure-hunter security-auditor type-design-analyzer
        performance-engineer architect-reviewer)
 N="$AGENT_TARGET"
 [ "$N" -lt 2 ] && N=2
-[ "$N" -gt "${#PANEL[@]}" ] && N="${#PANEL[@]}"
+[ "$N" -le "${#PANEL[@]}" ] || {
+  echo "quality-select-agents: resolved target $N exceeds supported ${#PANEL[@]}-agent panel" >&2
+  exit 1
+}
 AGENTS=("${PANEL[@]:0:$N}")
 PANEL_INCOMPLETE=false
 
