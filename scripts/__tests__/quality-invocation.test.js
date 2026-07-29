@@ -1001,6 +1001,97 @@ printf '%s\\n' "$manifest"
     ).toBe("human-required");
   });
 
+  function preparedMergeAuthorization(authority) {
+    const root = repo(`merge-authority-${authority ?? "legacy"}`);
+    const manifest = create(root, ["--level", "98", "--pr", "1", "--merge"]);
+    invocation.withManifestLock(manifest, (state) => {
+      invocation.setRisk(state, {
+        tier: "critical",
+        taskType: "bugfix",
+        score: 85,
+        agents: 6,
+        "codex-depth": "xhigh",
+        "codex-rounds": 2,
+      });
+    });
+    execFileSync("bash", [SELECT, "--manifest", manifest], { cwd: root });
+    prepareCodexReview(root, manifest);
+    recordJudgeArtifact(root, manifest);
+    invocation.withManifestLock(manifest, (state) => {
+      if (authority === null) delete state.risk.mergeAuthority;
+      else state.risk.mergeAuthority = authority;
+    });
+    return {
+      root,
+      manifest,
+      bin: fakeGh(root, git(root, ["rev-parse", "HEAD"])),
+    };
+  }
+
+  it("executes autonomous critical merge authorization without a break-glass approval", () => {
+    const { root, manifest, bin } = preparedMergeAuthorization("autonomous");
+    const result = spawnSync(
+      "bash",
+      [AUTHORIZE, "--manifest", manifest, "--preflight"],
+      {
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          QUALITY_TEST_STRICT_PROTECTION: "true",
+        },
+        encoding: "utf8",
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain(
+      "non-mutating merge authorization preflight passed",
+    );
+  }, 120_000);
+
+  it("executes human-required critical merge authorization and blocks without approval", () => {
+    const { root, manifest, bin } =
+      preparedMergeAuthorization("human-required");
+    const result = spawnSync(
+      "bash",
+      [AUTHORIZE, "--manifest", manifest, "--preflight"],
+      {
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          QUALITY_TEST_STRICT_PROTECTION: "true",
+        },
+        encoding: "utf8",
+      },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(
+      /human break-glass approval is missing or stale/,
+    );
+  }, 120_000);
+
+  it("executes legacy merge authorization and fails closed to human-required", () => {
+    const { root, manifest, bin } = preparedMergeAuthorization(null);
+    const result = spawnSync(
+      "bash",
+      [AUTHORIZE, "--manifest", manifest, "--preflight"],
+      {
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          QUALITY_TEST_STRICT_PROTECTION: "true",
+        },
+        encoding: "utf8",
+      },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(
+      /human break-glass approval is missing or stale/,
+    );
+  }, 120_000);
+
   it("locates an explicit target manifest without trusting the caller cwd", () => {
     const first = repo("first");
     const second = repo("second");
