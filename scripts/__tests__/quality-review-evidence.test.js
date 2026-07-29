@@ -14,6 +14,8 @@ const fields = {
   tier: "critical",
   findings: 0,
   reviewer: "codex",
+  primary: "codex",
+  fallback: "claude",
 };
 
 function keyPair() {
@@ -43,6 +45,18 @@ describe("quality review evidence signatures", () => {
     expect(() =>
       verifyEvidence(
         { ...fields, head: "c".repeat(40) },
+        signature,
+        keys.publicKey,
+      ),
+    ).toThrow(/does not bind/);
+  });
+
+  it("rejects a signature whose declared primary reviewer was rewritten", () => {
+    const keys = keyPair();
+    const signature = signEvidence(fields, keys.privateKey);
+    expect(() =>
+      verifyEvidence(
+        { ...fields, primary: "claude" },
         signature,
         keys.publicKey,
       ),

@@ -7,7 +7,15 @@
 const crypto = require("crypto");
 const fs = require("fs");
 
-const FIELDS = ["head", "base", "tier", "findings", "reviewer"];
+const FIELDS = [
+  "head",
+  "base",
+  "tier",
+  "findings",
+  "reviewer",
+  "primary",
+  "fallback",
+];
 const TIERS = new Set(["low", "medium", "high", "critical"]);
 const REVIEWERS = new Set(["claude", "codex", "ci-only"]);
 
@@ -40,6 +48,12 @@ function evidencePayload(fields) {
   if (!REVIEWERS.has(fields.reviewer)) {
     throw new Error("evidence reviewer is invalid");
   }
+  if (!REVIEWERS.has(fields.primary) || fields.primary === "ci-only") {
+    throw new Error("evidence primary reviewer is invalid");
+  }
+  if (!REVIEWERS.has(fields.fallback)) {
+    throw new Error("evidence fallback reviewer is invalid");
+  }
   if (!Number.isInteger(fields.findings) || fields.findings < 0) {
     throw new Error("evidence findings must be a non-negative integer");
   }
@@ -50,6 +64,8 @@ function evidencePayload(fields) {
     tier: fields.tier,
     findings: fields.findings,
     reviewer: fields.reviewer,
+    primary: fields.primary,
+    fallback: fields.fallback,
   };
 }
 
@@ -171,7 +187,7 @@ if (require.main === module) {
       );
     } else {
       throw new Error(
-        "usage: quality-review-evidence.js sign|verify --head <sha> --base <sha> --tier <tier> --findings <count> --reviewer <name> [--signature <value>]",
+        "usage: quality-review-evidence.js sign|verify --head <sha> --base <sha> --tier <tier> --findings <count> --reviewer <name> --primary <name> --fallback <name> [--signature <value>]",
       );
     }
   } catch (error) {
