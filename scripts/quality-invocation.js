@@ -17,6 +17,14 @@ const NEEDS_EXECUTION_BUDGET_MIGRATION = Symbol(
 );
 const NEEDS_REQUIRED_GATES_MIGRATION = Symbol("needs-required-gates-migration");
 
+class GateExecutionError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.name = "GateExecutionError";
+    this.status = status;
+  }
+}
+
 function parseJson(raw, label) {
   try {
     return JSON.parse(raw);
@@ -2992,7 +3000,7 @@ function gateEvidenceInput(manifest, options) {
   const identity = gateEvidenceIdentity(manifest, options);
   const status = options.status || "success";
   const reason = options.reason?.trim() || null;
-  if (!["success", "skipped"].includes(status)) {
+  if (!["success", "skipped", "failed", "timeout"].includes(status)) {
     throw new Error(`invalid gate evidence status '${status}'`);
   }
   if (
@@ -3004,6 +3012,9 @@ function gateEvidenceInput(manifest, options) {
     throw new Error(
       "test gate skipping requires --skip-tests and an explicit skip reason",
     );
+  }
+  if (["failed", "timeout"].includes(status) && !reason) {
+    throw new Error(`gate ${status} evidence requires an explicit reason`);
   }
   return { ...identity, status, reason };
 }
@@ -3101,14 +3112,18 @@ function executeGate(manifest, required, name, log, manifestPath) {
   const output = `${result.stdout || ""}${result.stderr || ""}`;
   fs.writeFileSync(log, output, { mode: 0o600 });
   if (result.status === 124) {
-    throw new Error(
+    throw new GateExecutionError(
+      "timeout",
       `gate '${name}' exceeded its proportional ${timeoutSeconds}s budget`,
     );
   }
   if (result.error) throw result.error;
   if (result.status !== 0) {
     process.stderr.write(output);
-    throw new Error(`gate '${name}' failed with exit status ${result.status}`);
+    throw new GateExecutionError(
+      "failed",
+      `gate '${name}' failed with exit status ${result.status}`,
+    );
   }
   return output;
 }
@@ -3133,15 +3148,28 @@ function runGate(manifest, options, manifestPath) {
     recordSkippedGate(manifest, required, name, log, options);
     return;
   }
-  const output = executeGate(manifest, required, name, log, manifestPath);
-  recordGate(manifest, {
-    name,
-    source: required.source,
-    command: required.command,
-    log,
-    status: "success",
-  });
-  process.stdout.write(output);
+  try {
+    const output = executeGate(manifest, required, name, log, manifestPath);
+    recordGate(manifest, {
+      name,
+      source: required.source,
+      command: required.command,
+      log,
+      status: "success",
+    });
+    process.stdout.write(output);
+  } catch (error) {
+    recordGate(manifest, {
+      name,
+      source: required.source,
+      command: required.command,
+      log,
+      status: error instanceof GateExecutionError ? error.status : "failed",
+      reason: error.message,
+    });
+    process.stderr.write(`${error.message}\n`);
+    process.exitCode = 1;
+  }
 }
 
 function validGateArtifact(gate) {

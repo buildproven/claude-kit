@@ -44,6 +44,19 @@ LOG_DIR="$STATE_ROOT/gates/$HEAD"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/$NAME.log"
 cd "$ROOT" || exit 1
+release_terminal_quality_lock() {
+  local invocation branch plan primary
+  [ "$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" options.merge)" = true ] || return 0
+  branch="$(git branch --show-current 2>/dev/null || true)"
+  [ -n "$branch" ] || return 0
+  invocation="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" invocationId)" || return 0
+  plan="$(node "$SCRIPT_DIR/worktree-manager.js" resolve --repo "$ROOT" --branch "$branch" 2>/dev/null)" || return 0
+  primary="$(printf '%s' "$plan" | jq -r '.repoRoot // empty' 2>/dev/null)"
+  [ -n "$primary" ] && [ "$primary" != "$ROOT" ] || return 0
+  node "$SCRIPT_DIR/worktree-manager.js" unlock \
+    --repo "$ROOT" --branch "$branch" --owner "bs:quality/$invocation" --terminal \
+    >/dev/null 2>&1 || echo "[quality] terminal gate failure left its worktree lock in place; inspect the exact lock owner before recovery." >&2
+}
 if [ "$SKIP" = true ]; then
   node "$SCRIPT_DIR/quality-invocation.js" gate-run "$MANIFEST" \
     --name "$NAME" --skip --reason "$REASON" || exit 1
@@ -54,6 +67,7 @@ node "$SCRIPT_DIR/quality-invocation.js" gate-run "$MANIFEST" \
   --name "$NAME"
 GATE_RC=$?
 if [ "$GATE_RC" -ne 0 ]; then
+  release_terminal_quality_lock
   node "$SCRIPT_DIR/quality-terminal-status.js" \
     --manifest "$MANIFEST" --category repository-gate --gate "$NAME" || true
   exit "$GATE_RC"
