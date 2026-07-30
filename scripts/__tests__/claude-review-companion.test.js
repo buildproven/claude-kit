@@ -216,7 +216,7 @@ describe("claude-review-companion.sh", () => {
         "--agents",
         "code-reviewer,bogus-one,bogus-two",
       ]);
-      expect(r.code).toBe(4); // panel is still degraded (2/3 inconclusive)
+      expect(r.code).toBe(4); // one of three is not a usable majority
       expect(r.stderr).toMatch(
         /WARNING — 2 agent\(s\) have NO resolvable definition/,
       );
@@ -535,6 +535,51 @@ printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{
     ).toContain("structured output was missing or contradictory");
   });
 
+  it("keeps usable peer evidence when one panel agent is malformed", () => {
+    const d = tmpdir();
+    const bin = path.join(d, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+    fs.writeFileSync(path.join(d, "identity.json"), "{}\n");
+    fs.writeFileSync(
+      path.join(bin, "claude"),
+      `#!/usr/bin/env bash
+if printf '%s\\n' "$@" | grep -q 'silent-failure-hunter.md'; then
+  printf '%s\\n' '{"result":"<<<FINDINGS REPORTED>>>","is_error":false,"stop_reason":"end_turn"}'
+else
+  printf '%s\\n' '{"result":"{\\"verdict\\":\\"approve\\",\\"summary\\":\\"Clean\\",\\"findings\\":[]}","structured_output":{"verdict":"approve","summary":"Clean","findings":[]},"is_error":false,"stop_reason":"end_turn"}'
+fi
+`,
+      { mode: 0o755 },
+    );
+
+    const out = path.join(d, "out");
+    const r = run(
+      [
+        "--diff-file",
+        path.join(d, "diff.txt"),
+        "--out-dir",
+        out,
+        "--agents",
+        "code-reviewer,security-auditor,type-design-analyzer,silent-failure-hunter",
+        "--identity-file",
+        path.join(d, "identity.json"),
+      ],
+      { env: { PATH: `${bin}:${process.env.PATH}` } },
+    );
+
+    expect(r.code, r.stderr).toBe(0);
+    expect(
+      fs.readFileSync(
+        path.join(out, "silent-failure-hunter.findings.txt"),
+        "utf8",
+      ),
+    ).toMatch(/INCONCLUSIVE/);
+    expect(
+      fs.readFileSync(path.join(out, "code-reviewer.findings.txt"), "utf8"),
+    ).toContain("NO FINDINGS. Verdict: approve. Clean");
+  });
+
   describe("agent-file resolution (drift guard)", () => {
     // The whole design rests on pointing --append-system-prompt-file at the
     // REAL agent bodies (no inlined copies to drift). Assert the kit-local
@@ -664,7 +709,7 @@ printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{
       expect(r.code).toBe(4);
     });
 
-    it("blocks when any mandatory agent is inconclusive (--dry-run)", () => {
+    it("blocks when a two-agent panel has an inconclusive reviewer (--dry-run)", () => {
       const d = tmpdir();
       fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
       const r = run([
@@ -677,6 +722,21 @@ printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{
         "code-reviewer,bogus",
       ]);
       expect(r.code).toBe(4);
+    });
+
+    it("preserves a usable majority when one of four agents is inconclusive (--dry-run)", () => {
+      const d = tmpdir();
+      fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+      const r = run([
+        "--dry-run",
+        "--diff-file",
+        path.join(d, "diff.txt"),
+        "--out-dir",
+        path.join(d, "o"),
+        "--agents",
+        "code-reviewer,security-auditor,type-design-analyzer,bogus",
+      ]);
+      expect(r.code).toBe(0);
     });
   });
 

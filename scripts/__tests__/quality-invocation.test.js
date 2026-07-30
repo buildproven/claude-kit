@@ -1281,11 +1281,16 @@ exec "${realGit}" "$@"
       recordGateFixture(manifest, gate.name);
     }
     recordMutationFixture(manifest);
-    expect(() =>
+    const authorization = JSON.parse(
       execFileSync("node", [INVOCATION, "review-authorization", manifest], {
         cwd: root,
       }),
-    ).not.toThrow();
+    );
+    expect(authorization).toMatchObject({
+      provider: "operator-quality-override",
+      primary: "unavailable",
+      fallback: "unavailable",
+    });
   });
 
   it("carries a valid break-glass approval across a rebase-only HEAD change with no new diff (BUI-380)", () => {
@@ -3476,6 +3481,14 @@ exit 1
     expect(() =>
       invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
     ).toThrow(/inconclusive provider findings/);
+
+    writeFileSync(
+      path.join(artifactDir, "reviewer-b.findings.txt"),
+      "NO FINDINGS.\nINCONCLUSIVE: later pass\n",
+    );
+    expect(() =>
+      invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
+    ).toThrow(/inconclusive provider findings/);
   });
 
   it("excludes stale fallback artifacts when a retry succeeds with Codex", () => {
@@ -3839,7 +3852,7 @@ exit 1
     }).toThrow();
     // Named as inconclusive/malformed — NOT as an actionable code finding.
     expect(stderr).toMatch(/inconclusive provider findings/);
-    expect(stderr).toMatch(/wrote no finding text/);
+    expect(stderr).toMatch(/usable reviewer reports/);
   });
 
   it("BUI-463: stripping the delimiter preserves paragraph breaks between multiple findings", () => {

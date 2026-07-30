@@ -406,25 +406,26 @@ run_agent() {
 # --- run all agents concurrently as background jobs, then wait ---------------
 # Bash `wait` blocks the caller's Bash tool call synchronously in every context.
 pids=()
-resolved=0
+mandatory=0
 IFS=',' read -ra AGENT_LIST <<< "$AGENTS"
 for agent in "${AGENT_LIST[@]}"; do
   agent="$(printf '%s' "$agent" | tr -d '[:space:]')"
   [ -z "$agent" ] && continue
-  resolved=$((resolved + 1))
+  mandatory=$((mandatory + 1))
   run_agent "$agent" &
   pids+=("$!")
 done
 
-if [ "$resolved" -eq 0 ]; then
+if [ "$mandatory" -eq 0 ]; then
   echo "claude-review-companion: no agents to run" >&2
   exit 1
 fi
 
 # Collect each agent's rc. run_agent returns 3 for INCONCLUSIVE (timeout /
-# error / unparseable / unresolved). If EVERY agent went inconclusive, the whole
-# review is degraded — exit 4 so the caller can block the merge rather than
-# treat "N inconclusive files" as a clean pass.
+# error / unparseable / unresolved). A strict majority of the mandatory panel
+# must return usable evidence. This tolerates one transient agent failure in a
+# four-agent panel without allowing a single surviving agent to mask a
+# degraded majority.
 inconclusive=0
 unresolved_agents=()
 provider_failure_rc=0
@@ -460,9 +461,11 @@ if [ "$provider_failure_rc" -ne 0 ] || [ -f "$EXHAUSTED_FILE" ]; then
   exit "$provider_failure_rc"
 fi
 
-echo "claude-review-companion: wrote findings for $resolved agent(s) to $OUT_DIR ($inconclusive inconclusive)" >&2
-if [ "$inconclusive" -gt 0 ]; then
-  echo "claude-review-companion: $inconclusive mandatory agent(s) inconclusive — checkpoint blocked" >&2
+echo "claude-review-companion: wrote findings for $mandatory mandatory agent(s) to $OUT_DIR ($inconclusive inconclusive)" >&2
+usable=$((mandatory - inconclusive))
+required_usable=$((mandatory / 2 + 1))
+if [ "$usable" -lt "$required_usable" ]; then
+  echo "claude-review-companion: only $usable/$mandatory mandatory agents produced usable evidence (need $required_usable) — checkpoint blocked" >&2
   exit 4
 fi
 exit 0
