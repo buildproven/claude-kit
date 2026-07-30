@@ -2329,7 +2329,7 @@ function providerFindings(manifest) {
       fs.readFileSync(path.join(review.artifactDir, "artifact-inventory.json")),
       "provider artifact inventory",
     );
-    if (inventory.provider === "claude") {
+    if (inventory.provider === "claude" && review.status !== "advisory") {
       requiredUsableReports = Math.max(
         requiredUsableReports,
         Math.floor(manifest.agents.length / 2) + 1,
