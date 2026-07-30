@@ -242,7 +242,8 @@ About to:
 
 Budget caps:
   - max wall-clock: 30 min
-  - escalation: Opus/Sol high only for an explicit irreversible architecture decision
+- escalation: Claude Opus or a GPT Sol-class Codex power profile at high effort,
+  only for an explicit irreversible architecture decision
   - max judge tier: Codex high (if changed files match harness-config.json 'high'/'critical')
   - 7-day quota delta: ≤ 2% (read from ~/.claude/plugins/claude-hud/.usage-cache.json)
 
