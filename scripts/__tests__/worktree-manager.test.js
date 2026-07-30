@@ -370,6 +370,41 @@ describe("worktree-manager public CLI", () => {
     expect(existsSync(worktree.worktreePath)).toBe(false);
   });
 
+  it("removes a merged PR worktree after GitHub deletes its squash-merged remote branch", () => {
+    const { parent, repo } = fixture();
+    const bin = fakeGh(parent);
+    const worktree = create(repo, "feature/test");
+    writeFileSync(path.join(worktree.worktreePath, "change.txt"), "change\n");
+    git(worktree.worktreePath, "add", "change.txt");
+    git(worktree.worktreePath, "commit", "-m", "feature change");
+    git(worktree.worktreePath, "push", "-u", "origin", "feature/test");
+
+    git(repo, "merge", "--squash", "feature/test");
+    git(repo, "commit", "-m", "squash feature");
+    git(repo, "push", "origin", "main");
+    git(repo, "push", "origin", "--delete", "feature/test");
+    git(repo, "fetch", "--prune", "origin");
+    git(repo, "branch", "--unset-upstream", "feature/test");
+
+    const state = manager(
+      ["status", "--repo", repo, "--grace-hours", "0", "--recent-minutes", "0"],
+      { env: ghEnv(bin, "MERGED") },
+    ).json.worktrees[0];
+    expect(state.unpushed).toBe(true);
+    expect(state.classification).toBe("clean with merged PR");
+    expect(state.removable).toBe(true);
+
+    const output = manager(
+      ["remove", "--repo", repo, "--branch", "feature/test"],
+      { env: ghEnv(bin, "MERGED") },
+    ).json;
+    expect(output.removedPath).toBe(worktree.worktreePath);
+    expect(existsSync(worktree.worktreePath)).toBe(false);
+    expect(
+      git(repo, "show-ref", "--verify", "refs/heads/feature/test"),
+    ).toContain("refs/heads/feature/test");
+  });
+
   it("removes an eligible merged worktree with initialized submodules", () => {
     const { parent, repo } = fixture();
     const submoduleSource = path.join(parent, "submodule-source");

@@ -1021,15 +1021,6 @@ function classify(repoRoot, record, options = {}) {
     };
   }
   const push = upstreamState(repoRoot, record.branch);
-  if (push.unpushed) {
-    return {
-      ...record,
-      ...push,
-      classification: "clean with unpushed commits",
-      removable: false,
-      reason: "branch contains commits absent from its remote",
-    };
-  }
   const pr = options.skipPrCheck
     ? { available: false, state: "UNKNOWN", number: null }
     : lookupPr(repoRoot, record.branch);
@@ -1051,6 +1042,16 @@ function classify(repoRoot, record, options = {}) {
       classification: "clean with closed/unmerged PR",
       removable: false,
       reason: `PR #${pr.number} closed without merge`,
+    };
+  }
+  if (push.unpushed && pr.state !== "MERGED") {
+    return {
+      ...record,
+      ...push,
+      pr,
+      classification: "clean with unpushed commits",
+      removable: false,
+      reason: "branch contains commits absent from its remote",
     };
   }
   const ageMinutes = activityAgeMinutes(repoRoot, record);
@@ -1148,12 +1149,6 @@ function removeRecord(options) {
   }
   if (record.branch) {
     const push = upstreamState(repoRoot, record.branch);
-    if (push.unpushed) {
-      throw new ManagerError(
-        `Worktree removal refused: '${record.branch}' has unpushed commits.`,
-        "UNPUSHED",
-      );
-    }
     const pr = options.skipPrCheck
       ? { state: "UNKNOWN", available: false }
       : lookupPr(repoRoot, record.branch);
@@ -1167,6 +1162,12 @@ function removeRecord(options) {
       throw new ManagerError(
         `Worktree removal refused: PR #${pr.number} was closed without merge. Use --allow-closed after explicit review.`,
         "CLOSED_PR",
+      );
+    }
+    if (push.unpushed && pr.state !== "MERGED") {
+      throw new ManagerError(
+        `Worktree removal refused: '${record.branch}' has unpushed commits.`,
+        "UNPUSHED",
       );
     }
     if (!options.allowUnknown && !pr.available && !push.localMerged) {
