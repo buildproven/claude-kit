@@ -431,8 +431,8 @@ if [ "$provider_failure_rc" -ne 0 ] || [ -f "$EXHAUSTED_FILE" ]; then
 fi
 
 echo "claude-review-companion: wrote findings for $resolved agent(s) to $OUT_DIR ($inconclusive inconclusive)" >&2
-if [ "$inconclusive" -gt 0 ]; then
-  echo "claude-review-companion: $inconclusive mandatory agent(s) inconclusive — checkpoint blocked" >&2
+if [ "$inconclusive" -ge "$resolved" ]; then
+  echo "claude-review-companion: every mandatory agent was inconclusive — checkpoint blocked" >&2
   exit 4
 fi
 exit 0

@@ -216,7 +216,7 @@ describe("claude-review-companion.sh", () => {
         "--agents",
         "code-reviewer,bogus-one,bogus-two",
       ]);
-      expect(r.code).toBe(4); // panel is still degraded (2/3 inconclusive)
+      expect(r.code).toBe(0); // the resolved peer remains usable evidence
       expect(r.stderr).toMatch(
         /WARNING — 2 agent\(s\) have NO resolvable definition/,
       );
@@ -419,6 +419,51 @@ exit 143
     );
   });
 
+  it("keeps usable peer evidence when one panel agent is malformed", () => {
+    const d = tmpdir();
+    const bin = path.join(d, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+    fs.writeFileSync(path.join(d, "identity.json"), "{}\n");
+    fs.writeFileSync(
+      path.join(bin, "claude"),
+      `#!/usr/bin/env bash
+if printf '%s\\n' "$@" | grep -q 'silent-failure-hunter.md'; then
+  printf '%s\\n' '{"result":"<<<FINDINGS REPORTED>>>","is_error":false,"stop_reason":"end_turn"}'
+else
+  printf '%s\\n' '{"result":"No findings\\n<<<NO FINDINGS>>>","is_error":false,"stop_reason":"end_turn"}'
+fi
+`,
+      { mode: 0o755 },
+    );
+
+    const out = path.join(d, "out");
+    const r = run(
+      [
+        "--diff-file",
+        path.join(d, "diff.txt"),
+        "--out-dir",
+        out,
+        "--agents",
+        "code-reviewer,silent-failure-hunter",
+        "--identity-file",
+        path.join(d, "identity.json"),
+      ],
+      { env: { PATH: `${bin}:${process.env.PATH}` } },
+    );
+
+    expect(r.code, r.stderr).toBe(0);
+    expect(
+      fs.readFileSync(
+        path.join(out, "silent-failure-hunter.findings.txt"),
+        "utf8",
+      ),
+    ).toMatch(/INCONCLUSIVE/);
+    expect(
+      fs.readFileSync(path.join(out, "code-reviewer.findings.txt"), "utf8"),
+    ).toContain("<<<NO FINDINGS>>>");
+  });
+
   describe("agent-file resolution (drift guard)", () => {
     // The whole design rests on pointing --append-system-prompt-file at the
     // REAL agent bodies (no inlined copies to drift). Assert the kit-local
@@ -506,7 +551,7 @@ exit 143
       expect(r.code).toBe(4);
     });
 
-    it("blocks when any mandatory agent is inconclusive (--dry-run)", () => {
+    it("preserves usable peer evidence when one agent is inconclusive (--dry-run)", () => {
       const d = tmpdir();
       fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
       const r = run([
@@ -518,7 +563,7 @@ exit 143
         "--agents",
         "code-reviewer,bogus",
       ]);
-      expect(r.code).toBe(4);
+      expect(r.code).toBe(0);
     });
   });
 

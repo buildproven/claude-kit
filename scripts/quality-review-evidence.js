@@ -47,8 +47,7 @@ function evidencePayload(fields) {
   assertSha(fields.head, "evidence head");
   assertSha(fields.base, "evidence base");
   if (!TIERS.has(fields.tier)) throw new Error("evidence tier is invalid");
-  const isOperatorOverride =
-    fields.reviewer === OPERATOR_OVERRIDE_REVIEWER;
+  const isOperatorOverride = fields.reviewer === OPERATOR_OVERRIDE_REVIEWER;
   if (isOperatorOverride) {
     if (
       fields.primary !== UNAVAILABLE_REVIEWER ||

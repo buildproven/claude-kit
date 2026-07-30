@@ -2295,6 +2295,7 @@ function providerFindings(manifest) {
   // Collected across all covered reviews and raised as one malformed-output
   // failure below, rather than silently dropped or counted as findings.
   const inconclusiveAgents = [];
+  let usableReviewerReports = 0;
   for (const review of coveredReviews(manifest)) {
     const reviewFindingsStart = findings.length;
     const inventory = parseJson(
@@ -2388,7 +2389,11 @@ function providerFindings(manifest) {
               ),
           );
       }
-      if (!text || isClean) continue;
+      if (!text) continue;
+      if (isClean) {
+        usableReviewerReports += 1;
+        continue;
+      }
       // Strip the trailing <<<FINDINGS REPORTED>>> delimiter line (if that's
       // how this text was classified as non-clean) so it doesn't leak into
       // the finding body shown to a human or the judge. Slice the ORIGINAL
@@ -2423,6 +2428,7 @@ function providerFindings(manifest) {
         inconclusiveAgents.push(item.name);
         continue;
       }
+      usableReviewerReports += 1;
       const body = strippedBody;
       findings.push({
         id: crypto
@@ -2439,7 +2445,7 @@ function providerFindings(manifest) {
   // Fail closed, and distinctly from "actionable code findings remain" — the
   // operator needs to know the panel produced no usable verdict, not hunt for
   // a defect that was never described.
-  if (inconclusiveAgents.length) {
+  if (inconclusiveAgents.length && usableReviewerReports === 0) {
     throw new Error(
       `inconclusive provider findings: ${inconclusiveAgents.join(", ")} ` +
         "reported findings but wrote no finding text (malformed review output)",
@@ -2690,14 +2696,13 @@ function writeArtifactInventory(
     .sort();
   const findings = names.filter((name) => name.endsWith(".findings.txt"));
   if (findings.length === 0) throw new Error("provider findings are missing");
-  if (
-    findings.some((name) =>
-      fs
-        .readFileSync(path.join(resolved, name), "utf8")
-        .split(/\r?\n/)
-        .some((line) => line.startsWith("INCONCLUSIVE:")),
-    )
-  ) {
+  const inconclusiveFindings = findings.filter((name) =>
+    fs
+      .readFileSync(path.join(resolved, name), "utf8")
+      .split(/\r?\n/)
+      .some((line) => line.startsWith("INCONCLUSIVE:")),
+  );
+  if (inconclusiveFindings.length === findings.length) {
     throw new Error("inconclusive provider findings cannot be inventoried");
   }
   if (

@@ -3416,6 +3416,14 @@ exit 1
     );
     expect(() =>
       invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
+    ).not.toThrow();
+
+    writeFileSync(
+      path.join(artifactDir, "reviewer-b.findings.txt"),
+      "NO FINDINGS.\nINCONCLUSIVE: later pass\n",
+    );
+    expect(() =>
+      invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
     ).toThrow(/inconclusive provider findings/);
   });
 
