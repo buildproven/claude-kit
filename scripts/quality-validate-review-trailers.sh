@@ -104,20 +104,20 @@ elif printf '%s\n' "$PARSED" | grep -q '^Quality-Override: '; then
   exit 1
 fi
 
+tier_rank() {
+  case "$1" in
+    low) echo 0 ;;
+    medium) echo 1 ;;
+    high) echo 2 ;;
+    critical) echo 3 ;;
+    *) return 1 ;;
+  esac
+}
+STAMP_RANK="$(tier_rank "$STAMP_TIER")" || {
+  echo "quality evidence tier is invalid" >&2
+  exit 1
+}
 if [ -n "$REQUIRED_TIER" ]; then
-  tier_rank() {
-    case "$1" in
-      low) echo 0 ;;
-      medium) echo 1 ;;
-      high) echo 2 ;;
-      critical) echo 3 ;;
-      *) return 1 ;;
-    esac
-  }
-  STAMP_RANK="$(tier_rank "$STAMP_TIER")" || {
-    echo "quality evidence tier is invalid" >&2
-    exit 1
-  }
   REQUIRED_RANK="$(tier_rank "$REQUIRED_TIER")" || {
     echo "required quality tier is invalid" >&2
     exit 1
@@ -126,11 +126,15 @@ if [ -n "$REQUIRED_TIER" ]; then
     echo "quality evidence tier is below the required tier" >&2
     exit 1
   }
-  if [ "$REQUIRED_RANK" -ge 2 ] && \
-     [ "$STAMP_PROVIDER" != "operator-quality-override" ] && \
-     [ "$STAMP_PROVIDER" != "$STAMP_PRIMARY" ]; then
-    echo "high/critical evidence requires the configured primary reviewer" >&2
+  if [ "$REQUIRED_RANK" -ge 2 ] && [ "$REQUIRE_SIGNATURE" != true ]; then
+    echo "high/critical evidence requires --require-signature" >&2
     exit 1
   fi
+fi
+if [ "$STAMP_RANK" -ge 2 ] && \
+   [ "$STAMP_PROVIDER" != "operator-quality-override" ] && \
+   [ "$STAMP_PROVIDER" != "$STAMP_PRIMARY" ]; then
+  echo "high/critical evidence requires the configured primary reviewer" >&2
+  exit 1
 fi
 echo "quality review evidence verified: reviewer=$STAMP_PROVIDER head=$STAMP_HEAD base=$STAMP_BASE"

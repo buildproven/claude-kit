@@ -78,6 +78,9 @@ describe("quality merge gates", () => {
     expect(VALIDATOR).toContain("Quality-Evidence-Signature");
     expect(VALIDATOR).toContain("QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY");
     expect(VALIDATOR).toContain("--require-signature");
+    expect(VALIDATOR).toContain(
+      "high/critical evidence requires --require-signature",
+    );
     expect(VALIDATOR).toContain("--required-tier");
     expect(VALIDATOR).toContain("operator-quality-override");
     expect(VALIDATOR).toContain(
