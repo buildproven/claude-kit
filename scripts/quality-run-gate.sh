@@ -45,11 +45,11 @@ mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/$NAME.log"
 cd "$ROOT" || exit 1
 release_terminal_quality_lock() {
-  local invocation branch plan primary root_real primary_real unlock_error
+  local lock_owner branch plan primary root_real primary_real unlock_error
   [ "$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" options.merge)" = true ] || return 0
   branch="$(git branch --show-current 2>/dev/null || true)"
   [ -n "$branch" ] || return 0
-  invocation="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" invocationId)" || {
+  lock_owner="$(node "$SCRIPT_DIR/quality-invocation.js" lock-owner "$MANIFEST")" || {
     echo "[quality] terminal gate failure could not resolve its invocation identity; the worktree lock was not changed." >&2
     return 0
   }
@@ -62,16 +62,17 @@ release_terminal_quality_lock() {
     echo "[quality] terminal gate failure resolved no primary repository for '$branch'; the lock was not changed." >&2
     return 0
   }
-  root_real="$(cd "$ROOT" 2>/dev/null && pwd -P)" || return 0
+  root_real="$(cd "$ROOT" 2>/dev/null && pwd -P)" || {
+    echo "[quality] terminal gate failure could not normalize target repository '$ROOT'; the lock was not changed." >&2
+    return 0
+  }
   primary_real="$(cd "$primary" 2>/dev/null && pwd -P)" || {
     echo "[quality] terminal gate failure could not normalize primary repository '$primary'; the lock was not changed." >&2
     return 0
   }
   [ "$primary_real" != "$root_real" ] || return 0
-  # quality-bootstrap.sh owns linked worktrees as bs:quality/<invocationId>;
-  # worktree-manager enforces the exact same identity before it unlocks.
   unlock_error="$(node "$SCRIPT_DIR/worktree-manager.js" unlock \
-    --repo "$ROOT" --branch "$branch" --owner "bs:quality/$invocation" --terminal \
+    --repo "$ROOT" --branch "$branch" --owner "$lock_owner" --terminal \
     2>&1 >/dev/null)" || {
     echo "[quality] terminal gate failure left its worktree lock in place: $unlock_error" >&2
     node "$SCRIPT_DIR/worktree-manager.js" status \

@@ -482,6 +482,7 @@ if [ -n "${RES_PR:-}" ]; then
 fi
 BS_QUALITY_MANIFEST="$(node "$SCRIPT_DIR/quality-invocation.js" "${CREATE_ARGS[@]}")" || exit 1
 INVOCATION_ID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$BS_QUALITY_MANIFEST" invocationId)"
+LOCK_OWNER="$(node "$SCRIPT_DIR/quality-invocation.js" lock-owner "$BS_QUALITY_MANIFEST")" || exit 1
 BASE_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$BS_QUALITY_MANIFEST" revisions.baseSha)"
 HEAD_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$BS_QUALITY_MANIFEST" revisions.currentHead)"
 
@@ -492,7 +493,7 @@ if [ "$ARGS_MERGE" = true ] && [ "$CURRENT_BRANCH" != "main" ] && [ "$CURRENT_BR
   LOCK_ARGS=(lock \
     --repo "$GIT_ROOT" \
     --branch "$CURRENT_BRANCH" \
-    --reason "bs:quality/$INVOCATION_ID" \
+    --reason "$LOCK_OWNER" \
     --creator "bs:quality" \
     --purpose "verified-merge" \
     --invocation "$INVOCATION_ID")
@@ -507,7 +508,7 @@ if [ "$ARGS_MERGE" = true ] && [ "$CURRENT_BRANCH" != "main" ] && [ "$CURRENT_BR
     echo "❌ Could not parse existing worktree ownership." >&2
     exit 1
   }
-  if [ -n "$PRIOR_LOCK" ] && [ "$PRIOR_LOCK" != "bs:quality/$INVOCATION_ID" ]; then
+  if [ -n "$PRIOR_LOCK" ] && [ "$PRIOR_LOCK" != "$LOCK_OWNER" ]; then
     echo "❌ quality target is actively locked by '$PRIOR_LOCK'." >&2
     echo "Release that exact owner at its terminal handoff before retrying:" >&2
     echo "  node \"$SCRIPT_DIR/worktree-manager.js\" unlock --repo \"$GIT_ROOT\" --branch \"$CURRENT_BRANCH\" --owner \"$PRIOR_LOCK\" --terminal" >&2

@@ -3525,6 +3525,14 @@ function gateSatisfied(manifest, name) {
   );
 }
 
+function qualityLockOwner(manifest) {
+  const invocationId = String(manifest.invocationId || "").trim();
+  if (!invocationId) {
+    throw new Error("quality lock owner requires an invocation id");
+  }
+  return `bs:quality/${invocationId}`;
+}
+
 const COMMANDS = {
   validate: ({ manifest }) =>
     process.stdout.write(`${manifest.invocationId}\n`),
@@ -3621,6 +3629,7 @@ const COMMANDS = {
   },
   get: ({ manifest, rawArgs }) => printValue(getPath(manifest, rawArgs[0])),
   field: ({ manifest, rawArgs }) => printValue(getPath(manifest, rawArgs[0])),
+  "lock-owner": ({ manifest }) => printValue(qualityLockOwner(manifest)),
   "verify-artifacts": ({ manifest }) => {
     for (const review of coveredReviews(manifest)) {
       verifyReviewArtifact(manifest, review);
@@ -3735,6 +3744,7 @@ module.exports = {
   lifecycleStale,
   parseOptions,
   parseJson,
+  qualityLockOwner,
   recordReview,
   recordAdvisoryReview,
   recordJudge,
