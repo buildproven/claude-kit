@@ -77,6 +77,7 @@ describe("quality merge gates", () => {
     expect(VALIDATOR).toMatch(/quality-review-evidence\.js" verify/);
     expect(VALIDATOR).toContain("Quality-Evidence-Signature");
     expect(VALIDATOR).toContain("QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY");
+    expect(VALIDATOR).toContain("--require-signature");
     expect(VALIDATOR).toContain("--required-tier");
     expect(VALIDATOR).toContain("operator-quality-override");
     expect(VALIDATOR).toContain(

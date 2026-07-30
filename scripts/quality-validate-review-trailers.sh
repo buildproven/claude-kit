@@ -5,11 +5,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 BASE_REF=origin/main
 MANIFEST=""
 REQUIRED_TIER=""
+REQUIRE_SIGNATURE=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --manifest) MANIFEST="${2:-}"; shift 2 ;;
     --base) BASE_REF="${2:-}"; shift 2 ;;
     --required-tier) REQUIRED_TIER="${2:-}"; shift 2 ;;
+    --require-signature) REQUIRE_SIGNATURE=true; shift ;;
     *) BASE_REF="$1"; shift ;;
   esac
 done
@@ -75,9 +77,13 @@ printf '%s\n' "$PARSED" | grep -Fxq "$EXPECTED" || {
   exit 1
 }
 
-if [ -n "${QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY:-}" ]; then
+if [ "$REQUIRE_SIGNATURE" = true ]; then
   [ -n "$STAMP_SIGNATURE" ] || {
     echo "quality evidence signature is missing" >&2
+    exit 1
+  }
+  [ -n "${QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY:-}" ] || {
+    echo "quality evidence public key is missing" >&2
     exit 1
   }
   node "$SCRIPT_DIR/quality-review-evidence.js" verify \
