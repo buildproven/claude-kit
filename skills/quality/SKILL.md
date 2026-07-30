@@ -1,358 +1,185 @@
 ---
 name: quality
-description: Autonomous quality loop with configurable thoroughness. Runs checks, revision-bound provider review, remediation, CI, and optional merge.
+description: "Autonomous, revision-bound quality loop: deterministic gates, independent review, CI, and optional merge."
 disallowed-tools: AskUserQuestion
 ---
 
 # Quality Skill
 
-Run autonomously to completion. Every mutable fact belongs to one versioned
-JSON invocation manifest. Never infer active state from environment inheritance,
-session IDs, globbing, mtimes, or a "latest" pointer.
+Run autonomously from the exact `--manifest <path>` supplied by the wrapper;
+reject every other argument. The manifest is the sole source of campaign state.
+Never infer state from environment inheritance, session IDs, globbing, mtimes, or
+a “latest” pointer. Never source or eval manifest content.
 
-This skill deliberately does not request `context: fork`: its provider review
-workers start from revision-bound manifests and explicit diff/identity files.
-Claude workers run with `--no-session-persistence`; Codex workers run with
-`--ephemeral`. A quality campaign therefore never inherits a long-lived parent
-transcript. The outer autonomous runner must obtain the same operator-scoped
-usage/concurrency admission as Ralph before it starts a new campaign.
+Campaign identity is deterministic for repository, PR, base, HEAD, scope, level,
+and merge intent. An identical request resumes its evidence, deadline, attempts,
+and terminal state. Changing provider order or retrying an unchanged HEAD cannot
+mint budget. Workers are ephemeral (`--no-session-persistence` / `--ephemeral`)
+and must obtain the same operator admission as Ralph before a new campaign.
 
-Campaign identity is deterministic for the exact repository, PR, base, HEAD,
-scope, level, and merge intent. Repeating the same request resumes that campaign
-and its evidence, deadlines, attempts, and terminal state. Changing provider
-order cannot mint a fresh budget for the same work. Never start another campaign
-for an unchanged identity merely to retry a provider or reset a clock.
-
-Each fenced Bash block runs in a fresh shell. Resolve the installed runtime at
-the start of every block; never assume a variable from an earlier block exists.
+Each fenced Bash block starts a fresh shell. Begin every executable block with
+this resolver; it finds the installed runtime and fails closed when absent:
 
 ```bash
-QUALITY_SCRIPTS_DIR=""
-for candidate in \
-  "${CLAUDE_PLUGIN_ROOT:-}/scripts" \
-  "${CLAUDE_KIT_ROOT:-}/scripts" \
-  "$HOME/.claude/scripts" \
-  "./scripts"
-do
-  if [ -f "$candidate/quality-invocation.js" ]; then
-    QUALITY_SCRIPTS_DIR="$(cd "$candidate" && pwd -P)"
-    break
-  fi
-done
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
 [ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
 ```
 
-## 0. On-demand status (`/bs:quality status`)
+Use `reference.md` only when resolving flags, target paths, manifest schema,
+budgets, or history. Read `checklist.md` before gates, findings, judge, or merge.
+Those references are part of the policy, not optional background reading.
 
-`quality-terminal-status.js`'s diagnosis (repository gate status, provider
-review/checkpoint state, break-glass approval state and expiry, GitHub CI
-status) is otherwise fired only reactively, from failure paths inside gate,
-review, and merge steps. `status` is the proactive entry point: check an
-in-flight or stalled campaign's state without waiting for a failure or
-reading the manifest JSON/`ps aux` by hand.
+## Status
 
-```text
-/bs:quality status --manifest <exact-manifest-path>
-```
+`/bs:quality status --manifest <exact-manifest-path>` is read-only. It validates
+that exact manifest and prints repository-gate, provider, approval, and CI
+diagnosis. Do not substitute a PR number or search for an invocation.
 
 ```bash
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
 bash "$QUALITY_SCRIPTS_DIR/quality-status.sh" --manifest "<exact-manifest-path>"
 ```
 
-Read-only: locates and validates the manifest (same identity checks as any
-resume) and prints the diagnosis — never mutates state, never starts a
-campaign. Requires the exact manifest path, same as every other resume path
-in this skill; there is deliberately no PR-number or session-glob discovery.
-If the exact path isn't known, it was printed as `BS_QUALITY_MANIFEST=` by
-whichever bootstrap/resume created the campaign being asked about.
+## 1. Bootstrap, risk, and contracts
 
-## 1. Manifest handoff
-
-The wrapper has already run bootstrap and must invoke this fork with exactly
-`--manifest <path>`. Reject every other argument. Substitute that literal path
-in every command. Never source or eval manifest content.
-
-Before a command block needs state, validate it and fetch only required fields:
+Load the rooted repository, then persist risk and select agents before any gate
+or provider call. Fetch only the manifest fields a command needs.
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
-bash "$QUALITY_SCRIPTS_DIR/quality-load-root.sh" \
-  --manifest "<exact-manifest-path>"
-GIT_ROOT="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" \
-  field "<exact-manifest-path>" repo.realpath)"
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
+bash "$QUALITY_SCRIPTS_DIR/quality-load-root.sh" --manifest "<exact-manifest-path>"
+GIT_ROOT="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" field "<exact-manifest-path>" repo.realpath)"
 cd "$GIT_ROOT"
+bash "$QUALITY_SCRIPTS_DIR/quality-risk-resolve.sh" --manifest "<exact-manifest-path>"
+bash "$QUALITY_SCRIPTS_DIR/quality-select-agents.sh" --manifest "<exact-manifest-path>"
 ```
 
-Do not source Bash-only scripts from zsh.
+Path/security floors always win. The initial task type is bound to the campaign;
+a remediation commit cannot change task context or reset budget. Bug-fix and
+performance labels are context; path sensitivity, change nature, and magnitude
+set depth. Critical increases review depth, not routine human approval. Low-tier
+typed provider unavailability may record revision-bound `ci-only` coverage only
+after its configured fallback path. Medium+ provider failure, malformed output,
+stale coverage, findings, and CI failure block unless the outer operator issues
+the signed exact-identity `approve --override-quality` capability. That override
+preserves gates, CI, freshness, and audit evidence; it never converts failed
+evidence into a clean review. Explicit `mergeAuthority=human-required` policy
+still needs the wrapper-created, identity-bound, unexpired capability; nested
+processes cannot create one.
 
-## 2. Risk and agent contract
+## 2. Deterministic gates and formatting
+
+Run every immutable `requiredGates` entry through the recording runner. It
+accepts only manifest-policy argv, records results atomically, applies attempt
+and cumulative execution limits, and reuses only exact-HEAD successes whose
+source and command still match. Never invent a passing command or execute a
+fork-controlled script on the operator host.
+
+For example, `bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" --manifest "<exact-manifest-path>" --name lint`
+is a persisted-policy invocation, never a caller-supplied command.
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
-bash "$QUALITY_SCRIPTS_DIR/quality-risk-resolve.sh" \
-  --manifest "<exact-manifest-path>"
-bash "$QUALITY_SCRIPTS_DIR/quality-select-agents.sh" \
-  --manifest "<exact-manifest-path>"
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
+# Names must be present in requiredGates.
+for name in lint type test build security consumer; do
+  bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
+    --manifest "<exact-manifest-path>" --name "$name"
+done
 ```
 
-Risk resolution must persist a concrete task type, tier, and numeric agent
-target before selection. Docs/CI/build/chore work receives the lightest
-eligible routing without weakening path or security floors; feature work keeps
-the standard floor; bug-fix and performance work receive the high-review floor.
-The initial task type remains bound to the campaign so a later remediation
-commit named `fix` cannot mint a stronger campaign or reset its budget.
-Critical review increases review depth; it does not require routine human
-approval. New campaigns persist `mergeAuthority=autonomous` and merge when
-their revision-bound gates, review evidence, CI, and base freshness are clean.
-Actionable findings, malformed or inconclusive provider output, stale review
-coverage, and CI failures remain terminal blocked states unless the outer
-operator issues the explicit, exact-identity `approve --override-quality`
-capability. That signed, expiring capability is auditable and preserves
-deterministic gates, CI, and base freshness; it never turns failed evidence
-into a clean review. The one
-exception is a low-risk campaign whose provider is unavailable after the
-configured primary/fallback path: typed unavailability, exhaustion, billing,
-or bounded-timeout evidence records a revision-bound `ci-only` advisory
-checkpoint and proceeds only when every required deterministic gate is clean.
-Medium, high, and critical tiers remain fail-closed for AI-review failure.
+The runner skips categories not required by the manifest. A config-only
+repository may use `--name test --skip --reason "<recorded reason>"` only when
+the manifest authorizes `options.skipTests`. Supported gate names and native
+`.quality-gates.json` policy are in `reference.md`; shell strings and unknown
+fields fail closed.
 
-Repositories may explicitly set `scorePolicy.mergeAuthority` to
-`human-required`. That legacy opt-in requires a signed break-glass capability
-created only by the outer wrapper and bound to repository, PR, HEAD,
-invocation, approver, and expiry identity. Nested quality processes cannot mint
-it; a changed HEAD or expired/replaced capability invalidates it.
-
-## 3. Automated gates and formatting
-
-Run every gate in the manifest's immutable `requiredGates` policy, derived at
-invocation creation from applicable package scripts, a committed
-`.quality-gates.json` policy, and consumer-workflow fixtures. A native
-Python/shell/polyglot repository can declare revision-bound commands without
-adding a fake `package.json`:
-
-```json
-{
-  "version": 1,
-  "gates": {
-    "lint": {
-      "executable": "python3",
-      "args": ["-m", "ruff", "check", "."]
-    },
-    "test": {
-      "executable": "python3",
-      "args": ["-m", "pytest", "-q"]
-    },
-    "security": {
-      "executable": "python3",
-      "args": ["-m", "pip_audit", "-r", "requirements.txt"]
-    }
-  }
-}
-```
-
-Only argv arrays are accepted; shell command strings and unknown gate fields
-fail closed. Explicit native declarations take precedence over same-named
-package-script fallbacks. Supported names are `lint`, `test`, `security`,
-`build`, `type`, and `consumer`.
-
-This includes lint, type, test, build, security, and consumer gates when
-applicable, all evidenced against the current HEAD. Tests must exist and pass
-unless the manifest's
-`options.skipTests` is true for a config-only repository. Execute the mandatory
-categories through the evidence-recording runner:
-
-The invocation persists absolute attempt caps plus cumulative active-execution
-budgets. Every required gate has a strict per-attempt timeout and all gates
-share the remaining gate ledger. Provider attempts likewise keep their
-risk-adjusted timeout while primary and fallback providers share one provider
-ledger; changing providers cannot mint more execution time.
+High/critical campaigns require the bounded detached-worktree mutation check
+after the recorded test gate succeeds. It must never modify the reviewed checkout.
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
-bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
-  --manifest "<exact-manifest-path>" --name lint
-bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
-  --manifest "<exact-manifest-path>" --name test
-bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
-  --manifest "<exact-manifest-path>" --name security
-```
-
-After the persisted test gate succeeds, high and critical campaigns must also
-produce red-capable evidence. This runs the exact persisted test argv in a
-detached temporary worktree after a bounded revert of changed executable source
-files; it never modifies the reviewed checkout. Low and medium campaigns omit
-this check by policy.
-
-```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
 TIER="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" field "<exact-manifest-path>" risk.tier)"
 case "$TIER" in
-  high|critical)
-    bash "$QUALITY_SCRIPTS_DIR/quality-mutation-check.sh" \
-      --manifest "<exact-manifest-path>"
-    ;;
+  high|critical) bash "$QUALITY_SCRIPTS_DIR/quality-mutation-check.sh" --manifest "<exact-manifest-path>" ;;
   low|medium) ;;
   *) echo "quality risk tier is unresolved" >&2; exit 1 ;;
 esac
 ```
 
-The manifest binds the resulting artifact to the exact base, HEAD, tier, and
-campaign identity. Review authorization rejects high/critical campaigns with
-missing, stale, or tampered mutation evidence.
-
-The runner resolves commands only from the revision-bound `requiredGates`
-policy and executes and records each result atomically. It rejects caller
-commands. Cross-repository PRs fail during bootstrap until trusted CI-evidence
-ingestion exists; never run fork-controlled scripts on the operator host.
-On resume, an exact-HEAD successful gate whose persisted source and command
-still match policy is reused instead of rerun. A changed HEAD, command, source,
-or failed result executes normally.
-
-When `options.skipTests` is true, record the config-only decision explicitly
-instead of inventing a passing test command:
+Formatting remediation uses the manifest-bound formatter and configured
+extensions; do not send unknown files directly to Prettier.
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
-bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
-  --manifest "<exact-manifest-path>" --name test --skip \
-  --reason "config-only repository has no executable test suite"
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
+node "$QUALITY_SCRIPTS_DIR/quality-format.js" --manifest "<exact-manifest-path>" -- <changed-files...>
 ```
 
-The revision-bound engine supports `options.scope=branch` only. Unsupported
-`changed` and `all` values fail during manifest creation instead of silently
-behaving like branch scope.
+## 3. Bounded independent review
 
-Formatting remediation must use:
+Increment the persisted round, then run the selected provider policy. Provider
+and gate execution budgets are separate from idle lifecycle time; each attempt
+still has a strict timeout. Review artifacts must bind repository, PR, base,
+HEAD, invocation, diff hash, and round.
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
-node "$QUALITY_SCRIPTS_DIR/quality-format.js" \
-  --manifest "<exact-manifest-path>" -- <changed-files...>
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
+node "$QUALITY_SCRIPTS_DIR/quality-run-governor.js" bump-round "<exact-manifest-path>"
+bash "$QUALITY_SCRIPTS_DIR/quality-run-review.sh" --manifest "<exact-manifest-path>"
 ```
 
-This respects repository-configured lint-staged extensions and uses
-`--ignore-unknown`; never pass unsupported files such as `.gitleaks.toml`
-directly to Prettier.
+Classify availability, exhaustion, billing, parser failure, timeout, findings,
+and CI failure from structured evidence, never generated review prose. Primary
+and fallback share one provider ledger. A successful initial review covers
+`base..HEAD`; after one batched fix, resume the same manifest for the incremental
+review. A verification finding is terminal: do not start a third review.
 
-## 4. Bounded provider review
+For high/critical, independent-review requirements are strict: a fallback that
+would make reviewer identity equal the implementing/primary model must block,
+not silently authorize. See `checklist.md` for provider failure handling.
 
-Before every review:
+## 4. Judge, remediation, and terminal diagnosis
 
-```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
-node "$QUALITY_SCRIPTS_DIR/quality-run-governor.js" \
-  bump-round "<exact-manifest-path>" || exit 1
-bash "$QUALITY_SCRIPTS_DIR/quality-run-review.sh" \
-  --manifest "<exact-manifest-path>" || exit 1
-```
-
-The first successful review covers `baseSha..HEAD`. After a fix commit, resume
-the same explicit manifest; bootstrap advances only to a descendant HEAD and
-the next review covers `previousReviewedHead..currentHead`. Review artifacts
-live under the invocation directory at `reviews/<headSha>/round-N/` and carry
-repository, PR, base, head, invocation, and diff-hash identity.
-
-Provider exhaustion and billing failures are classified only from structured
-API/CLI error metadata. Some provider CLIs return an error envelope with process
-status 0, so the envelope is authoritative; generated review text mentioning
-HTTP 429, quota, or rate-limit handling remains ordinary review content.
-Claude, Codex, and the opt-in Gemini adapter share this circuit and governor
-contract; Gemini runs only when explicitly selected by quality provider policy.
-
-Typed failures update an operator-state provider circuit. Exhaustion remains
-open until its structured reset time; failures without a reset use a bounded
-cooldown before one recovery probe (one hour for exhaustion, six for billing).
-A successful probe clears the circuit. An open primary circuit skips immediately
-to the configured fallback instead of spending another review clock. Parser
-failures, provider exhaustion, billing, availability, timeouts, code findings,
-and CI failures remain distinct diagnoses. An inconclusive native Codex or
-Gemini parser result — both report the same structured rc=4 — gets exactly one
-bounded fallback attempt. Claude's currently bundled inconclusive result
-remains fail-closed until its timeout, parser, and unresolved agent causes are
-typed separately; an inconclusive fallback also remains fail-closed.
-At the low risk tier alone, a terminal typed provider availability failure
-(unavailable, exhaustion, billing, or timeout) after that configured fallback
-path records `ci-only` coverage; it does not treat malformed or inconclusive
-output as a pass, and it never weakens medium, high, or critical review.
-
-Runtime is derived from both risk and actual diff workload. Risk controls
-depth; changed lines plus per-file overhead control each provider attempt.
-Critical review receives a 9-minute provider floor because measured xhigh
-review of a roughly 1,200-line security change exceeded the former 330-second
-large-diff window. Lower-risk windows remain workload-scaled.
-
-Execution and lifecycle use separate clocks. Required gates share 10 minutes
-of measured subprocess time and provider attempts share 15 minutes; waiting
-for CI, human approval, user input, or another turn consumes neither budget.
-The manifest persists an active start only while a gate or provider subprocess
-is running, then adds its bounded elapsed time to the corresponding ledger.
-Every gate and provider attempt retains its own strict timeout, so a hang is
-still killed even though idle lifecycle time is free.
-
-A manifest becomes stale after 24 hours without activity. Resume it only by
-passing the exact manifest back through bootstrap, which re-resolves repository,
-PR, base, and HEAD identity before preserving the unused execution ledgers.
-Bootstrap and downstream authorization revalidate review, CI, stamp, and
-approval evidence against the resolved revision; there is no unlimited pause
-switch.
-If discovery requires a fix, one fix commit and one targeted verification are
-allowed; there is no recursive third round.
-
-One campaign permits exactly one discovery review, one batched fix commit, and
-one targeted verification review. A verification finding is a terminal
-blocked result for that campaign: report it with evidence and stop. Do not fix
-it and recursively start a third review. Address the reported blocker in a new
-commit; the changed HEAD then creates a distinct, explicitly budgeted campaign.
-
-## 5. Judge and remediation
-
-Read only findings artifacts listed by the manifest. Verify artifact identity
-before synthesis. Classify findings as BLOCKING, WARNING, or SUPPRESSED.
-Generate the identity-bound judge context, classify every listed provider
-finding as `BLOCKING`, `WARNING`, or `SUPPRESSED`, and preserve every `id`.
-The runtime rejects missing, extra, or stale finding IDs and derives the
-blocking count mechanically:
+Read only manifest-listed artifacts and verify their identity. Generate judge
+context, classify every provider finding as `BLOCKING`, `WARNING`, or
+`SUPPRESSED`, preserve every ID, and let the runtime derive the blocking count.
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
-JUDGE_ARTIFACT="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" field \
-  "<exact-manifest-path>" stateRoot)/judge-input.json"
-node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" judge-context \
-  "<exact-manifest-path>" > "$JUDGE_ARTIFACT"
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
+JUDGE_ARTIFACT="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" field "<exact-manifest-path>" stateRoot)/judge-input.json"
+node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" judge-context "<exact-manifest-path>" > "$JUDGE_ARTIFACT"
 # Add disposition and reason to every findings[] entry without changing identity.
-node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" judge \
-  "<exact-manifest-path>" --artifact "$JUDGE_ARTIFACT"
+node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" judge "<exact-manifest-path>" --artifact "$JUDGE_ARTIFACT"
 ```
 
-- Any BLOCKING finding must be fixed.
-- Before a fix, run governor `check` against the same manifest.
-- Advance/resume the manifest after committing, rerun all affected automated
-  gates, then run the incremental review.
-- If the incremental verification finds a blocker, stop and report it. Never
-  mutate the reviewed HEAD after the second review in the same campaign.
-- An inconclusive or malformed provider response blocks merge. At the low risk
-  tier only, typed provider unavailability after the configured fallback path
-  instead records CI-only advisory coverage; required deterministic gates and
-  their revision-bound evidence remain mandatory.
-
-Before a terminal stop for remaining code findings, print the separated
-diagnosis:
+Fix every blocking finding in one batched commit, run affected gates, then one
+incremental review. If the second review blocks, report its evidence and stop.
+Any BLOCKING finding must be fixed. If BLOCKING findings remain, merge is
+forbidden before any trailer is emitted.
+Before any terminal code-finding stop, print the categorized diagnosis:
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-terminal-status.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
-node "$QUALITY_SCRIPTS_DIR/quality-terminal-status.js" \
-  --manifest "<exact-manifest-path>" --category code-findings
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
+node "$QUALITY_SCRIPTS_DIR/quality-terminal-status.js" --manifest "<exact-manifest-path>" --category code-findings
 ```
 
-## 6. Review evidence and merge
+## 5. Evidence, CI, and optional merge
 
-Final authorization remains bound to the complete base/final-HEAD
-relationship. The manifest's contiguous review checkpoints must cover the
-whole change with no gaps; a changed, unreviewed HEAD cannot be stamped.
+If `options.merge` is false, report the verified result after telemetry. If true,
+only `quality-stamp-and-merge.sh` may authorize the merge. It requires contiguous
+review checkpoints covering the final change, valid canonical `Quality-*` evidence,
+zero findings, current manifest identity, required green CI, fresh base, and the
+required merge authority. Never use `gh pr merge`, `--no-verify`, a forged
+trailer, a skipped review, or a weaker tier to bypass these checks.
 
-Read `options.merge` from the manifest. When it is false, finish after reporting
-the verified review result; do not invoke PR authorization. When it is true,
-generate the exact provider-neutral and provider-specific trailers:
+contiguous review checkpoints are mandatory.
 
 ```text
 Reviewed-By: quality
@@ -366,86 +193,37 @@ Quality-Head: <reviewed-head>
 Quality-Base: <base-sha>
 ```
 
-This is the canonical version-1 schema. Every `Quality-*` trailer is required
-exactly once; `Quality-Reviewer` names the actual provider,
-`Quality-Findings` is the integer `0`, and `Quality-Tier` must meet the
-campaign's selected risk tier. `Quality-Head` and `Quality-Base` bind the
-evidence to the reviewed revision. The parenthetical `Reviewed-By` form is
-legacy reader compatibility only and must not be emitted.
-
-For compatibility with legacy readers, the historical neutral form was
-`Reviewed-By: quality (tier=<tier>, reviewer=<provider>, primary=<provider>,
-fallback=<provider-or-none>, findings=0, head=<reviewed-head>, base=<base-sha>)`.
-It documents how old readers interpret the canonical fields above; new quality
-campaigns emit only the `Quality-*` schema.
+The parenthetical legacy form used `reviewer=<provider>` and
+`head=<reviewed-head>, base=<base-sha>`; it is reader compatibility only.
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do [ -f "$candidate/quality-invocation.js" ] && { cd "$candidate" && pwd -P; break; }; done)"
-bash "$QUALITY_SCRIPTS_DIR/quality-stamp-and-merge.sh" \
-  --manifest "<exact-manifest-path>"
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
+bash "$QUALITY_SCRIPTS_DIR/quality-stamp-and-merge.sh" --manifest "<exact-manifest-path>"
 ```
 
-Merge is forbidden when:
+The script must prove that the merge landed at the reviewed SHA and then run
+worktree-aware cleanup. A billing preallocation waiver is allowed only under the
+narrow conditions in `checklist.md`.
 
-- BLOCKING findings remain;
-- manifest identity does not match the current repository/revision;
-- review coverage is stale or discontinuous;
-- `mergeAuthority=human-required` and its required break-glass approval is
-  absent or stale;
-- CI is failing, except on a plan-proven unprotectable private repository
-  during an active operator-authorized GitHub billing window where every failed
-  Actions job is exact-HEAD, acquired no runner, ran zero steps, and terminated
-  within 30 seconds;
-- trailers are missing, malformed, or revision-stale.
+CI remains required except on a plan-proven unprotectable private repository.
 
-When a repository cannot express required checks, wait for all registered
-checks instead of polling forever for a nonexistent required set. A billing
-waiver never excuses a job that acquired a runner, ran a step, is pending,
-failed outside GitHub Actions, or has an ambiguous result. Persist its
-classification artifact alongside the manifest.
+It never excuses pending, ambiguous, runner-acquired, step-running, or
+non-Actions failures.
 
-After green CI—or the narrow billing-preallocation classification above—and
-valid evidence, the merge invocation must execute the merge, then perform
-worktree-aware cleanup. Never use `--no-verify`, weaken critical review, or
-bypass the governor.
+## 6. Telemetry — always terminal
 
-## 7. Campaign telemetry (terminal — always run)
-
-Record exactly one telemetry line at the end of the campaign, on **every** exit
-path: after a merge, after a no-merge report, and after a blocked/incomplete
-stop. It summarizes the manifest — no model judgment — and is idempotent on
-invocation id, so a run that both merges and reports records once. A telemetry
-write failure never changes the campaign outcome (it warns and exits 0); a
-missing or unreadable manifest is a hard failure worth surfacing.
+On every exit path (merge, no-merge report, blocked, incomplete), record exactly
+one idempotent manifest-derived telemetry line. A recorder failure warns without
+changing the quality outcome; a missing/unreadable manifest remains a hard error.
 
 ```bash
-QUALITY_SCRIPTS_DIR=""
-for candidate in "${CLAUDE_PLUGIN_ROOT:-}/scripts" "${CLAUDE_KIT_ROOT:-}/scripts" "$HOME/.claude/scripts" "./scripts"; do
-  [ -f "$candidate/quality-telemetry.js" ] || continue
-  QUALITY_SCRIPTS_DIR="$(cd "$candidate" && pwd -P)" || {
-    echo "[quality] telemetry: found recorder at $candidate but cannot resolve it — campaign verdict stands" >&2
-    QUALITY_SCRIPTS_DIR=""
-  }
-  break
-done
-if [ -n "$QUALITY_SCRIPTS_DIR" ]; then
-  node "$QUALITY_SCRIPTS_DIR/quality-telemetry.js" \
-    record "<exact-manifest-path>" \
-    || echo "[quality] telemetry: recorder exited $? (see above) — campaign verdict stands" >&2
-else
-  echo "[quality] telemetry: recorder unresolved — skipping (campaign outcome stands)" >&2
-fi
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
+node "$QUALITY_SCRIPTS_DIR/quality-telemetry.js" record "<exact-manifest-path>" \
+  || echo "[quality] telemetry failed; campaign outcome stands" >&2
 ```
 
-The line lands in `$BS_QUALITY_TELEMETRY_FILE` when set, else in the operator
-state directory at
-`$XDG_STATE_HOME/claude-kit/quality-telemetry/<repo-key>.jsonl` (falling back to
-`~/.local/state`). It never dirties the audited repository by default. The
-monthly quality-value report derives escaped-defect rate, finding precision,
-and cost-per-caught-bug from these lines.
-
-## References
-
-- `reference.md` — flags, target resolution, manifest schema, budgets, history
-- `checklist.md` — automated gates, finding validation, judge rules
-- `scripts/quality-invocation.js` — authoritative state and identity contract
+The recorder writes to `$BS_QUALITY_TELEMETRY_FILE` or the operator state
+directory, never the audited checkout by default. Use the quality-value report
+for escaped-defect rate, finding precision, and token-based cost per caught bug.

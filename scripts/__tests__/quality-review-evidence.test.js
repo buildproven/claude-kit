@@ -14,6 +14,8 @@ const fields = {
   tier: "critical",
   findings: 0,
   reviewer: "codex",
+  primary: "codex",
+  fallback: "claude",
 };
 
 function keyPair() {
@@ -47,6 +49,59 @@ describe("quality review evidence signatures", () => {
         keys.publicKey,
       ),
     ).toThrow(/does not bind/);
+  });
+
+  it("rejects a signature whose declared reviewer was rewritten", () => {
+    const keys = keyPair();
+    const signed = {
+      ...fields,
+      reviewer: "ci-only",
+      primary: "codex",
+      fallback: "claude",
+    };
+    const signature = signEvidence(signed, keys.privateKey);
+    expect(() =>
+      verifyEvidence(
+        { ...signed, reviewer: "codex" },
+        signature,
+        keys.publicKey,
+      ),
+    ).toThrow(/does not bind/);
+  });
+
+  it("rejects ci-only as a fallback reviewer", () => {
+    expect(() =>
+      signEvidence({ ...fields, fallback: "ci-only" }, keyPair().privateKey),
+    ).toThrow(/fallback reviewer is invalid/);
+  });
+
+  it("rejects identical primary and fallback reviewers", () => {
+    expect(() =>
+      signEvidence({ ...fields, fallback: "codex" }, keyPair().privateKey),
+    ).toThrow(/fallback reviewer must differ/);
+  });
+
+  it("signs the distinct sanctioned operator-override tuple", () => {
+    const keys = keyPair();
+    const override = {
+      ...fields,
+      reviewer: "operator-quality-override",
+      primary: "unavailable",
+      fallback: "unavailable",
+    };
+    const signature = signEvidence(override, keys.privateKey);
+    expect(verifyEvidence(override, signature, keys.publicKey)).toMatchObject(
+      override,
+    );
+  });
+
+  it("rejects a mixed operator-override reviewer tuple", () => {
+    expect(() =>
+      signEvidence(
+        { ...fields, reviewer: "operator-quality-override" },
+        keyPair().privateKey,
+      ),
+    ).toThrow(/must use unavailable/);
   });
 
   it("rejects a signature from an untrusted key", () => {

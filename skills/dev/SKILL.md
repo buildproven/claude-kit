@@ -17,18 +17,6 @@ Generic command for all development work. Auto-detects branch type or use flags.
 
 ## Auto-Detection
 
-Smart branch naming based on your input:
-
-```bash
-/bs:dev dark-mode              # feature/dark-mode
-/bs:dev fix-login-bug          # fix/login-bug (auto-detected "fix-")
-/bs:dev refactor-auth          # refactor/auth (auto-detected "refactor-")
-/bs:dev experiment-ai          # experiment/ai (auto-detected "experiment-")
-/bs:dev hotfix-crash           # fix/crash (auto-detected "hotfix-")
-```
-
-**Detection keywords:**
-
 - `fix-*`, `bugfix-*`, `hotfix-*` → `fix/`
 - `refactor-*` → `refactor/`
 - `experiment-*`, `exp-*`, `test-*` → `experiment/`
@@ -227,64 +215,18 @@ fi
 
 ### Step 3: Gather Requirements
 
-Ask the user what to build based on type:
-
-**For features:**
-
-```markdown
-What should we build?
-
-Please describe:
-
-- User-facing functionality
-- Technical requirements
-- Any constraints or dependencies
-```
-
-**For bug fixes:**
-
-```markdown
-What bug are we fixing?
-
-Please describe:
-
-- Current behavior (broken)
-- Expected behavior (correct)
-- Steps to reproduce
-- Any error messages
-```
+Ask for feature behavior, technical constraints, and dependencies. For a bug,
+ask for actual/expected behavior, reproduction, and errors.
 
 Then invoke the `diagnosing-bugs` skill. Do not propose or implement a fix
 until there is one red-capable command that reproduces the user's exact
 symptom, unless the skill's documented blocked path applies.
 
-**For refactoring:**
-
-```markdown
-What should we refactor?
-
-Please describe:
-
-- Current code issues
-- Target improvements
-- Must preserve behavior?
-```
-
 Then load the `codebase-design` skill and name the interface/seam being
 improved. Refactors must deepen a real module or remove accidental complexity;
 do not introduce pass-through abstractions.
 
-**For experiments:**
-
-```markdown
-What are we testing?
-
-Please describe:
-
-- Hypothesis
-- What to measure
-- Success criteria
-```
+For an experiment, establish its hypothesis, measurement, and success criteria.
 
 ### Step 4: Assess Complexity
 
@@ -296,76 +238,57 @@ Use sequential thinking to analyze: file impact, approach options, architectural
 - **Medium**: 3-5 files, clear approach, some unknowns requiring exploration
 - **Complex**: 6+ files OR architectural decisions OR multiple approaches OR many unknowns
 
+### Step 4.25: Architecture Decision Gate (automatic)
+
+For every task, evaluate this checklist before implementation. This is a
+classification step, not a reason to use a stronger model for routine work:
+
+- Does it change authentication, authorization, billing, or payments?
+- Does it create, migrate, retain, or delete durable data?
+- Does it introduce or break a public API, event schema, or external contract?
+- Does it affect distributed consistency, retries, or failure ownership?
+- Does it create a cross-repository dependency or another expensive-to-reverse boundary?
+
+If all answers are **no**, record `Architecture decision: none required` in the
+plan or task summary and continue at the normal medium-effort runtime profile.
+
+If any answer is **yes**, automatically load `codebase-design`, write a short
+ADR at `docs/decisions/ADR-<slug>.md`, and link it from the plan/PRD before
+coding. The ADR must state the decision, alternatives, invariants, migration or
+rollback, and verification. Draft it at the normal profile; run a bounded
+adversarial review of the ADR at high effort (Opus in Claude Code or the
+configured Codex power profile: `codex --profile power -c
+'model_reasoning_effort="high"' review --uncommitted`) before implementing the
+irreversible boundary. `--uncommitted` makes the newly written, not-yet-committed
+ADR the review subject. Configure `power` to a current high-end model.
+
+This is fail-closed: do not begin implementation while the ADR review has a
+blocking finding, an unresolved question, malformed/inconclusive output, or a
+provider failure. Revise the ADR, re-run the review, and record the clean result
+in the ADR before proceeding. Large but reversible refactors do not satisfy this
+trigger by size alone.
+
 ### Step 4.5: Auto-detect Parallelizable Subtasks (CS-164)
 
 **Runs automatically when complexity = Complex.** Skipped for Simple/Medium — those run sequentially.
 
-When a task is Complex, check if it decomposes into **≥2 independent components** that could run as parallel workers. This catches cases like "add Google + GitHub + Apple OAuth" or "migrate auth, payments, and notifications to new API" where the user didn't think to use `--parallel`.
-
-```markdown
-Looking at this complex task — can I decompose it into independent subtasks?
-
-**Subtask candidates:**
-
-1. [component A] — touches: [predicted files]
-2. [component B] — touches: [predicted files]
-3. [component C] — touches: [predicted files]
-
-**Conflict analysis:**
-
-- A and B: [no shared files ✅ / shared file X ⚠️]
-- A and C: [no shared files ✅ / shared file Y ⚠️]
-- B and C: [no shared files ✅ / shared file Z ⚠️]
-
-**Routing decision:**
-
-- Parallel group: [A, B, C] (no conflicts) OR
-- Parallel group 1: [A, B], then sequential: [C] (C depends on A+B output)
-```
-
-**Trigger conditions — route to parallel execution when ALL are true:**
-
-- Task contains ≥2 clearly named independent components (e.g. "X, Y, and Z")
-- Predicted file conflicts are ≤1 shared file across components
-- Each component is substantial enough to justify a separate agent (>30 min each)
-
-**Output to user:**
-
-```markdown
-This task has independent components I can parallelize:
-
-🔀 **Parallel group** (spawning 2 agents):
-• Agent 1: [component A] — ~[time estimate]
-• Agent 2: [component B] — ~[time estimate]
-
-⬇️ **Then sequential** (depends on parallel output):
-• [component C] — ~[time estimate]
-
-Proceed with parallel execution? [y/n]
-(Or: "Run sequentially" to use single-agent mode)
-```
-
-**If user confirms (or --parallel flag already set):** Route directly to Parallel Execution Mode (see below). Set the parallel task list from the detected components — skip manual `--parallel "t1,t2"` specification.
-
-**If user declines or components are ambiguous:** Continue to Step 5 as a single sequential COMPLEX task.
-
-**Important:** Do NOT trigger on tasks that mention parallelism abstractly ("improve performance in multiple areas") — only trigger when there are distinct, clearly-named independent deliverables.
+For a complex task, identify independently named components, predict their file
+overlap, and offer parallel work only when there are at least two substantial
+(>30-minute) components with at most one shared file. Show the parallel and
+dependent sequential groups, then ask to proceed unless `--parallel` was
+given. Do not infer parallelism from vague multi-area work.
 
 ### Step 5: Plan Based on Complexity
 
 **For SIMPLE tasks:** Grep/Glob to find relevant files → TodoWrite 3-5 tasks → implement.
 
-**For MEDIUM tasks:**
+**MEDIUM:** explore files/patterns/dependencies, then create a specific todo.
 
-1. Spawn `Explore` subagent to find relevant files, patterns, integration points
-2. Document findings (patterns, files, dependencies)
-3. TodoWrite with specific tasks → implement
-
-**For COMPLEX tasks:** 0. **Interview** (or if `--interview` flag): ask Scope/Constraints/Edge cases/Success criteria/Non-goals → output spec, get approval
-
-1. Use sequential thinking to enumerate approaches and trade-offs
-2. EnterPlanMode → evaluate approaches, present recommendation → get approval → ExitPlanMode
-3. Implement; if new complexity discovered, re-plan before continuing
+**COMPLEX:** interview only when requested; establish
+scope/constraints/edges/success/non-goals, compare approaches in plan mode, and
+apply the automatic Architecture Decision Gate above. Continue automatically
+with the recommended reversible approach; ask only when a material product
+choice cannot be inferred safely. Re-plan if scope changes.
 
 ### Step 5.5: TDD — Write Failing Tests First (--tdd flag only)
 
@@ -377,12 +300,13 @@ independent oracle—not from recomputing the implementation.
 
 ### Step 6: Explore Before Implementing (Medium/Complex)
 
-Check `docs/dev_guide/CONVENTIONS.md` first if it exists. Then spawn an `Explore` subagent (keeps main context clean). Pin it to Sonnet — codebase exploration is search-read-summarize work that does not need the session model's tier, and this is a per-call override (not a frontmatter pin), so it never trips the 1M-context billing gate:
+Check `docs/dev_guide/CONVENTIONS.md` first if present. Then use a Sonnet
+Explore subagent (a per-call override, not a frontmatter pin):
 
 ```javascript
 Task(subagent_type: "Explore",
      model: "sonnet",
-     prompt: `Explore the codebase for [feature area]. Find relevant files, patterns, integration points, constraints. Return: file list with roles, key patterns, dependencies, recommended approach.`)
+     prompt: `Explore [feature area]. Return file roles, patterns, dependencies, constraints, and an approach.`)
 ```
 
 ### Step 7: Development
@@ -476,28 +400,11 @@ spawning agents. Honor `--max` (default 4) and warn if the user requested more t
 **9.3 — Spawn agents (parallel by default)**
 
 For each item, pre-create and lock its canonical target with
-`worktree-manager create`, then spawn a background `Agent` whose prompt names
-that exact target:
-
-```javascript
-// For i = 0 .. ITEM_COUNT-1, spawn in batches of MAX_PARALLEL
-Task({
-  subagent_type: "Agent",
-  prompt: `Implement the following task in this already-created worktree:
-
-TASK: ${items[i]}
-BRANCH: feature/${slugs[i]}
-TARGET_DIR: ${worktreePaths[i]}
-
-1. cd to TARGET_DIR; do not create another branch or worktree.
-2. Infer requirements from the task description.
-3. Assess complexity (Simple/Medium/Complex), explore if needed.
-4. Implement with TodoWrite tracking.
-5. Release the exact bs:dev worktree lock as a terminal handoff, then run
-   /bs:quality --merge --target-dir TARGET_DIR.
-6. Report back: branch name, PR URL, status (passed/failed/blocked).`,
-});
-```
+`worktree-manager create`, then spawn a background agent naming its exact task,
+branch, and target. It must use only that worktree; infer, assess, explore,
+implement with TodoWrite; release its exact lock; run
+`/bs:quality --merge --target-dir TARGET_DIR`; and return branch, PR, and
+passed/failed/blocked status.
 
 If `--sequential`, await each agent before spawning the next.
 If parallel, run up to MAX_PARALLEL concurrently, draining as they finish.
@@ -519,57 +426,22 @@ for any blocked items.
 
 ## Flags
 
-| Flag                 | Description                                                             |
-| -------------------- | ----------------------------------------------------------------------- |
-| `--next`             | Auto-pick highest-priority item from Linear                             |
-| `--tdd`              | Write failing tests before implementation (tests become the spec)       |
-| `--with-tests`       | Generate tests during dev (slower but complete)                         |
-| `--fix`              | Create fix/ branch                                                      |
-| `--refactor`         | Create refactor/ branch                                                 |
-| `--experiment`       | Create experiment/ branch                                               |
-| `--skip-branch`      | Don't create branch (use current)                                       |
-| `--base <branch>`    | Branch from specific base (default: main)                               |
-| `--parallel "t1,t2"` | Run multiple tasks in parallel (comma-separated list)                   |
-| `--interview`        | Force interview pattern even for simple/medium tasks                    |
-| `--teams`            | Use agent teams for parallel work (tmux visibility, conflict detection) |
-| `--no-teams`         | Force Task subagents for parallel work (default)                        |
-| `--merge`            | Auto-merge PRs after quality passes (use with --parallel)               |
-| `--list`             | Force inline-list mode (one worktree per task) — see Step 0d / Step 9   |
-| `--sequential`       | In list mode, fan out one task at a time (for dependent tasks)          |
-| `--max=N`            | In list mode, cap concurrent background agents (default 4)              |
-| `--alt`              | Second-opinion mode — see below                                         |
+`--next` picks Linear's top backlog item; `--tdd` and `--with-tests` enable
+test-first/test-generation; `--fix`, `--refactor`, and `--experiment` select
+the branch type; `--base` selects its base. `--parallel`, `--teams`,
+`--no-teams`, and `--merge` control parallel delivery. `--list`, `--sequential`,
+and `--max=N` control inline fan-out. `--interview` forces discovery; `--alt`
+requests a second opinion. `--skip-branch` is unsupported: worktree isolation
+is mandatory.
 
 ## --alt: Second Opinion Mode
 
-When `--alt` is passed, after Claude generates its approach (Step 4), run the shared collaboration layer through `scripts/ensemble-runner.js` before any implementation begins.
-
-```bash
-# Resolve runner via the same candidates as the inline-list parser
-for p in \
-  "${CLAUDE_PLUGIN_ROOT:-}/scripts/ensemble-runner.js" \
-  "${KIT_REPO:-}/scripts/ensemble-runner.js" \
-  "$(git rev-parse --show-toplevel 2>/dev/null)/core/core/scripts/ensemble-runner.js" \
-  "$(git rev-parse --show-toplevel 2>/dev/null)/core/scripts/ensemble-runner.js" \
-  "$(git rev-parse --show-toplevel 2>/dev/null)/scripts/ensemble-runner.js" \
-  "$HOME/.claude/scripts/ensemble-runner.js"
-do
-  [[ -f "$p" ]] && { RUNNER="$p"; break; }
-done
-
-if [[ -n "$RUNNER" ]]; then
-  node "$RUNNER" \
-    "What implementation approach should we take for: [task description]?" \
-    --decision "Choose implementation approach before coding" \
-    --providers claude,codex \
-    --mode parallel \
-    --output scorecard \
-    --rubric "implementation risk,complexity,maintainability,migration cost,speed"
-fi
-```
-
-Present both the local plan and the panel report side-by-side; implement whichever approach the user selects.
-
-If runner is unavailable, continue with Claude's approach and note that the pass was skipped.
+With `--alt`, resolve `scripts/ensemble-runner.js` using the parser's candidate
+order, then before implementation run it with the task, decision “Choose
+implementation approach before coding”, providers `claude,codex`, parallel
+scorecard mode, and rubric `implementation risk,complexity,maintainability,
+migration cost,speed`. Present both plans; if unavailable, note the skipped
+pass and continue with the local plan.
 
 ## Parallel Execution Mode
 
@@ -579,36 +451,11 @@ Parse tasks → conflict analysis → show plan → spawn background agents (eac
 
 ### Implementation
 
-Each spawned agent uses a target pre-created by `worktree-manager`. Do not use
-harness-native worktree creation because its directory policy is outside this
-repository's lifecycle contract:
-
-```javascript
-// Resolve/create each target through worktree-manager before spawning.
-Task(subagent_type: "general-purpose",
-     run_in_background: true,
-     prompt: `Work only in this canonical linked worktree: ${worktreePath}
-     Implement: ${task}
-
-     Workflow:
-     1. cd to ${worktreePath}; use its existing feature branch
-     2. Gather requirements (infer from task description)
-     3. Assess complexity using Sequential Thinking
-     4. Explore codebase if needed (use Task + Explore agent)
-     5. Implement with TodoWrite tracking
-     6. Release the exact bs:dev worktree lock as a terminal handoff.
-     7. Run autonomous quality loop:
-        - Run tests (fix until passing)
-        - Run ESLint (fix until passing)
-        - Run TypeScript check (fix until passing)
-        - Run build (fix until passing)
-        - Verify all checks pass (95% quality)
-     8. Create PR with description
-     9. If --merge: gh pr merge --auto --squash --delete-branch
-
-     Note: You work in an isolated worktree. No coordination with other agents needed.
-     Quality must hit 95% before PR creation.`)
-```
+Pre-create each canonical linked worktree with `worktree-manager`; never use a
+harness-native worktree. Each worker must use only its assigned target and
+branch, infer requirements, assess/explore, implement with TodoWrite, release
+its exact lock at terminal handoff, run the full quality loop, and report a PR.
+Only the revision-bound quality path may merge it.
 
 ### Backlog Update (After All Agents Complete)
 
@@ -617,14 +464,6 @@ When using `--parallel --merge`, mark completed items Done in Linear via `mcp__l
 ### Conflict Detection and Grouping
 
 Use Sequential Thinking to predict file impact per task. Group into **parallel** (no conflicts) and **sequential** (shared files). Show execution plan + "Proceed? (y/n)" before spawning.
-
-### Examples
-
-```bash
-/bs:dev --parallel "login page,header fix,API docs" --merge       # 3 agents, auto-merge
-/bs:dev --parallel "login page,header fix,API docs"               # 3 agents, manual review
-/bs:dev --parallel "fix-login-bug,refactor-api,add-dashboard"     # auto-detects branch types
-```
 
 ### Agent Teams Mode (`--teams`) (CS-104)
 

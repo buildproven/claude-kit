@@ -12,8 +12,14 @@ model: haiku
 ## Model routing
 
 Daily commands inherit the configured runtime default (Sonnet/medium in Claude
-Code; the normal Codex profile/medium in Codex). `/bs:quality` alone may
-escalate a bounded adversarial pass; no command pin is a standing Opus default.
+Code; the normal Codex profile/medium in Codex). `/bs:quality` and a triggered
+ADR review may escalate a bounded adversarial pass; no command pin is a standing
+Opus default.
+
+`/bs:dev` and `/bs:plan` automatically evaluate the Architecture Decision Gate.
+Only an auth/payments, durable-data, public-contract, distributed-consistency,
+cross-repository, or similarly irreversible decision creates an ADR and earns a
+bounded high-effort review.
 
 **Arguments received:** $ARGUMENTS
 
