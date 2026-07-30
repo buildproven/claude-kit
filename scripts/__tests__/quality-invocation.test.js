@@ -2981,28 +2981,21 @@ exit 1
     });
   });
 
-  it("rejects a resolved target larger than the supported panel", () => {
+  it("refuses to persist a resolved target larger than the supported panel", () => {
     const root = repo("oversized-panel-target");
     const manifestPath = create(root);
-    invocation.withManifestLock(manifestPath, (manifest) => {
-      invocation.setRisk(manifest, {
-        tier: "high",
-        taskType: "bugfix",
-        score: 60,
-        agents: 10,
-        "codex-depth": "high",
-        "codex-rounds": 1,
-      });
-    });
-
-    const result = spawnSync("bash", [SELECT, "--manifest", manifestPath], {
-      cwd: root,
-      encoding: "utf8",
-    });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toMatch(
-      /resolved target 10 exceeds supported 9-agent panel/,
-    );
+    expect(() =>
+      invocation.withManifestLock(manifestPath, (manifest) => {
+        invocation.setRisk(manifest, {
+          tier: "high",
+          taskType: "bugfix",
+          score: 60,
+          agents: 10,
+          "codex-depth": "high",
+          "codex-rounds": 1,
+        });
+      }),
+    ).toThrow(/agent target 10 exceeds supported 9-agent panel/);
   });
 
   it("refuses to reduce a critical panel through the selector seam", () => {

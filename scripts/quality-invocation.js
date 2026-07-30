@@ -11,6 +11,7 @@ const riskScore = require("./risk-score.js");
 const SCHEMA_VERSION = 1;
 const EXECUTION_BUDGET_VERSION = 1;
 const REQUIRED_GATES_POLICY_VERSION = 2;
+const MAX_AGENT_TARGET = 9;
 const NEEDS_EXECUTION_BUDGET_MIGRATION = Symbol(
   "needs-execution-budget-migration",
 );
@@ -1658,6 +1659,14 @@ function setRisk(manifest, options) {
   ) {
     throw new Error(`invalid resolved task type '${taskType}'`);
   }
+  const agentTarget = parseInteger(options.agents, "agent target", {
+    minimum: 2,
+  });
+  if (agentTarget > MAX_AGENT_TARGET) {
+    throw new Error(
+      `agent target ${agentTarget} exceeds supported ${MAX_AGENT_TARGET}-agent panel`,
+    );
+  }
   const resolved = {
     requestedLevel: manifest.risk.requestedLevel,
     resolved: true,
@@ -1668,7 +1677,7 @@ function setRisk(manifest, options) {
       options.score === undefined || options.score === ""
         ? null
         : parseInteger(options.score, "risk score"),
-    agentTarget: parseInteger(options.agents, "agent target", { minimum: 2 }),
+    agentTarget,
     codexDepth: options["codex-depth"] || "medium",
     codexRounds: parseInteger(options["codex-rounds"] || "1", "codex rounds"),
     level: options.level || manifest.options.level,

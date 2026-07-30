@@ -30,7 +30,8 @@ PANEL=(code-reviewer silent-failure-hunter security-auditor type-design-analyzer
        pr-test-analyzer architect-reviewer code-simplifier \
        accessibility-tester performance-engineer)
 N="$AGENT_TARGET"
-[ "$N" -lt 2 ] && N=2
+# setRisk owns the 2..9 target invariant. Retain this boundary check so older
+# or tampered manifests fail visibly instead of silently truncating coverage.
 [ "$N" -le "${#PANEL[@]}" ] || {
   echo "quality-select-agents: resolved target $N exceeds supported ${#PANEL[@]}-agent panel" >&2
   exit 1

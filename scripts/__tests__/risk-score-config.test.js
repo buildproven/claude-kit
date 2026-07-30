@@ -122,6 +122,11 @@ describe("score — Git-valid control-character paths", () => {
     expect(result.riskScore).toBeGreaterThanOrEqual(
       DEFAULTS.base.securityFloor,
     );
+    expect(result.knobs).toEqual({
+      agents: 6,
+      codex: "xhigh",
+      codexRounds: 1,
+    });
   });
 });
 
