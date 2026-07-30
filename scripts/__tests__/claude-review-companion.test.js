@@ -350,6 +350,8 @@ describe("claude-review-companion.sh", () => {
     expect(args).toContain("--json-schema\n");
     expect(args).toContain('"required":["verdict","summary","findings"]');
     expect(args).not.toContain("https://json-schema.org/draft/2020-12/schema");
+    expect(args).toContain("--tools\n\n");
+    expect(args).not.toContain("--allowedTools");
   });
 
   it("preserves a complete review emitted just before watchdog termination", () => {

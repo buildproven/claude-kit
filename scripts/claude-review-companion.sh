@@ -275,12 +275,11 @@ run_agent() {
 
   # Blocking claude -p under a watchdog that can actually kill it.
   #
-  # NO Bash IN --allowedTools (2026-07-10). The full diff is already in the
-  # prompt; a reviewer has nothing legitimate to execute. With Bash +
-  # bypassPermissions, reviewers would run `npm test`/builds/repo-wide greps and
-  # burn the entire timeout — that is the "code-reviewer hangs ~10min" symptom,
-  # and since the panel joins on `wait`, ONE such agent held the whole run
-  # hostage. Read/Grep/Glob is everything a diff review needs.
+  # NO TOOLS. The full diff, changed files, commit log, and revision identity
+  # are already in the prompt. Even read-only tools let reviewers ignore that
+  # bounded evidence, explore the repository for dozens of turns, rerun tests,
+  # and hit the timeout without returning a verdict. Force a single bounded
+  # reasoning turn; deterministic gates already prove repository behavior.
   #
   # NOTE: "${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"}" is the bash-3.2-safe expansion
   # for a possibly-empty array under `set -u` (macOS /bin/bash 3.2 treats a
@@ -291,7 +290,7 @@ run_agent() {
           --no-session-persistence \
           --append-system-prompt-file "$sysfile" \
           --permission-mode bypassPermissions \
-          --allowedTools "Read,Grep,Glob" \
+          --tools "" \
           --json-schema "$REVIEW_SCHEMA_JSON" \
           ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} \
           --output-format json 2>>"$stderr_file" )"
