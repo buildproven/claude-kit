@@ -4,10 +4,15 @@
   "additionalProperties": false,
   "required": ["verdict", "summary", "findings"],
   "properties": {
-    "verdict": { "type": "string", "enum": ["approve", "needs-attention"] },
-    "summary": { "type": "string", "minLength": 1 },
+    "verdict": {
+      "type": "string",
+      "enum": ["approve", "needs-attention"],
+      "description": "Use approve only when findings is empty; use needs-attention when findings contains one or more items."
+    },
+    "summary": { "type": "string", "minLength": 1, "pattern": "\\S" },
     "findings": {
       "type": "array",
+      "description": "Material findings. This must be empty for an approve verdict and non-empty for a needs-attention verdict.",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -24,11 +29,15 @@
             "type": "string",
             "enum": ["critical", "high", "medium", "low"]
           },
-          "title": { "type": "string" },
-          "body": { "type": "string" },
-          "file": { "type": "string" },
+          "title": { "type": "string", "minLength": 1, "pattern": "\\S" },
+          "body": { "type": "string", "minLength": 1, "pattern": "\\S" },
+          "file": { "type": "string", "minLength": 1, "pattern": "\\S" },
           "line_start": { "type": "integer", "minimum": 1 },
-          "recommendation": { "type": "string" }
+          "recommendation": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
         }
       }
     }

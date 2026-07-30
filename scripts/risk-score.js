@@ -678,8 +678,6 @@ function collectCommitSubjects(mergeBase, gitRunner) {
 function applyTaskTypeFloor(scored, taskType, cfg) {
   const floors = {
     feature: cfg.base.medium,
-    bugfix: cfg.base.high,
-    performance: cfg.base.high,
   };
   const floor = floors[taskType];
   if (!Number.isFinite(floor) || scored.riskScore >= floor) return scored;
