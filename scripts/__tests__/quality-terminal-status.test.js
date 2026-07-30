@@ -1,8 +1,11 @@
 const { execFileSync, spawnSync } = require("node:child_process");
-const { mkdtempSync, readFileSync, writeFileSync } = require("node:fs");
+const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
-const { buildDiagnosis } = require("../quality-terminal-status");
+const {
+  buildDiagnosis,
+  worktreeLockStatus,
+} = require("../quality-terminal-status");
 
 const ROOT = path.resolve(__dirname, "..", "..");
 const WRAPPER = path.join(ROOT, "scripts", "quality-wrapper.js");
@@ -36,6 +39,18 @@ function repo(label) {
 }
 
 describe("quality terminal diagnosis", () => {
+  it("skips an unrelated prunable worktree while resolving the target lock", () => {
+    const primary = repo("terminal-status-prunable");
+    const stale = mkdtempSync(path.join(tmpdir(), "quality-a-stale-"));
+    const target = mkdtempSync(path.join(tmpdir(), "quality-z-target-"));
+    git(primary, ["switch", "-q", "main"]);
+    git(primary, ["worktree", "add", "-q", "-b", "stale", stale, "main"]);
+    git(primary, ["worktree", "add", "-q", "-b", "target", target, "main"]);
+    rmSync(stale, { recursive: true, force: true });
+
+    expect(worktreeLockStatus({ repo: { realpath: target } })).toBe("released");
+  });
+
   it("separates gates, provider exhaustion, approval, CI, and exact recovery", () => {
     const manifest = {
       requiredGates: [{ name: "lint" }, { name: "security" }],

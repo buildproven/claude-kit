@@ -4605,6 +4605,66 @@ exit 1
     });
   });
 
+  it("leaves a manually held lock unchanged for a non-merge gate failure", () => {
+    const primary = repo("terminal-non-merge-lock");
+    const linked = mkdtempSync(path.join(tmpdir(), "quality-linked-review-"));
+    git(primary, ["switch", "-q", "main"]);
+    git(primary, [
+      "worktree",
+      "add",
+      "-q",
+      "-b",
+      "quality-review-failure",
+      linked,
+      "main",
+    ]);
+    const packageFile = path.join(linked, "package.json");
+    const packageJson = JSON.parse(readFileSync(packageFile, "utf8"));
+    packageJson.scripts.build = "false";
+    writeFileSync(packageFile, JSON.stringify(packageJson));
+    git(linked, ["add", "package.json"]);
+    git(linked, ["commit", "-q", "-m", "add failing review gate"]);
+
+    const manifestPath = create(linked);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    execFileSync(
+      "node",
+      [
+        WORKTREE_MANAGER,
+        "lock",
+        "--repo",
+        linked,
+        "--branch",
+        "quality-review-failure",
+        "--reason",
+        `bs:quality/${manifest.invocationId}`,
+      ],
+      { encoding: "utf8" },
+    );
+
+    const result = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
+      { cwd: linked, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    const status = JSON.parse(
+      execFileSync(
+        "node",
+        [WORKTREE_MANAGER, "status", "--repo", linked, "--skip-pr-check"],
+        { encoding: "utf8" },
+      ),
+    );
+    expect(
+      status.worktrees.find(
+        (worktree) => worktree.branch === "quality-review-failure",
+      ),
+    ).toMatchObject({
+      locked: true,
+      lockReason: `bs:quality/${manifest.invocationId}`,
+    });
+  });
+
   it("allows a slow gate to finish within its declared check reserve", () => {
     const root = repo("gate-check-reserve");
     const marker = path.join(tmpdir(), `quality-slow-gate-${process.pid}`);
