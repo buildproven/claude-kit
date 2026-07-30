@@ -21,7 +21,7 @@ Each fenced Bash block starts a fresh shell. Begin every executable block with
 this resolver; it finds the installed runtime and fails closed when absent:
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -x "$d/scripts/quality-runtime-dir.sh" ] && "$d/scripts/quality-runtime-dir.sh" && break; done)"
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
 [ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
 ```
 
@@ -36,7 +36,8 @@ that exact manifest and prints repository-gate, provider, approval, and CI
 diagnosis. Do not substitute a PR number or search for an invocation.
 
 ```bash
-# Resolve QUALITY_SCRIPTS_DIR as above.
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
 bash "$QUALITY_SCRIPTS_DIR/quality-status.sh" --manifest "<exact-manifest-path>"
 ```
 
@@ -46,7 +47,8 @@ Load the rooted repository, then persist risk and select agents before any gate
 or provider call. Fetch only the manifest fields a command needs.
 
 ```bash
-# Resolve QUALITY_SCRIPTS_DIR as above.
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
 bash "$QUALITY_SCRIPTS_DIR/quality-load-root.sh" --manifest "<exact-manifest-path>"
 GIT_ROOT="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" field "<exact-manifest-path>" repo.realpath)"
 cd "$GIT_ROOT"
@@ -79,7 +81,9 @@ For example, `bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" --manifest "<exact
 is a persisted-policy invocation, never a caller-supplied command.
 
 ```bash
-# Resolve QUALITY_SCRIPTS_DIR as above; names must be present in requiredGates.
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
+# Names must be present in requiredGates.
 for name in lint type test build security consumer; do
   bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
     --manifest "<exact-manifest-path>" --name "$name"
@@ -96,7 +100,8 @@ High/critical campaigns require the bounded detached-worktree mutation check
 after the recorded test gate succeeds. It must never modify the reviewed checkout.
 
 ```bash
-# Resolve QUALITY_SCRIPTS_DIR as above.
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
 TIER="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" field "<exact-manifest-path>" risk.tier)"
 case "$TIER" in
   high|critical) bash "$QUALITY_SCRIPTS_DIR/quality-mutation-check.sh" --manifest "<exact-manifest-path>" ;;
@@ -109,7 +114,8 @@ Formatting remediation uses the manifest-bound formatter and configured
 extensions; do not send unknown files directly to Prettier.
 
 ```bash
-# Resolve QUALITY_SCRIPTS_DIR as above.
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
 node "$QUALITY_SCRIPTS_DIR/quality-format.js" --manifest "<exact-manifest-path>" -- <changed-files...>
 ```
 
@@ -121,7 +127,8 @@ still has a strict timeout. Review artifacts must bind repository, PR, base,
 HEAD, invocation, diff hash, and round.
 
 ```bash
-# Resolve QUALITY_SCRIPTS_DIR as above.
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
 node "$QUALITY_SCRIPTS_DIR/quality-run-governor.js" bump-round "<exact-manifest-path>"
 bash "$QUALITY_SCRIPTS_DIR/quality-run-review.sh" --manifest "<exact-manifest-path>"
 ```
@@ -143,7 +150,8 @@ context, classify every provider finding as `BLOCKING`, `WARNING`, or
 `SUPPRESSED`, preserve every ID, and let the runtime derive the blocking count.
 
 ```bash
-# Resolve QUALITY_SCRIPTS_DIR as above.
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
 JUDGE_ARTIFACT="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" field "<exact-manifest-path>" stateRoot)/judge-input.json"
 node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" judge-context "<exact-manifest-path>" > "$JUDGE_ARTIFACT"
 # Add disposition and reason to every findings[] entry without changing identity.
@@ -157,7 +165,8 @@ forbidden before any trailer is emitted.
 Before any terminal code-finding stop, print the categorized diagnosis:
 
 ```bash
-# Resolve QUALITY_SCRIPTS_DIR as above.
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
 node "$QUALITY_SCRIPTS_DIR/quality-terminal-status.js" --manifest "<exact-manifest-path>" --category code-findings
 ```
 
@@ -188,7 +197,8 @@ The parenthetical legacy form used `reviewer=<provider>` and
 `head=<reviewed-head>, base=<base-sha>`; it is reader compatibility only.
 
 ```bash
-# Resolve QUALITY_SCRIPTS_DIR as above.
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
 bash "$QUALITY_SCRIPTS_DIR/quality-stamp-and-merge.sh" --manifest "<exact-manifest-path>"
 ```
 
@@ -208,7 +218,8 @@ one idempotent manifest-derived telemetry line. A recorder failure warns without
 changing the quality outcome; a missing/unreadable manifest remains a hard error.
 
 ```bash
-# Resolve QUALITY_SCRIPTS_DIR as above.
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
+[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
 node "$QUALITY_SCRIPTS_DIR/quality-telemetry.js" record "<exact-manifest-path>" \
   || echo "[quality] telemetry failed; campaign outcome stands" >&2
 ```
