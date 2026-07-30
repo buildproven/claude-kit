@@ -89,6 +89,17 @@ describe("provider review runtime", () => {
     expect(Date.now() - started).toBeLessThan(4000);
   });
 
+  it("reaps the watchdog promptly after a successful command", () => {
+    const started = Date.now();
+    const result = spawnSync(
+      "bash",
+      [BOUNDED, "--timeout", "20", "--", "bash", "-c", "exit 0"],
+      { encoding: "utf8", timeout: 5000 },
+    );
+    expect(result.status).toBe(0);
+    expect(Date.now() - started).toBeLessThan(4000);
+  });
+
   it("honors scorer-selected independent Codex rounds", () => {
     const result = spawnSync(
       "bash",

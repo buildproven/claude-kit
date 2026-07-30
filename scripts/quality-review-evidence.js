@@ -7,9 +7,19 @@
 const crypto = require("crypto");
 const fs = require("fs");
 
-const FIELDS = ["head", "base", "tier", "findings", "reviewer"];
+const FIELDS = [
+  "head",
+  "base",
+  "tier",
+  "findings",
+  "reviewer",
+  "primary",
+  "fallback",
+];
 const TIERS = new Set(["low", "medium", "high", "critical"]);
 const REVIEWERS = new Set(["claude", "codex", "ci-only"]);
+const OPERATOR_OVERRIDE_REVIEWER = "operator-quality-override";
+const UNAVAILABLE_REVIEWER = "unavailable";
 
 function canonicalJson(value) {
   if (Array.isArray(value)) return value.map(canonicalJson);
@@ -37,8 +47,41 @@ function evidencePayload(fields) {
   assertSha(fields.head, "evidence head");
   assertSha(fields.base, "evidence base");
   if (!TIERS.has(fields.tier)) throw new Error("evidence tier is invalid");
-  if (!REVIEWERS.has(fields.reviewer)) {
-    throw new Error("evidence reviewer is invalid");
+  const isOperatorOverride = fields.reviewer === OPERATOR_OVERRIDE_REVIEWER;
+  if (isOperatorOverride) {
+    if (
+      fields.primary !== UNAVAILABLE_REVIEWER ||
+      fields.fallback !== UNAVAILABLE_REVIEWER
+    ) {
+      throw new Error(
+        "operator override evidence must use unavailable primary and fallback reviewers",
+      );
+    }
+  } else {
+    if (!REVIEWERS.has(fields.reviewer)) {
+      throw new Error("evidence reviewer is invalid");
+    }
+    if (!REVIEWERS.has(fields.primary) || fields.primary === "ci-only") {
+      throw new Error("evidence primary reviewer is invalid");
+    }
+    if (!REVIEWERS.has(fields.fallback) || fields.fallback === "ci-only") {
+      throw new Error("evidence fallback reviewer is invalid");
+    }
+    if (fields.primary === fields.fallback) {
+      throw new Error("evidence fallback reviewer must differ from primary");
+    }
+    // ci-only is the explicitly recorded low-risk advisory path: no model
+    // produced review evidence, but primary/fallback still bind the two real
+    // configured model routes that failed to provide it.
+    if (
+      fields.reviewer !== "ci-only" &&
+      fields.reviewer !== fields.primary &&
+      fields.reviewer !== fields.fallback
+    ) {
+      throw new Error(
+        "evidence reviewer must match the declared primary or fallback reviewer",
+      );
+    }
   }
   if (!Number.isInteger(fields.findings) || fields.findings < 0) {
     throw new Error("evidence findings must be a non-negative integer");
@@ -50,6 +93,8 @@ function evidencePayload(fields) {
     tier: fields.tier,
     findings: fields.findings,
     reviewer: fields.reviewer,
+    primary: fields.primary,
+    fallback: fields.fallback,
   };
 }
 
@@ -171,7 +216,7 @@ if (require.main === module) {
       );
     } else {
       throw new Error(
-        "usage: quality-review-evidence.js sign|verify --head <sha> --base <sha> --tier <tier> --findings <count> --reviewer <name> [--signature <value>]",
+        "usage: quality-review-evidence.js sign|verify --head <sha> --base <sha> --tier <tier> --findings <count> --reviewer <name> --primary <name> --fallback <name> [--signature <value>]",
       );
     }
   } catch (error) {
