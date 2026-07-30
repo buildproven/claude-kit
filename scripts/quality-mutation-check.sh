@@ -73,6 +73,22 @@ TEST_ARGS=()
 while IFS= read -r ARGUMENT; do
   TEST_ARGS+=("$ARGUMENT")
 done < <(printf '%s' "$TEST_PLAN" | jq -r '.args[]')
+MUTATION_TEST_ARGS=("${TEST_ARGS[@]}")
+
+# Mutation evidence needs one observed failure, not a complete failure report.
+# Use the test runner's native fail-fast option when the persisted npm test
+# script names a supported runner. This preserves the exact test suite while
+# preventing already-red mutations from spending the full gate budget on
+# unrelated long-running fixtures.
+if [ "$TEST_EXECUTABLE" = npm ] &&
+   [ "${TEST_ARGS[0]:-}" = run ] &&
+   [ "${TEST_ARGS[1]:-}" = test ]; then
+  TEST_SCRIPT="$(git -C "$ROOT" show "$HEAD:package.json" |
+    jq -r '.scripts.test // ""')"
+  case "$TEST_SCRIPT" in
+    *vitest*|*jest*) MUTATION_TEST_ARGS+=(-- --bail=1) ;;
+  esac
+fi
 
 CANDIDATES=()
 while IFS= read -r CANDIDATE; do
@@ -282,7 +298,7 @@ for CANDIDATE in "${CANDIDATES[@]}"; do
   set +e
   cd "$SANDBOX"
   bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$REMAINING" -- \
-    "$TEST_EXECUTABLE" "${TEST_ARGS[@]}" > "$LOG" 2>&1
+    "$TEST_EXECUTABLE" "${MUTATION_TEST_ARGS[@]}" > "$LOG" 2>&1
   RESULT=$?
   set -e
   cd "$ROOT"
