@@ -86,7 +86,9 @@ if [ "$TEST_EXECUTABLE" = npm ] &&
   TEST_SCRIPT="$(git -C "$ROOT" show "$HEAD:package.json" |
     jq -r '.scripts.test // ""')"
   case "$TEST_SCRIPT" in
-    *vitest*|*jest*) MUTATION_TEST_ARGS+=(-- --bail=1) ;;
+    vitest\ *|jest\ *|npx\ vitest\ *|npx\ jest\ *)
+      MUTATION_TEST_ARGS+=(-- --bail=1)
+      ;;
   esac
 fi
 

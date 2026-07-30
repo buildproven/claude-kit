@@ -127,6 +127,10 @@ if [ ! -f "$REVIEW_SCHEMA_FILE" ]; then
   echo "claude-review-companion: review schema not found: $REVIEW_SCHEMA_FILE" >&2
   exit 1
 fi
+if ! command -v jq >/dev/null 2>&1; then
+  echo "claude-review-companion: jq is required to load the review schema" >&2
+  exit 1
+fi
 # Claude Code validates the schema natively, but its bundled validator rejects
 # the Draft 2020 metadata URI. Keep the shared schema canonical and remove only
 # that annotation at this provider boundary.
@@ -177,6 +181,8 @@ CTX_FILE="$OUT_DIR/review-context.txt"
   echo
   echo "Return only material findings. The quality runner supplies and validates"
   echo "the structured review schema; do not add a prose report outside it."
+  echo "The verdict MUST be approve when findings is empty and MUST be"
+  echo "needs-attention when findings contains one or more items."
 } > "$CTX_FILE"
 
 # --- hard timeout that actually kills ----------------------------------------
@@ -247,7 +253,7 @@ record_structured_failure() {
 
 run_agent() {
   local agent="$1" sysfile out raw rc stderr_file error_json failure_rc
-  local normalized_file
+  local normalized_file salvage_warning
   out="$OUT_DIR/${agent##*:}.findings.txt"
   stderr_file="$OUT_DIR/${agent##*:}.stderr"
   if ! sysfile="$(resolve_agent_file "$agent")"; then
@@ -275,7 +281,8 @@ run_agent() {
 
   # Blocking claude -p under a watchdog that can actually kill it.
   #
-  # NO TOOLS. The full diff, changed files, commit log, and revision identity
+  # NO TOOLS (`claude --help`: use "" to disable all built-in tools). The full
+  # diff, changed files, commit log, and revision identity
   # are already in the prompt. Even read-only tools let reviewers ignore that
   # bounded evidence, explore the repository for dozens of turns, rerun tests,
   # and hit the timeout without returning a verdict. Force a single bounded
@@ -336,7 +343,7 @@ run_agent() {
   # that revision-bound evidence only when the envelope itself proves normal
   # completion; a non-zero exit with partial/error output remains fail-closed.
   if [ "$rc" -ne 0 ] && ! printf '%s' "$raw" | jq -e '
-    .is_error != true and .structured_output != null and
+    .is_error != true and (.structured_output | type) == "object" and
     (.terminal_reason == "completed" or
       (.terminal_reason == null and .stop_reason == "end_turn"))
   ' >/dev/null 2>&1; then
@@ -344,8 +351,9 @@ run_agent() {
     return 3
   fi
   if [ "$rc" -ne 0 ]; then
-    echo "claude-review-companion: WARNING — preserved a complete structured envelope despite process rc=$rc" \
-      >> "$stderr_file"
+    salvage_warning="claude-review-companion: WARNING — preserved a complete structured envelope despite process rc=$rc"
+    echo "$salvage_warning" >> "$stderr_file"
+    echo "$salvage_warning" >&2
   fi
 
   # Claude Code validates --json-schema before emitting structured_output.

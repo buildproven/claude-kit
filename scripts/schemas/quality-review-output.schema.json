@@ -4,10 +4,15 @@
   "additionalProperties": false,
   "required": ["verdict", "summary", "findings"],
   "properties": {
-    "verdict": { "type": "string", "enum": ["approve", "needs-attention"] },
+    "verdict": {
+      "type": "string",
+      "enum": ["approve", "needs-attention"],
+      "description": "Use approve only when findings is empty; use needs-attention when findings contains one or more items."
+    },
     "summary": { "type": "string", "minLength": 1, "pattern": "\\S" },
     "findings": {
       "type": "array",
+      "description": "Material findings. This must be empty for an approve verdict and non-empty for a needs-attention verdict.",
       "items": {
         "type": "object",
         "additionalProperties": false,

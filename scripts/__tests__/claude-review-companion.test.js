@@ -554,10 +554,27 @@ printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{
 
     it("uses the shared structured review schema instead of prompt delimiters", () => {
       const source = fs.readFileSync(SCRIPT, "utf8");
+      const schema = JSON.parse(
+        fs.readFileSync(
+          path.join(
+            KIT_ROOT,
+            "scripts",
+            "schemas",
+            "quality-review-output.schema.json",
+          ),
+          "utf8",
+        ),
+      );
       expect(source).toContain("schemas/quality-review-output.schema.json");
       expect(source).toContain('--json-schema "$REVIEW_SCHEMA_JSON"');
       expect(source).toContain(".structured_output");
       expect(source).not.toContain("marker-only-findings");
+      expect(schema.properties.verdict.description).toContain(
+        "approve only when findings is empty",
+      );
+      expect(schema.properties.findings.description).toContain(
+        "empty for an approve verdict",
+      );
     });
 
     it("selects only read-only review roles for the six-agent high-tier panel", () => {
