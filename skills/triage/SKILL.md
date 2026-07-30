@@ -111,7 +111,12 @@ For a specific Sentry issue ID:
 2. Find the repo + commit that shipped the regression (via release tag in Sentry)
 3. Create and lock the worktree through the shared manager:
    `node <kit-scripts>/worktree-manager.js create --repo <repo> --branch fix/sentry-<issue-id> --creator bs:triage --purpose <issue-id> --lock-reason bs:triage/<issue-id>`
-4. **HUMAN PAUSE GATE**: present a one-paragraph hypothesis of root cause. Generate it with a Sonnet-pinned subagent — reading a stack trace and proposing a root cause is analysis, not the coding work, so it does not need the session model's tier. The fix returns to the normal runtime profile; escalate only if the diagnosis exposes an irreversible architecture decision.
+4. Generate and record a one-paragraph root-cause hypothesis with a
+   Sonnet-pinned subagent. Reading a stack trace and proposing a root cause is
+   bounded analysis, not the coding work, so it does not need the session
+   model's tier. Continue automatically when the hypothesis identifies a
+   testable, reversible fix; ask only when it exposes a genuinely ambiguous
+   product decision or an irreversible architecture boundary.
 
    ```javascript
    Task(subagent_type: "general-purpose",
@@ -119,9 +124,8 @@ For a specific Sentry issue ID:
         prompt: `Read this Sentry issue (stack trace, breadcrumbs, release) and propose a one-paragraph root-cause hypothesis + the file:line most likely responsible. Do NOT write a fix. <issue context>`)
    ```
 
-   Ask the user to confirm before writing code.
-
-5. After confirmation, implement minimal fix in worktree (this leg keeps the session model — it's the actual coding work)
+5. Implement the minimal fix in the worktree at the normal runtime profile.
+   Escalate only when the automatic Architecture Decision Gate triggers.
 6. Add regression test that reproduces the error
 7. Run `/bs:quality --merge`
 8. Open PR with body:
