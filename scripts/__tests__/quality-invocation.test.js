@@ -1279,11 +1279,16 @@ exec "${realGit}" "$@"
       recordGateFixture(manifest, gate.name);
     }
     recordMutationFixture(manifest);
-    expect(() =>
+    const authorization = JSON.parse(
       execFileSync("node", [INVOCATION, "review-authorization", manifest], {
         cwd: root,
       }),
-    ).not.toThrow();
+    );
+    expect(authorization).toMatchObject({
+      provider: "operator-quality-override",
+      primary: "unavailable",
+      fallback: "unavailable",
+    });
   });
 
   it("carries a valid break-glass approval across a rebase-only HEAD change with no new diff (BUI-380)", () => {
