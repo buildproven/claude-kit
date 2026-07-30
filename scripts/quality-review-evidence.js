@@ -17,7 +17,7 @@ const FIELDS = [
   "fallback",
 ];
 const TIERS = new Set(["low", "medium", "high", "critical"]);
-const REVIEWERS = new Set(["claude", "codex", "ci-only"]);
+const REVIEWERS = new Set(["claude", "codex", "gemini", "ci-only"]);
 const OPERATOR_OVERRIDE_REVIEWER = "operator-quality-override";
 const UNAVAILABLE_REVIEWER = "unavailable";
 
@@ -64,10 +64,14 @@ function evidencePayload(fields) {
     if (!REVIEWERS.has(fields.primary) || fields.primary === "ci-only") {
       throw new Error("evidence primary reviewer is invalid");
     }
-    if (!REVIEWERS.has(fields.fallback) || fields.fallback === "ci-only") {
+    const hasFallback = fields.fallback !== "none";
+    if (
+      hasFallback &&
+      (!REVIEWERS.has(fields.fallback) || fields.fallback === "ci-only")
+    ) {
       throw new Error("evidence fallback reviewer is invalid");
     }
-    if (fields.primary === fields.fallback) {
+    if (hasFallback && fields.primary === fields.fallback) {
       throw new Error("evidence fallback reviewer must differ from primary");
     }
     // ci-only is the explicitly recorded low-risk advisory path: no model
@@ -76,7 +80,7 @@ function evidencePayload(fields) {
     if (
       fields.reviewer !== "ci-only" &&
       fields.reviewer !== fields.primary &&
-      fields.reviewer !== fields.fallback
+      (!hasFallback || fields.reviewer !== fields.fallback)
     ) {
       throw new Error(
         "evidence reviewer must match the declared primary or fallback reviewer",
