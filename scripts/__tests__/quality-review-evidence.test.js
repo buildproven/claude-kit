@@ -75,6 +75,15 @@ describe("quality review evidence signatures", () => {
     ).toThrow(/fallback reviewer is invalid/);
   });
 
+  it("signs a primary-only policy with no fallback", () => {
+    const keys = keyPair();
+    const primaryOnly = { ...fields, fallback: "none" };
+    const signature = signEvidence(primaryOnly, keys.privateKey);
+    expect(() =>
+      verifyEvidence(primaryOnly, signature, keys.publicKey),
+    ).not.toThrow();
+  });
+
   it("rejects identical primary and fallback reviewers", () => {
     expect(() =>
       signEvidence({ ...fields, fallback: "codex" }, keyPair().privateKey),
