@@ -2750,7 +2750,9 @@ function writeArtifactInventory(
       .some((line) => line.startsWith("INCONCLUSIVE:")),
   );
   const panelSize =
-    provider === "claude" && !advisory ? manifest.agents.length : findings.length;
+    provider === "claude" && !advisory
+      ? manifest.agents.length
+      : findings.length;
   const requiredUsableFindings = Math.floor(panelSize / 2) + 1;
   const usableFindings = findings.length - inconclusiveFindings.length;
   if (usableFindings < requiredUsableFindings) {
