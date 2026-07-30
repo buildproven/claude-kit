@@ -82,6 +82,29 @@ describe("quality review evidence signatures", () => {
     ).toThrow(/fallback reviewer must differ/);
   });
 
+  it("signs the distinct sanctioned operator-override tuple", () => {
+    const keys = keyPair();
+    const override = {
+      ...fields,
+      reviewer: "operator-quality-override",
+      primary: "unavailable",
+      fallback: "unavailable",
+    };
+    const signature = signEvidence(override, keys.privateKey);
+    expect(verifyEvidence(override, signature, keys.publicKey)).toMatchObject(
+      override,
+    );
+  });
+
+  it("rejects a mixed operator-override reviewer tuple", () => {
+    expect(() =>
+      signEvidence(
+        { ...fields, reviewer: "operator-quality-override" },
+        keyPair().privateKey,
+      ),
+    ).toThrow(/must use unavailable/);
+  });
+
   it("rejects a signature from an untrusted key", () => {
     const signature = signEvidence(fields, keyPair().privateKey);
     expect(() =>

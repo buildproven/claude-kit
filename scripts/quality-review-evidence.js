@@ -18,6 +18,8 @@ const FIELDS = [
 ];
 const TIERS = new Set(["low", "medium", "high", "critical"]);
 const REVIEWERS = new Set(["claude", "codex", "ci-only"]);
+const OPERATOR_OVERRIDE_REVIEWER = "operator-quality-override";
+const UNAVAILABLE_REVIEWER = "unavailable";
 
 function canonicalJson(value) {
   if (Array.isArray(value)) return value.map(canonicalJson);
@@ -45,17 +47,30 @@ function evidencePayload(fields) {
   assertSha(fields.head, "evidence head");
   assertSha(fields.base, "evidence base");
   if (!TIERS.has(fields.tier)) throw new Error("evidence tier is invalid");
-  if (!REVIEWERS.has(fields.reviewer)) {
-    throw new Error("evidence reviewer is invalid");
-  }
-  if (!REVIEWERS.has(fields.primary) || fields.primary === "ci-only") {
-    throw new Error("evidence primary reviewer is invalid");
-  }
-  if (!REVIEWERS.has(fields.fallback)) {
-    throw new Error("evidence fallback reviewer is invalid");
-  }
-  if (fields.primary === fields.fallback) {
-    throw new Error("evidence fallback reviewer must differ from primary");
+  const isOperatorOverride =
+    fields.reviewer === OPERATOR_OVERRIDE_REVIEWER;
+  if (isOperatorOverride) {
+    if (
+      fields.primary !== UNAVAILABLE_REVIEWER ||
+      fields.fallback !== UNAVAILABLE_REVIEWER
+    ) {
+      throw new Error(
+        "operator override evidence must use unavailable primary and fallback reviewers",
+      );
+    }
+  } else {
+    if (!REVIEWERS.has(fields.reviewer)) {
+      throw new Error("evidence reviewer is invalid");
+    }
+    if (!REVIEWERS.has(fields.primary) || fields.primary === "ci-only") {
+      throw new Error("evidence primary reviewer is invalid");
+    }
+    if (!REVIEWERS.has(fields.fallback)) {
+      throw new Error("evidence fallback reviewer is invalid");
+    }
+    if (fields.primary === fields.fallback) {
+      throw new Error("evidence fallback reviewer must differ from primary");
+    }
   }
   if (!Number.isInteger(fields.findings) || fields.findings < 0) {
     throw new Error("evidence findings must be a non-negative integer");
