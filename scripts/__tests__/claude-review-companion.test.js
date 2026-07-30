@@ -547,7 +547,7 @@ printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{
 if printf '%s\\n' "$@" | grep -q 'silent-failure-hunter.md'; then
   printf '%s\\n' '{"result":"<<<FINDINGS REPORTED>>>","is_error":false,"stop_reason":"end_turn"}'
 else
-  printf '%s\\n' '{"result":"No findings\\n<<<NO FINDINGS>>>","is_error":false,"stop_reason":"end_turn"}'
+  printf '%s\\n' '{"result":"{\\"verdict\\":\\"approve\\",\\"summary\\":\\"Clean\\",\\"findings\\":[]}","structured_output":{"verdict":"approve","summary":"Clean","findings":[]},"is_error":false,"stop_reason":"end_turn"}'
 fi
 `,
       { mode: 0o755 },
@@ -577,7 +577,7 @@ fi
     ).toMatch(/INCONCLUSIVE/);
     expect(
       fs.readFileSync(path.join(out, "code-reviewer.findings.txt"), "utf8"),
-    ).toContain("<<<NO FINDINGS>>>");
+    ).toContain("NO FINDINGS. Verdict: approve. Clean");
   });
 
   describe("agent-file resolution (drift guard)", () => {
