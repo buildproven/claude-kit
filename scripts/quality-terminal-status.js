@@ -76,9 +76,14 @@ function worktreeLockStatus(manifest) {
       repo: target,
       skipPrCheck: true,
     });
-    const record = result.worktrees.find(
-      (candidate) => fs.realpathSync(candidate.path) === target,
-    );
+    const record = result.worktrees.find((candidate) => {
+      try {
+        return fs.realpathSync(candidate.path) === target;
+      } catch (error) {
+        if (error.code === "ENOENT") return false;
+        throw error;
+      }
+    });
     if (!record) return "not tracked";
     return record.locked
       ? `locked by ${record.lockReason || "unknown owner"}`

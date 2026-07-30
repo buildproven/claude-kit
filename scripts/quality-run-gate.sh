@@ -57,7 +57,7 @@ release_terminal_quality_lock() {
     echo "[quality] terminal gate failure could not resolve its invocation identity; the worktree lock was not changed." >&2
     return 0
   }
-  plan="$(node "$SCRIPT_DIR/worktree-manager.js" resolve --repo "$ROOT" --branch "$branch" 2>/dev/null)" || {
+  plan="$(node "$SCRIPT_DIR/worktree-manager.js" resolve --repo "$ROOT" --branch "$branch")" || {
     echo "[quality] terminal gate failure could not resolve worktree ownership for '$branch'; the lock was not changed." >&2
     return 0
   }

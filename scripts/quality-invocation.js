@@ -3617,6 +3617,8 @@ const COMMANDS = {
         runGate(locked, parseOptions(rawArgs), manifestArg);
       } catch (error) {
         if (!(error instanceof GateExecutionError)) throw error;
+        // Keep the expected gate failure inside mutate so its failed/timeout
+        // evidence is durably saved, then propagate it after the transaction.
         gateFailure = error;
       }
     });
