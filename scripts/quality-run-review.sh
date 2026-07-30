@@ -252,7 +252,11 @@ run_codex_review() {
           jq '. + {provider: "codex"}' > "$REVIEW_OUT/provider-failure.json"
         return 79
       fi
-      grep -Eiq 'not authenticated|not logged in|login required|setup required' "$error_file" 2>/dev/null && return 2
+      # Codex refreshes MCP OAuth before starting the review. A rejected refresh
+      # token prevents the reviewer from running at all, so it is provider
+      # unavailability rather than a review or parser failure. Keep this match
+      # deliberately narrow: other rc=1 errors remain fail-closed.
+      grep -Eiq 'not authenticated|not logged in|login required|setup required|OAuth token refresh failed:.*invalid_grant' "$error_file" 2>/dev/null && return 2
       return 1
     fi
     if ! bash "$normalizer" "$raw_file" "$normalized_file"; then

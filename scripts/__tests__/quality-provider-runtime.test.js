@@ -159,6 +159,12 @@ describe("provider review runtime", () => {
     expect(companion).not.toContain('category: "marker-only-findings"');
   });
 
+  it("fails over when Codex cannot refresh an MCP OAuth token", () => {
+    const runner = readFileSync(RUN_REVIEW, "utf8");
+    expect(runner).toContain("OAuth token refresh failed:.*invalid_grant");
+    expect(runner).toContain("return 2");
+  });
+
   it("kills the provider tree when the wrapper itself is cancelled", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "bounded-cancel-"));
     const pidFile = path.join(dir, "child.pid");
