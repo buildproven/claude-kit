@@ -343,6 +343,10 @@ run_agent() {
     echo "INCONCLUSIVE: agent '$agent' timed out or errored (rc=$rc) — human review required" > "$out"
     return 3
   fi
+  if [ "$rc" -ne 0 ]; then
+    echo "claude-review-companion: WARNING — preserved a complete structured envelope despite process rc=$rc" \
+      >> "$stderr_file"
+  fi
 
   # Claude Code validates --json-schema before emitting structured_output.
   # Retain a local semantic check as well: the verdict must agree with whether
@@ -361,7 +365,8 @@ run_agent() {
           (.title | type) == "string" and (.title | test("\\S")) and
           (.body | type) == "string" and (.body | test("\\S")) and
           (.file | type) == "string" and (.file | test("\\S")) and
-          (.line_start | type) == "number" and .line_start >= 1 and
+          (.line_start | type) == "number" and
+          (.line_start | floor) == .line_start and .line_start >= 1 and
           (.recommendation | type) == "string" and
           (.recommendation | test("\\S"))
         ) and

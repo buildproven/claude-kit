@@ -388,6 +388,11 @@ exit 143
     expect(
       fs.readFileSync(path.join(out, "code-reviewer.findings.txt"), "utf8"),
     ).toContain("NO FINDINGS. Verdict: approve. Clean");
+    expect(
+      fs.readFileSync(path.join(out, "code-reviewer.stderr"), "utf8"),
+    ).toContain(
+      "preserved a complete structured envelope despite process rc=143",
+    );
   });
 
   it("marks missing structured output inconclusive", () => {
@@ -495,6 +500,41 @@ printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{
     ).toContain("structured output was missing or contradictory");
   });
 
+  it("rejects a clean verdict paired with a concrete finding", () => {
+    const d = tmpdir();
+    const bin = path.join(d, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+    fs.writeFileSync(path.join(d, "identity.json"), "{}\n");
+    fs.writeFileSync(
+      path.join(bin, "claude"),
+      `#!/usr/bin/env bash
+printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{"verdict":"approve","summary":"Contradictory","findings":[{"severity":"high","title":"Unsafe merge","body":"The result can merge stale evidence.","file":"scripts/review.sh","line_start":42,"recommendation":"Bind the evidence to HEAD."}]}}'
+`,
+      { mode: 0o755 },
+    );
+
+    const out = path.join(d, "out");
+    const r = run(
+      [
+        "--diff-file",
+        path.join(d, "diff.txt"),
+        "--out-dir",
+        out,
+        "--agents",
+        "code-reviewer",
+        "--identity-file",
+        path.join(d, "identity.json"),
+      ],
+      { env: { PATH: `${bin}:${process.env.PATH}` } },
+    );
+
+    expect(r.code).toBe(4);
+    expect(
+      fs.readFileSync(path.join(out, "code-reviewer.findings.txt"), "utf8"),
+    ).toContain("structured output was missing or contradictory");
+  });
+
   describe("agent-file resolution (drift guard)", () => {
     // The whole design rests on pointing --append-system-prompt-file at the
     // REAL agent bodies (no inlined copies to drift). Assert the kit-local
@@ -528,7 +568,10 @@ printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{
       const panelStart = selector.indexOf("PANEL=(");
       const panelEnd = selector.indexOf(")", panelStart);
       const panel = selector.slice(panelStart, panelEnd);
-      expect(panel).toContain("pr-test-analyzer architect-reviewer");
+      const normalizedPanel = panel.replace(/\\\s*/g, " ").replace(/\s+/g, " ");
+      expect(normalizedPanel).toContain(
+        "PANEL=(code-reviewer silent-failure-hunter security-auditor type-design-analyzer pr-test-analyzer architect-reviewer",
+      );
       expect(panel.indexOf("architect-reviewer")).toBeLessThan(
         panel.indexOf("code-simplifier"),
       );
