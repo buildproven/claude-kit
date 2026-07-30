@@ -134,29 +134,18 @@ describe("provider review runtime", () => {
     );
   });
 
-  it("retries a marker-only Claude result once without weakening other failures", () => {
+  it("uses native structured Claude output without a malformed-output retry loop", () => {
     const runner = readFileSync(RUN_REVIEW, "utf8");
     const companion = readFileSync(
       path.resolve(ROOT, "scripts", "claude-review-companion.sh"),
       "utf8",
     );
-    expect(runner).toContain("claude_marker_only_result()");
-    expect(runner).toContain(
-      "Claude emitted a marker-only finding; retrying once",
-    );
-    expect(runner).toContain(
-      'if [ "$rc" -eq 4 ] && claude_marker_only_result; then',
-    );
-    expect(runner).toContain(
-      'marker_signal="${findings%.findings.txt}.marker-only.json"',
-    );
-    expect(runner).toContain("marker_only_seen=false");
-    expect(runner).toContain("Retrying the full panel would overwrite it.");
-    expect(runner).toContain(
-      'if [ "${companion_args[$timeout_index]}" = "--timeout" ]; then',
-    );
-    expect(runner).toContain("any second malformed result remains fail-closed");
-    expect(companion).toContain('category: "marker-only-findings"');
+    expect(runner).not.toContain("claude_marker_only_result()");
+    expect(runner).not.toContain("marker-only finding; retrying once");
+    expect(companion).toContain('--json-schema "$REVIEW_SCHEMA_JSON"');
+    expect(companion).toContain(".structured_output");
+    expect(companion).toContain('del(."$schema")');
+    expect(companion).not.toContain('category: "marker-only-findings"');
   });
 
   it("kills the provider tree when the wrapper itself is cancelled", () => {

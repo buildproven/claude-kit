@@ -18,5 +18,4 @@ Check:
 - asynchronous work that can fail after success is returned
 
 Report only concrete findings with file:line, production consequence, and exact
-fix. End the entire response with exactly one standalone delimiter:
-`<<<NO FINDINGS>>>` if none, or `<<<FINDINGS REPORTED>>>` after any finding list.
+fix. If none, say `NO FINDINGS`.

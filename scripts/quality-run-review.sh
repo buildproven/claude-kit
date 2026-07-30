@@ -111,25 +111,8 @@ complete_provider_attempt() {
     "$MANIFEST" --provider "$provider" --elapsed-seconds "$elapsed"
 }
 
-claude_marker_only_result() {
-  local findings marker_signal marker_only_seen
-  marker_only_seen=false
-  for findings in "$REVIEW_OUT"/*.findings.txt; do
-    [ -f "$findings" ] || continue
-    marker_signal="${findings%.findings.txt}.marker-only.json"
-    if [ -f "$marker_signal" ]; then
-      marker_only_seen=true
-    else
-      # Preserve any actual finding, clean result, timeout, or other failure
-      # from another agent. Retrying the full panel would overwrite it.
-      return 1
-    fi
-  done
-  [ "$marker_only_seen" = true ]
-}
-
 run_claude_review() {
-  local agents_csv rc attempt_timeout attempt_started timeout_index timeout_updated
+  local agents_csv rc attempt_timeout attempt_started
   local companion_args=()
   command -v claude >/dev/null 2>&1 || return 2
   claude auth status --json 2>/dev/null | jq -e '.loggedIn == true' >/dev/null 2>&1 || return 2
@@ -155,30 +138,6 @@ run_claude_review() {
   bash "$SCRIPT_DIR/claude-review-companion.sh" "${companion_args[@]}"
   rc=$?
   complete_provider_attempt claude "$attempt_started" || return 1
-  # A bare marker proves neither an approval nor a finding. Retry this one
-  # typed malformed-output case once with a new, governor-authorized Claude
-  # attempt; any second malformed result remains fail-closed.
-  if [ "$rc" -eq 4 ] && claude_marker_only_result; then
-    echo "⚠️  [quality] Claude emitted a marker-only finding; retrying once within the provider budget." >&2
-    attempt_timeout="$(authorize_provider_attempt claude "$QUALITY_REVIEW_TIMEOUT")" \
-      || return 77
-    timeout_updated=false
-    for timeout_index in "${!companion_args[@]}"; do
-      if [ "${companion_args[$timeout_index]}" = "--timeout" ]; then
-        companion_args[$((timeout_index + 1))]="$attempt_timeout"
-        timeout_updated=true
-        break
-      fi
-    done
-    [ "$timeout_updated" = true ] || {
-      echo "quality: Claude review timeout argument is missing" >&2
-      return 1
-    }
-    attempt_started=$SECONDS
-    bash "$SCRIPT_DIR/claude-review-companion.sh" "${companion_args[@]}"
-    rc=$?
-    complete_provider_attempt claude "$attempt_started" || return 1
-  fi
   return "$rc"
 }
 

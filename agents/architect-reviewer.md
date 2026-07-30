@@ -139,13 +139,6 @@ For significant decisions, document:
 - Pros/cons of each
 - Recommended approach with rationale
 
-## Quality Review Evidence
-
-When this agent is invoked by the quality runner, preserve the architecture
-report above and end the entire response with exactly one standalone delimiter:
-`<<<NO FINDINGS>>>` when no material concern was found, or
-`<<<FINDINGS REPORTED>>>` after one or more reported findings.
-
 ## Guiding Principles
 
 1. **Simplicity over cleverness** - The best architecture is the simplest that meets requirements

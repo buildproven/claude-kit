@@ -105,10 +105,6 @@ If none: write "None"
 - **PASS** if BLOCKING FINDINGS is "None"
 - **FAIL** if any blocking findings exist
 
-After the report, end the entire response with exactly one standalone delimiter:
-`<<<NO FINDINGS>>>` when there are no material findings, or
-`<<<FINDINGS REPORTED>>>` when the report contains one or more findings.
-
 ## Anti-Patterns (do not produce these)
 
 - "Consider adding error handling" — WHERE? WHAT error? Be specific.

@@ -18,5 +18,4 @@ Find:
 - migrations that break existing serialized data
 
 Report only actionable correctness findings with file:line and a concrete safer
-model. End the entire response with exactly one standalone delimiter:
-`<<<NO FINDINGS>>>` if none, or `<<<FINDINGS REPORTED>>>` after any finding list.
+model. If none, say `NO FINDINGS`.

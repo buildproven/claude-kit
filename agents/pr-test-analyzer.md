@@ -17,6 +17,5 @@ Check:
 - assertions on observable outcomes rather than implementation details
 - tests that pass without executing the changed branch
 
-Report only material coverage gaps with the exact missing test. End the entire
-response with exactly one standalone delimiter: `<<<NO FINDINGS>>>` if none, or
-`<<<FINDINGS REPORTED>>>` after any finding list.
+Report only material coverage gaps with the exact missing test. If none, say
+`NO FINDINGS`.
