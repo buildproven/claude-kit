@@ -9,6 +9,12 @@ model: haiku
 
 # /bs:help Command
 
+## Model routing
+
+Daily commands inherit the configured runtime default (Sonnet/medium in Claude
+Code; the normal Codex profile/medium in Codex). `/bs:quality` alone may
+escalate a bounded adversarial pass; no command pin is a standing Opus default.
+
 **Arguments received:** $ARGUMENTS
 
 ## Instructions

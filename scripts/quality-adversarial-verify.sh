@@ -39,6 +39,10 @@ DIFF_FILE=""
 OUT_DIR=""
 VOTERS=3
 TIMEOUT=300
+# Adversarial verification is the deliberate Claude escalation: use Opus at
+# high effort for a bounded, revision-specific skeptic pass. Never inherit the
+# operator session model; that could silently reintroduce a long-context pin.
+DEFAULT_REVIEW_MODEL="claude-opus-5"
 MODEL=""
 DRY_RUN=false
 # Governor integration: an absolute wall-clock deadline (epoch seconds) that the
@@ -80,8 +84,14 @@ VERDICTS="$OUT_DIR/verdicts.json"
 case "$VOTERS" in ''|*[!0-9]*) echo "voters must be a number" >&2; exit 2 ;; esac
 [ "$VOTERS" -ge 1 ] || { echo "voters must be >= 1" >&2; exit 2; }
 
-MODEL_ARGS=()
-[ -n "$MODEL" ] && MODEL_ARGS=(--model "$MODEL")
+EFFECTIVE_MODEL="${MODEL:-$DEFAULT_REVIEW_MODEL}"
+case "$EFFECTIVE_MODEL" in
+  *"[1m]"*|*"-1m"*)
+    echo "quality-adversarial-verify: refusing 1M-context model ($EFFECTIVE_MODEL) — using $DEFAULT_REVIEW_MODEL" >&2
+    EFFECTIVE_MODEL="$DEFAULT_REVIEW_MODEL"
+    ;;
+esac
+MODEL_ARGS=(--model "$EFFECTIVE_MODEL" --effort high)
 
 # Portable timeout: macOS has no coreutils `timeout` by default.
 run_with_timeout() {

@@ -58,17 +58,26 @@ function assertOuterApprovalContext() {
 
 function parseApprovalCommand(argv) {
   if (argv[0] !== "approve") {
-    return { argv, explicit: false, expectedHead: null, expectedPr: null };
+    return {
+      argv,
+      explicit: false,
+      expectedHead: null,
+      expectedPr: null,
+      overrideQuality: false,
+    };
   }
   const forwarded = [];
   let expectedHead = null;
   let expectedPr = null;
+  let overrideQuality = false;
   for (let index = 1; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "--head") {
       expectedHead = argv[++index];
     } else if (value.startsWith("--head=")) {
       expectedHead = value.slice("--head=".length);
+    } else if (value === "--override-quality") {
+      overrideQuality = true;
     } else {
       forwarded.push(value);
       if (value === "--pr") expectedPr = argv[index + 1];
@@ -88,6 +97,7 @@ function parseApprovalCommand(argv) {
     explicit: true,
     expectedHead,
     expectedPr: Number(expectedPr),
+    overrideQuality,
   };
 }
 
@@ -138,6 +148,9 @@ function issueApprovalCapability(
     head: manifest.revisions.currentHead,
     invocationId: manifest.invocationId,
     approver: process.env.BREAK_GLASS_APPROVER || process.env.USER || "unknown",
+    scope: expectedIdentity?.overrideQuality
+      ? "operator-quality-override"
+      : "standard",
     issuedAt: issuedAt.toISOString(),
     expiresAt: new Date(issuedAt.getTime() + ttl * 1000).toISOString(),
     nonce: crypto.randomUUID(),
@@ -246,7 +259,11 @@ function main() {
       publicKey,
       privateKey: keyPair.privateKey,
       expectedIdentity: request.explicit
-        ? { pr: request.expectedPr, head: request.expectedHead }
+        ? {
+            pr: request.expectedPr,
+            head: request.expectedHead,
+            overrideQuality: request.overrideQuality,
+          }
         : null,
     });
     if (request.explicit) printExplicitApproval(approval);
