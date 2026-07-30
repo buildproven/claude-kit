@@ -3144,7 +3144,7 @@ function runGate(manifest, options, manifestPath) {
       reason: error.message,
     });
     process.stderr.write(`${error.message}\n`);
-    process.exitCode = 1;
+    throw error;
   }
 }
 
@@ -3583,10 +3583,18 @@ const COMMANDS = {
     ),
   judge: ({ manifestArg, rawArgs }) =>
     mutate(manifestArg, (locked) => recordJudge(locked, parseOptions(rawArgs))),
-  "gate-run": ({ manifestArg, rawArgs }) =>
-    mutate(manifestArg, (locked) =>
-      runGate(locked, parseOptions(rawArgs), manifestArg),
-    ),
+  "gate-run": ({ manifestArg, rawArgs }) => {
+    let gateFailure = null;
+    mutate(manifestArg, (locked) => {
+      try {
+        runGate(locked, parseOptions(rawArgs), manifestArg);
+      } catch (error) {
+        if (!(error instanceof GateExecutionError)) throw error;
+        gateFailure = error;
+      }
+    });
+    if (gateFailure) throw gateFailure;
+  },
   "mutation-record": ({ manifestArg, rawArgs }) =>
     mutate(manifestArg, (locked) =>
       recordMutation(locked, parseOptions(rawArgs)),
