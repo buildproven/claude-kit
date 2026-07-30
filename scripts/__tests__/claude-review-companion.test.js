@@ -460,6 +460,41 @@ printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{
     );
   });
 
+  it("rejects structured findings with blank required content", () => {
+    const d = tmpdir();
+    const bin = path.join(d, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+    fs.writeFileSync(path.join(d, "identity.json"), "{}\n");
+    fs.writeFileSync(
+      path.join(bin, "claude"),
+      `#!/usr/bin/env bash
+printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{"verdict":"needs-attention","summary":"One issue","findings":[{"severity":"high","title":"   ","body":"","file":"","line_start":1,"recommendation":""}]}}'
+`,
+      { mode: 0o755 },
+    );
+
+    const out = path.join(d, "out");
+    const r = run(
+      [
+        "--diff-file",
+        path.join(d, "diff.txt"),
+        "--out-dir",
+        out,
+        "--agents",
+        "code-reviewer",
+        "--identity-file",
+        path.join(d, "identity.json"),
+      ],
+      { env: { PATH: `${bin}:${process.env.PATH}` } },
+    );
+
+    expect(r.code).toBe(4);
+    expect(
+      fs.readFileSync(path.join(out, "code-reviewer.findings.txt"), "utf8"),
+    ).toContain("structured output was missing or contradictory");
+  });
+
   describe("agent-file resolution (drift guard)", () => {
     // The whole design rests on pointing --append-system-prompt-file at the
     // REAL agent bodies (no inlined copies to drift). Assert the kit-local

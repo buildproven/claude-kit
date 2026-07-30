@@ -353,8 +353,22 @@ run_agent() {
     select(.is_error != true and (.structured_output | type) == "object")
     | .structured_output
     | select(
-        (.verdict == "approve" and (.findings | length) == 0) or
-        (.verdict == "needs-attention" and (.findings | length) > 0)
+        (.summary | type) == "string" and
+        (.summary | test("\\S")) and
+        (.findings | type) == "array" and
+        all(.findings[];
+          (.severity | type) == "string" and
+          (.title | type) == "string" and (.title | test("\\S")) and
+          (.body | type) == "string" and (.body | test("\\S")) and
+          (.file | type) == "string" and (.file | test("\\S")) and
+          (.line_start | type) == "number" and .line_start >= 1 and
+          (.recommendation | type) == "string" and
+          (.recommendation | test("\\S"))
+        ) and
+        (
+          (.verdict == "approve" and (.findings | length) == 0) or
+          (.verdict == "needs-attention" and (.findings | length) > 0)
+        )
       )
   ' > "$normalized_file" 2>/dev/null; then
     rm -f "$normalized_file"
