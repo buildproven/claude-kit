@@ -22,9 +22,13 @@ AGENT_TARGET="$(field risk.agentTarget)"
   exit 1
 }
 
+# The first six positions are all read-only review roles with compatible
+# evidence output. code-simplifier is an implementation agent, not a review
+# agent, so reserve it for the broader advisory panel rather than selecting it
+# for ordinary high-tier review.
 PANEL=(code-reviewer silent-failure-hunter security-auditor type-design-analyzer \
-       pr-test-analyzer code-simplifier accessibility-tester \
-       performance-engineer architect-reviewer)
+       pr-test-analyzer architect-reviewer code-simplifier \
+       accessibility-tester performance-engineer)
 N="$AGENT_TARGET"
 [ "$N" -lt 2 ] && N=2
 [ "$N" -le "${#PANEL[@]}" ] || {

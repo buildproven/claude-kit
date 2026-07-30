@@ -324,7 +324,7 @@ describe("claude-review-companion.sh", () => {
     fs.writeFileSync(path.join(d, "identity.json"), "{}\n");
     fs.writeFileSync(
       path.join(bin, "claude"),
-      `#!/usr/bin/env bash\nprintf '%s\\n' "$@" > "${argsFile}"\nprintf '%s\\n' '{"result":"No findings\\n<<<NO FINDINGS>>>","is_error":false,"stop_reason":"end_turn"}'\n`,
+      `#!/usr/bin/env bash\nprintf '%s\\n' "$@" > "${argsFile}"\nprintf '%s\\n' '{"result":"{\\"verdict\\":\\"approve\\",\\"summary\\":\\"Clean\\",\\"findings\\":[]}","structured_output":{"verdict":"approve","summary":"Clean","findings":[]},"is_error":false,"stop_reason":"end_turn"}'\n`,
       { mode: 0o755 },
     );
 
@@ -346,6 +346,12 @@ describe("claude-review-companion.sh", () => {
     expect(fs.readFileSync(argsFile, "utf8")).toContain(
       "--model\nclaude-sonnet-5\n",
     );
+    const args = fs.readFileSync(argsFile, "utf8");
+    expect(args).toContain("--json-schema\n");
+    expect(args).toContain('"required":["verdict","summary","findings"]');
+    expect(args).not.toContain("https://json-schema.org/draft/2020-12/schema");
+    expect(args).toContain("--tools\n\n");
+    expect(args).not.toContain("--allowedTools");
   });
 
   it("preserves a complete review emitted just before watchdog termination", () => {
@@ -357,7 +363,7 @@ describe("claude-review-companion.sh", () => {
     fs.writeFileSync(
       path.join(bin, "claude"),
       `#!/usr/bin/env bash
-printf '%s\\n' '{"terminal_reason":"completed","result":"No findings\\n<<<NO FINDINGS>>>","is_error":false}'
+printf '%s\\n' '{"terminal_reason":"completed","result":"{\\"verdict\\":\\"approve\\",\\"summary\\":\\"Clean\\",\\"findings\\":[]}","structured_output":{"verdict":"approve","summary":"Clean","findings":[]},"is_error":false}'
 exit 143
 `,
       { mode: 0o755 },
@@ -381,10 +387,15 @@ exit 143
     expect(r.code, r.stderr).toBe(0);
     expect(
       fs.readFileSync(path.join(out, "code-reviewer.findings.txt"), "utf8"),
-    ).toContain("<<<NO FINDINGS>>>");
+    ).toContain("NO FINDINGS. Verdict: approve. Clean");
+    expect(
+      fs.readFileSync(path.join(out, "code-reviewer.stderr"), "utf8"),
+    ).toContain(
+      "preserved a complete structured envelope despite process rc=143",
+    );
   });
 
-  it("marks a bare findings-reported delimiter inconclusive before recording review evidence", () => {
+  it("marks missing structured output inconclusive", () => {
     const d = tmpdir();
     const bin = path.join(d, "bin");
     fs.mkdirSync(bin);
@@ -414,9 +425,114 @@ exit 143
     expect(r.code).toBe(4);
     expect(
       fs.readFileSync(path.join(out, "code-reviewer.findings.txt"), "utf8"),
-    ).toMatch(
-      /INCONCLUSIVE: agent 'code-reviewer' reported findings without finding text/,
+    ).toMatch(/structured output was missing or contradictory/);
+  });
+
+  it("renders validated structured findings and preserves their concrete fix", () => {
+    const d = tmpdir();
+    const bin = path.join(d, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+    fs.writeFileSync(path.join(d, "identity.json"), "{}\n");
+    fs.writeFileSync(
+      path.join(bin, "claude"),
+      `#!/usr/bin/env bash
+printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{"verdict":"needs-attention","summary":"One issue","findings":[{"severity":"high","title":"Unsafe merge","body":"The result can merge stale evidence.","file":"scripts/review.sh","line_start":42,"recommendation":"Bind the evidence to HEAD."}]}}'
+`,
+      { mode: 0o755 },
     );
+
+    const out = path.join(d, "out");
+    const r = run(
+      [
+        "--diff-file",
+        path.join(d, "diff.txt"),
+        "--out-dir",
+        out,
+        "--agents",
+        "code-reviewer",
+        "--identity-file",
+        path.join(d, "identity.json"),
+      ],
+      { env: { PATH: `${bin}:${process.env.PATH}` } },
+    );
+
+    expect(r.code, r.stderr).toBe(0);
+    expect(
+      fs.readFileSync(path.join(out, "code-reviewer.findings.txt"), "utf8"),
+    ).toContain(
+      "high: scripts/review.sh:42 — Unsafe merge\nThe result can merge stale evidence.\nFix: Bind the evidence to HEAD.",
+    );
+  });
+
+  it("rejects structured findings with blank required content", () => {
+    const d = tmpdir();
+    const bin = path.join(d, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+    fs.writeFileSync(path.join(d, "identity.json"), "{}\n");
+    fs.writeFileSync(
+      path.join(bin, "claude"),
+      `#!/usr/bin/env bash
+printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{"verdict":"needs-attention","summary":"One issue","findings":[{"severity":"high","title":"   ","body":"","file":"","line_start":1,"recommendation":""}]}}'
+`,
+      { mode: 0o755 },
+    );
+
+    const out = path.join(d, "out");
+    const r = run(
+      [
+        "--diff-file",
+        path.join(d, "diff.txt"),
+        "--out-dir",
+        out,
+        "--agents",
+        "code-reviewer",
+        "--identity-file",
+        path.join(d, "identity.json"),
+      ],
+      { env: { PATH: `${bin}:${process.env.PATH}` } },
+    );
+
+    expect(r.code).toBe(4);
+    expect(
+      fs.readFileSync(path.join(out, "code-reviewer.findings.txt"), "utf8"),
+    ).toContain("structured output was missing or contradictory");
+  });
+
+  it("rejects a clean verdict paired with a concrete finding", () => {
+    const d = tmpdir();
+    const bin = path.join(d, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+    fs.writeFileSync(path.join(d, "identity.json"), "{}\n");
+    fs.writeFileSync(
+      path.join(bin, "claude"),
+      `#!/usr/bin/env bash
+printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{"verdict":"approve","summary":"Contradictory","findings":[{"severity":"high","title":"Unsafe merge","body":"The result can merge stale evidence.","file":"scripts/review.sh","line_start":42,"recommendation":"Bind the evidence to HEAD."}]}}'
+`,
+      { mode: 0o755 },
+    );
+
+    const out = path.join(d, "out");
+    const r = run(
+      [
+        "--diff-file",
+        path.join(d, "diff.txt"),
+        "--out-dir",
+        out,
+        "--agents",
+        "code-reviewer",
+        "--identity-file",
+        path.join(d, "identity.json"),
+      ],
+      { env: { PATH: `${bin}:${process.env.PATH}` } },
+    );
+
+    expect(r.code).toBe(4);
+    expect(
+      fs.readFileSync(path.join(out, "code-reviewer.findings.txt"), "utf8"),
+    ).toContain("structured output was missing or contradictory");
   });
 
   describe("agent-file resolution (drift guard)", () => {
@@ -435,6 +551,48 @@ exit 143
         );
       });
     }
+
+    it("uses the shared structured review schema instead of prompt delimiters", () => {
+      const source = fs.readFileSync(SCRIPT, "utf8");
+      const schema = JSON.parse(
+        fs.readFileSync(
+          path.join(
+            KIT_ROOT,
+            "scripts",
+            "schemas",
+            "quality-review-output.schema.json",
+          ),
+          "utf8",
+        ),
+      );
+      expect(source).toContain("schemas/quality-review-output.schema.json");
+      expect(source).toContain('--json-schema "$REVIEW_SCHEMA_JSON"');
+      expect(source).toContain(".structured_output");
+      expect(source).not.toContain("marker-only-findings");
+      expect(schema.properties.verdict.description).toContain(
+        "approve only when findings is empty",
+      );
+      expect(schema.properties.findings.description).toContain(
+        "empty for an approve verdict",
+      );
+    });
+
+    it("selects only read-only review roles for the six-agent high-tier panel", () => {
+      const selector = fs.readFileSync(
+        path.join(KIT_ROOT, "scripts", "quality-select-agents.sh"),
+        "utf8",
+      );
+      const panelStart = selector.indexOf("PANEL=(");
+      const panelEnd = selector.indexOf(")", panelStart);
+      const panel = selector.slice(panelStart, panelEnd);
+      const normalizedPanel = panel.replace(/\\\s*/g, " ").replace(/\s+/g, " ");
+      expect(normalizedPanel).toContain(
+        "PANEL=(code-reviewer silent-failure-hunter security-auditor type-design-analyzer pr-test-analyzer architect-reviewer",
+      );
+      expect(panel.indexOf("architect-reviewer")).toBeLessThan(
+        panel.indexOf("code-simplifier"),
+      );
+    });
   });
 
   describe("recursion guard contract", () => {
@@ -619,7 +777,7 @@ exit 0
       fs.writeFileSync(
         fakeClaude,
         `#!/bin/bash
-printf '%s\\n' '{"is_error":false,"result":"WARNING: src/http.js:10 — status === 429 should preserve quota headers."}'
+printf '%s\\n' '{"is_error":false,"structured_output":{"verdict":"needs-attention","summary":"Quota handling issue","findings":[{"severity":"medium","title":"Quota headers are discarded","body":"status === 429 should preserve quota headers.","file":"src/http.js","line_start":10,"recommendation":"Forward the quota reset headers."}]}}'
 `,
       );
       fs.chmodSync(fakeClaude, 0o755);
