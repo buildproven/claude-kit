@@ -1,5 +1,5 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -2536,9 +2536,11 @@ exit 1
       ...process.env,
       PATH: `${bin}:${process.env.PATH}`,
       QUALITY_STAMP_CI_TIMEOUT: "5",
-      // The operator key is intentionally discovered from the real XDG
-      // configuration directory. Keep this fixture hermetic so its mocked
-      // repository exercises the unsigned compatibility path.
+      QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY: generateKeyPairSync("ed25519")
+        .privateKey.export({ format: "der", type: "pkcs8" })
+        .toString("base64"),
+      // Keep default key discovery hermetic; this fixture supplies an
+      // explicit ephemeral signer for the critical-tier stamp path.
       XDG_CONFIG_HOME: path.join(harness, "xdg"),
     };
 
