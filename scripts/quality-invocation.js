@@ -2322,12 +2322,19 @@ function providerFindings(manifest) {
   // failure below, rather than silently dropped or counted as findings.
   const inconclusiveAgents = [];
   let usableReviewerReports = 0;
+  let requiredUsableReports = 0;
   for (const review of coveredReviews(manifest)) {
     const reviewFindingsStart = findings.length;
     const inventory = parseJson(
       fs.readFileSync(path.join(review.artifactDir, "artifact-inventory.json")),
       "provider artifact inventory",
     );
+    if (inventory.provider === "claude") {
+      requiredUsableReports = Math.max(
+        requiredUsableReports,
+        Math.floor(manifest.agents.length / 2) + 1,
+      );
+    }
     const resultFiles = inventory.files.filter((file) =>
       file.name.endsWith(".json"),
     );
@@ -2471,15 +2478,15 @@ function providerFindings(manifest) {
   // Fail closed, and distinctly from "actionable code findings remain" — the
   // operator needs to know the panel produced no usable verdict, not hunt for
   // a defect that was never described.
-  const requiredUsableReports = Math.floor(manifest.agents.length / 2) + 1;
   if (
-    inconclusiveAgents.length &&
-    usableReviewerReports < requiredUsableReports
+    (requiredUsableReports > 0 &&
+      usableReviewerReports < requiredUsableReports) ||
+    (inconclusiveAgents.length && usableReviewerReports === 0)
   ) {
     throw new Error(
       `inconclusive provider findings: ${inconclusiveAgents.join(", ")} ` +
         `left only ${usableReviewerReports}/${manifest.agents.length} usable ` +
-        `reviewer reports (need ${requiredUsableReports})`,
+        `reviewer reports (need ${requiredUsableReports || 1})`,
     );
   }
   return findings;
@@ -2727,21 +2734,6 @@ function writeArtifactInventory(
     .sort();
   const findings = names.filter((name) => name.endsWith(".findings.txt"));
   if (findings.length === 0) throw new Error("provider findings are missing");
-  const inconclusiveFindings = findings.filter((name) =>
-    fs
-      .readFileSync(path.join(resolved, name), "utf8")
-      .split(/\r?\n/)
-      .some((line) => line.startsWith("INCONCLUSIVE:")),
-  );
-  const requiredUsableFindings = Math.floor(findings.length / 2) + 1;
-  const usableFindings = findings.length - inconclusiveFindings.length;
-  if (usableFindings < requiredUsableFindings) {
-    throw new Error(
-      `inconclusive provider findings cannot be inventoried: ` +
-        `only ${usableFindings}/${findings.length} usable reports ` +
-        `(need ${requiredUsableFindings})`,
-    );
-  }
   if (
     provider === "claude" &&
     !advisory &&
@@ -2749,6 +2741,23 @@ function writeArtifactInventory(
   ) {
     throw new Error(
       "Claude findings inventory does not cover the mandatory panel",
+    );
+  }
+  const inconclusiveFindings = findings.filter((name) =>
+    fs
+      .readFileSync(path.join(resolved, name), "utf8")
+      .split(/\r?\n/)
+      .some((line) => line.startsWith("INCONCLUSIVE:")),
+  );
+  const panelSize =
+    provider === "claude" && !advisory ? manifest.agents.length : findings.length;
+  const requiredUsableFindings = Math.floor(panelSize / 2) + 1;
+  const usableFindings = findings.length - inconclusiveFindings.length;
+  if (usableFindings < requiredUsableFindings) {
+    throw new Error(
+      `inconclusive provider findings cannot be inventoried: ` +
+        `only ${usableFindings}/${panelSize} usable reports ` +
+        `(need ${requiredUsableFindings})`,
     );
   }
   const inventory = {

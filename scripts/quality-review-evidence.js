@@ -64,15 +64,15 @@ function evidencePayload(fields) {
     if (!REVIEWERS.has(fields.primary) || fields.primary === "ci-only") {
       throw new Error("evidence primary reviewer is invalid");
     }
-    if (!REVIEWERS.has(fields.fallback)) {
+    if (!REVIEWERS.has(fields.fallback) || fields.fallback === "ci-only") {
       throw new Error("evidence fallback reviewer is invalid");
     }
     if (fields.primary === fields.fallback) {
       throw new Error("evidence fallback reviewer must differ from primary");
     }
     // ci-only is the explicitly recorded low-risk advisory path: no model
-    // produced review evidence, while primary/fallback still bind the failed
-    // routing policy that led to the advisory authorization.
+    // produced review evidence, but primary/fallback still bind the two real
+    // configured model routes that failed to provide it.
     if (
       fields.reviewer !== "ci-only" &&
       fields.reviewer !== fields.primary &&

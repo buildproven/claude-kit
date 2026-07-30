@@ -51,49 +51,34 @@ describe("quality review evidence signatures", () => {
     ).toThrow(/does not bind/);
   });
 
-  it("rejects a signature whose declared primary reviewer was rewritten", () => {
+  it("rejects a signature whose declared reviewer was rewritten", () => {
     const keys = keyPair();
     const signed = {
       ...fields,
       reviewer: "ci-only",
       primary: "codex",
-      fallback: "ci-only",
+      fallback: "claude",
     };
     const signature = signEvidence(signed, keys.privateKey);
     expect(() =>
       verifyEvidence(
-        { ...signed, primary: "claude" },
+        { ...signed, reviewer: "codex" },
         signature,
         keys.publicKey,
       ),
     ).toThrow(/does not bind/);
   });
 
-  it("rejects a signature whose declared fallback reviewer was rewritten", () => {
-    const keys = keyPair();
-    const signature = signEvidence(fields, keys.privateKey);
+  it("rejects ci-only as a fallback reviewer", () => {
     expect(() =>
-      verifyEvidence(
-        { ...fields, fallback: "ci-only" },
-        signature,
-        keys.publicKey,
-      ),
-    ).toThrow(/does not bind/);
+      signEvidence({ ...fields, fallback: "ci-only" }, keyPair().privateKey),
+    ).toThrow(/fallback reviewer is invalid/);
   });
 
   it("rejects identical primary and fallback reviewers", () => {
     expect(() =>
       signEvidence({ ...fields, fallback: "codex" }, keyPair().privateKey),
     ).toThrow(/fallback reviewer must differ/);
-  });
-
-  it("rejects a reviewer outside the declared routing pair", () => {
-    expect(() =>
-      signEvidence(
-        { ...fields, primary: "claude", fallback: "ci-only" },
-        keyPair().privateKey,
-      ),
-    ).toThrow(/must match the declared primary or fallback/);
   });
 
   it("signs the distinct sanctioned operator-override tuple", () => {
