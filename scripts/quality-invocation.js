@@ -11,6 +11,7 @@ const riskScore = require("./risk-score.js");
 const SCHEMA_VERSION = 1;
 const EXECUTION_BUDGET_VERSION = 1;
 const REQUIRED_GATES_POLICY_VERSION = 2;
+const MAX_AGENT_TARGET = 9;
 const NEEDS_EXECUTION_BUDGET_MIGRATION = Symbol(
   "needs-execution-budget-migration",
 );
@@ -1658,6 +1659,14 @@ function setRisk(manifest, options) {
   ) {
     throw new Error(`invalid resolved task type '${taskType}'`);
   }
+  const agentTarget = parseInteger(options.agents, "agent target", {
+    minimum: 2,
+  });
+  if (agentTarget > MAX_AGENT_TARGET) {
+    throw new Error(
+      `agent target ${agentTarget} exceeds supported ${MAX_AGENT_TARGET}-agent panel`,
+    );
+  }
   const resolved = {
     requestedLevel: manifest.risk.requestedLevel,
     resolved: true,
@@ -1668,7 +1677,7 @@ function setRisk(manifest, options) {
       options.score === undefined || options.score === ""
         ? null
         : parseInteger(options.score, "risk score"),
-    agentTarget: parseInteger(options.agents, "agent target", { minimum: 2 }),
+    agentTarget,
     codexDepth: options["codex-depth"] || "medium",
     codexRounds: parseInteger(options["codex-rounds"] || "1", "codex rounds"),
     level: options.level || manifest.options.level,
@@ -1685,6 +1694,16 @@ function setRisk(manifest, options) {
   manifest.risk = resolved;
 }
 
+function panelSelectionError({ selectedAgents, target, incomplete }) {
+  if (incomplete && selectedAgents >= target) {
+    return "an incomplete panel must contain fewer agents than the resolved target";
+  }
+  if (!incomplete && selectedAgents !== target) {
+    return `a complete panel must contain exactly ${target} agents; use --incomplete for a deliberate reduction`;
+  }
+  return null;
+}
+
 function setAgents(manifest, names, { incomplete = false } = {}) {
   if (!manifest.risk?.resolved) {
     throw new Error("cannot select agents before risk resolution");
@@ -1692,6 +1711,13 @@ function setAgents(manifest, names, { incomplete = false } = {}) {
   if (names.length < 2) {
     throw new Error("quality agent floor requires at least two agents");
   }
+  const target = manifest.risk.agentTarget;
+  const selectionError = panelSelectionError({
+    selectedAgents: names.length,
+    target,
+    incomplete,
+  });
+  if (selectionError) throw new Error(selectionError);
   if (
     manifest.agents.length > 0 &&
     JSON.stringify(manifest.agents) === JSON.stringify(names) &&
@@ -1704,7 +1730,7 @@ function setAgents(manifest, names, { incomplete = false } = {}) {
   }
   manifest.agents = names;
   manifest.panel = {
-    requiredAgents: manifest.risk.agentTarget,
+    requiredAgents: target,
     selectedAgents: names.length,
     incomplete,
   };
@@ -2295,12 +2321,20 @@ function providerFindings(manifest) {
   // Collected across all covered reviews and raised as one malformed-output
   // failure below, rather than silently dropped or counted as findings.
   const inconclusiveAgents = [];
+  let usableReviewerReports = 0;
+  let requiredUsableReports = 0;
   for (const review of coveredReviews(manifest)) {
     const reviewFindingsStart = findings.length;
     const inventory = parseJson(
       fs.readFileSync(path.join(review.artifactDir, "artifact-inventory.json")),
       "provider artifact inventory",
     );
+    if (inventory.provider === "claude" && review.status !== "advisory") {
+      requiredUsableReports = Math.max(
+        requiredUsableReports,
+        Math.floor(manifest.agents.length / 2) + 1,
+      );
+    }
     const resultFiles = inventory.files.filter((file) =>
       file.name.endsWith(".json"),
     );
@@ -2388,7 +2422,11 @@ function providerFindings(manifest) {
               ),
           );
       }
-      if (!text || isClean) continue;
+      if (!text) continue;
+      if (isClean) {
+        usableReviewerReports += 1;
+        continue;
+      }
       // Strip the trailing <<<FINDINGS REPORTED>>> delimiter line (if that's
       // how this text was classified as non-clean) so it doesn't leak into
       // the finding body shown to a human or the judge. Slice the ORIGINAL
@@ -2423,6 +2461,7 @@ function providerFindings(manifest) {
         inconclusiveAgents.push(item.name);
         continue;
       }
+      usableReviewerReports += 1;
       const body = strippedBody;
       findings.push({
         id: crypto
@@ -2439,10 +2478,15 @@ function providerFindings(manifest) {
   // Fail closed, and distinctly from "actionable code findings remain" — the
   // operator needs to know the panel produced no usable verdict, not hunt for
   // a defect that was never described.
-  if (inconclusiveAgents.length) {
+  if (
+    (requiredUsableReports > 0 &&
+      usableReviewerReports < requiredUsableReports) ||
+    (inconclusiveAgents.length && usableReviewerReports === 0)
+  ) {
     throw new Error(
       `inconclusive provider findings: ${inconclusiveAgents.join(", ")} ` +
-        "reported findings but wrote no finding text (malformed review output)",
+        `left only ${usableReviewerReports}/${manifest.agents.length} usable ` +
+        `reviewer reports (need ${requiredUsableReports || 1})`,
     );
   }
   return findings;
@@ -2691,22 +2735,31 @@ function writeArtifactInventory(
   const findings = names.filter((name) => name.endsWith(".findings.txt"));
   if (findings.length === 0) throw new Error("provider findings are missing");
   if (
-    findings.some((name) =>
-      fs
-        .readFileSync(path.join(resolved, name), "utf8")
-        .split(/\r?\n/)
-        .some((line) => line.startsWith("INCONCLUSIVE:")),
-    )
-  ) {
-    throw new Error("inconclusive provider findings cannot be inventoried");
-  }
-  if (
     provider === "claude" &&
     !advisory &&
     findings.length !== manifest.agents.length
   ) {
     throw new Error(
       "Claude findings inventory does not cover the mandatory panel",
+    );
+  }
+  const inconclusiveFindings = findings.filter((name) =>
+    fs
+      .readFileSync(path.join(resolved, name), "utf8")
+      .split(/\r?\n/)
+      .some((line) => line.startsWith("INCONCLUSIVE:")),
+  );
+  const panelSize =
+    provider === "claude" && !advisory
+      ? manifest.agents.length
+      : findings.length;
+  const requiredUsableFindings = Math.floor(panelSize / 2) + 1;
+  const usableFindings = findings.length - inconclusiveFindings.length;
+  if (usableFindings < requiredUsableFindings) {
+    throw new Error(
+      `inconclusive provider findings cannot be inventoried: ` +
+        `only ${usableFindings}/${panelSize} usable reports ` +
+        `(need ${requiredUsableFindings})`,
     );
   }
   const inventory = {
@@ -3290,8 +3343,8 @@ function reviewAuthorization(manifest) {
       base: manifest.revisions.baseSha,
       head: manifest.revisions.currentHead,
       provider: "operator-quality-override",
-      primary: manifest.provider?.primary || "unavailable",
-      fallback: manifest.provider?.fallback || "unavailable",
+      primary: "unavailable",
+      fallback: "unavailable",
       tier: manifest.risk.tier,
       blockingCount: 0,
       operatorOverride: true,

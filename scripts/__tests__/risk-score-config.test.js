@@ -122,6 +122,11 @@ describe("score — Git-valid control-character paths", () => {
     expect(result.riskScore).toBeGreaterThanOrEqual(
       DEFAULTS.base.securityFloor,
     );
+    expect(result.knobs).toEqual({
+      agents: 6,
+      codex: "xhigh",
+      codexRounds: 1,
+    });
   });
 });
 
@@ -290,10 +295,18 @@ describe("score — the end-to-end entry point", () => {
         scripts: { postinstall: "node install.js" },
       }),
     );
-    execFileSync("git", ["commit", "-qam", "install hook"], { cwd: dir });
-    expect(
-      score({ base: "main", gitRunner: runGit, config: DEFAULTS }).riskScore,
-    ).toBeGreaterThanOrEqual(DEFAULTS.base.securityFloor);
+    execFileSync("git", ["commit", "-qam", "fix: secure install hook"], {
+      cwd: dir,
+    });
+    const result = score({
+      base: "main",
+      gitRunner: runGit,
+      config: DEFAULTS,
+    });
+    expect(result.taskType).toBe("bugfix");
+    expect(result.riskScore).toBeGreaterThanOrEqual(
+      DEFAULTS.base.securityFloor,
+    );
   });
 });
 
@@ -323,7 +336,7 @@ describe("score — task-type risk routing", () => {
     expect(result.taskType).toBe(expected);
   });
 
-  it("routes bug fixes and performance work through the high-review floor", () => {
+  it("keeps bug fixes and performance work on their evidence-based score", () => {
     for (const subject of [
       "fix: correct widget state",
       "perf: remove quadratic scan",
@@ -333,12 +346,43 @@ describe("score — task-type risk routing", () => {
         gitRunner: gitRunner(sourceChange, [subject]),
         config: DEFAULTS,
       });
-      expect(result.riskScore).toBeGreaterThanOrEqual(DEFAULTS.base.high);
-      expect(result.knobs.agents).toBeGreaterThanOrEqual(6);
-      expect(result.reasons).toContain(
+      expect(result.riskScore).toBe(DEFAULTS.base.medium);
+      expect(result.knobs).toEqual({
+        agents: 4,
+        codex: "high",
+        codexRounds: 1,
+      });
+      expect(result.reasons).not.toContain(
         `task type ${result.taskType} → high-review floor ${DEFAULTS.base.high}`,
       );
     }
+  });
+
+  it("does not escalate a small docs fix from its commit prefix alone", () => {
+    const result = score({
+      base: "BASE",
+      gitRunner: gitRunner(
+        [
+          {
+            path: "docs/guide.md",
+            status: "M",
+            added: 1,
+            deleted: 0,
+            patch: "+clarify the setup step",
+          },
+        ],
+        ["fix: clarify setup guidance"],
+      ),
+      config: DEFAULTS,
+    });
+
+    expect(result.taskType).toBe("bugfix");
+    expect(result.riskScore).toBe(DEFAULTS.base.low);
+    expect(result.knobs).toEqual({
+      agents: 2,
+      codex: "skip",
+      codexRounds: 0,
+    });
   });
 
   it("infers docs and CI from an all-specialized diff without trusting the commit subject", () => {

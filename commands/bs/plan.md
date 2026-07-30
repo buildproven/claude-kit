@@ -67,6 +67,11 @@ Task(subagent_type: "Explore",
 
 Use the subagent's findings to populate the plan doc.
 
+Before writing the plan, evaluate the Architecture Decision Gate from those
+findings. Mark every applicable criterion in the generated document; never
+leave the checklist blank as a proxy for "none required." If any criterion
+applies, create and link the ADR before the implementation plan is approved.
+
 ### Step 3: Generate Plan Document
 
 Create `$PLAN_FILE` with this structure:
@@ -124,6 +129,32 @@ Create `$PLAN_FILE` with this structure:
 **Approach:** Option [X] — [Name]
 
 **Rationale:** [2-3 sentences. Why this option over the others?]
+
+---
+
+## Architecture Decision Gate (automatic)
+
+Evaluate before implementation:
+
+- [ ] Auth, authorization, billing, or payments
+- [ ] Durable data creation, migration, retention, or deletion
+- [ ] Public API, event schema, or external contract
+- [ ] Distributed consistency, retry, or failure-ownership change
+- [ ] Cross-repository dependency or another expensive-to-reverse boundary
+
+Mark this checklist from the exploration findings before presenting the plan. If
+every evaluated box is unchecked, record `Architecture decision: none required`
+and continue at the normal medium-effort runtime profile. If any box is checked,
+load `codebase-design`, create `docs/decisions/ADR-[slug].md`, and link it here.
+The ADR records the decision, alternatives, invariants, migration/rollback, and
+verification. Draft it at the normal profile; review only that ADR at high
+effort (Opus in Claude Code or `codex --profile power -c
+'model_reasoning_effort="high"' review --uncommitted`). `--uncommitted` is
+required because the ADR is newly written during planning. The Codex `power`
+profile must pin a current high-end model. Do not approve implementation until
+the ADR review is clean; revise and re-review any blocking, unresolved,
+malformed, inconclusive, or unavailable result. Do not escalate merely because
+a reversible refactor is large.
 
 ---
 

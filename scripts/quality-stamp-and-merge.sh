@@ -87,10 +87,13 @@ else
       REVIEW_BASE="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.base')"
       REVIEW_TIER="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.tier')"
       REVIEW_PROVIDER="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.provider')"
+      REVIEW_PRIMARY="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.primary')"
+      REVIEW_FALLBACK="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.fallback')"
       REVIEW_FINDINGS="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.blockingCount')"
       REVIEW_SIGNATURE="$(node "$SCRIPT_DIR/quality-review-evidence.js" sign \
         --head "$REVIEWED_HEAD" --base "$REVIEW_BASE" --tier "$REVIEW_TIER" \
-        --findings "$REVIEW_FINDINGS" --reviewer "$REVIEW_PROVIDER")"
+        --findings "$REVIEW_FINDINGS" --reviewer "$REVIEW_PROVIDER" \
+        --primary "$REVIEW_PRIMARY" --fallback "$REVIEW_FALLBACK")"
       TRAILERS="$TRAILERS
 Quality-Evidence-Signature: $REVIEW_SIGNATURE"
     fi

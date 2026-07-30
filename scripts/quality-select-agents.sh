@@ -22,12 +22,20 @@ AGENT_TARGET="$(field risk.agentTarget)"
   exit 1
 }
 
+# The first six positions are all read-only review roles with compatible
+# evidence output. code-simplifier is an implementation agent, not a review
+# agent, so reserve it for the broader advisory panel rather than selecting it
+# for ordinary high-tier review.
 PANEL=(code-reviewer silent-failure-hunter security-auditor type-design-analyzer \
-       pr-test-analyzer code-simplifier accessibility-tester \
-       performance-engineer architect-reviewer)
+       pr-test-analyzer architect-reviewer code-simplifier \
+       accessibility-tester performance-engineer)
 N="$AGENT_TARGET"
-[ "$N" -lt 2 ] && N=2
-[ "$N" -gt "${#PANEL[@]}" ] && N="${#PANEL[@]}"
+# setRisk owns the 2..9 target invariant. Retain this boundary check so older
+# or tampered manifests fail visibly instead of silently truncating coverage.
+[ "$N" -le "${#PANEL[@]}" ] || {
+  echo "quality-select-agents: resolved target $N exceeds supported ${#PANEL[@]}-agent panel" >&2
+  exit 1
+}
 AGENTS=("${PANEL[@]:0:$N}")
 PANEL_INCOMPLETE=false
 
