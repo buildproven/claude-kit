@@ -98,15 +98,19 @@ bash "$QUALITY_SCRIPTS_DIR/quality-select-agents.sh" \
 Risk resolution must persist a concrete task type, tier, and numeric agent
 target before selection. Docs/CI/build/chore work receives the lightest
 eligible routing without weakening path or security floors; feature work keeps
-the standard floor; bug-fix and performance work receive the high-review floor.
-The initial task type remains bound to the campaign so a later remediation
-commit named `fix` cannot mint a stronger campaign or reset its budget.
+the standard floor. Bug-fix and performance labels remain review context, while
+path sensitivity, change nature, and magnitude determine review depth. The
+initial task type remains bound to the campaign so a later remediation commit
+cannot change the campaign's recorded context or reset its budget.
 Critical review increases review depth; it does not require routine human
 approval. New campaigns persist `mergeAuthority=autonomous` and merge when
 their revision-bound gates, review evidence, CI, and base freshness are clean.
 Actionable findings, malformed or inconclusive provider output, stale review
-coverage, and CI failures remain terminal blocked states—the only cases that
-need human direction because quality cannot mechanically converge. The one
+coverage, and CI failures remain terminal blocked states unless the outer
+operator issues the explicit, exact-identity `approve --override-quality`
+capability. That signed, expiring capability is auditable and preserves
+deterministic gates, CI, and base freshness; it never turns failed evidence
+into a clean review. The one
 exception is a low-risk campaign whose provider is unavailable after the
 configured primary/fallback path: typed unavailability, exhaustion, billing,
 or bounded-timeout evidence records a revision-bound `ci-only` advisory

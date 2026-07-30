@@ -11,6 +11,7 @@ const riskScore = require("./risk-score.js");
 const SCHEMA_VERSION = 1;
 const EXECUTION_BUDGET_VERSION = 1;
 const REQUIRED_GATES_POLICY_VERSION = 2;
+const MAX_AGENT_TARGET = 9;
 const NEEDS_EXECUTION_BUDGET_MIGRATION = Symbol(
   "needs-execution-budget-migration",
 );
@@ -1666,6 +1667,14 @@ function setRisk(manifest, options) {
   ) {
     throw new Error(`invalid resolved task type '${taskType}'`);
   }
+  const agentTarget = parseInteger(options.agents, "agent target", {
+    minimum: 2,
+  });
+  if (agentTarget > MAX_AGENT_TARGET) {
+    throw new Error(
+      `agent target ${agentTarget} exceeds supported ${MAX_AGENT_TARGET}-agent panel`,
+    );
+  }
   const resolved = {
     requestedLevel: manifest.risk.requestedLevel,
     resolved: true,
@@ -1676,7 +1685,7 @@ function setRisk(manifest, options) {
       options.score === undefined || options.score === ""
         ? null
         : parseInteger(options.score, "risk score"),
-    agentTarget: parseInteger(options.agents, "agent target", { minimum: 2 }),
+    agentTarget,
     codexDepth: options["codex-depth"] || "medium",
     codexRounds: parseInteger(options["codex-rounds"] || "1", "codex rounds"),
     level: options.level || manifest.options.level,
@@ -1693,6 +1702,16 @@ function setRisk(manifest, options) {
   manifest.risk = resolved;
 }
 
+function panelSelectionError({ selectedAgents, target, incomplete }) {
+  if (incomplete && selectedAgents >= target) {
+    return "an incomplete panel must contain fewer agents than the resolved target";
+  }
+  if (!incomplete && selectedAgents !== target) {
+    return `a complete panel must contain exactly ${target} agents; use --incomplete for a deliberate reduction`;
+  }
+  return null;
+}
+
 function setAgents(manifest, names, { incomplete = false } = {}) {
   if (!manifest.risk?.resolved) {
     throw new Error("cannot select agents before risk resolution");
@@ -1700,6 +1719,13 @@ function setAgents(manifest, names, { incomplete = false } = {}) {
   if (names.length < 2) {
     throw new Error("quality agent floor requires at least two agents");
   }
+  const target = manifest.risk.agentTarget;
+  const selectionError = panelSelectionError({
+    selectedAgents: names.length,
+    target,
+    incomplete,
+  });
+  if (selectionError) throw new Error(selectionError);
   if (
     manifest.agents.length > 0 &&
     JSON.stringify(manifest.agents) === JSON.stringify(names) &&
@@ -1712,7 +1738,7 @@ function setAgents(manifest, names, { incomplete = false } = {}) {
   }
   manifest.agents = names;
   manifest.panel = {
-    requiredAgents: manifest.risk.agentTarget,
+    requiredAgents: target,
     selectedAgents: names.length,
     incomplete,
   };
@@ -1861,7 +1887,8 @@ function approvalValid(manifest, root) {
       payload?.head === approval.head &&
       payload?.invocationId === manifest.invocationId &&
       payload?.approver === approval.approver &&
-      payload?.expiresAt === approval.expiresAt;
+      payload?.expiresAt === approval.expiresAt &&
+      (payload?.scope || "standard") === (approval.scope || "standard");
     return identityMatches && capabilitySignatureValid(manifest, artifact);
   } catch {
     return false;
@@ -1928,6 +1955,7 @@ function attachApproval(manifest, options) {
     issuedAt: payload.issuedAt,
     expiresAt: payload.expiresAt,
     source: "outer-wrapper-capability",
+    scope: payload.scope || "standard",
     artifactPath,
     artifactSha256: sha256File(artifactPath),
     // Patch-id of the reviewed diff at approval time, cached so a later
@@ -3292,6 +3320,9 @@ function reviewTrailers(manifest) {
     `Quality-Findings: ${authorization.blockingCount}`,
     `Quality-Head: ${authorization.head}`,
     `Quality-Base: ${authorization.base}`,
+    ...(authorization.operatorOverride
+      ? ["Quality-Override: operator-quality-override"]
+      : []),
   ].join("\n");
 }
 
@@ -3300,6 +3331,26 @@ function reviewAuthorization(manifest) {
   // the strength assertion here so a caller cannot bypass resume/advance and
   // authorize review artifacts produced under a stale, weaker risk contract.
   assertCurrentReviewStrength(manifest, manifest.repo.realpath);
+  if (
+    approvalValid(manifest, manifest.repo.realpath) &&
+    manifest.approval?.scope === "operator-quality-override"
+  ) {
+    // This is a deliberately narrow operator decision: deterministic gates,
+    // PR identity/freshness, and CI still run in the merge scripts. It exists
+    // for a human to accept unavailable or malformed provider-review evidence
+    // without manufacturing a clean AI review or weakening the normal path.
+    verifyGateEvidence(manifest);
+    return {
+      base: manifest.revisions.baseSha,
+      head: manifest.revisions.currentHead,
+      provider: "operator-quality-override",
+      primary: manifest.provider?.primary || "unavailable",
+      fallback: manifest.provider?.fallback || "unavailable",
+      tier: manifest.risk.tier,
+      blockingCount: 0,
+      operatorOverride: true,
+    };
+  }
   const authorization = reviewCoverage(manifest);
   const covered = coveredReviews(manifest);
   const evidenceSha256 = crypto

@@ -15,6 +15,13 @@ Use each runtime's normal medium-effort profile for daily development. The
 quality workflow performs any bounded high-effort adversarial escalation; do
 not select Opus or a Codex power profile for ordinary commands.
 
+`/bs:dev` and `/bs:plan` automatically run the Architecture Decision Gate. An
+ADR is required only for an irreversible boundary (auth/payments, durable data,
+public contracts, distributed consistency, or cross-repo dependencies). It is
+drafted at the normal profile, then receives a bounded high-effort review before
+implementation; routine plans and reversible refactors stay on the normal
+medium-effort profile.
+
 Quick reference for the public `claude-kit` workflow.
 
 ## Core loop

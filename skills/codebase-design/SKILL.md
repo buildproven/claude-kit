@@ -56,6 +56,10 @@ Prefer accepting dependencies over constructing them invisibly, returning
 results over mutating distant state, and explicit failure modes over silent
 fallbacks.
 
+## Architecture escalation gate
+
+Draft at the normal runtime profile. Before implementation, create a short Architecture Decision Record when the change affects auth/payments, durable data/migration, public APIs/events, distributed consistency, cross-repository dependencies, or another expensive-to-reverse boundary. Record the decision, alternatives, invariants, rollback, and verification; review only that record in Opus/high (Claude Code) or with `codex --profile power -c 'model_reasoning_effort="high"' review --uncommitted`. The Codex `power` profile must pin a current high-end model. The review is fail-closed: resolve every blocking or unresolved finding and re-run any malformed, inconclusive, or unavailable review before implementation. Ordinary refactors do not escalate merely because they are large.
+
 ## Review questions
 
 - Can the interface expose fewer concepts?
