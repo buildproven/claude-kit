@@ -45,17 +45,38 @@ mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/$NAME.log"
 cd "$ROOT" || exit 1
 release_terminal_quality_lock() {
-  local invocation branch plan primary
+  local invocation branch plan primary root_real primary_real unlock_error
   [ "$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" options.merge)" = true ] || return 0
   branch="$(git branch --show-current 2>/dev/null || true)"
   [ -n "$branch" ] || return 0
-  invocation="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" invocationId)" || return 0
-  plan="$(node "$SCRIPT_DIR/worktree-manager.js" resolve --repo "$ROOT" --branch "$branch" 2>/dev/null)" || return 0
+  invocation="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" invocationId)" || {
+    echo "[quality] terminal gate failure could not resolve its invocation identity; the worktree lock was not changed." >&2
+    return 0
+  }
+  plan="$(node "$SCRIPT_DIR/worktree-manager.js" resolve --repo "$ROOT" --branch "$branch" 2>/dev/null)" || {
+    echo "[quality] terminal gate failure could not resolve worktree ownership for '$branch'; the lock was not changed." >&2
+    return 0
+  }
   primary="$(printf '%s' "$plan" | jq -r '.repoRoot // empty' 2>/dev/null)"
-  [ -n "$primary" ] && [ "$primary" != "$ROOT" ] || return 0
-  node "$SCRIPT_DIR/worktree-manager.js" unlock \
+  [ -n "$primary" ] || {
+    echo "[quality] terminal gate failure resolved no primary repository for '$branch'; the lock was not changed." >&2
+    return 0
+  }
+  root_real="$(cd "$ROOT" 2>/dev/null && pwd -P)" || return 0
+  primary_real="$(cd "$primary" 2>/dev/null && pwd -P)" || {
+    echo "[quality] terminal gate failure could not normalize primary repository '$primary'; the lock was not changed." >&2
+    return 0
+  }
+  [ "$primary_real" != "$root_real" ] || return 0
+  # quality-bootstrap.sh owns linked worktrees as bs:quality/<invocationId>;
+  # worktree-manager enforces the exact same identity before it unlocks.
+  unlock_error="$(node "$SCRIPT_DIR/worktree-manager.js" unlock \
     --repo "$ROOT" --branch "$branch" --owner "bs:quality/$invocation" --terminal \
-    >/dev/null 2>&1 || echo "[quality] terminal gate failure left its worktree lock in place; inspect the exact lock owner before recovery." >&2
+    2>&1 >/dev/null)" || {
+    echo "[quality] terminal gate failure left its worktree lock in place: $unlock_error" >&2
+    node "$SCRIPT_DIR/worktree-manager.js" status \
+      --repo "$ROOT" --branch "$branch" --skip-pr-check >&2 || true
+  }
 }
 if [ "$SKIP" = true ]; then
   node "$SCRIPT_DIR/quality-invocation.js" gate-run "$MANIFEST" \

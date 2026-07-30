@@ -217,5 +217,6 @@ describe("quality terminal diagnosis", () => {
       ),
     );
     expect(output).not.toContain("required and missing or stale");
+    expect(output).toContain("Worktree lock: not tracked");
   });
 });
