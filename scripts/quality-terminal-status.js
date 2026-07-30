@@ -84,6 +84,7 @@ function worktreeLockStatus(manifest) {
       ? `locked by ${record.lockReason || "unknown owner"}`
       : "released";
   } catch (error) {
+    if (error.code === "ENOENT") return "not tracked (worktree removed)";
     return `status unavailable — ${error.message}`;
   }
 }

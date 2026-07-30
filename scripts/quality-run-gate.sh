@@ -46,9 +46,13 @@ LOG="$LOG_DIR/$NAME.log"
 cd "$ROOT" || exit 1
 release_terminal_quality_lock() {
   local lock_owner branch plan primary root_real primary_real unlock_error
+  # Bootstrap acquires quality worktree locks only for merge campaigns.
   [ "$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" options.merge)" = true ] || return 0
   branch="$(git branch --show-current 2>/dev/null || true)"
-  [ -n "$branch" ] || return 0
+  [ -n "$branch" ] || {
+    echo "[quality] terminal gate failure could not determine the current branch (detached HEAD?); the worktree lock was not changed." >&2
+    return 0
+  }
   lock_owner="$(node "$SCRIPT_DIR/quality-invocation.js" lock-owner "$MANIFEST")" || {
     echo "[quality] terminal gate failure could not resolve its invocation identity; the worktree lock was not changed." >&2
     return 0
