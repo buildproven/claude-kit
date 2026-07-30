@@ -55,12 +55,17 @@ bash "$QUALITY_SCRIPTS_DIR/quality-select-agents.sh" --manifest "<exact-manifest
 ```
 
 Path/security floors always win. The initial task type is bound to the campaign;
-a remediation `fix:` commit cannot increase depth or reset budget. Low-tier
+a remediation commit cannot change task context or reset budget. Bug-fix and
+performance labels are context; path sensitivity, change nature, and magnitude
+set depth. Critical increases review depth, not routine human approval. Low-tier
 typed provider unavailability may record revision-bound `ci-only` coverage only
-after its configured fallback path. Medium, high, and critical review failures,
-malformed output, stale coverage, findings, and CI failures are terminal blocks.
-`mergeAuthority=human-required` needs the wrapper-created, identity-bound,
-unexpired break-glass capability; nested processes cannot create one.
+after its configured fallback path. Medium+ provider failure, malformed output,
+stale coverage, findings, and CI failure block unless the outer operator issues
+the signed exact-identity `approve --override-quality` capability. That override
+preserves gates, CI, freshness, and audit evidence; it never converts failed
+evidence into a clean review. Explicit `mergeAuthority=human-required` policy
+still needs the wrapper-created, identity-bound, unexpired capability; nested
+processes cannot create one.
 
 ## 2. Deterministic gates and formatting
 

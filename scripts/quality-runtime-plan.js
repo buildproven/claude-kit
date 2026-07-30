@@ -33,7 +33,11 @@ const WORKLOAD_BANDS = [
     name: "small",
     maxUnits: 400,
     campaignSeconds: 420,
-    reviewSeconds: 120,
+    // A small change can still select the four-agent medium panel. Give that
+    // panel enough wall clock to return every mandatory review artifact after
+    // a primary-provider timeout and fallback; 120s was observed to kill a
+    // healthy reviewer at the watchdog boundary.
+    reviewSeconds: 180,
     verificationSeconds: 90,
     checkSeconds: 180,
     reviewReserveSeconds: 120,
@@ -76,7 +80,7 @@ const WORKLOAD_BANDS = [
 
 const RISK_FLOORS = {
   low: { campaignSeconds: 300, reviewSeconds: 75 },
-  medium: { campaignSeconds: 420, reviewSeconds: 120 },
+  medium: { campaignSeconds: 480, reviewSeconds: 180 },
   high: { campaignSeconds: 540, reviewSeconds: 180 },
   // Empirical floor: an xhigh Codex pass over a 1.2k-line security diff took
   // longer than the old 330s "large" allowance. Keep the planning envelope

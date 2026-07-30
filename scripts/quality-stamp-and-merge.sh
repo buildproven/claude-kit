@@ -22,6 +22,17 @@ EXPECTED_HEAD_REF="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" 
 EXPECTED_HEAD_REPOSITORY="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" repo.headRepository)"
 LOCAL_HEAD="$(git rev-parse HEAD)"
 
+# Keep the private signer outside every repository.  An explicit environment
+# setting wins; the conventional local path makes autonomous quality runs work
+# without requiring each shell to source a secret-bearing dotfile.
+if [ -z "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY:-}" ] && \
+  [ -z "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY_FILE:-}" ]; then
+  DEFAULT_REVIEW_EVIDENCE_KEY="${XDG_CONFIG_HOME:-$HOME/.config}/claude-kit/quality-review-evidence.key"
+  if [ -r "$DEFAULT_REVIEW_EVIDENCE_KEY" ]; then
+    export QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY_FILE="$DEFAULT_REVIEW_EVIDENCE_KEY"
+  fi
+fi
+
 HEAD_REMOTE=""
 while IFS= read -r REMOTE; do
   [ -n "$REMOTE" ] || continue
@@ -70,6 +81,22 @@ if [ -n "$STAMP_HEAD" ]; then
 else
   if [ "$LOCAL_HEAD" = "$REVIEWED_HEAD" ]; then
     TRAILERS="$(node "$SCRIPT_DIR/quality-invocation.js" trailers "$MANIFEST")"
+    if [ -n "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY:-}" ] || \
+       [ -n "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY_FILE:-}" ]; then
+      REVIEW_AUTHORIZATION="$(node "$SCRIPT_DIR/quality-invocation.js" review-authorization "$MANIFEST")"
+      REVIEW_BASE="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.base')"
+      REVIEW_TIER="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.tier')"
+      REVIEW_PROVIDER="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.provider')"
+      REVIEW_PRIMARY="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.primary')"
+      REVIEW_FALLBACK="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.fallback')"
+      REVIEW_FINDINGS="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.blockingCount')"
+      REVIEW_SIGNATURE="$(node "$SCRIPT_DIR/quality-review-evidence.js" sign \
+        --head "$REVIEWED_HEAD" --base "$REVIEW_BASE" --tier "$REVIEW_TIER" \
+        --findings "$REVIEW_FINDINGS" --reviewer "$REVIEW_PROVIDER" \
+        --primary "$REVIEW_PRIMARY" --fallback "$REVIEW_FALLBACK")"
+      TRAILERS="$TRAILERS
+Quality-Evidence-Signature: $REVIEW_SIGNATURE"
+    fi
     # HUSKY=0: this is quality's own empty stamp commit in the target repo. Its
     # husky pre-commit hooks would re-run lint/tests the pipeline just ran —
     # unbounded work outside the campaign governor, on a commit that changes no

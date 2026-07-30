@@ -238,6 +238,36 @@ Use sequential thinking to analyze: file impact, approach options, architectural
 - **Medium**: 3-5 files, clear approach, some unknowns requiring exploration
 - **Complex**: 6+ files OR architectural decisions OR multiple approaches OR many unknowns
 
+### Step 4.25: Architecture Decision Gate (automatic)
+
+For every task, evaluate this checklist before implementation. This is a
+classification step, not a reason to use a stronger model for routine work:
+
+- Does it change authentication, authorization, billing, or payments?
+- Does it create, migrate, retain, or delete durable data?
+- Does it introduce or break a public API, event schema, or external contract?
+- Does it affect distributed consistency, retries, or failure ownership?
+- Does it create a cross-repository dependency or another expensive-to-reverse boundary?
+
+If all answers are **no**, record `Architecture decision: none required` in the
+plan or task summary and continue at the normal medium-effort runtime profile.
+
+If any answer is **yes**, automatically load `codebase-design`, write a short
+ADR at `docs/decisions/ADR-<slug>.md`, and link it from the plan/PRD before
+coding. The ADR must state the decision, alternatives, invariants, migration or
+rollback, and verification. Draft it at the normal profile; run a bounded
+adversarial review of the ADR at high effort (Opus in Claude Code or the
+configured Codex power profile: `codex --profile power -c
+'model_reasoning_effort="high"' review --uncommitted`) before implementing the
+irreversible boundary. `--uncommitted` makes the newly written, not-yet-committed
+ADR the review subject. Configure `power` to a current high-end model.
+
+This is fail-closed: do not begin implementation while the ADR review has a
+blocking finding, an unresolved question, malformed/inconclusive output, or a
+provider failure. Revise the ADR, re-run the review, and record the clean result
+in the ADR before proceeding. Large but reversible refactors do not satisfy this
+trigger by size alone.
+
 ### Step 4.5: Auto-detect Parallelizable Subtasks (CS-164)
 
 **Runs automatically when complexity = Complex.** Skipped for Simple/Medium — those run sequentially.
@@ -254,8 +284,11 @@ given. Do not infer parallelism from vague multi-area work.
 
 **MEDIUM:** explore files/patterns/dependencies, then create a specific todo.
 
-**COMPLEX:** interview if requested, establish scope/constraints/edges/success/non-goals,
-compare approaches in plan mode, get approval, and re-plan if scope changes.
+**COMPLEX:** interview only when requested; establish
+scope/constraints/edges/success/non-goals, compare approaches in plan mode, and
+apply the automatic Architecture Decision Gate above. Continue automatically
+with the recommended reversible approach; ask only when a material product
+choice cannot be inferred safely. Re-plan if scope changes.
 
 ### Step 5.5: TDD — Write Failing Tests First (--tdd flag only)
 

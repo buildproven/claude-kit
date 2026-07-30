@@ -961,8 +961,9 @@ printf '%s\\n' "$manifest"
     expect(manifest.risk.tier).not.toBe("auto");
     expect(manifest.risk.mergeAuthority).toBe("autonomous");
     expect(manifest.risk.taskType).toBe("bugfix");
-    expect(manifest.risk.score).toBeGreaterThanOrEqual(60);
-    expect(manifest.agents.length).toBeGreaterThanOrEqual(2);
+    expect(manifest.risk.score).toBe(35);
+    expect(manifest.risk.agentTarget).toBe(4);
+    expect(manifest.agents).toHaveLength(4);
   }, 120_000);
 
   it("persists an explicit human-required policy in the immutable risk contract", () => {
@@ -1238,6 +1239,7 @@ exec "${realGit}" "$@"
       input: JSON.stringify({
         argv: [
           "approve",
+          "--override-quality",
           "--target-dir",
           root,
           "--pr",
@@ -1269,6 +1271,25 @@ exec "${realGit}" "$@"
         cwd: root,
       }).status,
     ).toBe(0);
+    expect(JSON.parse(readFileSync(manifest, "utf8")).approval.scope).toBe(
+      "operator-quality-override",
+    );
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
+    for (const gate of JSON.parse(readFileSync(manifest, "utf8"))
+      .requiredGates) {
+      recordGateFixture(manifest, gate.name);
+    }
+    recordMutationFixture(manifest);
+    const authorization = JSON.parse(
+      execFileSync("node", [INVOCATION, "review-authorization", manifest], {
+        cwd: root,
+      }),
+    );
+    expect(authorization).toMatchObject({
+      provider: "operator-quality-override",
+      primary: "unavailable",
+      fallback: "unavailable",
+    });
   });
 
   it("carries a valid break-glass approval across a rebase-only HEAD change with no new diff (BUI-380)", () => {
@@ -2515,6 +2536,10 @@ exit 1
       ...process.env,
       PATH: `${bin}:${process.env.PATH}`,
       QUALITY_STAMP_CI_TIMEOUT: "5",
+      // The operator key is intentionally discovered from the real XDG
+      // configuration directory. Keep this fixture hermetic so its mocked
+      // repository exercises the unsigned compatibility path.
+      XDG_CONFIG_HOME: path.join(harness, "xdg"),
     };
 
     const reviewedHead = git(root, ["rev-parse", "HEAD"]);
@@ -2897,6 +2922,46 @@ exit 1
     );
   });
 
+  it("requires an explicit incomplete marker for every reduced panel", () => {
+    const root = repo("complete-panel-target");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 4,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+
+      expect(() =>
+        invocation.setAgents(manifest, ["reviewer-a", "reviewer-b"]),
+      ).toThrow(/complete panel must contain exactly 4 agents/);
+      expect(() =>
+        invocation.setAgents(
+          manifest,
+          ["reviewer-a", "reviewer-b", "reviewer-c", "reviewer-d"],
+          { incomplete: true },
+        ),
+      ).toThrow(/incomplete panel must contain fewer agents/);
+
+      invocation.setAgents(manifest, [
+        "reviewer-a",
+        "reviewer-b",
+        "reviewer-c",
+        "reviewer-d",
+      ]);
+    });
+
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifest.panel).toEqual({
+      requiredAgents: 4,
+      selectedAgents: 4,
+      incomplete: false,
+    });
+  });
+
   it("persists a merge-train panel cap visibly through the selector seam", () => {
     const root = repo("reduced-panel-selector");
     const manifestPath = create(root);
@@ -2919,6 +2984,23 @@ exit 1
       selectedAgents: 2,
       incomplete: true,
     });
+  });
+
+  it("refuses to persist a resolved target larger than the supported panel", () => {
+    const root = repo("oversized-panel-target");
+    const manifestPath = create(root);
+    expect(() =>
+      invocation.withManifestLock(manifestPath, (manifest) => {
+        invocation.setRisk(manifest, {
+          tier: "high",
+          taskType: "bugfix",
+          score: 60,
+          agents: 10,
+          "codex-depth": "high",
+          "codex-rounds": 1,
+        });
+      }),
+    ).toThrow(/agent target 10 exceeds supported 9-agent panel/);
   });
 
   it("refuses to reduce a critical panel through the selector seam", () => {
@@ -3398,6 +3480,14 @@ exit 1
     expect(() =>
       invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
     ).toThrow(/inconclusive provider findings/);
+
+    writeFileSync(
+      path.join(artifactDir, "reviewer-b.findings.txt"),
+      "NO FINDINGS.\nINCONCLUSIVE: later pass\n",
+    );
+    expect(() =>
+      invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
+    ).toThrow(/inconclusive provider findings/);
   });
 
   it("excludes stale fallback artifacts when a retry succeeds with Codex", () => {
@@ -3761,7 +3851,7 @@ exit 1
     }).toThrow();
     // Named as inconclusive/malformed — NOT as an actionable code finding.
     expect(stderr).toMatch(/inconclusive provider findings/);
-    expect(stderr).toMatch(/wrote no finding text/);
+    expect(stderr).toMatch(/usable reviewer reports/);
   });
 
   it("BUI-463: stripping the delimiter preserves paragraph breaks between multiple findings", () => {
