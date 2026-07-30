@@ -37,9 +37,9 @@ if [ "$PRIMARY_CHECKOUT" = "$WORKTREE_PATH" ]; then
   exit 0
 fi
 
-INVOCATION_ID=""
+LOCK_OWNER=""
 if [ -n "$MANIFEST" ] && [ -f "$MANIFEST" ]; then
-  INVOCATION_ID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" invocationId 2>/dev/null || true)"
+  LOCK_OWNER="$(node "$SCRIPT_DIR/quality-invocation.js" lock-owner "$MANIFEST" 2>/dev/null || true)"
 fi
 
 # Leave the worktree before asking Git to remove its exact registered path.
@@ -85,8 +85,8 @@ else
 fi
 
 REMOVE_ARGS=(remove --repo "$PRIMARY_CHECKOUT" --branch "$FEATURE_BRANCH" --allow-unknown)
-[ -n "$INVOCATION_ID" ] &&
-  REMOVE_ARGS+=(--recover --owner "bs:quality/$INVOCATION_ID")
+[ -n "$LOCK_OWNER" ] &&
+  REMOVE_ARGS+=(--recover --owner "$LOCK_OWNER")
 [ "$PRESERVE_BRANCH" = false ] && REMOVE_ARGS+=(--delete-branch)
 REMOVE_JSON="$(node "$MANAGER" "${REMOVE_ARGS[@]}" 2>&1)"
 REMOVE_RC=$?
