@@ -44,13 +44,23 @@ set -m
 CHILD_PID=$!
 set +m
 set -m
-(
-  sleep "$TIMEOUT"
+watchdog() {
+  local sleeper=""
+  stop_watchdog() {
+    [ -z "$sleeper" ] || kill -TERM "$sleeper" 2>/dev/null || true
+    [ -z "$sleeper" ] || wait "$sleeper" 2>/dev/null || true
+    exit 0
+  }
+  trap stop_watchdog INT TERM HUP
+  sleep "$TIMEOUT" &
+  sleeper=$!
+  wait "$sleeper" || exit 0
   : > "$MARKER"
   kill -TERM "-${CHILD_PID}" 2>/dev/null || kill -TERM "$CHILD_PID" 2>/dev/null
   sleep 1
   kill -KILL "-${CHILD_PID}" 2>/dev/null || kill -KILL "$CHILD_PID" 2>/dev/null
-) &
+}
+watchdog &
 WATCHDOG_PID=$!
 set +m
 cleanup_provider() {
