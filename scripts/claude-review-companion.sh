@@ -122,6 +122,22 @@ MODEL_ARGS=(--model "$EFFECTIVE_MODEL")
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 KIT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 PLUGIN_AGENTS_GLOB="$HOME/.claude/plugins/marketplaces/*/plugins/pr-review-toolkit/agents"
+REVIEW_SCHEMA_FILE="$SCRIPT_DIR/schemas/quality-review-output.schema.json"
+if [ ! -f "$REVIEW_SCHEMA_FILE" ]; then
+  echo "claude-review-companion: review schema not found: $REVIEW_SCHEMA_FILE" >&2
+  exit 1
+fi
+if ! command -v jq >/dev/null 2>&1; then
+  echo "claude-review-companion: jq is required to load the review schema" >&2
+  exit 1
+fi
+# Claude Code validates the schema natively, but its bundled validator rejects
+# the Draft 2020 metadata URI. Keep the shared schema canonical and remove only
+# that annotation at this provider boundary.
+if ! REVIEW_SCHEMA_JSON="$(jq -c 'del(."$schema")' "$REVIEW_SCHEMA_FILE" 2>/dev/null)"; then
+  echo "claude-review-companion: review schema is invalid JSON: $REVIEW_SCHEMA_FILE" >&2
+  exit 1
+fi
 
 resolve_agent_file() {
   local name="$1"
@@ -163,18 +179,10 @@ CTX_FILE="$OUT_DIR/review-context.txt"
   echo "## Diff"
   cat "$DIFF_FILE"
   echo
-  echo "Return your findings as a concise list. For each: file:line, severity"
-  echo "(BLOCKING|WARNING), what's wrong, and the concrete fix."
-  echo
-  echo "End your entire response with exactly one of these two lines, and"
-  echo "nothing else on that line — no punctuation, no extra words:"
-  echo '  <<<NO FINDINGS>>>'
-  echo "if there is nothing to report, or:"
-  echo '  <<<FINDINGS REPORTED>>>'
-  echo "if you listed at least one finding above. Any discussion, rationale,"
-  echo "or commentary belongs BEFORE this final delimited line, never inside"
-  echo "or after it — the delimiter itself must never appear anywhere else"
-  echo "in your response, including when explaining what it means."
+  echo "Return only material findings. The quality runner supplies and validates"
+  echo "the structured review schema; do not add a prose report outside it."
+  echo "The verdict MUST be approve when findings is empty and MUST be"
+  echo "needs-attention when findings contains one or more items."
 } > "$CTX_FILE"
 
 # --- hard timeout that actually kills ----------------------------------------
@@ -244,7 +252,8 @@ record_structured_failure() {
 }
 
 run_agent() {
-  local agent="$1" sysfile out raw result rc stderr_file error_json failure_rc
+  local agent="$1" sysfile out raw rc stderr_file error_json failure_rc
+  local normalized_file salvage_warning
   out="$OUT_DIR/${agent##*:}.findings.txt"
   stderr_file="$OUT_DIR/${agent##*:}.stderr"
   if ! sysfile="$(resolve_agent_file "$agent")"; then
@@ -272,12 +281,12 @@ run_agent() {
 
   # Blocking claude -p under a watchdog that can actually kill it.
   #
-  # NO Bash IN --allowedTools (2026-07-10). The full diff is already in the
-  # prompt; a reviewer has nothing legitimate to execute. With Bash +
-  # bypassPermissions, reviewers would run `npm test`/builds/repo-wide greps and
-  # burn the entire timeout — that is the "code-reviewer hangs ~10min" symptom,
-  # and since the panel joins on `wait`, ONE such agent held the whole run
-  # hostage. Read/Grep/Glob is everything a diff review needs.
+  # NO TOOLS (`claude --help`: use "" to disable all built-in tools). The full
+  # diff, changed files, commit log, and revision identity
+  # are already in the prompt. Even read-only tools let reviewers ignore that
+  # bounded evidence, explore the repository for dozens of turns, rerun tests,
+  # and hit the timeout without returning a verdict. Force a single bounded
+  # reasoning turn; deterministic gates already prove repository behavior.
   #
   # NOTE: "${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"}" is the bash-3.2-safe expansion
   # for a possibly-empty array under `set -u` (macOS /bin/bash 3.2 treats a
@@ -288,7 +297,8 @@ run_agent() {
           --no-session-persistence \
           --append-system-prompt-file "$sysfile" \
           --permission-mode bypassPermissions \
-          --allowedTools "Read,Grep,Glob" \
+          --tools "" \
+          --json-schema "$REVIEW_SCHEMA_JSON" \
           ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} \
           --output-format json 2>>"$stderr_file" )"
   rc=$?
@@ -333,44 +343,64 @@ run_agent() {
   # that revision-bound evidence only when the envelope itself proves normal
   # completion; a non-zero exit with partial/error output remains fail-closed.
   if [ "$rc" -ne 0 ] && ! printf '%s' "$raw" | jq -e '
-    .is_error != true and .result != null and
+    .is_error != true and (.structured_output | type) == "object" and
     (.terminal_reason == "completed" or
       (.terminal_reason == null and .stop_reason == "end_turn"))
   ' >/dev/null 2>&1; then
     echo "INCONCLUSIVE: agent '$agent' timed out or errored (rc=$rc) — human review required" > "$out"
     return 3
   fi
-
-  # Extract the CLI envelope's .result (verified schema). Reject is_error AND a
-  # null .result (an aborted/tool-exhausted turn returns {is_error:false,
-  # result:null}; `jq -r` would print the literal "null" and pass a non-empty
-  # check — a silent empty "review"). If jq/parse fails or result is null/empty,
-  # mark INCONCLUSIVE rather than crash the merge or fake a clean review.
-  if result="$(printf '%s' "$raw" | jq -r 'if (.is_error == true) or (.result == null) then empty else .result end' 2>/dev/null)" \
-     && [ -n "$result" ]; then
-    # A bare "findings reported" delimiter is malformed, not a finding and
-    # not a successful review. Detect it at the producer boundary so the
-    # companion returns its existing inconclusive status; otherwise the later
-    # judge correctly rejects the artifact but cannot retry an already-recorded
-    # review checkpoint for the same HEAD.
-    if printf '%s\n' "$result" | awk '
-      { lines[NR] = $0; if ($0 ~ /[^[:space:]]/) last = NR }
-      END {
-        if (!last || lines[last] != "<<<FINDINGS REPORTED>>>") exit 1
-        for (i = 1; i < last; i++) {
-          if (lines[i] ~ /[^[:space:]]/) exit 1
-        }
-        exit 0
-      }
-    '; then
-      echo "INCONCLUSIVE: agent '$agent' reported findings without finding text — human review required" > "$out"
-      return 3
-    fi
-    printf '%s\n' "$result" > "$out"
-    return 0
+  if [ "$rc" -ne 0 ]; then
+    salvage_warning="claude-review-companion: WARNING — preserved a complete structured envelope despite process rc=$rc"
+    echo "$salvage_warning" >> "$stderr_file"
+    echo "$salvage_warning" >&2
   fi
-  echo "INCONCLUSIVE: agent '$agent' output could not be parsed — human review required" > "$out"
-  return 3
+
+  # Claude Code validates --json-schema before emitting structured_output.
+  # Retain a local semantic check as well: the verdict must agree with whether
+  # findings exist. Contradictory evidence must not become either a false pass
+  # or a content-free blocking result.
+  normalized_file="$OUT_DIR/${agent##*:}.normalized.json"
+  if ! printf '%s' "$raw" | jq -e '
+    select(.is_error != true and (.structured_output | type) == "object")
+    | .structured_output
+    | select(
+        (.summary | type) == "string" and
+        (.summary | test("\\S")) and
+        (.findings | type) == "array" and
+        all(.findings[];
+          (.severity | type) == "string" and
+          (.title | type) == "string" and (.title | test("\\S")) and
+          (.body | type) == "string" and (.body | test("\\S")) and
+          (.file | type) == "string" and (.file | test("\\S")) and
+          (.line_start | type) == "number" and
+          (.line_start | floor) == .line_start and .line_start >= 1 and
+          (.recommendation | type) == "string" and
+          (.recommendation | test("\\S"))
+        ) and
+        (
+          (.verdict == "approve" and (.findings | length) == 0) or
+          (.verdict == "needs-attention" and (.findings | length) > 0)
+        )
+      )
+  ' > "$normalized_file" 2>/dev/null; then
+    rm -f "$normalized_file"
+    echo "INCONCLUSIVE: agent '$agent' structured output was missing or contradictory — human review required" > "$out"
+    return 3
+  fi
+
+  if ! jq -r '
+    if (.findings | length) == 0 then
+      "NO FINDINGS. Verdict: \(.verdict). \(.summary)"
+    else
+      .findings[]
+      | "\(.severity): \(.file):\(.line_start) — \(.title)\n\(.body)\nFix: \(.recommendation)"
+    end
+  ' "$normalized_file" > "$out"; then
+    echo "INCONCLUSIVE: agent '$agent' structured output could not be rendered — human review required" > "$out"
+    return 3
+  fi
+  return 0
 }
 
 # --- run all agents concurrently as background jobs, then wait ---------------

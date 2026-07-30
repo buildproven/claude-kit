@@ -82,8 +82,8 @@ provider policy remains unchanged and telemetry infers the received arm from
 the actual reviewer.
 
 Repositories that explicitly set `scorePolicy.mergeAuthority` to
-`"human-required"` retain the legacy signed break-glass capability. Only in
-that opt-in mode is the supported outer command:
+`"human-required"` retain the legacy signed break-glass capability. The
+ordinary exact-identity approval command is:
 
 ```text
 /bs:quality approve --pr <number> --head <exact-40-character-sha>
@@ -95,6 +95,20 @@ same signed, expiring capability used by the legacy outer
 `BREAK_GLASS_APPROVED=true` channel. Nested/headless children cannot mint this
 capability. The wrapper prints repository key, PR, HEAD, invocation, approver,
 and expiry before the quality skill continues with the returned manifest.
+
+When the operator explicitly accepts unresolved provider-review or mutation
+evidence, use the separately-scoped override command:
+
+```text
+/bs:quality approve --override-quality --pr <number> --head <exact-40-character-sha>
+```
+
+This is never automatic. It creates a signed, expiring capability bound to the
+repository, PR, HEAD, invocation, and approver, and leaves deterministic local
+gates, exact-HEAD CI, protected-base freshness, and the merge audit trail
+mandatory. The resulting stamp carries `Quality-Override: operator-quality-override`;
+it does not fabricate an AI approval or hide that the operator accepted the
+remaining review risk.
 
 Capture the exact `BS_QUALITY_MANIFEST=` path from bootstrap output. Invoke the
 `quality` skill exactly once with only:

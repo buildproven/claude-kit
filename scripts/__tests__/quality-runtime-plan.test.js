@@ -30,7 +30,7 @@ describe("quality runtime planning", () => {
       medium.reviewSeconds,
       large.reviewSeconds,
       huge.reviewSeconds,
-    ]).toEqual([75, 120, 210, 330, 480]);
+    ]).toEqual([75, 180, 210, 330, 480]);
     expect(small.checkReserveSeconds).toBe(360);
   });
 

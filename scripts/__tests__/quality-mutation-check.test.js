@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -22,11 +22,12 @@ function fixture(label, testBody, options = {}) {
     JSON.stringify({
       scripts: {
         lint: "true",
-        test: "node logic.test.js",
+        test: options.vitestRunner ? "vitest run" : "node logic.test.js",
         "security:audit": "true",
       },
     }),
   );
+  writeFileSync(path.join(root, ".gitignore"), "node_modules/\n");
   const source = options.shellSource
     ? "policy.sh"
     : options.addedSource
@@ -61,6 +62,15 @@ function fixture(label, testBody, options = {}) {
   );
   git(root, ["add", source]);
   git(root, ["commit", "-qm", "feat: authorize admin"]);
+  if (options.vitestRunner) {
+    const bin = path.join(root, "node_modules", ".bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(
+      path.join(bin, "vitest"),
+      '#!/usr/bin/env bash\nprintf "%s\\n" "$*"\nnode logic.test.js\n',
+      { mode: 0o755 },
+    );
+  }
   const manifest = execFileSync(
     "node",
     [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
@@ -210,6 +220,32 @@ describe("quality-mutation-check", () => {
     const state = JSON.parse(readFileSync(manifest, "utf8"));
     expect(state.governor.activeExecution).toBeNull();
     expect(state.governor.gateSecondsUsed).toBeGreaterThanOrEqual(1);
+  });
+
+  it("uses the native Vitest bail option after the first mutation failure", () => {
+    const { root, manifest } = fixture(
+      "vitest-bail",
+      "const { isAllowed } = require('./logic');\nif (!isAllowed('admin')) process.exit(1);\n",
+      { vitestRunner: true },
+    );
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+    const stateRoot = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "stateRoot"],
+      { encoding: "utf8" },
+    ).trim();
+    const head = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "revisions.currentHead"],
+      { encoding: "utf8" },
+    ).trim();
+    const log = readFileSync(
+      path.join(stateRoot, "mutation", `${head}.logic.js.log`),
+      "utf8",
+    );
+    expect(log).toContain("run --bail=1");
   });
 
   it("removes an added source file to produce revision-bound evidence", () => {
