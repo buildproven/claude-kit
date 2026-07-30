@@ -53,11 +53,16 @@ describe("quality review evidence signatures", () => {
 
   it("rejects a signature whose declared primary reviewer was rewritten", () => {
     const keys = keyPair();
-    const signed = { ...fields, primary: "claude", fallback: "ci-only" };
+    const signed = {
+      ...fields,
+      reviewer: "ci-only",
+      primary: "codex",
+      fallback: "ci-only",
+    };
     const signature = signEvidence(signed, keys.privateKey);
     expect(() =>
       verifyEvidence(
-        { ...signed, primary: "codex" },
+        { ...signed, primary: "claude" },
         signature,
         keys.publicKey,
       ),
@@ -80,6 +85,15 @@ describe("quality review evidence signatures", () => {
     expect(() =>
       signEvidence({ ...fields, fallback: "codex" }, keyPair().privateKey),
     ).toThrow(/fallback reviewer must differ/);
+  });
+
+  it("rejects a reviewer outside the declared routing pair", () => {
+    expect(() =>
+      signEvidence(
+        { ...fields, primary: "claude", fallback: "ci-only" },
+        keyPair().privateKey,
+      ),
+    ).toThrow(/must match the declared primary or fallback/);
   });
 
   it("signs the distinct sanctioned operator-override tuple", () => {

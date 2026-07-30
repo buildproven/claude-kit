@@ -216,7 +216,7 @@ describe("claude-review-companion.sh", () => {
         "--agents",
         "code-reviewer,bogus-one,bogus-two",
       ]);
-      expect(r.code).toBe(0); // the resolved peer remains usable evidence
+      expect(r.code).toBe(4); // one of three is not a usable majority
       expect(r.stderr).toMatch(
         /WARNING — 2 agent\(s\) have NO resolvable definition/,
       );
@@ -561,7 +561,7 @@ fi
         "--out-dir",
         out,
         "--agents",
-        "code-reviewer,silent-failure-hunter",
+        "code-reviewer,security-auditor,type-design-analyzer,silent-failure-hunter",
         "--identity-file",
         path.join(d, "identity.json"),
       ],
@@ -709,7 +709,7 @@ fi
       expect(r.code).toBe(4);
     });
 
-    it("preserves usable peer evidence when one agent is inconclusive (--dry-run)", () => {
+    it("blocks when a two-agent panel has an inconclusive reviewer (--dry-run)", () => {
       const d = tmpdir();
       fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
       const r = run([
@@ -720,6 +720,21 @@ fi
         path.join(d, "o"),
         "--agents",
         "code-reviewer,bogus",
+      ]);
+      expect(r.code).toBe(4);
+    });
+
+    it("preserves a usable majority when one of four agents is inconclusive (--dry-run)", () => {
+      const d = tmpdir();
+      fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+      const r = run([
+        "--dry-run",
+        "--diff-file",
+        path.join(d, "diff.txt"),
+        "--out-dir",
+        path.join(d, "o"),
+        "--agents",
+        "code-reviewer,security-auditor,type-design-analyzer,bogus",
       ]);
       expect(r.code).toBe(0);
     });

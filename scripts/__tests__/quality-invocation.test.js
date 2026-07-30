@@ -3479,7 +3479,7 @@ exit 1
     );
     expect(() =>
       invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
-    ).not.toThrow();
+    ).toThrow(/inconclusive provider findings/);
 
     writeFileSync(
       path.join(artifactDir, "reviewer-b.findings.txt"),
@@ -3851,7 +3851,7 @@ exit 1
     }).toThrow();
     // Named as inconclusive/malformed — NOT as an actionable code finding.
     expect(stderr).toMatch(/inconclusive provider findings/);
-    expect(stderr).toMatch(/wrote no finding text/);
+    expect(stderr).toMatch(/usable reviewer reports/);
   });
 
   it("BUI-463: stripping the delimiter preserves paragraph breaks between multiple findings", () => {

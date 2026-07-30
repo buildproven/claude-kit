@@ -422,9 +422,10 @@ if [ "$resolved" -eq 0 ]; then
 fi
 
 # Collect each agent's rc. run_agent returns 3 for INCONCLUSIVE (timeout /
-# error / unparseable / unresolved). If EVERY agent went inconclusive, the whole
-# review is degraded — exit 4 so the caller can block the merge rather than
-# treat "N inconclusive files" as a clean pass.
+# error / unparseable / unresolved). A strict majority of the mandatory panel
+# must return usable evidence. This tolerates one transient agent failure in a
+# four-agent panel without allowing a single surviving agent to mask a
+# degraded majority.
 inconclusive=0
 unresolved_agents=()
 provider_failure_rc=0
@@ -461,8 +462,10 @@ if [ "$provider_failure_rc" -ne 0 ] || [ -f "$EXHAUSTED_FILE" ]; then
 fi
 
 echo "claude-review-companion: wrote findings for $resolved agent(s) to $OUT_DIR ($inconclusive inconclusive)" >&2
-if [ "$inconclusive" -ge "$resolved" ]; then
-  echo "claude-review-companion: every mandatory agent was inconclusive — checkpoint blocked" >&2
+usable=$((resolved - inconclusive))
+required_usable=$((resolved / 2 + 1))
+if [ "$usable" -lt "$required_usable" ]; then
+  echo "claude-review-companion: only $usable/$resolved mandatory agents produced usable evidence (need $required_usable) — checkpoint blocked" >&2
   exit 4
 fi
 exit 0

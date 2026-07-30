@@ -70,6 +70,18 @@ function evidencePayload(fields) {
     if (fields.primary === fields.fallback) {
       throw new Error("evidence fallback reviewer must differ from primary");
     }
+    // ci-only is the explicitly recorded low-risk advisory path: no model
+    // produced review evidence, while primary/fallback still bind the failed
+    // routing policy that led to the advisory authorization.
+    if (
+      fields.reviewer !== "ci-only" &&
+      fields.reviewer !== fields.primary &&
+      fields.reviewer !== fields.fallback
+    ) {
+      throw new Error(
+        "evidence reviewer must match the declared primary or fallback reviewer",
+      );
+    }
   }
   if (!Number.isInteger(fields.findings) || fields.findings < 0) {
     throw new Error("evidence findings must be a non-negative integer");

@@ -2471,10 +2471,15 @@ function providerFindings(manifest) {
   // Fail closed, and distinctly from "actionable code findings remain" — the
   // operator needs to know the panel produced no usable verdict, not hunt for
   // a defect that was never described.
-  if (inconclusiveAgents.length && usableReviewerReports === 0) {
+  const requiredUsableReports = Math.floor(manifest.agents.length / 2) + 1;
+  if (
+    inconclusiveAgents.length &&
+    usableReviewerReports < requiredUsableReports
+  ) {
     throw new Error(
       `inconclusive provider findings: ${inconclusiveAgents.join(", ")} ` +
-        "reported findings but wrote no finding text (malformed review output)",
+        `left only ${usableReviewerReports}/${manifest.agents.length} usable ` +
+        `reviewer reports (need ${requiredUsableReports})`,
     );
   }
   return findings;
@@ -2728,8 +2733,14 @@ function writeArtifactInventory(
       .split(/\r?\n/)
       .some((line) => line.startsWith("INCONCLUSIVE:")),
   );
-  if (inconclusiveFindings.length === findings.length) {
-    throw new Error("inconclusive provider findings cannot be inventoried");
+  const requiredUsableFindings = Math.floor(findings.length / 2) + 1;
+  const usableFindings = findings.length - inconclusiveFindings.length;
+  if (usableFindings < requiredUsableFindings) {
+    throw new Error(
+      `inconclusive provider findings cannot be inventoried: ` +
+        `only ${usableFindings}/${findings.length} usable reports ` +
+        `(need ${requiredUsableFindings})`,
+    );
   }
   if (
     provider === "claude" &&
