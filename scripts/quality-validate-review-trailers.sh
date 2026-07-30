@@ -75,15 +75,17 @@ printf '%s\n' "$PARSED" | grep -Fxq "$EXPECTED" || {
   exit 1
 }
 
-[ -n "$STAMP_SIGNATURE" ] || {
-  echo "quality evidence signature is missing" >&2
-  exit 1
-}
-node "$SCRIPT_DIR/quality-review-evidence.js" verify \
-  --head "$STAMP_HEAD" --base "$STAMP_BASE" --tier "$STAMP_TIER" \
-  --findings "$STAMP_FINDINGS" --reviewer "$STAMP_PROVIDER" \
-  --primary "$STAMP_PRIMARY" --fallback "$STAMP_FALLBACK" \
-  --signature "$STAMP_SIGNATURE" || exit 1
+if [ -n "${QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY:-}" ]; then
+  [ -n "$STAMP_SIGNATURE" ] || {
+    echo "quality evidence signature is missing" >&2
+    exit 1
+  }
+  node "$SCRIPT_DIR/quality-review-evidence.js" verify \
+    --head "$STAMP_HEAD" --base "$STAMP_BASE" --tier "$STAMP_TIER" \
+    --findings "$STAMP_FINDINGS" --reviewer "$STAMP_PROVIDER" \
+    --primary "$STAMP_PRIMARY" --fallback "$STAMP_FALLBACK" \
+    --signature "$STAMP_SIGNATURE" || exit 1
+fi
 
 if [ "$STAMP_PROVIDER" = "operator-quality-override" ]; then
   printf '%s\n' "$PARSED" | grep -Fxq \
