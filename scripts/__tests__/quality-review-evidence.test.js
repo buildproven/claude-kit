@@ -77,7 +77,15 @@ describe("quality review evidence signatures", () => {
 
   it("signs a primary-only policy with no fallback", () => {
     const keys = keyPair();
-    const primaryOnly = { ...fields, fallback: "none" };
+    // Gemini is a supported configured provider.  Keep this paired with the
+    // no-fallback form so a signed Gemini review can traverse the setup CI
+    // evidence verifier without an impossible fallback identity.
+    const primaryOnly = {
+      ...fields,
+      reviewer: "gemini",
+      primary: "gemini",
+      fallback: "none",
+    };
     const signature = signEvidence(primaryOnly, keys.privateKey);
     expect(() =>
       verifyEvidence(primaryOnly, signature, keys.publicKey),

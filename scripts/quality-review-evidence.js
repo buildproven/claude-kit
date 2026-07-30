@@ -17,7 +17,7 @@ const FIELDS = [
   "fallback",
 ];
 const TIERS = new Set(["low", "medium", "high", "critical"]);
-const REVIEWERS = new Set(["claude", "codex", "ci-only"]);
+const REVIEWERS = new Set(["claude", "codex", "gemini", "ci-only"]);
 const OPERATOR_OVERRIDE_REVIEWER = "operator-quality-override";
 const UNAVAILABLE_REVIEWER = "unavailable";
 
