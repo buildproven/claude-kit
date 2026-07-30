@@ -3159,12 +3159,15 @@ function runGate(manifest, options, manifestPath) {
     });
     process.stdout.write(output);
   } catch (error) {
+    if (!(error instanceof GateExecutionError)) {
+      throw error;
+    }
     recordGate(manifest, {
       name,
       source: required.source,
       command: required.command,
       log,
-      status: error instanceof GateExecutionError ? error.status : "failed",
+      status: error.status,
       reason: error.message,
     });
     process.stderr.write(`${error.message}\n`);
