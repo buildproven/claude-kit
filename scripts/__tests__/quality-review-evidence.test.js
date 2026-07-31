@@ -1,7 +1,11 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { signEvidence, verifyEvidence } = require("../quality-review-evidence");
+const {
+  publicKeyFromPrivate,
+  signEvidence,
+  verifyEvidence,
+} = require("../quality-review-evidence");
 
 const STAMP_AND_MERGE = fs.readFileSync(
   path.join(__dirname, "..", "quality-stamp-and-merge.sh"),
@@ -37,6 +41,11 @@ describe("quality review evidence signatures", () => {
     expect(verifyEvidence(fields, signature, keys.publicKey)).toMatchObject(
       fields,
     );
+  });
+
+  it("derives the verifier key from an operator signing key", () => {
+    const keys = keyPair();
+    expect(publicKeyFromPrivate(keys.privateKey)).toBe(keys.publicKey);
   });
 
   it("rejects a signature replayed for a different reviewed head", () => {

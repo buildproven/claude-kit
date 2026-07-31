@@ -97,6 +97,10 @@ describe("quality merge gates", () => {
     );
   });
 
+  it("derives a local verifier key only from the configured operator signer", () => {
+    expect(STAMP_AND_MERGE).toMatch(/quality-review-evidence\.js" public-key/);
+  });
+
   it("head-binds the merge and verifies terminal merged state", () => {
     expect(AUTHORIZE).toMatch(/--match-head-commit "\$ACTUAL_HEAD"/);
     expect(AUTHORIZE).toMatch(/MERGE_RC=0/);

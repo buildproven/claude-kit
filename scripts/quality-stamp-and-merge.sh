@@ -32,6 +32,14 @@ if [ -z "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY:-}" ] && \
     export QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY_FILE="$DEFAULT_REVIEW_EVIDENCE_KEY"
   fi
 fi
+if [ -z "${QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY:-}" ] && \
+  { [ -n "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY:-}" ] || \
+    [ -n "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY_FILE:-}" ]; }; then
+  # Local quality owns the private signer, so derive its matching public
+  # verifier once for the final local authorization. CI receives only its
+  # separately configured public key and never reaches this branch.
+  export QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY="$(node "$SCRIPT_DIR/quality-review-evidence.js" public-key)"
+fi
 
 HEAD_REMOTE=""
 while IFS= read -r REMOTE; do
