@@ -64,6 +64,14 @@ bs_provider_load() {
       return 1
     }
   fi
+  # `auto` is validated before the invoking provider is resolved.  A legal
+  # `auto/codex` policy can therefore become `codex/codex` at runtime.  That
+  # is one provider, not a fallback, and review evidence correctly rejects
+  # identical primary and fallback identities.  Record the truthful
+  # single-provider policy instead of spending a campaign that cannot stamp.
+  if [ "$primary" = "$fallback" ]; then
+    fallback=none
+  fi
   printf '%s %s\n' "$primary" "$fallback"
 }
 

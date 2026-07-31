@@ -48,6 +48,19 @@ describe("quality provider policy", () => {
     ).toBe("codex/claude");
   });
 
+  it("normalizes an auto policy that resolves to its configured fallback", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "qpp-"));
+    const config = path.join(home, "providers.json");
+    writeFileSync(config, '{"primary":"auto","fallback":"codex"}\n');
+    expect(
+      resolvePolicy({
+        HOME: home,
+        CODEX_THREAD_ID: "test-thread",
+        BS_QUALITY_PROVIDER_CONFIG: config,
+      }),
+    ).toBe("codex/none");
+  });
+
   it("lets explicit environment policy override the file", () => {
     const home = mkdtempSync(path.join(tmpdir(), "qpp-"));
     const config = path.join(home, "providers.json");
