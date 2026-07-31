@@ -496,9 +496,37 @@ function worktreeMetadataKey(record) {
   return record.branch || `detached-${record.head}`;
 }
 
+// Stale-lock evidence directories are kept for post-mortem triage, but nothing
+// removed them, so `<git-common-dir>/worktree-manager/locks/` grew without
+// bound — and `help()` tells operators to hand-inspect that directory, which
+// gets harder the more debris sits in it.
+const STALE_EVIDENCE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+function pruneStaleEvidence(lockRoot) {
+  let entries;
+  try {
+    entries = fs.readdirSync(lockRoot, { withFileTypes: true });
+  } catch {
+    return; // Nothing to prune; never fail an operation over housekeeping.
+  }
+  const cutoff = Date.now() - STALE_EVIDENCE_RETENTION_MS;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.includes(".lock.stale-")) continue;
+    const full = path.join(lockRoot, entry.name);
+    try {
+      if (fs.statSync(full).mtimeMs < cutoff) {
+        fs.rmSync(full, { recursive: true, force: true });
+      }
+    } catch {
+      // Raced with another pruner, or not ours to remove — leave it.
+    }
+  }
+}
+
 function withLifecycleLock(repoRoot, key, operation, callback) {
   const lockRoot = path.join(metadataDir(repoRoot), "locks");
   fs.mkdirSync(lockRoot, { recursive: true, mode: 0o700 });
+  pruneStaleEvidence(lockRoot);
   const lock = path.join(lockRoot, `${stableHash(key)}.lock`);
   try {
     fs.mkdirSync(lock);
@@ -526,9 +554,43 @@ function withLifecycleLock(repoRoot, key, operation, callback) {
           { operation, owner },
         );
       }
-      const evidence = `${lock}.stale-${Date.now()}`;
-      fs.renameSync(lock, evidence);
-      fs.mkdirSync(lock);
+      // Stealing a stale lock must be atomic against a specific directory, not
+      // a check-then-act. Two processes can both observe the same dead owner
+      // and both decide to steal; without this, the second one renames the
+      // FIRST one's freshly-created live lock and then creates its own, so both
+      // believe they hold the mutex — and this mutex is the only serialization
+      // for removal.
+      //
+      // rename() is atomic: exactly one stealer can move a given directory, and
+      // the loser gets ENOENT. The winner then re-creates the lock; if that
+      // hits EEXIST, someone else got there first and we must back off rather
+      // than proceed unlocked. The evidence name includes the pid so two
+      // stealers in the same millisecond cannot collide on the destination.
+      const evidence = `${lock}.stale-${process.pid}-${Date.now()}`;
+      try {
+        fs.renameSync(lock, evidence);
+      } catch (renameError) {
+        if (renameError.code === "ENOENT") {
+          throw new ManagerError(
+            `Another process is recovering the '${key}' worktree lifecycle lock. Retry after it finishes.`,
+            "LIFECYCLE_BUSY",
+            { operation, owner },
+          );
+        }
+        throw renameError;
+      }
+      try {
+        fs.mkdirSync(lock);
+      } catch (recreateError) {
+        if (recreateError.code === "EEXIST") {
+          throw new ManagerError(
+            `Another process claimed the '${key}' worktree lifecycle lock during recovery. Retry after it finishes.`,
+            "LIFECYCLE_BUSY",
+            { operation, owner },
+          );
+        }
+        throw recreateError;
+      }
     } else {
       throw error;
     }
@@ -548,8 +610,22 @@ function withLifecycleLock(repoRoot, key, operation, callback) {
   try {
     return callback();
   } finally {
-    fs.unlinkSync(ownerFile);
-    fs.rmdirSync(lock);
+    // Releasing must never mask the operation's real outcome. A throw from a
+    // `finally` REPLACES the callback's return value — or, worse, the original
+    // error — so a bare unlinkSync here turned an actionable `UNPUSHED`
+    // refusal into a confusing `ENOENT`/`UNEXPECTED` whenever the lock had
+    // already been reclaimed (by a stale-lock stealer, or by an operator
+    // following the manual cleanup guidance in `help()`).
+    try {
+      fs.unlinkSync(ownerFile);
+    } catch {
+      // Lock already reclaimed by another process or cleaned up by hand.
+    }
+    try {
+      fs.rmdirSync(lock);
+    } catch {
+      // Same: releasing a lock we no longer own is not this call's failure.
+    }
   }
 }
 
