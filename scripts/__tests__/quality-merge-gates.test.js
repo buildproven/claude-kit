@@ -73,6 +73,34 @@ describe("quality merge gates", () => {
     expect(VALIDATOR).toMatch(/grep -Fxq "\$EXPECTED"/);
   });
 
+  it("makes the reusable trailer validator verify signed provider evidence", () => {
+    expect(VALIDATOR).toMatch(/quality-review-evidence\.js" verify/);
+    expect(VALIDATOR).toContain("Quality-Evidence-Signature");
+    expect(VALIDATOR).toContain("QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY");
+    expect(VALIDATOR).toContain("--require-signature");
+    expect(VALIDATOR).toContain(
+      "high/critical evidence requires --require-signature",
+    );
+    expect(VALIDATOR).toContain(
+      "high/critical evidence requires a configured primary reviewer",
+    );
+    expect(VALIDATOR).toContain("--required-tier");
+    expect(VALIDATOR).toContain("operator-quality-override");
+    expect(VALIDATOR).toContain(
+      "high/critical evidence requires the configured primary reviewer",
+    );
+  });
+
+  it("requires signed evidence at the merge authorization boundary", () => {
+    expect(AUTHORIZE).toMatch(
+      /quality-validate-review-trailers\.sh"[\s\S]*--required-tier "\$TIER" --require-signature/,
+    );
+  });
+
+  it("derives a local verifier key only from the configured operator signer", () => {
+    expect(STAMP_AND_MERGE).toMatch(/quality-review-evidence\.js" public-key/);
+  });
+
   it("head-binds the merge and verifies terminal merged state", () => {
     expect(AUTHORIZE).toMatch(/--match-head-commit "\$ACTUAL_HEAD"/);
     expect(AUTHORIZE).toMatch(/MERGE_RC=0/);

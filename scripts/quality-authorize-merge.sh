@@ -350,7 +350,8 @@ fi
 }
 BASE_REF="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseRef)"
 bash "$SCRIPT_DIR/quality-validate-review-trailers.sh" \
-  --manifest "$MANIFEST" --base "$BASE_REF" || exit 1
+  --manifest "$MANIFEST" --base "$BASE_REF" \
+  --required-tier "$TIER" --require-signature || exit 1
 FINAL_PR_JSON="$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
   --json headRefName,headRefOid,baseRefName)" || exit 1
 [ "$(printf '%s' "$FINAL_PR_JSON" | jq -r '.headRefName')" = "$EXPECTED_HEAD_REF" ] || {

@@ -1,5 +1,5 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -32,6 +32,11 @@ const STAMP_AND_MERGE = path.join(
   ROOT,
   "scripts",
   "quality-stamp-and-merge.sh",
+);
+const REVIEW_EVIDENCE = path.join(
+  ROOT,
+  "scripts",
+  "quality-review-evidence.js",
 );
 const require = createRequire(import.meta.url);
 const invocation = require(INVOCATION);
@@ -2321,7 +2326,49 @@ exit 99
       cwd: root,
       encoding: "utf8",
     }).trim();
-    const message = `chore: quality stamp\n\n${trailers}`;
+    const signer = generateKeyPairSync("ed25519");
+    const signingKey = signer.privateKey
+      .export({ format: "der", type: "pkcs8" })
+      .toString("base64");
+    const verificationKey = signer.publicKey
+      .export({ format: "der", type: "spki" })
+      .toString("base64");
+    const authorization = JSON.parse(
+      execFileSync("node", [INVOCATION, "review-authorization", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    const signature = execFileSync(
+      "node",
+      [
+        REVIEW_EVIDENCE,
+        "sign",
+        "--head",
+        authorization.head,
+        "--base",
+        authorization.base,
+        "--tier",
+        authorization.tier,
+        "--findings",
+        String(authorization.blockingCount),
+        "--reviewer",
+        authorization.provider,
+        "--primary",
+        authorization.primary,
+        "--fallback",
+        authorization.fallback,
+      ],
+      {
+        cwd: root,
+        env: {
+          ...process.env,
+          QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY: signingKey,
+        },
+        encoding: "utf8",
+      },
+    ).trim();
+    const message = `chore: quality stamp\n\n${trailers}\nQuality-Evidence-Signature: ${signature}`;
     git(root, ["commit", "--allow-empty", "-q", "-m", message]);
     const stampHead = git(root, ["rev-parse", "HEAD"]);
     execFileSync(
@@ -2406,6 +2453,7 @@ exit 99
           PATH: `${bin}:${process.env.PATH}`,
           QUALITY_TEST_EFFECTIVE_RULES: "strict",
           QUALITY_TEST_MERGE_RC: "1",
+          QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY: verificationKey,
         },
         encoding: "utf8",
       }).status,
@@ -2419,6 +2467,7 @@ exit 99
           PATH: `${bin}:${process.env.PATH}`,
           QUALITY_TEST_STRICT_PROTECTION: "true",
           QUALITY_TEST_EFFECTIVE_RULES: "unavailable",
+          QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY: verificationKey,
         },
         encoding: "utf8",
       }).status,
@@ -2532,13 +2581,19 @@ exit 1
 `,
     );
     chmodSync(gh, 0o755);
+    const reviewEvidenceKeys = generateKeyPairSync("ed25519");
     const env = {
       ...process.env,
       PATH: `${bin}:${process.env.PATH}`,
       QUALITY_STAMP_CI_TIMEOUT: "5",
-      // The operator key is intentionally discovered from the real XDG
-      // configuration directory. Keep this fixture hermetic so its mocked
-      // repository exercises the unsigned compatibility path.
+      QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY: reviewEvidenceKeys.privateKey
+        .export({ format: "der", type: "pkcs8" })
+        .toString("base64"),
+      QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY: reviewEvidenceKeys.publicKey
+        .export({ format: "der", type: "spki" })
+        .toString("base64"),
+      // Keep default key discovery hermetic; this fixture supplies an
+      // explicit ephemeral signer for the critical-tier stamp path.
       XDG_CONFIG_HOME: path.join(harness, "xdg"),
     };
 

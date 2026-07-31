@@ -213,7 +213,10 @@ run_codex_review() {
     attempt_started=$SECONDS
     if [ "$REVIEW_ROUND" -eq 1 ]; then
       bash "$bounded" --timeout "$pass_timeout" -- \
-        codex exec --ephemeral -s read-only --json \
+        # A review needs Codex authentication, but not a developer's optional
+        # MCP configuration. Loading it makes unrelated, stale OAuth grants
+        # capable of blocking every quality campaign before review begins.
+        codex exec --ephemeral --ignore-user-config -s read-only --json \
         -C "$GIT_ROOT" \
         -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
         --output-schema "$schema" -o "$raw_file" review \
@@ -229,7 +232,7 @@ run_codex_review() {
         cat "$REVIEW_OUT/diff.txt"
       } > "$prompt_file"
       bash "$bounded" --timeout "$pass_timeout" -- \
-        codex exec --ephemeral -s read-only --json \
+        codex exec --ephemeral --ignore-user-config -s read-only --json \
         -C "$GIT_ROOT" \
         -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
         --output-schema "$schema" -o "$raw_file" - \

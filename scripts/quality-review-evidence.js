@@ -17,7 +17,7 @@ const FIELDS = [
   "fallback",
 ];
 const TIERS = new Set(["low", "medium", "high", "critical"]);
-const REVIEWERS = new Set(["claude", "codex", "ci-only"]);
+const REVIEWERS = new Set(["claude", "codex", "gemini", "ci-only"]);
 const OPERATOR_OVERRIDE_REVIEWER = "operator-quality-override";
 const UNAVAILABLE_REVIEWER = "unavailable";
 
@@ -64,10 +64,14 @@ function evidencePayload(fields) {
     if (!REVIEWERS.has(fields.primary) || fields.primary === "ci-only") {
       throw new Error("evidence primary reviewer is invalid");
     }
-    if (!REVIEWERS.has(fields.fallback) || fields.fallback === "ci-only") {
+    const hasFallback = fields.fallback !== "none";
+    if (
+      hasFallback &&
+      (!REVIEWERS.has(fields.fallback) || fields.fallback === "ci-only")
+    ) {
       throw new Error("evidence fallback reviewer is invalid");
     }
-    if (fields.primary === fields.fallback) {
+    if (hasFallback && fields.primary === fields.fallback) {
       throw new Error("evidence fallback reviewer must differ from primary");
     }
     // ci-only is the explicitly recorded low-risk advisory path: no model
@@ -76,7 +80,7 @@ function evidencePayload(fields) {
     if (
       fields.reviewer !== "ci-only" &&
       fields.reviewer !== fields.primary &&
-      fields.reviewer !== fields.fallback
+      (!hasFallback || fields.reviewer !== fields.fallback)
     ) {
       throw new Error(
         "evidence reviewer must match the declared primary or fallback reviewer",
@@ -118,6 +122,18 @@ function signingKeyFromEnvironment() {
     );
   }
   return fs.readFileSync(file, "utf8").trim();
+}
+
+function publicKeyFromPrivate(privateKeyBase64) {
+  const privateKey = crypto.createPrivateKey({
+    key: decodeKey(privateKeyBase64, "private"),
+    format: "der",
+    type: "pkcs8",
+  });
+  return crypto
+    .createPublicKey(privateKey)
+    .export({ format: "der", type: "spki" })
+    .toString("base64");
 }
 
 function signEvidence(fields, privateKeyBase64) {
@@ -183,6 +199,7 @@ module.exports = {
   signEvidence,
   verifyEvidence,
   signingKeyFromEnvironment,
+  publicKeyFromPrivate,
 };
 
 function cliFields(argv) {
@@ -201,12 +218,18 @@ function cliFields(argv) {
 if (require.main === module) {
   try {
     const [command, ...argv] = process.argv.slice(2);
-    const fields = cliFields(argv);
-    if (command === "sign") {
+    if (command === "public-key") {
+      if (argv.length !== 0) throw new Error("public-key accepts no arguments");
+      process.stdout.write(
+        `${publicKeyFromPrivate(signingKeyFromEnvironment())}\n`,
+      );
+    } else if (command === "sign") {
+      const fields = cliFields(argv);
       process.stdout.write(
         `${signEvidence(fields, signingKeyFromEnvironment())}\n`,
       );
     } else if (command === "verify") {
+      const fields = cliFields(argv);
       const signature = fields.signature;
       delete fields.signature;
       verifyEvidence(
@@ -216,7 +239,7 @@ if (require.main === module) {
       );
     } else {
       throw new Error(
-        "usage: quality-review-evidence.js sign|verify --head <sha> --base <sha> --tier <tier> --findings <count> --reviewer <name> --primary <name> --fallback <name> [--signature <value>]",
+        "usage: quality-review-evidence.js public-key | sign|verify --head <sha> --base <sha> --tier <tier> --findings <count> --reviewer <name> --primary <name> --fallback <name> [--signature <value>]",
       );
     }
   } catch (error) {
