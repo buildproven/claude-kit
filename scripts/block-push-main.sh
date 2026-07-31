@@ -19,7 +19,10 @@ if [ -z "$COMMAND" ]; then
 fi
 
 # Extract -C <dir> from command if present (handles cross-repo pushes)
-GIT_DIR=$(echo "$COMMAND" | grep -oE 'git\s+-C\s+\S+' | head -1 | awk '{print $3}')
+# `|| true` is required: under `set -euo pipefail` a no-match `grep` exits 1 and
+# kills the hook before it can deny anything. Commands without `-C` are the
+# common case, so omitting it silently disabled this guard entirely.
+GIT_DIR=$(echo "$COMMAND" | grep -oE 'git\s+-C\s+\S+' | head -1 | awk '{print $3}' || true)
 if [ -n "$GIT_DIR" ]; then
   GIT_DIR="${GIT_DIR/#\~/$HOME}"  # expand ~ safely (no eval)
   GIT_CMD="git -C $GIT_DIR"
