@@ -530,6 +530,7 @@ update_backlog_item_status() {
     local item_id="$1"
     local new_status="$2"
     local tmp
+    backup_backlog_once
     tmp="$(mktemp)"
 
     awk -v id="$item_id" -v st="$new_status" '
@@ -544,11 +545,26 @@ update_backlog_item_status() {
     ' "$BACKLOG_FILE" > "$tmp" && mv "$tmp" "$BACKLOG_FILE"
 }
 
-# Remove an item from its active table and append it to the Completed section.
+# Snapshot BACKLOG.md before a mutation. The session loop backs up once at
+# startup, but the subcommands — which skills/ralph tells the orchestrator to
+# drive directly — mutated the file with no backup at all, so a bad edit had no
+# recovery path. Timestamped so a second run cannot overwrite the only copy of
+# the pre-mutation state.
+backup_backlog_once() {
+    [[ -f "$BACKLOG_FILE" ]] || return 0
+    [[ -n "${BACKLOG_BACKED_UP:-}" ]] && return 0
+    local stamp
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    cp "$BACKLOG_FILE" "${BACKLOG_FILE}.ralph-next-backup-${stamp}" 2>/dev/null || return 0
+    BACKLOG_BACKED_UP=1
+    log_info "BACKLOG.md backed up to ${BACKLOG_FILE}.ralph-next-backup-${stamp}"
+}
+
 move_item_to_completed() {
     local item_id="$1"
     local completed_date="$2"
     local tmp
+    backup_backlog_once
     tmp="$(mktemp)"
 
     awk -v id="$item_id" -v date="$completed_date" '
@@ -581,7 +597,27 @@ move_item_to_completed() {
             inserted=1
         }
     }
-    ' "$BACKLOG_FILE" > "$tmp" && mv "$tmp" "$BACKLOG_FILE"
+
+    # The active row is removed by `next` above and re-inserted only inside the
+    # Completed section. If that section is absent — or present without a
+    # `| ---` divider — the re-insert never fires and the row is simply GONE.
+    # Exiting non-zero here means the `&& mv` below never runs, so the original
+    # file is left untouched rather than silently truncated.
+    END {
+        if (found && !inserted) {
+            printf "ralph-next: cannot move %s to Completed: no \"## Completed\" section with a \"| ---\" divider row in %s\n", id, FILENAME > "/dev/stderr"
+            exit 3
+        }
+        if (!found) {
+            printf "ralph-next: %s not found as an active row in %s\n", id, FILENAME > "/dev/stderr"
+            exit 4
+        }
+    }
+    ' "$BACKLOG_FILE" > "$tmp" || {
+        rm -f "$tmp"
+        die "BACKLOG.md not modified — $item_id could not be moved to Completed"
+    }
+    mv "$tmp" "$BACKLOG_FILE"
 }
 
 ########################################
@@ -923,9 +959,22 @@ fi
 # Resolve --until condition
 if [[ "$UNTIL_CONDITION" =~ ^([0-9]+)[[:space:]]*items?$ ]]; then
     ITEM_LIMIT="${BASH_REMATCH[1]}"
+    [[ "$ITEM_LIMIT" -gt 0 && "$ITEM_LIMIT" -le 10000 ]] \
+        || die "--until items must be between 1 and 10000: $UNTIL_CONDITION"
 elif [[ "$UNTIL_CONDITION" =~ ^([0-9]+)[[:space:]]*hours?$ ]]; then
     ITEM_LIMIT=999999
-    SESSION_LIMIT_SECONDS="$((BASH_REMATCH[1] * 3600))"
+    # The regex accepts arbitrarily many digits, and `$(( n * 3600 ))` wraps
+    # NEGATIVE on 64-bit overflow. The session guard is
+    # `[[ $SESSION_LIMIT_SECONDS -gt 0 && ... ]]`, so a negative limit fails the
+    # first conjunct and the wall-clock check is skipped for the entire run —
+    # an autonomous loop with its time bound silently removed. Bound the input
+    # before multiplying rather than trying to detect the overflow after.
+    UNTIL_HOURS="${BASH_REMATCH[1]}"
+    [[ "$UNTIL_HOURS" -gt 0 && "$UNTIL_HOURS" -le 168 ]] \
+        || die "--until hours must be between 1 and 168 (one week): $UNTIL_CONDITION"
+    SESSION_LIMIT_SECONDS="$((UNTIL_HOURS * 3600))"
+    [[ "$SESSION_LIMIT_SECONDS" -gt 0 ]] \
+        || die "--until produced a non-positive session limit: $UNTIL_CONDITION"
 elif [[ "$UNTIL_CONDITION" == "empty" ]]; then
     ITEM_LIMIT=999999
 elif [[ "$UNTIL_CONDITION" =~ ^item:([A-Z]+-[0-9]+)$ ]]; then
@@ -1028,9 +1077,11 @@ mkdir -p "$EVIDENCE_ITEMS_DIR" "$QUALITY_LOG_DIR"
 touch "$TRAJECTORY_LOG"
 init_state_file
 
-# Backup BACKLOG.md once per session before any mutations
-cp "$BACKLOG_FILE" "${BACKLOG_FILE}.ralph-next-backup"
-log_info "BACKLOG.md backed up to ${BACKLOG_FILE}.ralph-next-backup"
+# Backup BACKLOG.md once per session before any mutations. Timestamped: the
+# fixed filename was overwritten by the next run, so after two runs the
+# pre-mutation state was unrecoverable — the backup destroyed the very thing it
+# existed to preserve. backup_backlog_once is shared with the subcommands.
+backup_backlog_once
 
 session_started_epoch="$(date +%s)"
 completed=0
@@ -1272,4 +1323,4 @@ log_info "  Blocked: $blocked"
 log_info "  Avg trajectory score: $avg_score"
 log_info "  State: $STATE_FILE"
 log_info "  Trajectory log: $TRAJECTORY_LOG"
-log_info "  BACKLOG.md backup: ${BACKLOG_FILE}.ralph-next-backup"
+log_info "  BACKLOG.md backup: ${BACKLOG_FILE}.ralph-next-backup-*"

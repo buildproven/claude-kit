@@ -39,6 +39,7 @@ cost-tracking.json
 # Backups
 *.backup
 BACKLOG.md.ralph-next-backup
+BACKLOG.md.ralph-next-backup-*
 
 # Claude Code worktrees (transient parallel-agent artifacts)
 .claude/worktrees/
