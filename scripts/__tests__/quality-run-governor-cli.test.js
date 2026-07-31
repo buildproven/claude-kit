@@ -1,7 +1,7 @@
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
+const { makeTempDir } = require("./helpers/tmp.js");
 
 const GOV = path.join(__dirname, "..", "quality-run-governor.js");
 
@@ -27,10 +27,7 @@ const run = (args, cwd = process.cwd()) => {
 };
 
 const sentinel = (state) => {
-  const p = path.join(
-    fs.mkdtempSync(path.join(os.tmpdir(), "gov-cli-")),
-    "run-state.json",
-  );
+  const p = path.join(makeTempDir("gov-cli-"), "run-state.json");
   if (state !== undefined) fs.writeFileSync(p, JSON.stringify(state));
   return p;
 };

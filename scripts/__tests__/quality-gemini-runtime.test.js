@@ -1,14 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  mkdtempSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const SCRIPTS = path.join(ROOT, "scripts");
@@ -49,7 +43,7 @@ function fixtureRepo(root) {
 
 describe("governed Gemini review", () => {
   it("records strict Gemini evidence inside the existing campaign budget", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "quality-gemini-"));
+    const root = makeTempDir("quality-gemini-");
     const repo = fixtureRepo(root);
     const bin = path.join(root, "bin");
     const state = path.join(root, "state");

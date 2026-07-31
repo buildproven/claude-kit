@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const INVOCATION = path.join(ROOT, "scripts", "quality-invocation.js");
@@ -13,7 +13,7 @@ function git(cwd, args) {
 }
 
 function fixture(label, testBody, options = {}) {
-  const root = mkdtempSync(path.join(tmpdir(), `quality-mutation-${label}-`));
+  const root = makeTempDir(`quality-mutation-${label}-`);
   git(root, ["init", "-q", "-b", "main"]);
   git(root, ["config", "user.name", "Quality Test"]);
   git(root, ["config", "user.email", "quality@example.com"]);
@@ -335,9 +335,7 @@ describe("quality-mutation-check", () => {
   });
 
   it("skips the gate when the diff touches only a submodule pointer bump", () => {
-    const submodule = mkdtempSync(
-      path.join(tmpdir(), "quality-mutation-gitlink-submodule-"),
-    );
+    const submodule = makeTempDir("quality-mutation-gitlink-submodule-");
     git(submodule, ["init", "-q", "-b", "main"]);
     git(submodule, ["config", "user.name", "Quality Test"]);
     git(submodule, ["config", "user.email", "quality@example.com"]);
@@ -348,7 +346,7 @@ describe("quality-mutation-check", () => {
     git(submodule, ["add", "."]);
     git(submodule, ["commit", "-q", "-m", "v2"]);
 
-    const root = mkdtempSync(path.join(tmpdir(), "quality-mutation-gitlink-"));
+    const root = makeTempDir("quality-mutation-gitlink-");
     git(root, ["init", "-q", "-b", "main"]);
     git(root, ["config", "user.name", "Quality Test"]);
     git(root, ["config", "user.email", "quality@example.com"]);
@@ -442,7 +440,7 @@ describe("quality-mutation-check", () => {
   });
 
   it("skips the gate when the diff changes only dependency manifests", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "quality-mutation-manifest-"));
+    const root = makeTempDir("quality-mutation-manifest-");
     git(root, ["init", "-q", "-b", "main"]);
     git(root, ["config", "user.name", "Quality Test"]);
     git(root, ["config", "user.email", "quality@example.com"]);
@@ -527,7 +525,7 @@ describe("quality-mutation-check", () => {
     // source to revert, but a behavioral check exists: revert the config and
     // the test must go red. The config is promoted to a candidate so the
     // normal revert-diff loop proves it (BUI-511).
-    const root = mkdtempSync(path.join(tmpdir(), "quality-mutation-config-"));
+    const root = makeTempDir("quality-mutation-config-");
     git(root, ["init", "-q", "-b", "main"]);
     git(root, ["config", "user.name", "Quality Test"]);
     git(root, ["config", "user.email", "quality@example.com"]);
@@ -618,7 +616,7 @@ describe("quality-mutation-check", () => {
   it("still fails closed when a config change has no covering test", () => {
     // The promoted-config path must still demand real evidence: if reverting
     // the config leaves the suite green, the test never covered it.
-    const root = mkdtempSync(path.join(tmpdir(), "quality-mutation-cfgvac-"));
+    const root = makeTempDir("quality-mutation-cfgvac-");
     git(root, ["init", "-q", "-b", "main"]);
     git(root, ["config", "user.name", "Quality Test"]);
     git(root, ["config", "user.email", "quality@example.com"]);
@@ -702,7 +700,7 @@ describe("quality-mutation-check", () => {
     // read as a guarded-config change: reverting package.json mid-run would
     // change the very test command the sandbox is about to execute. Such
     // diffs belong to the no-mutable-source path instead.
-    const root = mkdtempSync(path.join(tmpdir(), "quality-mutation-deps-"));
+    const root = makeTempDir("quality-mutation-deps-");
     git(root, ["init", "-q", "-b", "main"]);
     git(root, ["config", "user.name", "Quality Test"]);
     git(root, ["config", "user.email", "quality@example.com"]);
@@ -787,7 +785,7 @@ describe("quality-mutation-check", () => {
     // The candidate filter drops test paths, so a test-only diff also yields
     // zero candidates. It must NOT be waved through as "no mutable source" —
     // otherwise weakening a test would bypass mutation verification.
-    const root = mkdtempSync(path.join(tmpdir(), "quality-mutation-testonly-"));
+    const root = makeTempDir("quality-mutation-testonly-");
     git(root, ["init", "-q", "-b", "main"]);
     git(root, ["config", "user.name", "Quality Test"]);
     git(root, ["config", "user.email", "quality@example.com"]);
@@ -857,7 +855,7 @@ describe("quality-mutation-check", () => {
   });
 
   it("still runs the gate when a manifest change also touches source", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "quality-mutation-mixed-"));
+    const root = makeTempDir("quality-mutation-mixed-");
     git(root, ["init", "-q", "-b", "main"]);
     git(root, ["config", "user.name", "Quality Test"]);
     git(root, ["config", "user.email", "quality@example.com"]);
@@ -924,7 +922,7 @@ describe("quality-mutation-check", () => {
   });
 
   it("does not abort on a diff with zero added/modified entries", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "quality-mutation-delonly-"));
+    const root = makeTempDir("quality-mutation-delonly-");
     git(root, ["init", "-q", "-b", "main"]);
     git(root, ["config", "user.name", "Quality Test"]);
     git(root, ["config", "user.email", "quality@example.com"]);

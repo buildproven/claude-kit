@@ -1,14 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  copyFileSync,
-  mkdirSync,
-  mkdtempSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const repo = resolve(import.meta.dirname, "../..");
 const loop = join(repo, "scripts/overnight-loop.sh");
@@ -20,7 +14,7 @@ function executable(path, body) {
 }
 
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "overnight-loop-test-"));
+  const root = makeTempDir("overnight-loop-test-");
   const setup = join(root, "setup");
   const target = join(root, "target");
   const bin = join(root, "bin");

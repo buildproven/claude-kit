@@ -1,8 +1,8 @@
 const { planRuntime, workloadUnits } = require("../quality-runtime-plan");
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
+const { makeTempDir } = require("./helpers/tmp.js");
 
 const PLANNER = path.join(__dirname, "..", "quality-runtime-plan.js");
 
@@ -98,7 +98,7 @@ describe("quality runtime planning", () => {
   });
 
   it("plans real git diffs at the same public CLI seam", () => {
-    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "quality-plan-"));
+    const repo = makeTempDir("quality-plan-");
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
     execFileSync("git", ["config", "user.name", "test"], { cwd: repo });
     execFileSync("git", ["config", "user.email", "test@example.com"], {
@@ -160,7 +160,7 @@ describe("quality runtime planning", () => {
   });
 
   it("includes an initialized submodule's expanded delta in its workload", () => {
-    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "quality-submodule-"));
+    const parent = makeTempDir("quality-submodule-");
     const submodule = path.join(parent, "core");
     const repo = path.join(parent, "consumer");
     fs.mkdirSync(submodule);

@@ -4,7 +4,6 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   realpathSync,
   readFileSync,
   symlinkSync,
@@ -15,6 +14,7 @@ import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const INVOCATION = path.join(ROOT, "scripts", "quality-invocation.js");
@@ -94,7 +94,7 @@ function withoutAmbientGitHubIdentity(overrides = {}) {
 }
 
 function repo(label) {
-  const root = mkdtempSync(path.join(tmpdir(), `quality-${label}-`));
+  const root = makeTempDir(`quality-${label}-`);
   git(root, ["init", "-q", "-b", "main"]);
   git(root, ["config", "user.name", "Quality Test"]);
   git(root, ["config", "user.email", "quality@example.com"]);
@@ -362,7 +362,7 @@ function recordJudgeArtifact(root, manifest, dispositions = []) {
 }
 
 function fakeGh(root, head) {
-  const bin = mkdtempSync(path.join(tmpdir(), "quality-gh-"));
+  const bin = makeTempDir("quality-gh-");
   const gh = path.join(bin, "gh");
   const merged = path.join(bin, "merged");
   const base = git(root, ["rev-parse", "origin/main"]);
@@ -697,7 +697,7 @@ describe("quality invocation manifest", () => {
   it("cannot reset the same campaign from another linked worktree", () => {
     const root = repo("durable-linked-worktree");
     create(root);
-    const linked = mkdtempSync(path.join(tmpdir(), "quality-linked-"));
+    const linked = makeTempDir("quality-linked-");
     git(root, ["worktree", "add", "--detach", linked, "HEAD"]);
     expect(() => create(linked)).toThrow(
       /deterministic quality campaign identity collision/,
@@ -707,7 +707,7 @@ describe("quality invocation manifest", () => {
   it("namespaces independent clones by their Git common directory", () => {
     const root = repo("durable-independent-clone");
     const original = create(root);
-    const clone = mkdtempSync(path.join(tmpdir(), "quality-clone-"));
+    const clone = makeTempDir("quality-clone-");
     execFileSync("git", ["clone", "-q", root, clone]);
     git(clone, ["fetch", "-q", "origin", "main"]);
     const independent = create(clone);
@@ -781,7 +781,7 @@ describe("quality invocation manifest", () => {
     const root = repo("pr-bootstrap");
     const base = git(root, ["rev-parse", "origin/main"]);
     git(root, ["branch", "release", base]);
-    const bin = mkdtempSync(path.join(tmpdir(), "quality-bootstrap-gh-"));
+    const bin = makeTempDir("quality-bootstrap-gh-");
     const gh = path.join(bin, "gh");
     writeFileSync(
       gh,
@@ -837,7 +837,7 @@ exit 1
     // reports staleBase as baseRefOid — exactly what a lagging GitHub API
     // cache would return. A fresh `git ls-remote`/fetch will see the real,
     // newer tip; the fix must trust that live read over the stale gh field.
-    const worktree = mkdtempSync(path.join(tmpdir(), "quality-release-wt-"));
+    const worktree = makeTempDir("quality-release-wt-");
     git(root, ["worktree", "add", "-q", worktree, "release"]);
     writeFileSync(path.join(worktree, "release-only.txt"), "landed\n");
     git(worktree, ["add", "."]);
@@ -845,7 +845,7 @@ exit 1
     const freshBase = git(worktree, ["rev-parse", "HEAD"]);
     expect(freshBase).not.toBe(staleBase);
 
-    const bin = mkdtempSync(path.join(tmpdir(), "quality-bootstrap-gh-"));
+    const bin = makeTempDir("quality-bootstrap-gh-");
     const gh = path.join(bin, "gh");
     writeFileSync(
       gh,
@@ -899,7 +899,7 @@ exit 1
     const root = repo("pr-bootstrap-genuine-race");
     const base = git(root, ["rev-parse", "origin/main"]);
     git(root, ["branch", "release", base]);
-    const bin = mkdtempSync(path.join(tmpdir(), "quality-bootstrap-gh-"));
+    const bin = makeTempDir("quality-bootstrap-gh-");
     const gh = path.join(bin, "gh");
     writeFileSync(
       gh,
@@ -1202,7 +1202,7 @@ wait
     const root = repo("approval-command");
     const head = git(root, ["rev-parse", "HEAD"]);
     const base = git(root, ["rev-parse", "origin/main"]);
-    const bin = mkdtempSync(path.join(tmpdir(), "quality-approve-gh-"));
+    const bin = makeTempDir("quality-approve-gh-");
     const gh = path.join(bin, "gh");
     writeFileSync(
       gh,
@@ -2113,7 +2113,7 @@ exec "${realGit}" "$@"
   });
 
   it("passes a structured wrapper argv without executing spaces or metacharacters", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "quality-wrapper-"));
+    const dir = makeTempDir("quality-wrapper-");
     const bootstrap = path.join(dir, "bootstrap.sh");
     const marker = path.join(dir, "executed");
     writeFileSync(bootstrap, '#!/usr/bin/env bash\nprintf "<%s>\\n" "$@"\n');
@@ -2137,7 +2137,7 @@ exec "${realGit}" "$@"
   });
 
   it("fails safely when approval bootstrap returns malformed manifest JSON", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "quality-wrapper-json-"));
+    const dir = makeTempDir("quality-wrapper-json-");
     const bootstrap = path.join(dir, "bootstrap.sh");
     const manifest = path.join(dir, "invocation.json");
     writeFileSync(manifest, "{not-json\n");
@@ -2160,7 +2160,7 @@ printf 'BS_QUALITY_MANIFEST=%s\\n' ${JSON.stringify(manifest)}
 
   it("rejects malformed merge arguments before any GitHub or repository mutation", () => {
     const root = repo("strict-wrapper-args");
-    const harness = mkdtempSync(path.join(tmpdir(), "quality-strict-args-"));
+    const harness = makeTempDir("quality-strict-args-");
     const bin = path.join(harness, "bin");
     const ghMarker = path.join(harness, "gh-invoked");
     mkdirSync(bin);
@@ -2512,7 +2512,7 @@ exit 99
 
   it("persists one empty stamp and waits for its CI before authorization", () => {
     const root = repo("stamp-retry");
-    const remote = mkdtempSync(path.join(tmpdir(), "quality-remote-"));
+    const remote = makeTempDir("quality-remote-");
     git(remote, ["init", "--bare", "-q"]);
     git(root, ["remote", "set-url", "origin", remote]);
     git(root, ["push", "-q", "origin", "main"]);
@@ -2524,7 +2524,7 @@ exit 99
     prepareCodexReview(root, manifest);
     recordJudgeArtifact(root, manifest);
 
-    const harness = mkdtempSync(path.join(tmpdir(), "quality-stamp-harness-"));
+    const harness = makeTempDir("quality-stamp-harness-");
     const bin = path.join(harness, "bin");
     mkdirSync(bin);
     const log = path.join(harness, "gh-order.log");
@@ -3208,7 +3208,7 @@ exit 1
   });
 
   it("fails a non-finite policy closed before validating a stale level-98 contract", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "quality-non-finite-policy-"));
+    const root = makeTempDir("quality-non-finite-policy-");
     git(root, ["init", "-q", "-b", "main"]);
     git(root, ["config", "user.name", "Quality Test"]);
     git(root, ["config", "user.email", "quality@example.com"]);
@@ -4769,7 +4769,7 @@ exit 1
 
   it("releases only its exact linked-worktree lock after a terminal gate failure", () => {
     const primary = repo("terminal-gate-unlock");
-    const linked = mkdtempSync(path.join(tmpdir(), "quality-linked-gate-"));
+    const linked = makeTempDir("quality-linked-gate-");
     git(primary, ["switch", "-q", "main"]);
     git(primary, [
       "worktree",
@@ -4834,7 +4834,7 @@ exit 1
 
   it("leaves a manually held lock unchanged for a non-merge gate failure", () => {
     const primary = repo("terminal-non-merge-lock");
-    const linked = mkdtempSync(path.join(tmpdir(), "quality-linked-review-"));
+    const linked = makeTempDir("quality-linked-review-");
     git(primary, ["switch", "-q", "main"]);
     git(primary, [
       "worktree",
@@ -5180,7 +5180,7 @@ describe("human-floor-check command (Phase 0 autonomy relaxation)", () => {
   // Exit-code contract: 0 = VERIFIED CLEAR (autonomous OK); 10 = touches floor;
   // any other code (error) = human required. Only rc 0 unlocks autonomy.
   function repoChanging(label, changedFile, scorePolicy = null) {
-    const root = mkdtempSync(path.join(tmpdir(), `hfloor-${label}-`));
+    const root = makeTempDir(`hfloor-${label}-`);
     git(root, ["init", "-q", "-b", "main"]);
     git(root, ["config", "user.name", "Quality Test"]);
     git(root, ["config", "user.email", "quality@example.com"]);
@@ -5266,7 +5266,7 @@ describe("human-floor-check command (Phase 0 autonomy relaxation)", () => {
 
   it("exits 10 when a sensitive file is RENAMED out of a floor path", () => {
     // auth/login.js -> login.js. --no-renames must surface the old auth/ path.
-    const root = mkdtempSync(path.join(tmpdir(), "hfloor-rename-"));
+    const root = makeTempDir("hfloor-rename-");
     git(root, ["init", "-q", "-b", "main"]);
     git(root, ["config", "user.name", "Quality Test"]);
     git(root, ["config", "user.email", "quality@example.com"]);

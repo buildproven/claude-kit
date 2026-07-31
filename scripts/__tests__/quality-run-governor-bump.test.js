@@ -1,7 +1,7 @@
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 const { bumpRound } = require("../quality-run-governor");
+const { makeTempDir } = require("./helpers/tmp.js");
 
 /**
  * bumpRound is what actually terminates the fix -> re-review loop. Before it
@@ -14,10 +14,7 @@ const { bumpRound } = require("../quality-run-governor");
  * that behavior was covered.
  */
 const sentinel = (state) => {
-  const p = path.join(
-    fs.mkdtempSync(path.join(os.tmpdir(), "gov-")),
-    "run-state.json",
-  );
+  const p = path.join(makeTempDir("gov-"), "run-state.json");
   if (state !== undefined) fs.writeFileSync(p, JSON.stringify(state));
   return p;
 };

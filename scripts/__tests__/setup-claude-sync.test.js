@@ -2,16 +2,15 @@ import { execFileSync } from "node:child_process";
 import {
   appendFileSync,
   readFileSync,
-  mkdtempSync,
   mkdirSync,
   writeFileSync,
   readlinkSync,
   existsSync,
   symlinkSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const SCRIPT = path.resolve(import.meta.dirname, "..", "setup-claude-sync.sh");
 const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..");
@@ -49,8 +48,7 @@ function run(args, configDir, scriptPath = SCRIPT, setCodexTarget = true) {
   }
 }
 
-const sandbox = () =>
-  path.join(mkdtempSync(path.join(tmpdir(), "kit-sync-")), ".claude");
+const sandbox = () => path.join(makeTempDir("kit-sync-"), ".claude");
 
 describe("setup-claude-sync.sh", () => {
   it("uses the same declared installation surface as install.sh", () => {
@@ -134,7 +132,7 @@ describe("setup-claude-sync.sh", () => {
   });
 
   it("does not mutate global Codex state for an alternate Claude target", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "kit-sync-alt-"));
+    const root = makeTempDir("kit-sync-alt-");
     const cfg = path.join(root, "alternate-claude");
 
     expect(run(["--repair"], cfg, SCRIPT, false).code).toBe(0);

@@ -1,8 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const INVOCATION = path.join(ROOT, "scripts", "quality-invocation.js");
@@ -13,7 +13,7 @@ function git(cwd, args) {
 }
 
 function repo(label) {
-  const root = mkdtempSync(path.join(tmpdir(), `quality-${label}-`));
+  const root = makeTempDir(`quality-${label}-`);
   git(root, ["init", "-q", "-b", "main"]);
   git(root, ["config", "user.name", "Quality Test"]);
   git(root, ["config", "user.email", "quality@example.com"]);
