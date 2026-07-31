@@ -303,7 +303,12 @@ Quality-Base: ${base}`;
       /while \[ "\$pass" -le "\$QUALITY_REVIEW_PASSES" \]/,
     );
     expect(source).toMatch(/model_reasoning_effort=.*QUALITY_REVIEW_DEPTH/);
-    expect(source).toMatch(/codex exec --ephemeral -s read-only --json/);
+    expect(source).toMatch(
+      /codex exec --ephemeral --ignore-user-config -s read-only --json/,
+    );
+    expect(source).toMatch(
+      /optional[\s\S]*MCP configuration[\s\S]*unrelated, stale OAuth grants/i,
+    );
     expect(source).toMatch(/-C "\$GIT_ROOT"/);
     expect(source).toMatch(/review_selector=--base/);
     expect(source).not.toMatch(/review_selector=--commit/);
