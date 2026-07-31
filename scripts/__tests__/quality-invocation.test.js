@@ -1302,7 +1302,7 @@ exec "${realGit}" "$@"
     const root = repo("approval-command-ci-billing");
     const head = git(root, ["rev-parse", "HEAD"]);
     const base = git(root, ["rev-parse", "origin/main"]);
-    const bin = mkdtempSync(path.join(tmpdir(), "quality-approve-gh-"));
+    const bin = makeTempDir("quality-approve-gh-");
     const gh = path.join(bin, "gh");
     writeFileSync(
       gh,
