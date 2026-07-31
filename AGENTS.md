@@ -96,7 +96,7 @@ When changing any of these scripts: the hook invokes them as `$HOME/.claude/scri
 ### Quality / release automation
 
 - `.github/workflows/quality.yml` runs the gate in CI — lint, format, tests, security scan, license check.
-- `.github/workflows/auto-release.yml` handles releases; `stale-prs.yml` does non-destructive PR housekeeping.
+- `.github/workflows/release-please.yml` handles releases; `stale-prs.yml` does non-destructive PR housekeeping.
 - `.husky/` + `lint-staged` run prettier/eslint/bash-syntax on commit. `commitlint.config.js` enforces conventional commits (`feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert`).
 
 ### ESLint setup
