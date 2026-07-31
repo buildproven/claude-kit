@@ -91,6 +91,12 @@ describe("quality merge gates", () => {
     );
   });
 
+  it("requires signed evidence at the merge authorization boundary", () => {
+    expect(AUTHORIZE).toMatch(
+      /quality-validate-review-trailers\.sh"[\s\S]*--required-tier "\$TIER" --require-signature/,
+    );
+  });
+
   it("head-binds the merge and verifies terminal merged state", () => {
     expect(AUTHORIZE).toMatch(/--match-head-commit "\$ACTUAL_HEAD"/);
     expect(AUTHORIZE).toMatch(/MERGE_RC=0/);
