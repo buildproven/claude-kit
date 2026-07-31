@@ -19,6 +19,7 @@ Commands use prefixes: `/bs:` (workflow), `/gh:` (GitHub), `/cc:` (Claude Code),
 | `/bs:new`      | Create a new project scaffold | Starting a greenfield repo |
 | `/bs:dev`      | Start feature development     | Beginning implementation   |
 | `/bs:plan`     | Structure a larger task       | Ambiguous or multi-step    |
+| `/bs:prd`      | Carson-pattern PRD + tasks    | Work spanning >1 day       |
 | `/bs:test`     | Run tests with defaults       | During implementation      |
 | `/bs:quality`  | Run the quality loop          | Before PR or merge         |
 | `/bs:workflow` | Show the daily workflow       | Quick lookup               |
