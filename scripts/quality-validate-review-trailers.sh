@@ -126,15 +126,21 @@ if [ -n "$REQUIRED_TIER" ]; then
     echo "quality evidence tier is below the required tier" >&2
     exit 1
   }
-  if [ "$REQUIRED_RANK" -ge 2 ] && [ "$REQUIRE_SIGNATURE" != true ]; then
+fi
+if [ -n "$REQUIRED_TIER" ] && [ "$REQUIRED_RANK" -ge 2 ]; then
+  [ "$REQUIRE_SIGNATURE" = true ] || {
     echo "high/critical evidence requires --require-signature" >&2
     exit 1
+  }
+  if [ "$STAMP_PROVIDER" != "operator-quality-override" ]; then
+    [ -n "$STAMP_PRIMARY" ] || {
+      echo "high/critical evidence requires a configured primary reviewer" >&2
+      exit 1
+    }
+    [ "$STAMP_PROVIDER" = "$STAMP_PRIMARY" ] || {
+      echo "high/critical evidence requires the configured primary reviewer" >&2
+      exit 1
+    }
   fi
-fi
-if [ "$STAMP_RANK" -ge 2 ] && \
-   [ "$STAMP_PROVIDER" != "operator-quality-override" ] && \
-   [ "$STAMP_PROVIDER" != "$STAMP_PRIMARY" ]; then
-  echo "high/critical evidence requires the configured primary reviewer" >&2
-  exit 1
 fi
 echo "quality review evidence verified: reviewer=$STAMP_PROVIDER head=$STAMP_HEAD base=$STAMP_BASE"
