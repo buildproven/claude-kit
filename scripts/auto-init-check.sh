@@ -6,9 +6,12 @@ if ! git -C "$PWD" rev-parse --git-dir &>/dev/null 2>&1; then
   exit 0
 fi
 
-# Only warn once per project (marker lives in .git/, never committed)
-git_root=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)
-marker="$git_root/.git/claude-init-checked"
+# Only warn once per project (marker lives in the git dir, never committed).
+# Resolve the git dir rather than assuming "<toplevel>/.git" is a directory: in
+# a linked worktree `.git` is a FILE, so `touch` failed there and the
+# warn-once marker never persisted — re-warning on every single prompt.
+git_dir=$(git -C "$PWD" rev-parse --absolute-git-dir 2>/dev/null) || exit 0
+marker="$git_dir/claude-init-checked"
 [ -f "$marker" ] && exit 0
 touch "$marker"
 
