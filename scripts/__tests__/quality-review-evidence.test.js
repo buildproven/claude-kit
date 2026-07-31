@@ -1,7 +1,11 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { signEvidence, verifyEvidence } = require("../quality-review-evidence");
+const {
+  publicKeyFromPrivate,
+  signEvidence,
+  verifyEvidence,
+} = require("../quality-review-evidence");
 
 const STAMP_AND_MERGE = fs.readFileSync(
   path.join(__dirname, "..", "quality-stamp-and-merge.sh"),
@@ -39,6 +43,11 @@ describe("quality review evidence signatures", () => {
     );
   });
 
+  it("derives the verifier key from an operator signing key", () => {
+    const keys = keyPair();
+    expect(publicKeyFromPrivate(keys.privateKey)).toBe(keys.publicKey);
+  });
+
   it("rejects a signature replayed for a different reviewed head", () => {
     const keys = keyPair();
     const signature = signEvidence(fields, keys.privateKey);
@@ -73,6 +82,23 @@ describe("quality review evidence signatures", () => {
     expect(() =>
       signEvidence({ ...fields, fallback: "ci-only" }, keyPair().privateKey),
     ).toThrow(/fallback reviewer is invalid/);
+  });
+
+  it("signs a primary-only policy with no fallback", () => {
+    const keys = keyPair();
+    // Gemini is a supported configured provider.  Keep this paired with the
+    // no-fallback form so a signed Gemini review can traverse the setup CI
+    // evidence verifier without an impossible fallback identity.
+    const primaryOnly = {
+      ...fields,
+      reviewer: "gemini",
+      primary: "gemini",
+      fallback: "none",
+    };
+    const signature = signEvidence(primaryOnly, keys.privateKey);
+    expect(() =>
+      verifyEvidence(primaryOnly, signature, keys.publicKey),
+    ).not.toThrow();
   });
 
   it("rejects identical primary and fallback reviewers", () => {
