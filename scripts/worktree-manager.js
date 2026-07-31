@@ -1042,7 +1042,21 @@ function validateQualityManifest(repoRoot, invocation, manifestPath) {
         reason: "quality manifest repository does not match the lock",
       };
     }
-    if (path.resolve(manifest.stateRoot || "") !== path.dirname(manifestPath)) {
+    let declaredStateRoot;
+    let actualStateRoot;
+    try {
+      // Invocation writers and this reader may observe macOS's /var → /private
+      // alias differently. Compare canonical paths so a legitimate manifest is
+      // not retained forever solely because TMPDIR was spelled differently.
+      declaredStateRoot = fs.realpathSync(manifest.stateRoot || "");
+      actualStateRoot = fs.realpathSync(path.dirname(manifestPath));
+    } catch {
+      return {
+        state: "inconclusive",
+        reason: "quality manifest state path cannot be resolved safely",
+      };
+    }
+    if (declaredStateRoot !== actualStateRoot) {
       return {
         state: "inconclusive",
         reason: "quality manifest state path does not match the lock",
@@ -1085,13 +1099,37 @@ function manifestForQualityInvocation(repoRoot, invocation) {
   return { state: "missing" };
 }
 
-function qualityManifestReleaseState(manifest, now) {
-  const updatedAt = Date.parse(manifest.updatedAt || manifest.createdAt || "");
+function qualityManifestReleaseState(manifest, manifestPath, now) {
+  const declaredUpdatedAt = Date.parse(
+    manifest.updatedAt || manifest.createdAt || "",
+  );
+  let observedUpdatedAt = declaredUpdatedAt;
+  let timestampSource = "quality manifest";
+  if (!Number.isFinite(observedUpdatedAt)) {
+    try {
+      observedUpdatedAt = fs.statSync(manifestPath).mtimeMs;
+      timestampSource = "quality manifest file";
+    } catch {
+      return {
+        releasable: false,
+        reason: "quality manifest timestamp cannot be read safely",
+      };
+    }
+  }
   const stale =
-    Number.isFinite(updatedAt) &&
-    now - updatedAt >= DEFAULT_QUALITY_LOCK_STALE_HOURS * 3600000;
-  const terminal = (manifest.gates || []).some((gate) =>
-    ["failed", "timeout"].includes(gate.status),
+    now - observedUpdatedAt >= DEFAULT_QUALITY_LOCK_STALE_HOURS * 3600000;
+  // quality-invocation's recordGate replaces a prior result for the same gate.
+  // Still reduce to the latest result defensively: a legacy or manually
+  // repaired manifest must not release an active lock because of an obsolete
+  // failed attempt followed by a successful retry.
+  const latestGateStatus = new Map();
+  for (const gate of manifest.gates || []) {
+    if (typeof gate?.name === "string") {
+      latestGateStatus.set(gate.name, gate.status);
+    }
+  }
+  const terminal = [...latestGateStatus.values()].some((status) =>
+    ["failed", "timeout"].includes(status),
   );
   if (terminal) {
     return {
@@ -1102,7 +1140,7 @@ function qualityManifestReleaseState(manifest, now) {
   if (stale) {
     return {
       releasable: true,
-      reason: `quality manifest is older than ${DEFAULT_QUALITY_LOCK_STALE_HOURS}h`,
+      reason: `${timestampSource} is older than ${DEFAULT_QUALITY_LOCK_STALE_HOURS}h`,
     };
   }
   return { releasable: false, reason: "quality manifest is still active" };
@@ -1123,7 +1161,11 @@ function qualityLockState(repoRoot, record, metadata, now = Date.now()) {
   }
   if (manifest.state === "present") {
     return {
-      ...qualityManifestReleaseState(manifest.manifest, now),
+      ...qualityManifestReleaseState(
+        manifest.manifest,
+        manifest.manifestPath,
+        now,
+      ),
       manifestPath: manifest.manifestPath,
     };
   }

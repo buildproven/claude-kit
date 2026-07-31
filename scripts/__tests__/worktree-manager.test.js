@@ -9,6 +9,7 @@ import {
   readdirSync,
   realpathSync,
   renameSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -1042,6 +1043,59 @@ esac
       (candidate) => candidate.branch === "feature/terminal-quality-lock",
     );
     expect(after.locked).toBe(false);
+  });
+
+  it("retains a quality lock when a later result replaces a failed gate", () => {
+    const { parent, repo } = fixture();
+    const temporaryRoot = path.join(parent, "quality-state");
+    const invocation = "12121212-1212-5121-8121-121212121212";
+    create(repo, "feature/retried-quality-lock", [
+      "--lock-reason",
+      `bs:quality/${invocation}`,
+      "--invocation",
+      invocation,
+    ]);
+    writeQualityManifest(repo, temporaryRoot, invocation, {
+      gates: [
+        { name: "test", status: "timeout" },
+        { name: "test", status: "success" },
+      ],
+    });
+    const state = manager(["status", "--repo", repo, "--skip-pr-check"], {
+      env: { ...process.env, TMPDIR: temporaryRoot },
+    }).json.worktrees.find(
+      (candidate) => candidate.branch === "feature/retried-quality-lock",
+    );
+    expect(state).toMatchObject({ classification: "active and locked" });
+  });
+
+  it("uses an invalid manifest timestamp's file mtime for stale-lock release", () => {
+    const { parent, repo } = fixture();
+    const temporaryRoot = path.join(parent, "quality-state");
+    const invocation = "13131313-1313-5131-8131-131313131313";
+    create(repo, "feature/invalid-quality-time", [
+      "--lock-reason",
+      `bs:quality/${invocation}`,
+      "--invocation",
+      invocation,
+    ]);
+    const stateRoot = writeQualityManifest(repo, temporaryRoot, invocation, {
+      updatedAt: "not-a-timestamp",
+      createdAt: "also-not-a-timestamp",
+    });
+    const manifestPath = path.join(stateRoot, "invocation.json");
+    const staleAt = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    utimesSync(manifestPath, staleAt, staleAt);
+    const state = manager(["status", "--repo", repo, "--skip-pr-check"], {
+      env: { ...process.env, TMPDIR: temporaryRoot },
+    }).json.worktrees.find(
+      (candidate) => candidate.branch === "feature/invalid-quality-time",
+    );
+    expect(state).toMatchObject({
+      classification: "stale quality lock",
+      releasable: true,
+    });
+    expect(state.reason).toContain("quality manifest file is older than 24h");
   });
 
   it("retains a recent quality lock when its manifest is missing", () => {
