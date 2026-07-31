@@ -7,6 +7,12 @@
 # where the variable pointed to a git worktree inside ~/Projects/internal/,
 # wiping the entire internal/ directory. The host user restored from Time
 # Machine. This hook exists so that class of accident cannot repeat.
+#
+# KNOWN LIMIT: this is a textual guard, not a shell interpreter. A destructive
+# target that is not literally present in the command string cannot be seen —
+# notably `xargs rm -rf < targets.txt`, where the paths live in a file, and
+# `rm -rf $DEST` where the value is opaque (Rule 1a blocks the substitution
+# form outright for exactly this reason). Such commands are allowed through.
 
 set -euo pipefail
 
@@ -66,6 +72,30 @@ has_recursive_force_rm() {
   [[ "$has_recursive" == "true" && "$has_force" == "true" ]]
 }
 
+# Collapse `.` and `..` segments so a detour through a child cannot disguise a
+# protected root: `~/Projects/../Projects` and `~/Projects/./` both resolve to
+# `~/Projects`. Purely textual — it does not touch the filesystem or resolve
+# symlinks — which is the right scope for a guard that must also reason about
+# paths that do not exist yet. Repeated until stable so nested `../../` chains
+# fully collapse.
+collapse_path_segments() {
+  local text="$1" previous=""
+  while [[ "$text" != "$previous" ]]; do
+    previous="$text"
+    # Remove `<segment>/../` where <segment> is not itself `..`.
+    text=$(printf '%s' "$text" | sed -E 's#(^|/)([^/[:space:]]|[^/[:space:]][^/[:space:]]|[^./[:space:]][^/[:space:]]*|[^/[:space:]]*[^./[:space:]])/\.\./#\1#g')
+    # Remove `./` segments and a trailing `/.`.
+    text=$(printf '%s' "$text" | sed -E 's#(^|/)\./#\1#g; s#/\.$##g')
+  done
+  printf '%s' "$text"
+}
+
+# The set of literal top-level personal directories that must never be wiped,
+# in every spelling (`~`, `$HOME`, `${HOME}`, `/Users/<u>`, `/home/<u>`).
+# Rules 1 and 2 share this so a root protected against `rm -rf` cannot be left
+# unprotected against `find -delete`, which is exactly how the two drifted.
+BLOCKED_LITERALS='(/\*?|~/?\*?|~/Projects/?\*?|~/Projects/(internal|products|personal|_archived)/?\*?|~/\.(claude|ssh|aws|config)/?\*?|\$\{?HOME\}?/?\*?|\$\{?HOME\}?/Projects/?\*?|\$\{?HOME\}?/Projects/(internal|products|personal|_archived)/?\*?|\$\{?HOME\}?/\.(claude|ssh|aws|config)/?\*?|/(Users|home)/?\*?|/(Users|home)/[^/[:space:]]+/?\*?|/(Users|home)/[^/[:space:]]+/Projects/?\*?|/(Users|home)/[^/[:space:]]+/Projects/(internal|products|personal|_archived)/?\*?|/(Users|home)/[^/[:space:]]+/\.(claude|ssh|aws|config)/?\*?)'
+
 # ---------------------------------------------------------------------------
 # Rule 1: `rm -rf` / `rm -fr` / `rm -r -f` with unsafe target.
 # ---------------------------------------------------------------------------
@@ -75,7 +105,11 @@ has_recursive_force_rm() {
 # `rm` escape Rule 1 entirely — a fail-open bypass of the whole guard. Treat
 # `(`, `)`, `{`, `}` and newlines as boundaries on both sides so a removal
 # nested in any of them is still extracted and inspected.
-RM_COMMANDS=$(printf '%s' "$CMD_FLAT" | grep -oE '(^|[;&|(){}[:space:]][[:space:]]*)((sudo|command|env)[[:space:]]+)*([^[:space:];|(){}]*/)?rm[[:space:]]+[^;&|(){}]*' | head -5 || true)
+#
+# The optional leading `\\?` matches `\rm`, the standard way to bypass a shell
+# alias. It reaches the very same binary as `rm`, so a guard that inspects
+# `/bin/rm` but not `\rm` is trivially evaded by one character.
+RM_COMMANDS=$(printf '%s' "$CMD_FLAT" | grep -oE '(^|[;&|(){}[:space:]][[:space:]]*)((sudo|command|env)[[:space:]]+)*\\?([^[:space:];|(){}]*/)?rm[[:space:]]+[^;&|(){}]*' | head -5 || true)
 while IFS= read -r TARGETS; do
   [[ -z "$TARGETS" ]] && continue
   has_recursive_force_rm "$TARGETS" || continue
@@ -113,7 +147,7 @@ while IFS= read -r TARGETS; do
   # /Users/<me> and silently stop catching `rm -rf $HOME` — a security regression.
   # shellcheck disable=SC2016
   TARGETS_MATCH=$(printf '%s' "$TARGETS" | tr -d '"'"'"'' | sed -E 's#/+#/#g')
-  BLOCKED_LITERALS='(/\*?|~/?\*?|~/Projects/?\*?|~/Projects/(internal|products|personal|_archived)/?\*?|~/\.(claude|ssh|aws|config)/?\*?|\$HOME/?\*?|/(Users|home)/?\*?|/(Users|home)/[^/[:space:]]+/?\*?|/(Users|home)/[^/[:space:]]+/Projects/?\*?|/(Users|home)/[^/[:space:]]+/Projects/(internal|products|personal|_archived)/?\*?|/(Users|home)/[^/[:space:]]+/\.(claude|ssh|aws|config)/?\*?)'
+  TARGETS_MATCH=$(collapse_path_segments "$TARGETS_MATCH")
   if echo "$TARGETS_MATCH" | grep -qE "(^|[[:space:]])${BLOCKED_LITERALS}${BOUNDARY}"; then
     deny "rm -rf target is a top-level personal directory. Wiping \$HOME, /Users, ~/Projects, ~/Projects/internal, ~/.claude, ~/.ssh, ~/.aws, or ~/.config is refused. Concrete per-project paths under these are allowed."
   fi
@@ -129,11 +163,23 @@ done <<< "$RM_COMMANDS"
 # ---------------------------------------------------------------------------
 if echo "$CMD_FLAT" | grep -qE 'find[[:space:]].*(-delete|-exec[[:space:]]+rm)'; then
   FIND_ROOT=$(echo "$CMD_FLAT" | sed -E 's/.*find[[:space:]]+([^[:space:]]+).*/\1/' | tr -d '"'"'"'')
+  FIND_ROOT=$(collapse_path_segments "$(printf '%s' "$FIND_ROOT" | sed -E 's#/+#/#g')")
+
+  # Check the protected literals BEFORE the dynamic-root rejection below:
+  # `$HOME/Projects` is both "starts with a variable" and a named protected
+  # root, and the specific message is the more useful one.
+  #
+  # This reuses Rule 1's BLOCKED_LITERALS rather than restating the path list.
+  # The two previously diverged — Rule 2 covered `/Users/<u>/Projects` but only
+  # bare `~`, so `find ~/Projects -delete` was allowed while the identical
+  # `find /Users/alice/Projects -delete` was blocked. Sharing one definition
+  # means a root can never again be protected against `rm -rf` but not
+  # `find -delete`.
+  if printf '%s' "$FIND_ROOT" | grep -qE "^${BLOCKED_LITERALS}\$"; then
+    deny "find ... -delete rooted at a top-level personal directory."
+  fi
   if printf '%s' "$FIND_ROOT" | grep -qE '^\$|`|\$\('; then
     deny "find ... -delete uses a dynamic root path."
-  fi
-  if printf '%s' "$FIND_ROOT" | grep -qE '^(/|~/?|\$HOME/?|\$\{HOME\}/?|/Users/?|/Users/[^/]+/?|/Users/[^/]+/(Projects|\.claude|\.ssh|\.aws|\.config)/?|/Users/[^/]+/Projects/(internal|products|personal|_archived)/?|/home/?|/home/[^/]+/?|/home/[^/]+/(Projects|\.claude|\.ssh|\.aws|\.config)/?)$'; then
-    deny "find ... -delete rooted at a top-level personal directory."
   fi
 fi
 
