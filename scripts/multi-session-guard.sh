@@ -13,11 +13,17 @@
 
 set -euo pipefail
 
-# Only act in git repos
+# Only act in git repos. Resolve the git dir rather than assuming
+# "<toplevel>/.git" is a directory: in a linked worktree `.git` is a FILE
+# holding a gitdir: pointer, so the old path made `mkdir -p` fail with
+# "Not a directory" and `set -e` killed this hook — disabling multi-session
+# detection in every worktree, the exact multi-checkout case it guards.
+GIT_DIR_PATH=$(git -C "$PWD" rev-parse --absolute-git-dir 2>/dev/null) || exit 0
+# Still needed for the human-readable repo/branch in the warning below.
 GIT_ROOT=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null) || exit 0
 
-LOCK_DIR="$GIT_ROOT/.git/claude-sessions"
-mkdir -p "$LOCK_DIR"
+LOCK_DIR="$GIT_DIR_PATH/claude-sessions"
+mkdir -p "$LOCK_DIR" 2>/dev/null || exit 0
 
 # Current session identifier (use CC session ID if available, fallback to PID-based)
 SESSION_ID="${SESSION_ID:-$$}"
