@@ -3605,6 +3605,19 @@ const COMMANDS = {
   "approval-valid": ({ manifest }) => {
     process.exitCode = approvalValid(manifest, manifest.repo.realpath) ? 0 : 1;
   },
+  // Scope is intentionally checked separately from validity: a capability
+  // signed for one scope (e.g. operator-quality-override) must never satisfy
+  // a check gated on a different scope (e.g. operator-ci-billing-override),
+  // even though both are "valid" in the signature/expiry/identity sense.
+  "approval-scope": ({ manifest, rawArgs }) => {
+    const options = parseOptions(rawArgs);
+    if (!options.scope) {
+      throw new Error("approval-scope requires --scope <name>");
+    }
+    const valid = approvalValid(manifest, manifest.repo.realpath);
+    process.exitCode =
+      valid && manifest.approval?.scope === options.scope ? 0 : 1;
+  },
   "human-floor-check": ({ manifest }) => {
     // Contract designed so the AUTONOMOUS path is reachable ONLY by an explicit
     // verified-clear result; every other outcome requires a human.

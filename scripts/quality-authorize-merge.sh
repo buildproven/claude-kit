@@ -263,10 +263,32 @@ if [ "$PREFLIGHT" = false ] && [ "${CI_BILLING_WAIVED:-false}" = false ]; then
     }
   fi
 fi
+# A CI billing waiver on a genuinely server-enforceable base is normally
+# refused outright: an admin merge there would silently step around real,
+# working branch protection. The one accepted exception is an operator
+# capability signed for EXACTLY this scope — narrower than
+# operator-quality-override, which covers unavailable/malformed review
+# evidence and has nothing to do with CI. Scope is checked, not just
+# validity, so a capability signed for a different purpose can never satisfy
+# this. It still requires quality-ci-billing-waiver.js to have independently
+# proven the billing-preallocation signature above; this only widens WHICH
+# repos may use that proof, never what counts as proof.
+OPERATOR_CI_BILLING_APPROVED=false
 if [ -n "${CI_BILLING_WAIVER_ARTIFACT:-}" ] &&
-  [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ]; then
-  echo "❌ MERGE BLOCKED: CI billing waivers are limited to plan-proven unprotectable private repositories." >&2
+  [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ] &&
+  node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
+    --scope operator-ci-billing-override >/dev/null 2>&1; then
+  OPERATOR_CI_BILLING_APPROVED=true
+  echo "⚠️  [quality] operator-signed CI billing override accepted on a server-enforceable base." >&2
+fi
+if [ -n "${CI_BILLING_WAIVER_ARTIFACT:-}" ] &&
+  [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ] &&
+  [ "$OPERATOR_CI_BILLING_APPROVED" = false ]; then
+  echo "❌ MERGE BLOCKED: CI billing waivers are limited to plan-proven unprotectable private repositories," >&2
+  echo "   unless the operator supplies a signed operator-ci-billing-override capability." >&2
   echo "   Refusing an admin merge that could bypass required reviews, status checks, or strict base freshness." >&2
+  echo "   To authorize: BREAK_GLASS_APPROVED=true BREAK_GLASS_APPROVER=<you> \\" >&2
+  echo "     node quality-wrapper.js approve --pr $PR --head <exact-head-sha> --override-ci-billing" >&2
   exit 1
 fi
 TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"
@@ -384,10 +406,19 @@ MERGE_ARGS=(
   --match-head-commit "$ACTUAL_HEAD"
 )
 if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
-  [ "$ATOMIC_BASE_FRESHNESS" = unprotectable ] || {
-    echo "❌ MERGE BLOCKED: CI billing waiver admin merge is restricted to repositories that cannot enforce branch protection." >&2
-    exit 1
-  }
+  if [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ]; then
+    # Revalidate the operator scope immediately before --admin, same
+    # discipline as the artifact revalidation below: the earlier check
+    # authorizes skipping the green-check query, this one authorizes the
+    # actual admin merge, and neither trusts a variable computed earlier.
+    node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
+      --scope operator-ci-billing-override >/dev/null 2>&1 || {
+      echo "❌ MERGE BLOCKED: CI billing waiver admin merge on a server-enforceable base requires a" >&2
+      echo "   currently-valid operator-ci-billing-override capability; none is present immediately before merge." >&2
+      exit 1
+    }
+    echo "⚠️  [quality] admin merge authorized by operator-signed CI billing override on a server-enforceable base." >&2
+  fi
   node "$SCRIPT_DIR/quality-ci-billing-waiver.js" \
     --repo "$EXPECTED_REPOSITORY" --pr "$PR" --head "$ACTUAL_HEAD" \
     --artifact "$CI_BILLING_WAIVER_ARTIFACT" >/dev/null || {
