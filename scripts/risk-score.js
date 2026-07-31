@@ -458,20 +458,40 @@ function collectDescriptors(base, gitRunner) {
     mergeBase = base;
   }
 
-  const nameStatus = safeGit(gitRunner, [
-    "diff",
-    "--name-status",
-    "--find-renames",
-    "-z",
-    `${mergeBase}...HEAD`,
-  ]);
-  const numstat = safeGit(gitRunner, [
-    "diff",
-    "--numstat",
-    "--find-renames",
-    "-z",
-    `${mergeBase}...HEAD`,
-  ]);
+  // These two calls are STRUCTURAL: everything downstream is derived from them.
+  // They must not go through safeGit, which turns a git failure into "" and is
+  // then indistinguishable from "the diff is genuinely empty" — that path
+  // scored a change at base.medium with the reason "no changes detected", so a
+  // large security-surface change against an unreachable base (shallow clone,
+  // GC'd object, missing submodule ref) was under-provisioned AND explained
+  // with a misleading reason. Report the failure so score() can fail closed,
+  // matching the unresolved-base contract above.
+  let nameStatus;
+  let numstat;
+  try {
+    nameStatus = gitRunner([
+      "diff",
+      "--name-status",
+      "--find-renames",
+      "-z",
+      `${mergeBase}...HEAD`,
+    ]);
+    numstat = gitRunner([
+      "diff",
+      "--numstat",
+      "--find-renames",
+      "-z",
+      `${mergeBase}...HEAD`,
+    ]);
+  } catch (error) {
+    return {
+      descriptors: [],
+      diffStats: { files: 0, lines: 0 },
+      mergeBase,
+      collectionFailed: true,
+      collectionError: error?.message || String(error),
+    };
+  }
 
   const statuses = parseNameStatusZ(nameStatus);
   const stats = parseNumstatZ(numstat);
@@ -1061,7 +1081,13 @@ function manifestRisk(descriptor, cfg = DEFAULTS) {
 // diff with NONE of these signals downgrades. An unparsable/empty patch
 // (e.g. binary, truncated >200KB) is treated as risk-bearing (fail closed).
 const WORKFLOW_RISK_PATTERNS = [
-  /^permissions\s*:/i, // top-level or job-level permissions block
+  // Leading `\s*` is required: a JOB-level permissions block is indented under
+  // `jobs.<id>:`, and that is the more common form. Anchoring at column 0
+  // matched only the top-level block, so escalating a job to
+  // `contents: write` + `id-token: write` — the OIDC-credential-exfiltration
+  // class this floor exists to catch — scored below the critical band. The
+  // sibling `run:`/`uses:` patterns already allow indentation.
+  /^\s*permissions\s*:/i, // top-level or job-level permissions block
   /permissions\s*:\s*\{/i, // inline permissions map
   /\bsecrets\s*\.\s*[A-Z0-9_]+/, // secrets.FOO reference (added or removed)
   /\bsecrets\s*:/i, // secrets: passthrough block (reusable workflow calls)
@@ -1415,10 +1441,36 @@ function score({
   }
 
   const resolvedBase = resolved.ref;
-  const { descriptors, diffStats, mergeBase } = collectDescriptors(
-    resolvedBase,
-    gitRunner,
-  );
+  const {
+    descriptors,
+    diffStats,
+    mergeBase,
+    collectionFailed,
+    collectionError,
+  } = collectDescriptors(resolvedBase, gitRunner);
+
+  // Fail CLOSED when the diff itself could not be read. Same reasoning as the
+  // unresolved-base branch above: an unreadable diff can only produce a
+  // misleadingly LOW score, and here it would also be labelled "no changes
+  // detected" — actively misleading the operator.
+  if (collectionFailed) {
+    return {
+      riskScore: 100,
+      mergeAuthority: cfg.mergeAuthority,
+      taskType: "unknown",
+      changeNature: "unknown",
+      diffStats: { files: 0, lines: 0 },
+      reasons: [
+        `diff collection failed against ${resolvedBase} — scoring maximum risk fail-closed${
+          collectionError ? ` (${collectionError})` : ""
+        }; fetch the base ref or unshallow the clone for an accurate score`,
+      ],
+      knobs: scoreToKnobs(100, cfg),
+      base: resolvedBase,
+      diffCollectionFailed: true,
+    };
+  }
+
   if (persistedTaskType !== null && !TASK_TYPES.has(persistedTaskType)) {
     throw new Error(`invalid persisted task type '${persistedTaskType}'`);
   }
