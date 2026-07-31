@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
+const { makeTempDir } = require("./helpers/tmp.js");
 
 const SCRIPT = path.join(__dirname, "..", "quality-adversarial-verify.sh");
 
@@ -34,10 +35,7 @@ const run = (args) => {
 
 /** Same, but captures stderr on a successful (exit 0) run. */
 const runCapturingStderr = (args) => {
-  const errFile = path.join(
-    fs.mkdtempSync(path.join(os.tmpdir(), "adv-err-")),
-    "err",
-  );
+  const errFile = path.join(makeTempDir("adv-err-"), "err");
   const fd = fs.openSync(errFile, "w");
   try {
     const out = execFileSync("bash", [SCRIPT, ...args], {
@@ -56,7 +54,7 @@ const runCapturingStderr = (args) => {
 };
 
 const fixture = (findings) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "adv-"));
+  const dir = makeTempDir("adv-");
   const f = path.join(dir, "findings.json");
   fs.writeFileSync(
     f,

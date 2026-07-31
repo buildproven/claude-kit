@@ -1,20 +1,14 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const WAIT = path.join(ROOT, "scripts", "quality-wait-required-checks.sh");
 
 function harness(body) {
-  const root = mkdtempSync(path.join(tmpdir(), "quality-ci-registration-"));
+  const root = makeTempDir("quality-ci-registration-");
   const bin = path.join(root, "bin");
   mkdirSync(bin);
   const gh = path.join(bin, "gh");

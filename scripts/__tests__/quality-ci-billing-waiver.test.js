@@ -1,8 +1,8 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const require = createRequire(import.meta.url);
 const {
@@ -99,7 +99,7 @@ describe("quality CI billing waiver", () => {
   });
 
   it("reads time-bounded authority from the shared provider policy file", () => {
-    const home = mkdtempSync(path.join(tmpdir(), "quality-ci-policy-"));
+    const home = makeTempDir("quality-ci-policy-");
     writeFileSync(
       path.join(home, "providers.json"),
       '{"ciBillingWaiverUntil":"2026-08-01T05:00:00Z"}\n',

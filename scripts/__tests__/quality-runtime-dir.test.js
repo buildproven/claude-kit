@@ -1,14 +1,8 @@
 import { spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  copyFileSync,
-  mkdtempSync,
-  mkdirSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const RESOLVER = path.join(ROOT, "scripts", "quality-runtime-dir.sh");
@@ -22,7 +16,7 @@ describe("quality runtime directory resolver", () => {
   });
 
   it("fails visibly when the invocation runtime is absent", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "quality-runtime-dir-"));
+    const root = makeTempDir("quality-runtime-dir-");
     const scripts = path.join(root, "scripts");
     const resolver = path.join(scripts, "quality-runtime-dir.sh");
     mkdirSync(scripts);

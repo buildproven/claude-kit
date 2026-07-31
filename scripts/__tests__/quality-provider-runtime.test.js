@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const PLAN = path.join(ROOT, "scripts", "quality-review-plan.sh");
@@ -166,7 +166,7 @@ describe("provider review runtime", () => {
   });
 
   it("kills the provider tree when the wrapper itself is cancelled", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "bounded-cancel-"));
+    const dir = makeTempDir("bounded-cancel-");
     const pidFile = path.join(dir, "child.pid");
     const script = `
 "$1" --timeout 20 -- bash -c 'trap "" TERM; echo $$ > "$1"; while :; do sleep 1; done' child "$2" &
@@ -203,7 +203,7 @@ if kill -0 "$child" 2>/dev/null; then exit 99; fi
   });
 
   it("accepts exact evidence, then rejects later code and contradictions", () => {
-    const repo = mkdtempSync(path.join(tmpdir(), "review-evidence-"));
+    const repo = makeTempDir("review-evidence-");
     const setup = spawnSync(
       "bash",
       [
@@ -366,7 +366,7 @@ Quality-Base: ${base}`;
     ["root", (review) => review],
     ["legacy result envelope", (review) => ({ result: review })],
   ])("normalizes %s Codex structured output", (_label, wrap) => {
-    const dir = mkdtempSync(path.join(tmpdir(), "codex-review-output-"));
+    const dir = makeTempDir("codex-review-output-");
     const input = path.join(dir, "input.json");
     const output = path.join(dir, "output.json");
     const review = {
@@ -434,7 +434,7 @@ Quality-Base: ${base}`;
       },
     ],
   ])("rejects malformed Codex output: %s", (_label, review) => {
-    const dir = mkdtempSync(path.join(tmpdir(), "codex-review-invalid-"));
+    const dir = makeTempDir("codex-review-invalid-");
     const input = path.join(dir, "input.json");
     const output = path.join(dir, "output.json");
     writeFileSync(input, JSON.stringify(review));
@@ -473,7 +473,7 @@ Quality-Base: ${base}`;
       // exhaustion/timeout/unavailability -> evidence-absent). Either way,
       // pass 1's normalized result is authoritative and must not be
       // discarded as if the primary produced nothing.
-      const dir = mkdtempSync(path.join(tmpdir(), "preserve-primary-"));
+      const dir = makeTempDir("preserve-primary-");
       writeFileSync(
         path.join(dir, "codex-1.normalized.json"),
         JSON.stringify({
@@ -515,7 +515,7 @@ Quality-Base: ${base}`;
       // preservation loop only globbed codex-*.normalized.json, so a
       // completed Gemini pass got swept into failed-primary/ by the raw
       // artifact quarantine loop (gemini-*.json) instead of being preserved.
-      const dir = mkdtempSync(path.join(tmpdir(), "preserve-primary-gemini-"));
+      const dir = makeTempDir("preserve-primary-gemini-");
       writeFileSync(
         path.join(dir, "gemini-1.normalized.json"),
         JSON.stringify({

@@ -3,7 +3,6 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
   readlinkSync,
@@ -11,9 +10,9 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const PROVIDER_RUN = path.join(ROOT, "scripts", "provider-run.sh");
@@ -99,7 +98,7 @@ describe("provider-native platform", () => {
   });
 
   it("falls back immediately on a structured quota error event (BUI-325)", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "provider-native-"));
+    const dir = makeTempDir("provider-native-");
     const bin = path.join(dir, "bin");
     const output = path.join(dir, "output");
     const prompt = path.join(dir, "prompt");
@@ -156,7 +155,7 @@ describe("provider-native platform", () => {
   });
 
   it("does not classify incidental exhaustion-marker text in the transcript as exhaustion (BUI-325)", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "provider-native-fp-"));
+    const dir = makeTempDir("provider-native-fp-");
     const bin = path.join(dir, "bin");
     const output = path.join(dir, "output");
     const prompt = path.join(dir, "prompt");
@@ -211,7 +210,7 @@ describe("provider-native platform", () => {
   });
 
   it("classifies claude exhaustion from a status-0 error envelope (BUI-325)", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "provider-native-claude-exh-"));
+    const dir = makeTempDir("provider-native-claude-exh-");
     const bin = path.join(dir, "bin");
     const output = path.join(dir, "output");
     const prompt = path.join(dir, "prompt");
@@ -254,7 +253,7 @@ describe("provider-native platform", () => {
   });
 
   it("does not classify a successful claude status-0 envelope as exhausted (BUI-325)", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "provider-native-claude-ok-"));
+    const dir = makeTempDir("provider-native-claude-ok-");
     const bin = path.join(dir, "bin");
     const output = path.join(dir, "output");
     const prompt = path.join(dir, "prompt");
@@ -295,7 +294,7 @@ describe("provider-native platform", () => {
   });
 
   it("installs only allowlisted native Codex skills and detects drift", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "codex-skills-"));
+    const dir = makeTempDir("codex-skills-");
     const source = path.join(dir, "source");
     const target = path.join(dir, "target");
     mkdirSync(path.join(source, "keep"), { recursive: true });
@@ -347,7 +346,7 @@ describe("provider-native platform", () => {
   });
 
   it("keeps Codex skill check mode read-only", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "codex-skills-check-"));
+    const dir = makeTempDir("codex-skills-check-");
     const source = path.join(dir, "source");
     const target = path.join(dir, "missing-target");
     const allowlist = path.join(dir, "allowlist.json");
@@ -371,7 +370,7 @@ describe("provider-native platform", () => {
   });
 
   it("removes only stale skills owned by the previous managed manifest", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "codex-skill-prune-"));
+    const dir = makeTempDir("codex-skill-prune-");
     const source = path.join(dir, "source");
     const target = path.join(dir, "target");
     mkdirSync(path.join(source, "keep"), { recursive: true });
@@ -415,7 +414,7 @@ describe("provider-native platform", () => {
   });
 
   it("rejects invalid allowlists without pruning managed skills", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "codex-skill-invalid-"));
+    const dir = makeTempDir("codex-skill-invalid-");
     const source = path.join(dir, "source");
     const target = path.join(dir, "target");
     const allowlist = path.join(dir, "allowlist.json");
@@ -451,7 +450,7 @@ describe("provider-native platform", () => {
   });
 
   it("preflights conflicts before removing stale managed skills", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "codex-skill-conflict-"));
+    const dir = makeTempDir("codex-skill-conflict-");
     const source = path.join(dir, "source");
     const target = path.join(dir, "target");
     const allowlist = path.join(dir, "allowlist.json");
@@ -489,7 +488,7 @@ describe("provider-native platform", () => {
   });
 
   it("rejects unknown allowlisted names before pruning managed skills", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "codex-skill-unknown-"));
+    const dir = makeTempDir("codex-skill-unknown-");
     const source = path.join(dir, "source");
     const target = path.join(dir, "target");
     const allowlist = path.join(dir, "allowlist.json");
@@ -524,7 +523,7 @@ describe("provider-native platform", () => {
   });
 
   it("uses the last source for duplicate skill names without partial sync", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "codex-skill-overlay-"));
+    const dir = makeTempDir("codex-skill-overlay-");
     const base = path.join(dir, "base");
     const overlay = path.join(dir, "overlay");
     const target = path.join(dir, "target");
@@ -553,7 +552,7 @@ describe("provider-native platform", () => {
   });
 
   it("retargets a previously managed skill and rolls back a failed transition", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "codex-skill-retarget-"));
+    const dir = makeTempDir("codex-skill-retarget-");
     const base = path.join(dir, "base");
     const overlay = path.join(dir, "overlay");
     const target = path.join(dir, "target");
@@ -614,7 +613,7 @@ describe("provider-native platform", () => {
   });
 
   it("rejects overlapping syncs without changing managed state", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "codex-skill-lock-"));
+    const dir = makeTempDir("codex-skill-lock-");
     const source = path.join(dir, "source");
     const target = path.join(dir, "target");
     const allowlist = path.join(dir, "allowlist.json");
@@ -638,7 +637,7 @@ describe("provider-native platform", () => {
   });
 
   it("recovers a stale owned sync lock", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "codex-skill-stale-lock-"));
+    const dir = makeTempDir("codex-skill-stale-lock-");
     const source = path.join(dir, "source");
     const target = path.join(dir, "target");
     const allowlist = path.join(dir, "allowlist.json");
@@ -666,7 +665,7 @@ describe("provider-native platform", () => {
   });
 
   it("rejects path traversal in the managed manifest", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "codex-skill-manifest-"));
+    const dir = makeTempDir("codex-skill-manifest-");
     const target = path.join(dir, "target");
     mkdirSync(target, { recursive: true });
     writeFileSync(
@@ -680,7 +679,7 @@ describe("provider-native platform", () => {
   });
 
   it("rejects a manifest directory without creating unowned links", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "codex-manifest-dir-"));
+    const dir = makeTempDir("codex-manifest-dir-");
     const source = path.join(dir, "source");
     const target = path.join(dir, "target");
     const allowlist = path.join(dir, "allowlist.json");
@@ -704,7 +703,7 @@ describe("provider-native platform", () => {
   });
 
   it("measures instruction and allowlisted skill discovery budgets", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "surface-budget-"));
+    const dir = makeTempDir("surface-budget-");
     const skills = path.join(dir, "skills");
     const config = path.join(dir, "config");
     mkdirSync(path.join(skills, "keep"), { recursive: true });
@@ -744,7 +743,7 @@ describe("provider-native platform", () => {
   });
 
   it("audits the default Codex profile through installed skill symlinks", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "surface-symlinks-"));
+    const dir = makeTempDir("surface-symlinks-");
     const skills = path.join(dir, "skills");
     const installed = path.join(dir, "installed");
     const config = path.join(dir, "config");
@@ -794,7 +793,7 @@ describe("provider-native platform", () => {
   });
 
   it("counts YAML block-scalar and escaped descriptions", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "surface-yaml-"));
+    const dir = makeTempDir("surface-yaml-");
     const skills = path.join(dir, "skills");
     const allowlist = path.join(dir, "skills.json");
     for (const name of ["folded", "literal", "quoted"]) {
@@ -833,7 +832,7 @@ describe("provider-native platform", () => {
   });
 
   it("fails when explicit surface-audit inputs are missing or malformed", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "surface-invalid-"));
+    const dir = makeTempDir("surface-invalid-");
     const skills = path.join(dir, "skills");
     const allowlist = path.join(dir, "skills.json");
     mkdirSync(skills);
@@ -882,7 +881,7 @@ describe("provider-native platform", () => {
   });
 
   it("treats absent implicit skill surfaces as empty", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "surface-generic-"));
+    const dir = makeTempDir("surface-generic-");
     const payload = JSON.parse(
       execFileSync("node", [SURFACE, `--root=${dir}`, "--json"]),
     );
@@ -910,7 +909,7 @@ describe("provider-native platform", () => {
   });
 
   it("discovers active non-bot repos and open-PR repos from fixtures", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "fleet-discovery-"));
+    const dir = makeTempDir("fleet-discovery-");
     const config = path.join(dir, "fleet.json");
     const fixture = path.join(dir, "repos.json");
     writeFileSync(
@@ -967,7 +966,7 @@ describe("provider-native platform", () => {
   });
 
   it("maps GitHub repos to primary checkouts, never linked worktrees", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "fleet-local-map-"));
+    const dir = makeTempDir("fleet-local-map-");
     const root = path.join(dir, "repos");
     const primary = path.join(root, "primary");
     const worktree = path.join(root, "primary-worktree");
@@ -1045,7 +1044,7 @@ describe("provider-native platform", () => {
   });
 
   it("syncs the same declarative MCP server into both clients", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "mcp-sync-"));
+    const dir = makeTempDir("mcp-sync-");
     const bin = path.join(dir, "bin");
     const codexHome = path.join(dir, "codex");
     const calls = path.join(dir, "calls");
@@ -1089,7 +1088,7 @@ describe("provider-native platform", () => {
   });
 
   it("runs fleet checks with the repository's declared Node version", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "steward-node-version-"));
+    const dir = makeTempDir("steward-node-version-");
     const repo = path.join(dir, "repo");
     const bin = path.join(dir, "bin");
     const nvm = path.join(dir, "nvm");

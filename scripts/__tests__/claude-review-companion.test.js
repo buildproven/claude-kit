@@ -8,6 +8,7 @@ const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { makeTempDir } = require("./helpers/tmp.js");
 
 const SCRIPT = path.resolve(__dirname, "..", "claude-review-companion.sh");
 const KIT_ROOT = path.resolve(__dirname, "..", "..");
@@ -61,7 +62,7 @@ function run(args, { env } = {}) {
 }
 
 function tmpdir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "crc-test-"));
+  return makeTempDir("crc-test-");
 }
 
 describe("claude-review-companion.sh", () => {

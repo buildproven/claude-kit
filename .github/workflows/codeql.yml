@@ -1,0 +1,63 @@
+name: CodeQL
+
+# GitHub's static analysis. Free for public repositories, and complementary to
+# the Semgrep scan in quality.yml: Semgrep runs this repo's own hand-written
+# rules (.semgrep/) on a fast per-PR budget, while CodeQL runs GitHub's
+# maintained query packs with dataflow analysis that a pattern matcher cannot do.
+#
+# Also covers `actions` — the workflow files themselves. This repo's risk scorer
+# treats .github/workflows/** as security-floor surface precisely because a
+# workflow change can exfiltrate credentials, so scanning them is not optional.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, so newly published queries reach an unchanged repo. Off-peak on a
+    # Tuesday rather than 00:00 Monday, which is the most contended slot.
+    - cron: "27 4 * * 2"
+
+# A CodeQL run on an already-superseded commit has no value.
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # Least privilege: read the code, write the findings, nothing else.
+      contents: read
+      security-events: write
+      actions: read
+
+    strategy:
+      # One language failing must not hide the results of the others.
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, python, actions]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          language: ${{ matrix.language }}
+          # security-extended adds lower-severity security queries beyond the
+          # default set. Deliberately NOT security-and-quality: this repo already
+          # gates style and complexity through ESLint, and the quality queries
+          # would duplicate that with a slower feedback loop.
+          queries: security-extended
+
+      # No build step: every language here is interpreted, so CodeQL's
+      # autobuild would be a no-op. `npm ci` is intentionally skipped —
+      # dependencies are not analyzed and installing them only adds minutes.
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}

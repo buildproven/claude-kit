@@ -1,14 +1,8 @@
-import {
-  chmodSync,
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const SCRIPT = path.join(ROOT, "scripts", "backlog-post-merge.sh");
@@ -21,7 +15,7 @@ const CUSTOM_WORKFLOW = path.join(
 );
 
 function fixture() {
-  const root = mkdtempSync(path.join(tmpdir(), "backlog-post-merge-"));
+  const root = makeTempDir("backlog-post-merge-");
   const bin = path.join(root, "bin");
   const log = path.join(root, "curl.log");
   const result = spawnSync("mkdir", ["-p", bin]);
