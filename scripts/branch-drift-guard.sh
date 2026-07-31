@@ -24,19 +24,28 @@ fi
 [ -z "$COMMAND" ] && exit 0
 
 # Extract -C <dir> from command if present (handles cross-repo operations)
-TARGET_DIR=$(echo "$COMMAND" | grep -oE 'git\s+-C\s+\S+' | head -1 | awk '{print $3}')
+# `|| true` is required: under `set -euo pipefail` a no-match `grep` exits 1 and
+# kills the hook before it can detect drift. Commands without `-C` are the
+# common case, so omitting it silently disabled this guard entirely.
+TARGET_DIR=$(echo "$COMMAND" | grep -oE 'git\s+-C\s+\S+' | head -1 | awk '{print $3}' || true)
 if [ -n "$TARGET_DIR" ]; then
   TARGET_DIR="${TARGET_DIR/#\~/$HOME}"  # expand ~ safely (no eval)
-  GIT_ROOT=$(git -C "$TARGET_DIR" rev-parse --show-toplevel 2>/dev/null) || exit 0
+  GIT_DIR_PATH=$(git -C "$TARGET_DIR" rev-parse --absolute-git-dir 2>/dev/null) || exit 0
   GIT_CMD="git -C $TARGET_DIR"
 else
-  GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+  GIT_DIR_PATH=$(git rev-parse --absolute-git-dir 2>/dev/null) || exit 0
   GIT_CMD="git"
 fi
 
 SESSION_ID="${SESSION_ID:-$$}"
-LOCK_DIR="$GIT_ROOT/.git/claude-sessions"
-mkdir -p "$LOCK_DIR"
+# Resolve the git dir rather than assuming "$root/.git" is a directory. In a
+# linked worktree `.git` is a FILE containing a gitdir: pointer, so the old
+# `mkdir -p "$root/.git/claude-sessions"` failed with "Not a directory" and
+# `set -e` killed the hook — disabling drift detection in every worktree.
+# --absolute-git-dir already resolves to the per-worktree dir, which is the
+# right scope: each worktree has its own checked-out branch to track.
+LOCK_DIR="$GIT_DIR_PATH/claude-sessions"
+mkdir -p "$LOCK_DIR" 2>/dev/null || exit 0
 BRANCH_FILE="$LOCK_DIR/$SESSION_ID.branch"
 
 CURRENT_BRANCH=$($GIT_CMD branch --show-current 2>/dev/null || echo "")
