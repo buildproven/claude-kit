@@ -11,8 +11,8 @@ const {
 } = require("../risk-score");
 const { execFileSync } = require("child_process");
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
+const { makeTempDir } = require("./helpers/tmp.js");
 
 // Helper: build a descriptor.
 function d(file, status = "M", patch = "", lines = 10, isBinary = false) {
@@ -427,7 +427,7 @@ describe("score — rename-aware workload", () => {
   }
 
   it("counts only residual edits in renamed files, while retaining changed-file overhead", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-renames-"));
+    const root = makeTempDir("quality-renames-");
     git(root, ["init", "-q", "-b", "main"]);
     git(root, ["config", "user.name", "Quality Test"]);
     git(root, ["config", "user.email", "quality@example.com"]);

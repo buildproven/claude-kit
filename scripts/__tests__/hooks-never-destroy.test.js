@@ -1,8 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const SCRIPTS = path.resolve(import.meta.dirname, "..");
 
@@ -45,7 +44,7 @@ describe("hooks never destroy user work", () => {
     git(cwd, "branch", "--format=%(refname:short)").split("\n").filter(Boolean);
 
   it("auto-branch-on-main denies the edit rather than switching the user's branch", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "kit-hook-"));
+    const root = makeTempDir("kit-hook-");
     git(root, "init", "-q", "-b", "main", ".");
     git(root, "commit", "-q", "--allow-empty", "-m", "init");
 

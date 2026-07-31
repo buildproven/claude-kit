@@ -1,9 +1,9 @@
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 
 const { score, loadConfig, deepMerge, DEFAULTS } = require("../risk-score");
+const { makeTempDir } = require("./helpers/tmp.js");
 
 /**
  * The risk-adaptive gate is the differentiated thing this toolkit ships: it reads
@@ -13,7 +13,7 @@ const { score, loadConfig, deepMerge, DEFAULTS } = require("../risk-score");
  * ties git -> descriptors -> knobs — was not. That is the half a user configures.
  */
 const repoWith = (config) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "risk-"));
+  const dir = makeTempDir("risk-");
   if (config)
     fs.writeFileSync(
       path.join(dir, "harness-config.json"),
@@ -101,7 +101,7 @@ describe("loadConfig — per-repo harness-config.json", () => {
 
 describe("score — Git-valid control-character paths", () => {
   it("parses NUL-delimited Git records and fails control paths into the security floor", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "risk-control-path-"));
+    const dir = makeTempDir("risk-control-path-");
     const git = (args) =>
       execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
     git(["init", "-q", "-b", "main"]);

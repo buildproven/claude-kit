@@ -1,8 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const POLICY = path.join(ROOT, "scripts", "quality-provider-policy.sh");
@@ -33,14 +33,14 @@ describe("quality provider policy", () => {
   it("defaults to the invoking provider with no fallback", () => {
     expect(
       resolvePolicy({
-        HOME: mkdtempSync(path.join(tmpdir(), "qpp-")),
+        HOME: makeTempDir("qpp-"),
         CODEX_THREAD_ID: "test-thread",
       }),
     ).toBe("codex/none");
   });
 
   it("reads a preference shared by Claude Code and Codex", () => {
-    const home = mkdtempSync(path.join(tmpdir(), "qpp-"));
+    const home = makeTempDir("qpp-");
     const config = path.join(home, "providers.json");
     writeFileSync(config, '{"primary":"codex","fallback":"claude"}\n');
     expect(
@@ -49,7 +49,7 @@ describe("quality provider policy", () => {
   });
 
   it("normalizes an auto policy that resolves to its configured fallback", () => {
-    const home = mkdtempSync(path.join(tmpdir(), "qpp-"));
+    const home = makeTempDir("qpp-");
     const config = path.join(home, "providers.json");
     writeFileSync(config, '{"primary":"auto","fallback":"codex"}\n');
     expect(
@@ -62,7 +62,7 @@ describe("quality provider policy", () => {
   });
 
   it("lets explicit environment policy override the file", () => {
-    const home = mkdtempSync(path.join(tmpdir(), "qpp-"));
+    const home = makeTempDir("qpp-");
     const config = path.join(home, "providers.json");
     writeFileSync(config, '{"primary":"codex","fallback":"claude"}\n');
     expect(
@@ -78,7 +78,7 @@ describe("quality provider policy", () => {
   it("accepts Gemini as an explicit governed provider", () => {
     expect(
       resolvePolicy({
-        HOME: mkdtempSync(path.join(tmpdir(), "qpp-")),
+        HOME: makeTempDir("qpp-"),
         BS_QUALITY_PRIMARY: "gemini",
         BS_QUALITY_FALLBACK: "none",
       }),
@@ -87,7 +87,7 @@ describe("quality provider policy", () => {
 
   it("fails closed when the provider policy is invalid", () => {
     const result = resolvePolicyResult({
-      HOME: mkdtempSync(path.join(tmpdir(), "qpp-")),
+      HOME: makeTempDir("qpp-"),
       BS_QUALITY_PRIMARY: "unknown-provider",
       BS_QUALITY_FALLBACK: "none",
     });

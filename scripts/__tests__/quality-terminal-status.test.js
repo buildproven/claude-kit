@@ -1,7 +1,7 @@
 const { execFileSync, spawnSync } = require("node:child_process");
-const { mkdtempSync, readFileSync, rmSync, writeFileSync } = require("node:fs");
-const { tmpdir } = require("node:os");
+const { readFileSync, rmSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
+const { makeTempDir } = require("./helpers/tmp.js");
 const {
   buildDiagnosis,
   worktreeLockStatus,
@@ -17,7 +17,7 @@ function git(cwd, args) {
 }
 
 function repo(label) {
-  const root = mkdtempSync(path.join(tmpdir(), `quality-${label}-`));
+  const root = makeTempDir(`quality-${label}-`);
   git(root, ["init", "-q", "-b", "main"]);
   git(root, ["config", "user.name", "Quality Test"]);
   git(root, ["config", "user.email", "quality@example.com"]);
@@ -41,8 +41,8 @@ function repo(label) {
 describe("quality terminal diagnosis", () => {
   it("skips an unrelated prunable worktree while resolving the target lock", () => {
     const primary = repo("terminal-status-prunable");
-    const stale = mkdtempSync(path.join(tmpdir(), "quality-a-stale-"));
-    const target = mkdtempSync(path.join(tmpdir(), "quality-z-target-"));
+    const stale = makeTempDir("quality-a-stale-");
+    const target = makeTempDir("quality-z-target-");
     git(primary, ["switch", "-q", "main"]);
     git(primary, ["worktree", "add", "-q", "-b", "stale", stale, "main"]);
     git(primary, ["worktree", "add", "-q", "-b", "target", target, "main"]);

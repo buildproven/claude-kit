@@ -1,14 +1,8 @@
 import { spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const SCRIPT = path.join(ROOT, "scripts", "quality-stamp-and-merge.sh");
@@ -31,7 +25,7 @@ function extractRetryLoop() {
 }
 
 function harness(ghBody) {
-  const root = mkdtempSync(path.join(tmpdir(), "quality-pr-head-retry-"));
+  const root = makeTempDir("quality-pr-head-retry-");
   const bin = path.join(root, "bin");
   mkdirSync(bin);
   const gh = path.join(bin, "gh");

@@ -7,17 +7,17 @@
 // set -euo pipefail aborted the whole install.
 
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readlinkSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { cpSync, existsSync, readlinkSync, rmSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..");
 const INSTALL_SCRIPT = path.join(REPO_ROOT, "install.sh");
 
 /** A throwaway HOME + PROJECT_DIR pair, isolated from the real filesystem. */
 function sandbox() {
-  const root = mkdtempSync(path.join(tmpdir(), "kit-install-upgrade-"));
+  const root = makeTempDir("kit-install-upgrade-");
   return {
     home: path.join(root, "home"),
     projectDir: path.join(root, "claude-kit"),
