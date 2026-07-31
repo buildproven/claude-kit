@@ -9,6 +9,7 @@ import {
   readdirSync,
   realpathSync,
   renameSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -162,6 +163,53 @@ function ghEnv(bin, state, headRefOid = "") {
     GH_PR_STATE: state,
     GH_PR_HEAD: headRefOid,
   };
+}
+
+function qualityStateRoot(repo, temporaryRoot, invocation) {
+  mkdirSync(temporaryRoot, { recursive: true });
+  const common = realpathSync(
+    git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+  );
+  const key = createHash("sha256").update(common).digest("hex").slice(0, 16);
+  return path.join(
+    realpathSync(temporaryRoot),
+    "bs-quality",
+    key,
+    "pr-none",
+    "base",
+    invocation,
+  );
+}
+
+function writeQualityManifest(repo, temporaryRoot, invocation, patch = {}) {
+  const stateRoot = qualityStateRoot(repo, temporaryRoot, invocation);
+  mkdirSync(stateRoot, { recursive: true });
+  writeFileSync(
+    path.join(stateRoot, "invocation.json"),
+    `${JSON.stringify(
+      {
+        invocationId: invocation,
+        stateRoot,
+        repo: {
+          gitCommonDir: realpathSync(
+            git(
+              repo,
+              "rev-parse",
+              "--path-format=absolute",
+              "--git-common-dir",
+            ),
+          ),
+        },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        gates: [],
+        ...patch,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  return stateRoot;
 }
 
 afterEach(() => {
@@ -943,6 +991,220 @@ esac
       "--terminal",
     ]).json;
     expect(unlocked.unlocked).toBe(true);
+  });
+
+  it("releases a quality lock only when its exact manifest records a terminal gate", () => {
+    const { parent, repo } = fixture();
+    const temporaryRoot = path.join(parent, "quality-state");
+    const invocation = "11111111-1111-5111-8111-111111111111";
+    const worktree = create(repo, "feature/terminal-quality-lock", [
+      "--lock-reason",
+      `bs:quality/${invocation}`,
+      "--invocation",
+      invocation,
+    ]);
+    const stateRoot = writeQualityManifest(repo, temporaryRoot, invocation, {
+      gates: [{ name: "test", status: "timeout" }],
+    });
+    const written = JSON.parse(
+      readFileSync(path.join(stateRoot, "invocation.json"), "utf8"),
+    );
+    expect(written.stateRoot).toBe(stateRoot);
+    expect(written.repo.gitCommonDir).toBe(
+      realpathSync(
+        git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+      ),
+    );
+    const env = { ...process.env, TMPDIR: temporaryRoot };
+
+    const before = manager(["status", "--repo", repo, "--skip-pr-check"], {
+      env,
+    }).json.worktrees.find(
+      (candidate) => candidate.branch === "feature/terminal-quality-lock",
+    );
+    expect(before, before?.reason).toMatchObject({
+      classification: "stale quality lock",
+      releasable: true,
+    });
+
+    const reconciled = manager(
+      ["reconcile", "--repo", repo, "--apply", "--skip-pr-check"],
+      { env },
+    ).json;
+    expect(reconciled.worktrees).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: "released stale quality lock" }),
+      ]),
+    );
+    expect(existsSync(worktree.worktreePath)).toBe(true);
+    const after = manager(["status", "--repo", repo, "--skip-pr-check"], {
+      env,
+    }).json.worktrees.find(
+      (candidate) => candidate.branch === "feature/terminal-quality-lock",
+    );
+    expect(after.locked).toBe(false);
+  });
+
+  it("retains a quality lock when a later result replaces a failed gate", () => {
+    const { parent, repo } = fixture();
+    const temporaryRoot = path.join(parent, "quality-state");
+    const invocation = "12121212-1212-5121-8121-121212121212";
+    create(repo, "feature/retried-quality-lock", [
+      "--lock-reason",
+      `bs:quality/${invocation}`,
+      "--invocation",
+      invocation,
+    ]);
+    writeQualityManifest(repo, temporaryRoot, invocation, {
+      gates: [
+        { name: "test", status: "timeout" },
+        { name: "test", status: "success" },
+      ],
+    });
+    const state = manager(["status", "--repo", repo, "--skip-pr-check"], {
+      env: { ...process.env, TMPDIR: temporaryRoot },
+    }).json.worktrees.find(
+      (candidate) => candidate.branch === "feature/retried-quality-lock",
+    );
+    expect(state).toMatchObject({ classification: "active and locked" });
+  });
+
+  it("uses an invalid manifest timestamp's file mtime for stale-lock release", () => {
+    const { parent, repo } = fixture();
+    const temporaryRoot = path.join(parent, "quality-state");
+    const invocation = "13131313-1313-5131-8131-131313131313";
+    create(repo, "feature/invalid-quality-time", [
+      "--lock-reason",
+      `bs:quality/${invocation}`,
+      "--invocation",
+      invocation,
+    ]);
+    const stateRoot = writeQualityManifest(repo, temporaryRoot, invocation, {
+      updatedAt: "not-a-timestamp",
+      createdAt: "also-not-a-timestamp",
+    });
+    const manifestPath = path.join(stateRoot, "invocation.json");
+    const staleAt = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    utimesSync(manifestPath, staleAt, staleAt);
+    const state = manager(["status", "--repo", repo, "--skip-pr-check"], {
+      env: { ...process.env, TMPDIR: temporaryRoot },
+    }).json.worktrees.find(
+      (candidate) => candidate.branch === "feature/invalid-quality-time",
+    );
+    expect(state).toMatchObject({
+      classification: "stale quality lock",
+      releasable: true,
+    });
+    expect(state.reason).toContain("quality manifest file is older than 24h");
+  });
+
+  it("retains a recent quality lock when its manifest is missing", () => {
+    const { parent, repo } = fixture();
+    const temporaryRoot = path.join(parent, "quality-state");
+    const invocation = "22222222-2222-5222-8222-222222222222";
+    create(repo, "feature/recent-missing-quality-lock", [
+      "--lock-reason",
+      `bs:quality/${invocation}`,
+      "--invocation",
+      invocation,
+    ]);
+    const state = manager(["status", "--repo", repo, "--skip-pr-check"], {
+      env: { ...process.env, TMPDIR: temporaryRoot },
+    }).json.worktrees.find(
+      (candidate) => candidate.branch === "feature/recent-missing-quality-lock",
+    );
+    expect(state).toMatchObject({ classification: "active and locked" });
+    expect(state.reason).toContain(
+      "manifest is missing but lock metadata is recent",
+    );
+  });
+
+  it("releases a quality lock with a missing manifest only after its metadata is stale", () => {
+    const { repo } = fixture();
+    const invocation = "33333333-3333-5333-8333-333333333333";
+    create(repo, "feature/stale-missing-quality-lock", [
+      "--lock-reason",
+      `bs:quality/${invocation}`,
+      "--invocation",
+      invocation,
+    ]);
+    const common = realpathSync(
+      git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+    );
+    const metadataPath = path.join(
+      common,
+      "worktree-manager",
+      `${createHash("sha256")
+        .update("feature/stale-missing-quality-lock")
+        .digest("hex")
+        .slice(0, 8)}.json`,
+    );
+    const metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
+    writeFileSync(
+      metadataPath,
+      `${JSON.stringify(
+        {
+          ...metadata,
+          updatedAt: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const before = manager([
+      "status",
+      "--repo",
+      repo,
+      "--skip-pr-check",
+    ]).json.worktrees.find(
+      (candidate) => candidate.branch === "feature/stale-missing-quality-lock",
+    );
+    expect(before, before?.reason).toMatchObject({
+      classification: "stale quality lock",
+      releasable: true,
+    });
+    expect(before.reason).toContain(
+      "manifest is missing and lock metadata is older than 24h",
+    );
+
+    manager(["reconcile", "--repo", repo, "--apply", "--skip-pr-check"]);
+    const after = manager([
+      "status",
+      "--repo",
+      repo,
+      "--skip-pr-check",
+    ]).json.worktrees.find(
+      (candidate) => candidate.branch === "feature/stale-missing-quality-lock",
+    );
+    expect(after.locked).toBe(false);
+  });
+
+  it("retains a quality lock when its manifest identity is malformed", () => {
+    const { parent, repo } = fixture();
+    const temporaryRoot = path.join(parent, "quality-state");
+    const invocation = "44444444-4444-5444-8444-444444444444";
+    create(repo, "feature/malformed-quality-lock", [
+      "--lock-reason",
+      `bs:quality/${invocation}`,
+      "--invocation",
+      invocation,
+    ]);
+    const stateRoot = writeQualityManifest(repo, temporaryRoot, invocation, {
+      invocationId: "55555555-5555-5555-8555-555555555555",
+      gates: [{ name: "test", status: "failed" }],
+    });
+
+    const state = manager(["status", "--repo", repo, "--skip-pr-check"], {
+      env: { ...process.env, TMPDIR: temporaryRoot },
+    }).json.worktrees.find(
+      (candidate) => candidate.branch === "feature/malformed-quality-lock",
+    );
+    expect(state).toMatchObject({ classification: "active and locked" });
+    expect(state.reason).toContain(
+      "manifest invocation does not match the lock",
+    );
+    expect(existsSync(path.join(stateRoot, "invocation.json"))).toBe(true);
   });
 
   it("repairs divergent lifecycle ownership only for the Git lock owner", () => {
