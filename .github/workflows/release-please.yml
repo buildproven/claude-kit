@@ -15,6 +15,19 @@ jobs:
     steps:
       - uses: googleapis/release-please-action@v5
         with:
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          # The automatic per-run token, not a PAT. RELEASE_PLEASE_TOKEN was
+          # never configured in this repository, so every run since 2026-07-28
+          # failed with "Input required and not supplied: token" and no release
+          # was cut for 84 commits. The `permissions:` block above grants this
+          # token exactly what release-please needs, which overrides the
+          # repository's read-only default for workflow tokens.
+          #
+          # Known tradeoff: a push made with GITHUB_TOKEN does not trigger other
+          # workflows (GitHub's loop prevention), so the release commit and tag
+          # will not start downstream CI. Nothing here triggers on `tag` or
+          # `release`, so this costs nothing today. If a publish-on-tag job is
+          # ever added, swap this for a fine-grained PAT with contents:write and
+          # pull-requests:write stored as RELEASE_PLEASE_TOKEN.
+          token: ${{ secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
