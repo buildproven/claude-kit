@@ -1750,6 +1750,122 @@ describe("canonical-source contract", () => {
     expect(source).toContain("refs/pull/$RES_PR/head:$WT_BASE_REF");
   });
 
+  // The lifecycle lock is the ONLY serialization for worktree removal, so a
+  // stale-lock steal that is not atomic lets two processes both believe they
+  // hold it and interleave classify → unlock → remove → branch delete.
+  describe("lifecycle lock recovery", () => {
+    function lockRootOf(repo) {
+      const common = realpathSync(
+        git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+      );
+      return path.join(common, "worktree-manager", "locks");
+    }
+
+    /** Plant a lock owned by a PID that cannot be alive. */
+    function plantDeadLock(repo, worktreePath) {
+      const lockRoot = lockRootOf(repo);
+      mkdirSync(lockRoot, { recursive: true });
+      const hash = createHash("sha256")
+        .update(worktreePath)
+        .digest("hex")
+        .slice(0, 8);
+      const lock = path.join(lockRoot, `${hash}.lock`);
+      mkdirSync(lock, { recursive: true });
+      writeFileSync(
+        path.join(lock, "owner.json"),
+        `${JSON.stringify({
+          // PID 2^22 is above the Linux/macOS maximum, so it can never exist.
+          pid: 4194304,
+          hostname: os.hostname(),
+          operation: "remove",
+          key: worktreePath,
+          createdAt: new Date().toISOString(),
+        })}\n`,
+      );
+      return { lock, lockRoot };
+    }
+
+    it("recovers a dead owner's lock and leaves exactly one live lock", () => {
+      const { repo } = fixture();
+      const wt = create(repo, "feature/lock-recovery");
+      const { lock, lockRoot } = plantDeadLock(repo, wt.worktreePath);
+      expect(existsSync(lock)).toBe(true);
+
+      // Any lifecycle operation on this key must recover, not refuse.
+      manager(["status", "--repo", repo]);
+      const removal = manager(
+        [
+          "remove",
+          "--repo",
+          repo,
+          "--branch",
+          "feature/lock-recovery",
+          "--skip-pr-check",
+          "--allow-unknown",
+        ],
+        { ok: false },
+      );
+      expect(removal.result.status).toBe(0);
+
+      // Exactly one stale-evidence directory, and no leftover live lock.
+      const evidence = readdirSync(lockRoot).filter((name) =>
+        name.includes(".lock.stale-"),
+      );
+      expect(evidence).toHaveLength(1);
+      expect(existsSync(lock)).toBe(false);
+    });
+
+    it("names stale evidence with the recovering pid so two stealers cannot collide", () => {
+      // Date.now() alone collides when two processes recover in the same
+      // millisecond; both would rename onto the same destination.
+      const source = readFileSync(MANAGER, "utf8");
+      expect(source).toContain("stale-${process.pid}-${Date.now()}");
+    });
+
+    it("treats a lost steal race as BUSY rather than proceeding unlocked", () => {
+      // The recreate after a successful rename must not silently continue when
+      // another stealer already claimed the lock.
+      const source = readFileSync(MANAGER, "utf8");
+      const start = source.indexOf("const evidence = ");
+      expect(start).toBeGreaterThan(-1);
+      const recovery = source.slice(start, start + 1600);
+      expect(recovery).toContain('renameError.code === "ENOENT"');
+      expect(recovery).toContain('recreateError.code === "EEXIST"');
+    });
+
+    it("does not let lock release mask the operation's real error", () => {
+      // A throw from `finally` replaces the original error, turning an
+      // actionable UNPUSHED refusal into a confusing ENOENT.
+      const source = readFileSync(MANAGER, "utf8");
+      const release = source.slice(
+        source.indexOf("    return callback();"),
+        source.indexOf("function create(options)"),
+      );
+      expect(release).toMatch(/try\s*\{\s*fs\.unlinkSync\(ownerFile\);/);
+      expect(release).toMatch(/try\s*\{\s*fs\.rmdirSync\(lock\);/);
+    });
+
+    it("prunes stale evidence older than the retention window", () => {
+      const { repo } = fixture();
+      create(repo, "feature/prune-evidence");
+      const lockRoot = lockRootOf(repo);
+      mkdirSync(lockRoot, { recursive: true });
+
+      const old = path.join(lockRoot, "deadbeef.lock.stale-111-1");
+      const recent = path.join(lockRoot, "deadbeef.lock.stale-222-2");
+      mkdirSync(old, { recursive: true });
+      mkdirSync(recent, { recursive: true });
+      const ancient = Date.now() / 1000 - 30 * 24 * 60 * 60;
+      utimesSync(old, ancient, ancient);
+
+      // Pruning runs when a lifecycle lock is taken; `status` does not take one.
+      create(repo, "feature/prune-trigger");
+
+      expect(existsSync(old)).toBe(false);
+      expect(existsSync(recent)).toBe(true);
+    });
+  });
+
   // `Number("abc")` is NaN, and every comparison against NaN is false — so
   // `ageMinutes < recentMinutes` stopped protecting anything and the
   // "recently active" guard silently became a no-op that removes live
