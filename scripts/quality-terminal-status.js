@@ -2,6 +2,8 @@
 "use strict";
 
 const invocation = require("./quality-invocation");
+const fs = require("fs");
+const worktrees = require("./worktree-manager");
 
 function currentGateStatus(manifest, name, failure = {}) {
   if (failure.category === "repository-gate" && failure.gate === name) {
@@ -67,6 +69,31 @@ function breakGlassStatus(manifest) {
   return "required and missing or stale";
 }
 
+function worktreeLockStatus(manifest) {
+  try {
+    const target = fs.realpathSync(manifest.repo.realpath);
+    const result = worktrees.status({
+      repo: target,
+      skipPrCheck: true,
+    });
+    const record = result.worktrees.find((candidate) => {
+      try {
+        return fs.realpathSync(candidate.path) === target;
+      } catch (error) {
+        if (error.code === "ENOENT") return false;
+        throw error;
+      }
+    });
+    if (!record) return "not tracked";
+    return record.locked
+      ? `locked by ${record.lockReason || "unknown owner"}`
+      : "released";
+  } catch (error) {
+    if (error.code === "ENOENT") return "not tracked (worktree removed)";
+    return `status unavailable — ${error.message}`;
+  }
+}
+
 function buildDiagnosis(manifestPath, manifest, failure = {}) {
   const gates = (manifest.requiredGates || [])
     .map(
@@ -85,6 +112,7 @@ function buildDiagnosis(manifestPath, manifest, failure = {}) {
     `Repository gates: ${gates || "none discovered"}`,
     `Provider review/checkpoint: ${providerStatus(manifest, failure)}`,
     `Break-glass: ${breakGlassStatus(manifest)}`,
+    `Worktree lock: ${worktreeLockStatus(manifest)}`,
     `GitHub CI: ${ciStatus}`,
     `Retry/resume: /bs:quality --manifest ${manifestPath}`,
   ].join("\n");
@@ -126,4 +154,9 @@ if (require.main === module) {
   }
 }
 
-module.exports = { buildDiagnosis, currentGateStatus, parseArgs };
+module.exports = {
+  buildDiagnosis,
+  currentGateStatus,
+  parseArgs,
+  worktreeLockStatus,
+};

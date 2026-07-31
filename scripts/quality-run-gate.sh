@@ -44,6 +44,45 @@ LOG_DIR="$STATE_ROOT/gates/$HEAD"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/$NAME.log"
 cd "$ROOT" || exit 1
+release_terminal_quality_lock() {
+  local lock_owner branch plan primary root_real primary_real unlock_error
+  # Bootstrap acquires quality worktree locks only for merge campaigns.
+  [ "$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" options.merge)" = true ] || return 0
+  branch="$(git branch --show-current 2>/dev/null || true)"
+  [ -n "$branch" ] || {
+    echo "[quality] terminal gate failure could not determine the current branch (detached HEAD?); the worktree lock was not changed." >&2
+    return 0
+  }
+  lock_owner="$(node "$SCRIPT_DIR/quality-invocation.js" lock-owner "$MANIFEST")" || {
+    echo "[quality] terminal gate failure could not resolve its invocation identity; the worktree lock was not changed." >&2
+    return 0
+  }
+  plan="$(node "$SCRIPT_DIR/worktree-manager.js" resolve --repo "$ROOT" --branch "$branch")" || {
+    echo "[quality] terminal gate failure could not resolve worktree ownership for '$branch'; the lock was not changed." >&2
+    return 0
+  }
+  primary="$(printf '%s' "$plan" | jq -r '.repoRoot // empty' 2>/dev/null)"
+  [ -n "$primary" ] || {
+    echo "[quality] terminal gate failure resolved no primary repository for '$branch'; the lock was not changed." >&2
+    return 0
+  }
+  root_real="$(cd "$ROOT" 2>/dev/null && pwd -P)" || {
+    echo "[quality] terminal gate failure could not normalize target repository '$ROOT'; the lock was not changed." >&2
+    return 0
+  }
+  primary_real="$(cd "$primary" 2>/dev/null && pwd -P)" || {
+    echo "[quality] terminal gate failure could not normalize primary repository '$primary'; the lock was not changed." >&2
+    return 0
+  }
+  [ "$primary_real" != "$root_real" ] || return 0
+  unlock_error="$(node "$SCRIPT_DIR/worktree-manager.js" unlock \
+    --repo "$ROOT" --branch "$branch" --owner "$lock_owner" --terminal \
+    2>&1 >/dev/null)" || {
+    echo "[quality] terminal gate failure left its worktree lock in place: $unlock_error" >&2
+    node "$SCRIPT_DIR/worktree-manager.js" status \
+      --repo "$ROOT" --branch "$branch" --skip-pr-check >&2 || true
+  }
+}
 if [ "$SKIP" = true ]; then
   node "$SCRIPT_DIR/quality-invocation.js" gate-run "$MANIFEST" \
     --name "$NAME" --skip --reason "$REASON" || exit 1
@@ -54,6 +93,7 @@ node "$SCRIPT_DIR/quality-invocation.js" gate-run "$MANIFEST" \
   --name "$NAME"
 GATE_RC=$?
 if [ "$GATE_RC" -ne 0 ]; then
+  release_terminal_quality_lock
   node "$SCRIPT_DIR/quality-terminal-status.js" \
     --manifest "$MANIFEST" --category repository-gate --gate "$NAME" || true
   exit "$GATE_RC"
