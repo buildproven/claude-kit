@@ -2328,20 +2328,38 @@ function providerFindings(manifest) {
   // BUI-521: agents whose findings artifact was a bare delimiter with no body.
   // Collected across all covered reviews and raised as one malformed-output
   // failure below, rather than silently dropped or counted as findings.
-  const inconclusiveAgents = [];
+  let inconclusiveAgents = [];
+  // Counted PER REVIEW, not across the campaign. These were previously
+  // function-scoped: `usableReviewerReports` accumulated with `+= 1` over every
+  // covered review while `requiredUsableReports` was only ever Math.max'd to a
+  // SINGLE panel's majority. A later clean round therefore satisfied an earlier
+  // round's shortfall — round 1 producing zero usable reports passed as soon as
+  // round 2 returned three. reviewCoverage() checks that the reviewed slices are
+  // contiguous and artifact-intact, but never that each slice individually had a
+  // usable panel, so the merge was authorized over a diff range that no quorum
+  // ever reviewed. Every covered review must carry its own majority.
   let usableReviewerReports = 0;
   let requiredUsableReports = 0;
+  const failQuorum = () => {
+    throw new Error(
+      `inconclusive provider findings: ${inconclusiveAgents.join(", ")} ` +
+        `left only ${usableReviewerReports}/${manifest.agents.length} usable ` +
+        `reviewer reports (need ${requiredUsableReports || 1})`,
+    );
+  };
   for (const review of coveredReviews(manifest)) {
     const reviewFindingsStart = findings.length;
+    usableReviewerReports = 0;
+    requiredUsableReports = 0;
+    // Reset too: a malformed agent in round 1 must not be reported against
+    // round 2's panel now that the quorum is evaluated inside the loop.
+    inconclusiveAgents = [];
     const inventory = parseJson(
       fs.readFileSync(path.join(review.artifactDir, "artifact-inventory.json")),
       "provider artifact inventory",
     );
     if (inventory.provider === "claude" && review.status !== "advisory") {
-      requiredUsableReports = Math.max(
-        requiredUsableReports,
-        Math.floor(manifest.agents.length / 2) + 1,
-      );
+      requiredUsableReports = Math.floor(manifest.agents.length / 2) + 1;
     }
     const resultFiles = inventory.files.filter((file) =>
       file.name.endsWith(".json"),
@@ -2363,10 +2381,20 @@ function providerFindings(manifest) {
           `provider result ${item.name}`,
         );
       } catch {
+        // Unparseable evidence is NOT the absence of evidence. A bare
+        // `continue` converted it to silence: no finding, no counter, no
+        // diagnosis. Route it into the inconclusive path so it participates
+        // in the fail-closed quorum instead of vanishing.
+        inconclusiveAgents.push(item.name);
         continue;
       }
       const items = parsed.findings || parsed.result?.findings;
-      if (!Array.isArray(items)) continue;
+      if (!Array.isArray(items)) {
+        // Same reasoning: a result whose findings are not an array is
+        // malformed evidence, not a clean review.
+        inconclusiveAgents.push(item.name);
+        continue;
+      }
       items.forEach((finding, index) => {
         findings.push({
           ...finding,
@@ -2482,20 +2510,18 @@ function providerFindings(manifest) {
         source: item.name,
       });
     }
-  }
-  // Fail closed, and distinctly from "actionable code findings remain" — the
-  // operator needs to know the panel produced no usable verdict, not hunt for
-  // a defect that was never described.
-  if (
-    (requiredUsableReports > 0 &&
-      usableReviewerReports < requiredUsableReports) ||
-    (inconclusiveAgents.length && usableReviewerReports === 0)
-  ) {
-    throw new Error(
-      `inconclusive provider findings: ${inconclusiveAgents.join(", ")} ` +
-        `left only ${usableReviewerReports}/${manifest.agents.length} usable ` +
-        `reviewer reports (need ${requiredUsableReports || 1})`,
-    );
+    // Fail closed per review, and distinctly from "actionable code findings
+    // remain" — the operator needs to know THIS panel produced no usable
+    // verdict, not hunt for a defect that was never described. Evaluating here
+    // rather than after the loop is what stops a later clean round from
+    // covering for an earlier round that returned nothing.
+    if (
+      (requiredUsableReports > 0 &&
+        usableReviewerReports < requiredUsableReports) ||
+      (inconclusiveAgents.length && usableReviewerReports === 0)
+    ) {
+      failQuorum();
+    }
   }
   return findings;
 }
@@ -2751,12 +2777,18 @@ function writeArtifactInventory(
       "Claude findings inventory does not cover the mandatory panel",
     );
   }
-  const inconclusiveFindings = findings.filter((name) =>
-    fs
-      .readFileSync(path.join(resolved, name), "utf8")
-      .split(/\r?\n/)
-      .some((line) => line.startsWith("INCONCLUSIVE:")),
-  );
+  // An EMPTY report is inconclusive too. This filter previously only excluded
+  // files carrying an explicit `INCONCLUSIVE:` line, so a 0-byte or
+  // whitespace-only artifact — an agent killed mid-write, or a truncated
+  // write — counted toward the usable quorum and got stamped into signed,
+  // hash-bound inventory evidence as a completed report. providerFindings()
+  // independently treats an empty body as inconclusive; these two must agree,
+  // or this gate is not enforcing the invariant its own error message claims.
+  const inconclusiveFindings = findings.filter((name) => {
+    const text = fs.readFileSync(path.join(resolved, name), "utf8");
+    if (!text.trim()) return true;
+    return text.split(/\r?\n/).some((line) => line.startsWith("INCONCLUSIVE:"));
+  });
   const panelSize =
     provider === "claude" && !advisory
       ? manifest.agents.length

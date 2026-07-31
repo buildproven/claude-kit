@@ -3546,6 +3546,178 @@ exit 1
     ).toThrow(/inconclusive provider findings/);
   });
 
+  // An agent killed mid-write leaves a 0-byte artifact. It carries no
+  // `INCONCLUSIVE:` marker, so the inventory usability filter counted it as a
+  // completed report and stamped silence into signed, hash-bound evidence.
+  // providerFindings() already treats an empty body as inconclusive; the two
+  // must agree or this gate is not enforcing what its error message claims.
+  it("refuses to inventory an empty findings artifact as a usable report", () => {
+    const root = repo("empty-findings-not-usable");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 3,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(manifest, [
+        "reviewer-a",
+        "reviewer-b",
+        "reviewer-c",
+      ]);
+    });
+    const manifest = invocation.loadManifest(manifestPath).manifest;
+    const artifactDir = invocation.reviewInfo(manifest).artifactDir;
+    mkdirSync(artifactDir, { recursive: true });
+
+    // Only one of three agents produced a real report.
+    writeFileSync(path.join(artifactDir, "reviewer-a.findings.txt"), "");
+    writeFileSync(path.join(artifactDir, "reviewer-b.findings.txt"), "   \n\n");
+    writeFileSync(
+      path.join(artifactDir, "reviewer-c.findings.txt"),
+      "NO FINDINGS.\n",
+    );
+
+    expect(() =>
+      invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
+    ).toThrow(/inconclusive provider findings cannot be inventoried/);
+  });
+
+  // The reviewer quorum must be satisfied by EACH covered review, not by the
+  // campaign total. `usableReviewerReports` accumulated across rounds while
+  // `requiredUsableReports` was only Math.max'd to a single panel's majority,
+  // so a clean round 2 satisfied an empty round 1 — authorizing a merge over a
+  // diff slice no quorum ever reviewed. reviewCoverage() checks slice
+  // contiguity and artifact integrity, but never per-slice panel usability.
+  it("does not let a later clean round satisfy an earlier empty round", () => {
+    // Mirrors providerFindings' counter arithmetic. The scoring loop is the
+    // unit under test; building two fully-signed review rounds would exercise
+    // the signing pipeline rather than the quorum rule.
+    const quorum = (rounds, agentCount, perReview) => {
+      let usable = 0;
+      let required = 0;
+      let inconclusive = 0;
+      for (const round of rounds) {
+        if (perReview) {
+          usable = 0;
+          required = 0;
+          inconclusive = 0;
+        }
+        required = perReview
+          ? Math.floor(agentCount / 2) + 1
+          : Math.max(required, Math.floor(agentCount / 2) + 1);
+        for (const ok of round) {
+          if (ok) usable += 1;
+          else inconclusive += 1;
+        }
+        if (
+          perReview &&
+          ((required > 0 && usable < required) ||
+            (inconclusive && usable === 0))
+        ) {
+          return { failed: true };
+        }
+      }
+      if (
+        (required > 0 && usable < required) ||
+        (inconclusive && usable === 0)
+      ) {
+        return { failed: true };
+      }
+      return { failed: false };
+    };
+
+    const emptyThenClean = [
+      [false, false, false],
+      [true, true, true],
+    ];
+    // The defect: campaign-wide counters pass this.
+    expect(quorum(emptyThenClean, 3, false).failed).toBe(false);
+    // The fix: per-review counters catch it.
+    expect(quorum(emptyThenClean, 3, true).failed).toBe(true);
+    // And a genuinely clean campaign still passes under the fix.
+    expect(
+      quorum(
+        [
+          [true, true, true],
+          [true, true, true],
+        ],
+        3,
+        true,
+      ).failed,
+    ).toBe(false);
+  });
+
+  it("evaluates the reviewer quorum inside the covered-review loop", () => {
+    // Structural fence: the throw must live inside the loop, and the counters
+    // must reset per review. Moving either back out silently restores the
+    // cross-round bug, which no single-round fixture would catch.
+    const source = readFileSync(INVOCATION, "utf8");
+    const fn = source.slice(
+      source.indexOf("function providerFindings(manifest)"),
+      source.indexOf("function priorFindings(manifest)"),
+    );
+    expect(fn).toContain("usableReviewerReports = 0;");
+    expect(fn).toContain("inconclusiveAgents = [];");
+    // The quorum check must precede the end of the review loop, not follow it.
+    expect(fn.indexOf("failQuorum()")).toBeLessThan(
+      fn.indexOf("return findings"),
+    );
+    expect(fn).not.toMatch(/requiredUsableReports = Math\.max\(/);
+  });
+
+  it("treats unparseable provider results as inconclusive, not as silence", () => {
+    // A bare `continue` converted malformed evidence into NO evidence: no
+    // finding, no counter, no diagnosis.
+    const source = readFileSync(INVOCATION, "utf8");
+    const fn = source.slice(
+      source.indexOf("function providerFindings(manifest)"),
+      source.indexOf("function priorFindings(manifest)"),
+    );
+    const parseBlock = fn.slice(
+      fn.indexOf("`provider result ${item.name}`"),
+      fn.indexOf("items.forEach("),
+    );
+    expect(
+      parseBlock.match(/inconclusiveAgents\.push\(item\.name\)/g),
+    ).toHaveLength(2);
+  });
+
+  it("still inventories a panel whose reports are all non-empty", () => {
+    const root = repo("nonempty-findings-usable");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 3,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(manifest, [
+        "reviewer-a",
+        "reviewer-b",
+        "reviewer-c",
+      ]);
+    });
+    const manifest = invocation.loadManifest(manifestPath).manifest;
+    const artifactDir = invocation.reviewInfo(manifest).artifactDir;
+    mkdirSync(artifactDir, { recursive: true });
+    for (const agent of ["reviewer-a", "reviewer-b", "reviewer-c"]) {
+      writeFileSync(
+        path.join(artifactDir, `${agent}.findings.txt`),
+        "NO FINDINGS.\n",
+      );
+    }
+    expect(() =>
+      invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
+    ).not.toThrow();
+  });
+
   it("excludes stale fallback artifacts when a retry succeeds with Codex", () => {
     const root = repo("retry-inventory-provider-isolation");
     const manifestPath = create(root);
