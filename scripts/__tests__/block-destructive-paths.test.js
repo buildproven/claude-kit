@@ -405,4 +405,77 @@ describe("block-destructive-paths hook", () => {
       expect(status).toBe(0);
     });
   });
+
+  // Rule 2 protected the `/Users/<u>/...` spelling of every personal directory
+  // but only bare `~` and `~/` for the tilde spelling, so `find ~/Projects
+  // -delete` walked straight through a guard that blocks the exact same
+  // deletion written as `/Users/alice/Projects`. Rule 1 already treats the two
+  // spellings identically; Rule 2 must too.
+  describe("Rule 2: tilde-spelled personal roots", () => {
+    const tildeRoots = [
+      ["~/Projects", "find ~/Projects -delete"],
+      ["~/Projects/internal", "find ~/Projects/internal -delete"],
+      ["~/Projects/products", "find ~/Projects/products -delete"],
+      ["~/Projects/personal", "find ~/Projects/personal -delete"],
+      ["~/Projects/_archived", "find ~/Projects/_archived -delete"],
+      ["~/.claude", "find ~/.claude -delete"],
+      ["~/.ssh", "find ~/.ssh -delete"],
+      ["~/.aws", "find ~/.aws -delete"],
+      ["~/.config", "find ~/.config -delete"],
+      ["a trailing slash", "find ~/Projects/ -delete"],
+      ["-exec rm form", "find ~/Projects -exec rm -rf {} +"],
+      ["$HOME spelling", "find $HOME/Projects -delete"],
+      ["${HOME} spelling", "find ${HOME}/Projects -delete"],
+    ];
+
+    it.each(tildeRoots)("blocks find -delete rooted at %s", (_, cmd) => {
+      const { status } = runHook(cmd);
+      expect(status).toBe(2);
+    });
+
+    // Concrete per-project paths under a protected root stay allowed, matching
+    // Rule 1's documented behavior.
+    const allowedFinds = [
+      ["a repo build dir", "find ~/Projects/myrepo/dist -delete"],
+      ["a node_modules tree", "find ~/Projects/myrepo/node_modules -delete"],
+      ["a non-personal tilde path", "find ~/scratch -delete"],
+      ["a temp dir", "find /tmp/build.XXXX -delete"],
+    ];
+
+    it.each(allowedFinds)("allows find -delete rooted at %s", (_, cmd) => {
+      const { status } = runHook(cmd);
+      expect(status).toBe(0);
+    });
+  });
+
+  // `\rm` is the standard way to bypass an `rm` alias, and it reaches the real
+  // binary. Rule 1's extraction regex only accepted an optional `<path>/`
+  // prefix, so a leading backslash made the whole removal invisible to the
+  // guard while `/bin/rm` was correctly caught.
+  describe("Rule 1: alias-bypassing and non-normalized targets", () => {
+    const evaded = [
+      ["a backslash-escaped rm", "\\rm -rf ~"],
+      ["a backslash-escaped rm on $HOME", "\\rm -rf $HOME"],
+      ["a backslash-escaped rm on a Projects root", "\\rm -rf ~/Projects"],
+      ["a backslash rm after a separator", "echo hi; \\rm -rf ~"],
+      ["a dot-segment detour", "rm -rf ~/Projects/../Projects"],
+      ["a dot-segment detour on .claude", "rm -rf ~/.claude/../.claude"],
+      ["a current-dir segment", "rm -rf ~/Projects/./"],
+    ];
+
+    it.each(evaded)("blocks %s", (_, cmd) => {
+      const { status } = runHook(cmd);
+      expect(status).toBe(2);
+    });
+
+    const stillAllowed = [
+      ["a backslash rm on a build dir", "\\rm -rf ./dist"],
+      ["a repo path with a dot segment", "rm -rf ~/Projects/repo/../repo/dist"],
+    ];
+
+    it.each(stillAllowed)("does not over-block %s", (_, cmd) => {
+      const { status } = runHook(cmd);
+      expect(status).toBe(0);
+    });
+  });
 });
