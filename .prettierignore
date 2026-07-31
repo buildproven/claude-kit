@@ -1,0 +1,25 @@
+# Prettier does not read .gitignore for paths passed explicitly, and `prettier
+# --check .` walks the whole working tree — including untracked directories.
+# Keep this list in sync with the `ignores` block in eslint.config.cjs.
+
+node_modules/
+coverage/
+dist/
+build/
+
+# Agent scratch space: untracked temp trees and test fixtures. Some fixtures are
+# deliberately malformed (invalid JSON, truncated YAML) to exercise error paths,
+# so format-checking them reports failures that must not be "fixed".
+scratchpad/
+
+# Transient worktree and session artifacts. These are machine-local runtime
+# state (already gitignored), not repository sources.
+.claude/worktrees/
+.claude/ralph-next/
+.claude/sota-history.json
+.stryker-tmp/
+.playwright-mcp/
+
+# Generated
+CHANGELOG.md
+package-lock.json
