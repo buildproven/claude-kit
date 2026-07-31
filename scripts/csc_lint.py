@@ -229,11 +229,29 @@ def _submodule_paths(root: Path) -> set[tuple[str, ...]]:
     return paths
 
 
+# Directories that never hold real commands or skills. `scratchpad` is agent
+# scratch space holding untracked test fixtures — several are deliberately
+# malformed to exercise error paths, so linting them reports violations that
+# cannot be fixed and inflates the command/skill counts in the summary line.
+_EXCLUDED_DIR_NAMES = frozenset(
+    {
+        "node_modules",
+        "scratchpad",
+        ".git",
+        "coverage",
+        "dist",
+        "build",
+        "__pycache__",
+        ".pytest_cache",
+    }
+)
+
+
 def _is_excluded_root(
     directory: Path, root: Path, submodules: set[tuple[str, ...]]
 ) -> bool:
     relative = directory.relative_to(root).parts if directory != root else ()
-    return "node_modules" in directory.parts or any(
+    return not _EXCLUDED_DIR_NAMES.isdisjoint(directory.parts) or any(
         relative[: len(submodule)] == submodule for submodule in submodules
     )
 
@@ -280,7 +298,9 @@ def _find_dependency_skill_names(root: Path) -> set[str]:
         if not submodule_root.is_dir():
             continue
         for skills_dir in submodule_root.rglob("skills"):
-            if not skills_dir.is_dir() or "node_modules" in skills_dir.parts:
+            if not skills_dir.is_dir() or not _EXCLUDED_DIR_NAMES.isdisjoint(
+                skills_dir.parts
+            ):
                 continue
             names.update(
                 item.parent.name for item in skills_dir.rglob("SKILL.md")

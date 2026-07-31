@@ -43,6 +43,12 @@ BACKLOG.md.ralph-next-backup
 # Claude Code worktrees (transient parallel-agent artifacts)
 .claude/worktrees/
 
+# Agent scratch space. Sessions are told to put temp files here instead of
+# /tmp, and test suites that set TMPDIR leak their mkdtemp trees into it. It is
+# never repository content, and untracked fixtures under it otherwise get
+# scored, linted, and formatted as if they were.
+scratchpad/
+
 # Session artifacts (transient — not shared across machines)
 .playwright-mcp/
 .claude/ralph-next/quality-*.json

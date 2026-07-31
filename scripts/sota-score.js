@@ -36,18 +36,45 @@ function readJSON(relativePath) {
   }
 }
 
+// Directories that never hold repository sources. Scratch and coverage output
+// matter as much as node_modules here: this scorer walks the working tree, and
+// an untracked scratch directory full of test fixtures otherwise gets scored as
+// if it were the repository — inflating command/skill counts and reporting
+// fixture content as real findings.
+const WALK_SKIP_DIRS = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  "coverage",
+  "scratchpad",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".pytest_cache",
+]);
+
 function walkFiles(relativeDir, predicate = () => true) {
   const root = path.join(ROOT, relativeDir);
   if (!fs.existsSync(root)) return [];
   const results = [];
   const visit = (dir) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (["node_modules", ".git", "dist", "build"].includes(entry.name)) {
-        continue;
-      }
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      // A directory can disappear mid-walk when a concurrent test run cleans up
+      // its temp tree. Skip it rather than aborting the whole score.
+      return;
+    }
+    for (const entry of entries) {
+      if (WALK_SKIP_DIRS.has(entry.name)) continue;
       const full = path.join(dir, entry.name);
+      // Do not follow symlinks: a linked directory can point outside the repo
+      // (or back into it) and turn the walk into an unbounded or cyclic scan.
+      if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) visit(full);
-      else if (predicate(full)) results.push(full);
+      else if (entry.isFile() && predicate(full)) results.push(full);
     }
   };
   visit(root);
@@ -278,7 +305,14 @@ function scanRetiredModels() {
       file.endsWith("check-deprecated-apis.sh")
     )
       continue;
-    const content = fs.readFileSync(file, "utf8");
+    let content;
+    try {
+      content = fs.readFileSync(file, "utf8");
+    } catch {
+      // Listed by the walk but gone (or unreadable) by the time we read it —
+      // a concurrent cleanup, not a scoring failure.
+      continue;
+    }
     for (const model of retired) {
       if (content.includes(model))
         findings.push(`${path.relative(ROOT, file)}: ${model}`);

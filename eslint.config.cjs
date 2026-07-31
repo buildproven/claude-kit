@@ -36,6 +36,10 @@ const configs = [
       "**/__pycache__/**",
       ".stryker-tmp/**",
       ".claude/worktrees/**",
+      // Agent scratch space: untracked temp trees and test fixtures, not
+      // repository sources. Deliberately-malformed fixtures live here, so
+      // linting it reports errors that no one can or should fix.
+      "scratchpad/**",
     ],
   },
   js.configs.recommended,
