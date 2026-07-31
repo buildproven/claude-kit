@@ -20,6 +20,15 @@ if ! _quality_policy_value="$(bs_provider_load "$BS_PROVIDER_CONFIG")"; then
   return 1 2>/dev/null || exit 1
 fi
 read -r QUALITY_PRIMARY QUALITY_FALLBACK <<< "$_quality_policy_value"
+# `auto` is validated before the invoking provider is resolved. A legal
+# `auto/codex` policy can therefore become `codex/codex` at this quality-only
+# boundary. That is one provider, not a fallback, and signed review evidence
+# correctly rejects identical primary and fallback identities. Preserve the
+# generic provider policy for other consumers and record the truthful
+# single-provider quality policy here.
+if [ "$QUALITY_PRIMARY" = "$QUALITY_FALLBACK" ]; then
+  QUALITY_FALLBACK=none
+fi
 QUALITY_PROVIDER_CONFIG="$BS_PROVIDER_CONFIG"
 
 export QUALITY_PROVIDER_CONFIG QUALITY_PRIMARY QUALITY_FALLBACK
