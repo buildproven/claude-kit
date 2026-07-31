@@ -23,6 +23,42 @@ class ManagerError extends Error {
   }
 }
 
+/**
+ * Parse a non-negative numeric CLI option, refusing anything that is not one.
+ *
+ * `Number(value || fallback)` is unsafe for the thresholds that gate worktree
+ * removal. A non-numeric value ("abc", "30m", a shell variable that expanded to
+ * garbage) yields NaN, and every comparison against NaN is false — so
+ * `ageMinutes < recentMinutes` silently stops protecting anything and the
+ * "recently active" guard becomes a no-op that removes live worktrees. It also
+ * conflates an explicit `0` with "unset", because `0 || fallback` is the
+ * fallback, so asking for no grace period silently got the 24h default.
+ *
+ * Fail closed instead: an unparseable threshold is a usage error, not a reason
+ * to proceed with an unguarded deletion.
+ */
+// CLI options parsed as non-negative numbers, as [optionKey, flagName].
+const NUMERIC_OPTIONS = [
+  ["graceHours", "grace-hours"],
+  ["recentMinutes", "recent-minutes"],
+];
+
+function numericOption(value, fallback, flag) {
+  if (value === undefined || value === null || value === "") return fallback;
+  // Trim only to tolerate stray padding around a real number. A value that is
+  // ENTIRELY whitespace is a mistake, not a request for zero — `Number("")`
+  // would quietly make it 0 and disable the guard it was meant to configure.
+  const text = typeof value === "number" ? String(value) : String(value).trim();
+  const numeric = text === "" ? Number.NaN : Number(text);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    throw new ManagerError(
+      `--${flag} must be a non-negative number (got: ${JSON.stringify(value)})`,
+      "USAGE",
+    );
+  }
+  return numeric;
+}
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
@@ -1289,7 +1325,11 @@ function classify(repoRoot, record, options = {}) {
     };
   }
   const ageMinutes = activityAgeMinutes(repoRoot, record);
-  const recentMinutes = Number(options.recentMinutes || DEFAULT_RECENT_MINUTES);
+  const recentMinutes = numericOption(
+    options.recentMinutes,
+    DEFAULT_RECENT_MINUTES,
+    "recent-minutes",
+  );
   if (ageMinutes !== null && ageMinutes < recentMinutes) {
     return {
       ...record,
@@ -1305,7 +1345,11 @@ function classify(repoRoot, record, options = {}) {
     const mergedAgeHours = pr.mergedAt
       ? (Date.now() - Date.parse(pr.mergedAt)) / 3600000
       : null;
-    const graceHours = Number(options.graceHours || DEFAULT_GRACE_HOURS);
+    const graceHours = numericOption(
+      options.graceHours,
+      DEFAULT_GRACE_HOURS,
+      "grace-hours",
+    );
     return {
       ...record,
       ...push,
@@ -1816,6 +1860,15 @@ function parseCli(argv) {
       .replace(/-([a-z])/g, (_, character) => character.toUpperCase());
     options[key] = argv[index + 1];
     index += 1;
+  }
+  // Validate numeric thresholds at parse time, not where they are consumed.
+  // These gate worktree removal, and a bad value must be rejected even on a
+  // run whose repository happens to have no worktree to classify — otherwise
+  // the same typo passes silently today and deletes work tomorrow.
+  for (const [key, flag] of NUMERIC_OPTIONS) {
+    if (key in options) {
+      options[key] = numericOption(options[key], undefined, flag);
+    }
   }
   return { command, options };
 }

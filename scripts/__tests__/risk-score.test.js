@@ -727,3 +727,108 @@ describe("isForcedLogic / fileIsMechanical", () => {
     ).toBe(DEFAULTS.base.securityFloor);
   });
 });
+
+// The file's stated contract (see the unresolved-base branch in score()) is to
+// fail CLOSED whenever the diff cannot be trusted: an unreadable diff can only
+// produce a misleadingly LOW score, which under-provisions review.
+describe("fail-closed on unreadable diffs", () => {
+  // A runner that resolves a base successfully but fails the structural
+  // `git diff` calls — a shallow clone, a GC'd object, or a missing
+  // submodule ref.
+  function runnerFailingDiff() {
+    return (args) => {
+      if (args[0] === "rev-parse" || args[0] === "merge-base") {
+        return "abc123";
+      }
+      if (args[0] === "diff") {
+        throw new Error("fatal: bad object abc123");
+      }
+      return "";
+    };
+  }
+
+  it("scores maximum risk when diff collection fails", () => {
+    const result = score({
+      base: "origin/main",
+      gitRunner: runnerFailingDiff(),
+    });
+    expect(result.riskScore).toBe(100);
+    expect(result.diffCollectionFailed).toBe(true);
+  });
+
+  it("explains the failure instead of claiming no changes were found", () => {
+    const result = score({
+      base: "origin/main",
+      gitRunner: runnerFailingDiff(),
+    });
+    expect(result.reasons.join(" ")).toMatch(/diff collection failed/i);
+    expect(result.reasons.join(" ")).not.toMatch(/no changes detected/i);
+  });
+
+  it("provisions critical-tier review knobs on a failed diff", () => {
+    const result = score({
+      base: "origin/main",
+      gitRunner: runnerFailingDiff(),
+    });
+    // Must not land on the base.medium knobs the empty-diff path produced.
+    expect(result.knobs).toEqual(scoreToKnobs(100, DEFAULTS));
+  });
+
+  it("still reports a genuinely empty diff as low risk", () => {
+    // Guards against over-correcting: git succeeding with no output is a real
+    // "nothing changed", not a failure.
+    const result = score({
+      base: "origin/main",
+      gitRunner: (args) => {
+        if (args[0] === "rev-parse" || args[0] === "merge-base")
+          return "abc123";
+        return "";
+      },
+    });
+    expect(result.diffCollectionFailed).toBeUndefined();
+    expect(result.riskScore).toBeLessThan(75);
+  });
+});
+
+// A JOB-level `permissions:` block is indented under `jobs.<id>:` and is the
+// more common form. The pattern was anchored at column 0, so escalating a job
+// to `id-token: write` — the OIDC-credential-exfiltration class this floor
+// exists to catch — never matched and scored below the critical band.
+describe("workflow permissions detection", () => {
+  const workflowFile = ".github/workflows/release.yml";
+
+  function scoreWorkflowPatch(patch) {
+    return computeScore(
+      [d(workflowFile, "M", patch, 4)],
+      { files: 1, lines: 4 },
+      DEFAULTS,
+    ).riskScore;
+  }
+
+  it("holds the security floor for a job-level permissions escalation", () => {
+    const patch = [
+      "   jobs:",
+      "     release:",
+      "-      permissions:",
+      "-        contents: read",
+      "+      permissions:",
+      "+        contents: write",
+      "+        id-token: write",
+    ].join("\n");
+    expect(scoreWorkflowPatch(patch)).toBe(DEFAULTS.base.securityFloor);
+  });
+
+  it("holds the security floor for a top-level permissions change", () => {
+    const patch = ["-permissions:", "+permissions:", "+  id-token: write"].join(
+      "\n",
+    );
+    expect(scoreWorkflowPatch(patch)).toBe(DEFAULTS.base.securityFloor);
+  });
+
+  it("still downgrades a workflow diff that only bumps a comment", () => {
+    // The content-aware downgrade must survive: this is why the pattern list
+    // exists rather than pinning every workflow edit to the floor.
+    const patch = ["-  # old note", "+  # new note"].join("\n");
+    expect(scoreWorkflowPatch(patch)).toBeLessThan(DEFAULTS.base.securityFloor);
+  });
+});

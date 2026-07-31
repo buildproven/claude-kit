@@ -1749,4 +1749,78 @@ describe("canonical-source contract", () => {
     );
     expect(source).toContain("refs/pull/$RES_PR/head:$WT_BASE_REF");
   });
+
+  // `Number("abc")` is NaN, and every comparison against NaN is false — so
+  // `ageMinutes < recentMinutes` stopped protecting anything and the
+  // "recently active" guard silently became a no-op that removes live
+  // worktrees. Reject a non-numeric threshold instead of proceeding with an
+  // unguarded deletion.
+  describe("numeric threshold validation", () => {
+    const { parseCli } = require(MANAGER);
+
+    const rejected = [
+      ["a non-numeric word", "abc"],
+      ["a unit suffix", "30m"],
+      ["a negative value", "-5"],
+      ["whitespace only", "   "],
+      ["a bare sign", "-"],
+    ];
+
+    it.each(rejected)("rejects --recent-minutes with %s", (_label, value) => {
+      expect(() =>
+        parseCli(["status", "--repo", "/tmp/x", "--recent-minutes", value]),
+      ).toThrow(/--recent-minutes must be a non-negative number/);
+    });
+
+    it.each(rejected)("rejects --grace-hours with %s", (_label, value) => {
+      expect(() =>
+        parseCli(["status", "--repo", "/tmp/x", "--grace-hours", value]),
+      ).toThrow(/--grace-hours must be a non-negative number/);
+    });
+
+    it("raises a USAGE error, not a generic failure", () => {
+      try {
+        parseCli(["status", "--repo", "/tmp/x", "--recent-minutes", "abc"]);
+        throw new Error("expected parseCli to throw");
+      } catch (error) {
+        expect(error.code).toBe("USAGE");
+      }
+    });
+
+    // An explicit 0 means "no recency window" and must survive: `0 || default`
+    // previously discarded it and silently restored the 30-minute default.
+    it("preserves an explicit zero rather than falling back to the default", () => {
+      const { options } = parseCli([
+        "status",
+        "--repo",
+        "/tmp/x",
+        "--recent-minutes",
+        "0",
+        "--grace-hours",
+        "0",
+      ]);
+      expect(options.recentMinutes).toBe(0);
+      expect(options.graceHours).toBe(0);
+    });
+
+    it("accepts ordinary numeric thresholds", () => {
+      const { options } = parseCli([
+        "status",
+        "--repo",
+        "/tmp/x",
+        "--recent-minutes",
+        "45",
+        "--grace-hours",
+        "12.5",
+      ]);
+      expect(options.recentMinutes).toBe(45);
+      expect(options.graceHours).toBe(12.5);
+    });
+
+    it("leaves unset thresholds absent so callers apply their defaults", () => {
+      const { options } = parseCli(["status", "--repo", "/tmp/x"]);
+      expect(options.recentMinutes).toBeUndefined();
+      expect(options.graceHours).toBeUndefined();
+    });
+  });
 });
