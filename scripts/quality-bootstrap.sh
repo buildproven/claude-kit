@@ -118,7 +118,12 @@ for ((argument_index = 0; argument_index < ${#BOOTSTRAP_ARGS[@]}; argument_index
         exit 1
       }
       ;;
-    /*|~/*|./*|../*) EXPLICIT_TARGET=true ;;
+    # "~/"* is deliberately quoted, not bare ~/* — an unquoted tilde in a
+    # case pattern undergoes bash tilde expansion (becomes rooted at $HOME)
+    # and so fails to match a literal "~/..." argument string. Quoting the
+    # tilde forces a literal match instead (same fix as the resolver-path
+    # scanner below, BUI-390 review).
+    /*|"~/"*|./*|../*) EXPLICIT_TARGET=true ;;
     */*)
       EXPLICIT_TARGET=true
       [[ "$argument" =~ ^[A-Za-z][A-Za-z0-9_.-]*/[A-Za-z0-9_./-]+$ ]] || {
@@ -148,9 +153,9 @@ if [ -n "$MANIFEST_ARG" ]; then
   RESUME_PR="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" repo.pr)"
   ADVANCE_ARGS=(advance "$MANIFEST_ARG")
   if [ -n "$RESUME_PR" ] && [ "$RESUME_PR" != null ]; then
-    RESUME_PR_JSON="$(gh pr view "$RESUME_PR" \
-      --json headRefName,headRepository,isCrossRepository 2>/dev/null)" || exit 1
     RESUME_GITHUB_REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
+    RESUME_PR_JSON="$(gh pr view "$RESUME_PR" --repo "$RESUME_GITHUB_REPOSITORY" \
+      --json headRefName,headRepository,isCrossRepository 2>/dev/null)" || exit 1
     RESUME_HEAD_REF="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.headRefName')" || exit 1
     RESUME_HEAD_REPOSITORY="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.headRepository.nameWithOwner')" || exit 1
     RESUME_CROSS_REPOSITORY="$(printf '%s' "$RESUME_PR_JSON" | jq -r '.isCrossRepository')" || exit 1
@@ -206,14 +211,81 @@ if [ -z "$RESOLVER" ]; then
   fi
 else
   # Use the resolver. It returns a JSON plan we act on.
-  PRIMARY_CHECKOUT=$(git worktree list --porcelain 2>/dev/null \
-    | awk '/^worktree / {p=substr($0, 10)} /^branch refs\/heads\/main$/ {print p; exit}')
-  CWD_INPUT=$(pwd)
+  #
+  # QUALITY_CWD (and, when only BS_QUALITY_TARGET_DIR set the target, the
+  # --target-dir flag itself) must reflect the target directory — otherwise
+  # this silently carries this process's own launch directory into the
+  # resolver's fallback/cwd-relative resolution paths, which breaks when
+  # invoked from outside the target checkout (BUI-390). --target-dir, when
+  # present (CLI flag or BS_QUALITY_TARGET_DIR env var, per the documented
+  # precedence: --target-dir > env var > cwd), is always authoritative over
+  # ambient $PWD.
+  RESOLVER_TARGET_DIR=""
+  RESOLVER_SAW_EXPLICIT_PATH=false
+  prev_resolver_arg=""
+  for resolver_arg in "$@"; do
+    case "$prev_resolver_arg" in
+      # Mirrors quality-target-resolver.js's EXPLICIT_PATH_FLAG set exactly
+      # (--target-dir, --target, --worktree) — --worktree was missing here,
+      # so a --worktree-based invocation launched from another checkout
+      # could resolve/materialize against the wrong repo (BUI-390 review).
+      --target-dir|--target|--worktree)
+        RESOLVER_TARGET_DIR="$resolver_arg"
+        RESOLVER_SAW_EXPLICIT_PATH=true
+        ;;
+    esac
+    case "$resolver_arg" in
+      --target-dir=*|--target=*|--worktree=*)
+        RESOLVER_TARGET_DIR="${resolver_arg#*=}"
+        RESOLVER_SAW_EXPLICIT_PATH=true
+        ;;
+      # Mirrors quality-target-resolver.js's own applyPathPattern: a bare
+      # absolute or ~/-prefixed positional token is an explicit path target
+      # too, not just the --target-dir/--target flag forms. Without this,
+      # the env-var-fallback injection below would wrongly override a
+      # caller-supplied bare path (BUI-390 review finding), and CWD_INPUT
+      # below would miss it too.
+      #
+      # The pattern's second alternative is deliberately quoted ("~/"*)
+      # rather than bare (~/*): an UNQUOTED ~/* undergoes tilde expansion in
+      # a case pattern and becomes rooted at $HOME, so it silently fails to
+      # match a literal "~/..." argument string (a second Codex review
+      # finding on this same line) — quoting the tilde forces a literal
+      # match instead.
+      /*|"~/"*)
+        RESOLVER_SAW_EXPLICIT_PATH=true
+        [ -z "$RESOLVER_TARGET_DIR" ] && RESOLVER_TARGET_DIR="$resolver_arg"
+        ;;
+    esac
+    prev_resolver_arg="$resolver_arg"
+  done
+  RESOLVER_ARGS=("$@")
+  if [ "$RESOLVER_SAW_EXPLICIT_PATH" = false ] && [ -n "${BS_QUALITY_TARGET_DIR:-}" ]; then
+    RESOLVER_TARGET_DIR="$BS_QUALITY_TARGET_DIR"
+    # The env var alone leaves parsed.path unset inside the resolver (it only
+    # parses CLI tokens), which falls through to the ambient-cwd fallback
+    # paths and hard-refuses under --merge. Inject it as an explicit
+    # --target-dir token so the resolver treats it the same as if the caller
+    # had passed the flag directly. Only reached when the caller supplied no
+    # explicit path token of their own (checked above) — --target-dir must
+    # never override the caller's own explicit path.
+    RESOLVER_ARGS+=(--target-dir "$RESOLVER_TARGET_DIR")
+  fi
+  if [ -n "$RESOLVER_TARGET_DIR" ]; then
+    RESOLVER_TARGET_DIR="${RESOLVER_TARGET_DIR/#\~/$HOME}"
+    CWD_INPUT="$RESOLVER_TARGET_DIR"
+    PRIMARY_CHECKOUT=$(git -C "$RESOLVER_TARGET_DIR" worktree list --porcelain 2>/dev/null \
+      | awk '/^worktree / {p=substr($0, 10)} /^branch refs\/heads\/main$/ {print p; exit}')
+  else
+    CWD_INPUT=$(pwd)
+    PRIMARY_CHECKOUT=$(git worktree list --porcelain 2>/dev/null \
+      | awk '/^worktree / {p=substr($0, 10)} /^branch refs\/heads\/main$/ {print p; exit}')
+  fi
 
   RESOLVER_STDERR=$(mktemp 2>/dev/null || echo "/tmp/quality-resolver-stderr.$$")
   RESOLUTION_JSON=$(QUALITY_CWD="$CWD_INPUT" \
                     QUALITY_PRIMARY_CHECKOUT="$PRIMARY_CHECKOUT" \
-                    node "$RESOLVER" --cli "$@" 2>"$RESOLVER_STDERR")
+                    node "$RESOLVER" --cli "${RESOLVER_ARGS[@]}" 2>"$RESOLVER_STDERR")
   RESOLVER_RC=$?
 
   # Distinguish a resolver *crash* (non-zero exit) from a clean empty/ok:false
@@ -270,7 +342,14 @@ else
           echo "❌ Could not materialize '$RES_BRANCH': worktree-manager.js is unavailable."
           exit 1
         }
-        REPO_ROOT_FOR_WT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+        # CWD_INPUT reflects the resolved target directory (--target-dir, a
+        # bare path token, or BS_QUALITY_TARGET_DIR) when one was supplied;
+        # falling back to `git rev-parse --show-toplevel`/pwd here would
+        # anchor materialization to this process's own ambient directory
+        # instead, which can fetch/create the same-numbered PR in an
+        # unrelated repo, or fail outright from a non-repo directory
+        # (BUI-390 review finding).
+        REPO_ROOT_FOR_WT=$(git -C "$CWD_INPUT" rev-parse --show-toplevel 2>/dev/null || echo "$CWD_INPUT")
         WT_BASE_REF="origin/$RES_BRANCH"
         if [ "$RES_KIND" = pr ] && [ -n "${RES_PR:-}" ]; then
           WT_BASE_REF="refs/remotes/pull/$RES_PR/head"
@@ -342,12 +421,26 @@ fi
 # A PR-targeted invocation must always bind to the PR's actual base identity,
 # even when it is review-only. Falling back to origin/main for non-merge runs
 # produces the wrong diff and a manifest that cannot safely resume or merge.
+#
+# --repo is always passed explicitly (derived from GIT_ROOT's own remote, not
+# left to gh's CWD-relative default) so PR lookups stay bound to --target-dir
+# even when the invoking shell's $PWD points at a different repo (BUI-470).
+GH_REPO_SLUG=""
+if [ -n "${RES_PR:-}" ] || [ "$ARGS_MERGE" = true ]; then
+  GH_REPO_SLUG="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" || {
+    echo "❌ /bs:quality could not resolve the GitHub repository for $GIT_ROOT." >&2
+    exit 1
+  }
+fi
 PR_JSON=""
 if [ -n "${RES_PR:-}" ]; then
-  PR_JSON="$(gh pr view "$RES_PR" \
+  PR_JSON="$(gh pr view "$RES_PR" --repo "$GH_REPO_SLUG" \
     --json number,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,isCrossRepository 2>/dev/null)"
 elif [ "$ARGS_MERGE" = true ]; then
-  PR_JSON="$(gh pr view \
+  # `gh pr view --repo X` with no selector errors ("argument required when
+  # using the --repo flag") — pass the current branch explicitly.
+  MERGE_LOOKUP_BRANCH="$(git branch --show-current)"
+  PR_JSON="$(gh pr view "$MERGE_LOOKUP_BRANCH" --repo "$GH_REPO_SLUG" \
     --json number,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,isCrossRepository 2>/dev/null)"
 fi
 if [ "$ARGS_MERGE" = true ]; then
@@ -372,6 +465,13 @@ if [ -n "$PR_JSON" ]; then
       echo "❌ /bs:quality could not resolve the PR base identity." >&2
       exit 1
     }
+  # Defensive check: even with --repo pinned above, fail closed (rather than
+  # silently proceeding) if the resolved PR ever belongs to a different repo
+  # than --target-dir/GIT_ROOT expects.
+  [ "$PR_IS_CROSS_REPOSITORY" = false ] && [ "$PR_HEAD_REPOSITORY" != "$GH_REPO_SLUG" ] && {
+    echo "❌ /bs:quality PR #$RES_PR belongs to $PR_HEAD_REPOSITORY, not $GH_REPO_SLUG (--target-dir)." >&2
+    exit 1
+  }
   [ "$PR_HEAD_OID" = "$(git rev-parse HEAD)" ] || {
     echo "❌ /bs:quality PR HEAD does not match the target worktree." >&2
     exit 1

@@ -10,7 +10,7 @@ const riskScore = require("./risk-score.js");
 
 const SCHEMA_VERSION = 1;
 const EXECUTION_BUDGET_VERSION = 1;
-const REQUIRED_GATES_POLICY_VERSION = 2;
+const REQUIRED_GATES_POLICY_VERSION = 3;
 const MAX_AGENT_TARGET = 9;
 const NEEDS_EXECUTION_BUDGET_MIGRATION = Symbol(
   "needs-execution-budget-migration",
@@ -237,8 +237,16 @@ function normalizeManifestCollections(manifest) {
   normalizeGovernor(manifest);
   if (
     manifest.requiredGatesPolicyVersion === undefined ||
-    manifest.requiredGatesPolicyVersion === 1
+    manifest.requiredGatesPolicyVersion === 1 ||
+    manifest.requiredGatesPolicyVersion === 2
   ) {
+    // v1->v2 and v2->v3 both migrate via full recompute (replace, not
+    // union) — v3 (BUI-467) changed inference semantics for the `type`
+    // gate specifically (mypy is no longer promoted merely because
+    // pyproject.toml declares [tool.mypy]; the diff must touch .py/.pyi
+    // too), so a v2 manifest that already inferred python:mypy must be
+    // recomputed under the new policy rather than keeping the stale entry
+    // via union.
     Object.defineProperty(manifest, NEEDS_REQUIRED_GATES_MIGRATION, {
       value: true,
       writable: true,
@@ -302,6 +310,22 @@ function saveManifest(file, manifest) {
   atomicWrite(file, manifest);
 }
 
+// A mid-mutation persist for progress that must survive even if the rest of
+// the current mutation() callback later throws (withManifestLock() only
+// calls saveManifest() on a callback that returns normally). Unlike
+// saveManifest(), this does NOT bump manifestRevision: withManifestLock()
+// compares manifestRevision before/after the SAME mutation() call to detect
+// a genuinely concurrent writer, and bumping it here would make that check
+// misfire against our own in-progress transaction, not an actual concurrent
+// writer. updatedAt IS refreshed, though — worktree-manager.js's
+// qualityManifestReleaseState() reads it to judge whether a locked
+// campaign is abandoned, and an execution reconciled moments ago is
+// definitionally not abandoned (Codex review finding, 2026-08-01, medium).
+function saveManifestMidTransaction(file, manifest) {
+  manifest.updatedAt = new Date().toISOString();
+  atomicWrite(file, manifest);
+}
+
 // manifest.revisions.baseSha is an immutable creation-time snapshot (it also
 // namespaces stateRoot and anchors review-trailer provenance, so it is never
 // reassigned). A base that has legitimately moved since then (main advanced
@@ -328,6 +352,18 @@ function baseIdentityMatches(manifest, actualRoot, currentHead, actualBase) {
     carry.baseSha === actualBase &&
     (carry.head === currentHead ||
       isAncestorOf(actualRoot, carry.head, currentHead)),
+  );
+}
+
+// The base to diff against for anything that needs "what changed relative
+// to the PR's true base" (e.g. diffTouchesPython) — the carried live base
+// after a proven rebase-only replay, or the immutable creation-time
+// baseSha otherwise. Using the stale baseSha post-rebase would include
+// upstream commits (that landed on main between PR creation and the
+// rebase) in the diff, which can falsely widen gate inference (BUI-467).
+function effectiveBaseSha(manifest) {
+  return (
+    manifest.revisions.baseRebaseCarry?.baseSha ?? manifest.revisions.baseSha
   );
 }
 
@@ -476,6 +512,42 @@ function committedFiles(root, head) {
   }
 }
 
+// Files changed between baseSha and head (diff scope), as opposed to
+// committedFiles' full repo-tree-at-head scope. Used to avoid promoting a
+// repo-wide-but-narrow tool (e.g. mypy for a handful of scripts/ files) into
+// a required, blocking gate for a PR that never touches that surface.
+function changedFiles(root, baseSha, head) {
+  if (!baseSha) return null;
+  try {
+    // -z: NUL-delimited, unquoted paths. Without it, git quotes filenames
+    // containing non-ASCII bytes (core.quotePath's default), which would
+    // otherwise break a suffix check like .endsWith(".py") on a path such
+    // as "café.py".
+    return git(root, ["diff", "-z", "--name-only", `${baseSha}..${head}`])
+      .split("\0")
+      .filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+// Unlike lint/test/security, a repo-wide mypy requirement is a real
+// environment dependency (mypy must be installed) for what may be a handful
+// of scripts/ files never touched by most PRs. Only promote it to a
+// required gate when the diff actually changes a .py file — a repo-wide
+// requirement can still be declared explicitly via .quality-gates.json
+// (handled upstream via nativeGates), which always takes precedence over
+// this inference. When baseSha/diff info is unavailable (changedFiles
+// returns null), fail open to the prior repo-wide behavior rather than
+// silently dropping required coverage.
+function diffTouchesPython(root, baseSha, head) {
+  const changed = changedFiles(root, baseSha, head);
+  return (
+    changed === null ||
+    changed.some((file) => file.endsWith(".py") || file.endsWith(".pyi"))
+  );
+}
+
 function isPythonRepository(root, head, pyproject) {
   if (pyproject !== "") return true;
   return committedFiles(root, head).some(
@@ -558,6 +630,7 @@ function hasCommittedPythonTests(root, head) {
 function pythonGate({
   root,
   head,
+  baseSha,
   name,
   pyproject,
   pythonRepository,
@@ -606,7 +679,11 @@ function pythonGate({
           allowSkip,
         });
   }
-  if (name === "type" && hasPythonTool(pyproject, "mypy")) {
+  if (
+    name === "type" &&
+    hasPythonTool(pyproject, "mypy") &&
+    diffTouchesPython(root, baseSha, head)
+  ) {
     return pythonDirectGate({
       root,
       head,
@@ -661,6 +738,7 @@ function optionalBuildGate({ nativeGates, scripts, manager }) {
 function optionalTypeGate({
   root,
   head,
+  baseSha,
   nativeGates,
   scripts,
   manager,
@@ -678,6 +756,7 @@ function optionalTypeGate({
     : pythonGate({
         root,
         head,
+        baseSha,
         name: "type",
         pyproject,
         pythonRepository,
@@ -768,6 +847,7 @@ function discoverRequiredGates(
   root,
   options,
   head = git(root, ["rev-parse", "HEAD"]),
+  baseSha = null,
 ) {
   const packageContent = committedFile(root, head, "package.json");
   let scripts = {};
@@ -821,6 +901,7 @@ function discoverRequiredGates(
   const typeGate = optionalTypeGate({
     root,
     head,
+    baseSha,
     nativeGates,
     scripts,
     manager,
@@ -1344,7 +1425,7 @@ function createManifest(options) {
     provider,
     reviews: [],
     governor: buildGovernor(head),
-    requiredGates: discoverRequiredGates(root, options),
+    requiredGates: discoverRequiredGates(root, options, head, baseSha),
     requiredGatesPolicyVersion: REQUIRED_GATES_POLICY_VERSION,
     gates: [],
   };
@@ -2075,6 +2156,25 @@ function completeActiveExecution(
   return elapsed;
 }
 
+// Pure predicate, no mutation: true only if manifest.governor.activeExecution
+// exists AND its deadline has already passed. Callers that need to know
+// "will reconcileAbandonedExecution() actually reconcile something" without
+// triggering its mutation/throw side effects (e.g. to decide whether a
+// manifestPath is required before calling it) should use this instead of
+// duplicating the deadline arithmetic (Codex review finding, 2026-08-01,
+// medium: an activeExecution merely EXISTING is not the same as it being
+// abandoned -- a still-valid in-flight execution must surface
+// reconcileAbandonedExecution's own "already active" conflict error, not an
+// unrelated manifestPath requirement that only applies to actual
+// reconciliation).
+function hasAbandonedExecution(manifest, now = Date.now()) {
+  const active = manifest.governor.activeExecution;
+  if (!active) return false;
+  const started = Date.parse(active.startedAt);
+  const deadline = started + active.timeoutSeconds * 1000;
+  return Number.isFinite(deadline) && now >= deadline;
+}
+
 function reconcileAbandonedExecution(manifest, now = Date.now()) {
   const active = manifest.governor.activeExecution;
   if (!active) return;
@@ -2095,7 +2195,7 @@ function providerPhaseSeconds(manifest) {
     : (manifest.risk?.runtime?.reviewReserveSeconds ?? 300);
 }
 
-function authorizeProviderAttempt(manifest, options) {
+function authorizeProviderAttempt(manifest, options, manifestPath) {
   const provider = options.provider;
   if (!["claude", "codex", "gemini"].includes(provider)) {
     throw new Error(`invalid review provider '${provider}'`);
@@ -2116,7 +2216,53 @@ function authorizeProviderAttempt(manifest, options) {
   ) {
     throw new Error("provider attempt governor is missing or invalid");
   }
-  reconcileAbandonedExecution(manifest);
+  const hadActiveExecution = governor.activeExecution != null;
+  // A single captured timestamp shared by the preflight check and the
+  // reconciliation call below -- NOT two independent Date.now() calls.
+  // With two separate calls, an execution that expires in the (sub-
+  // millisecond but real) window between them would pass
+  // hasAbandonedExecution() as "not yet abandoned" (skipping the
+  // manifestPath guard) but then be reconciled anyway by
+  // reconcileAbandonedExecution()'s own later Date.now(), recreating the
+  // exact mutation-before-persistence-check race this guard exists to
+  // prevent (Codex review finding, 2026-08-01, medium).
+  const reconciliationNow = Date.now();
+  if (hasAbandonedExecution(manifest, reconciliationNow)) {
+    // Validate BEFORE calling reconcileAbandonedExecution(), not after:
+    // that call mutates governor.activeExecution (clearing it) and credits
+    // gateSecondsUsed/providerSecondsUsed in memory as a side effect. If
+    // this guard ran after reconciling and a caller then caught the thrown
+    // error and retried the SAME manifest object with a manifestPath, the
+    // retry's hadActiveExecution would already read false (this call
+    // already cleared it), so the retry would never detect "a
+    // reconciliation happened" and would skip the persist entirely --
+    // silently losing the reconciliation forever. Refuse to mutate state
+    // we might not be able to persist in the first place (Codex review
+    // finding, 2026-08-01, medium).
+    //
+    // manifestPath is only required when an activeExecution is actually
+    // ABANDONED (deadline passed) -- not merely present -- so a caller
+    // whose activeExecution is still validly in-flight gets
+    // reconcileAbandonedExecution's own actionable "already active"
+    // conflict error below instead of an unrelated manifestPath
+    // requirement that only applies to real reconciliation (Codex review
+    // finding, 2026-08-01, medium: an entry merely EXISTING was too broad
+    // a trigger for this guard, masking the more useful error).
+    if (typeof manifestPath !== "string" || manifestPath === "") {
+      throw new Error(
+        "authorizeProviderAttempt requires manifestPath to persist a reconciled execution",
+      );
+    }
+  }
+  reconcileAbandonedExecution(manifest, reconciliationNow);
+  if (hadActiveExecution && governor.activeExecution == null) {
+    // Same bug as executeGate's gate-budget reconciliation: if the cap
+    // check below throws, that plain Error propagates out of mutate()'s
+    // operation() call before saveManifest() runs, silently discarding
+    // this reconciliation and re-triggering the same false exhaustion on
+    // every retry. Persist it now, unconditionally.
+    saveManifestMidTransaction(manifestPath, manifest);
+  }
   const currentHead = manifest.revisions.currentHead;
   if (governor.providerAttempts.length >= governor.maxProviderAttempts) {
     throw new Error("absolute provider attempt cap exhausted");
@@ -2169,13 +2315,49 @@ function completeProviderAttempt(manifest, options) {
   completeActiveExecution(manifest, "provider", Date.now(), measuredSeconds);
 }
 
-function authorizeMutationAttempt(manifest, options) {
+function authorizeMutationAttempt(manifest, options, manifestPath) {
   if (!["high", "critical"].includes(manifest.risk?.tier)) {
+    // Throws before reconcileAbandonedExecution() runs, so a stale
+    // activeExecution on a non-high/critical manifest is never reconciled
+    // via THIS call path -- intentional, not a gap: executeGate() (the
+    // only place gates actually run) unconditionally reconciles on every
+    // invocation regardless of risk tier, so it still gets cleared the
+    // next time any gate runs (Codex review finding, 2026-08-01, medium:
+    // confirming this ordering is safe, not a leak).
     throw new Error(
       "mutation execution is only available for high or critical campaigns",
     );
   }
-  reconcileAbandonedExecution(manifest);
+  const hadActiveExecution = manifest.governor.activeExecution != null;
+  // One captured timestamp for both the preflight check and reconciliation
+  // -- see authorizeProviderAttempt's identical fix for why two
+  // independent Date.now() calls would reopen the exact race this guard
+  // exists to close (Codex review finding, 2026-08-01, medium).
+  const reconciliationNow = Date.now();
+  if (hasAbandonedExecution(manifest, reconciliationNow)) {
+    // Validate BEFORE reconcileAbandonedExecution() mutates state, and
+    // only for an actually-ABANDONED execution (not merely a present
+    // one) -- see authorizeProviderAttempt's identical guard for both
+    // reasons: reconciling first and only then throwing would let a
+    // caught-and-retried call silently lose the reconciliation, and
+    // gating on mere presence would mask reconcileAbandonedExecution's
+    // own "already active" conflict error for a still-valid execution
+    // (Codex review finding, 2026-08-01, medium, both rounds).
+    if (typeof manifestPath !== "string" || manifestPath === "") {
+      throw new Error(
+        "authorizeMutationAttempt requires manifestPath to persist a reconciled execution",
+      );
+    }
+  }
+  reconcileAbandonedExecution(manifest, reconciliationNow);
+  if (hadActiveExecution && manifest.governor.activeExecution == null) {
+    // Same bug as executeGate's gate-budget reconciliation: if the cap
+    // check below throws, that plain Error propagates out of mutate()'s
+    // operation() call before saveManifest() runs, silently discarding
+    // this reconciliation and re-triggering the same false exhaustion on
+    // every retry. Persist it now, unconditionally.
+    saveManifestMidTransaction(manifestPath, manifest);
+  }
   const remaining = executionRemaining(manifest, "gate");
   const runtime = manifest.risk?.runtime;
   const requestedTimeout = parseInteger(
@@ -2369,20 +2551,38 @@ function providerFindings(manifest) {
   // BUI-521: agents whose findings artifact was a bare delimiter with no body.
   // Collected across all covered reviews and raised as one malformed-output
   // failure below, rather than silently dropped or counted as findings.
-  const inconclusiveAgents = [];
+  let inconclusiveAgents = [];
+  // Counted PER REVIEW, not across the campaign. These were previously
+  // function-scoped: `usableReviewerReports` accumulated with `+= 1` over every
+  // covered review while `requiredUsableReports` was only ever Math.max'd to a
+  // SINGLE panel's majority. A later clean round therefore satisfied an earlier
+  // round's shortfall — round 1 producing zero usable reports passed as soon as
+  // round 2 returned three. reviewCoverage() checks that the reviewed slices are
+  // contiguous and artifact-intact, but never that each slice individually had a
+  // usable panel, so the merge was authorized over a diff range that no quorum
+  // ever reviewed. Every covered review must carry its own majority.
   let usableReviewerReports = 0;
   let requiredUsableReports = 0;
+  const failQuorum = () => {
+    throw new Error(
+      `inconclusive provider findings: ${inconclusiveAgents.join(", ")} ` +
+        `left only ${usableReviewerReports}/${manifest.agents.length} usable ` +
+        `reviewer reports (need ${requiredUsableReports || 1})`,
+    );
+  };
   for (const review of coveredReviews(manifest)) {
     const reviewFindingsStart = findings.length;
+    usableReviewerReports = 0;
+    requiredUsableReports = 0;
+    // Reset too: a malformed agent in round 1 must not be reported against
+    // round 2's panel now that the quorum is evaluated inside the loop.
+    inconclusiveAgents = [];
     const inventory = parseJson(
       fs.readFileSync(path.join(review.artifactDir, "artifact-inventory.json")),
       "provider artifact inventory",
     );
     if (inventory.provider === "claude" && review.status !== "advisory") {
-      requiredUsableReports = Math.max(
-        requiredUsableReports,
-        Math.floor(manifest.agents.length / 2) + 1,
-      );
+      requiredUsableReports = Math.floor(manifest.agents.length / 2) + 1;
     }
     const resultFiles = inventory.files.filter((file) =>
       file.name.endsWith(".json"),
@@ -2404,10 +2604,20 @@ function providerFindings(manifest) {
           `provider result ${item.name}`,
         );
       } catch {
+        // Unparseable evidence is NOT the absence of evidence. A bare
+        // `continue` converted it to silence: no finding, no counter, no
+        // diagnosis. Route it into the inconclusive path so it participates
+        // in the fail-closed quorum instead of vanishing.
+        inconclusiveAgents.push(item.name);
         continue;
       }
       const items = parsed.findings || parsed.result?.findings;
-      if (!Array.isArray(items)) continue;
+      if (!Array.isArray(items)) {
+        // Same reasoning: a result whose findings are not an array is
+        // malformed evidence, not a clean review.
+        inconclusiveAgents.push(item.name);
+        continue;
+      }
       items.forEach((finding, index) => {
         findings.push({
           ...finding,
@@ -2523,20 +2733,18 @@ function providerFindings(manifest) {
         source: item.name,
       });
     }
-  }
-  // Fail closed, and distinctly from "actionable code findings remain" — the
-  // operator needs to know the panel produced no usable verdict, not hunt for
-  // a defect that was never described.
-  if (
-    (requiredUsableReports > 0 &&
-      usableReviewerReports < requiredUsableReports) ||
-    (inconclusiveAgents.length && usableReviewerReports === 0)
-  ) {
-    throw new Error(
-      `inconclusive provider findings: ${inconclusiveAgents.join(", ")} ` +
-        `left only ${usableReviewerReports}/${manifest.agents.length} usable ` +
-        `reviewer reports (need ${requiredUsableReports || 1})`,
-    );
+    // Fail closed per review, and distinctly from "actionable code findings
+    // remain" — the operator needs to know THIS panel produced no usable
+    // verdict, not hunt for a defect that was never described. Evaluating here
+    // rather than after the loop is what stops a later clean round from
+    // covering for an earlier round that returned nothing.
+    if (
+      (requiredUsableReports > 0 &&
+        usableReviewerReports < requiredUsableReports) ||
+      (inconclusiveAgents.length && usableReviewerReports === 0)
+    ) {
+      failQuorum();
+    }
   }
   return findings;
 }
@@ -2792,12 +3000,18 @@ function writeArtifactInventory(
       "Claude findings inventory does not cover the mandatory panel",
     );
   }
-  const inconclusiveFindings = findings.filter((name) =>
-    fs
-      .readFileSync(path.join(resolved, name), "utf8")
-      .split(/\r?\n/)
-      .some((line) => line.startsWith("INCONCLUSIVE:")),
-  );
+  // An EMPTY report is inconclusive too. This filter previously only excluded
+  // files carrying an explicit `INCONCLUSIVE:` line, so a 0-byte or
+  // whitespace-only artifact — an agent killed mid-write, or a truncated
+  // write — counted toward the usable quorum and got stamped into signed,
+  // hash-bound inventory evidence as a completed report. providerFindings()
+  // independently treats an empty body as inconclusive; these two must agree,
+  // or this gate is not enforcing the invariant its own error message claims.
+  const inconclusiveFindings = findings.filter((name) => {
+    const text = fs.readFileSync(path.join(resolved, name), "utf8");
+    if (!text.trim()) return true;
+    return text.split(/\r?\n/).some((line) => line.startsWith("INCONCLUSIVE:"));
+  });
   const panelSize =
     provider === "claude" && !advisory
       ? manifest.agents.length
@@ -3099,7 +3313,21 @@ function executeGate(manifest, required, name, log, manifestPath) {
   const runtime = manifest.risk?.runtime;
   const gateSeconds = runtime?.checkSeconds ?? 300;
   const gateReserveSeconds = runtime?.checkReserveSeconds ?? 0;
+  const hadActiveExecution = manifest.governor.activeExecution != null;
   reconcileAbandonedExecution(manifest);
+  if (hadActiveExecution && manifest.governor.activeExecution == null) {
+    // reconcileAbandonedExecution just cleared a timed-out execution and
+    // credited its elapsed time to gateSecondsUsed, in memory only. If the
+    // exhaustion check below throws, that plain Error propagates out of
+    // mutate()'s operation() call in withManifestLock() before
+    // saveManifest() ever runs -- so this reconciliation was silently
+    // discarded on every prior attempt, and a stale execution whose
+    // deadline had already passed kept getting "recovered" and immediately
+    // re-discarded, re-throwing the exhaustion error forever with no way to
+    // recover the manifest. Persist the reconciliation now, unconditionally,
+    // so it survives regardless of what happens next in this function.
+    saveManifestMidTransaction(manifestPath, manifest);
+  }
   const gateRemaining = executionRemaining(manifest, "gate");
   if (gateRemaining <= 0) {
     throw new Error(
@@ -3118,7 +3346,16 @@ function executeGate(manifest, required, name, log, manifestPath) {
   };
   manifest.governor.lastActivityAt =
     manifest.governor.activeExecution.startedAt;
-  atomicWrite(manifestPath, manifest);
+  // Refreshing updatedAt here (rather than only on completion) is
+  // intentional: a gate execution that just started is not abandoned, and
+  // worktree-manager.js's qualityManifestReleaseState() reads updatedAt to
+  // judge lock staleness. Nothing else touches updatedAt while the
+  // subprocess below runs, but that's covered by activeExecution's own
+  // startedAt+timeoutSeconds deadline (reconcileAbandonedExecution), which
+  // is independent of the lock-staleness heuristic (Codex review finding,
+  // 2026-08-01, medium: confirming this doesn't conflate in-flight vs
+  // abandoned state).
+  saveManifestMidTransaction(manifestPath, manifest);
   const boundedRunner = path.join(__dirname, "quality-run-bounded.sh");
   const monotonicStartedAt = process.hrtime.bigint();
   let result;
@@ -3148,7 +3385,7 @@ function executeGate(manifest, required, name, log, manifestPath) {
       Date.now(),
       Number(elapsedNanoseconds) / 1_000_000_000,
     );
-    atomicWrite(manifestPath, manifest);
+    saveManifestMidTransaction(manifestPath, manifest);
   }
   const output = `${result.stdout || ""}${result.stderr || ""}`;
   fs.writeFileSync(log, output, { mode: 0o600 });
@@ -3313,14 +3550,14 @@ function validMutationArtifact(manifest, artifact) {
   ].every(Boolean);
 }
 
-function mutationEvidenceValid(manifest) {
-  // Creation begins with an unresolved risk contract. The normal quality flow
-  // cannot select agents or record reviews in that state, but fixture and
-  // inspection callers can still ask whether their existing evidence is
-  // coherent. Mutation proof is a requirement of a *resolved* high/critical
-  // contract, not a substitute for resolving that contract in the first
-  // place.
-  if (manifest.risk?.resolved !== true) return true;
+function mutationEvidenceValid(manifest, options = {}) {
+  // An unresolved risk contract means mutation evidence cannot yet be
+  // evaluated, so the honest answer is "not valid" — callers that need the
+  // pre-resolution "no evidence to contradict" case must opt in explicitly
+  // via unresolvedIsVacuous rather than receiving a default pass.
+  if (manifest.risk?.resolved !== true) {
+    return options.unresolvedIsVacuous === true;
+  }
   const tier = manifest.risk?.tier;
   if (["low", "medium"].includes(tier)) return true;
   if (!["high", "critical"].includes(tier)) return false;
@@ -3614,6 +3851,19 @@ const COMMANDS = {
   "approval-valid": ({ manifest }) => {
     process.exitCode = approvalValid(manifest, manifest.repo.realpath) ? 0 : 1;
   },
+  // Scope is intentionally checked separately from validity: a capability
+  // signed for one scope (e.g. operator-quality-override) must never satisfy
+  // a check gated on a different scope (e.g. operator-ci-billing-override),
+  // even though both are "valid" in the signature/expiry/identity sense.
+  "approval-scope": ({ manifest, rawArgs }) => {
+    const options = parseOptions(rawArgs);
+    if (!options.scope) {
+      throw new Error("approval-scope requires --scope <name>");
+    }
+    const valid = approvalValid(manifest, manifest.repo.realpath);
+    process.exitCode =
+      valid && manifest.approval?.scope === options.scope ? 0 : 1;
+  },
   "human-floor-check": ({ manifest }) => {
     // Contract designed so the AUTONOMOUS path is reachable ONLY by an explicit
     // verified-clear result; every other outcome requires a human.
@@ -3629,7 +3879,11 @@ const COMMANDS = {
   "provider-attempt": ({ manifestArg, rawArgs }) => {
     let result;
     mutate(manifestArg, (locked) => {
-      result = authorizeProviderAttempt(locked, parseOptions(rawArgs));
+      result = authorizeProviderAttempt(
+        locked,
+        parseOptions(rawArgs),
+        manifestArg,
+      );
     });
     process.stdout.write(`${JSON.stringify(result)}\n`);
   },
@@ -3672,7 +3926,11 @@ const COMMANDS = {
   "mutation-attempt": ({ manifestArg, rawArgs }) => {
     let result;
     mutate(manifestArg, (locked) => {
-      result = authorizeMutationAttempt(locked, parseOptions(rawArgs));
+      result = authorizeMutationAttempt(
+        locked,
+        parseOptions(rawArgs),
+        manifestArg,
+      );
     });
     process.stdout.write(`${JSON.stringify(result)}\n`);
   },
@@ -3745,6 +4003,7 @@ function runAdvance(manifestArg, manifest, rawArgs) {
         "verify-app": locked.options?.verifyApp === true,
       },
       locked.revisions.currentHead,
+      effectiveBaseSha(locked),
     );
     locked.requiredGates = locked[NEEDS_REQUIRED_GATES_MIGRATION]
       ? discovered
@@ -3831,6 +4090,7 @@ module.exports = {
   recordJudge,
   recordGate,
   recordMutation,
+  hasAbandonedExecution,
   reconcileAbandonedExecution,
   executionRemaining,
   runGate,

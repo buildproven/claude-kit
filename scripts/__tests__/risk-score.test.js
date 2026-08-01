@@ -11,8 +11,8 @@ const {
 } = require("../risk-score");
 const { execFileSync } = require("child_process");
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
+const { makeTempDir } = require("./helpers/tmp.js");
 
 // Helper: build a descriptor.
 function d(file, status = "M", patch = "", lines = 10, isBinary = false) {
@@ -427,7 +427,7 @@ describe("score — rename-aware workload", () => {
   }
 
   it("counts only residual edits in renamed files, while retaining changed-file overhead", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-renames-"));
+    const root = makeTempDir("quality-renames-");
     git(root, ["init", "-q", "-b", "main"]);
     git(root, ["config", "user.name", "Quality Test"]);
     git(root, ["config", "user.email", "quality@example.com"]);
@@ -576,6 +576,29 @@ describe("score — base resolution is deterministic and fails closed", () => {
     expect(r.knobs).toHaveProperty("agents");
   });
 
+  it("BUI-603 #3: reports a merge-base failure in reasons instead of silently substituting the raw base ref", () => {
+    const runner = (args) => {
+      const a = args.join(" ");
+      if (
+        a.startsWith("rev-parse --abbrev-ref --symbolic-full-name @{upstream}")
+      ) {
+        throw new Error("no upstream");
+      }
+      if (a.startsWith("rev-parse --verify --quiet")) {
+        if (a.includes("origin/main")) return "abc123";
+        throw new Error("unknown ref");
+      }
+      if (a.startsWith("merge-base")) throw new Error("no merge base");
+      if (a.includes("--name-status")) return NAME_STATUS;
+      if (a.includes("--numstat")) return NUMSTAT;
+      return "";
+    };
+    const r = score({ gitRunner: runner });
+    expect(r.baseUnresolved).toBeUndefined();
+    expect(r.diffCollectionFailed).toBeUndefined();
+    expect(r.reasons.join(" ")).toMatch(/merge-base .* failed/i);
+  });
+
   it("honors GITHUB_BASE_REF for the CI path", () => {
     const prev = process.env.GITHUB_BASE_REF;
     process.env.GITHUB_BASE_REF = "main";
@@ -629,6 +652,19 @@ describe("scoreToKnobs — Moderate curve", () => {
       curve: [{ maxScore: 100, agents: 2, codex: "skip", codexRounds: 0 }],
     });
     expect(scoreToKnobs(80, cfg).codex).not.toBe("skip");
+  });
+  it("a repo-committed curve cannot weaken review below the built-in baseline for scores under 75", () => {
+    // BUI-603 #2: previously the baseline clamp only fired at
+    // effectiveScore >= 75, so a curve like this let a 69-74 score through
+    // with 2 agents and no Codex verification.
+    const cfg = deepMerge(DEFAULTS, {
+      curve: [{ maxScore: 100, agents: 2, codex: "skip", codexRounds: 0 }],
+      codexForceFloor: 101,
+    });
+    const baseline = DEFAULTS.curve.find((band) => 69 <= band.maxScore);
+    const knobs = scoreToKnobs(69, cfg);
+    expect(knobs.agents).toBeGreaterThanOrEqual(baseline.agents);
+    expect(knobs.codex).not.toBe("skip");
   });
   it.each([75, 76, 80, 84, 85])(
     "reviewed config cannot weaken critical review depth at score %i",
@@ -725,5 +761,110 @@ describe("isForcedLogic / fileIsMechanical", () => {
         ),
       ).score,
     ).toBe(DEFAULTS.base.securityFloor);
+  });
+});
+
+// The file's stated contract (see the unresolved-base branch in score()) is to
+// fail CLOSED whenever the diff cannot be trusted: an unreadable diff can only
+// produce a misleadingly LOW score, which under-provisions review.
+describe("fail-closed on unreadable diffs", () => {
+  // A runner that resolves a base successfully but fails the structural
+  // `git diff` calls — a shallow clone, a GC'd object, or a missing
+  // submodule ref.
+  function runnerFailingDiff() {
+    return (args) => {
+      if (args[0] === "rev-parse" || args[0] === "merge-base") {
+        return "abc123";
+      }
+      if (args[0] === "diff") {
+        throw new Error("fatal: bad object abc123");
+      }
+      return "";
+    };
+  }
+
+  it("scores maximum risk when diff collection fails", () => {
+    const result = score({
+      base: "origin/main",
+      gitRunner: runnerFailingDiff(),
+    });
+    expect(result.riskScore).toBe(100);
+    expect(result.diffCollectionFailed).toBe(true);
+  });
+
+  it("explains the failure instead of claiming no changes were found", () => {
+    const result = score({
+      base: "origin/main",
+      gitRunner: runnerFailingDiff(),
+    });
+    expect(result.reasons.join(" ")).toMatch(/diff collection failed/i);
+    expect(result.reasons.join(" ")).not.toMatch(/no changes detected/i);
+  });
+
+  it("provisions critical-tier review knobs on a failed diff", () => {
+    const result = score({
+      base: "origin/main",
+      gitRunner: runnerFailingDiff(),
+    });
+    // Must not land on the base.medium knobs the empty-diff path produced.
+    expect(result.knobs).toEqual(scoreToKnobs(100, DEFAULTS));
+  });
+
+  it("still reports a genuinely empty diff as low risk", () => {
+    // Guards against over-correcting: git succeeding with no output is a real
+    // "nothing changed", not a failure.
+    const result = score({
+      base: "origin/main",
+      gitRunner: (args) => {
+        if (args[0] === "rev-parse" || args[0] === "merge-base")
+          return "abc123";
+        return "";
+      },
+    });
+    expect(result.diffCollectionFailed).toBeUndefined();
+    expect(result.riskScore).toBeLessThan(75);
+  });
+});
+
+// A JOB-level `permissions:` block is indented under `jobs.<id>:` and is the
+// more common form. The pattern was anchored at column 0, so escalating a job
+// to `id-token: write` — the OIDC-credential-exfiltration class this floor
+// exists to catch — never matched and scored below the critical band.
+describe("workflow permissions detection", () => {
+  const workflowFile = ".github/workflows/release.yml";
+
+  function scoreWorkflowPatch(patch) {
+    return computeScore(
+      [d(workflowFile, "M", patch, 4)],
+      { files: 1, lines: 4 },
+      DEFAULTS,
+    ).riskScore;
+  }
+
+  it("holds the security floor for a job-level permissions escalation", () => {
+    const patch = [
+      "   jobs:",
+      "     release:",
+      "-      permissions:",
+      "-        contents: read",
+      "+      permissions:",
+      "+        contents: write",
+      "+        id-token: write",
+    ].join("\n");
+    expect(scoreWorkflowPatch(patch)).toBe(DEFAULTS.base.securityFloor);
+  });
+
+  it("holds the security floor for a top-level permissions change", () => {
+    const patch = ["-permissions:", "+permissions:", "+  id-token: write"].join(
+      "\n",
+    );
+    expect(scoreWorkflowPatch(patch)).toBe(DEFAULTS.base.securityFloor);
+  });
+
+  it("still downgrades a workflow diff that only bumps a comment", () => {
+    // The content-aware downgrade must survive: this is why the pattern list
+    // exists rather than pinning every workflow edit to the floor.
+    const patch = ["-  # old note", "+  # new note"].join("\n");
+    expect(scoreWorkflowPatch(patch)).toBeLessThan(DEFAULTS.base.securityFloor);
   });
 });

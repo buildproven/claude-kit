@@ -4,7 +4,6 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   realpathSync,
   readFileSync,
   symlinkSync,
@@ -14,7 +13,8 @@ import {
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const INVOCATION = path.join(ROOT, "scripts", "quality-invocation.js");
@@ -94,7 +94,7 @@ function withoutAmbientGitHubIdentity(overrides = {}) {
 }
 
 function repo(label) {
-  const root = mkdtempSync(path.join(tmpdir(), `quality-${label}-`));
+  const root = makeTempDir(`quality-${label}-`);
   git(root, ["init", "-q", "-b", "main"]);
   git(root, ["config", "user.name", "Quality Test"]);
   git(root, ["config", "user.email", "quality@example.com"]);
@@ -362,7 +362,7 @@ function recordJudgeArtifact(root, manifest, dispositions = []) {
 }
 
 function fakeGh(root, head) {
-  const bin = mkdtempSync(path.join(tmpdir(), "quality-gh-"));
+  const bin = makeTempDir("quality-gh-");
   const gh = path.join(bin, "gh");
   const merged = path.join(bin, "merged");
   const base = git(root, ["rev-parse", "origin/main"]);
@@ -422,6 +422,33 @@ exit 1
   chmodSync(gh, 0o755);
   return bin;
 }
+
+describe("mutationEvidenceValid — BUI-603 #1 fail-closed on unresolved risk", () => {
+  it("returns false for an unresolved risk contract by default", () => {
+    const manifest = { risk: { resolved: false } };
+    expect(invocation.mutationEvidenceValid(manifest)).toBe(false);
+  });
+
+  it("returns true for an unresolved risk contract only with an explicit opt-in", () => {
+    const manifest = { risk: { resolved: false } };
+    expect(
+      invocation.mutationEvidenceValid(manifest, {
+        unresolvedIsVacuous: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("still evaluates the resolved-contract rules normally once resolved", () => {
+    const lowTier = { risk: { resolved: true, tier: "low" } };
+    expect(invocation.mutationEvidenceValid(lowTier)).toBe(true);
+
+    const unresolvedHighTier = {
+      risk: { resolved: true, tier: "high" },
+      mutation: null,
+    };
+    expect(invocation.mutationEvidenceValid(unresolvedHighTier)).toBe(false);
+  });
+});
 
 describe("quality invocation manifest", () => {
   it("reuses one durable campaign for the same exact repo, PR, base, HEAD, and options", () => {
@@ -697,7 +724,7 @@ describe("quality invocation manifest", () => {
   it("cannot reset the same campaign from another linked worktree", () => {
     const root = repo("durable-linked-worktree");
     create(root);
-    const linked = mkdtempSync(path.join(tmpdir(), "quality-linked-"));
+    const linked = makeTempDir("quality-linked-");
     git(root, ["worktree", "add", "--detach", linked, "HEAD"]);
     expect(() => create(linked)).toThrow(
       /deterministic quality campaign identity collision/,
@@ -707,7 +734,7 @@ describe("quality invocation manifest", () => {
   it("namespaces independent clones by their Git common directory", () => {
     const root = repo("durable-independent-clone");
     const original = create(root);
-    const clone = mkdtempSync(path.join(tmpdir(), "quality-clone-"));
+    const clone = makeTempDir("quality-clone-");
     execFileSync("git", ["clone", "-q", root, clone]);
     git(clone, ["fetch", "-q", "origin", "main"]);
     const independent = create(clone);
@@ -777,11 +804,265 @@ describe("quality invocation manifest", () => {
     expect(manifest.provider.fallbackOverride).toBe("codex");
   }, 120_000);
 
+  it("passes QUALITY_CWD derived from --target-dir, not this process's own $PWD (BUI-390)", () => {
+    // Reproduces the BUI-390 repro shape: invoking bash from a directory
+    // other than --target-dir. Stubs the resolver location with a fake
+    // resolver that just reports the QUALITY_CWD it received and exits
+    // non-zero — if bootstrap.sh derives QUALITY_CWD from --target-dir (the
+    // fix) rather than $(pwd) at the resolver-path branch (the bug), the
+    // fake resolver observes the target dir, not the elsewhere cwd.
+    const target = repo("bootstrap-cwd-target");
+    const setupRoot = makeTempDir("quality-fake-setup-root-");
+    const fakeScriptsDir = path.join(setupRoot, "scripts");
+    mkdirSync(fakeScriptsDir, { recursive: true });
+    const observedFile = path.join(setupRoot, "observed-cwd.txt");
+    writeFileSync(
+      path.join(fakeScriptsDir, "quality-target-resolver.js"),
+      `#!/usr/bin/env node
+require("fs").writeFileSync(${JSON.stringify(observedFile)}, process.env.QUALITY_CWD || "");
+process.stdout.write(JSON.stringify({ ok: false, reason: "test stub", resolution: "path", warnings: [] }));
+process.exit(0);
+`,
+    );
+    const elsewhereCwd = makeTempDir("quality-bootstrap-elsewhere-");
+    spawnSync("bash", [BOOTSTRAP, "--target-dir", target, "--level", "auto"], {
+      cwd: elsewhereCwd,
+      env: {
+        ...process.env,
+        CLAUDE_SETUP_ROOT: setupRoot,
+      },
+      encoding: "utf8",
+    });
+    const observedCwd = readFileSync(observedFile, "utf8");
+    expect(observedCwd).toBe(target);
+    expect(observedCwd).not.toBe(elsewhereCwd);
+  }, 30_000);
+
+  it("injects --target-dir into resolver args when only BS_QUALITY_TARGET_DIR env var is set (BUI-390)", () => {
+    // Documented precedence is --target-dir > env var > cwd. Without
+    // injecting an explicit --target-dir token, the resolver's own arg
+    // parser never sees a path (it only parses CLI tokens, not env vars),
+    // so it falls through to the ambient-cwd fallback and hard-refuses
+    // under --merge — breaking the documented env-var-only fallback for
+    // forked/agent invocations with no inherited cwd.
+    const target = repo("bootstrap-env-target-dir");
+    const setupRoot = makeTempDir("quality-fake-setup-root-envvar-");
+    const fakeScriptsDir = path.join(setupRoot, "scripts");
+    mkdirSync(fakeScriptsDir, { recursive: true });
+    const observedArgsFile = path.join(setupRoot, "observed-args.json");
+    writeFileSync(
+      path.join(fakeScriptsDir, "quality-target-resolver.js"),
+      `#!/usr/bin/env node
+const idx = process.argv.indexOf("--cli");
+const argv = idx >= 0 ? process.argv.slice(idx + 1) : [];
+require("fs").writeFileSync(${JSON.stringify(observedArgsFile)}, JSON.stringify(argv));
+process.stdout.write(JSON.stringify({ ok: false, reason: "test stub", resolution: "path", warnings: [] }));
+process.exit(0);
+`,
+    );
+    const elsewhereCwd = makeTempDir("quality-bootstrap-elsewhere-envvar-");
+    spawnSync("bash", [BOOTSTRAP, "--merge", "--level", "auto"], {
+      cwd: elsewhereCwd,
+      env: {
+        ...process.env,
+        CLAUDE_SETUP_ROOT: setupRoot,
+        BS_QUALITY_TARGET_DIR: target,
+      },
+      encoding: "utf8",
+    });
+    const observedArgs = JSON.parse(readFileSync(observedArgsFile, "utf8"));
+    const targetDirIdx = observedArgs.indexOf("--target-dir");
+    expect(targetDirIdx).toBeGreaterThanOrEqual(0);
+    expect(observedArgs[targetDirIdx + 1]).toBe(target);
+  }, 30_000);
+
+  it("does not let BS_QUALITY_TARGET_DIR override an explicit bare-path argument (BUI-390)", () => {
+    // Codex review finding: parseArgs recognizes a bare absolute/~ path
+    // token as an explicit target too, not just --target-dir/--target. If
+    // bootstrap.sh's own env-var-fallback scanner doesn't recognize that
+    // form, it wrongly appends --target-dir <env value>, and because
+    // quality-target-resolver.js's applyExplicitFlags runs before
+    // applyPathPattern, the injected env value would win over the caller's
+    // own explicit path — silently auditing/merging the wrong checkout.
+    const explicitTarget = repo("bootstrap-explicit-bare-path");
+    const envTarget = repo("bootstrap-env-target-should-be-ignored");
+    const setupRoot = makeTempDir("quality-fake-setup-root-bare-path-");
+    const fakeScriptsDir = path.join(setupRoot, "scripts");
+    mkdirSync(fakeScriptsDir, { recursive: true });
+    const observedArgsFile = path.join(setupRoot, "observed-args.json");
+    writeFileSync(
+      path.join(fakeScriptsDir, "quality-target-resolver.js"),
+      `#!/usr/bin/env node
+const idx = process.argv.indexOf("--cli");
+const argv = idx >= 0 ? process.argv.slice(idx + 1) : [];
+require("fs").writeFileSync(${JSON.stringify(observedArgsFile)}, JSON.stringify(argv));
+process.stdout.write(JSON.stringify({ ok: false, reason: "test stub", resolution: "path", warnings: [] }));
+process.exit(0);
+`,
+    );
+    spawnSync(
+      "bash",
+      [BOOTSTRAP, "--merge", explicitTarget, "--level", "auto"],
+      {
+        cwd: explicitTarget,
+        env: {
+          ...process.env,
+          CLAUDE_SETUP_ROOT: setupRoot,
+          BS_QUALITY_TARGET_DIR: envTarget,
+        },
+        encoding: "utf8",
+      },
+    );
+    const observedArgs = JSON.parse(readFileSync(observedArgsFile, "utf8"));
+    // The caller's own bare path must be present, unmodified; --target-dir
+    // must NOT have been injected with the env var's (different) value.
+    expect(observedArgs).toContain(explicitTarget);
+    const targetDirIdx = observedArgs.indexOf("--target-dir");
+    if (targetDirIdx >= 0) {
+      expect(observedArgs[targetDirIdx + 1]).not.toBe(envTarget);
+    }
+  }, 30_000);
+
+  it("does not let BS_QUALITY_TARGET_DIR override a literal ~/... path argument (BUI-390)", () => {
+    // Second Codex review finding on the same fix: an UNQUOTED ~/* case
+    // pattern undergoes bash tilde expansion and becomes rooted at $HOME,
+    // so it silently fails to match a literal "~/..." argument string
+    // (as opposed to a shell-expanded absolute path). Passes a literal
+    // ~/-prefixed token (not expanded by the test harness, since it's
+    // passed as a discrete argv entry, not through a shell) to prove the
+    // quoted-tilde pattern in quality-bootstrap.sh actually matches it.
+    const explicitTarget = repo("bootstrap-explicit-tilde-path");
+    const envTarget = repo("bootstrap-env-target-should-be-ignored-tilde");
+    const setupRoot = makeTempDir("quality-fake-setup-root-tilde-path-");
+    const fakeScriptsDir = path.join(setupRoot, "scripts");
+    mkdirSync(fakeScriptsDir, { recursive: true });
+    const observedArgsFile = path.join(setupRoot, "observed-args.json");
+    writeFileSync(
+      path.join(fakeScriptsDir, "quality-target-resolver.js"),
+      `#!/usr/bin/env node
+const idx = process.argv.indexOf("--cli");
+const argv = idx >= 0 ? process.argv.slice(idx + 1) : [];
+require("fs").writeFileSync(${JSON.stringify(observedArgsFile)}, JSON.stringify(argv));
+process.stdout.write(JSON.stringify({ ok: false, reason: "test stub", resolution: "path", warnings: [] }));
+process.exit(0);
+`,
+    );
+    const literalTildeArg = "~/some/literal/tilde/path";
+    spawnSync(
+      "bash",
+      [BOOTSTRAP, "--merge", literalTildeArg, "--level", "auto"],
+      {
+        cwd: explicitTarget,
+        env: {
+          ...process.env,
+          CLAUDE_SETUP_ROOT: setupRoot,
+          BS_QUALITY_TARGET_DIR: envTarget,
+        },
+        encoding: "utf8",
+      },
+    );
+    const observedArgs = JSON.parse(readFileSync(observedArgsFile, "utf8"));
+    expect(observedArgs).toContain(literalTildeArg);
+    const targetDirIdx = observedArgs.indexOf("--target-dir");
+    if (targetDirIdx >= 0) {
+      expect(observedArgs[targetDirIdx + 1]).not.toBe(envTarget);
+    }
+  }, 30_000);
+
+  it("recognizes --worktree as an explicit path, same as --target-dir (BUI-390)", () => {
+    // Codex review finding (full-diff pass): quality-target-resolver.js's
+    // EXPLICIT_PATH_FLAG set is {--target-dir, --target, --worktree} — the
+    // bootstrap.sh scanner only checked the first two, so a --worktree-based
+    // invocation launched from another checkout would wrongly accept the
+    // BS_QUALITY_TARGET_DIR env-var fallback, resolving/materializing
+    // against the wrong repo.
+    const explicitTarget = repo("bootstrap-explicit-worktree-flag");
+    const envTarget = repo("bootstrap-env-target-should-be-ignored-worktree");
+    const setupRoot = makeTempDir("quality-fake-setup-root-worktree-flag-");
+    const fakeScriptsDir = path.join(setupRoot, "scripts");
+    mkdirSync(fakeScriptsDir, { recursive: true });
+    const observedArgsFile = path.join(setupRoot, "observed-args.json");
+    writeFileSync(
+      path.join(fakeScriptsDir, "quality-target-resolver.js"),
+      `#!/usr/bin/env node
+const idx = process.argv.indexOf("--cli");
+const argv = idx >= 0 ? process.argv.slice(idx + 1) : [];
+require("fs").writeFileSync(${JSON.stringify(observedArgsFile)}, JSON.stringify(argv));
+process.stdout.write(JSON.stringify({ ok: false, reason: "test stub", resolution: "path", warnings: [] }));
+process.exit(0);
+`,
+    );
+    // Uses --worktree=<relative-looking-name> deliberately: an *absolute*
+    // --worktree value would incidentally satisfy the separate bare-path
+    // ("/*") detection this same scanner does, masking whether --worktree
+    // itself is recognized as an explicit-path FLAG. A relative-looking
+    // --worktree=value isolates the flag-recognition behavior under test.
+    const worktreeArg = `--worktree=${explicitTarget}`;
+    const elsewhereCwd = makeTempDir("quality-bootstrap-elsewhere-worktree-");
+    spawnSync("bash", [BOOTSTRAP, "--merge", worktreeArg, "--level", "auto"], {
+      cwd: elsewhereCwd,
+      env: {
+        ...process.env,
+        CLAUDE_SETUP_ROOT: setupRoot,
+        BS_QUALITY_TARGET_DIR: envTarget,
+      },
+      encoding: "utf8",
+    });
+    const observedArgs = JSON.parse(readFileSync(observedArgsFile, "utf8"));
+    expect(observedArgs).toContain(worktreeArg);
+    // The scanner must recognize --worktree=... as an explicit path and NOT
+    // inject the env var's --target-dir over it.
+    const targetDirIdx = observedArgs.indexOf("--target-dir");
+    expect(targetDirIdx).toBe(-1);
+  }, 30_000);
+
+  it("anchors worktree materialization to the resolved target, not ambient cwd (BUI-390)", () => {
+    // Codex review finding: REPO_ROOT_FOR_WT used `git rev-parse
+    // --show-toplevel` unscoped, which resolves against this process's own
+    // cwd rather than the resolved --target-dir. When a resolved branch has
+    // no local worktree yet, materialization would fetch/create it against
+    // the wrong repo (or fail outright from a non-repo directory). Uses
+    // --branch (not --pr) so this doesn't depend on the repo() test
+    // helper's origin remote being a github.com URL — resolveByBranch
+    // doesn't need repo scoping, only cwd scoping, which is exactly what
+    // this fix addresses.
+    const primary = repo("bootstrap-materialize-target");
+    const base = git(primary, ["rev-parse", "origin/main"]);
+    git(primary, ["branch", "release", base]);
+    const elsewhereCwd = makeTempDir(
+      "quality-bootstrap-elsewhere-materialize-",
+    );
+    const result = spawnSync(
+      "bash",
+      [
+        BOOTSTRAP,
+        "--target-dir",
+        primary,
+        "--branch",
+        "release",
+        "--level",
+        "auto",
+      ],
+      {
+        cwd: elsewhereCwd,
+        env: {
+          ...process.env,
+          CLAUDE_SETUP_ROOT: ROOT,
+        },
+        encoding: "utf8",
+      },
+    );
+    // Materialization must succeed (anchored to `primary`, which has the
+    // `release` branch) rather than fail because it tried to resolve a repo
+    // root from `elsewhereCwd` (not a git checkout at all).
+    expect(result.status, result.stderr).toBe(0);
+  }, 30_000);
+
   it("binds a non-merge PR bootstrap to the PR base branch and base SHA", () => {
     const root = repo("pr-bootstrap");
     const base = git(root, ["rev-parse", "origin/main"]);
     git(root, ["branch", "release", base]);
-    const bin = mkdtempSync(path.join(tmpdir(), "quality-bootstrap-gh-"));
+    const bin = makeTempDir("quality-bootstrap-gh-");
     const gh = path.join(bin, "gh");
     writeFileSync(
       gh,
@@ -827,6 +1108,172 @@ exit 1
     expect(manifest.revisions.baseHeadSha).toBe(base);
   }, 120_000);
 
+  it("passes --repo (derived from GIT_ROOT, not CWD) to gh pr view on --merge resume (BUI-470)", () => {
+    // Exercises quality-bootstrap.sh's own --repo scoping directly (line
+    // ~151, resume path) rather than routing through quality-target-
+    // resolver.js's separate --target-dir scoping (BUI-391) — that already
+    // has its own coverage in quality-target-resolver-pr-repo-scoping.test.js.
+    const root = repo("bootstrap-pr-repo-flag-resume");
+    const bin = makeTempDir("quality-bootstrap-gh-");
+    const gh = path.join(bin, "gh");
+    // This stub only succeeds when called with --repo owner/repo; if the
+    // fix regresses (drops --repo on the resume path), the command fails.
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+if [ "$1 $2" = "repo view" ]; then
+  printf '%s\\n' 'owner/repo'
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  saw_repo=false
+  for arg in "$@"; do
+    if [ "$arg" = "--repo" ]; then saw_repo=true; fi
+  done
+  [ "$saw_repo" = true ] || { echo "gh pr view called without --repo" >&2; exit 1; }
+  printf '%s\\n' '{"headRefName":"feature","headRepository":{"nameWithOwner":"owner/repo"},"isCrossRepository":false}'
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(gh, 0o755);
+    const bootstrapEnv = {
+      ...process.env,
+      CLAUDE_SETUP_ROOT: ROOT,
+      PATH: `${bin}:${process.env.PATH}`,
+    };
+    const manifestPath = create(root, ["--pr", "21"], bootstrapEnv);
+    // Invoke resume with cwd pointed elsewhere (a stale tmp dir, not `root`)
+    // — the exact BUI-470 repro shape: $PWD and the manifest's own repo
+    // disagree, so any unscoped `gh` call would resolve against the wrong
+    // (or no) repo instead of the manifest's repo.realpath.
+    const elsewhereCwd = makeTempDir("quality-bootstrap-elsewhere-");
+    const result = spawnSync("bash", [BOOTSTRAP, "--manifest", manifestPath], {
+      cwd: elsewhereCwd,
+      env: bootstrapEnv,
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+  }, 120_000);
+
+  it("passes --repo (derived from GIT_ROOT, not CWD) to gh pr view on the --merge no-arg lookup (BUI-470)", () => {
+    const primary = repo("bootstrap-pr-repo-flag-merge-noarg");
+    const linked = makeTempDir("quality-linked-merge-noarg-");
+    git(primary, ["switch", "-q", "main"]);
+    git(primary, [
+      "worktree",
+      "add",
+      "-q",
+      "-b",
+      "quality-merge-noarg-branch",
+      linked,
+      "main",
+    ]);
+    const bin = makeTempDir("quality-bootstrap-gh-");
+    const gh = path.join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+if [ "$1 $2" = "repo view" ]; then
+  printf '%s\\n' 'owner/repo'
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  saw_repo=false
+  saw_selector=false
+  prev=""
+  idx=0
+  for arg in "$@"; do
+    idx=$((idx + 1))
+    if [ "$idx" -le 2 ]; then prev="$arg"; continue; fi
+    if [ "$arg" = "--repo" ]; then saw_repo=true; fi
+    # Real gh requires a positional selector (PR number/URL/branch) when
+    # --repo is combined with 'pr view' — reject the no-selector shape the
+    # same way real gh does, so a regression to the bare form is caught.
+    # A non-flag token (after 'pr view') that isn't a value belonging to a
+    # preceding flag counts as the selector.
+    if [ "\${arg#-}" = "$arg" ] && [ "$prev" != "--repo" ] && [ "$prev" != "--json" ]; then
+      saw_selector=true
+    fi
+    prev="$arg"
+  done
+  [ "$saw_repo" = true ] || { echo "gh pr view called without --repo" >&2; exit 1; }
+  [ "$saw_selector" = true ] || { echo "argument required when using the --repo flag" >&2; exit 1; }
+  printf '%s\\n' '{"number":23,"headRefName":"quality-merge-noarg-branch","headRefOid":"${git(linked, ["rev-parse", "HEAD"])}","headRepository":{"nameWithOwner":"owner/repo"},"isCrossRepository":false,"baseRefName":"main","baseRefOid":"${git(primary, ["rev-parse", "origin/main"])}"}'
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(gh, 0o755);
+    const result = spawnSync(
+      "bash",
+      [BOOTSTRAP, "--target-dir", linked, "--merge", "--level", "auto"],
+      {
+        cwd: linked,
+        env: {
+          ...process.env,
+          CLAUDE_SETUP_ROOT: ROOT,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+        encoding: "utf8",
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+  }, 120_000);
+
+  it("fails closed when the resolved PR belongs to a different repo than GIT_ROOT's own remote (BUI-470)", () => {
+    // Exercises quality-bootstrap.sh's own defensive cross-check (belt-and-
+    // suspenders on top of --repo scoping): if gh ever returns a PR bound to
+    // a different repo than GIT_ROOT's remote, fail closed instead of
+    // silently proceeding to audit/merge the wrong repo.
+    const primary = repo("bootstrap-pr-repo-mismatch");
+    const linked = makeTempDir("quality-linked-repo-mismatch-");
+    git(primary, ["switch", "-q", "main"]);
+    git(primary, [
+      "worktree",
+      "add",
+      "-q",
+      "-b",
+      "quality-repo-mismatch-branch",
+      linked,
+      "main",
+    ]);
+    const bin = makeTempDir("quality-bootstrap-gh-");
+    const gh = path.join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+if [ "$1 $2" = "repo view" ]; then
+  printf '%s\\n' 'owner/repo'
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s\\n' '{"number":24,"headRefName":"quality-repo-mismatch-branch","headRefOid":"${git(linked, ["rev-parse", "HEAD"])}","headRepository":{"nameWithOwner":"other-owner/other-repo"},"isCrossRepository":false,"baseRefName":"main","baseRefOid":"${git(primary, ["rev-parse", "origin/main"])}"}'
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(gh, 0o755);
+    const result = spawnSync(
+      "bash",
+      [BOOTSTRAP, "--target-dir", linked, "--merge", "--level", "auto"],
+      {
+        cwd: linked,
+        env: {
+          ...process.env,
+          CLAUDE_SETUP_ROOT: ROOT,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+        encoding: "utf8",
+      },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/belongs to other-owner\/other-repo/);
+  }, 120_000);
+
   it("does not false-positive 'base changed during bootstrap' on a stale gh pr view cache (BUI-382)", () => {
     const root = repo("pr-bootstrap-stale-cache");
     const staleBase = git(root, ["rev-parse", "origin/main"]);
@@ -837,7 +1284,7 @@ exit 1
     // reports staleBase as baseRefOid — exactly what a lagging GitHub API
     // cache would return. A fresh `git ls-remote`/fetch will see the real,
     // newer tip; the fix must trust that live read over the stale gh field.
-    const worktree = mkdtempSync(path.join(tmpdir(), "quality-release-wt-"));
+    const worktree = makeTempDir("quality-release-wt-");
     git(root, ["worktree", "add", "-q", worktree, "release"]);
     writeFileSync(path.join(worktree, "release-only.txt"), "landed\n");
     git(worktree, ["add", "."]);
@@ -845,7 +1292,7 @@ exit 1
     const freshBase = git(worktree, ["rev-parse", "HEAD"]);
     expect(freshBase).not.toBe(staleBase);
 
-    const bin = mkdtempSync(path.join(tmpdir(), "quality-bootstrap-gh-"));
+    const bin = makeTempDir("quality-bootstrap-gh-");
     const gh = path.join(bin, "gh");
     writeFileSync(
       gh,
@@ -899,7 +1346,7 @@ exit 1
     const root = repo("pr-bootstrap-genuine-race");
     const base = git(root, ["rev-parse", "origin/main"]);
     git(root, ["branch", "release", base]);
-    const bin = mkdtempSync(path.join(tmpdir(), "quality-bootstrap-gh-"));
+    const bin = makeTempDir("quality-bootstrap-gh-");
     const gh = path.join(bin, "gh");
     writeFileSync(
       gh,
@@ -1202,7 +1649,7 @@ wait
     const root = repo("approval-command");
     const head = git(root, ["rev-parse", "HEAD"]);
     const base = git(root, ["rev-parse", "origin/main"]);
-    const bin = mkdtempSync(path.join(tmpdir(), "quality-approve-gh-"));
+    const bin = makeTempDir("quality-approve-gh-");
     const gh = path.join(bin, "gh");
     writeFileSync(
       gh,
@@ -1296,6 +1743,146 @@ exec "${realGit}" "$@"
       primary: "unavailable",
       fallback: "unavailable",
     });
+  });
+
+  it("issues a distinct operator-ci-billing-override scope, never satisfying an operator-quality-override check or vice versa", () => {
+    const root = repo("approval-command-ci-billing");
+    const head = git(root, ["rev-parse", "HEAD"]);
+    const base = git(root, ["rev-parse", "origin/main"]);
+    const bin = makeTempDir("quality-approve-gh-");
+    const gh = path.join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+if [ "$1 $2" = "pr view" ]; then
+  printf '%s\\n' '{"number":15,"headRefName":"feature","headRefOid":"${head}","headRepository":{"nameWithOwner":"owner/repo"},"isCrossRepository":false,"baseRefName":"main","baseRefOid":"${base}","url":"https://github.com/owner/repo/pull/15"}'
+  exit 0
+fi
+if [ "$1 $2" = "repo view" ]; then
+  printf '%s\\n' 'owner/repo'
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(gh, 0o755);
+    const gitShim = path.join(bin, "git");
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    writeFileSync(
+      gitShim,
+      `#!/usr/bin/env bash
+if [ "$1" = "-C" ] && [ "$3 $4 $5" = "remote get-url origin" ]; then
+  printf '%s\\n' "https://github.com/owner/repo.git"
+  exit 0
+fi
+exec "${realGit}" "$@"
+`,
+    );
+    chmodSync(gitShim, 0o755);
+    const approveEnv = withoutAmbientGitHubIdentity({
+      BREAK_GLASS_APPROVER: "brett",
+      CLAUDE_SETUP_ROOT: ROOT,
+      PATH: `${bin}:${process.env.PATH}`,
+    });
+    const result = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+      cwd: root,
+      input: JSON.stringify({
+        argv: [
+          "approve",
+          "--override-ci-billing",
+          "--target-dir",
+          root,
+          "--pr",
+          "15",
+          "--head",
+          head,
+          "--level",
+          "98",
+        ],
+      }),
+      encoding: "utf8",
+      env: approveEnv,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const manifest = result.stdout
+      .split("\n")
+      .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
+      ?.slice("BS_QUALITY_MANIFEST=".length);
+    expect(JSON.parse(readFileSync(manifest, "utf8")).approval.scope).toBe(
+      "operator-ci-billing-override",
+    );
+    // The capability is valid overall...
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", manifest], {
+        cwd: root,
+      }).status,
+    ).toBe(0);
+    // ...and satisfies a check for its own scope...
+    expect(
+      spawnSync(
+        "node",
+        [
+          INVOCATION,
+          "approval-scope",
+          manifest,
+          "--scope",
+          "operator-ci-billing-override",
+        ],
+        { cwd: root },
+      ).status,
+    ).toBe(0);
+    // ...but must never satisfy a check gated on the OTHER scope. A
+    // capability signed to accept a billing-related CI gap must not also
+    // be usable to accept unavailable/malformed review evidence.
+    expect(
+      spawnSync(
+        "node",
+        [
+          INVOCATION,
+          "approval-scope",
+          manifest,
+          "--scope",
+          "operator-quality-override",
+        ],
+        { cwd: root },
+      ).status,
+    ).not.toBe(0);
+    // A missing --scope must fail closed, not silently pass.
+    expect(
+      spawnSync("node", [INVOCATION, "approval-scope", manifest], {
+        cwd: root,
+      }).status,
+    ).not.toBe(0);
+  });
+
+  it("rejects an approve command combining --override-quality and --override-ci-billing", () => {
+    const root = repo("approval-command-conflicting-scopes");
+    const head = git(root, ["rev-parse", "HEAD"]);
+    const result = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+      cwd: root,
+      input: JSON.stringify({
+        argv: [
+          "approve",
+          "--override-quality",
+          "--override-ci-billing",
+          "--target-dir",
+          root,
+          "--pr",
+          "16",
+          "--head",
+          head,
+          "--level",
+          "98",
+        ],
+      }),
+      encoding: "utf8",
+      env: withoutAmbientGitHubIdentity({
+        BREAK_GLASS_APPROVER: "brett",
+        CLAUDE_SETUP_ROOT: ROOT,
+      }),
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/only one override flag/);
   });
 
   it("carries a valid break-glass approval across a rebase-only HEAD change with no new diff (BUI-380)", () => {
@@ -2113,7 +2700,7 @@ exec "${realGit}" "$@"
   });
 
   it("passes a structured wrapper argv without executing spaces or metacharacters", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "quality-wrapper-"));
+    const dir = makeTempDir("quality-wrapper-");
     const bootstrap = path.join(dir, "bootstrap.sh");
     const marker = path.join(dir, "executed");
     writeFileSync(bootstrap, '#!/usr/bin/env bash\nprintf "<%s>\\n" "$@"\n');
@@ -2137,7 +2724,7 @@ exec "${realGit}" "$@"
   });
 
   it("fails safely when approval bootstrap returns malformed manifest JSON", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "quality-wrapper-json-"));
+    const dir = makeTempDir("quality-wrapper-json-");
     const bootstrap = path.join(dir, "bootstrap.sh");
     const manifest = path.join(dir, "invocation.json");
     writeFileSync(manifest, "{not-json\n");
@@ -2160,7 +2747,7 @@ printf 'BS_QUALITY_MANIFEST=%s\\n' ${JSON.stringify(manifest)}
 
   it("rejects malformed merge arguments before any GitHub or repository mutation", () => {
     const root = repo("strict-wrapper-args");
-    const harness = mkdtempSync(path.join(tmpdir(), "quality-strict-args-"));
+    const harness = makeTempDir("quality-strict-args-");
     const bin = path.join(harness, "bin");
     const ghMarker = path.join(harness, "gh-invoked");
     mkdirSync(bin);
@@ -2512,7 +3099,7 @@ exit 99
 
   it("persists one empty stamp and waits for its CI before authorization", () => {
     const root = repo("stamp-retry");
-    const remote = mkdtempSync(path.join(tmpdir(), "quality-remote-"));
+    const remote = makeTempDir("quality-remote-");
     git(remote, ["init", "--bare", "-q"]);
     git(root, ["remote", "set-url", "origin", remote]);
     git(root, ["push", "-q", "origin", "main"]);
@@ -2524,7 +3111,7 @@ exit 99
     prepareCodexReview(root, manifest);
     recordJudgeArtifact(root, manifest);
 
-    const harness = mkdtempSync(path.join(tmpdir(), "quality-stamp-harness-"));
+    const harness = makeTempDir("quality-stamp-harness-");
     const bin = path.join(harness, "bin");
     mkdirSync(bin);
     const log = path.join(harness, "gh-order.log");
@@ -3208,7 +3795,7 @@ exit 1
   });
 
   it("fails a non-finite policy closed before validating a stale level-98 contract", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "quality-non-finite-policy-"));
+    const root = makeTempDir("quality-non-finite-policy-");
     git(root, ["init", "-q", "-b", "main"]);
     git(root, ["config", "user.name", "Quality Test"]);
     git(root, ["config", "user.email", "quality@example.com"]);
@@ -3386,6 +3973,7 @@ exit 1
       reason: "config-only fixture has no executable tests",
     });
 
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
     prepareCodexReview(root, manifest);
     recordGateFixture(manifest, "test", {
       status: "skipped",
@@ -3544,6 +4132,178 @@ exit 1
     expect(() =>
       invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
     ).toThrow(/inconclusive provider findings/);
+  });
+
+  // An agent killed mid-write leaves a 0-byte artifact. It carries no
+  // `INCONCLUSIVE:` marker, so the inventory usability filter counted it as a
+  // completed report and stamped silence into signed, hash-bound evidence.
+  // providerFindings() already treats an empty body as inconclusive; the two
+  // must agree or this gate is not enforcing what its error message claims.
+  it("refuses to inventory an empty findings artifact as a usable report", () => {
+    const root = repo("empty-findings-not-usable");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 3,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(manifest, [
+        "reviewer-a",
+        "reviewer-b",
+        "reviewer-c",
+      ]);
+    });
+    const manifest = invocation.loadManifest(manifestPath).manifest;
+    const artifactDir = invocation.reviewInfo(manifest).artifactDir;
+    mkdirSync(artifactDir, { recursive: true });
+
+    // Only one of three agents produced a real report.
+    writeFileSync(path.join(artifactDir, "reviewer-a.findings.txt"), "");
+    writeFileSync(path.join(artifactDir, "reviewer-b.findings.txt"), "   \n\n");
+    writeFileSync(
+      path.join(artifactDir, "reviewer-c.findings.txt"),
+      "NO FINDINGS.\n",
+    );
+
+    expect(() =>
+      invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
+    ).toThrow(/inconclusive provider findings cannot be inventoried/);
+  });
+
+  // The reviewer quorum must be satisfied by EACH covered review, not by the
+  // campaign total. `usableReviewerReports` accumulated across rounds while
+  // `requiredUsableReports` was only Math.max'd to a single panel's majority,
+  // so a clean round 2 satisfied an empty round 1 — authorizing a merge over a
+  // diff slice no quorum ever reviewed. reviewCoverage() checks slice
+  // contiguity and artifact integrity, but never per-slice panel usability.
+  it("does not let a later clean round satisfy an earlier empty round", () => {
+    // Mirrors providerFindings' counter arithmetic. The scoring loop is the
+    // unit under test; building two fully-signed review rounds would exercise
+    // the signing pipeline rather than the quorum rule.
+    const quorum = (rounds, agentCount, perReview) => {
+      let usable = 0;
+      let required = 0;
+      let inconclusive = 0;
+      for (const round of rounds) {
+        if (perReview) {
+          usable = 0;
+          required = 0;
+          inconclusive = 0;
+        }
+        required = perReview
+          ? Math.floor(agentCount / 2) + 1
+          : Math.max(required, Math.floor(agentCount / 2) + 1);
+        for (const ok of round) {
+          if (ok) usable += 1;
+          else inconclusive += 1;
+        }
+        if (
+          perReview &&
+          ((required > 0 && usable < required) ||
+            (inconclusive && usable === 0))
+        ) {
+          return { failed: true };
+        }
+      }
+      if (
+        (required > 0 && usable < required) ||
+        (inconclusive && usable === 0)
+      ) {
+        return { failed: true };
+      }
+      return { failed: false };
+    };
+
+    const emptyThenClean = [
+      [false, false, false],
+      [true, true, true],
+    ];
+    // The defect: campaign-wide counters pass this.
+    expect(quorum(emptyThenClean, 3, false).failed).toBe(false);
+    // The fix: per-review counters catch it.
+    expect(quorum(emptyThenClean, 3, true).failed).toBe(true);
+    // And a genuinely clean campaign still passes under the fix.
+    expect(
+      quorum(
+        [
+          [true, true, true],
+          [true, true, true],
+        ],
+        3,
+        true,
+      ).failed,
+    ).toBe(false);
+  });
+
+  it("evaluates the reviewer quorum inside the covered-review loop", () => {
+    // Structural fence: the throw must live inside the loop, and the counters
+    // must reset per review. Moving either back out silently restores the
+    // cross-round bug, which no single-round fixture would catch.
+    const source = readFileSync(INVOCATION, "utf8");
+    const fn = source.slice(
+      source.indexOf("function providerFindings(manifest)"),
+      source.indexOf("function priorFindings(manifest)"),
+    );
+    expect(fn).toContain("usableReviewerReports = 0;");
+    expect(fn).toContain("inconclusiveAgents = [];");
+    // The quorum check must precede the end of the review loop, not follow it.
+    expect(fn.indexOf("failQuorum()")).toBeLessThan(
+      fn.indexOf("return findings"),
+    );
+    expect(fn).not.toMatch(/requiredUsableReports = Math\.max\(/);
+  });
+
+  it("treats unparseable provider results as inconclusive, not as silence", () => {
+    // A bare `continue` converted malformed evidence into NO evidence: no
+    // finding, no counter, no diagnosis.
+    const source = readFileSync(INVOCATION, "utf8");
+    const fn = source.slice(
+      source.indexOf("function providerFindings(manifest)"),
+      source.indexOf("function priorFindings(manifest)"),
+    );
+    const parseBlock = fn.slice(
+      fn.indexOf("`provider result ${item.name}`"),
+      fn.indexOf("items.forEach("),
+    );
+    expect(
+      parseBlock.match(/inconclusiveAgents\.push\(item\.name\)/g),
+    ).toHaveLength(2);
+  });
+
+  it("still inventories a panel whose reports are all non-empty", () => {
+    const root = repo("nonempty-findings-usable");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 3,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(manifest, [
+        "reviewer-a",
+        "reviewer-b",
+        "reviewer-c",
+      ]);
+    });
+    const manifest = invocation.loadManifest(manifestPath).manifest;
+    const artifactDir = invocation.reviewInfo(manifest).artifactDir;
+    mkdirSync(artifactDir, { recursive: true });
+    for (const agent of ["reviewer-a", "reviewer-b", "reviewer-c"]) {
+      writeFileSync(
+        path.join(artifactDir, `${agent}.findings.txt`),
+        "NO FINDINGS.\n",
+      );
+    }
+    expect(() =>
+      invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
+    ).not.toThrow();
   });
 
   it("excludes stale fallback artifacts when a retry succeeds with Codex", () => {
@@ -4115,6 +4875,7 @@ exit 1
       "consumer",
     ]);
 
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
     prepareCodexReview(root, manifest);
     expect(
       spawnSync("node", [INVOCATION, "review-authorization", manifest], {
@@ -4522,6 +5283,207 @@ exit 1
     );
   });
 
+  it("does not require mypy for a JS/TS-first repo whose diff never touches .py (BUI-467)", () => {
+    // Reproduces the claude-kit real-world shape: pyproject.toml declares
+    // [tool.mypy] for a handful of scripts/ .py files (committed on the
+    // base branch), but a given PR's diff never touches any .py file. mypy
+    // must not become a required, blocking gate for that PR — it's an
+    // environment dependency (mypy must be installed) unrelated to the
+    // change under review.
+    const root = repo("mypy-not-required-non-python-diff");
+    // repo() leaves the checkout on `feature`, one commit ahead of `main`.
+    // Land pyproject.toml/scripts/helper.py on `main` (the base) so they
+    // are NOT part of the diff being audited, then rebase feature onto it.
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(
+      path.join(root, "pyproject.toml"),
+      "[tool.ruff]\n\n[tool.mypy]\n",
+    );
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(path.join(root, "scripts", "helper.py"), "x = 1\n");
+    git(root, ["add", "pyproject.toml", "scripts/helper.py"]);
+    git(root, ["commit", "-q", "-m", "add Python tooling and a script"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["rebase", "-q", "main"]);
+
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.find((gate) => gate.name === "type")).toBeUndefined();
+  });
+
+  it("still requires mypy when the diff does touch a .py file (BUI-467)", () => {
+    const root = repo("mypy-required-python-diff");
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(
+      path.join(root, "pyproject.toml"),
+      "[tool.ruff]\n\n[tool.mypy]\n",
+    );
+    git(root, ["add", "pyproject.toml"]);
+    git(root, ["commit", "-q", "-m", "add Python tooling"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["rebase", "-q", "main"]);
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(path.join(root, "scripts", "helper.py"), "x = 1\n");
+    git(root, ["add", "scripts/helper.py"]);
+    git(root, ["commit", "-q", "-m", "add a python script"]);
+
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.find((gate) => gate.name === "type")).toMatchObject({
+      source: "python:mypy",
+      executable: "mypy",
+      args: ["."],
+    });
+  });
+
+  it("requires mypy when the diff touches only a .pyi stub (BUI-467)", () => {
+    const root = repo("mypy-required-pyi-diff");
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(
+      path.join(root, "pyproject.toml"),
+      "[tool.ruff]\n\n[tool.mypy]\n",
+    );
+    git(root, ["add", "pyproject.toml"]);
+    git(root, ["commit", "-q", "-m", "add Python tooling"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["rebase", "-q", "main"]);
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(path.join(root, "scripts", "helper.pyi"), "x: int\n");
+    git(root, ["add", "scripts/helper.pyi"]);
+    git(root, ["commit", "-q", "-m", "add a python stub"]);
+
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.find((gate) => gate.name === "type")).toMatchObject({
+      source: "python:mypy",
+    });
+  });
+
+  it("requires mypy when the diff touches a non-ASCII-named .py file (BUI-467)", () => {
+    // Reproduces the review finding: without -z, `git diff --name-only`
+    // quotes non-ASCII filenames by default (core.quotePath), which would
+    // break a plain .endsWith(".py") suffix check.
+    const root = repo("mypy-required-nonascii-diff");
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(
+      path.join(root, "pyproject.toml"),
+      "[tool.ruff]\n\n[tool.mypy]\n",
+    );
+    git(root, ["add", "pyproject.toml"]);
+    git(root, ["commit", "-q", "-m", "add Python tooling"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["rebase", "-q", "main"]);
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(path.join(root, "scripts", "café.py"), "x = 1\n");
+    git(root, ["add", "scripts/café.py"]);
+    git(root, ["commit", "-q", "-m", "add a non-ascii-named python script"]);
+
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.find((gate) => gate.name === "type")).toMatchObject({
+      source: "python:mypy",
+    });
+  });
+
+  it("does not require mypy for an upstream-only .py change after a rebase (BUI-467)", () => {
+    // Reproduces the rebase-carry review finding: if a rebase-only replay
+    // has happened, the diff check must anchor on the carried live base
+    // (baseRebaseCarry.baseSha), not the stale creation-time baseSha —
+    // otherwise upstream .py commits that landed on main between PR
+    // creation and the rebase leak into the diff and falsely require mypy
+    // for a PR that never touched Python itself.
+    const root = repo("mypy-rebase-carry-upstream-python");
+    const manifestPath = create(root);
+    const originalManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+
+    // Advance main with an unrelated Python change (simulating upstream
+    // activity between PR creation and the eventual rebase).
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(
+      path.join(root, "pyproject.toml"),
+      "[tool.ruff]\n\n[tool.mypy]\n",
+    );
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(path.join(root, "scripts", "upstream.py"), "x = 1\n");
+    git(root, ["add", "pyproject.toml", "scripts/upstream.py"]);
+    git(root, ["commit", "-q", "-m", "upstream adds python tooling"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+
+    // Rebase feature onto the advanced main — a pure replay, no new
+    // content, so this should register as a rebase-only carry.
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["rebase", "-q", "main"]);
+    const rebasedHead = git(root, ["rev-parse", "HEAD"]);
+    const advancedBase = git(root, ["rev-parse", "main"]);
+
+    execFileSync("node", [INVOCATION, "advance", manifestPath], {
+      cwd: root,
+    });
+    const advanced = JSON.parse(readFileSync(manifestPath, "utf8"));
+    // Sanity: the manifest's immutable baseSha is unchanged (still the
+    // original, now-stale value) while a carry was recorded.
+    expect(advanced.revisions.baseSha).toBe(originalManifest.revisions.baseSha);
+    expect(advanced.revisions.baseRebaseCarry?.baseSha).toBe(advancedBase);
+    expect(advanced.revisions.currentHead).toBe(rebasedHead);
+    // The mypy gate must NOT be required: the only .py file in the true
+    // (carried) diff scope belongs to main itself, not to this PR.
+    expect(
+      advanced.requiredGates.find((gate) => gate.name === "type"),
+    ).toBeUndefined();
+  });
+
+  it("drops a stale inferred python:mypy gate on a v2->v3 migration when the diff doesn't touch .py (BUI-467)", () => {
+    // A manifest created under the pre-BUI-467 policy (v2) may already
+    // carry an inferred python:mypy gate. Union-only advance would keep it
+    // forever; the policy-version bump forces a full recompute instead, so
+    // the stale gate is dropped once the diff is re-evaluated under v3.
+    const root = repo("mypy-v2-to-v3-migration");
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(
+      path.join(root, "pyproject.toml"),
+      "[tool.ruff]\n\n[tool.mypy]\n",
+    );
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(path.join(root, "scripts", "helper.py"), "x = 1\n");
+    git(root, ["add", "pyproject.toml", "scripts/helper.py"]);
+    git(root, ["commit", "-q", "-m", "add Python tooling and a script"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["rebase", "-q", "main"]);
+
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    // Simulate a manifest created under the old (v2) policy: inject the
+    // stale mypy gate the old (pre-fix) inference would have added, and
+    // roll the policy version back to 2.
+    manifest.requiredGates.push({
+      name: "type",
+      source: "python:mypy",
+      command: '"mypy" "."',
+      executable: "mypy",
+      args: ["."],
+      allowSkip: false,
+    });
+    manifest.requiredGatesPolicyVersion = 2;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    // A subsequent commit that touches no .py file at all — advance should
+    // trigger the v2->v3 migration and recompute (not union) requiredGates.
+    writeFileSync(path.join(root, "file.js"), "export const value = 3;\n");
+    git(root, ["commit", "-qam", "non-python change"]);
+    execFileSync("node", [INVOCATION, "advance", manifestPath], { cwd: root });
+
+    const migrated = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(migrated.requiredGatesPolicyVersion).toBe(3);
+    expect(
+      migrated.requiredGates.find((gate) => gate.name === "type"),
+    ).toBeUndefined();
+  });
+
   it("binds optional gate evidence to the persisted trusted source and command", () => {
     const root = repo("trusted-gate-runner");
     const marker = path.join(tmpdir(), `quality-build-${process.pid}.marker`);
@@ -4643,7 +5605,7 @@ exit 1
 
   it("releases only its exact linked-worktree lock after a terminal gate failure", () => {
     const primary = repo("terminal-gate-unlock");
-    const linked = mkdtempSync(path.join(tmpdir(), "quality-linked-gate-"));
+    const linked = makeTempDir("quality-linked-gate-");
     git(primary, ["switch", "-q", "main"]);
     git(primary, [
       "worktree",
@@ -4708,7 +5670,7 @@ exit 1
 
   it("leaves a manually held lock unchanged for a non-merge gate failure", () => {
     const primary = repo("terminal-non-merge-lock");
-    const linked = mkdtempSync(path.join(tmpdir(), "quality-linked-review-"));
+    const linked = makeTempDir("quality-linked-review-");
     git(primary, ["switch", "-q", "main"]);
     git(primary, [
       "worktree",
@@ -4834,6 +5796,379 @@ exit 1
     const updated = JSON.parse(readFileSync(manifestPath, "utf8"));
     expect(updated.governor.gateSecondsUsed).toBe(2);
     expect(updated.governor.activeExecution).toBeNull();
+  }, 30_000);
+
+  it("persists an abandoned-execution reconciliation even when the immediate budget check then fails", () => {
+    // Regression: reconcileAbandonedExecution() cleared a timed-out
+    // activeExecution and credited its elapsed time to gateSecondsUsed in
+    // memory only. If the exhaustion check right after it then threw (a
+    // plain Error, not GateExecutionError), that error propagated out of
+    // mutate()'s operation() callback in withManifestLock() BEFORE
+    // saveManifest() ever ran -- silently discarding the reconciliation.
+    // Every retry re-read the same stale activeExecution from disk,
+    // recomputed the same "would exceed" result, and re-threw forever with
+    // no way for the manifest to ever recover on its own.
+    const root = repo("gate-abandoned-reconcile-persists");
+    const packageFile = path.join(root, "package.json");
+    const packageJson = JSON.parse(readFileSync(packageFile, "utf8"));
+    packageJson.scripts.build = "true";
+    writeFileSync(packageFile, JSON.stringify(packageJson));
+    git(root, ["add", "package.json"]);
+    git(root, ["commit", "-q", "-m", "add build script"]);
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.governor.gateSecondsLimit = 600;
+    manifest.governor.gateSecondsUsed = 197;
+    manifest.governor.activeExecution = {
+      kind: "gate",
+      name: "security",
+      startedAt: new Date(Date.now() - 500_000).toISOString(),
+      timeoutSeconds: 403,
+    };
+    const revisionBeforeRun = manifest.manifestRevision;
+    const updatedAtBeforeRun = manifest.updatedAt;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    // 197 + 403 == 600 == the limit: reconciling this abandoned execution
+    // exhausts the budget exactly, so the very next check throws.
+    const first = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(first.status).not.toBe(0);
+    expect(first.stderr).toMatch(
+      /total gate execution budget is exhausted before 'build'/,
+    );
+
+    // The reconciliation itself (activeExecution cleared, usage credited)
+    // must be durable even though the budget check failed -- otherwise the
+    // manifest is permanently stuck re-deriving and re-discarding the same
+    // reconciliation on every future invocation.
+    const afterFirst = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(afterFirst.governor.activeExecution).toBeNull();
+    expect(afterFirst.governor.gateSecondsUsed).toBe(600);
+    // Regression (Codex review finding, 2026-08-01, medium): the
+    // mid-transaction persist must refresh updatedAt -- otherwise
+    // worktree-manager.js's qualityManifestReleaseState() can judge this
+    // freshly-reconciled campaign as abandoned and release its lock as
+    // stale -- but must NOT bump manifestRevision, since
+    // withManifestLock() compares manifestRevision before/after the SAME
+    // mutation() call to detect a genuinely concurrent writer, and
+    // bumping it here would make that check misfire against our own
+    // in-progress transaction.
+    expect(afterFirst.updatedAt).not.toBe(updatedAtBeforeRun);
+    expect(afterFirst.manifestRevision).toBe(revisionBeforeRun);
+
+    // A second attempt must fail with the SAME exhausted-budget error, not
+    // hang or throw a different/inconsistent error -- proving the state is
+    // now stable rather than re-deriving the same thing every time.
+    const second = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(second.status).not.toBe(0);
+    expect(second.stderr).toMatch(
+      /total gate execution budget is exhausted before 'build'/,
+    );
+    const afterSecond = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(afterSecond.governor.gateSecondsUsed).toBe(600);
+  }, 30_000);
+
+  it("authorizeProviderAttempt requires manifestPath only when a reconciliation actually needs persisting", () => {
+    // Regression (Codex review round 1, 2026-08-01, medium -> round 2,
+    // high): the mid-transaction reconciliation persist was gated on an
+    // OPTIONAL manifestPath parameter (`... && manifestPath`). Any call
+    // site that omitted it would silently skip the persist and
+    // reintroduce the exact discard-on-throw bug this whole fix exists to
+    // close, with zero signal anything was wrong. An initial fix made
+    // manifestPath mandatory at function ENTRY -- but that's a broader
+    // contract change than the bug requires: a caller with no abandoned
+    // execution to reconcile has no persistence to skip, and shouldn't be
+    // forced to supply a path it has no use for. The guard must only fire
+    // at the point persistence is actually needed.
+    const root = repo("provider-attempt-requires-manifest-path");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+
+    // No activeExecution at all: nothing to reconcile, so no persistence
+    // is needed -- must NOT throw even with no manifestPath.
+    expect(() =>
+      invocation.authorizeProviderAttempt(manifest, { provider: "codex" }),
+    ).not.toThrow();
+
+    // An abandoned (deadline-passed) activeExecution IS something to
+    // reconcile and persist -- omitting manifestPath here must throw
+    // loudly rather than silently skip the persist.
+    manifest.governor.activeExecution = {
+      kind: "provider",
+      name: "codex",
+      startedAt: new Date(Date.now() - 500_000).toISOString(),
+      timeoutSeconds: 60,
+    };
+    expect(() =>
+      invocation.authorizeProviderAttempt(manifest, { provider: "codex" }),
+    ).toThrow(/requires manifestPath/);
+  });
+
+  it("authorizeProviderAttempt surfaces the real 'already active' conflict for a still-valid execution, not a manifestPath requirement", () => {
+    // Regression (Codex review round 5, 2026-08-01, medium): the
+    // manifestPath guard was gated on activeExecution merely EXISTING,
+    // not on it actually being abandoned. A caller with a still-valid,
+    // in-flight activeExecution (deadline not yet passed) that omitted
+    // manifestPath got the confusing "requires manifestPath" error
+    // instead of reconcileAbandonedExecution's own actionable "already
+    // active" conflict -- masking the real, more useful error for a
+    // scenario that has nothing to do with persistence at all.
+    const root = repo("provider-attempt-still-valid-execution-conflict");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.governor.activeExecution = {
+      kind: "provider",
+      name: "claude",
+      startedAt: new Date().toISOString(),
+      timeoutSeconds: 900, // nowhere near expired
+    };
+
+    // No manifestPath supplied, but nothing needs persisting -- must
+    // throw the ACTUAL conflict, not a manifestPath complaint.
+    expect(() =>
+      invocation.authorizeProviderAttempt(manifest, { provider: "codex" }),
+    ).toThrow(/provider execution 'claude' is already active/);
+  });
+
+  it("authorizeProviderAttempt uses one timestamp for both the manifestPath preflight and reconciliation, closing the boundary race", () => {
+    // Regression (Codex review round 6, 2026-08-01, medium): the preflight
+    // hasAbandonedExecution() check and the later reconcileAbandonedExecution()
+    // call each used their OWN independent Date.now(). An execution whose
+    // deadline falls in the (real, if narrow) window between those two
+    // calls would pass the preflight as "not yet abandoned" (skipping the
+    // manifestPath guard) but then get reconciled anyway by
+    // reconcileAbandonedExecution()'s own later, larger Date.now() --
+    // recreating the exact mutation-before-persistence-check loss this
+    // guard exists to prevent. Verify the fix directly: at the exact
+    // instant the deadline passes, a single shared timestamp must produce
+    // CONSISTENT answers from both hasAbandonedExecution() and
+    // reconcileAbandonedExecution() -- not a value that disagrees between
+    // two separate clock reads a moment apart.
+    const startedAt = new Date(Date.now() - 60_000).toISOString();
+    const execution = {
+      kind: "provider",
+      name: "codex",
+      startedAt,
+      timeoutSeconds: 60,
+    };
+    const deadlineMs = Date.parse(startedAt) + 60_000;
+
+    // Exactly at the deadline: abandoned (>=), by reconcileAbandonedExecution's
+    // own `now < deadline` / `now >= deadline` boundary semantics.
+    const manifestAtDeadline = { governor: { activeExecution: execution } };
+    expect(
+      invocation.hasAbandonedExecution(manifestAtDeadline, deadlineMs),
+    ).toBe(true);
+    expect(() =>
+      invocation.reconcileAbandonedExecution(
+        JSON.parse(JSON.stringify(manifestAtDeadline)),
+        deadlineMs,
+      ),
+    ).not.toThrow();
+
+    // One tick before the deadline: not yet abandoned by EITHER function,
+    // proving they agree given the SAME timestamp (the actual fix -- prior
+    // to it, authorizeProviderAttempt computed this instant twice,
+    // independently, which could disagree at exactly this kind of
+    // boundary).
+    const manifestBeforeDeadline = {
+      governor: { activeExecution: { ...execution } },
+    };
+    expect(
+      invocation.hasAbandonedExecution(manifestBeforeDeadline, deadlineMs - 1),
+    ).toBe(false);
+    expect(() =>
+      invocation.reconcileAbandonedExecution(
+        manifestBeforeDeadline,
+        deadlineMs - 1,
+      ),
+    ).toThrow(/already active/);
+  });
+
+  it("authorizeProviderAttempt does not straddle the deadline boundary across two separate clock reads", () => {
+    // Direct proof against the actual call path: mock Date.now() to
+    // advance PAST the deadline between what would previously have been
+    // two independent reads (the old hasAbandonedExecution() preflight and
+    // the later reconcileAbandonedExecution() call). Before the fix, this
+    // sequence would let the preflight see "not yet abandoned" (skip the
+    // manifestPath guard) while reconciliation's own later read saw
+    // "abandoned" and mutated anyway -- an unrecoverable, unpersisted
+    // reconciliation with no manifestPath to save it. After the fix (one
+    // captured `reconciliationNow` reused for both), the two checks can
+    // never disagree, so the manifestPath guard reliably fires whenever
+    // reconciliation is about to happen.
+    const root = repo("provider-attempt-clock-boundary-race");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const startedAt = new Date(Date.now() - 60_000).toISOString();
+    manifest.governor.activeExecution = {
+      kind: "provider",
+      name: "codex",
+      startedAt,
+      timeoutSeconds: 60,
+    };
+    const deadlineMs = Date.parse(startedAt) + 60_000;
+
+    const dateNowSpy = vi
+      .spyOn(Date, "now")
+      // First read (used for the preflight in the OLD, buggy code, and for
+      // authorizeProviderAttempt's own unrelated sharedDeadlineEpoch check
+      // in both old and new code): one tick BEFORE the deadline.
+      .mockReturnValueOnce(deadlineMs - 1)
+      // Every subsequent read (what the OLD code's separate
+      // reconcileAbandonedExecution() call would have used): AFTER the
+      // deadline. The fixed code must never actually reach a second
+      // distinct read for this decision -- it reuses the first.
+      .mockReturnValue(deadlineMs + 1);
+
+    try {
+      // No manifestPath: if the fix works, the single shared timestamp
+      // must consistently see this as abandoned (matching the *first*
+      // read, deadlineMs - 1, which is NOT yet past the deadline) --
+      // proving the preflight and reconciliation didn't straddle the
+      // boundary using two different reads.
+      expect(() =>
+        invocation.authorizeProviderAttempt(manifest, { provider: "codex" }),
+      ).toThrow(/provider execution 'codex' is already active/);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
+  it("authorizeProviderAttempt does not mutate activeExecution before the manifestPath guard can throw", () => {
+    // Regression (Codex review round 4, 2026-08-01, medium): the
+    // manifestPath guard originally ran AFTER reconcileAbandonedExecution()
+    // had already mutated the manifest in memory (clearing activeExecution,
+    // crediting elapsed time). If a caller caught that thrown error and
+    // retried the SAME manifest object with a manifestPath this time, the
+    // retry's hadActiveExecution would already read false -- the first call
+    // already cleared it -- so the retry would never detect "a
+    // reconciliation happened" and would skip the persist entirely,
+    // silently losing the reconciliation forever. The guard must validate
+    // BEFORE any mutation, so a retry with the same object still works.
+    const root = repo("provider-attempt-retry-preserves-reconciliation");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const abandonedExecution = {
+      kind: "provider",
+      name: "codex",
+      startedAt: new Date(Date.now() - 500_000).toISOString(),
+      timeoutSeconds: 60,
+    };
+    manifest.governor.activeExecution = { ...abandonedExecution };
+
+    // First call: no manifestPath, must throw WITHOUT mutating the manifest.
+    expect(() =>
+      invocation.authorizeProviderAttempt(manifest, { provider: "codex" }),
+    ).toThrow(/requires manifestPath/);
+    expect(manifest.governor.activeExecution).toEqual(abandonedExecution);
+
+    // Retry the SAME object, now with manifestPath: must still detect and
+    // persist the reconciliation -- proving no state was silently lost on
+    // the first, failed attempt. (The function then goes on to authorize
+    // and record a brand new provider attempt, which legitimately sets a
+    // fresh activeExecution of its own -- that's the function's actual
+    // job on success, not evidence the reconciliation was skipped.)
+    invocation.authorizeProviderAttempt(
+      manifest,
+      { provider: "codex" },
+      manifestPath,
+    );
+    const persisted = JSON.parse(readFileSync(manifestPath, "utf8"));
+    // The reconciled attempt's elapsed time must have been credited and
+    // durably written -- this is the actual evidence the reconciliation
+    // survived the failed-then-retried call, not lost to the discard bug.
+    expect(persisted.governor.providerSecondsUsed).toBeGreaterThan(0);
+  });
+
+  it("authorizeMutationAttempt requires manifestPath only when a reconciliation actually needs persisting", () => {
+    const root = repo("mutation-attempt-requires-manifest-path");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.risk = { ...manifest.risk, tier: "high" };
+
+    expect(() =>
+      invocation.authorizeMutationAttempt(manifest, {}),
+    ).not.toThrow();
+
+    manifest.governor.activeExecution = {
+      kind: "gate",
+      name: "mutation",
+      startedAt: new Date(Date.now() - 500_000).toISOString(),
+      timeoutSeconds: 60,
+    };
+    expect(() => invocation.authorizeMutationAttempt(manifest, {})).toThrow(
+      /requires manifestPath/,
+    );
+  });
+
+  it("authorizeMutationAttempt surfaces the real 'already active' conflict for a still-valid execution, not a manifestPath requirement", () => {
+    const root = repo("mutation-attempt-still-valid-execution-conflict");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.risk = { ...manifest.risk, tier: "high" };
+    manifest.governor.activeExecution = {
+      kind: "gate",
+      name: "build",
+      startedAt: new Date().toISOString(),
+      timeoutSeconds: 900,
+    };
+
+    expect(() => invocation.authorizeMutationAttempt(manifest, {})).toThrow(
+      /gate execution 'build' is already active/,
+    );
+  });
+
+  it("authorizeMutationAttempt never reconciles an abandoned execution on a non-high/critical manifest, but leaves it for executeGate to clear", () => {
+    // Confirms Codex review finding, 2026-08-01, medium is not a real gap:
+    // the tier-gate throw runs BEFORE reconcileAbandonedExecution(), so a
+    // stale activeExecution is untouched by this call path on a
+    // medium/low-risk manifest. That's fine because executeGate()
+    // unconditionally reconciles on every invocation regardless of risk
+    // tier -- the abandoned execution still gets cleared the next time any
+    // gate actually runs, it's just not THIS function's job to do it.
+    const root = repo("mutation-attempt-medium-tier-leaves-reconcile-to-gate");
+    const packageFile = path.join(root, "package.json");
+    const packageJson = JSON.parse(readFileSync(packageFile, "utf8"));
+    packageJson.scripts.build = "true";
+    writeFileSync(packageFile, JSON.stringify(packageJson));
+    git(root, ["add", "package.json"]);
+    git(root, ["commit", "-q", "-m", "add build script"]);
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.risk = { ...manifest.risk, tier: "medium" };
+    manifest.governor.activeExecution = {
+      kind: "gate",
+      name: "build",
+      startedAt: new Date(Date.now() - 500_000).toISOString(),
+      timeoutSeconds: 60,
+    };
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => invocation.authorizeMutationAttempt(manifest, {})).toThrow(
+      /only available for high or critical/,
+    );
+    // Untouched by the throw above -- still the stale in-memory object.
+    expect(manifest.governor.activeExecution).not.toBeNull();
+
+    // The next gate run (the actual execution path, independent of risk
+    // tier) still reconciles it, proving no permanent leak.
+    const result = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).toBe(0);
+    const afterGateRun = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(afterGateRun.governor.activeExecution).toBeNull();
   }, 30_000);
 
   it("requires explicit revalidation after lifecycle inactivity", () => {
@@ -4973,7 +6308,7 @@ exit 1
     const root = repo("future-gate-policy");
     const manifestPath = create(root);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    manifest.requiredGatesPolicyVersion = 3;
+    manifest.requiredGatesPolicyVersion = 4;
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     for (const command of ["validate", "advance"]) {
       const result = spawnSync("node", [INVOCATION, command, manifestPath], {
@@ -5028,7 +6363,7 @@ exit 1
 
     execFileSync("node", [INVOCATION, "advance", manifestPath], { cwd: root });
     const migrated = JSON.parse(readFileSync(manifestPath, "utf8"));
-    expect(migrated.requiredGatesPolicyVersion).toBe(2);
+    expect(migrated.requiredGatesPolicyVersion).toBe(3);
     expect(migrated.requiredGates.map((gate) => gate.name)).toEqual([
       "lint",
       "test",
@@ -5054,7 +6389,7 @@ describe("human-floor-check command (Phase 0 autonomy relaxation)", () => {
   // Exit-code contract: 0 = VERIFIED CLEAR (autonomous OK); 10 = touches floor;
   // any other code (error) = human required. Only rc 0 unlocks autonomy.
   function repoChanging(label, changedFile, scorePolicy = null) {
-    const root = mkdtempSync(path.join(tmpdir(), `hfloor-${label}-`));
+    const root = makeTempDir(`hfloor-${label}-`);
     git(root, ["init", "-q", "-b", "main"]);
     git(root, ["config", "user.name", "Quality Test"]);
     git(root, ["config", "user.email", "quality@example.com"]);
@@ -5140,7 +6475,7 @@ describe("human-floor-check command (Phase 0 autonomy relaxation)", () => {
 
   it("exits 10 when a sensitive file is RENAMED out of a floor path", () => {
     // auth/login.js -> login.js. --no-renames must surface the old auth/ path.
-    const root = mkdtempSync(path.join(tmpdir(), "hfloor-rename-"));
+    const root = makeTempDir("hfloor-rename-");
     git(root, ["init", "-q", "-b", "main"]);
     git(root, ["config", "user.name", "Quality Test"]);
     git(root, ["config", "user.email", "quality@example.com"]);

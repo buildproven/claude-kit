@@ -1,20 +1,14 @@
 import { spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const FINISH = path.join(ROOT, "scripts", "quality-finish-merge.sh");
 
 function fixture(mode, seconds = 600) {
-  const dir = mkdtempSync(path.join(tmpdir(), "quality-merge-"));
+  const dir = makeTempDir("quality-merge-");
   const bin = path.join(dir, "bin");
   const log = path.join(dir, "gh.log");
   const governor = path.join(dir, "governor.json");

@@ -6,9 +6,9 @@ const {
   reserveAdmission,
 } = require("../merge-train-batch");
 const { spawn } = require("node:child_process");
-const { mkdtempSync, mkdirSync, writeFileSync } = require("node:fs");
-const { tmpdir } = require("node:os");
+const { mkdirSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
+const { makeTempDir } = require("./helpers/tmp.js");
 
 const sha = (character) => character.repeat(40);
 
@@ -212,10 +212,7 @@ describe("merge-train batch controller", () => {
   });
 
   it("serializes simultaneous worker admissions through the shared ledger", async () => {
-    const stateFile = path.join(
-      mkdtempSync(path.join(tmpdir(), "merge-train-")),
-      "state.json",
-    );
+    const stateFile = path.join(makeTempDir("merge-train-"), "state.json");
     const shared = [
       "--state-file",
       stateFile,
@@ -239,10 +236,7 @@ describe("merge-train batch controller", () => {
   });
 
   it("fails with a descriptive error instead of an uncaught exception on a corrupted state file", async () => {
-    const stateFile = path.join(
-      mkdtempSync(path.join(tmpdir(), "merge-train-")),
-      "state.json",
-    );
+    const stateFile = path.join(makeTempDir("merge-train-"), "state.json");
     writeFileSync(stateFile, "{not valid json");
     const result = await admit([
       "--state-file",
@@ -261,10 +255,7 @@ describe("merge-train batch controller", () => {
   });
 
   it("reclaims an admission lock abandoned by a dead process instead of wedging forever", async () => {
-    const stateFile = path.join(
-      mkdtempSync(path.join(tmpdir(), "merge-train-")),
-      "state.json",
-    );
+    const stateFile = path.join(makeTempDir("merge-train-"), "state.json");
     const lockDirectory = `${stateFile}.lock`;
     mkdirSync(lockDirectory, { mode: 0o700 });
     writeFileSync(

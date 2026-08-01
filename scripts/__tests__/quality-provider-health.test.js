@@ -1,6 +1,6 @@
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
+const { makeTempDir } = require("./helpers/tmp.js");
 
 const {
   clearProviderFailure,
@@ -11,10 +11,7 @@ const {
 
 describe("quality provider health circuit", () => {
   const stateFile = () =>
-    path.join(
-      fs.mkdtempSync(path.join(os.tmpdir(), "provider-health-")),
-      "state.json",
-    );
+    path.join(makeTempDir("provider-health-"), "state.json");
 
   it("skips a provider until its typed exhaustion reset", () => {
     const file = stateFile();

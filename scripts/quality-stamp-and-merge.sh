@@ -164,9 +164,20 @@ node "$SCRIPT_DIR/quality-invocation.js" record-stamp-published "$MANIFEST" \
 # a genuine divergence (someone else pushed to the branch) still fails after
 # the retry window exhausts.
 PR_HEAD_RETRIES="${QUALITY_STAMP_PR_HEAD_RETRIES:-3}"
+case "$PR_HEAD_RETRIES" in
+  ''|*[!0-9]*) echo "❌ MERGE BLOCKED: QUALITY_STAMP_PR_HEAD_RETRIES must be a non-negative integer." >&2; exit 1 ;;
+esac
+[ "$PR_HEAD_RETRIES" -gt 0 ] || {
+  echo "❌ MERGE BLOCKED: QUALITY_STAMP_PR_HEAD_RETRIES must be positive." >&2
+  exit 1
+}
 PR_HEAD_RETRY_DELAY="${QUALITY_STAMP_PR_HEAD_RETRY_DELAY:-3}"
+case "$PR_HEAD_RETRY_DELAY" in
+  ''|*[!0-9]*) echo "❌ MERGE BLOCKED: QUALITY_STAMP_PR_HEAD_RETRY_DELAY must be a non-negative integer (seconds)." >&2; exit 1 ;;
+esac
 PR_HEAD=""
 PR_HEAD_ERR_FILE="$(mktemp)"
+trap 'rm -f "$PR_HEAD_ERR_FILE"' EXIT
 attempt=1
 while [ "$attempt" -le "$PR_HEAD_RETRIES" ]; do
   # `gh pr view` failing outright (network blip, auth hiccup, rate limit) is
@@ -181,14 +192,20 @@ while [ "$attempt" -le "$PR_HEAD_RETRIES" ]; do
   # second time on failure just to get a clean error message, which doubled
   # API calls on exactly the rate-limit path this fix is meant to tolerate;
   # route stderr to a scratch file instead so one call covers both.
+  GH_PR_VIEW_FAILED=false
   if ! PR_HEAD="$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
     --json headRefOid --jq .headRefOid 2>"$PR_HEAD_ERR_FILE")"; then
     echo "[quality] gh pr view failed on attempt $attempt/$PR_HEAD_RETRIES: $(cat "$PR_HEAD_ERR_FILE")" >&2
     PR_HEAD=""
+    GH_PR_VIEW_FAILED=true
   fi
   [ "$PR_HEAD" = "$STAMP_HEAD" ] && break
   if [ "$attempt" -lt "$PR_HEAD_RETRIES" ]; then
-    echo "[quality] PR HEAD mismatch on attempt $attempt/$PR_HEAD_RETRIES (got $PR_HEAD, want $STAMP_HEAD) — retrying in ${PR_HEAD_RETRY_DELAY}s, likely GitHub API lag" >&2
+    if [ "$GH_PR_VIEW_FAILED" = true ]; then
+      echo "[quality] retrying in ${PR_HEAD_RETRY_DELAY}s after the gh pr view failure above (attempt $attempt/$PR_HEAD_RETRIES)" >&2
+    else
+      echo "[quality] PR HEAD mismatch on attempt $attempt/$PR_HEAD_RETRIES (got $PR_HEAD, want $STAMP_HEAD) — retrying in ${PR_HEAD_RETRY_DELAY}s, likely GitHub API lag" >&2
+    fi
     sleep "$PR_HEAD_RETRY_DELAY"
   fi
   attempt=$((attempt + 1))

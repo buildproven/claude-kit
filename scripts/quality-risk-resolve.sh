@@ -72,3 +72,14 @@ node "$SCRIPT_DIR/quality-invocation.js" risk "$MANIFEST" \
   --level "$LEVEL" || exit 1
 
 echo "🧭 Risk: ${RISK_SCORE}/100 (${TASK_TYPE}/${NATURE}), $(printf '%s' "$PLAN_JSON" | jq -r '"\(.workload): \(.diffStats.files) files/\(.diffStats.lines) lines"') → ${AGENT_TARGET} agents, Codex ${CODEX_DEPTH}×${CODEX_ROUNDS} [${TIER}], $(printf '%s' "$PLAN_JSON" | jq -r '.campaignSeconds')s workload plan"
+
+# scored.reasons[] is otherwise silently dropped — every other reason is
+# routine scoring detail, but these two mean the diff itself may be
+# unreliable (measured against the wrong base, or not measured at all): a
+# soft merge-base fallback that still produced a diff, or a collection
+# failure severe enough that scoring fell back to 100/max-risk. The operator
+# needs to see either even though the campaign proceeds in both cases (see
+# risk-score.js merge-base and diff-collection-failure handling).
+printf '%s' "$PLAN_JSON" | jq -r '.reasons[]? | select(startswith("merge-base HEAD") or startswith("diff collection failed"))' | while IFS= read -r reason; do
+  echo "⚠️  quality-risk-resolve: $reason" >&2
+done

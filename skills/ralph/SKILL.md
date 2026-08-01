@@ -389,7 +389,13 @@ echo "$items_json" | jq -r '.[] | "- \(.id) [\(.type)] [effort:\(.effort)] [scor
 **SOTA staleness check (auto-run if >7 days stale):**
 
 ```bash
-SOTA_HISTORY="$SETUP_REPO/data/sota-history.json"
+# Must match where the SOTA skill actually writes: `.claude/sota-history.json`
+# in the current project. This previously read "$SETUP_REPO/data/..." — a
+# variable nothing in this repo defines — so the path collapsed to
+# "/data/sota-history.json", the file was never found, and the "history
+# missing" branch fired on EVERY run. The staleness check could therefore
+# never observe a fresh SOTA run, which is the one thing it exists to do.
+SOTA_HISTORY=".claude/sota-history.json"
 if [ -f "$SOTA_HISTORY" ]; then
   LAST_DATE=$(jq -r '.lastUpdated // empty' "$SOTA_HISTORY")
   if [ -n "$LAST_DATE" ]; then

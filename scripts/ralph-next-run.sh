@@ -530,6 +530,7 @@ update_backlog_item_status() {
     local item_id="$1"
     local new_status="$2"
     local tmp
+    backup_backlog_once
     tmp="$(mktemp)"
 
     awk -v id="$item_id" -v st="$new_status" '
@@ -544,11 +545,26 @@ update_backlog_item_status() {
     ' "$BACKLOG_FILE" > "$tmp" && mv "$tmp" "$BACKLOG_FILE"
 }
 
-# Remove an item from its active table and append it to the Completed section.
+# Snapshot BACKLOG.md before a mutation. The session loop backs up once at
+# startup, but the subcommands — which skills/ralph tells the orchestrator to
+# drive directly — mutated the file with no backup at all, so a bad edit had no
+# recovery path. Timestamped so a second run cannot overwrite the only copy of
+# the pre-mutation state.
+backup_backlog_once() {
+    [[ -f "$BACKLOG_FILE" ]] || return 0
+    [[ -n "${BACKLOG_BACKED_UP:-}" ]] && return 0
+    local stamp
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    cp "$BACKLOG_FILE" "${BACKLOG_FILE}.ralph-next-backup-${stamp}" 2>/dev/null || return 0
+    BACKLOG_BACKED_UP=1
+    log_info "BACKLOG.md backed up to ${BACKLOG_FILE}.ralph-next-backup-${stamp}"
+}
+
 move_item_to_completed() {
     local item_id="$1"
     local completed_date="$2"
     local tmp
+    backup_backlog_once
     tmp="$(mktemp)"
 
     awk -v id="$item_id" -v date="$completed_date" '
@@ -581,7 +597,27 @@ move_item_to_completed() {
             inserted=1
         }
     }
-    ' "$BACKLOG_FILE" > "$tmp" && mv "$tmp" "$BACKLOG_FILE"
+
+    # The active row is removed by `next` above and re-inserted only inside the
+    # Completed section. If that section is absent — or present without a
+    # `| ---` divider — the re-insert never fires and the row is simply GONE.
+    # Exiting non-zero here means the `&& mv` below never runs, so the original
+    # file is left untouched rather than silently truncated.
+    END {
+        if (found && !inserted) {
+            printf "ralph-next: cannot move %s to Completed: no \"## Completed\" section with a \"| ---\" divider row in %s\n", id, FILENAME > "/dev/stderr"
+            exit 3
+        }
+        if (!found) {
+            printf "ralph-next: %s not found as an active row in %s\n", id, FILENAME > "/dev/stderr"
+            exit 4
+        }
+    }
+    ' "$BACKLOG_FILE" > "$tmp" || {
+        rm -f "$tmp"
+        die "BACKLOG.md not modified — $item_id could not be moved to Completed"
+    }
+    mv "$tmp" "$BACKLOG_FILE"
 }
 
 ########################################
@@ -599,6 +635,50 @@ move_item_to_completed() {
 #   block-item   Mark item Blocked: args ITEM_ID
 #   finalize     Write session summary
 ########################################
+
+# --- proof-of-work helpers -------------------------------------------------
+# The graph loop's IMPLEMENT state is a placeholder: this script runs quality
+# gates but cannot invoke /bs:ralph or /bs:quality to write code (see usage).
+# Completion must therefore be gated on the tree having actually changed,
+# otherwise a passing lint run on an untouched checkout reads as a finished
+# feature.
+
+current_head_sha() {
+    git rev-parse HEAD 2>/dev/null || echo ""
+}
+
+# Hash of `git status --porcelain`, so uncommitted work counts as work. Two
+# different dirty states produce two different fingerprints; an unchanged tree
+# reproduces the same one.
+#
+# BACKLOG.md is EXCLUDED: this runner writes it itself when it completes or
+# blocks an item, so counting it would let item 1's bookkeeping satisfy item
+# 2's proof-of-work gate — the loop would vouch for itself after the first
+# iteration. The evidence dir and the backup file are already gitignored and
+# so never appear here.
+working_tree_fingerprint() {
+    git status --porcelain 2>/dev/null \
+        | grep -v ' BACKLOG\.md$' \
+        | shasum 2>/dev/null \
+        | awk '{print $1}' || echo ""
+}
+
+# True when the repository changed since the baseline captured at PICK, either
+# as a new commit or as new uncommitted content. Unknown git state is treated
+# as NO evidence: an item must prove work happened, never merely fail to
+# disprove it.
+item_has_work_evidence() {
+    local baseline_head="$1"
+    local head_now
+    head_now="$(current_head_sha)"
+
+    [[ -n "$baseline_head" && -n "$head_now" ]] || return 1
+    [[ "$head_now" != "$baseline_head" ]] && return 0
+
+    local dirty_now
+    dirty_now="$(working_tree_fingerprint)"
+    [[ -n "$dirty_now" && "$dirty_now" != "$item_baseline_dirty" ]]
+}
 
 _sc_setup_env() {
     # Sets up globals required by helper functions.
@@ -879,9 +959,22 @@ fi
 # Resolve --until condition
 if [[ "$UNTIL_CONDITION" =~ ^([0-9]+)[[:space:]]*items?$ ]]; then
     ITEM_LIMIT="${BASH_REMATCH[1]}"
+    [[ "$ITEM_LIMIT" -gt 0 && "$ITEM_LIMIT" -le 10000 ]] \
+        || die "--until items must be between 1 and 10000: $UNTIL_CONDITION"
 elif [[ "$UNTIL_CONDITION" =~ ^([0-9]+)[[:space:]]*hours?$ ]]; then
     ITEM_LIMIT=999999
-    SESSION_LIMIT_SECONDS="$((BASH_REMATCH[1] * 3600))"
+    # The regex accepts arbitrarily many digits, and `$(( n * 3600 ))` wraps
+    # NEGATIVE on 64-bit overflow. The session guard is
+    # `[[ $SESSION_LIMIT_SECONDS -gt 0 && ... ]]`, so a negative limit fails the
+    # first conjunct and the wall-clock check is skipped for the entire run —
+    # an autonomous loop with its time bound silently removed. Bound the input
+    # before multiplying rather than trying to detect the overflow after.
+    UNTIL_HOURS="${BASH_REMATCH[1]}"
+    [[ "$UNTIL_HOURS" -gt 0 && "$UNTIL_HOURS" -le 168 ]] \
+        || die "--until hours must be between 1 and 168 (one week): $UNTIL_CONDITION"
+    SESSION_LIMIT_SECONDS="$((UNTIL_HOURS * 3600))"
+    [[ "$SESSION_LIMIT_SECONDS" -gt 0 ]] \
+        || die "--until produced a non-positive session limit: $UNTIL_CONDITION"
 elif [[ "$UNTIL_CONDITION" == "empty" ]]; then
     ITEM_LIMIT=999999
 elif [[ "$UNTIL_CONDITION" =~ ^item:([A-Z]+-[0-9]+)$ ]]; then
@@ -952,13 +1045,43 @@ if [[ "$DRY_RUN" == "true" ]]; then
     exit 0
 fi
 
+# This runner cannot implement backlog items. Its IMPLEMENT state is a
+# placeholder and the loop contains no code-writing, commit, or provider call —
+# slash-command execution is out of scope for a shell script (see usage).
+#
+# It previously ran its quality gates against the UNMODIFIED checkout, passed
+# them because the repository's own lint passes, and marked items Completed
+# having done nothing. Verified: "Implement OAuth login" and "Fix data
+# corruption bug" both closed with zero commits and `passed: true` evidence
+# written to disk.
+#
+# Stop here instead. The selection above is the genuinely useful output, and
+# /bs:ralph is the supported path that can actually implement (skills/ralph:
+# "YOU are the orchestrator ... YOU drive the PICK->IMPLEMENT->QUALITY loop").
+# Exit non-zero so an automated caller cannot mistake this for a completed run.
+# BS_RALPH_ALLOW_PLACEHOLDER_LOOP=1 re-enables the legacy loop for anyone
+# depending on its quality-gate side effects; completion is still gated on
+# proof of work, so it can block but never falsely complete.
+if [[ "${BS_RALPH_ALLOW_PLACEHOLDER_LOOP:-}" != "1" ]]; then
+    log_warn "Selected $item_count item(s), but this runner cannot implement them."
+    jq -r '.[] | "  - \(.id) [\(.type)] [effort:\(.effort)] \(.description)"' <<< "$items_json"
+    log_warn ""
+    log_warn "Orchestrate implementation via /bs:ralph, which drives the"
+    log_warn "PICK -> IMPLEMENT -> QUALITY -> REFLECT -> DECIDE loop with a model."
+    log_warn "Use the subcommands (pick-items / run-quality / complete-item) to"
+    log_warn "script individual steps, or --dry-run to list selections only."
+    exit 3
+fi
+
 mkdir -p "$EVIDENCE_ITEMS_DIR" "$QUALITY_LOG_DIR"
 touch "$TRAJECTORY_LOG"
 init_state_file
 
-# Backup BACKLOG.md once per session before any mutations
-cp "$BACKLOG_FILE" "${BACKLOG_FILE}.ralph-next-backup"
-log_info "BACKLOG.md backed up to ${BACKLOG_FILE}.ralph-next-backup"
+# Backup BACKLOG.md once per session before any mutations. Timestamped: the
+# fixed filename was overwritten by the next run, so after two runs the
+# pre-mutation state was unrecoverable — the backup destroyed the very thing it
+# existed to preserve. backup_backlog_once is shared with the subcommands.
+backup_backlog_once
 
 session_started_epoch="$(date +%s)"
 completed=0
@@ -978,6 +1101,11 @@ while IFS= read -r item; do
     fi
 
     log_info "Processing $item_id - $item_description"
+
+    # Recorded BEFORE the (placeholder) IMPLEMENT state so completion can be
+    # gated on the tree actually changing. See item_has_work_evidence.
+    item_baseline_head="$(current_head_sha)"
+    item_baseline_dirty="$(working_tree_fingerprint)"
 
     append_trajectory "$item_id" "PICK" '{"mode":"phase2"}'
     append_trajectory "$item_id" "IMPLEMENT" '{"status":"placeholder"}'
@@ -1085,8 +1213,27 @@ while IFS= read -r item; do
 
     item_status="blocked"
     if [[ "$final_decision" == "pass" || "$final_decision" == "marginal" ]]; then
-        item_status="completed"
-        completed=$((completed + 1))
+        # Proof of work. The IMPLEMENT state in this loop is a placeholder —
+        # this script cannot invoke /bs:ralph or /bs:quality (see usage), so it
+        # never writes code. Without this gate the loop ran quality checks
+        # against an UNMODIFIED tree, passed them because the repo's own lint
+        # passes, scored the pass, and marked the item Completed having done
+        # nothing: "Implement OAuth login" closed with zero commits.
+        #
+        # Requiring a real change is what separates "the work succeeded" from
+        # "no work was attempted". A quality gate that never saw a diff is
+        # evidence about the previous commit, not about this item.
+        if item_has_work_evidence "$item_baseline_head"; then
+            item_status="completed"
+            completed=$((completed + 1))
+        else
+            append_trajectory "$item_id" "BLOCK" \
+                '{"reason":"no-work-evidence","detail":"tree unchanged since PICK; this runner cannot implement items"}'
+            log_warn "$item_id: no code change since PICK — refusing to mark Completed."
+            log_warn "  This runner performs quality gates only; orchestrate implementation via /bs:ralph."
+            final_decision="block"
+            blocked=$((blocked + 1))
+        fi
     else
         blocked=$((blocked + 1))
     fi
@@ -1176,4 +1323,4 @@ log_info "  Blocked: $blocked"
 log_info "  Avg trajectory score: $avg_score"
 log_info "  State: $STATE_FILE"
 log_info "  Trajectory log: $TRAJECTORY_LOG"
-log_info "  BACKLOG.md backup: ${BACKLOG_FILE}.ralph-next-backup"
+log_info "  BACKLOG.md backup: ${BACKLOG_FILE}.ralph-next-backup-*"

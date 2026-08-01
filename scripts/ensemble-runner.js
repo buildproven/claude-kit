@@ -36,8 +36,24 @@ function createDefaultOptions() {
 }
 
 function readFlagValue(args, fallback = "") {
+  // A flag whose value is omitted must not swallow the NEXT flag as its value.
+  // `--providers --dry-run --persist /tmp/x` previously parsed as
+  // providers:["--dry-run"] with dryRun silently false, so the run invoked a
+  // nonexistent provider AND executed for real instead of dry-running.
+  if (args.length > 0 && String(args[0]).startsWith("--")) return fallback;
   const value = args.shift();
   return value || fallback;
+}
+
+// `Number.parseInt` stops at the first non-digit, so "5x" is 5 and "1e9" is 1 —
+// a user asking for a billion rounds silently gets one. Require the whole token
+// to be digits so a malformed value is rejected rather than reinterpreted.
+function parseWholeNumber(raw, label) {
+  const text = String(raw).trim();
+  if (!/^\d+$/.test(text)) {
+    throw new Error(`Invalid ${label} value: ${raw}`);
+  }
+  return Number.parseInt(text, 10);
 }
 
 function applyFlag(token, args, options) {
@@ -76,12 +92,12 @@ function applyFlag(token, args, options) {
       options.persist = readFlagValue(args);
     },
     "--rounds": () => {
-      options.rounds = Number.parseInt(readFlagValue(args, "1"), 10);
+      options.rounds = parseWholeNumber(readFlagValue(args, "1"), "rounds");
     },
     "--timeout-ms": () => {
-      options.timeoutMs = Number.parseInt(
+      options.timeoutMs = parseWholeNumber(
         readFlagValue(args, String(DEFAULT_TIMEOUT_MS)),
-        10,
+        "timeout-ms",
       );
     },
     "--cwd": () => {
@@ -119,8 +135,19 @@ function normalizeOptions(options) {
     throw new Error(`Invalid rounds value: ${options.rounds}`);
   }
 
-  if (!Number.isFinite(options.timeoutMs) || options.timeoutMs < 1000) {
-    throw new Error(`Invalid timeout-ms value: ${options.timeoutMs}`);
+  // Node stores timers in a signed 32-bit int. A larger value overflows and is
+  // clamped to 1 ms with only a TimeoutOverflowWarning, so a user asking for a
+  // generous timeout would instead have every provider killed instantly — a
+  // uniformly failed panel that looks like a provider outage.
+  const MAX_TIMEOUT_MS = 2147483647;
+  if (
+    !Number.isFinite(options.timeoutMs) ||
+    options.timeoutMs < 1000 ||
+    options.timeoutMs > MAX_TIMEOUT_MS
+  ) {
+    throw new Error(
+      `Invalid timeout-ms value: ${options.timeoutMs} (must be 1000-${MAX_TIMEOUT_MS})`,
+    );
   }
 
   if (options.providers.length === 0) {
@@ -346,6 +373,29 @@ function execAcpx(provider, prompt, options) {
             ok: false,
             stdout: stdout || "",
             stderr: formatProviderFailure(provider, stderr || error.message),
+          });
+          return;
+        }
+
+        // A zero exit is not a review. Provider CLIs routinely print an auth,
+        // quota, or permission error to stderr and still exit 0; counting that
+        // as success produced a well-formed panel reporting "Successes: 2,
+        // Failures: 0" with both responses empty, no Provider Failures section,
+        // and therefore no concerns raised — a clean bill of health from
+        // providers that said nothing at all. The `succeeded === 0` guard below
+        // cannot catch it, because both providers "succeeded".
+        const body = (stdout || "").trim();
+        if (!body) {
+          resolve({
+            provider,
+            ok: false,
+            stdout: "",
+            stderr: formatProviderFailure(
+              provider,
+              `exited 0 but produced no output${
+                stderr && stderr.trim() ? `: ${stderr.trim()}` : ""
+              }`,
+            ),
           });
           return;
         }

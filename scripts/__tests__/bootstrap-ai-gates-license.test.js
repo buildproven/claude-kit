@@ -11,16 +11,14 @@
 
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
+const { makeTempDir } = require("./helpers/tmp.js");
 
 const SCRIPT = path.resolve(__dirname, "..", "bootstrap-ai-gates.sh");
 
 describe("bootstrap-ai-gates.sh license gate", () => {
   it("dry-run plan installs license-checker-rseidelsohn, not the abandoned package", () => {
-    const target = fs.mkdtempSync(
-      path.join(os.tmpdir(), "bootstrap-ai-gates-license-"),
-    );
+    const target = makeTempDir("bootstrap-ai-gates-license-");
     fs.writeFileSync(
       path.join(target, "package.json"),
       JSON.stringify({ name: "scratch", scripts: {} }, null, 2),

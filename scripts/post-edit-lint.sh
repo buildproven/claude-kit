@@ -40,8 +40,15 @@ ERRORS=""
 
 # --- gitleaks: check for secrets ---
 if command -v gitleaks &>/dev/null; then
-  GITLEAKS_OUTPUT=$(gitleaks detect --no-git --source "$FILE_PATH" 2>&1)
-  GITLEAKS_EXIT=$?
+  # `|| GITLEAKS_EXIT=$?` is load-bearing. gitleaks exits non-zero exactly when
+  # it FINDS secrets, and under `set -e` a bare assignment from a failing
+  # command substitution kills the script right here — so the entire reporting
+  # block below was unreachable and detected secrets were silently allowed
+  # through. Capturing the status in the `||` branch keeps the failure
+  # non-fatal so it can be acted on.
+  GITLEAKS_EXIT=0
+  GITLEAKS_OUTPUT=$(gitleaks detect --no-git --source "$FILE_PATH" 2>&1) ||
+    GITLEAKS_EXIT=$?
   if [ $GITLEAKS_EXIT -ne 0 ]; then
     if echo "$GITLEAKS_OUTPUT" | grep -q "leaks found"; then
       ERRORS="${ERRORS}Secrets detected by gitleaks in $FILE_PATH:\n${GITLEAKS_OUTPUT}\n\nRemove secrets before continuing.\n\n"

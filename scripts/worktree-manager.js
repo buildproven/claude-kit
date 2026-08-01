@@ -23,6 +23,42 @@ class ManagerError extends Error {
   }
 }
 
+/**
+ * Parse a non-negative numeric CLI option, refusing anything that is not one.
+ *
+ * `Number(value || fallback)` is unsafe for the thresholds that gate worktree
+ * removal. A non-numeric value ("abc", "30m", a shell variable that expanded to
+ * garbage) yields NaN, and every comparison against NaN is false — so
+ * `ageMinutes < recentMinutes` silently stops protecting anything and the
+ * "recently active" guard becomes a no-op that removes live worktrees. It also
+ * conflates an explicit `0` with "unset", because `0 || fallback` is the
+ * fallback, so asking for no grace period silently got the 24h default.
+ *
+ * Fail closed instead: an unparseable threshold is a usage error, not a reason
+ * to proceed with an unguarded deletion.
+ */
+// CLI options parsed as non-negative numbers, as [optionKey, flagName].
+const NUMERIC_OPTIONS = [
+  ["graceHours", "grace-hours"],
+  ["recentMinutes", "recent-minutes"],
+];
+
+function numericOption(value, fallback, flag) {
+  if (value === undefined || value === null || value === "") return fallback;
+  // Trim only to tolerate stray padding around a real number. A value that is
+  // ENTIRELY whitespace is a mistake, not a request for zero — `Number("")`
+  // would quietly make it 0 and disable the guard it was meant to configure.
+  const text = typeof value === "number" ? String(value) : String(value).trim();
+  const numeric = text === "" ? Number.NaN : Number(text);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    throw new ManagerError(
+      `--${flag} must be a non-negative number (got: ${JSON.stringify(value)})`,
+      "USAGE",
+    );
+  }
+  return numeric;
+}
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
@@ -460,9 +496,37 @@ function worktreeMetadataKey(record) {
   return record.branch || `detached-${record.head}`;
 }
 
+// Stale-lock evidence directories are kept for post-mortem triage, but nothing
+// removed them, so `<git-common-dir>/worktree-manager/locks/` grew without
+// bound — and `help()` tells operators to hand-inspect that directory, which
+// gets harder the more debris sits in it.
+const STALE_EVIDENCE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+function pruneStaleEvidence(lockRoot) {
+  let entries;
+  try {
+    entries = fs.readdirSync(lockRoot, { withFileTypes: true });
+  } catch {
+    return; // Nothing to prune; never fail an operation over housekeeping.
+  }
+  const cutoff = Date.now() - STALE_EVIDENCE_RETENTION_MS;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.includes(".lock.stale-")) continue;
+    const full = path.join(lockRoot, entry.name);
+    try {
+      if (fs.statSync(full).mtimeMs < cutoff) {
+        fs.rmSync(full, { recursive: true, force: true });
+      }
+    } catch {
+      // Raced with another pruner, or not ours to remove — leave it.
+    }
+  }
+}
+
 function withLifecycleLock(repoRoot, key, operation, callback) {
   const lockRoot = path.join(metadataDir(repoRoot), "locks");
   fs.mkdirSync(lockRoot, { recursive: true, mode: 0o700 });
+  pruneStaleEvidence(lockRoot);
   const lock = path.join(lockRoot, `${stableHash(key)}.lock`);
   try {
     fs.mkdirSync(lock);
@@ -490,9 +554,43 @@ function withLifecycleLock(repoRoot, key, operation, callback) {
           { operation, owner },
         );
       }
-      const evidence = `${lock}.stale-${Date.now()}`;
-      fs.renameSync(lock, evidence);
-      fs.mkdirSync(lock);
+      // Stealing a stale lock must be atomic against a specific directory, not
+      // a check-then-act. Two processes can both observe the same dead owner
+      // and both decide to steal; without this, the second one renames the
+      // FIRST one's freshly-created live lock and then creates its own, so both
+      // believe they hold the mutex — and this mutex is the only serialization
+      // for removal.
+      //
+      // rename() is atomic: exactly one stealer can move a given directory, and
+      // the loser gets ENOENT. The winner then re-creates the lock; if that
+      // hits EEXIST, someone else got there first and we must back off rather
+      // than proceed unlocked. The evidence name includes the pid so two
+      // stealers in the same millisecond cannot collide on the destination.
+      const evidence = `${lock}.stale-${process.pid}-${Date.now()}`;
+      try {
+        fs.renameSync(lock, evidence);
+      } catch (renameError) {
+        if (renameError.code === "ENOENT") {
+          throw new ManagerError(
+            `Another process is recovering the '${key}' worktree lifecycle lock. Retry after it finishes.`,
+            "LIFECYCLE_BUSY",
+            { operation, owner },
+          );
+        }
+        throw renameError;
+      }
+      try {
+        fs.mkdirSync(lock);
+      } catch (recreateError) {
+        if (recreateError.code === "EEXIST") {
+          throw new ManagerError(
+            `Another process claimed the '${key}' worktree lifecycle lock during recovery. Retry after it finishes.`,
+            "LIFECYCLE_BUSY",
+            { operation, owner },
+          );
+        }
+        throw recreateError;
+      }
     } else {
       throw error;
     }
@@ -512,8 +610,22 @@ function withLifecycleLock(repoRoot, key, operation, callback) {
   try {
     return callback();
   } finally {
-    fs.unlinkSync(ownerFile);
-    fs.rmdirSync(lock);
+    // Releasing must never mask the operation's real outcome. A throw from a
+    // `finally` REPLACES the callback's return value — or, worse, the original
+    // error — so a bare unlinkSync here turned an actionable `UNPUSHED`
+    // refusal into a confusing `ENOENT`/`UNEXPECTED` whenever the lock had
+    // already been reclaimed (by a stale-lock stealer, or by an operator
+    // following the manual cleanup guidance in `help()`).
+    try {
+      fs.unlinkSync(ownerFile);
+    } catch {
+      // Lock already reclaimed by another process or cleaned up by hand.
+    }
+    try {
+      fs.rmdirSync(lock);
+    } catch {
+      // Same: releasing a lock we no longer own is not this call's failure.
+    }
   }
 }
 
@@ -1289,8 +1401,16 @@ function classify(repoRoot, record, options = {}) {
     };
   }
   const ageMinutes = activityAgeMinutes(repoRoot, record);
-  const recentMinutes = Number(options.recentMinutes || DEFAULT_RECENT_MINUTES);
-  if (ageMinutes !== null && ageMinutes < recentMinutes) {
+  const recentMinutes = numericOption(
+    options.recentMinutes,
+    DEFAULT_RECENT_MINUTES,
+    "recent-minutes",
+  );
+  if (
+    !options.skipRecencyCheck &&
+    ageMinutes !== null &&
+    ageMinutes < recentMinutes
+  ) {
     return {
       ...record,
       ...push,
@@ -1305,7 +1425,11 @@ function classify(repoRoot, record, options = {}) {
     const mergedAgeHours = pr.mergedAt
       ? (Date.now() - Date.parse(pr.mergedAt)) / 3600000
       : null;
-    const graceHours = Number(options.graceHours || DEFAULT_GRACE_HOURS);
+    const graceHours = numericOption(
+      options.graceHours,
+      DEFAULT_GRACE_HOURS,
+      "grace-hours",
+    );
     return {
       ...record,
       ...push,
@@ -1412,6 +1536,29 @@ function removeRecord(options) {
       throw new ManagerError(
         "Worktree removal refused because PR state is unavailable.",
         "UNKNOWN",
+      );
+    }
+  }
+  // classify() re-checks dirty/unpushed/PR/lock state via recordFor() above,
+  // closing the window for those guards. Activity recency lives only in
+  // classify() and is not otherwise re-evaluated here, so an automated
+  // reconcile --apply pass that classifies as removable and then removes
+  // moments later could still remove a worktree a session started editing in
+  // that window (unsaved edits don't show up as dirty). Re-check it under
+  // the lock, but only on that automated path — an operator's direct,
+  // explicit `remove` of one named worktree has no such window and should
+  // not gain a new confirmation step.
+  if (options.reconcileRecentCheck && !options.allowRecentActivity) {
+    const ageMinutes = activityAgeMinutes(repoRoot, record);
+    const recentMinutes = numericOption(
+      options.recentMinutes,
+      DEFAULT_RECENT_MINUTES,
+      "recent-minutes",
+    );
+    if (ageMinutes !== null && ageMinutes < recentMinutes) {
+      throw new ManagerError(
+        `Worktree removal refused: activity within ${recentMinutes} minutes. Pass --allow-recent-activity after explicit review.`,
+        "RECENT_ACTIVITY",
       );
     }
   }
@@ -1536,25 +1683,43 @@ function reconcile(options) {
       }
       continue;
     }
-    if (options.apply && state.removable) {
+    // --allow-recent-activity waives ONLY the recency guard, not the other
+    // lifecycle checks (merge grace period, PR state, unpushed commits) that
+    // classify() short-circuits past when it returns early on recency.
+    // Reclassify with just that one check disabled and require the result to
+    // be independently removable before treating it as overridden.
+    const reclassifiedForOverride =
+      state.classification === "recently active but otherwise removable" &&
+      options.allowRecentActivity
+        ? classify(repoRoot, record, { ...options, skipRecencyCheck: true })
+        : null;
+    const effectiveState = reclassifiedForOverride || state;
+    if (options.apply && effectiveState.removable) {
       try {
         const removed = remove({
           repo: repoRoot,
           path: record.path,
           deleteBranch: Boolean(options.deleteBranch),
           allowUnknown: false,
+          recentMinutes: options.recentMinutes,
+          allowRecentActivity: Boolean(options.allowRecentActivity),
+          reconcileRecentCheck: true,
         });
-        results.push({ ...state, action: "removed", removal: removed });
+        results.push({
+          ...effectiveState,
+          action: "removed",
+          removal: removed,
+        });
       } catch (error) {
         results.push({
-          ...state,
+          ...effectiveState,
           action: "skipped",
           error: error.message,
           errorCode: error.code,
         });
       }
     } else {
-      results.push({ ...state, action: "report" });
+      results.push({ ...effectiveState, action: "report" });
     }
   }
   return {
@@ -1795,6 +1960,7 @@ function parseCli(argv) {
     "--delete-branch",
     "--allow-closed",
     "--allow-unknown",
+    "--allow-recent-activity",
     "--skip-pr-check",
     "--repair-stale",
     "--json",
@@ -1817,6 +1983,15 @@ function parseCli(argv) {
     options[key] = argv[index + 1];
     index += 1;
   }
+  // Validate numeric thresholds at parse time, not where they are consumed.
+  // These gate worktree removal, and a bad value must be rejected even on a
+  // run whose repository happens to have no worktree to classify — otherwise
+  // the same typo passes silently today and deletes work tomorrow.
+  for (const [key, flag] of NUMERIC_OPTIONS) {
+    if (key in options) {
+      options[key] = numericOption(options[key], undefined, flag);
+    }
+  }
   return { command, options };
 }
 
@@ -1829,7 +2004,7 @@ function help() {
       "worktree-manager unlock --repo <path> (--branch <branch>|--path <path>) --owner <exact identity> [--terminal]",
       "worktree-manager status --repo <path>",
       "worktree-manager remove --repo <path> (--branch <branch>|--path <path>) [--delete-branch] [--recover --owner <exact identity>]",
-      "worktree-manager reconcile --repo <path> [--apply] [--grace-hours <n>] [--recent-minutes <n>] [--delete-branch] [--repair-stale]",
+      "worktree-manager reconcile --repo <path> [--apply] [--grace-hours <n>] [--recent-minutes <n>] [--delete-branch] [--repair-stale] [--allow-recent-activity]",
       "worktree-manager migrate --repo <path> (--dry-run|--apply)",
       "worktree-manager repair --repo <path> [--primary <path>] [--old-repo-name <name>] [--apply]",
     ],

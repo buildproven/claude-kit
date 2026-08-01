@@ -1,14 +1,8 @@
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const SKILL = readFileSync(path.join(ROOT, "skills/quality/SKILL.md"), "utf8");
@@ -246,10 +240,7 @@ describe("quality merge gates", () => {
       // The body travels as a FILE, never argv: command substitution and shell
       // arguments strip NUL bytes, which would normalize a malformed response
       // into a well-formed authorized one before the classifier sees it.
-      const bodyFile = path.join(
-        mkdtempSync(path.join(tmpdir(), "protectability-")),
-        "body.json",
-      );
+      const bodyFile = path.join(makeTempDir("protectability-"), "body.json");
       writeFileSync(bodyFile, args.body ?? "");
       try {
         execFileSync(
@@ -398,10 +389,7 @@ describe("quality merge gates", () => {
     it("rejects bodies that are not valid UTF-8", () => {
       // Buffer.toString("utf8") rewrites invalid sequences to U+FFFD, which
       // would launder a body that is not valid UTF-8 JSON into one that parses.
-      const bodyFile = path.join(
-        mkdtempSync(path.join(tmpdir(), "protectability-")),
-        "body.json",
-      );
+      const bodyFile = path.join(makeTempDir("protectability-"), "body.json");
       writeFileSync(
         bodyFile,
         Buffer.concat([
@@ -622,7 +610,7 @@ describe("quality merge gates", () => {
   });
 
   it("preserves conclusive findings when a later primary pass is inconclusive", () => {
-    const reviewOut = mkdtempSync(path.join(tmpdir(), "quality-evidence-"));
+    const reviewOut = makeTempDir("quality-evidence-");
     writeFileSync(
       path.join(reviewOut, "codex.findings.txt"),
       "BLOCKING: src/example.js:12 — real finding\nFix it.\nINCONCLUSIVE: pass 2 parser failed\n",
@@ -672,7 +660,7 @@ describe("quality merge gates", () => {
   });
 
   it("quarantines repeated primary evidence without replacing the authoritative result", () => {
-    const reviewOut = mkdtempSync(path.join(tmpdir(), "quality-collision-"));
+    const reviewOut = makeTempDir("quality-collision-");
     writeFileSync(
       path.join(reviewOut, "primary-codex-1.result.json"),
       JSON.stringify({ findings: [{ title: "earlier evidence" }] }),
@@ -714,7 +702,7 @@ describe("quality merge gates", () => {
   });
 
   it("does not promote a marker-only inconclusive review to evidence", () => {
-    const reviewOut = mkdtempSync(path.join(tmpdir(), "quality-evidence-"));
+    const reviewOut = makeTempDir("quality-evidence-");
     mkdirSync(path.join(reviewOut, "unrelated"));
     writeFileSync(
       path.join(reviewOut, "codex.findings.txt"),
@@ -739,7 +727,7 @@ describe("quality merge gates", () => {
   });
 
   it("quarantines partial findings when the primary produced no evidence", () => {
-    const reviewOut = mkdtempSync(path.join(tmpdir(), "quality-evidence-"));
+    const reviewOut = makeTempDir("quality-evidence-");
     writeFileSync(
       path.join(reviewOut, "codex.findings.txt"),
       "BLOCKING: partial pass before timeout\n",

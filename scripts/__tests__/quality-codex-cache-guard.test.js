@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "./helpers/tmp.js";
 
 const GUARD = path.resolve(
   import.meta.dirname,
@@ -13,8 +13,8 @@ const GUARD = path.resolve(
 // Run the guard with a fake `codex` on PATH and an isolated CODEX_HOME so the
 // probe/refresh logic is exercised without touching the real ~/.codex.
 function runGuard({ codexVersion, cache, regenWrites }) {
-  const home = mkdtempSync(path.join(tmpdir(), "codex-guard-"));
-  const binDir = mkdtempSync(path.join(tmpdir(), "codex-bin-"));
+  const home = makeTempDir("codex-guard-");
+  const binDir = makeTempDir("codex-bin-");
   const cachePath = path.join(home, "models_cache.json");
   if (cache !== undefined) writeFileSync(cachePath, cache);
 
@@ -81,7 +81,7 @@ describe("quality-codex-cache-guard", () => {
 
   it("exits 0 (defers to runner) when codex is not installed", () => {
     // No fake codex on PATH → command -v codex fails.
-    const home = mkdtempSync(path.join(tmpdir(), "codex-guard-"));
+    const home = makeTempDir("codex-guard-");
     const res = spawnSync("bash", [GUARD], {
       encoding: "utf8",
       env: { ...process.env, PATH: "/usr/bin:/bin", CODEX_HOME: home },
