@@ -2136,15 +2136,6 @@ function providerPhaseSeconds(manifest) {
 }
 
 function authorizeProviderAttempt(manifest, options, manifestPath) {
-  if (!manifestPath) {
-    // manifestPath drives saveManifestMidTransaction() below, without which
-    // a reconciled-but-not-yet-saved activeExecution silently reverts to
-    // the exact discard-on-throw bug this persist exists to fix, with no
-    // signal that persistence was skipped. Fail loudly instead of letting
-    // a future/missed call site quietly regress (Codex review finding,
-    // 2026-08-01, medium).
-    throw new Error("authorizeProviderAttempt requires manifestPath");
-  }
   const provider = options.provider;
   if (!["claude", "codex", "gemini"].includes(provider)) {
     throw new Error(`invalid review provider '${provider}'`);
@@ -2173,6 +2164,19 @@ function authorizeProviderAttempt(manifest, options, manifestPath) {
     // operation() call before saveManifest() runs, silently discarding
     // this reconciliation and re-triggering the same false exhaustion on
     // every retry. Persist it now, unconditionally.
+    //
+    // manifestPath is only required here, at the point persistence is
+    // actually needed -- not at function entry -- so a caller with no
+    // reconciliation to persist (the common case) isn't forced to supply
+    // a path it has no use for. Failing loudly here rather than silently
+    // skipping the persist is what actually closes the bug (Codex review
+    // finding, 2026-08-01, high: an unconditional entry-point throw was
+    // a broader contract change than the fix required).
+    if (typeof manifestPath !== "string" || manifestPath === "") {
+      throw new Error(
+        "authorizeProviderAttempt requires manifestPath to persist a reconciled execution",
+      );
+    }
     saveManifestMidTransaction(manifestPath, manifest);
   }
   const currentHead = manifest.revisions.currentHead;
@@ -2228,14 +2232,6 @@ function completeProviderAttempt(manifest, options) {
 }
 
 function authorizeMutationAttempt(manifest, options, manifestPath) {
-  if (!manifestPath) {
-    // See authorizeProviderAttempt's identical guard: manifestPath drives
-    // saveManifestMidTransaction() below, without which reconciliation
-    // silently reverts to the discard-on-throw bug this exists to fix.
-    // Fail loudly rather than quietly regress (Codex review finding,
-    // 2026-08-01, medium).
-    throw new Error("authorizeMutationAttempt requires manifestPath");
-  }
   if (!["high", "critical"].includes(manifest.risk?.tier)) {
     throw new Error(
       "mutation execution is only available for high or critical campaigns",
@@ -2249,6 +2245,15 @@ function authorizeMutationAttempt(manifest, options, manifestPath) {
     // operation() call before saveManifest() runs, silently discarding
     // this reconciliation and re-triggering the same false exhaustion on
     // every retry. Persist it now, unconditionally.
+    //
+    // manifestPath is only required here, at the point persistence is
+    // actually needed -- not at function entry (Codex review finding,
+    // 2026-08-01, high: see authorizeProviderAttempt's identical fix).
+    if (typeof manifestPath !== "string" || manifestPath === "") {
+      throw new Error(
+        "authorizeMutationAttempt requires manifestPath to persist a reconciled execution",
+      );
+    }
     saveManifestMidTransaction(manifestPath, manifest);
   }
   const remaining = executionRemaining(manifest, "gate");
@@ -3239,6 +3244,15 @@ function executeGate(manifest, required, name, log, manifestPath) {
   };
   manifest.governor.lastActivityAt =
     manifest.governor.activeExecution.startedAt;
+  // Refreshing updatedAt here (rather than only on completion) is
+  // intentional: a gate execution that just started is not abandoned, and
+  // worktree-manager.js's qualityManifestReleaseState() reads updatedAt to
+  // judge lock staleness. Nothing else touches updatedAt while the
+  // subprocess below runs, but that's covered by activeExecution's own
+  // startedAt+timeoutSeconds deadline (reconcileAbandonedExecution), which
+  // is independent of the lock-staleness heuristic (Codex review finding,
+  // 2026-08-01, medium: confirming this doesn't conflate in-flight vs
+  // abandoned state).
   saveManifestMidTransaction(manifestPath, manifest);
   const boundedRunner = path.join(__dirname, "quality-run-bounded.sh");
   const monotonicStartedAt = process.hrtime.bigint();

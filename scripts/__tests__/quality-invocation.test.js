@@ -5830,27 +5830,58 @@ exit 1
     expect(afterSecond.governor.gateSecondsUsed).toBe(600);
   }, 30_000);
 
-  it("authorizeProviderAttempt requires manifestPath and fails loudly without it", () => {
-    // Regression (Codex review finding, 2026-08-01, medium): the
-    // mid-transaction reconciliation persist was gated on an OPTIONAL
-    // manifestPath parameter (`... && manifestPath`). Any call site that
-    // omitted it would silently skip the persist and reintroduce the exact
-    // discard-on-throw bug this whole fix exists to close, with zero
-    // signal that anything was wrong. manifestPath must be required so a
-    // missing value fails fast and loud instead of quietly regressing.
+  it("authorizeProviderAttempt requires manifestPath only when a reconciliation actually needs persisting", () => {
+    // Regression (Codex review round 1, 2026-08-01, medium -> round 2,
+    // high): the mid-transaction reconciliation persist was gated on an
+    // OPTIONAL manifestPath parameter (`... && manifestPath`). Any call
+    // site that omitted it would silently skip the persist and
+    // reintroduce the exact discard-on-throw bug this whole fix exists to
+    // close, with zero signal anything was wrong. An initial fix made
+    // manifestPath mandatory at function ENTRY -- but that's a broader
+    // contract change than the bug requires: a caller with no abandoned
+    // execution to reconcile has no persistence to skip, and shouldn't be
+    // forced to supply a path it has no use for. The guard must only fire
+    // at the point persistence is actually needed.
     const root = repo("provider-attempt-requires-manifest-path");
     const manifestPath = create(root);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+
+    // No activeExecution at all: nothing to reconcile, so no persistence
+    // is needed -- must NOT throw even with no manifestPath.
+    expect(() =>
+      invocation.authorizeProviderAttempt(manifest, { provider: "codex" }),
+    ).not.toThrow();
+
+    // An abandoned (deadline-passed) activeExecution IS something to
+    // reconcile and persist -- omitting manifestPath here must throw
+    // loudly rather than silently skip the persist.
+    manifest.governor.activeExecution = {
+      kind: "provider",
+      name: "codex",
+      startedAt: new Date(Date.now() - 500_000).toISOString(),
+      timeoutSeconds: 60,
+    };
     expect(() =>
       invocation.authorizeProviderAttempt(manifest, { provider: "codex" }),
     ).toThrow(/requires manifestPath/);
   });
 
-  it("authorizeMutationAttempt requires manifestPath and fails loudly without it", () => {
+  it("authorizeMutationAttempt requires manifestPath only when a reconciliation actually needs persisting", () => {
     const root = repo("mutation-attempt-requires-manifest-path");
     const manifestPath = create(root);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     manifest.risk = { ...manifest.risk, tier: "high" };
+
+    expect(() =>
+      invocation.authorizeMutationAttempt(manifest, {}),
+    ).not.toThrow();
+
+    manifest.governor.activeExecution = {
+      kind: "gate",
+      name: "mutation",
+      startedAt: new Date(Date.now() - 500_000).toISOString(),
+      timeoutSeconds: 60,
+    };
     expect(() => invocation.authorizeMutationAttempt(manifest, {})).toThrow(
       /requires manifestPath/,
     );
