@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "./helpers/tmp.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
@@ -5750,6 +5750,379 @@ exit 1
     const updated = JSON.parse(readFileSync(manifestPath, "utf8"));
     expect(updated.governor.gateSecondsUsed).toBe(2);
     expect(updated.governor.activeExecution).toBeNull();
+  }, 30_000);
+
+  it("persists an abandoned-execution reconciliation even when the immediate budget check then fails", () => {
+    // Regression: reconcileAbandonedExecution() cleared a timed-out
+    // activeExecution and credited its elapsed time to gateSecondsUsed in
+    // memory only. If the exhaustion check right after it then threw (a
+    // plain Error, not GateExecutionError), that error propagated out of
+    // mutate()'s operation() callback in withManifestLock() BEFORE
+    // saveManifest() ever ran -- silently discarding the reconciliation.
+    // Every retry re-read the same stale activeExecution from disk,
+    // recomputed the same "would exceed" result, and re-threw forever with
+    // no way for the manifest to ever recover on its own.
+    const root = repo("gate-abandoned-reconcile-persists");
+    const packageFile = path.join(root, "package.json");
+    const packageJson = JSON.parse(readFileSync(packageFile, "utf8"));
+    packageJson.scripts.build = "true";
+    writeFileSync(packageFile, JSON.stringify(packageJson));
+    git(root, ["add", "package.json"]);
+    git(root, ["commit", "-q", "-m", "add build script"]);
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.governor.gateSecondsLimit = 600;
+    manifest.governor.gateSecondsUsed = 197;
+    manifest.governor.activeExecution = {
+      kind: "gate",
+      name: "security",
+      startedAt: new Date(Date.now() - 500_000).toISOString(),
+      timeoutSeconds: 403,
+    };
+    const revisionBeforeRun = manifest.manifestRevision;
+    const updatedAtBeforeRun = manifest.updatedAt;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    // 197 + 403 == 600 == the limit: reconciling this abandoned execution
+    // exhausts the budget exactly, so the very next check throws.
+    const first = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(first.status).not.toBe(0);
+    expect(first.stderr).toMatch(
+      /total gate execution budget is exhausted before 'build'/,
+    );
+
+    // The reconciliation itself (activeExecution cleared, usage credited)
+    // must be durable even though the budget check failed -- otherwise the
+    // manifest is permanently stuck re-deriving and re-discarding the same
+    // reconciliation on every future invocation.
+    const afterFirst = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(afterFirst.governor.activeExecution).toBeNull();
+    expect(afterFirst.governor.gateSecondsUsed).toBe(600);
+    // Regression (Codex review finding, 2026-08-01, medium): the
+    // mid-transaction persist must refresh updatedAt -- otherwise
+    // worktree-manager.js's qualityManifestReleaseState() can judge this
+    // freshly-reconciled campaign as abandoned and release its lock as
+    // stale -- but must NOT bump manifestRevision, since
+    // withManifestLock() compares manifestRevision before/after the SAME
+    // mutation() call to detect a genuinely concurrent writer, and
+    // bumping it here would make that check misfire against our own
+    // in-progress transaction.
+    expect(afterFirst.updatedAt).not.toBe(updatedAtBeforeRun);
+    expect(afterFirst.manifestRevision).toBe(revisionBeforeRun);
+
+    // A second attempt must fail with the SAME exhausted-budget error, not
+    // hang or throw a different/inconsistent error -- proving the state is
+    // now stable rather than re-deriving the same thing every time.
+    const second = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(second.status).not.toBe(0);
+    expect(second.stderr).toMatch(
+      /total gate execution budget is exhausted before 'build'/,
+    );
+    const afterSecond = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(afterSecond.governor.gateSecondsUsed).toBe(600);
+  }, 30_000);
+
+  it("authorizeProviderAttempt requires manifestPath only when a reconciliation actually needs persisting", () => {
+    // Regression (Codex review round 1, 2026-08-01, medium -> round 2,
+    // high): the mid-transaction reconciliation persist was gated on an
+    // OPTIONAL manifestPath parameter (`... && manifestPath`). Any call
+    // site that omitted it would silently skip the persist and
+    // reintroduce the exact discard-on-throw bug this whole fix exists to
+    // close, with zero signal anything was wrong. An initial fix made
+    // manifestPath mandatory at function ENTRY -- but that's a broader
+    // contract change than the bug requires: a caller with no abandoned
+    // execution to reconcile has no persistence to skip, and shouldn't be
+    // forced to supply a path it has no use for. The guard must only fire
+    // at the point persistence is actually needed.
+    const root = repo("provider-attempt-requires-manifest-path");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+
+    // No activeExecution at all: nothing to reconcile, so no persistence
+    // is needed -- must NOT throw even with no manifestPath.
+    expect(() =>
+      invocation.authorizeProviderAttempt(manifest, { provider: "codex" }),
+    ).not.toThrow();
+
+    // An abandoned (deadline-passed) activeExecution IS something to
+    // reconcile and persist -- omitting manifestPath here must throw
+    // loudly rather than silently skip the persist.
+    manifest.governor.activeExecution = {
+      kind: "provider",
+      name: "codex",
+      startedAt: new Date(Date.now() - 500_000).toISOString(),
+      timeoutSeconds: 60,
+    };
+    expect(() =>
+      invocation.authorizeProviderAttempt(manifest, { provider: "codex" }),
+    ).toThrow(/requires manifestPath/);
+  });
+
+  it("authorizeProviderAttempt surfaces the real 'already active' conflict for a still-valid execution, not a manifestPath requirement", () => {
+    // Regression (Codex review round 5, 2026-08-01, medium): the
+    // manifestPath guard was gated on activeExecution merely EXISTING,
+    // not on it actually being abandoned. A caller with a still-valid,
+    // in-flight activeExecution (deadline not yet passed) that omitted
+    // manifestPath got the confusing "requires manifestPath" error
+    // instead of reconcileAbandonedExecution's own actionable "already
+    // active" conflict -- masking the real, more useful error for a
+    // scenario that has nothing to do with persistence at all.
+    const root = repo("provider-attempt-still-valid-execution-conflict");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.governor.activeExecution = {
+      kind: "provider",
+      name: "claude",
+      startedAt: new Date().toISOString(),
+      timeoutSeconds: 900, // nowhere near expired
+    };
+
+    // No manifestPath supplied, but nothing needs persisting -- must
+    // throw the ACTUAL conflict, not a manifestPath complaint.
+    expect(() =>
+      invocation.authorizeProviderAttempt(manifest, { provider: "codex" }),
+    ).toThrow(/provider execution 'claude' is already active/);
+  });
+
+  it("authorizeProviderAttempt uses one timestamp for both the manifestPath preflight and reconciliation, closing the boundary race", () => {
+    // Regression (Codex review round 6, 2026-08-01, medium): the preflight
+    // hasAbandonedExecution() check and the later reconcileAbandonedExecution()
+    // call each used their OWN independent Date.now(). An execution whose
+    // deadline falls in the (real, if narrow) window between those two
+    // calls would pass the preflight as "not yet abandoned" (skipping the
+    // manifestPath guard) but then get reconciled anyway by
+    // reconcileAbandonedExecution()'s own later, larger Date.now() --
+    // recreating the exact mutation-before-persistence-check loss this
+    // guard exists to prevent. Verify the fix directly: at the exact
+    // instant the deadline passes, a single shared timestamp must produce
+    // CONSISTENT answers from both hasAbandonedExecution() and
+    // reconcileAbandonedExecution() -- not a value that disagrees between
+    // two separate clock reads a moment apart.
+    const startedAt = new Date(Date.now() - 60_000).toISOString();
+    const execution = {
+      kind: "provider",
+      name: "codex",
+      startedAt,
+      timeoutSeconds: 60,
+    };
+    const deadlineMs = Date.parse(startedAt) + 60_000;
+
+    // Exactly at the deadline: abandoned (>=), by reconcileAbandonedExecution's
+    // own `now < deadline` / `now >= deadline` boundary semantics.
+    const manifestAtDeadline = { governor: { activeExecution: execution } };
+    expect(
+      invocation.hasAbandonedExecution(manifestAtDeadline, deadlineMs),
+    ).toBe(true);
+    expect(() =>
+      invocation.reconcileAbandonedExecution(
+        JSON.parse(JSON.stringify(manifestAtDeadline)),
+        deadlineMs,
+      ),
+    ).not.toThrow();
+
+    // One tick before the deadline: not yet abandoned by EITHER function,
+    // proving they agree given the SAME timestamp (the actual fix -- prior
+    // to it, authorizeProviderAttempt computed this instant twice,
+    // independently, which could disagree at exactly this kind of
+    // boundary).
+    const manifestBeforeDeadline = {
+      governor: { activeExecution: { ...execution } },
+    };
+    expect(
+      invocation.hasAbandonedExecution(manifestBeforeDeadline, deadlineMs - 1),
+    ).toBe(false);
+    expect(() =>
+      invocation.reconcileAbandonedExecution(
+        manifestBeforeDeadline,
+        deadlineMs - 1,
+      ),
+    ).toThrow(/already active/);
+  });
+
+  it("authorizeProviderAttempt does not straddle the deadline boundary across two separate clock reads", () => {
+    // Direct proof against the actual call path: mock Date.now() to
+    // advance PAST the deadline between what would previously have been
+    // two independent reads (the old hasAbandonedExecution() preflight and
+    // the later reconcileAbandonedExecution() call). Before the fix, this
+    // sequence would let the preflight see "not yet abandoned" (skip the
+    // manifestPath guard) while reconciliation's own later read saw
+    // "abandoned" and mutated anyway -- an unrecoverable, unpersisted
+    // reconciliation with no manifestPath to save it. After the fix (one
+    // captured `reconciliationNow` reused for both), the two checks can
+    // never disagree, so the manifestPath guard reliably fires whenever
+    // reconciliation is about to happen.
+    const root = repo("provider-attempt-clock-boundary-race");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const startedAt = new Date(Date.now() - 60_000).toISOString();
+    manifest.governor.activeExecution = {
+      kind: "provider",
+      name: "codex",
+      startedAt,
+      timeoutSeconds: 60,
+    };
+    const deadlineMs = Date.parse(startedAt) + 60_000;
+
+    const dateNowSpy = vi
+      .spyOn(Date, "now")
+      // First read (used for the preflight in the OLD, buggy code, and for
+      // authorizeProviderAttempt's own unrelated sharedDeadlineEpoch check
+      // in both old and new code): one tick BEFORE the deadline.
+      .mockReturnValueOnce(deadlineMs - 1)
+      // Every subsequent read (what the OLD code's separate
+      // reconcileAbandonedExecution() call would have used): AFTER the
+      // deadline. The fixed code must never actually reach a second
+      // distinct read for this decision -- it reuses the first.
+      .mockReturnValue(deadlineMs + 1);
+
+    try {
+      // No manifestPath: if the fix works, the single shared timestamp
+      // must consistently see this as abandoned (matching the *first*
+      // read, deadlineMs - 1, which is NOT yet past the deadline) --
+      // proving the preflight and reconciliation didn't straddle the
+      // boundary using two different reads.
+      expect(() =>
+        invocation.authorizeProviderAttempt(manifest, { provider: "codex" }),
+      ).toThrow(/provider execution 'codex' is already active/);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
+  it("authorizeProviderAttempt does not mutate activeExecution before the manifestPath guard can throw", () => {
+    // Regression (Codex review round 4, 2026-08-01, medium): the
+    // manifestPath guard originally ran AFTER reconcileAbandonedExecution()
+    // had already mutated the manifest in memory (clearing activeExecution,
+    // crediting elapsed time). If a caller caught that thrown error and
+    // retried the SAME manifest object with a manifestPath this time, the
+    // retry's hadActiveExecution would already read false -- the first call
+    // already cleared it -- so the retry would never detect "a
+    // reconciliation happened" and would skip the persist entirely,
+    // silently losing the reconciliation forever. The guard must validate
+    // BEFORE any mutation, so a retry with the same object still works.
+    const root = repo("provider-attempt-retry-preserves-reconciliation");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const abandonedExecution = {
+      kind: "provider",
+      name: "codex",
+      startedAt: new Date(Date.now() - 500_000).toISOString(),
+      timeoutSeconds: 60,
+    };
+    manifest.governor.activeExecution = { ...abandonedExecution };
+
+    // First call: no manifestPath, must throw WITHOUT mutating the manifest.
+    expect(() =>
+      invocation.authorizeProviderAttempt(manifest, { provider: "codex" }),
+    ).toThrow(/requires manifestPath/);
+    expect(manifest.governor.activeExecution).toEqual(abandonedExecution);
+
+    // Retry the SAME object, now with manifestPath: must still detect and
+    // persist the reconciliation -- proving no state was silently lost on
+    // the first, failed attempt. (The function then goes on to authorize
+    // and record a brand new provider attempt, which legitimately sets a
+    // fresh activeExecution of its own -- that's the function's actual
+    // job on success, not evidence the reconciliation was skipped.)
+    invocation.authorizeProviderAttempt(
+      manifest,
+      { provider: "codex" },
+      manifestPath,
+    );
+    const persisted = JSON.parse(readFileSync(manifestPath, "utf8"));
+    // The reconciled attempt's elapsed time must have been credited and
+    // durably written -- this is the actual evidence the reconciliation
+    // survived the failed-then-retried call, not lost to the discard bug.
+    expect(persisted.governor.providerSecondsUsed).toBeGreaterThan(0);
+  });
+
+  it("authorizeMutationAttempt requires manifestPath only when a reconciliation actually needs persisting", () => {
+    const root = repo("mutation-attempt-requires-manifest-path");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.risk = { ...manifest.risk, tier: "high" };
+
+    expect(() =>
+      invocation.authorizeMutationAttempt(manifest, {}),
+    ).not.toThrow();
+
+    manifest.governor.activeExecution = {
+      kind: "gate",
+      name: "mutation",
+      startedAt: new Date(Date.now() - 500_000).toISOString(),
+      timeoutSeconds: 60,
+    };
+    expect(() => invocation.authorizeMutationAttempt(manifest, {})).toThrow(
+      /requires manifestPath/,
+    );
+  });
+
+  it("authorizeMutationAttempt surfaces the real 'already active' conflict for a still-valid execution, not a manifestPath requirement", () => {
+    const root = repo("mutation-attempt-still-valid-execution-conflict");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.risk = { ...manifest.risk, tier: "high" };
+    manifest.governor.activeExecution = {
+      kind: "gate",
+      name: "build",
+      startedAt: new Date().toISOString(),
+      timeoutSeconds: 900,
+    };
+
+    expect(() => invocation.authorizeMutationAttempt(manifest, {})).toThrow(
+      /gate execution 'build' is already active/,
+    );
+  });
+
+  it("authorizeMutationAttempt never reconciles an abandoned execution on a non-high/critical manifest, but leaves it for executeGate to clear", () => {
+    // Confirms Codex review finding, 2026-08-01, medium is not a real gap:
+    // the tier-gate throw runs BEFORE reconcileAbandonedExecution(), so a
+    // stale activeExecution is untouched by this call path on a
+    // medium/low-risk manifest. That's fine because executeGate()
+    // unconditionally reconciles on every invocation regardless of risk
+    // tier -- the abandoned execution still gets cleared the next time any
+    // gate actually runs, it's just not THIS function's job to do it.
+    const root = repo("mutation-attempt-medium-tier-leaves-reconcile-to-gate");
+    const packageFile = path.join(root, "package.json");
+    const packageJson = JSON.parse(readFileSync(packageFile, "utf8"));
+    packageJson.scripts.build = "true";
+    writeFileSync(packageFile, JSON.stringify(packageJson));
+    git(root, ["add", "package.json"]);
+    git(root, ["commit", "-q", "-m", "add build script"]);
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.risk = { ...manifest.risk, tier: "medium" };
+    manifest.governor.activeExecution = {
+      kind: "gate",
+      name: "build",
+      startedAt: new Date(Date.now() - 500_000).toISOString(),
+      timeoutSeconds: 60,
+    };
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => invocation.authorizeMutationAttempt(manifest, {})).toThrow(
+      /only available for high or critical/,
+    );
+    // Untouched by the throw above -- still the stale in-memory object.
+    expect(manifest.governor.activeExecution).not.toBeNull();
+
+    // The next gate run (the actual execution path, independent of risk
+    // tier) still reconciles it, proving no permanent leak.
+    const result = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).toBe(0);
+    const afterGateRun = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(afterGateRun.governor.activeExecution).toBeNull();
   }, 30_000);
 
   it("requires explicit revalidation after lifecycle inactivity", () => {
