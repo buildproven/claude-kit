@@ -1406,7 +1406,11 @@ function classify(repoRoot, record, options = {}) {
     DEFAULT_RECENT_MINUTES,
     "recent-minutes",
   );
-  if (ageMinutes !== null && ageMinutes < recentMinutes) {
+  if (
+    !options.skipRecencyCheck &&
+    ageMinutes !== null &&
+    ageMinutes < recentMinutes
+  ) {
     return {
       ...record,
       ...push,
@@ -1679,10 +1683,18 @@ function reconcile(options) {
       }
       continue;
     }
-    const recentActivityOverridable =
+    // --allow-recent-activity waives ONLY the recency guard, not the other
+    // lifecycle checks (merge grace period, PR state, unpushed commits) that
+    // classify() short-circuits past when it returns early on recency.
+    // Reclassify with just that one check disabled and require the result to
+    // be independently removable before treating it as overridden.
+    const reclassifiedForOverride =
       state.classification === "recently active but otherwise removable" &&
-      options.allowRecentActivity;
-    if (options.apply && (state.removable || recentActivityOverridable)) {
+      options.allowRecentActivity
+        ? classify(repoRoot, record, { ...options, skipRecencyCheck: true })
+        : null;
+    const effectiveState = reclassifiedForOverride || state;
+    if (options.apply && effectiveState.removable) {
       try {
         const removed = remove({
           repo: repoRoot,
@@ -1693,17 +1705,21 @@ function reconcile(options) {
           allowRecentActivity: Boolean(options.allowRecentActivity),
           reconcileRecentCheck: true,
         });
-        results.push({ ...state, action: "removed", removal: removed });
+        results.push({
+          ...effectiveState,
+          action: "removed",
+          removal: removed,
+        });
       } catch (error) {
         results.push({
-          ...state,
+          ...effectiveState,
           action: "skipped",
           error: error.message,
           errorCode: error.code,
         });
       }
     } else {
-      results.push({ ...state, action: "report" });
+      results.push({ ...effectiveState, action: "report" });
     }
   }
   return {
