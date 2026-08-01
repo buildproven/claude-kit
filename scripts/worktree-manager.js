@@ -1679,7 +1679,10 @@ function reconcile(options) {
       }
       continue;
     }
-    if (options.apply && state.removable) {
+    const recentActivityOverridable =
+      state.classification === "recently active but otherwise removable" &&
+      options.allowRecentActivity;
+    if (options.apply && (state.removable || recentActivityOverridable)) {
       try {
         const removed = remove({
           repo: repoRoot,
@@ -1687,6 +1690,7 @@ function reconcile(options) {
           deleteBranch: Boolean(options.deleteBranch),
           allowUnknown: false,
           recentMinutes: options.recentMinutes,
+          allowRecentActivity: Boolean(options.allowRecentActivity),
           reconcileRecentCheck: true,
         });
         results.push({ ...state, action: "removed", removal: removed });

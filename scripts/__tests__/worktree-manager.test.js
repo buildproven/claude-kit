@@ -1455,6 +1455,43 @@ esac
     expect(existsSync(worktree.worktreePath)).toBe(false);
   });
 
+  it("BUI-603 #4 follow-up: --allow-recent-activity actually reaches a fresh, otherwise-removable worktree through reconcile", () => {
+    // classify() withholds a fresh worktree via "recently active but
+    // otherwise removable" (removable: false), so reconcile's apply branch
+    // must explicitly permit attempting removal for that classification when
+    // --allow-recent-activity is set — and remove()'s own recency re-check
+    // must also honor the override once options.allowRecentActivity is
+    // actually forwarded to it. Without both wired, the override documented
+    // on the CLI is unreachable dead code.
+    const { parent, repo } = fixture();
+    const bin = fakeGh(parent);
+    const worktree = create(repo, "feature/test");
+    writeFileSync(path.join(worktree.worktreePath, "merged.txt"), "merged\n");
+    git(worktree.worktreePath, "add", "merged.txt");
+    git(worktree.worktreePath, "commit", "-m", "merged change");
+    git(worktree.worktreePath, "push", "-u", "origin", "feature/test");
+    git(repo, "merge", "--ff-only", "feature/test");
+    git(repo, "push", "origin", "main");
+
+    const output = manager(
+      [
+        "reconcile",
+        "--repo",
+        repo,
+        "--apply",
+        "--grace-hours",
+        "0",
+        "--allow-recent-activity",
+      ],
+      { env: ghEnv(bin, "MERGED") },
+    ).json;
+    expect(output.worktrees[0].classification).toBe(
+      "recently active but otherwise removable",
+    );
+    expect(output.worktrees[0].action).toBe("removed");
+    expect(existsSync(worktree.worktreePath)).toBe(false);
+  });
+
   it("prunes stale registrations only on explicit repair", () => {
     const { repo } = fixture();
     const worktree = create(repo, "feature/stale");
