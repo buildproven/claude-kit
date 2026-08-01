@@ -104,17 +104,20 @@ done
 # with "${TEST_CMD[@]}" instead of eval, so a file pattern or --grep value
 # containing shell metacharacters (e.g. `/bs:test "**/*.test.ts"`) is passed
 # through literally rather than re-interpreted by the shell.
+# "${TEST_ARGS[@]+"${TEST_ARGS[@]}"}" (not plain "${TEST_ARGS[@]}") because
+# macOS ships bash 3.2 by default, and pre-4.4 bash treats an empty array
+# expansion as an unbound variable under `set -u`.
 if [ "$MODE" = "watch" ]; then
   case $PKG_MANAGER in
-    pnpm) TEST_CMD=(pnpm test --watch "${TEST_ARGS[@]}") ;;
-    yarn) TEST_CMD=(yarn test --watch "${TEST_ARGS[@]}") ;;
-    npm) TEST_CMD=(npm test -- --watch "${TEST_ARGS[@]}") ;;
+    pnpm) TEST_CMD=(pnpm test --watch "${TEST_ARGS[@]+"${TEST_ARGS[@]}"}") ;;
+    yarn) TEST_CMD=(yarn test --watch "${TEST_ARGS[@]+"${TEST_ARGS[@]}"}") ;;
+    npm) TEST_CMD=(npm test -- --watch "${TEST_ARGS[@]+"${TEST_ARGS[@]}"}") ;;
   esac
 else
   case $PKG_MANAGER in
-    pnpm) TEST_CMD=(pnpm test "${TEST_ARGS[@]}") ;;
-    yarn) TEST_CMD=(yarn test "${TEST_ARGS[@]}") ;;
-    npm) TEST_CMD=(npm test -- "${TEST_ARGS[@]}") ;;
+    pnpm) TEST_CMD=(pnpm test "${TEST_ARGS[@]+"${TEST_ARGS[@]}"}") ;;
+    yarn) TEST_CMD=(yarn test "${TEST_ARGS[@]+"${TEST_ARGS[@]}"}") ;;
+    npm) TEST_CMD=(npm test -- "${TEST_ARGS[@]+"${TEST_ARGS[@]}"}") ;;
   esac
 fi
 
@@ -123,7 +126,11 @@ fi
 # the runner — most runners treat positional args as path substrings, not
 # shell globs. Expand explicitly with globstar (recursive **) rather than
 # relying on eval's implicit re-parse, which only worked when the caller's
-# shell happened to have globstar enabled already.
+# shell happened to have globstar enabled already. Multiple matches are
+# passed as separate positional args (each a filter, per Jest/Vitest
+# semantics) — this is intentional: it's what the documented pattern is
+# supposed to do, and is now reliable instead of depending on the caller's
+# shell state the way the eval path did.
 if [ -n "$FILE_PATTERN" ]; then
   shopt -s globstar nullglob
   # shellcheck disable=SC2206  # word-splitting is the point: expand into an array
