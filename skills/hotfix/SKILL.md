@@ -83,10 +83,12 @@ npm run build
 ### Step 5: Create PR
 
 ```bash
-# Re-derive the same JS/TS-changed check from Step 4 (each fenced block runs
-# as its own shell, so Step 4's variables don't carry over) to describe test
-# status accurately instead of always claiming "Passing". Step 4 already
-# staged everything with `git add -A`, so this reads the same staged state.
+# lint/type-check/build in Step 4 can autofix or generate files AFTER that
+# step's git add -A, so re-stage now or the commit silently omits them while
+# still claiming those checks passed. Re-derive the same JS/TS-changed check
+# against this final staged state (each fenced block is its own shell, so
+# Step 4's variables don't carry over) instead of always claiming "Passing".
+git add -A
 TESTS_LINE="Tests: Passing (affected areas)"
 TESTS_CHECK_LINE="- ✅ Tests (affected areas)"
 if [ -z "$(git diff --name-only --cached main | grep -E '\.(js|ts|jsx|tsx)$' || true)" ]; then
