@@ -138,8 +138,13 @@ while [ $ELAPSED -lt $TIMEOUT ]; do
     FAILED=$(gh pr checks "$PR_NUMBER" --json conclusion --jq '.[] | select(.conclusion != "SUCCESS" and .conclusion != "NEUTRAL" and .conclusion != "SKIPPED") | .conclusion' | wc -l)
     if [ "$FAILED" -eq 0 ]; then
       echo "✅ CI checks passed"
-      gh pr merge "$PR_NUMBER" --squash --auto --delete-branch
-      exit 0
+      if gh pr merge "$PR_NUMBER" --squash --auto --delete-branch; then
+        exit 0
+      else
+        echo "❌ gh pr merge failed (branch protection, missing approval, or API/auth error)."
+        echo "   Review: $PR_URL"
+        exit 1
+      fi
     else
       echo "❌ CI checks failed. Not merging automatically."
       echo "   Review: $PR_URL"
