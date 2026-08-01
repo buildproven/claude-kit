@@ -5237,6 +5237,61 @@ exit 1
     );
   });
 
+  it("does not require mypy for a JS/TS-first repo whose diff never touches .py (BUI-467)", () => {
+    // Reproduces the claude-kit real-world shape: pyproject.toml declares
+    // [tool.mypy] for a handful of scripts/ .py files (committed on the
+    // base branch), but a given PR's diff never touches any .py file. mypy
+    // must not become a required, blocking gate for that PR — it's an
+    // environment dependency (mypy must be installed) unrelated to the
+    // change under review.
+    const root = repo("mypy-not-required-non-python-diff");
+    // repo() leaves the checkout on `feature`, one commit ahead of `main`.
+    // Land pyproject.toml/scripts/helper.py on `main` (the base) so they
+    // are NOT part of the diff being audited, then rebase feature onto it.
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(
+      path.join(root, "pyproject.toml"),
+      "[tool.ruff]\n\n[tool.mypy]\n",
+    );
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(path.join(root, "scripts", "helper.py"), "x = 1\n");
+    git(root, ["add", "pyproject.toml", "scripts/helper.py"]);
+    git(root, ["commit", "-q", "-m", "add Python tooling and a script"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["rebase", "-q", "main"]);
+
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.find((gate) => gate.name === "type")).toBeUndefined();
+  });
+
+  it("still requires mypy when the diff does touch a .py file (BUI-467)", () => {
+    const root = repo("mypy-required-python-diff");
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(
+      path.join(root, "pyproject.toml"),
+      "[tool.ruff]\n\n[tool.mypy]\n",
+    );
+    git(root, ["add", "pyproject.toml"]);
+    git(root, ["commit", "-q", "-m", "add Python tooling"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["rebase", "-q", "main"]);
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(path.join(root, "scripts", "helper.py"), "x = 1\n");
+    git(root, ["add", "scripts/helper.py"]);
+    git(root, ["commit", "-q", "-m", "add a python script"]);
+
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.find((gate) => gate.name === "type")).toMatchObject({
+      source: "python:mypy",
+      executable: "mypy",
+      args: ["."],
+    });
+  });
+
   it("binds optional gate evidence to the persisted trusted source and command", () => {
     const root = repo("trusted-gate-runner");
     const marker = path.join(tmpdir(), `quality-build-${process.pid}.marker`);

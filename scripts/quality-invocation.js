@@ -476,6 +476,35 @@ function committedFiles(root, head) {
   }
 }
 
+// Files changed between baseSha and head (diff scope), as opposed to
+// committedFiles' full repo-tree-at-head scope. Used to avoid promoting a
+// repo-wide-but-narrow tool (e.g. mypy for a handful of scripts/ files) into
+// a required, blocking gate for a PR that never touches that surface.
+function changedFiles(root, baseSha, head) {
+  if (!baseSha) return null;
+  try {
+    return git(root, ["diff", "--name-only", `${baseSha}..${head}`])
+      .split("\n")
+      .filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+// Unlike lint/test/security, a repo-wide mypy requirement is a real
+// environment dependency (mypy must be installed) for what may be a handful
+// of scripts/ files never touched by most PRs. Only promote it to a
+// required gate when the diff actually changes a .py file — a repo-wide
+// requirement can still be declared explicitly via .quality-gates.json
+// (handled upstream via nativeGates), which always takes precedence over
+// this inference. When baseSha/diff info is unavailable (changedFiles
+// returns null), fail open to the prior repo-wide behavior rather than
+// silently dropping required coverage.
+function diffTouchesPython(root, baseSha, head) {
+  const changed = changedFiles(root, baseSha, head);
+  return changed === null || changed.some((file) => file.endsWith(".py"));
+}
+
 function isPythonRepository(root, head, pyproject) {
   if (pyproject !== "") return true;
   return committedFiles(root, head).some(
@@ -558,6 +587,7 @@ function hasCommittedPythonTests(root, head) {
 function pythonGate({
   root,
   head,
+  baseSha,
   name,
   pyproject,
   pythonRepository,
@@ -606,7 +636,11 @@ function pythonGate({
           allowSkip,
         });
   }
-  if (name === "type" && hasPythonTool(pyproject, "mypy")) {
+  if (
+    name === "type" &&
+    hasPythonTool(pyproject, "mypy") &&
+    diffTouchesPython(root, baseSha, head)
+  ) {
     return pythonDirectGate({
       root,
       head,
@@ -651,6 +685,7 @@ function preferredRequiredGate({
 function optionalTypeGate({
   root,
   head,
+  baseSha,
   nativeGates,
   scripts,
   manager,
@@ -668,6 +703,7 @@ function optionalTypeGate({
     : pythonGate({
         root,
         head,
+        baseSha,
         name: "type",
         pyproject,
         pythonRepository,
@@ -757,6 +793,7 @@ function discoverRequiredGates(
   root,
   options,
   head = git(root, ["rev-parse", "HEAD"]),
+  baseSha = null,
 ) {
   const packageContent = committedFile(root, head, "package.json");
   let scripts = {};
@@ -813,6 +850,7 @@ function discoverRequiredGates(
   const typeGate = optionalTypeGate({
     root,
     head,
+    baseSha,
     nativeGates,
     scripts,
     manager,
@@ -1303,7 +1341,7 @@ function createManifest(options) {
     provider,
     reviews: [],
     governor: buildGovernor(head),
-    requiredGates: discoverRequiredGates(root, options),
+    requiredGates: discoverRequiredGates(root, options, head, baseSha),
     requiredGatesPolicyVersion: REQUIRED_GATES_POLICY_VERSION,
     gates: [],
   };
@@ -3746,6 +3784,7 @@ function runAdvance(manifestArg, manifest, rawArgs) {
       locked.repo.realpath,
       { "skip-tests": locked.options?.skipTests === true },
       locked.revisions.currentHead,
+      locked.revisions.baseSha,
     );
     locked.requiredGates = locked[NEEDS_REQUIRED_GATES_MIGRATION]
       ? discovered
