@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "./helpers/tmp.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
@@ -5890,6 +5890,111 @@ exit 1
     expect(() =>
       invocation.authorizeProviderAttempt(manifest, { provider: "codex" }),
     ).toThrow(/provider execution 'claude' is already active/);
+  });
+
+  it("authorizeProviderAttempt uses one timestamp for both the manifestPath preflight and reconciliation, closing the boundary race", () => {
+    // Regression (Codex review round 6, 2026-08-01, medium): the preflight
+    // hasAbandonedExecution() check and the later reconcileAbandonedExecution()
+    // call each used their OWN independent Date.now(). An execution whose
+    // deadline falls in the (real, if narrow) window between those two
+    // calls would pass the preflight as "not yet abandoned" (skipping the
+    // manifestPath guard) but then get reconciled anyway by
+    // reconcileAbandonedExecution()'s own later, larger Date.now() --
+    // recreating the exact mutation-before-persistence-check loss this
+    // guard exists to prevent. Verify the fix directly: at the exact
+    // instant the deadline passes, a single shared timestamp must produce
+    // CONSISTENT answers from both hasAbandonedExecution() and
+    // reconcileAbandonedExecution() -- not a value that disagrees between
+    // two separate clock reads a moment apart.
+    const startedAt = new Date(Date.now() - 60_000).toISOString();
+    const execution = {
+      kind: "provider",
+      name: "codex",
+      startedAt,
+      timeoutSeconds: 60,
+    };
+    const deadlineMs = Date.parse(startedAt) + 60_000;
+
+    // Exactly at the deadline: abandoned (>=), by reconcileAbandonedExecution's
+    // own `now < deadline` / `now >= deadline` boundary semantics.
+    const manifestAtDeadline = { governor: { activeExecution: execution } };
+    expect(
+      invocation.hasAbandonedExecution(manifestAtDeadline, deadlineMs),
+    ).toBe(true);
+    expect(() =>
+      invocation.reconcileAbandonedExecution(
+        JSON.parse(JSON.stringify(manifestAtDeadline)),
+        deadlineMs,
+      ),
+    ).not.toThrow();
+
+    // One tick before the deadline: not yet abandoned by EITHER function,
+    // proving they agree given the SAME timestamp (the actual fix -- prior
+    // to it, authorizeProviderAttempt computed this instant twice,
+    // independently, which could disagree at exactly this kind of
+    // boundary).
+    const manifestBeforeDeadline = {
+      governor: { activeExecution: { ...execution } },
+    };
+    expect(
+      invocation.hasAbandonedExecution(manifestBeforeDeadline, deadlineMs - 1),
+    ).toBe(false);
+    expect(() =>
+      invocation.reconcileAbandonedExecution(
+        manifestBeforeDeadline,
+        deadlineMs - 1,
+      ),
+    ).toThrow(/already active/);
+  });
+
+  it("authorizeProviderAttempt does not straddle the deadline boundary across two separate clock reads", () => {
+    // Direct proof against the actual call path: mock Date.now() to
+    // advance PAST the deadline between what would previously have been
+    // two independent reads (the old hasAbandonedExecution() preflight and
+    // the later reconcileAbandonedExecution() call). Before the fix, this
+    // sequence would let the preflight see "not yet abandoned" (skip the
+    // manifestPath guard) while reconciliation's own later read saw
+    // "abandoned" and mutated anyway -- an unrecoverable, unpersisted
+    // reconciliation with no manifestPath to save it. After the fix (one
+    // captured `reconciliationNow` reused for both), the two checks can
+    // never disagree, so the manifestPath guard reliably fires whenever
+    // reconciliation is about to happen.
+    const root = repo("provider-attempt-clock-boundary-race");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const startedAt = new Date(Date.now() - 60_000).toISOString();
+    manifest.governor.activeExecution = {
+      kind: "provider",
+      name: "codex",
+      startedAt,
+      timeoutSeconds: 60,
+    };
+    const deadlineMs = Date.parse(startedAt) + 60_000;
+
+    const dateNowSpy = vi
+      .spyOn(Date, "now")
+      // First read (used for the preflight in the OLD, buggy code, and for
+      // authorizeProviderAttempt's own unrelated sharedDeadlineEpoch check
+      // in both old and new code): one tick BEFORE the deadline.
+      .mockReturnValueOnce(deadlineMs - 1)
+      // Every subsequent read (what the OLD code's separate
+      // reconcileAbandonedExecution() call would have used): AFTER the
+      // deadline. The fixed code must never actually reach a second
+      // distinct read for this decision -- it reuses the first.
+      .mockReturnValue(deadlineMs + 1);
+
+    try {
+      // No manifestPath: if the fix works, the single shared timestamp
+      // must consistently see this as abandoned (matching the *first*
+      // read, deadlineMs - 1, which is NOT yet past the deadline) --
+      // proving the preflight and reconciliation didn't straddle the
+      // boundary using two different reads.
+      expect(() =>
+        invocation.authorizeProviderAttempt(manifest, { provider: "codex" }),
+      ).toThrow(/provider execution 'codex' is already active/);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
   });
 
   it("authorizeProviderAttempt does not mutate activeExecution before the manifestPath guard can throw", () => {

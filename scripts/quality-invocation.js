@@ -2176,7 +2176,17 @@ function authorizeProviderAttempt(manifest, options, manifestPath) {
     throw new Error("provider attempt governor is missing or invalid");
   }
   const hadActiveExecution = governor.activeExecution != null;
-  if (hasAbandonedExecution(manifest)) {
+  // A single captured timestamp shared by the preflight check and the
+  // reconciliation call below -- NOT two independent Date.now() calls.
+  // With two separate calls, an execution that expires in the (sub-
+  // millisecond but real) window between them would pass
+  // hasAbandonedExecution() as "not yet abandoned" (skipping the
+  // manifestPath guard) but then be reconciled anyway by
+  // reconcileAbandonedExecution()'s own later Date.now(), recreating the
+  // exact mutation-before-persistence-check race this guard exists to
+  // prevent (Codex review finding, 2026-08-01, medium).
+  const reconciliationNow = Date.now();
+  if (hasAbandonedExecution(manifest, reconciliationNow)) {
     // Validate BEFORE calling reconcileAbandonedExecution(), not after:
     // that call mutates governor.activeExecution (clearing it) and credits
     // gateSecondsUsed/providerSecondsUsed in memory as a side effect. If
@@ -2203,7 +2213,7 @@ function authorizeProviderAttempt(manifest, options, manifestPath) {
       );
     }
   }
-  reconcileAbandonedExecution(manifest);
+  reconcileAbandonedExecution(manifest, reconciliationNow);
   if (hadActiveExecution && governor.activeExecution == null) {
     // Same bug as executeGate's gate-budget reconciliation: if the cap
     // check below throws, that plain Error propagates out of mutate()'s
@@ -2278,7 +2288,12 @@ function authorizeMutationAttempt(manifest, options, manifestPath) {
     );
   }
   const hadActiveExecution = manifest.governor.activeExecution != null;
-  if (hasAbandonedExecution(manifest)) {
+  // One captured timestamp for both the preflight check and reconciliation
+  // -- see authorizeProviderAttempt's identical fix for why two
+  // independent Date.now() calls would reopen the exact race this guard
+  // exists to close (Codex review finding, 2026-08-01, medium).
+  const reconciliationNow = Date.now();
+  if (hasAbandonedExecution(manifest, reconciliationNow)) {
     // Validate BEFORE reconcileAbandonedExecution() mutates state, and
     // only for an actually-ABANDONED execution (not merely a present
     // one) -- see authorizeProviderAttempt's identical guard for both
@@ -2293,7 +2308,7 @@ function authorizeMutationAttempt(manifest, options, manifestPath) {
       );
     }
   }
-  reconcileAbandonedExecution(manifest);
+  reconcileAbandonedExecution(manifest, reconciliationNow);
   if (hadActiveExecution && manifest.governor.activeExecution == null) {
     // Same bug as executeGate's gate-budget reconciliation: if the cap
     // check below throws, that plain Error propagates out of mutate()'s
