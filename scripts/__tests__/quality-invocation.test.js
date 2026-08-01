@@ -854,6 +854,172 @@ exit 1
     expect(manifest.revisions.baseHeadSha).toBe(base);
   }, 120_000);
 
+  it("passes --repo (derived from GIT_ROOT, not CWD) to gh pr view on --merge resume (BUI-470)", () => {
+    // Exercises quality-bootstrap.sh's own --repo scoping directly (line
+    // ~151, resume path) rather than routing through quality-target-
+    // resolver.js's separate --target-dir scoping (BUI-391) — that already
+    // has its own coverage in quality-target-resolver-pr-repo-scoping.test.js.
+    const root = repo("bootstrap-pr-repo-flag-resume");
+    const bin = makeTempDir("quality-bootstrap-gh-");
+    const gh = path.join(bin, "gh");
+    // This stub only succeeds when called with --repo owner/repo; if the
+    // fix regresses (drops --repo on the resume path), the command fails.
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+if [ "$1 $2" = "repo view" ]; then
+  printf '%s\\n' 'owner/repo'
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  saw_repo=false
+  for arg in "$@"; do
+    if [ "$arg" = "--repo" ]; then saw_repo=true; fi
+  done
+  [ "$saw_repo" = true ] || { echo "gh pr view called without --repo" >&2; exit 1; }
+  printf '%s\\n' '{"headRefName":"feature","headRepository":{"nameWithOwner":"owner/repo"},"isCrossRepository":false}'
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(gh, 0o755);
+    const bootstrapEnv = {
+      ...process.env,
+      CLAUDE_SETUP_ROOT: ROOT,
+      PATH: `${bin}:${process.env.PATH}`,
+    };
+    const manifestPath = create(root, ["--pr", "21"], bootstrapEnv);
+    // Invoke resume with cwd pointed elsewhere (a stale tmp dir, not `root`)
+    // — the exact BUI-470 repro shape: $PWD and the manifest's own repo
+    // disagree, so any unscoped `gh` call would resolve against the wrong
+    // (or no) repo instead of the manifest's repo.realpath.
+    const elsewhereCwd = makeTempDir("quality-bootstrap-elsewhere-");
+    const result = spawnSync("bash", [BOOTSTRAP, "--manifest", manifestPath], {
+      cwd: elsewhereCwd,
+      env: bootstrapEnv,
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+  }, 120_000);
+
+  it("passes --repo (derived from GIT_ROOT, not CWD) to gh pr view on the --merge no-arg lookup (BUI-470)", () => {
+    const primary = repo("bootstrap-pr-repo-flag-merge-noarg");
+    const linked = makeTempDir("quality-linked-merge-noarg-");
+    git(primary, ["switch", "-q", "main"]);
+    git(primary, [
+      "worktree",
+      "add",
+      "-q",
+      "-b",
+      "quality-merge-noarg-branch",
+      linked,
+      "main",
+    ]);
+    const bin = makeTempDir("quality-bootstrap-gh-");
+    const gh = path.join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+if [ "$1 $2" = "repo view" ]; then
+  printf '%s\\n' 'owner/repo'
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  saw_repo=false
+  saw_selector=false
+  prev=""
+  idx=0
+  for arg in "$@"; do
+    idx=$((idx + 1))
+    if [ "$idx" -le 2 ]; then prev="$arg"; continue; fi
+    if [ "$arg" = "--repo" ]; then saw_repo=true; fi
+    # Real gh requires a positional selector (PR number/URL/branch) when
+    # --repo is combined with 'pr view' — reject the no-selector shape the
+    # same way real gh does, so a regression to the bare form is caught.
+    # A non-flag token (after 'pr view') that isn't a value belonging to a
+    # preceding flag counts as the selector.
+    if [ "\${arg#-}" = "$arg" ] && [ "$prev" != "--repo" ] && [ "$prev" != "--json" ]; then
+      saw_selector=true
+    fi
+    prev="$arg"
+  done
+  [ "$saw_repo" = true ] || { echo "gh pr view called without --repo" >&2; exit 1; }
+  [ "$saw_selector" = true ] || { echo "argument required when using the --repo flag" >&2; exit 1; }
+  printf '%s\\n' '{"number":23,"headRefName":"quality-merge-noarg-branch","headRefOid":"${git(linked, ["rev-parse", "HEAD"])}","headRepository":{"nameWithOwner":"owner/repo"},"isCrossRepository":false,"baseRefName":"main","baseRefOid":"${git(primary, ["rev-parse", "origin/main"])}"}'
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(gh, 0o755);
+    const result = spawnSync(
+      "bash",
+      [BOOTSTRAP, "--target-dir", linked, "--merge", "--level", "auto"],
+      {
+        cwd: linked,
+        env: {
+          ...process.env,
+          CLAUDE_SETUP_ROOT: ROOT,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+        encoding: "utf8",
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+  }, 120_000);
+
+  it("fails closed when the resolved PR belongs to a different repo than GIT_ROOT's own remote (BUI-470)", () => {
+    // Exercises quality-bootstrap.sh's own defensive cross-check (belt-and-
+    // suspenders on top of --repo scoping): if gh ever returns a PR bound to
+    // a different repo than GIT_ROOT's remote, fail closed instead of
+    // silently proceeding to audit/merge the wrong repo.
+    const primary = repo("bootstrap-pr-repo-mismatch");
+    const linked = makeTempDir("quality-linked-repo-mismatch-");
+    git(primary, ["switch", "-q", "main"]);
+    git(primary, [
+      "worktree",
+      "add",
+      "-q",
+      "-b",
+      "quality-repo-mismatch-branch",
+      linked,
+      "main",
+    ]);
+    const bin = makeTempDir("quality-bootstrap-gh-");
+    const gh = path.join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+if [ "$1 $2" = "repo view" ]; then
+  printf '%s\\n' 'owner/repo'
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  printf '%s\\n' '{"number":24,"headRefName":"quality-repo-mismatch-branch","headRefOid":"${git(linked, ["rev-parse", "HEAD"])}","headRepository":{"nameWithOwner":"other-owner/other-repo"},"isCrossRepository":false,"baseRefName":"main","baseRefOid":"${git(primary, ["rev-parse", "origin/main"])}"}'
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(gh, 0o755);
+    const result = spawnSync(
+      "bash",
+      [BOOTSTRAP, "--target-dir", linked, "--merge", "--level", "auto"],
+      {
+        cwd: linked,
+        env: {
+          ...process.env,
+          CLAUDE_SETUP_ROOT: ROOT,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+        encoding: "utf8",
+      },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/belongs to other-owner\/other-repo/);
+  }, 120_000);
+
   it("does not false-positive 'base changed during bootstrap' on a stale gh pr view cache (BUI-382)", () => {
     const root = repo("pr-bootstrap-stale-cache");
     const staleBase = git(root, ["rev-parse", "origin/main"]);
