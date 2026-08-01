@@ -5887,6 +5887,50 @@ exit 1
     );
   });
 
+  it("authorizeMutationAttempt never reconciles an abandoned execution on a non-high/critical manifest, but leaves it for executeGate to clear", () => {
+    // Confirms Codex review finding, 2026-08-01, medium is not a real gap:
+    // the tier-gate throw runs BEFORE reconcileAbandonedExecution(), so a
+    // stale activeExecution is untouched by this call path on a
+    // medium/low-risk manifest. That's fine because executeGate()
+    // unconditionally reconciles on every invocation regardless of risk
+    // tier -- the abandoned execution still gets cleared the next time any
+    // gate actually runs, it's just not THIS function's job to do it.
+    const root = repo("mutation-attempt-medium-tier-leaves-reconcile-to-gate");
+    const packageFile = path.join(root, "package.json");
+    const packageJson = JSON.parse(readFileSync(packageFile, "utf8"));
+    packageJson.scripts.build = "true";
+    writeFileSync(packageFile, JSON.stringify(packageJson));
+    git(root, ["add", "package.json"]);
+    git(root, ["commit", "-q", "-m", "add build script"]);
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.risk = { ...manifest.risk, tier: "medium" };
+    manifest.governor.activeExecution = {
+      kind: "gate",
+      name: "build",
+      startedAt: new Date(Date.now() - 500_000).toISOString(),
+      timeoutSeconds: 60,
+    };
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => invocation.authorizeMutationAttempt(manifest, {})).toThrow(
+      /only available for high or critical/,
+    );
+    // Untouched by the throw above -- still the stale in-memory object.
+    expect(manifest.governor.activeExecution).not.toBeNull();
+
+    // The next gate run (the actual execution path, independent of risk
+    // tier) still reconciles it, proving no permanent leak.
+    const result = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).toBe(0);
+    const afterGateRun = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(afterGateRun.governor.activeExecution).toBeNull();
+  }, 30_000);
+
   it("requires explicit revalidation after lifecycle inactivity", () => {
     const root = repo("lifecycle-stale");
     const manifestPath = create(root);

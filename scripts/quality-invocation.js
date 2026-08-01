@@ -2233,6 +2233,13 @@ function completeProviderAttempt(manifest, options) {
 
 function authorizeMutationAttempt(manifest, options, manifestPath) {
   if (!["high", "critical"].includes(manifest.risk?.tier)) {
+    // Throws before reconcileAbandonedExecution() runs, so a stale
+    // activeExecution on a non-high/critical manifest is never reconciled
+    // via THIS call path -- intentional, not a gap: executeGate() (the
+    // only place gates actually run) unconditionally reconciles on every
+    // invocation regardless of risk tier, so it still gets cleared the
+    // next time any gate runs (Codex review finding, 2026-08-01, medium:
+    // confirming this ordering is safe, not a leak).
     throw new Error(
       "mutation execution is only available for high or critical campaigns",
     );
