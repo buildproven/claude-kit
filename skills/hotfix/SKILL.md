@@ -131,11 +131,15 @@ PR_URL=$(gh pr view --json url --jq '.url')
 # here — it reads EOF and either hangs or silently aborts. Default to abort
 # on timeout/failure instead, and print the exact command a human can run
 # to merge once they've reviewed the CI result themselves.
+# `gh pr checks --json` exposes `bucket` (categorized: pass/fail/pending/
+# skipping/cancel) and the raw provider `state` (e.g. SUCCESS/FAILURE/
+# IN_PROGRESS) — there is no `COMPLETED` state and no `conclusion` field.
+# Use `bucket`, as gh's own --help recommends.
 TIMEOUT=120; ELAPSED=0; INTERVAL=5
 while [ $ELAPSED -lt $TIMEOUT ]; do
-  PENDING=$(gh pr checks "$PR_NUMBER" --json state --jq '.[] | select(.state != "COMPLETED") | .state' | wc -l)
+  PENDING=$(gh pr checks "$PR_NUMBER" --json bucket --jq '.[] | select(.bucket == "pending") | .bucket' | wc -l)
   if [ "$PENDING" -eq 0 ]; then
-    FAILED=$(gh pr checks "$PR_NUMBER" --json conclusion --jq '.[] | select(.conclusion != "SUCCESS" and .conclusion != "NEUTRAL" and .conclusion != "SKIPPED") | .conclusion' | wc -l)
+    FAILED=$(gh pr checks "$PR_NUMBER" --json bucket --jq '.[] | select(.bucket == "fail" or .bucket == "cancel") | .bucket' | wc -l)
     if [ "$FAILED" -eq 0 ]; then
       echo "✅ CI checks passed"
       if gh pr merge "$PR_NUMBER" --squash --auto --delete-branch; then
