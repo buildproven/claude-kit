@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+  # Manual re-run. Release-please is not a required check, so when it fails the
+  # failure is invisible on a green main — that is how it sat broken for 84
+  # commits. Without this, recovering required an unrelated push to main just to
+  # retrigger it.
+  workflow_dispatch:
 
 permissions:
   contents: write
