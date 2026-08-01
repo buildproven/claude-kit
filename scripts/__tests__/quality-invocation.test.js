@@ -5866,6 +5866,32 @@ exit 1
     ).toThrow(/requires manifestPath/);
   });
 
+  it("authorizeProviderAttempt surfaces the real 'already active' conflict for a still-valid execution, not a manifestPath requirement", () => {
+    // Regression (Codex review round 5, 2026-08-01, medium): the
+    // manifestPath guard was gated on activeExecution merely EXISTING,
+    // not on it actually being abandoned. A caller with a still-valid,
+    // in-flight activeExecution (deadline not yet passed) that omitted
+    // manifestPath got the confusing "requires manifestPath" error
+    // instead of reconcileAbandonedExecution's own actionable "already
+    // active" conflict -- masking the real, more useful error for a
+    // scenario that has nothing to do with persistence at all.
+    const root = repo("provider-attempt-still-valid-execution-conflict");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.governor.activeExecution = {
+      kind: "provider",
+      name: "claude",
+      startedAt: new Date().toISOString(),
+      timeoutSeconds: 900, // nowhere near expired
+    };
+
+    // No manifestPath supplied, but nothing needs persisting -- must
+    // throw the ACTUAL conflict, not a manifestPath complaint.
+    expect(() =>
+      invocation.authorizeProviderAttempt(manifest, { provider: "codex" }),
+    ).toThrow(/provider execution 'claude' is already active/);
+  });
+
   it("authorizeProviderAttempt does not mutate activeExecution before the manifestPath guard can throw", () => {
     // Regression (Codex review round 4, 2026-08-01, medium): the
     // manifestPath guard originally ran AFTER reconcileAbandonedExecution()
@@ -5930,6 +5956,23 @@ exit 1
     };
     expect(() => invocation.authorizeMutationAttempt(manifest, {})).toThrow(
       /requires manifestPath/,
+    );
+  });
+
+  it("authorizeMutationAttempt surfaces the real 'already active' conflict for a still-valid execution, not a manifestPath requirement", () => {
+    const root = repo("mutation-attempt-still-valid-execution-conflict");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.risk = { ...manifest.risk, tier: "high" };
+    manifest.governor.activeExecution = {
+      kind: "gate",
+      name: "build",
+      startedAt: new Date().toISOString(),
+      timeoutSeconds: 900,
+    };
+
+    expect(() => invocation.authorizeMutationAttempt(manifest, {})).toThrow(
+      /gate execution 'build' is already active/,
     );
   });
 

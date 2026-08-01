@@ -2115,6 +2115,25 @@ function completeActiveExecution(
   return elapsed;
 }
 
+// Pure predicate, no mutation: true only if manifest.governor.activeExecution
+// exists AND its deadline has already passed. Callers that need to know
+// "will reconcileAbandonedExecution() actually reconcile something" without
+// triggering its mutation/throw side effects (e.g. to decide whether a
+// manifestPath is required before calling it) should use this instead of
+// duplicating the deadline arithmetic (Codex review finding, 2026-08-01,
+// medium: an activeExecution merely EXISTING is not the same as it being
+// abandoned -- a still-valid in-flight execution must surface
+// reconcileAbandonedExecution's own "already active" conflict error, not an
+// unrelated manifestPath requirement that only applies to actual
+// reconciliation).
+function hasAbandonedExecution(manifest, now = Date.now()) {
+  const active = manifest.governor.activeExecution;
+  if (!active) return false;
+  const started = Date.parse(active.startedAt);
+  const deadline = started + active.timeoutSeconds * 1000;
+  return Number.isFinite(deadline) && now >= deadline;
+}
+
 function reconcileAbandonedExecution(manifest, now = Date.now()) {
   const active = manifest.governor.activeExecution;
   if (!active) return;
@@ -2157,7 +2176,7 @@ function authorizeProviderAttempt(manifest, options, manifestPath) {
     throw new Error("provider attempt governor is missing or invalid");
   }
   const hadActiveExecution = governor.activeExecution != null;
-  if (hadActiveExecution) {
+  if (hasAbandonedExecution(manifest)) {
     // Validate BEFORE calling reconcileAbandonedExecution(), not after:
     // that call mutates governor.activeExecution (clearing it) and credits
     // gateSecondsUsed/providerSecondsUsed in memory as a side effect. If
@@ -2170,12 +2189,14 @@ function authorizeProviderAttempt(manifest, options, manifestPath) {
     // we might not be able to persist in the first place (Codex review
     // finding, 2026-08-01, medium).
     //
-    // manifestPath is only required when an activeExecution actually
-    // exists to potentially reconcile -- not unconditionally at function
-    // entry -- so a caller with nothing to reconcile (the common case)
-    // isn't forced to supply a path it has no use for (Codex review
-    // finding, 2026-08-01, high: an unconditional entry-point throw was a
-    // broader contract change than the fix required).
+    // manifestPath is only required when an activeExecution is actually
+    // ABANDONED (deadline passed) -- not merely present -- so a caller
+    // whose activeExecution is still validly in-flight gets
+    // reconcileAbandonedExecution's own actionable "already active"
+    // conflict error below instead of an unrelated manifestPath
+    // requirement that only applies to real reconciliation (Codex review
+    // finding, 2026-08-01, medium: an entry merely EXISTING was too broad
+    // a trigger for this guard, masking the more useful error).
     if (typeof manifestPath !== "string" || manifestPath === "") {
       throw new Error(
         "authorizeProviderAttempt requires manifestPath to persist a reconciled execution",
@@ -2257,13 +2278,15 @@ function authorizeMutationAttempt(manifest, options, manifestPath) {
     );
   }
   const hadActiveExecution = manifest.governor.activeExecution != null;
-  if (hadActiveExecution) {
-    // Validate BEFORE reconcileAbandonedExecution() mutates state -- see
-    // authorizeProviderAttempt's identical guard for why: reconciling
-    // first and only then throwing would let a caught-and-retried call
-    // silently lose the reconciliation, since the retry's
-    // hadActiveExecution would already read false (Codex review finding,
-    // 2026-08-01, medium).
+  if (hasAbandonedExecution(manifest)) {
+    // Validate BEFORE reconcileAbandonedExecution() mutates state, and
+    // only for an actually-ABANDONED execution (not merely a present
+    // one) -- see authorizeProviderAttempt's identical guard for both
+    // reasons: reconciling first and only then throwing would let a
+    // caught-and-retried call silently lose the reconciliation, and
+    // gating on mere presence would mask reconcileAbandonedExecution's
+    // own "already active" conflict error for a still-valid execution
+    // (Codex review finding, 2026-08-01, medium, both rounds).
     if (typeof manifestPath !== "string" || manifestPath === "") {
       throw new Error(
         "authorizeMutationAttempt requires manifestPath to persist a reconciled execution",
@@ -4008,6 +4031,7 @@ module.exports = {
   recordJudge,
   recordGate,
   recordMutation,
+  hasAbandonedExecution,
   reconcileAbandonedExecution,
   executionRemaining,
   runGate,
