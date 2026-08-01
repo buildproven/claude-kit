@@ -804,6 +804,260 @@ describe("quality invocation manifest", () => {
     expect(manifest.provider.fallbackOverride).toBe("codex");
   }, 120_000);
 
+  it("passes QUALITY_CWD derived from --target-dir, not this process's own $PWD (BUI-390)", () => {
+    // Reproduces the BUI-390 repro shape: invoking bash from a directory
+    // other than --target-dir. Stubs the resolver location with a fake
+    // resolver that just reports the QUALITY_CWD it received and exits
+    // non-zero — if bootstrap.sh derives QUALITY_CWD from --target-dir (the
+    // fix) rather than $(pwd) at the resolver-path branch (the bug), the
+    // fake resolver observes the target dir, not the elsewhere cwd.
+    const target = repo("bootstrap-cwd-target");
+    const setupRoot = makeTempDir("quality-fake-setup-root-");
+    const fakeScriptsDir = path.join(setupRoot, "scripts");
+    mkdirSync(fakeScriptsDir, { recursive: true });
+    const observedFile = path.join(setupRoot, "observed-cwd.txt");
+    writeFileSync(
+      path.join(fakeScriptsDir, "quality-target-resolver.js"),
+      `#!/usr/bin/env node
+require("fs").writeFileSync(${JSON.stringify(observedFile)}, process.env.QUALITY_CWD || "");
+process.stdout.write(JSON.stringify({ ok: false, reason: "test stub", resolution: "path", warnings: [] }));
+process.exit(0);
+`,
+    );
+    const elsewhereCwd = makeTempDir("quality-bootstrap-elsewhere-");
+    spawnSync("bash", [BOOTSTRAP, "--target-dir", target, "--level", "auto"], {
+      cwd: elsewhereCwd,
+      env: {
+        ...process.env,
+        CLAUDE_SETUP_ROOT: setupRoot,
+      },
+      encoding: "utf8",
+    });
+    const observedCwd = readFileSync(observedFile, "utf8");
+    expect(observedCwd).toBe(target);
+    expect(observedCwd).not.toBe(elsewhereCwd);
+  }, 30_000);
+
+  it("injects --target-dir into resolver args when only BS_QUALITY_TARGET_DIR env var is set (BUI-390)", () => {
+    // Documented precedence is --target-dir > env var > cwd. Without
+    // injecting an explicit --target-dir token, the resolver's own arg
+    // parser never sees a path (it only parses CLI tokens, not env vars),
+    // so it falls through to the ambient-cwd fallback and hard-refuses
+    // under --merge — breaking the documented env-var-only fallback for
+    // forked/agent invocations with no inherited cwd.
+    const target = repo("bootstrap-env-target-dir");
+    const setupRoot = makeTempDir("quality-fake-setup-root-envvar-");
+    const fakeScriptsDir = path.join(setupRoot, "scripts");
+    mkdirSync(fakeScriptsDir, { recursive: true });
+    const observedArgsFile = path.join(setupRoot, "observed-args.json");
+    writeFileSync(
+      path.join(fakeScriptsDir, "quality-target-resolver.js"),
+      `#!/usr/bin/env node
+const idx = process.argv.indexOf("--cli");
+const argv = idx >= 0 ? process.argv.slice(idx + 1) : [];
+require("fs").writeFileSync(${JSON.stringify(observedArgsFile)}, JSON.stringify(argv));
+process.stdout.write(JSON.stringify({ ok: false, reason: "test stub", resolution: "path", warnings: [] }));
+process.exit(0);
+`,
+    );
+    const elsewhereCwd = makeTempDir("quality-bootstrap-elsewhere-envvar-");
+    spawnSync("bash", [BOOTSTRAP, "--merge", "--level", "auto"], {
+      cwd: elsewhereCwd,
+      env: {
+        ...process.env,
+        CLAUDE_SETUP_ROOT: setupRoot,
+        BS_QUALITY_TARGET_DIR: target,
+      },
+      encoding: "utf8",
+    });
+    const observedArgs = JSON.parse(readFileSync(observedArgsFile, "utf8"));
+    const targetDirIdx = observedArgs.indexOf("--target-dir");
+    expect(targetDirIdx).toBeGreaterThanOrEqual(0);
+    expect(observedArgs[targetDirIdx + 1]).toBe(target);
+  }, 30_000);
+
+  it("does not let BS_QUALITY_TARGET_DIR override an explicit bare-path argument (BUI-390)", () => {
+    // Codex review finding: parseArgs recognizes a bare absolute/~ path
+    // token as an explicit target too, not just --target-dir/--target. If
+    // bootstrap.sh's own env-var-fallback scanner doesn't recognize that
+    // form, it wrongly appends --target-dir <env value>, and because
+    // quality-target-resolver.js's applyExplicitFlags runs before
+    // applyPathPattern, the injected env value would win over the caller's
+    // own explicit path — silently auditing/merging the wrong checkout.
+    const explicitTarget = repo("bootstrap-explicit-bare-path");
+    const envTarget = repo("bootstrap-env-target-should-be-ignored");
+    const setupRoot = makeTempDir("quality-fake-setup-root-bare-path-");
+    const fakeScriptsDir = path.join(setupRoot, "scripts");
+    mkdirSync(fakeScriptsDir, { recursive: true });
+    const observedArgsFile = path.join(setupRoot, "observed-args.json");
+    writeFileSync(
+      path.join(fakeScriptsDir, "quality-target-resolver.js"),
+      `#!/usr/bin/env node
+const idx = process.argv.indexOf("--cli");
+const argv = idx >= 0 ? process.argv.slice(idx + 1) : [];
+require("fs").writeFileSync(${JSON.stringify(observedArgsFile)}, JSON.stringify(argv));
+process.stdout.write(JSON.stringify({ ok: false, reason: "test stub", resolution: "path", warnings: [] }));
+process.exit(0);
+`,
+    );
+    spawnSync(
+      "bash",
+      [BOOTSTRAP, "--merge", explicitTarget, "--level", "auto"],
+      {
+        cwd: explicitTarget,
+        env: {
+          ...process.env,
+          CLAUDE_SETUP_ROOT: setupRoot,
+          BS_QUALITY_TARGET_DIR: envTarget,
+        },
+        encoding: "utf8",
+      },
+    );
+    const observedArgs = JSON.parse(readFileSync(observedArgsFile, "utf8"));
+    // The caller's own bare path must be present, unmodified; --target-dir
+    // must NOT have been injected with the env var's (different) value.
+    expect(observedArgs).toContain(explicitTarget);
+    const targetDirIdx = observedArgs.indexOf("--target-dir");
+    if (targetDirIdx >= 0) {
+      expect(observedArgs[targetDirIdx + 1]).not.toBe(envTarget);
+    }
+  }, 30_000);
+
+  it("does not let BS_QUALITY_TARGET_DIR override a literal ~/... path argument (BUI-390)", () => {
+    // Second Codex review finding on the same fix: an UNQUOTED ~/* case
+    // pattern undergoes bash tilde expansion and becomes rooted at $HOME,
+    // so it silently fails to match a literal "~/..." argument string
+    // (as opposed to a shell-expanded absolute path). Passes a literal
+    // ~/-prefixed token (not expanded by the test harness, since it's
+    // passed as a discrete argv entry, not through a shell) to prove the
+    // quoted-tilde pattern in quality-bootstrap.sh actually matches it.
+    const explicitTarget = repo("bootstrap-explicit-tilde-path");
+    const envTarget = repo("bootstrap-env-target-should-be-ignored-tilde");
+    const setupRoot = makeTempDir("quality-fake-setup-root-tilde-path-");
+    const fakeScriptsDir = path.join(setupRoot, "scripts");
+    mkdirSync(fakeScriptsDir, { recursive: true });
+    const observedArgsFile = path.join(setupRoot, "observed-args.json");
+    writeFileSync(
+      path.join(fakeScriptsDir, "quality-target-resolver.js"),
+      `#!/usr/bin/env node
+const idx = process.argv.indexOf("--cli");
+const argv = idx >= 0 ? process.argv.slice(idx + 1) : [];
+require("fs").writeFileSync(${JSON.stringify(observedArgsFile)}, JSON.stringify(argv));
+process.stdout.write(JSON.stringify({ ok: false, reason: "test stub", resolution: "path", warnings: [] }));
+process.exit(0);
+`,
+    );
+    const literalTildeArg = "~/some/literal/tilde/path";
+    spawnSync(
+      "bash",
+      [BOOTSTRAP, "--merge", literalTildeArg, "--level", "auto"],
+      {
+        cwd: explicitTarget,
+        env: {
+          ...process.env,
+          CLAUDE_SETUP_ROOT: setupRoot,
+          BS_QUALITY_TARGET_DIR: envTarget,
+        },
+        encoding: "utf8",
+      },
+    );
+    const observedArgs = JSON.parse(readFileSync(observedArgsFile, "utf8"));
+    expect(observedArgs).toContain(literalTildeArg);
+    const targetDirIdx = observedArgs.indexOf("--target-dir");
+    if (targetDirIdx >= 0) {
+      expect(observedArgs[targetDirIdx + 1]).not.toBe(envTarget);
+    }
+  }, 30_000);
+
+  it("recognizes --worktree as an explicit path, same as --target-dir (BUI-390)", () => {
+    // Codex review finding (full-diff pass): quality-target-resolver.js's
+    // EXPLICIT_PATH_FLAG set is {--target-dir, --target, --worktree} — the
+    // bootstrap.sh scanner only checked the first two, so a --worktree-based
+    // invocation launched from another checkout would wrongly accept the
+    // BS_QUALITY_TARGET_DIR env-var fallback, resolving/materializing
+    // against the wrong repo.
+    const explicitTarget = repo("bootstrap-explicit-worktree-flag");
+    const envTarget = repo("bootstrap-env-target-should-be-ignored-worktree");
+    const setupRoot = makeTempDir("quality-fake-setup-root-worktree-flag-");
+    const fakeScriptsDir = path.join(setupRoot, "scripts");
+    mkdirSync(fakeScriptsDir, { recursive: true });
+    const observedArgsFile = path.join(setupRoot, "observed-args.json");
+    writeFileSync(
+      path.join(fakeScriptsDir, "quality-target-resolver.js"),
+      `#!/usr/bin/env node
+const idx = process.argv.indexOf("--cli");
+const argv = idx >= 0 ? process.argv.slice(idx + 1) : [];
+require("fs").writeFileSync(${JSON.stringify(observedArgsFile)}, JSON.stringify(argv));
+process.stdout.write(JSON.stringify({ ok: false, reason: "test stub", resolution: "path", warnings: [] }));
+process.exit(0);
+`,
+    );
+    // Uses --worktree=<relative-looking-name> deliberately: an *absolute*
+    // --worktree value would incidentally satisfy the separate bare-path
+    // ("/*") detection this same scanner does, masking whether --worktree
+    // itself is recognized as an explicit-path FLAG. A relative-looking
+    // --worktree=value isolates the flag-recognition behavior under test.
+    const worktreeArg = `--worktree=${explicitTarget}`;
+    const elsewhereCwd = makeTempDir("quality-bootstrap-elsewhere-worktree-");
+    spawnSync("bash", [BOOTSTRAP, "--merge", worktreeArg, "--level", "auto"], {
+      cwd: elsewhereCwd,
+      env: {
+        ...process.env,
+        CLAUDE_SETUP_ROOT: setupRoot,
+        BS_QUALITY_TARGET_DIR: envTarget,
+      },
+      encoding: "utf8",
+    });
+    const observedArgs = JSON.parse(readFileSync(observedArgsFile, "utf8"));
+    expect(observedArgs).toContain(worktreeArg);
+    // The scanner must recognize --worktree=... as an explicit path and NOT
+    // inject the env var's --target-dir over it.
+    const targetDirIdx = observedArgs.indexOf("--target-dir");
+    expect(targetDirIdx).toBe(-1);
+  }, 30_000);
+
+  it("anchors worktree materialization to the resolved target, not ambient cwd (BUI-390)", () => {
+    // Codex review finding: REPO_ROOT_FOR_WT used `git rev-parse
+    // --show-toplevel` unscoped, which resolves against this process's own
+    // cwd rather than the resolved --target-dir. When a resolved branch has
+    // no local worktree yet, materialization would fetch/create it against
+    // the wrong repo (or fail outright from a non-repo directory). Uses
+    // --branch (not --pr) so this doesn't depend on the repo() test
+    // helper's origin remote being a github.com URL — resolveByBranch
+    // doesn't need repo scoping, only cwd scoping, which is exactly what
+    // this fix addresses.
+    const primary = repo("bootstrap-materialize-target");
+    const base = git(primary, ["rev-parse", "origin/main"]);
+    git(primary, ["branch", "release", base]);
+    const elsewhereCwd = makeTempDir(
+      "quality-bootstrap-elsewhere-materialize-",
+    );
+    const result = spawnSync(
+      "bash",
+      [
+        BOOTSTRAP,
+        "--target-dir",
+        primary,
+        "--branch",
+        "release",
+        "--level",
+        "auto",
+      ],
+      {
+        cwd: elsewhereCwd,
+        env: {
+          ...process.env,
+          CLAUDE_SETUP_ROOT: ROOT,
+        },
+        encoding: "utf8",
+      },
+    );
+    // Materialization must succeed (anchored to `primary`, which has the
+    // `release` branch) rather than fail because it tried to resolve a repo
+    // root from `elsewhereCwd` (not a git checkout at all).
+    expect(result.status, result.stderr).toBe(0);
+  }, 30_000);
+
   it("binds a non-merge PR bootstrap to the PR base branch and base SHA", () => {
     const root = repo("pr-bootstrap");
     const base = git(root, ["rev-parse", "origin/main"]);
