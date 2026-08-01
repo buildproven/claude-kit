@@ -148,9 +148,15 @@ if [ -n "$FILE_PATTERN" ]; then
       case "$FIND_PATTERN" in
         *'**'*) ;; # mid-pattern ** after stripping the prefix — not supported, fall through
         *)
+          # Prune common dependency/build/vcs trees — an unpruned recursive
+          # search over "**/*.test.ts" in a real Node repo can pull in
+          # thousands of node_modules test files, select unintended tests,
+          # or exceed the shell's argument limit.
           while IFS= read -r -d '' match; do
             FILE_MATCHES+=("${match#./}")
-          done < <(find . -type f -path "$FIND_PATTERN" -print0 2>/dev/null)
+          done < <(find . \( -name node_modules -o -name .git -o -name dist \
+            -o -name build -o -name coverage -o -name .next -o -name .turbo \) \
+            -prune -o -type f -path "$FIND_PATTERN" -print0 2>/dev/null)
           ;;
       esac
       ;;
