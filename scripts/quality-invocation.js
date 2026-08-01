@@ -3304,14 +3304,14 @@ function validMutationArtifact(manifest, artifact) {
   ].every(Boolean);
 }
 
-function mutationEvidenceValid(manifest) {
-  // Creation begins with an unresolved risk contract. The normal quality flow
-  // cannot select agents or record reviews in that state, but fixture and
-  // inspection callers can still ask whether their existing evidence is
-  // coherent. Mutation proof is a requirement of a *resolved* high/critical
-  // contract, not a substitute for resolving that contract in the first
-  // place.
-  if (manifest.risk?.resolved !== true) return true;
+function mutationEvidenceValid(manifest, options = {}) {
+  // An unresolved risk contract means mutation evidence cannot yet be
+  // evaluated, so the honest answer is "not valid" — callers that need the
+  // pre-resolution "no evidence to contradict" case must opt in explicitly
+  // via unresolvedIsVacuous rather than receiving a default pass.
+  if (manifest.risk?.resolved !== true) {
+    return options.unresolvedIsVacuous === true;
+  }
   const tier = manifest.risk?.tier;
   if (["low", "medium"].includes(tier)) return true;
   if (!["high", "critical"].includes(tier)) return false;

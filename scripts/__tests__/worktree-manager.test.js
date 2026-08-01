@@ -1455,6 +1455,81 @@ esac
     expect(existsSync(worktree.worktreePath)).toBe(false);
   });
 
+  it("BUI-603 #4 follow-up: --allow-recent-activity actually reaches a fresh, otherwise-removable worktree through reconcile", () => {
+    // classify() withholds a fresh worktree via "recently active but
+    // otherwise removable" (removable: false), so reconcile's apply branch
+    // must reclassify with only the recency check disabled (still enforcing
+    // grace period / PR state / unpushed checks) and use THAT result to
+    // decide removability — and remove()'s own recency re-check must also
+    // honor the override once options.allowRecentActivity is forwarded to
+    // it. Without all three wired, the override documented on the CLI is
+    // unreachable dead code (or worse, bypasses more than just recency).
+    const { parent, repo } = fixture();
+    const bin = fakeGh(parent);
+    const worktree = create(repo, "feature/test");
+    writeFileSync(path.join(worktree.worktreePath, "merged.txt"), "merged\n");
+    git(worktree.worktreePath, "add", "merged.txt");
+    git(worktree.worktreePath, "commit", "-m", "merged change");
+    git(worktree.worktreePath, "push", "-u", "origin", "feature/test");
+    git(repo, "merge", "--ff-only", "feature/test");
+    git(repo, "push", "origin", "main");
+
+    const output = manager(
+      [
+        "reconcile",
+        "--repo",
+        repo,
+        "--apply",
+        "--grace-hours",
+        "0",
+        "--allow-recent-activity",
+      ],
+      { env: ghEnv(bin, "MERGED") },
+    ).json;
+    // The reported classification reflects the reclassification (recency
+    // check disabled), which correctly reaches the merged-PR outcome rather
+    // than staying stuck on the recency-only classification.
+    expect(output.worktrees[0].classification).toBe("clean with merged PR");
+    expect(output.worktrees[0].action).toBe("removed");
+    expect(existsSync(worktree.worktreePath)).toBe(false);
+  });
+
+  it("BUI-603 #4 follow-up: --allow-recent-activity does not bypass the merge grace period", () => {
+    // Codex review finding: classify() short-circuits on recency BEFORE
+    // reaching the grace-period check, so disabling only recency must still
+    // leave grace-period protection intact — a merged PR still within its
+    // grace window must stay refused even with the override.
+    const { parent, repo } = fixture();
+    const bin = fakeGh(parent);
+    const worktree = create(repo, "feature/test");
+    writeFileSync(path.join(worktree.worktreePath, "merged.txt"), "merged\n");
+    git(worktree.worktreePath, "add", "merged.txt");
+    git(worktree.worktreePath, "commit", "-m", "merged change");
+    git(worktree.worktreePath, "push", "-u", "origin", "feature/test");
+    git(repo, "merge", "--ff-only", "feature/test");
+    git(repo, "push", "origin", "main");
+
+    // fakeGh's MERGED fixture hardcodes mergedAt to 2020-01-01, so the grace
+    // window must exceed the real elapsed time since then to exercise the
+    // "still within grace" branch at all.
+    const output = manager(
+      [
+        "reconcile",
+        "--repo",
+        repo,
+        "--apply",
+        "--grace-hours",
+        "999999999",
+        "--allow-recent-activity",
+      ],
+      { env: ghEnv(bin, "MERGED") },
+    ).json;
+    expect(output.worktrees[0].classification).toBe("clean with merged PR");
+    expect(output.worktrees[0].removable).toBe(false);
+    expect(output.worktrees[0].action).toBe("report");
+    expect(existsSync(worktree.worktreePath)).toBe(true);
+  });
+
   it("prunes stale registrations only on explicit repair", () => {
     const { repo } = fixture();
     const worktree = create(repo, "feature/stale");
