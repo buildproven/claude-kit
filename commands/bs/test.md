@@ -135,14 +135,26 @@ fi
 FILE_MATCHES=()
 if [ -n "$FILE_PATTERN" ]; then
   case "$FILE_PATTERN" in
-    *'**'*)
-      # Recursive glob: convert to a find -path match. "**/*.test.ts" -> a
-      # pattern find's -path understands once the '**' segment collapses.
+    '**/'*)
+      # Only the documented leading-**/ form is handled recursively (e.g.
+      # "**/*.test.ts") — find -path's fnmatch already spans "/" for a bare
+      # "*", so stripping the leading "**/ " and matching the remainder
+      # against every path (not just the top level) is sufficient and
+      # matches files at any depth, including depth zero. A "**" appearing
+      # mid-pattern (e.g. "src/**/*.test.ts") or with no trailing wildcard
+      # (e.g. "**/auth.test.ts") is not a documented usage and falls through
+      # to the literal branch below instead of guessing at semantics.
       FIND_PATTERN="./${FILE_PATTERN#\*\*/}"
-      while IFS= read -r -d '' match; do
-        FILE_MATCHES+=("${match#./}")
-      done < <(find . -type f -path "$FIND_PATTERN" -print0 2>/dev/null)
+      case "$FIND_PATTERN" in
+        *'**'*) ;; # mid-pattern ** after stripping the prefix — not supported, fall through
+        *)
+          while IFS= read -r -d '' match; do
+            FILE_MATCHES+=("${match#./}")
+          done < <(find . -type f -path "$FIND_PATTERN" -print0 2>/dev/null)
+          ;;
+      esac
       ;;
+    *'**'*) ;; # mid-pattern ** — not supported, fall through to literal
     *)
       # Single-level glob or a plain filename — ordinary bash globbing
       # (no globstar needed) works on every supported shell.
@@ -155,8 +167,10 @@ if [ -n "$FILE_PATTERN" ]; then
   if [ "${#FILE_MATCHES[@]}" -gt 0 ]; then
     TEST_CMD+=("${FILE_MATCHES[@]}")
   else
-    # No glob metacharacters, or nothing matched — pass through literally so
-    # a plain filename (`/bs:test path/to/file.test`) still works.
+    # No glob metacharacters, nothing matched, or an unsupported ** position
+    # — pass through literally so a plain filename (`/bs:test
+    # path/to/file.test`) still works and the runner reports "no match"
+    # itself for anything else, rather than the argument silently vanishing.
     TEST_CMD+=("$FILE_PATTERN")
   fi
 fi
