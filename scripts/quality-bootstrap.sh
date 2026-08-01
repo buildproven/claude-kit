@@ -148,9 +148,9 @@ if [ -n "$MANIFEST_ARG" ]; then
   RESUME_PR="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" repo.pr)"
   ADVANCE_ARGS=(advance "$MANIFEST_ARG")
   if [ -n "$RESUME_PR" ] && [ "$RESUME_PR" != null ]; then
-    RESUME_PR_JSON="$(gh pr view "$RESUME_PR" \
-      --json headRefName,headRepository,isCrossRepository 2>/dev/null)" || exit 1
     RESUME_GITHUB_REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
+    RESUME_PR_JSON="$(gh pr view "$RESUME_PR" --repo "$RESUME_GITHUB_REPOSITORY" \
+      --json headRefName,headRepository,isCrossRepository 2>/dev/null)" || exit 1
     RESUME_HEAD_REF="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.headRefName')" || exit 1
     RESUME_HEAD_REPOSITORY="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.headRepository.nameWithOwner')" || exit 1
     RESUME_CROSS_REPOSITORY="$(printf '%s' "$RESUME_PR_JSON" | jq -r '.isCrossRepository')" || exit 1
@@ -342,12 +342,23 @@ fi
 # A PR-targeted invocation must always bind to the PR's actual base identity,
 # even when it is review-only. Falling back to origin/main for non-merge runs
 # produces the wrong diff and a manifest that cannot safely resume or merge.
+#
+# --repo is always passed explicitly (derived from GIT_ROOT's own remote, not
+# left to gh's CWD-relative default) so PR lookups stay bound to --target-dir
+# even when the invoking shell's $PWD points at a different repo (BUI-470).
+GH_REPO_SLUG=""
+if [ -n "${RES_PR:-}" ] || [ "$ARGS_MERGE" = true ]; then
+  GH_REPO_SLUG="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" || {
+    echo "❌ /bs:quality could not resolve the GitHub repository for $GIT_ROOT." >&2
+    exit 1
+  }
+fi
 PR_JSON=""
 if [ -n "${RES_PR:-}" ]; then
-  PR_JSON="$(gh pr view "$RES_PR" \
+  PR_JSON="$(gh pr view "$RES_PR" --repo "$GH_REPO_SLUG" \
     --json number,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,isCrossRepository 2>/dev/null)"
 elif [ "$ARGS_MERGE" = true ]; then
-  PR_JSON="$(gh pr view \
+  PR_JSON="$(gh pr view --repo "$GH_REPO_SLUG" \
     --json number,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,isCrossRepository 2>/dev/null)"
 fi
 if [ "$ARGS_MERGE" = true ]; then
@@ -372,6 +383,13 @@ if [ -n "$PR_JSON" ]; then
       echo "❌ /bs:quality could not resolve the PR base identity." >&2
       exit 1
     }
+  # Defensive check: even with --repo pinned above, fail closed (rather than
+  # silently proceeding) if the resolved PR ever belongs to a different repo
+  # than --target-dir/GIT_ROOT expects.
+  [ "$PR_IS_CROSS_REPOSITORY" = false ] && [ "$PR_HEAD_REPOSITORY" != "$GH_REPO_SLUG" ] && {
+    echo "❌ /bs:quality PR #$RES_PR belongs to $PR_HEAD_REPOSITORY, not $GH_REPO_SLUG (--target-dir)." >&2
+    exit 1
+  }
   [ "$PR_HEAD_OID" = "$(git rev-parse HEAD)" ] || {
     echo "❌ /bs:quality PR HEAD does not match the target worktree." >&2
     exit 1
