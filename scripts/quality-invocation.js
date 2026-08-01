@@ -10,7 +10,7 @@ const riskScore = require("./risk-score.js");
 
 const SCHEMA_VERSION = 1;
 const EXECUTION_BUDGET_VERSION = 1;
-const REQUIRED_GATES_POLICY_VERSION = 2;
+const REQUIRED_GATES_POLICY_VERSION = 3;
 const MAX_AGENT_TARGET = 9;
 const NEEDS_EXECUTION_BUDGET_MIGRATION = Symbol(
   "needs-execution-budget-migration",
@@ -237,8 +237,16 @@ function normalizeManifestCollections(manifest) {
   normalizeGovernor(manifest);
   if (
     manifest.requiredGatesPolicyVersion === undefined ||
-    manifest.requiredGatesPolicyVersion === 1
+    manifest.requiredGatesPolicyVersion === 1 ||
+    manifest.requiredGatesPolicyVersion === 2
   ) {
+    // v1->v2 and v2->v3 both migrate via full recompute (replace, not
+    // union) — v3 (BUI-467) changed inference semantics for the `type`
+    // gate specifically (mypy is no longer promoted merely because
+    // pyproject.toml declares [tool.mypy]; the diff must touch .py/.pyi
+    // too), so a v2 manifest that already inferred python:mypy must be
+    // recomputed under the new policy rather than keeping the stale entry
+    // via union.
     Object.defineProperty(manifest, NEEDS_REQUIRED_GATES_MIGRATION, {
       value: true,
       writable: true,
@@ -328,6 +336,18 @@ function baseIdentityMatches(manifest, actualRoot, currentHead, actualBase) {
     carry.baseSha === actualBase &&
     (carry.head === currentHead ||
       isAncestorOf(actualRoot, carry.head, currentHead)),
+  );
+}
+
+// The base to diff against for anything that needs "what changed relative
+// to the PR's true base" (e.g. diffTouchesPython) — the carried live base
+// after a proven rebase-only replay, or the immutable creation-time
+// baseSha otherwise. Using the stale baseSha post-rebase would include
+// upstream commits (that landed on main between PR creation and the
+// rebase) in the diff, which can falsely widen gate inference (BUI-467).
+function effectiveBaseSha(manifest) {
+  return (
+    manifest.revisions.baseRebaseCarry?.baseSha ?? manifest.revisions.baseSha
   );
 }
 
@@ -483,8 +503,12 @@ function committedFiles(root, head) {
 function changedFiles(root, baseSha, head) {
   if (!baseSha) return null;
   try {
-    return git(root, ["diff", "--name-only", `${baseSha}..${head}`])
-      .split("\n")
+    // -z: NUL-delimited, unquoted paths. Without it, git quotes filenames
+    // containing non-ASCII bytes (core.quotePath's default), which would
+    // otherwise break a suffix check like .endsWith(".py") on a path such
+    // as "café.py".
+    return git(root, ["diff", "-z", "--name-only", `${baseSha}..${head}`])
+      .split("\0")
       .filter(Boolean);
   } catch {
     return null;
@@ -502,7 +526,10 @@ function changedFiles(root, baseSha, head) {
 // silently dropping required coverage.
 function diffTouchesPython(root, baseSha, head) {
   const changed = changedFiles(root, baseSha, head);
-  return changed === null || changed.some((file) => file.endsWith(".py"));
+  return (
+    changed === null ||
+    changed.some((file) => file.endsWith(".py") || file.endsWith(".pyi"))
+  );
 }
 
 function isPythonRepository(root, head, pyproject) {
@@ -3784,7 +3811,7 @@ function runAdvance(manifestArg, manifest, rawArgs) {
       locked.repo.realpath,
       { "skip-tests": locked.options?.skipTests === true },
       locked.revisions.currentHead,
-      locked.revisions.baseSha,
+      effectiveBaseSha(locked),
     );
     locked.requiredGates = locked[NEEDS_REQUIRED_GATES_MIGRATION]
       ? discovered
