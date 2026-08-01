@@ -144,19 +144,25 @@ PR_URL=$(gh pr view --json url --jq '.url')
 # (see `gh help exit-codes` / `gh pr checks --help`). A failed `gh pr checks`
 # call must not read as "0 pending, 0 failed" → "CI passed", but exit 8 is
 # the normal in-progress state the polling loop exists for — it still prints
-# valid --json output, so treat the JSON's own `bucket` values as the source
-# of truth and only bail if the output isn't valid JSON at all.
+# valid --json output. Use gh's own --jq (no separate jq binary required —
+# same as PR_NUMBER/PR_URL above) and validate its output is a plain integer
+# before trusting it; a genuine query failure (auth/network/API error, or no
+# jq support) prints empty or non-numeric output instead.
 TIMEOUT=120; ELAPSED=0; INTERVAL=5
 while [ $ELAPSED -lt $TIMEOUT ]; do
-  CHECKS_JSON=$(gh pr checks "$PR_NUMBER" --json bucket 2>/dev/null)
-  if ! printf '%s' "$CHECKS_JSON" | jq -e 'type == "array"' >/dev/null 2>&1; then
+  PENDING=$(gh pr checks "$PR_NUMBER" --json bucket --jq '[.[] | select(.bucket == "pending")] | length' 2>/dev/null)
+  if ! [[ "$PENDING" =~ ^[0-9]+$ ]]; then
     echo "❌ Unable to query CI status for PR #$PR_NUMBER (gh pr checks returned no usable data). Not merging automatically."
     echo "   Review: $PR_URL"
     exit 1
   fi
-  PENDING=$(printf '%s' "$CHECKS_JSON" | jq -r '.[] | select(.bucket == "pending") | .bucket' | wc -l)
   if [ "$PENDING" -eq 0 ]; then
-    FAILED=$(printf '%s' "$CHECKS_JSON" | jq -r '.[] | select(.bucket == "fail" or .bucket == "cancel") | .bucket' | wc -l)
+    FAILED=$(gh pr checks "$PR_NUMBER" --json bucket --jq '[.[] | select(.bucket == "fail" or .bucket == "cancel")] | length' 2>/dev/null)
+    if ! [[ "$FAILED" =~ ^[0-9]+$ ]]; then
+      echo "❌ Unable to query CI status for PR #$PR_NUMBER (gh pr checks returned no usable data). Not merging automatically."
+      echo "   Review: $PR_URL"
+      exit 1
+    fi
     if [ "$FAILED" -eq 0 ]; then
       echo "✅ CI checks passed"
       if gh pr merge "$PR_NUMBER" --squash --auto --delete-branch; then
