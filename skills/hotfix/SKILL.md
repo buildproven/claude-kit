@@ -61,8 +61,15 @@ Use TodoWrite minimally (Fix bug → Verify → Deploy). Implement directly.
 ### Step 4: Minimal Quality Check (5-10 min)
 
 ```bash
-# Tests (affected areas only)
-npm run test -- --findRelatedTests $(git diff --name-only main...HEAD | grep -E '\.(js|ts|jsx|tsx)$' | tr '\n' ' ')
+# Tests (affected areas only) — skip cleanly if the diff touches no JS/TS
+# files, rather than passing --findRelatedTests with no paths (Jest treats
+# that as "no related tests" and exits 0, which is not the same as "tested").
+CHANGED_JS_TS=$(git diff --name-only main...HEAD | grep -E '\.(js|ts|jsx|tsx)$' || true)
+if [ -n "$CHANGED_JS_TS" ]; then
+  npm run test -- --findRelatedTests $CHANGED_JS_TS
+else
+  echo "ℹ️  No JS/TS files changed — targeted tests not applicable"
+fi
 
 npm run lint
 npm run type-check || tsc --noEmit
@@ -72,11 +79,21 @@ npm run build
 ### Step 5: Create PR
 
 ```bash
+# Re-derive the same JS/TS-changed check from Step 4 (each fenced block runs
+# as its own shell, so Step 4's variables don't carry over) to describe test
+# status accurately instead of always claiming "Passing".
+TESTS_LINE="Tests: Passing (affected areas)"
+TESTS_CHECK_LINE="- ✅ Tests (affected areas)"
+if [ -z "$(git diff --name-only main...HEAD | grep -E '\.(js|ts|jsx|tsx)$' || true)" ]; then
+  TESTS_LINE="Tests: N/A — no JS/TS files changed"
+  TESTS_CHECK_LINE="- ➖ Tests: N/A — no JS/TS files changed"
+fi
+
 git add .
 git commit -m "hotfix: ${DESCRIPTION}
 
 🚨 EMERGENCY HOTFIX - Minimal quality checks only
-- Tests: Passing (affected areas)
+- ${TESTS_LINE}
 - Lint: Clean
 - Build: Successful
 ⚠️  Skipped: Security, A11y, Performance audits
@@ -91,7 +108,7 @@ gh pr create \
 **What's broken:** ${DESCRIPTION}
 
 **Quality checks:**
-- ✅ Tests (affected areas)
+${TESTS_CHECK_LINE}
 - ✅ Lint / TypeScript / Build
 - ⚠️  Skipped: Security, A11y, Performance
 
@@ -107,29 +124,39 @@ gh pr create \
 
 ```bash
 PR_NUMBER=$(gh pr view --json number --jq '.number')
+PR_URL=$(gh pr view --json url --jq '.url')
 
-# Wait up to 2 minutes for CI
+# Wait up to 2 minutes for CI. stdin is not a TTY when this runs via the
+# Bash tool, so an interactive "proceed anyway? (y/n)" prompt cannot succeed
+# here — it reads EOF and either hangs or silently aborts. Default to abort
+# on timeout/failure instead, and print the exact command a human can run
+# to merge once they've reviewed the CI result themselves.
 TIMEOUT=120; ELAPSED=0; INTERVAL=5
 while [ $ELAPSED -lt $TIMEOUT ]; do
   PENDING=$(gh pr checks "$PR_NUMBER" --json state --jq '.[] | select(.state != "COMPLETED") | .state' | wc -l)
   if [ "$PENDING" -eq 0 ]; then
     FAILED=$(gh pr checks "$PR_NUMBER" --json conclusion --jq '.[] | select(.conclusion != "SUCCESS" and .conclusion != "NEUTRAL" and .conclusion != "SKIPPED") | .conclusion' | wc -l)
     if [ "$FAILED" -eq 0 ]; then
-      echo "✅ CI checks passed"; break
+      echo "✅ CI checks passed"
+      gh pr merge "$PR_NUMBER" --squash --auto --delete-branch
+      exit 0
     else
-      echo "⚠️  CI checks failed. Proceed anyway? (y/n)"
-      read -r PROCEED
-      [ "$PROCEED" != "y" ] && echo "❌ Merge aborted." && exit 1
-      break
+      echo "❌ CI checks failed. Not merging automatically."
+      echo "   Review: $PR_URL"
+      echo "   To merge anyway once reviewed: gh pr merge $PR_NUMBER --squash --auto --delete-branch"
+      exit 1
     fi
   fi
   sleep $INTERVAL; ELAPSED=$((ELAPSED + INTERVAL))
 done
 
-[ $ELAPSED -ge $TIMEOUT ] && echo "⚠️  CI timed out. Proceed anyway? (y/n)" && read -r PROCEED && [ "$PROCEED" != "y" ] && exit 1
-
-gh pr merge "$PR_NUMBER" --squash --auto --delete-branch
+echo "⚠️  CI timed out after ${TIMEOUT}s. Not merging automatically."
+echo "   Review: $PR_URL"
+echo "   To merge once CI completes: gh pr merge $PR_NUMBER --squash --auto --delete-branch"
+exit 1
 ```
+
+If Step 6 exited non-zero (CI failed, timed out, or the merge did not happen), **stop here** — do not proceed to Step 7. Report the CI/PR state to the user and wait for them to merge manually or explicitly say to retry.
 
 ### Step 7: Deploy to Production
 
