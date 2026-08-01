@@ -216,24 +216,43 @@ else
   # precedence: --target-dir > env var > cwd), is always authoritative over
   # ambient $PWD.
   RESOLVER_TARGET_DIR=""
+  RESOLVER_SAW_EXPLICIT_PATH=false
   prev_resolver_arg=""
   for resolver_arg in "$@"; do
     case "$prev_resolver_arg" in
-      --target-dir|--target) RESOLVER_TARGET_DIR="$resolver_arg" ;;
+      --target-dir|--target)
+        RESOLVER_TARGET_DIR="$resolver_arg"
+        RESOLVER_SAW_EXPLICIT_PATH=true
+        ;;
     esac
     case "$resolver_arg" in
-      --target-dir=*|--target=*) RESOLVER_TARGET_DIR="${resolver_arg#*=}" ;;
+      --target-dir=*|--target=*)
+        RESOLVER_TARGET_DIR="${resolver_arg#*=}"
+        RESOLVER_SAW_EXPLICIT_PATH=true
+        ;;
+      # Mirrors quality-target-resolver.js's own applyPathPattern: a bare
+      # absolute or ~/-prefixed positional token is an explicit path target
+      # too, not just the --target-dir/--target flag forms. Without this,
+      # the env-var-fallback injection below would wrongly override a
+      # caller-supplied bare path (BUI-390 review finding), and CWD_INPUT
+      # below would miss it too.
+      /*|~/*)
+        RESOLVER_SAW_EXPLICIT_PATH=true
+        [ -z "$RESOLVER_TARGET_DIR" ] && RESOLVER_TARGET_DIR="$resolver_arg"
+        ;;
     esac
     prev_resolver_arg="$resolver_arg"
   done
   RESOLVER_ARGS=("$@")
-  if [ -z "$RESOLVER_TARGET_DIR" ] && [ -n "${BS_QUALITY_TARGET_DIR:-}" ]; then
+  if [ "$RESOLVER_SAW_EXPLICIT_PATH" = false ] && [ -n "${BS_QUALITY_TARGET_DIR:-}" ]; then
     RESOLVER_TARGET_DIR="$BS_QUALITY_TARGET_DIR"
     # The env var alone leaves parsed.path unset inside the resolver (it only
     # parses CLI tokens), which falls through to the ambient-cwd fallback
     # paths and hard-refuses under --merge. Inject it as an explicit
     # --target-dir token so the resolver treats it the same as if the caller
-    # had passed the flag directly.
+    # had passed the flag directly. Only reached when the caller supplied no
+    # explicit path token of their own (checked above) — --target-dir must
+    # never override the caller's own explicit path.
     RESOLVER_ARGS+=(--target-dir "$RESOLVER_TARGET_DIR")
   fi
   if [ -n "$RESOLVER_TARGET_DIR" ]; then
@@ -307,7 +326,14 @@ else
           echo "❌ Could not materialize '$RES_BRANCH': worktree-manager.js is unavailable."
           exit 1
         }
-        REPO_ROOT_FOR_WT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+        # CWD_INPUT reflects the resolved target directory (--target-dir, a
+        # bare path token, or BS_QUALITY_TARGET_DIR) when one was supplied;
+        # falling back to `git rev-parse --show-toplevel`/pwd here would
+        # anchor materialization to this process's own ambient directory
+        # instead, which can fetch/create the same-numbered PR in an
+        # unrelated repo, or fail outright from a non-repo directory
+        # (BUI-390 review finding).
+        REPO_ROOT_FOR_WT=$(git -C "$CWD_INPUT" rev-parse --show-toplevel 2>/dev/null || echo "$CWD_INPUT")
         WT_BASE_REF="origin/$RES_BRANCH"
         if [ "$RES_KIND" = pr ] && [ -n "${RES_PR:-}" ]; then
           WT_BASE_REF="refs/remotes/pull/$RES_PR/head"

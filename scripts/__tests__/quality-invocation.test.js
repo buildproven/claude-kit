@@ -876,6 +876,95 @@ process.exit(0);
     expect(observedArgs[targetDirIdx + 1]).toBe(target);
   }, 30_000);
 
+  it("does not let BS_QUALITY_TARGET_DIR override an explicit bare-path argument (BUI-390)", () => {
+    // Codex review finding: parseArgs recognizes a bare absolute/~ path
+    // token as an explicit target too, not just --target-dir/--target. If
+    // bootstrap.sh's own env-var-fallback scanner doesn't recognize that
+    // form, it wrongly appends --target-dir <env value>, and because
+    // quality-target-resolver.js's applyExplicitFlags runs before
+    // applyPathPattern, the injected env value would win over the caller's
+    // own explicit path — silently auditing/merging the wrong checkout.
+    const explicitTarget = repo("bootstrap-explicit-bare-path");
+    const envTarget = repo("bootstrap-env-target-should-be-ignored");
+    const setupRoot = makeTempDir("quality-fake-setup-root-bare-path-");
+    const fakeScriptsDir = path.join(setupRoot, "scripts");
+    mkdirSync(fakeScriptsDir, { recursive: true });
+    const observedArgsFile = path.join(setupRoot, "observed-args.json");
+    writeFileSync(
+      path.join(fakeScriptsDir, "quality-target-resolver.js"),
+      `#!/usr/bin/env node
+const idx = process.argv.indexOf("--cli");
+const argv = idx >= 0 ? process.argv.slice(idx + 1) : [];
+require("fs").writeFileSync(${JSON.stringify(observedArgsFile)}, JSON.stringify(argv));
+process.stdout.write(JSON.stringify({ ok: false, reason: "test stub", resolution: "path", warnings: [] }));
+process.exit(0);
+`,
+    );
+    spawnSync(
+      "bash",
+      [BOOTSTRAP, "--merge", explicitTarget, "--level", "auto"],
+      {
+        cwd: explicitTarget,
+        env: {
+          ...process.env,
+          CLAUDE_SETUP_ROOT: setupRoot,
+          BS_QUALITY_TARGET_DIR: envTarget,
+        },
+        encoding: "utf8",
+      },
+    );
+    const observedArgs = JSON.parse(readFileSync(observedArgsFile, "utf8"));
+    // The caller's own bare path must be present, unmodified; --target-dir
+    // must NOT have been injected with the env var's (different) value.
+    expect(observedArgs).toContain(explicitTarget);
+    const targetDirIdx = observedArgs.indexOf("--target-dir");
+    if (targetDirIdx >= 0) {
+      expect(observedArgs[targetDirIdx + 1]).not.toBe(envTarget);
+    }
+  }, 30_000);
+
+  it("anchors worktree materialization to the resolved target, not ambient cwd (BUI-390)", () => {
+    // Codex review finding: REPO_ROOT_FOR_WT used `git rev-parse
+    // --show-toplevel` unscoped, which resolves against this process's own
+    // cwd rather than the resolved --target-dir. When a resolved branch has
+    // no local worktree yet, materialization would fetch/create it against
+    // the wrong repo (or fail outright from a non-repo directory). Uses
+    // --branch (not --pr) so this doesn't depend on the repo() test
+    // helper's origin remote being a github.com URL — resolveByBranch
+    // doesn't need repo scoping, only cwd scoping, which is exactly what
+    // this fix addresses.
+    const primary = repo("bootstrap-materialize-target");
+    const base = git(primary, ["rev-parse", "origin/main"]);
+    git(primary, ["branch", "release", base]);
+    const elsewhereCwd = makeTempDir(
+      "quality-bootstrap-elsewhere-materialize-",
+    );
+    const result = spawnSync(
+      "bash",
+      [
+        BOOTSTRAP,
+        "--target-dir",
+        primary,
+        "--branch",
+        "release",
+        "--level",
+        "auto",
+      ],
+      {
+        cwd: elsewhereCwd,
+        env: {
+          ...process.env,
+          CLAUDE_SETUP_ROOT: ROOT,
+        },
+        encoding: "utf8",
+      },
+    );
+    // Materialization must succeed (anchored to `primary`, which has the
+    // `release` branch) rather than fail because it tried to resolve a repo
+    // root from `elsewhereCwd` (not a git checkout at all).
+    expect(result.status, result.stderr).toBe(0);
+  }, 30_000);
+
   it("binds a non-merge PR bootstrap to the PR base branch and base SHA", () => {
     const root = repo("pr-bootstrap");
     const base = git(root, ["rev-parse", "origin/main"]);
