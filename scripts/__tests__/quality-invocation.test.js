@@ -969,6 +969,53 @@ process.exit(0);
     }
   }, 30_000);
 
+  it("recognizes --worktree as an explicit path, same as --target-dir (BUI-390)", () => {
+    // Codex review finding (full-diff pass): quality-target-resolver.js's
+    // EXPLICIT_PATH_FLAG set is {--target-dir, --target, --worktree} — the
+    // bootstrap.sh scanner only checked the first two, so a --worktree-based
+    // invocation launched from another checkout would wrongly accept the
+    // BS_QUALITY_TARGET_DIR env-var fallback, resolving/materializing
+    // against the wrong repo.
+    const explicitTarget = repo("bootstrap-explicit-worktree-flag");
+    const envTarget = repo("bootstrap-env-target-should-be-ignored-worktree");
+    const setupRoot = makeTempDir("quality-fake-setup-root-worktree-flag-");
+    const fakeScriptsDir = path.join(setupRoot, "scripts");
+    mkdirSync(fakeScriptsDir, { recursive: true });
+    const observedArgsFile = path.join(setupRoot, "observed-args.json");
+    writeFileSync(
+      path.join(fakeScriptsDir, "quality-target-resolver.js"),
+      `#!/usr/bin/env node
+const idx = process.argv.indexOf("--cli");
+const argv = idx >= 0 ? process.argv.slice(idx + 1) : [];
+require("fs").writeFileSync(${JSON.stringify(observedArgsFile)}, JSON.stringify(argv));
+process.stdout.write(JSON.stringify({ ok: false, reason: "test stub", resolution: "path", warnings: [] }));
+process.exit(0);
+`,
+    );
+    // Uses --worktree=<relative-looking-name> deliberately: an *absolute*
+    // --worktree value would incidentally satisfy the separate bare-path
+    // ("/*") detection this same scanner does, masking whether --worktree
+    // itself is recognized as an explicit-path FLAG. A relative-looking
+    // --worktree=value isolates the flag-recognition behavior under test.
+    const worktreeArg = `--worktree=${explicitTarget}`;
+    const elsewhereCwd = makeTempDir("quality-bootstrap-elsewhere-worktree-");
+    spawnSync("bash", [BOOTSTRAP, "--merge", worktreeArg, "--level", "auto"], {
+      cwd: elsewhereCwd,
+      env: {
+        ...process.env,
+        CLAUDE_SETUP_ROOT: setupRoot,
+        BS_QUALITY_TARGET_DIR: envTarget,
+      },
+      encoding: "utf8",
+    });
+    const observedArgs = JSON.parse(readFileSync(observedArgsFile, "utf8"));
+    expect(observedArgs).toContain(worktreeArg);
+    // The scanner must recognize --worktree=... as an explicit path and NOT
+    // inject the env var's --target-dir over it.
+    const targetDirIdx = observedArgs.indexOf("--target-dir");
+    expect(targetDirIdx).toBe(-1);
+  }, 30_000);
+
   it("anchors worktree materialization to the resolved target, not ambient cwd (BUI-390)", () => {
     // Codex review finding: REPO_ROOT_FOR_WT used `git rev-parse
     // --show-toplevel` unscoped, which resolves against this process's own

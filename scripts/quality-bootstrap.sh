@@ -225,13 +225,17 @@ else
   prev_resolver_arg=""
   for resolver_arg in "$@"; do
     case "$prev_resolver_arg" in
-      --target-dir|--target)
+      # Mirrors quality-target-resolver.js's EXPLICIT_PATH_FLAG set exactly
+      # (--target-dir, --target, --worktree) — --worktree was missing here,
+      # so a --worktree-based invocation launched from another checkout
+      # could resolve/materialize against the wrong repo (BUI-390 review).
+      --target-dir|--target|--worktree)
         RESOLVER_TARGET_DIR="$resolver_arg"
         RESOLVER_SAW_EXPLICIT_PATH=true
         ;;
     esac
     case "$resolver_arg" in
-      --target-dir=*|--target=*)
+      --target-dir=*|--target=*|--worktree=*)
         RESOLVER_TARGET_DIR="${resolver_arg#*=}"
         RESOLVER_SAW_EXPLICIT_PATH=true
         ;;
