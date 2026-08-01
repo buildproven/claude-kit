@@ -72,3 +72,11 @@ node "$SCRIPT_DIR/quality-invocation.js" risk "$MANIFEST" \
   --level "$LEVEL" || exit 1
 
 echo "🧭 Risk: ${RISK_SCORE}/100 (${TASK_TYPE}/${NATURE}), $(printf '%s' "$PLAN_JSON" | jq -r '"\(.workload): \(.diffStats.files) files/\(.diffStats.lines) lines"') → ${AGENT_TARGET} agents, Codex ${CODEX_DEPTH}×${CODEX_ROUNDS} [${TIER}], $(printf '%s' "$PLAN_JSON" | jq -r '.campaignSeconds')s workload plan"
+
+# scored.reasons[] is otherwise silently dropped — every other reason is
+# routine scoring detail, but a merge-base fallback means the diff itself may
+# be measured against the wrong base, which the operator needs to see even
+# though the campaign proceeds (see risk-score.js merge-base handling).
+printf '%s' "$PLAN_JSON" | jq -r '.reasons[]? | select(startswith("merge-base HEAD"))' | while IFS= read -r reason; do
+  echo "⚠️  quality-risk-resolve: $reason" >&2
+done
