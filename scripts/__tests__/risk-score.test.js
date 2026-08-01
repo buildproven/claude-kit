@@ -576,6 +576,29 @@ describe("score — base resolution is deterministic and fails closed", () => {
     expect(r.knobs).toHaveProperty("agents");
   });
 
+  it("BUI-603 #3: reports a merge-base failure in reasons instead of silently substituting the raw base ref", () => {
+    const runner = (args) => {
+      const a = args.join(" ");
+      if (
+        a.startsWith("rev-parse --abbrev-ref --symbolic-full-name @{upstream}")
+      ) {
+        throw new Error("no upstream");
+      }
+      if (a.startsWith("rev-parse --verify --quiet")) {
+        if (a.includes("origin/main")) return "abc123";
+        throw new Error("unknown ref");
+      }
+      if (a.startsWith("merge-base")) throw new Error("no merge base");
+      if (a.includes("--name-status")) return NAME_STATUS;
+      if (a.includes("--numstat")) return NUMSTAT;
+      return "";
+    };
+    const r = score({ gitRunner: runner });
+    expect(r.baseUnresolved).toBeUndefined();
+    expect(r.diffCollectionFailed).toBeUndefined();
+    expect(r.reasons.join(" ")).toMatch(/merge-base .* failed/i);
+  });
+
   it("honors GITHUB_BASE_REF for the CI path", () => {
     const prev = process.env.GITHUB_BASE_REF;
     process.env.GITHUB_BASE_REF = "main";
@@ -629,6 +652,19 @@ describe("scoreToKnobs — Moderate curve", () => {
       curve: [{ maxScore: 100, agents: 2, codex: "skip", codexRounds: 0 }],
     });
     expect(scoreToKnobs(80, cfg).codex).not.toBe("skip");
+  });
+  it("a repo-committed curve cannot weaken review below the built-in baseline for scores under 75", () => {
+    // BUI-603 #2: previously the baseline clamp only fired at
+    // effectiveScore >= 75, so a curve like this let a 69-74 score through
+    // with 2 agents and no Codex verification.
+    const cfg = deepMerge(DEFAULTS, {
+      curve: [{ maxScore: 100, agents: 2, codex: "skip", codexRounds: 0 }],
+      codexForceFloor: 101,
+    });
+    const baseline = DEFAULTS.curve.find((band) => 69 <= band.maxScore);
+    const knobs = scoreToKnobs(69, cfg);
+    expect(knobs.agents).toBeGreaterThanOrEqual(baseline.agents);
+    expect(knobs.codex).not.toBe("skip");
   });
   it.each([75, 76, 80, 84, 85])(
     "reviewed config cannot weaken critical review depth at score %i",

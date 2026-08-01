@@ -1535,6 +1535,29 @@ function removeRecord(options) {
       );
     }
   }
+  // classify() re-checks dirty/unpushed/PR/lock state via recordFor() above,
+  // closing the window for those guards. Activity recency lives only in
+  // classify() and is not otherwise re-evaluated here, so an automated
+  // reconcile --apply pass that classifies as removable and then removes
+  // moments later could still remove a worktree a session started editing in
+  // that window (unsaved edits don't show up as dirty). Re-check it under
+  // the lock, but only on that automated path — an operator's direct,
+  // explicit `remove` of one named worktree has no such window and should
+  // not gain a new confirmation step.
+  if (options.reconcileRecentCheck && !options.allowRecentActivity) {
+    const ageMinutes = activityAgeMinutes(repoRoot, record);
+    const recentMinutes = numericOption(
+      options.recentMinutes,
+      DEFAULT_RECENT_MINUTES,
+      "recent-minutes",
+    );
+    if (ageMinutes !== null && ageMinutes < recentMinutes) {
+      throw new ManagerError(
+        `Worktree removal refused: activity within ${recentMinutes} minutes. Pass --allow-recent-activity after explicit review.`,
+        "RECENT_ACTIVITY",
+      );
+    }
+  }
   if (record.locked) {
     unlockRecord(repoRoot, record, {
       owner: recoveryOwner,
@@ -1663,6 +1686,8 @@ function reconcile(options) {
           path: record.path,
           deleteBranch: Boolean(options.deleteBranch),
           allowUnknown: false,
+          recentMinutes: options.recentMinutes,
+          reconcileRecentCheck: true,
         });
         results.push({ ...state, action: "removed", removal: removed });
       } catch (error) {
@@ -1915,6 +1940,7 @@ function parseCli(argv) {
     "--delete-branch",
     "--allow-closed",
     "--allow-unknown",
+    "--allow-recent-activity",
     "--skip-pr-check",
     "--repair-stale",
     "--json",
@@ -1958,7 +1984,7 @@ function help() {
       "worktree-manager unlock --repo <path> (--branch <branch>|--path <path>) --owner <exact identity> [--terminal]",
       "worktree-manager status --repo <path>",
       "worktree-manager remove --repo <path> (--branch <branch>|--path <path>) [--delete-branch] [--recover --owner <exact identity>]",
-      "worktree-manager reconcile --repo <path> [--apply] [--grace-hours <n>] [--recent-minutes <n>] [--delete-branch] [--repair-stale]",
+      "worktree-manager reconcile --repo <path> [--apply] [--grace-hours <n>] [--recent-minutes <n>] [--delete-branch] [--repair-stale] [--allow-recent-activity]",
       "worktree-manager migrate --repo <path> (--dry-run|--apply)",
       "worktree-manager repair --repo <path> [--primary <path>] [--old-repo-name <name>] [--apply]",
     ],

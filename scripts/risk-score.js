@@ -452,10 +452,12 @@ function classifyChangeNature(descriptors, floorPaths) {
 
 function collectDescriptors(base, gitRunner) {
   let mergeBase;
+  let mergeBaseFallback = false;
   try {
     mergeBase = gitRunner(["merge-base", "HEAD", base]) || base;
   } catch {
     mergeBase = base;
+    mergeBaseFallback = true;
   }
 
   // These two calls are STRUCTURAL: everything downstream is derived from them.
@@ -532,6 +534,7 @@ function collectDescriptors(base, gitRunner) {
       lines: totalLines + submoduleStats.lines,
     },
     mergeBase,
+    mergeBaseFallback,
   };
 }
 
@@ -1252,18 +1255,19 @@ function scoreToKnobs(score, cfg) {
     knobs.codex = "high";
     knobs.codexRounds = 1;
   }
-  if (effectiveScore >= CRITICAL_RISK_SCORE) {
-    const baseline =
-      DEFAULTS.curve.find(
-        (candidate) => effectiveScore <= candidate.maxScore,
-      ) || DEFAULTS.curve[DEFAULTS.curve.length - 1];
-    const codexRank = { skip: 0, high: 1, xhigh: 2 };
-    knobs.agents = Math.max(knobs.agents, baseline.agents);
-    if ((codexRank[knobs.codex] ?? -1) < codexRank[baseline.codex]) {
-      knobs.codex = baseline.codex;
-    }
-    knobs.codexRounds = Math.max(knobs.codexRounds, baseline.codexRounds);
+  // A repo-committed curve must never authorize weaker review than the
+  // built-in baseline for the same score — floor it unconditionally, not
+  // only in the critical band. See humanFloor's non-replaceable-additive
+  // reasoning below for why repo config can extend but not weaken a floor.
+  const baseline =
+    DEFAULTS.curve.find((candidate) => effectiveScore <= candidate.maxScore) ||
+    DEFAULTS.curve[DEFAULTS.curve.length - 1];
+  const codexRank = { skip: 0, high: 1, xhigh: 2 };
+  knobs.agents = Math.max(knobs.agents, baseline.agents);
+  if ((codexRank[knobs.codex] ?? -1) < codexRank[baseline.codex]) {
+    knobs.codex = baseline.codex;
   }
+  knobs.codexRounds = Math.max(knobs.codexRounds, baseline.codexRounds);
   return knobs;
 }
 
@@ -1445,6 +1449,7 @@ function score({
     descriptors,
     diffStats,
     mergeBase,
+    mergeBaseFallback,
     collectionFailed,
     collectionError,
   } = collectDescriptors(resolvedBase, gitRunner);
@@ -1482,6 +1487,12 @@ function score({
     taskType,
     cfg,
   );
+  if (mergeBaseFallback) {
+    scored.reasons = [
+      `merge-base HEAD ${resolvedBase} failed — diff computed against raw ${resolvedBase} instead, which may include base-side commits and distort line counts`,
+      ...scored.reasons,
+    ];
+  }
   const knobs = scoreToKnobs(scored.riskScore, cfg);
   return {
     ...scored,

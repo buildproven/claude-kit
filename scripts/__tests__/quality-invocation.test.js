@@ -423,6 +423,33 @@ exit 1
   return bin;
 }
 
+describe("mutationEvidenceValid — BUI-603 #1 fail-closed on unresolved risk", () => {
+  it("returns false for an unresolved risk contract by default", () => {
+    const manifest = { risk: { resolved: false } };
+    expect(invocation.mutationEvidenceValid(manifest)).toBe(false);
+  });
+
+  it("returns true for an unresolved risk contract only with an explicit opt-in", () => {
+    const manifest = { risk: { resolved: false } };
+    expect(
+      invocation.mutationEvidenceValid(manifest, {
+        unresolvedIsVacuous: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("still evaluates the resolved-contract rules normally once resolved", () => {
+    const lowTier = { risk: { resolved: true, tier: "low" } };
+    expect(invocation.mutationEvidenceValid(lowTier)).toBe(true);
+
+    const unresolvedHighTier = {
+      risk: { resolved: true, tier: "high" },
+      mutation: null,
+    };
+    expect(invocation.mutationEvidenceValid(unresolvedHighTier)).toBe(false);
+  });
+});
+
 describe("quality invocation manifest", () => {
   it("reuses one durable campaign for the same exact repo, PR, base, HEAD, and options", () => {
     const root = repo("durable-campaign");
@@ -3526,6 +3553,7 @@ exit 1
       reason: "config-only fixture has no executable tests",
     });
 
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
     prepareCodexReview(root, manifest);
     recordGateFixture(manifest, "test", {
       status: "skipped",
@@ -4427,6 +4455,7 @@ exit 1
       "consumer",
     ]);
 
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
     prepareCodexReview(root, manifest);
     expect(
       spawnSync("node", [INVOCATION, "review-authorization", manifest], {
