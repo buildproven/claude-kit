@@ -64,7 +64,11 @@ Use TodoWrite minimally (Fix bug → Verify → Deploy). Implement directly.
 # Tests (affected areas only) — skip cleanly if the diff touches no JS/TS
 # files, rather than passing --findRelatedTests with no paths (Jest treats
 # that as "no related tests" and exits 0, which is not the same as "tested").
-CHANGED_JS_TS=$(git diff --name-only main...HEAD | grep -E '\.(js|ts|jsx|tsx)$' || true)
+# Step 3's fix is not committed yet at this point, so `main...HEAD` compares
+# two identical commits and shows nothing — stage first so both modified and
+# new files show up against main, tracked or not.
+git add -A
+CHANGED_JS_TS=$(git diff --name-only --cached main | grep -E '\.(js|ts|jsx|tsx)$' || true)
 if [ -n "$CHANGED_JS_TS" ]; then
   npm run test -- --findRelatedTests $CHANGED_JS_TS
 else
@@ -81,15 +85,15 @@ npm run build
 ```bash
 # Re-derive the same JS/TS-changed check from Step 4 (each fenced block runs
 # as its own shell, so Step 4's variables don't carry over) to describe test
-# status accurately instead of always claiming "Passing".
+# status accurately instead of always claiming "Passing". Step 4 already
+# staged everything with `git add -A`, so this reads the same staged state.
 TESTS_LINE="Tests: Passing (affected areas)"
 TESTS_CHECK_LINE="- ✅ Tests (affected areas)"
-if [ -z "$(git diff --name-only main...HEAD | grep -E '\.(js|ts|jsx|tsx)$' || true)" ]; then
+if [ -z "$(git diff --name-only --cached main | grep -E '\.(js|ts|jsx|tsx)$' || true)" ]; then
   TESTS_LINE="Tests: N/A — no JS/TS files changed"
   TESTS_CHECK_LINE="- ➖ Tests: N/A — no JS/TS files changed"
 fi
 
-git add .
 git commit -m "hotfix: ${DESCRIPTION}
 
 🚨 EMERGENCY HOTFIX - Minimal quality checks only
@@ -135,11 +139,19 @@ PR_URL=$(gh pr view --json url --jq '.url')
 # skipping/cancel) and the raw provider `state` (e.g. SUCCESS/FAILURE/
 # IN_PROGRESS) — there is no `COMPLETED` state and no `conclusion` field.
 # Use `bucket`, as gh's own --help recommends.
+# A failed `gh pr checks` call (auth/network/API error) must not read as "0
+# pending, 0 failed" → "CI passed". Capture its output once per iteration and
+# check its own exit status before counting anything from it.
 TIMEOUT=120; ELAPSED=0; INTERVAL=5
 while [ $ELAPSED -lt $TIMEOUT ]; do
-  PENDING=$(gh pr checks "$PR_NUMBER" --json bucket --jq '.[] | select(.bucket == "pending") | .bucket' | wc -l)
+  if ! CHECKS_JSON=$(gh pr checks "$PR_NUMBER" --json bucket); then
+    echo "❌ Unable to query CI status for PR #$PR_NUMBER (gh pr checks failed). Not merging automatically."
+    echo "   Review: $PR_URL"
+    exit 1
+  fi
+  PENDING=$(printf '%s' "$CHECKS_JSON" | jq -r '.[] | select(.bucket == "pending") | .bucket' | wc -l)
   if [ "$PENDING" -eq 0 ]; then
-    FAILED=$(gh pr checks "$PR_NUMBER" --json bucket --jq '.[] | select(.bucket == "fail" or .bucket == "cancel") | .bucket' | wc -l)
+    FAILED=$(printf '%s' "$CHECKS_JSON" | jq -r '.[] | select(.bucket == "fail" or .bucket == "cancel") | .bucket' | wc -l)
     if [ "$FAILED" -eq 0 ]; then
       echo "✅ CI checks passed"
       if gh pr merge "$PR_NUMBER" --squash --auto --delete-branch; then
