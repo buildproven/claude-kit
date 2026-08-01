@@ -358,7 +358,10 @@ if [ -n "${RES_PR:-}" ]; then
   PR_JSON="$(gh pr view "$RES_PR" --repo "$GH_REPO_SLUG" \
     --json number,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,isCrossRepository 2>/dev/null)"
 elif [ "$ARGS_MERGE" = true ]; then
-  PR_JSON="$(gh pr view --repo "$GH_REPO_SLUG" \
+  # `gh pr view --repo X` with no selector errors ("argument required when
+  # using the --repo flag") — pass the current branch explicitly.
+  MERGE_LOOKUP_BRANCH="$(git branch --show-current)"
+  PR_JSON="$(gh pr view "$MERGE_LOOKUP_BRANCH" --repo "$GH_REPO_SLUG" \
     --json number,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,isCrossRepository 2>/dev/null)"
 fi
 if [ "$ARGS_MERGE" = true ]; then

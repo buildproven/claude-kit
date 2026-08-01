@@ -927,10 +927,25 @@ if [ "$1 $2" = "repo view" ]; then
 fi
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   saw_repo=false
+  saw_selector=false
+  prev=""
+  idx=0
   for arg in "$@"; do
+    idx=$((idx + 1))
+    if [ "$idx" -le 2 ]; then prev="$arg"; continue; fi
     if [ "$arg" = "--repo" ]; then saw_repo=true; fi
+    # Real gh requires a positional selector (PR number/URL/branch) when
+    # --repo is combined with 'pr view' — reject the no-selector shape the
+    # same way real gh does, so a regression to the bare form is caught.
+    # A non-flag token (after 'pr view') that isn't a value belonging to a
+    # preceding flag counts as the selector.
+    if [ "\${arg#-}" = "$arg" ] && [ "$prev" != "--repo" ] && [ "$prev" != "--json" ]; then
+      saw_selector=true
+    fi
+    prev="$arg"
   done
   [ "$saw_repo" = true ] || { echo "gh pr view called without --repo" >&2; exit 1; }
+  [ "$saw_selector" = true ] || { echo "argument required when using the --repo flag" >&2; exit 1; }
   printf '%s\\n' '{"number":23,"headRefName":"quality-merge-noarg-branch","headRefOid":"${git(linked, ["rev-parse", "HEAD"])}","headRepository":{"nameWithOwner":"owner/repo"},"isCrossRepository":false,"baseRefName":"main","baseRefOid":"${git(primary, ["rev-parse", "origin/main"])}"}'
   exit 0
 fi
