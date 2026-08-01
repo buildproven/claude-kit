@@ -804,6 +804,40 @@ describe("quality invocation manifest", () => {
     expect(manifest.provider.fallbackOverride).toBe("codex");
   }, 120_000);
 
+  it("passes QUALITY_CWD derived from --target-dir, not this process's own $PWD (BUI-390)", () => {
+    // Reproduces the BUI-390 repro shape: invoking bash from a directory
+    // other than --target-dir. Stubs the resolver location with a fake
+    // resolver that just reports the QUALITY_CWD it received and exits
+    // non-zero — if bootstrap.sh derives QUALITY_CWD from --target-dir (the
+    // fix) rather than $(pwd) at the resolver-path branch (the bug), the
+    // fake resolver observes the target dir, not the elsewhere cwd.
+    const target = repo("bootstrap-cwd-target");
+    const setupRoot = makeTempDir("quality-fake-setup-root-");
+    const fakeScriptsDir = path.join(setupRoot, "scripts");
+    mkdirSync(fakeScriptsDir, { recursive: true });
+    const observedFile = path.join(setupRoot, "observed-cwd.txt");
+    writeFileSync(
+      path.join(fakeScriptsDir, "quality-target-resolver.js"),
+      `#!/usr/bin/env node
+require("fs").writeFileSync(${JSON.stringify(observedFile)}, process.env.QUALITY_CWD || "");
+process.stdout.write(JSON.stringify({ ok: false, reason: "test stub", resolution: "path", warnings: [] }));
+process.exit(0);
+`,
+    );
+    const elsewhereCwd = makeTempDir("quality-bootstrap-elsewhere-");
+    spawnSync("bash", [BOOTSTRAP, "--target-dir", target, "--level", "auto"], {
+      cwd: elsewhereCwd,
+      env: {
+        ...process.env,
+        CLAUDE_SETUP_ROOT: setupRoot,
+      },
+      encoding: "utf8",
+    });
+    const observedCwd = readFileSync(observedFile, "utf8");
+    expect(observedCwd).toBe(target);
+    expect(observedCwd).not.toBe(elsewhereCwd);
+  }, 30_000);
+
   it("binds a non-merge PR bootstrap to the PR base branch and base SHA", () => {
     const root = repo("pr-bootstrap");
     const base = git(root, ["rev-parse", "origin/main"]);

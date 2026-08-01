@@ -208,7 +208,31 @@ else
   # Use the resolver. It returns a JSON plan we act on.
   PRIMARY_CHECKOUT=$(git worktree list --porcelain 2>/dev/null \
     | awk '/^worktree / {p=substr($0, 10)} /^branch refs\/heads\/main$/ {print p; exit}')
-  CWD_INPUT=$(pwd)
+  # QUALITY_CWD must reflect --target-dir when the caller supplied one —
+  # otherwise it silently carries this process's own launch directory into
+  # the resolver's fallback/cwd-relative resolution paths, which breaks when
+  # invoked from outside the target checkout (BUI-390). --target-dir, when
+  # present, is always authoritative over ambient $PWD.
+  RESOLVER_TARGET_DIR=""
+  prev_resolver_arg=""
+  for resolver_arg in "$@"; do
+    case "$prev_resolver_arg" in
+      --target-dir|--target) RESOLVER_TARGET_DIR="$resolver_arg" ;;
+    esac
+    case "$resolver_arg" in
+      --target-dir=*|--target=*) RESOLVER_TARGET_DIR="${resolver_arg#*=}" ;;
+    esac
+    prev_resolver_arg="$resolver_arg"
+  done
+  if [ -z "$RESOLVER_TARGET_DIR" ] && [ -n "${BS_QUALITY_TARGET_DIR:-}" ]; then
+    RESOLVER_TARGET_DIR="$BS_QUALITY_TARGET_DIR"
+  fi
+  if [ -n "$RESOLVER_TARGET_DIR" ]; then
+    RESOLVER_TARGET_DIR="${RESOLVER_TARGET_DIR/#\~/$HOME}"
+    CWD_INPUT="$RESOLVER_TARGET_DIR"
+  else
+    CWD_INPUT=$(pwd)
+  fi
 
   RESOLVER_STDERR=$(mktemp 2>/dev/null || echo "/tmp/quality-resolver-stderr.$$")
   RESOLUTION_JSON=$(QUALITY_CWD="$CWD_INPUT" \

@@ -217,6 +217,40 @@ describe("resolveTarget", () => {
     expect(out.reason).toMatch(/PR #999/);
   });
 
+  it("passes --target-dir (not ctx.cwd) as lookupPr's cwd when --target-dir is given (BUI-390)", () => {
+    const parsed = parseArgs("--merge --pr 410 --target-dir /checkout");
+    let seenCwd = null;
+    resolveTarget(parsed, {
+      ...baseCtx,
+      cwd: "/somewhere/else",
+      getRepoForDir: (dir) => (dir === "/checkout" ? "owner/repo" : null),
+      lookupPr: (n, repo, cwd) => {
+        seenCwd = cwd;
+        return n === 410 && repo === "owner/repo"
+          ? { headRefName: "codex/foo", repo: "owner/repo" }
+          : null;
+      },
+    });
+    // lookupPr's gh call must run scoped to the target checkout, not
+    // whatever directory the resolver process itself happened to launch
+    // from — otherwise gh can fail to resolve the repo even with --repo set.
+    expect(seenCwd).toBe("/checkout");
+  });
+
+  it("passes ctx.cwd as lookupPr's cwd when no --target-dir is given (BUI-390)", () => {
+    const parsed = parseArgs("--merge --pr 410");
+    let seenCwd = null;
+    resolveTarget(parsed, {
+      ...baseCtx,
+      cwd: "/current/shell/cwd",
+      lookupPr: (n, repo, cwd) => {
+        seenCwd = cwd;
+        return n === 410 ? { headRefName: "codex/foo" } : null;
+      },
+    });
+    expect(seenCwd).toBe("/current/shell/cwd");
+  });
+
   it("resolves branch to worktree path", () => {
     const parsed = parseArgs("--merge codex/phase-1");
     const out = resolveTarget(parsed, {

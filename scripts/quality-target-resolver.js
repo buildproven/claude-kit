@@ -228,7 +228,7 @@ function normalizeTokens(rawArgs) {
  * @param {string|null} ctx.primaryCheckout
  * @param {(branch: string) => string|null} ctx.findWorktreeForBranch
  * @param {(p: string) => boolean} ctx.dirExists
- * @param {(pr: number, repo?: string|null) => { headRefName: string, headRepositoryOwnerLogin?: string, headRepositoryName?: string } | null} ctx.lookupPr
+ * @param {(pr: number, repo?: string|null, cwd?: string|null) => { headRefName: string, headRepositoryOwnerLogin?: string, headRepositoryName?: string } | null} ctx.lookupPr
  * @param {(dir: string) => string|null} [ctx.getRepoForDir] - resolves
  *   `owner/repo` for a worktree/checkout path (e.g. via `git -C <dir> remote
  *   get-url origin`). Used to scope `--pr` lookups to the repo named by
@@ -295,7 +295,13 @@ function resolveByPr(parsed, ctx) {
     };
   }
 
-  const pr = lookupPr ? lookupPr(parsed.pr, expectedRepo) : null;
+  // Resolve gh's own working directory explicitly: --target-dir when given,
+  // otherwise the resolver's own cwd. Without this, gh inherits whatever
+  // directory the resolver process itself launched from, which can differ
+  // from the target checkout and break PR lookup even with --repo set
+  // (BUI-390).
+  const lookupCwd = parsed.path ? expandHome(parsed.path) : ctx.cwd;
+  const pr = lookupPr ? lookupPr(parsed.pr, expectedRepo, lookupCwd) : null;
   if (!pr || !pr.headRefName) {
     return {
       ok: false,
@@ -506,15 +512,21 @@ if (require.main === module) {
     return parseOwnerRepo(out);
   };
 
-  const lookupPr = (n, repo) => {
+  const lookupPr = (n, repo, cwd) => {
     if (!Number.isInteger(n) || n <= 0) return null;
     try {
       const args = ["pr", "view", String(n)];
       if (repo) args.push("--repo", repo);
       args.push("--json", "headRefName,baseRefName,url");
+      // Explicit cwd: without it, execFileSync inherits this Node process's
+      // own launch directory rather than the target checkout. When invoked
+      // from outside the target repo, gh can't determine which repo to
+      // query even with a correct --repo, because gh itself may need a git
+      // checkout context for auth/config resolution (BUI-390).
       const out = execFileSync("gh", args, {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
+        cwd: cwd || process.cwd(),
       });
       const parsed = JSON.parse(out);
       if (!parsed || !parsed.headRefName) return null;
