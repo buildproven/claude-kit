@@ -55,8 +55,9 @@ fi
 ### Step 2: Parse Arguments and Build Test Command
 
 ```bash
-# Parse arguments
-TEST_ARGS=""
+# Parse arguments into an array, not a concatenated string — avoids needing
+# eval (and its quoting hazards) to expand this later.
+TEST_ARGS=()
 FILE_PATTERN=""
 MODE=""
 
@@ -67,24 +68,24 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --coverage)
-      TEST_ARGS="$TEST_ARGS --coverage"
+      TEST_ARGS+=(--coverage)
       shift
       ;;
     --debug)
-      TEST_ARGS="$TEST_ARGS --verbose --no-coverage"
+      TEST_ARGS+=(--verbose --no-coverage)
       shift
       ;;
     --update-snapshots)
-      TEST_ARGS="$TEST_ARGS --updateSnapshot"
+      TEST_ARGS+=(--updateSnapshot)
       shift
       ;;
     --grep)
-      TEST_ARGS="$TEST_ARGS --grep $2"
+      TEST_ARGS+=(--grep "$2")
       shift 2
       ;;
     --*)
       # Pass through any other flags
-      TEST_ARGS="$TEST_ARGS $1"
+      TEST_ARGS+=("$1")
       shift
       ;;
     *)
@@ -99,46 +100,35 @@ done
 ### Step 3: Build and Execute Test Command
 
 ```bash
-# Build base command
+# Build the full command as an array — same pieces as before, but expanded
+# with "${TEST_CMD[@]}" instead of eval, so a file pattern or --grep value
+# containing shell metacharacters (e.g. `/bs:test "**/*.test.ts"`) is passed
+# through literally rather than re-interpreted by the shell.
 if [ "$MODE" = "watch" ]; then
-  # Watch mode
   case $PKG_MANAGER in
-    pnpm)
-      TEST_CMD="pnpm test --watch $TEST_ARGS"
-      ;;
-    yarn)
-      TEST_CMD="yarn test --watch $TEST_ARGS"
-      ;;
-    npm)
-      TEST_CMD="npm test -- --watch $TEST_ARGS"
-      ;;
+    pnpm) TEST_CMD=(pnpm test --watch "${TEST_ARGS[@]}") ;;
+    yarn) TEST_CMD=(yarn test --watch "${TEST_ARGS[@]}") ;;
+    npm) TEST_CMD=(npm test -- --watch "${TEST_ARGS[@]}") ;;
   esac
 else
-  # Regular mode
   case $PKG_MANAGER in
-    pnpm)
-      TEST_CMD="pnpm test $TEST_ARGS"
-      ;;
-    yarn)
-      TEST_CMD="yarn test $TEST_ARGS"
-      ;;
-    npm)
-      TEST_CMD="npm test -- $TEST_ARGS"
-      ;;
+    pnpm) TEST_CMD=(pnpm test "${TEST_ARGS[@]}") ;;
+    yarn) TEST_CMD=(yarn test "${TEST_ARGS[@]}") ;;
+    npm) TEST_CMD=(npm test -- "${TEST_ARGS[@]}") ;;
   esac
 fi
 
 # Add file pattern if specified
 if [ -n "$FILE_PATTERN" ]; then
-  TEST_CMD="$TEST_CMD $FILE_PATTERN"
+  TEST_CMD+=("$FILE_PATTERN")
 fi
 
 # Execute
 echo "🧪 Running tests..."
-echo "Command: $TEST_CMD"
+echo "Command: ${TEST_CMD[*]}"
 echo ""
 
-eval $TEST_CMD
+"${TEST_CMD[@]}"
 TEST_EXIT_CODE=$?
 ```
 

@@ -338,10 +338,10 @@ Floor status after heal:
 
 #### 7.5 Commit the Changes
 
-After applying all auto-fixes:
+After applying all auto-fixes, stage only the specific files this heal loop edited — not `git add -A`, which would sweep in any unrelated dirty state (build artifacts, in-progress edits, scratch files) under a `chore(sota):` message:
 
 ```bash
-git add -A
+git add <file1> <file2> ...  # exactly the files touched by Tier 1+2 fixes above
 git commit -m "chore(sota): self-heal to 9/10 floor $(date +%Y-%m-%d)
 
 Categories healed: [list with before→after scores]
