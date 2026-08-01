@@ -56,6 +56,15 @@ function assertOuterApprovalContext() {
   }
 }
 
+// Each flag maps to exactly one signed capability scope. A capability is
+// narrow by construction: it can only ever carry the single scope named on
+// the command line, never a caller-supplied string, so an operator cannot
+// mint a scope the wrapper does not know about.
+const APPROVAL_SCOPE_FLAGS = {
+  "--override-quality": "operator-quality-override",
+  "--override-ci-billing": "operator-ci-billing-override",
+};
+
 function parseApprovalCommand(argv) {
   if (argv[0] !== "approve") {
     return {
@@ -63,21 +72,26 @@ function parseApprovalCommand(argv) {
       explicit: false,
       expectedHead: null,
       expectedPr: null,
-      overrideQuality: false,
+      scope: "standard",
     };
   }
   const forwarded = [];
   let expectedHead = null;
   let expectedPr = null;
-  let overrideQuality = false;
+  let scope = "standard";
   for (let index = 1; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "--head") {
       expectedHead = argv[++index];
     } else if (value.startsWith("--head=")) {
       expectedHead = value.slice("--head=".length);
-    } else if (value === "--override-quality") {
-      overrideQuality = true;
+    } else if (value in APPROVAL_SCOPE_FLAGS) {
+      if (scope !== "standard") {
+        throw new Error(
+          `quality approve accepts only one override flag, got both a prior override and '${value}'`,
+        );
+      }
+      scope = APPROVAL_SCOPE_FLAGS[value];
     } else {
       forwarded.push(value);
       if (value === "--pr") expectedPr = argv[index + 1];
@@ -97,7 +111,7 @@ function parseApprovalCommand(argv) {
     explicit: true,
     expectedHead,
     expectedPr: Number(expectedPr),
-    overrideQuality,
+    scope,
   };
 }
 
@@ -148,9 +162,7 @@ function issueApprovalCapability(
     head: manifest.revisions.currentHead,
     invocationId: manifest.invocationId,
     approver: process.env.BREAK_GLASS_APPROVER || process.env.USER || "unknown",
-    scope: expectedIdentity?.overrideQuality
-      ? "operator-quality-override"
-      : "standard",
+    scope: expectedIdentity?.scope || "standard",
     issuedAt: issuedAt.toISOString(),
     expiresAt: new Date(issuedAt.getTime() + ttl * 1000).toISOString(),
     nonce: crypto.randomUUID(),
@@ -262,7 +274,7 @@ function main() {
         ? {
             pr: request.expectedPr,
             head: request.expectedHead,
-            overrideQuality: request.overrideQuality,
+            scope: request.scope,
           }
         : null,
     });

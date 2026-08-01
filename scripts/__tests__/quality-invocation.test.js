@@ -1298,6 +1298,146 @@ exec "${realGit}" "$@"
     });
   });
 
+  it("issues a distinct operator-ci-billing-override scope, never satisfying an operator-quality-override check or vice versa", () => {
+    const root = repo("approval-command-ci-billing");
+    const head = git(root, ["rev-parse", "HEAD"]);
+    const base = git(root, ["rev-parse", "origin/main"]);
+    const bin = makeTempDir("quality-approve-gh-");
+    const gh = path.join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+if [ "$1 $2" = "pr view" ]; then
+  printf '%s\\n' '{"number":15,"headRefName":"feature","headRefOid":"${head}","headRepository":{"nameWithOwner":"owner/repo"},"isCrossRepository":false,"baseRefName":"main","baseRefOid":"${base}","url":"https://github.com/owner/repo/pull/15"}'
+  exit 0
+fi
+if [ "$1 $2" = "repo view" ]; then
+  printf '%s\\n' 'owner/repo'
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(gh, 0o755);
+    const gitShim = path.join(bin, "git");
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    writeFileSync(
+      gitShim,
+      `#!/usr/bin/env bash
+if [ "$1" = "-C" ] && [ "$3 $4 $5" = "remote get-url origin" ]; then
+  printf '%s\\n' "https://github.com/owner/repo.git"
+  exit 0
+fi
+exec "${realGit}" "$@"
+`,
+    );
+    chmodSync(gitShim, 0o755);
+    const approveEnv = withoutAmbientGitHubIdentity({
+      BREAK_GLASS_APPROVER: "brett",
+      CLAUDE_SETUP_ROOT: ROOT,
+      PATH: `${bin}:${process.env.PATH}`,
+    });
+    const result = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+      cwd: root,
+      input: JSON.stringify({
+        argv: [
+          "approve",
+          "--override-ci-billing",
+          "--target-dir",
+          root,
+          "--pr",
+          "15",
+          "--head",
+          head,
+          "--level",
+          "98",
+        ],
+      }),
+      encoding: "utf8",
+      env: approveEnv,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const manifest = result.stdout
+      .split("\n")
+      .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
+      ?.slice("BS_QUALITY_MANIFEST=".length);
+    expect(JSON.parse(readFileSync(manifest, "utf8")).approval.scope).toBe(
+      "operator-ci-billing-override",
+    );
+    // The capability is valid overall...
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", manifest], {
+        cwd: root,
+      }).status,
+    ).toBe(0);
+    // ...and satisfies a check for its own scope...
+    expect(
+      spawnSync(
+        "node",
+        [
+          INVOCATION,
+          "approval-scope",
+          manifest,
+          "--scope",
+          "operator-ci-billing-override",
+        ],
+        { cwd: root },
+      ).status,
+    ).toBe(0);
+    // ...but must never satisfy a check gated on the OTHER scope. A
+    // capability signed to accept a billing-related CI gap must not also
+    // be usable to accept unavailable/malformed review evidence.
+    expect(
+      spawnSync(
+        "node",
+        [
+          INVOCATION,
+          "approval-scope",
+          manifest,
+          "--scope",
+          "operator-quality-override",
+        ],
+        { cwd: root },
+      ).status,
+    ).not.toBe(0);
+    // A missing --scope must fail closed, not silently pass.
+    expect(
+      spawnSync("node", [INVOCATION, "approval-scope", manifest], {
+        cwd: root,
+      }).status,
+    ).not.toBe(0);
+  });
+
+  it("rejects an approve command combining --override-quality and --override-ci-billing", () => {
+    const root = repo("approval-command-conflicting-scopes");
+    const head = git(root, ["rev-parse", "HEAD"]);
+    const result = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+      cwd: root,
+      input: JSON.stringify({
+        argv: [
+          "approve",
+          "--override-quality",
+          "--override-ci-billing",
+          "--target-dir",
+          root,
+          "--pr",
+          "16",
+          "--head",
+          head,
+          "--level",
+          "98",
+        ],
+      }),
+      encoding: "utf8",
+      env: withoutAmbientGitHubIdentity({
+        BREAK_GLASS_APPROVER: "brett",
+        CLAUDE_SETUP_ROOT: ROOT,
+      }),
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/only one override flag/);
+  });
+
   it("carries a valid break-glass approval across a rebase-only HEAD change with no new diff (BUI-380)", () => {
     const root = repo("approval-rebase-carry");
     const wrapped = spawnSync("node", [WRAPPER, BOOTSTRAP], {
