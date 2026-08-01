@@ -6,6 +6,31 @@ const crypto = require("crypto");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const invocation = require("./quality-invocation.js");
+const taxonomy = require("./quality-condition-taxonomy.js");
+
+// High-risk condition namespaces require an explicit, category-specific
+// acknowledgement flag in addition to --accept (BUI-575). This mirrors, but
+// does not replace, quality-condition-taxonomy.js's own per-condition
+// highRisk marking (which is derived live from manifest state); this map is
+// the static id-prefix -> flag-name binding the CLI surface enforces before
+// any manifest even exists.
+const HIGH_RISK_ACK_FLAGS = [
+  { prefix: "gate:security", flag: "--i-understand-security-risk" },
+  { prefix: "gate:test", flag: "--i-understand-test-risk" },
+  { prefix: "ci:", flag: "--i-understand-missing-ci" },
+  { prefix: "review:finding:", flag: "--i-understand-code-finding" },
+  { prefix: "mutation:", flag: "--i-understand-security-risk" },
+];
+
+function requiredAckFlagsFor(acceptedIds) {
+  const required = new Set();
+  for (const id of acceptedIds) {
+    for (const { prefix, flag } of HIGH_RISK_ACK_FLAGS) {
+      if (id.startsWith(prefix)) required.add(flag);
+    }
+  }
+  return [...required];
+}
 
 function parseJson(raw, label) {
   try {
@@ -60,25 +85,28 @@ function assertOuterApprovalContext() {
 // narrow by construction: it can only ever carry the single scope named on
 // the command line, never a caller-supplied string, so an operator cannot
 // mint a scope the wrapper does not know about.
+//
+// `override` is the ticket-required standalone verb
+// (`/bs:quality override --pr <n> --head <sha> --reason <text> --accept
+// <id>[,<id>...]`). It is accepted as a strict alias for
+// `approve --override-quality --reason ... --accept ...` rather than a
+// second signing path: both resolve to the same scope="operator-quality-override"
+// capability, so there is exactly one place (issueApprovalCapability) that
+// ever mints that scope.
 const APPROVAL_SCOPE_FLAGS = {
   "--override-quality": "operator-quality-override",
   "--override-ci-billing": "operator-ci-billing-override",
 };
 
-function parseApprovalCommand(argv) {
-  if (argv[0] !== "approve") {
-    return {
-      argv,
-      explicit: false,
-      expectedHead: null,
-      expectedPr: null,
-      scope: "standard",
-    };
-  }
+function scanApprovalArgv(argv, initialScope) {
   const forwarded = [];
   let expectedHead = null;
   let expectedPr = null;
-  let scope = "standard";
+  let scope = initialScope;
+  let reason = null;
+  let acceptRaw = null;
+  const acknowledgedFlags = [];
+  const ackFlagNames = new Set(HIGH_RISK_ACK_FLAGS.map((entry) => entry.flag));
   for (let index = 1; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "--head") {
@@ -92,6 +120,16 @@ function parseApprovalCommand(argv) {
         );
       }
       scope = APPROVAL_SCOPE_FLAGS[value];
+    } else if (value === "--reason") {
+      reason = argv[++index];
+    } else if (value.startsWith("--reason=")) {
+      reason = value.slice("--reason=".length);
+    } else if (value === "--accept") {
+      acceptRaw = argv[++index];
+    } else if (value.startsWith("--accept=")) {
+      acceptRaw = value.slice("--accept=".length);
+    } else if (ackFlagNames.has(value)) {
+      acknowledgedFlags.push(value);
     } else {
       forwarded.push(value);
       if (value === "--pr") expectedPr = argv[index + 1];
@@ -99,19 +137,91 @@ function parseApprovalCommand(argv) {
         expectedPr = value.slice("--pr=".length);
     }
   }
-  if (!/^[0-9]+$/.test(expectedPr || "")) {
+  return {
+    forwarded,
+    expectedHead,
+    expectedPr,
+    scope,
+    reason,
+    acceptRaw,
+    acknowledgedFlags,
+  };
+}
+
+// --reason and --accept are mandatory for EVERY operator override, whether
+// invoked as the standalone `override` verb or as the legacy
+// `approve --override-quality` flag — there is exactly one way to mint an
+// operator-quality-override capability, and it always names the exact
+// conditions being accepted. This is what makes the override an accountable
+// decision rather than a blanket bypass switch (BUI-575). High-risk
+// conditions additionally require their matching acknowledgement flag.
+function assertOverrideRequestComplete(
+  overrideQuality,
+  reason,
+  acceptedConditions,
+  acknowledgedFlags,
+) {
+  if (!overrideQuality) return;
+  if (!reason || !reason.trim()) {
+    throw new Error("quality override requires --reason <text>");
+  }
+  if (acceptedConditions.length === 0) {
+    throw new Error(
+      "quality override requires --accept <condition-id>[,<condition-id>...]",
+    );
+  }
+  const missingAck = requiredAckFlagsFor(acceptedConditions).filter(
+    (flag) => !acknowledgedFlags.includes(flag),
+  );
+  if (missingAck.length > 0) {
+    throw new Error(
+      `override accepts a high-risk condition and requires: ${missingAck.join(", ")}`,
+    );
+  }
+}
+
+function parseApprovalCommand(argv) {
+  const isOverrideVerb = argv[0] === "override";
+  if (argv[0] !== "approve" && !isOverrideVerb) {
+    return {
+      argv,
+      explicit: false,
+      expectedHead: null,
+      expectedPr: null,
+      scope: "standard",
+      reason: null,
+      acceptedConditions: [],
+      acknowledgedFlags: [],
+    };
+  }
+  const scanned = scanApprovalArgv(
+    argv,
+    isOverrideVerb ? "operator-quality-override" : "standard",
+  );
+  if (!/^[0-9]+$/.test(scanned.expectedPr || "")) {
     throw new Error("quality approve requires --pr <number>");
   }
-  if (!/^[0-9a-f]{40}$/.test(expectedHead || "")) {
+  if (!/^[0-9a-f]{40}$/.test(scanned.expectedHead || "")) {
     throw new Error("quality approve requires --head <exact-40-character-sha>");
   }
+  const isOverride = scanned.scope === "operator-quality-override";
+  const acceptedConditions = taxonomy.parseAcceptList(scanned.acceptRaw);
+  assertOverrideRequestComplete(
+    isOverride,
+    scanned.reason,
+    acceptedConditions,
+    scanned.acknowledgedFlags,
+  );
   assertOuterApprovalContext();
   return {
-    argv: forwarded,
+    argv: scanned.forwarded,
     explicit: true,
-    expectedHead,
-    expectedPr: Number(expectedPr),
-    scope,
+    expectedHead: scanned.expectedHead,
+    expectedPr: Number(scanned.expectedPr),
+    scope: scanned.scope,
+    reason: scanned.reason,
+    acceptedConditions,
+    acknowledgedFlags: scanned.acknowledgedFlags,
   };
 }
 
@@ -120,9 +230,75 @@ function childEnvironment() {
   delete environment.BREAK_GLASS_APPROVED;
   delete environment.BREAK_GLASS_APPROVER;
   delete environment.BS_QUALITY_APPROVAL_TTL_SECONDS;
+  delete environment.BS_QUALITY_OVERRIDE_APPROVAL_TTL_SECONDS;
   delete environment.BS_QUALITY_APPROVAL_PUBLIC_KEY;
   delete environment.BS_QUALITY_APPROVAL_CHALLENGE_SHA256;
   return environment;
+}
+
+// Print the exact diagnosed conditions and evidence snapshot the operator is
+// about to accept, before the signed capability is minted (BUI-575 safety
+// requirement 2). This always runs ahead of issuing an override capability;
+// there is no override path that skips straight to signing.
+function printOverrideDiagnosis(manifestPath, manifest, conditions) {
+  const terminalStatus = require("./quality-terminal-status.js");
+  const diagnosis = terminalStatus.buildDiagnosis(manifestPath, manifest, {});
+  process.stdout.write(`${diagnosis}\n\n`);
+  process.stdout.write("OPERATOR OVERRIDE — CONDITIONS TO ACCEPT\n");
+  for (const condition of conditions) {
+    process.stdout.write(
+      `  [${condition.highRisk ? "HIGH RISK" : "standard "}] ${condition.id} — ${condition.description}\n`,
+    );
+  }
+  process.stdout.write("\n");
+}
+
+// Operator override defaults to a shorter TTL than a standard approval: this
+// is a deliberate final human decision about a specific diagnosed state, not
+// routine sign-off, so its blast radius (how long the signed capability
+// remains redeemable) is deliberately tighter by default.
+// BS_QUALITY_APPROVAL_TTL_SECONDS still governs standard approvals;
+// BS_QUALITY_OVERRIDE_APPROVAL_TTL_SECONDS is the override-specific knob,
+// read only when this capability's scope is operator-quality-override.
+function resolveApprovalTtlSeconds(isOverride) {
+  const ttlEnvVar = isOverride
+    ? "BS_QUALITY_OVERRIDE_APPROVAL_TTL_SECONDS"
+    : "BS_QUALITY_APPROVAL_TTL_SECONDS";
+  const ttlDefault = isOverride ? "900" : "3600";
+  const ttl = Number(process.env[ttlEnvVar] || ttlDefault);
+  if (!Number.isInteger(ttl) || ttl < 1 || ttl > 86400) {
+    throw new Error(
+      "approval TTL must be an integer between 1 and 86400 seconds",
+    );
+  }
+  return ttl;
+}
+
+function assertExpectedIdentityMatches(manifest, expectedIdentity) {
+  if (!expectedIdentity) return;
+  if (
+    manifest.repo.pr !== expectedIdentity.pr ||
+    manifest.revisions.currentHead !== expectedIdentity.head
+  ) {
+    throw new Error(
+      `approval identity mismatch: expected PR ${expectedIdentity.pr} at ${expectedIdentity.head}, got PR ${manifest.repo.pr} at ${manifest.revisions.currentHead}`,
+    );
+  }
+}
+
+// Prints the diagnosis (BUI-575 safety requirement 2) and validates the
+// requested accept-list covers every diagnosed condition before returning
+// it. Only ever called on the override path.
+function resolveOverrideAcceptedConditions(
+  manifestPath,
+  manifest,
+  expectedIdentity,
+) {
+  const requestedAccept = expectedIdentity.acceptedConditions || [];
+  const diagnosed = taxonomy.diagnoseConditions(manifest, {});
+  printOverrideDiagnosis(manifestPath, manifest, diagnosed);
+  taxonomy.assertAcceptListComplete(diagnosed, requestedAccept);
+  return requestedAccept;
 }
 
 function issueApprovalCapability(
@@ -139,30 +315,29 @@ function issueApprovalCapability(
     fs.readFileSync(manifestPath, "utf8"),
     "quality manifest",
   );
-  const ttl = Number(process.env.BS_QUALITY_APPROVAL_TTL_SECONDS || "3600");
-  if (!Number.isInteger(ttl) || ttl < 1 || ttl > 86400) {
-    throw new Error(
-      "approval TTL must be an integer between 1 and 86400 seconds",
-    );
-  }
+  const scope = expectedIdentity?.scope || "standard";
+  const isOverride = scope === "operator-quality-override";
+  const ttl = resolveApprovalTtlSeconds(isOverride);
   const issuedAt = new Date();
-  if (
-    expectedIdentity &&
-    (manifest.repo.pr !== expectedIdentity.pr ||
-      manifest.revisions.currentHead !== expectedIdentity.head)
-  ) {
-    throw new Error(
-      `approval identity mismatch: expected PR ${expectedIdentity.pr} at ${expectedIdentity.head}, got PR ${manifest.repo.pr} at ${manifest.revisions.currentHead}`,
-    );
-  }
+  assertExpectedIdentityMatches(manifest, expectedIdentity);
+  const acceptedConditions = isOverride
+    ? resolveOverrideAcceptedConditions(
+        manifestPath,
+        manifest,
+        expectedIdentity,
+      )
+    : [];
   const payload = {
     schemaVersion: 1,
     repoKey: manifest.repo.key,
     pr: manifest.repo.pr,
     head: manifest.revisions.currentHead,
+    baseSha: manifest.revisions.baseSha,
     invocationId: manifest.invocationId,
     approver: process.env.BREAK_GLASS_APPROVER || process.env.USER || "unknown",
-    scope: expectedIdentity?.scope || "standard",
+    scope,
+    reason: isOverride ? expectedIdentity.reason : null,
+    acceptedConditions,
     issuedAt: issuedAt.toISOString(),
     expiresAt: new Date(issuedAt.getTime() + ttl * 1000).toISOString(),
     nonce: crypto.randomUUID(),
@@ -230,14 +405,24 @@ function manifestPathFromBootstrap(stdout) {
 }
 
 function printExplicitApproval(approval) {
+  const isOverride = approval.scope === "operator-quality-override";
   process.stdout.write(
     [
-      "[quality] break-glass approval created",
+      isOverride
+        ? "[quality] operator override approval created"
+        : "[quality] break-glass approval created",
       `Repository key: ${approval.repoKey}`,
       `PR: ${approval.pr}`,
       `HEAD: ${approval.head}`,
+      `Base: ${approval.baseSha}`,
       `Invocation: ${approval.invocationId}`,
       `Approver: ${approval.approver}`,
+      ...(isOverride
+        ? [
+            `Reason: ${approval.reason}`,
+            `Accepted conditions: ${approval.acceptedConditions.join(", ")}`,
+          ]
+        : []),
       `Expires: ${approval.expiresAt}`,
       "",
     ].join("\n"),
@@ -275,6 +460,8 @@ function main() {
             pr: request.expectedPr,
             head: request.expectedHead,
             scope: request.scope,
+            reason: request.reason,
+            acceptedConditions: request.acceptedConditions,
           }
         : null,
     });

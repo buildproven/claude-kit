@@ -96,19 +96,55 @@ same signed, expiring capability used by the legacy outer
 capability. The wrapper prints repository key, PR, HEAD, invocation, approver,
 and expiry before the quality skill continues with the returned manifest.
 
-When the operator explicitly accepts unresolved provider-review or mutation
-evidence, use the separately-scoped override command:
+When the operator explicitly accepts one or more diagnosed terminal
+conditions — a failing deterministic gate, missing mutation evidence,
+unresolved provider review, or a specific accepted code finding — use the
+standalone override command:
 
 ```text
-/bs:quality approve --override-quality --pr <number> --head <exact-40-character-sha>
+/bs:quality override --pr <number> --head <exact-40-character-sha> --reason "<text>" --accept <condition-id>[,<condition-id>...]
 ```
 
-This is never automatic. It creates a signed, expiring capability bound to the
-repository, PR, HEAD, invocation, and approver, and leaves deterministic local
-gates, exact-HEAD CI, protected-base freshness, and the merge audit trail
-mandatory. The resulting stamp carries `Quality-Override: operator-quality-override`;
-it does not fabricate an AI approval or hide that the operator accepted the
-remaining review risk.
+`override` is a strict alias for
+`approve --override-quality --reason ... --accept ...`; both mint the same
+signed `operator-quality-override` capability through the one path in
+`quality-wrapper.js` that ever creates that scope. This is never automatic
+and never a substitute for the normal quality path — it exists for the
+narrow case where the evidence is already adequate for the repository
+owner's risk tolerance but automation cannot proceed on its own (unavailable
+or malformed review output, a flaky gate, exhausted CI billing, or a code
+finding the operator consciously accepts for a time-bound release).
+
+Before minting the capability, the wrapper prints the full terminal
+diagnosis and the exact evidence snapshot, then lists every currently
+diagnosed condition by its stable id (`gate:<name>`, `mutation:missing`,
+`review:<reason>`, `review:finding:<id>`, `ci:<reason>`). `--accept` must
+name every diagnosed condition exactly — an incomplete or stale list is
+rejected. Accepting a high-risk condition (a security or test gate, missing
+CI, or an unresolved code finding) additionally requires the matching
+acknowledgement flag: `--i-understand-security-risk`,
+`--i-understand-test-risk`, `--i-understand-missing-ci`, or
+`--i-understand-code-finding`. These flags are deliberately available to the
+repository owner, never technically blocked — they exist to make accepting
+serious risk a harder-to-fat-finger action than the ordinary accept path.
+
+The resulting capability is bound to repository, PR, exact HEAD, exact base
+SHA, invocation, the accepted condition-id list, approver, reason, and a
+short expiry (`BS_QUALITY_OVERRIDE_APPROVAL_TTL_SECONDS`, default 900s —
+shorter than the standard approval's default 3600s, since this is a
+one-shot exception decision, not routine sign-off). Any HEAD, base, or
+invocation drift, or expiry, refuses reuse and requires a fresh, explicit
+decision. Deterministic gates and mutation evidence still gate the merge for
+every condition that was NOT explicitly accepted; CI, protected-base
+freshness, and the merge audit trail remain mandatory regardless of what was
+accepted. The resulting stamp carries `Quality-Override:
+operator-quality-override`, `Quality-Override-Reason`,
+`Quality-Override-Accepted`, and `Quality-Override-Approver` alongside — not
+instead of — the normal evidence trailers; it never fabricates a clean AI
+review or hides that the operator accepted the remaining risk. The bounded
+automatic retry for a marker-only fallback review (a separate mechanism)
+still gets its chance before an operator needs to reach for this — override
+is the final step after diagnosis, not a way to skip retrying first.
 
 Capture the exact `BS_QUALITY_MANIFEST=` path from bootstrap output. Invoke the
 `quality` skill exactly once with only:

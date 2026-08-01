@@ -193,6 +193,13 @@ Quality-Head: <reviewed-head>
 Quality-Base: <base-sha>
 ```
 
+An operator-override merge (see `/bs:quality override` below) additionally
+carries `Quality-Override: operator-quality-override`,
+`Quality-Override-Reason: <text>`, `Quality-Override-Accepted: <comma-list of
+condition ids>`, and `Quality-Override-Approver: <name>` alongside — never
+instead of — the evidence trailers above, so the merge is never confused with
+a clean auto-merge.
+
 The parenthetical legacy form used `reviewer=<provider>` and
 `head=<reviewed-head>, base=<base-sha>`; it is reader compatibility only.
 

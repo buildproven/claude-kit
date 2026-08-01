@@ -18,6 +18,10 @@ describe("quality approve command scope parsing", () => {
   });
 
   it("maps --override-quality to operator-quality-override", () => {
+    // BUI-575: --override-quality is now the legacy alias for the standalone
+    // `override` verb and requires the same --reason/--accept as that verb —
+    // there is exactly one way to mint an operator-quality-override
+    // capability, and it always names the exact conditions being accepted.
     const parsed = parseApprovalCommand([
       "approve",
       "--pr",
@@ -25,16 +29,37 @@ describe("quality approve command scope parsing", () => {
       "--head",
       head,
       "--override-quality",
+      "--reason",
+      "known transient outage, ops accepted",
+      "--accept",
+      "gate:lint",
     ]);
     expect(parsed).toMatchObject({
       explicit: true,
       expectedPr: 676,
       expectedHead: head,
       scope: "operator-quality-override",
+      reason: "known transient outage, ops accepted",
+      acceptedConditions: ["gate:lint"],
     });
     // The scope flag must never leak into the forwarded bootstrap argv —
     // bootstrap has no concept of these flags and would reject them.
     expect(parsed.argv).not.toContain("--override-quality");
+    expect(parsed.argv).not.toContain("--reason");
+    expect(parsed.argv).not.toContain("--accept");
+  });
+
+  it("still requires --reason and --accept for --override-quality", () => {
+    expect(() =>
+      parseApprovalCommand([
+        "approve",
+        "--pr",
+        "676",
+        "--head",
+        head,
+        "--override-quality",
+      ]),
+    ).toThrow(/requires --reason/);
   });
 
   it("maps --override-ci-billing to operator-ci-billing-override", () => {
