@@ -61,8 +61,19 @@ Use TodoWrite minimally (Fix bug → Verify → Deploy). Implement directly.
 ### Step 4: Minimal Quality Check (5-10 min)
 
 ```bash
-# Tests (affected areas only)
-npm run test -- --findRelatedTests $(git diff --name-only main...HEAD | grep -E '\.(js|ts|jsx|tsx)$' | tr '\n' ' ')
+# Tests (affected areas only) — skip cleanly if the diff touches no JS/TS
+# files, rather than passing --findRelatedTests with no paths (Jest treats
+# that as "no related tests" and exits 0, which is not the same as "tested").
+# Step 3's fix is not committed yet at this point, so `main...HEAD` compares
+# two identical commits and shows nothing — stage first so both modified and
+# new files show up against main, tracked or not.
+git add -A
+CHANGED_JS_TS=$(git diff --name-only --cached main | grep -E '\.(js|ts|jsx|tsx)$' || true)
+if [ -n "$CHANGED_JS_TS" ]; then
+  npm run test -- --findRelatedTests $CHANGED_JS_TS
+else
+  echo "ℹ️  No JS/TS files changed — targeted tests not applicable"
+fi
 
 npm run lint
 npm run type-check || tsc --noEmit
@@ -72,11 +83,23 @@ npm run build
 ### Step 5: Create PR
 
 ```bash
-git add .
+# lint/type-check/build in Step 4 can autofix or generate files AFTER that
+# step's git add -A, so re-stage now or the commit silently omits them while
+# still claiming those checks passed. Re-derive the same JS/TS-changed check
+# against this final staged state (each fenced block is its own shell, so
+# Step 4's variables don't carry over) instead of always claiming "Passing".
+git add -A
+TESTS_LINE="Tests: Passing (affected areas)"
+TESTS_CHECK_LINE="- ✅ Tests (affected areas)"
+if [ -z "$(git diff --name-only --cached main | grep -E '\.(js|ts|jsx|tsx)$' || true)" ]; then
+  TESTS_LINE="Tests: N/A — no JS/TS files changed"
+  TESTS_CHECK_LINE="- ➖ Tests: N/A — no JS/TS files changed"
+fi
+
 git commit -m "hotfix: ${DESCRIPTION}
 
 🚨 EMERGENCY HOTFIX - Minimal quality checks only
-- Tests: Passing (affected areas)
+- ${TESTS_LINE}
 - Lint: Clean
 - Build: Successful
 ⚠️  Skipped: Security, A11y, Performance audits
@@ -91,7 +114,7 @@ gh pr create \
 **What's broken:** ${DESCRIPTION}
 
 **Quality checks:**
-- ✅ Tests (affected areas)
+${TESTS_CHECK_LINE}
 - ✅ Lint / TypeScript / Build
 - ⚠️  Skipped: Security, A11y, Performance
 
@@ -107,29 +130,67 @@ gh pr create \
 
 ```bash
 PR_NUMBER=$(gh pr view --json number --jq '.number')
+PR_URL=$(gh pr view --json url --jq '.url')
 
-# Wait up to 2 minutes for CI
+# Wait up to 2 minutes for CI. stdin is not a TTY when this runs via the
+# Bash tool, so an interactive "proceed anyway? (y/n)" prompt cannot succeed
+# here — it reads EOF and either hangs or silently aborts. Default to abort
+# on timeout/failure instead, and print the exact command a human can run
+# to merge once they've reviewed the CI result themselves.
+# `gh pr checks --json` exposes `bucket` (categorized: pass/fail/pending/
+# skipping/cancel) and the raw provider `state` (e.g. SUCCESS/FAILURE/
+# IN_PROGRESS) — there is no `COMPLETED` state and no `conclusion` field.
+# Use `bucket`, as gh's own --help recommends.
+# `gh pr checks` uses its exit code to report the CHECK RESULT, not just
+# command success: 0 = all pass, 1 = generic failure, 8 = checks pending
+# (see `gh help exit-codes` / `gh pr checks --help`). A failed `gh pr checks`
+# call must not read as "0 pending, 0 failed" → "CI passed", but exit 8 is
+# the normal in-progress state the polling loop exists for — it still prints
+# valid --json output. Use gh's own --jq (no separate jq binary required —
+# same as PR_NUMBER/PR_URL above) and validate its output is a plain integer
+# before trusting it; a genuine query failure (auth/network/API error, or no
+# jq support) prints empty or non-numeric output instead.
 TIMEOUT=120; ELAPSED=0; INTERVAL=5
 while [ $ELAPSED -lt $TIMEOUT ]; do
-  PENDING=$(gh pr checks "$PR_NUMBER" --json state --jq '.[] | select(.state != "COMPLETED") | .state' | wc -l)
+  PENDING=$(gh pr checks "$PR_NUMBER" --json bucket --jq '[.[] | select(.bucket == "pending")] | length' 2>/dev/null)
+  if ! [[ "$PENDING" =~ ^[0-9]+$ ]]; then
+    echo "❌ Unable to query CI status for PR #$PR_NUMBER (gh pr checks returned no usable data). Not merging automatically."
+    echo "   Review: $PR_URL"
+    exit 1
+  fi
   if [ "$PENDING" -eq 0 ]; then
-    FAILED=$(gh pr checks "$PR_NUMBER" --json conclusion --jq '.[] | select(.conclusion != "SUCCESS" and .conclusion != "NEUTRAL" and .conclusion != "SKIPPED") | .conclusion' | wc -l)
+    FAILED=$(gh pr checks "$PR_NUMBER" --json bucket --jq '[.[] | select(.bucket == "fail" or .bucket == "cancel")] | length' 2>/dev/null)
+    if ! [[ "$FAILED" =~ ^[0-9]+$ ]]; then
+      echo "❌ Unable to query CI status for PR #$PR_NUMBER (gh pr checks returned no usable data). Not merging automatically."
+      echo "   Review: $PR_URL"
+      exit 1
+    fi
     if [ "$FAILED" -eq 0 ]; then
-      echo "✅ CI checks passed"; break
+      echo "✅ CI checks passed"
+      if gh pr merge "$PR_NUMBER" --squash --auto --delete-branch; then
+        exit 0
+      else
+        echo "❌ gh pr merge failed (branch protection, missing approval, or API/auth error)."
+        echo "   Review: $PR_URL"
+        exit 1
+      fi
     else
-      echo "⚠️  CI checks failed. Proceed anyway? (y/n)"
-      read -r PROCEED
-      [ "$PROCEED" != "y" ] && echo "❌ Merge aborted." && exit 1
-      break
+      echo "❌ CI checks failed. Not merging automatically."
+      echo "   Review: $PR_URL"
+      echo "   To merge anyway once reviewed: gh pr merge $PR_NUMBER --squash --auto --delete-branch"
+      exit 1
     fi
   fi
   sleep $INTERVAL; ELAPSED=$((ELAPSED + INTERVAL))
 done
 
-[ $ELAPSED -ge $TIMEOUT ] && echo "⚠️  CI timed out. Proceed anyway? (y/n)" && read -r PROCEED && [ "$PROCEED" != "y" ] && exit 1
-
-gh pr merge "$PR_NUMBER" --squash --auto --delete-branch
+echo "⚠️  CI timed out after ${TIMEOUT}s. Not merging automatically."
+echo "   Review: $PR_URL"
+echo "   To merge once CI completes: gh pr merge $PR_NUMBER --squash --auto --delete-branch"
+exit 1
 ```
+
+If Step 6 exited non-zero (CI failed, timed out, or the merge did not happen), **stop here** — do not proceed to Step 7. Report the CI/PR state to the user and wait for them to merge manually or explicitly say to retry.
 
 ### Step 7: Deploy to Production
 
