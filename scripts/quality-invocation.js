@@ -310,6 +310,22 @@ function saveManifest(file, manifest) {
   atomicWrite(file, manifest);
 }
 
+// A mid-mutation persist for progress that must survive even if the rest of
+// the current mutation() callback later throws (withManifestLock() only
+// calls saveManifest() on a callback that returns normally). Unlike
+// saveManifest(), this does NOT bump manifestRevision: withManifestLock()
+// compares manifestRevision before/after the SAME mutation() call to detect
+// a genuinely concurrent writer, and bumping it here would make that check
+// misfire against our own in-progress transaction, not an actual concurrent
+// writer. updatedAt IS refreshed, though — worktree-manager.js's
+// qualityManifestReleaseState() reads it to judge whether a locked
+// campaign is abandoned, and an execution reconciled moments ago is
+// definitionally not abandoned (Codex review finding, 2026-08-01, medium).
+function saveManifestMidTransaction(file, manifest) {
+  manifest.updatedAt = new Date().toISOString();
+  atomicWrite(file, manifest);
+}
+
 // manifest.revisions.baseSha is an immutable creation-time snapshot (it also
 // namespaces stateRoot and anchors review-trailer provenance, so it is never
 // reassigned). A base that has legitimately moved since then (main advanced
@@ -2148,7 +2164,7 @@ function authorizeProviderAttempt(manifest, options, manifestPath) {
     // operation() call before saveManifest() runs, silently discarding
     // this reconciliation and re-triggering the same false exhaustion on
     // every retry. Persist it now, unconditionally.
-    atomicWrite(manifestPath, manifest);
+    saveManifestMidTransaction(manifestPath, manifest);
   }
   const currentHead = manifest.revisions.currentHead;
   if (governor.providerAttempts.length >= governor.maxProviderAttempts) {
@@ -2220,7 +2236,7 @@ function authorizeMutationAttempt(manifest, options, manifestPath) {
     // operation() call before saveManifest() runs, silently discarding
     // this reconciliation and re-triggering the same false exhaustion on
     // every retry. Persist it now, unconditionally.
-    atomicWrite(manifestPath, manifest);
+    saveManifestMidTransaction(manifestPath, manifest);
   }
   const remaining = executionRemaining(manifest, "gate");
   const runtime = manifest.risk?.runtime;
@@ -3190,7 +3206,7 @@ function executeGate(manifest, required, name, log, manifestPath) {
     // re-discarded, re-throwing the exhaustion error forever with no way to
     // recover the manifest. Persist the reconciliation now, unconditionally,
     // so it survives regardless of what happens next in this function.
-    atomicWrite(manifestPath, manifest);
+    saveManifestMidTransaction(manifestPath, manifest);
   }
   const gateRemaining = executionRemaining(manifest, "gate");
   if (gateRemaining <= 0) {
@@ -3210,7 +3226,7 @@ function executeGate(manifest, required, name, log, manifestPath) {
   };
   manifest.governor.lastActivityAt =
     manifest.governor.activeExecution.startedAt;
-  atomicWrite(manifestPath, manifest);
+  saveManifestMidTransaction(manifestPath, manifest);
   const boundedRunner = path.join(__dirname, "quality-run-bounded.sh");
   const monotonicStartedAt = process.hrtime.bigint();
   let result;
@@ -3240,7 +3256,7 @@ function executeGate(manifest, required, name, log, manifestPath) {
       Date.now(),
       Number(elapsedNanoseconds) / 1_000_000_000,
     );
-    atomicWrite(manifestPath, manifest);
+    saveManifestMidTransaction(manifestPath, manifest);
   }
   const output = `${result.stdout || ""}${result.stderr || ""}`;
   fs.writeFileSync(log, output, { mode: 0o600 });

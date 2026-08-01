@@ -5779,6 +5779,8 @@ exit 1
       startedAt: new Date(Date.now() - 500_000).toISOString(),
       timeoutSeconds: 403,
     };
+    const revisionBeforeRun = manifest.manifestRevision;
+    const updatedAtBeforeRun = manifest.updatedAt;
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
     // 197 + 403 == 600 == the limit: reconciling this abandoned execution
@@ -5800,6 +5802,17 @@ exit 1
     const afterFirst = JSON.parse(readFileSync(manifestPath, "utf8"));
     expect(afterFirst.governor.activeExecution).toBeNull();
     expect(afterFirst.governor.gateSecondsUsed).toBe(600);
+    // Regression (Codex review finding, 2026-08-01, medium): the
+    // mid-transaction persist must refresh updatedAt -- otherwise
+    // worktree-manager.js's qualityManifestReleaseState() can judge this
+    // freshly-reconciled campaign as abandoned and release its lock as
+    // stale -- but must NOT bump manifestRevision, since
+    // withManifestLock() compares manifestRevision before/after the SAME
+    // mutation() call to detect a genuinely concurrent writer, and
+    // bumping it here would make that check misfire against our own
+    // in-progress transaction.
+    expect(afterFirst.updatedAt).not.toBe(updatedAtBeforeRun);
+    expect(afterFirst.manifestRevision).toBe(revisionBeforeRun);
 
     // A second attempt must fail with the SAME exhausted-budget error, not
     // hang or throw a different/inconsistent error -- proving the state is
