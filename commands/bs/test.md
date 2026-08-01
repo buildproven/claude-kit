@@ -124,18 +124,34 @@ fi
 # Add file pattern if specified. The documented usage (`/bs:test
 # "**/*.test.ts"`) expects glob expansion, not a literal string passed to
 # the runner — most runners treat positional args as path substrings, not
-# shell globs. Expand explicitly with globstar (recursive **) rather than
-# relying on eval's implicit re-parse, which only worked when the caller's
-# shell happened to have globstar enabled already. Multiple matches are
+# shell globs. `shopt -s globstar` is bash 4+ only and macOS ships bash 3.2
+# by default (still true as of macOS's current release) — `shopt -s
+# globstar` hard-errors there, so recursive `**` needs `find`, not bash
+# glob options, to work on every supported shell. Multiple matches are
 # passed as separate positional args (each a filter, per Jest/Vitest
 # semantics) — this is intentional: it's what the documented pattern is
 # supposed to do, and is now reliable instead of depending on the caller's
 # shell state the way the eval path did.
+FILE_MATCHES=()
 if [ -n "$FILE_PATTERN" ]; then
-  shopt -s globstar nullglob
-  # shellcheck disable=SC2206  # word-splitting is the point: expand into an array
-  FILE_MATCHES=($FILE_PATTERN)
-  shopt -u globstar nullglob
+  case "$FILE_PATTERN" in
+    *'**'*)
+      # Recursive glob: convert to a find -path match. "**/*.test.ts" -> a
+      # pattern find's -path understands once the '**' segment collapses.
+      FIND_PATTERN="./${FILE_PATTERN#\*\*/}"
+      while IFS= read -r -d '' match; do
+        FILE_MATCHES+=("${match#./}")
+      done < <(find . -type f -path "$FIND_PATTERN" -print0 2>/dev/null)
+      ;;
+    *)
+      # Single-level glob or a plain filename — ordinary bash globbing
+      # (no globstar needed) works on every supported shell.
+      shopt -s nullglob
+      # shellcheck disable=SC2206  # word-splitting is the point: expand into an array
+      FILE_MATCHES=($FILE_PATTERN)
+      shopt -u nullglob
+      ;;
+  esac
   if [ "${#FILE_MATCHES[@]}" -gt 0 ]; then
     TEST_CMD+=("${FILE_MATCHES[@]}")
   else
