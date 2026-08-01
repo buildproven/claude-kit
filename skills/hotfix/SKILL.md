@@ -139,13 +139,18 @@ PR_URL=$(gh pr view --json url --jq '.url')
 # skipping/cancel) and the raw provider `state` (e.g. SUCCESS/FAILURE/
 # IN_PROGRESS) — there is no `COMPLETED` state and no `conclusion` field.
 # Use `bucket`, as gh's own --help recommends.
-# A failed `gh pr checks` call (auth/network/API error) must not read as "0
-# pending, 0 failed" → "CI passed". Capture its output once per iteration and
-# check its own exit status before counting anything from it.
+# `gh pr checks` uses its exit code to report the CHECK RESULT, not just
+# command success: 0 = all pass, 1 = generic failure, 8 = checks pending
+# (see `gh help exit-codes` / `gh pr checks --help`). A failed `gh pr checks`
+# call must not read as "0 pending, 0 failed" → "CI passed", but exit 8 is
+# the normal in-progress state the polling loop exists for — it still prints
+# valid --json output, so treat the JSON's own `bucket` values as the source
+# of truth and only bail if the output isn't valid JSON at all.
 TIMEOUT=120; ELAPSED=0; INTERVAL=5
 while [ $ELAPSED -lt $TIMEOUT ]; do
-  if ! CHECKS_JSON=$(gh pr checks "$PR_NUMBER" --json bucket); then
-    echo "❌ Unable to query CI status for PR #$PR_NUMBER (gh pr checks failed). Not merging automatically."
+  CHECKS_JSON=$(gh pr checks "$PR_NUMBER" --json bucket 2>/dev/null)
+  if ! printf '%s' "$CHECKS_JSON" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    echo "❌ Unable to query CI status for PR #$PR_NUMBER (gh pr checks returned no usable data). Not merging automatically."
     echo "   Review: $PR_URL"
     exit 1
   fi
