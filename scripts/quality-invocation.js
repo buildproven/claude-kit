@@ -2119,7 +2119,7 @@ function providerPhaseSeconds(manifest) {
     : (manifest.risk?.runtime?.reviewReserveSeconds ?? 300);
 }
 
-function authorizeProviderAttempt(manifest, options) {
+function authorizeProviderAttempt(manifest, options, manifestPath) {
   const provider = options.provider;
   if (!["claude", "codex", "gemini"].includes(provider)) {
     throw new Error(`invalid review provider '${provider}'`);
@@ -2140,7 +2140,16 @@ function authorizeProviderAttempt(manifest, options) {
   ) {
     throw new Error("provider attempt governor is missing or invalid");
   }
+  const hadActiveExecution = governor.activeExecution != null;
   reconcileAbandonedExecution(manifest);
+  if (hadActiveExecution && governor.activeExecution == null && manifestPath) {
+    // Same bug as executeGate's gate-budget reconciliation: if the cap
+    // check below throws, that plain Error propagates out of mutate()'s
+    // operation() call before saveManifest() runs, silently discarding
+    // this reconciliation and re-triggering the same false exhaustion on
+    // every retry. Persist it now, unconditionally.
+    atomicWrite(manifestPath, manifest);
+  }
   const currentHead = manifest.revisions.currentHead;
   if (governor.providerAttempts.length >= governor.maxProviderAttempts) {
     throw new Error("absolute provider attempt cap exhausted");
@@ -2193,13 +2202,26 @@ function completeProviderAttempt(manifest, options) {
   completeActiveExecution(manifest, "provider", Date.now(), measuredSeconds);
 }
 
-function authorizeMutationAttempt(manifest, options) {
+function authorizeMutationAttempt(manifest, options, manifestPath) {
   if (!["high", "critical"].includes(manifest.risk?.tier)) {
     throw new Error(
       "mutation execution is only available for high or critical campaigns",
     );
   }
+  const hadActiveExecution = manifest.governor.activeExecution != null;
   reconcileAbandonedExecution(manifest);
+  if (
+    hadActiveExecution &&
+    manifest.governor.activeExecution == null &&
+    manifestPath
+  ) {
+    // Same bug as executeGate's gate-budget reconciliation: if the cap
+    // check below throws, that plain Error propagates out of mutate()'s
+    // operation() call before saveManifest() runs, silently discarding
+    // this reconciliation and re-triggering the same false exhaustion on
+    // every retry. Persist it now, unconditionally.
+    atomicWrite(manifestPath, manifest);
+  }
   const remaining = executionRemaining(manifest, "gate");
   const runtime = manifest.risk?.runtime;
   const requestedTimeout = parseInteger(
@@ -3155,7 +3177,21 @@ function executeGate(manifest, required, name, log, manifestPath) {
   const runtime = manifest.risk?.runtime;
   const gateSeconds = runtime?.checkSeconds ?? 300;
   const gateReserveSeconds = runtime?.checkReserveSeconds ?? 0;
+  const hadActiveExecution = manifest.governor.activeExecution != null;
   reconcileAbandonedExecution(manifest);
+  if (hadActiveExecution && manifest.governor.activeExecution == null) {
+    // reconcileAbandonedExecution just cleared a timed-out execution and
+    // credited its elapsed time to gateSecondsUsed, in memory only. If the
+    // exhaustion check below throws, that plain Error propagates out of
+    // mutate()'s operation() call in withManifestLock() before
+    // saveManifest() ever runs -- so this reconciliation was silently
+    // discarded on every prior attempt, and a stale execution whose
+    // deadline had already passed kept getting "recovered" and immediately
+    // re-discarded, re-throwing the exhaustion error forever with no way to
+    // recover the manifest. Persist the reconciliation now, unconditionally,
+    // so it survives regardless of what happens next in this function.
+    atomicWrite(manifestPath, manifest);
+  }
   const gateRemaining = executionRemaining(manifest, "gate");
   if (gateRemaining <= 0) {
     throw new Error(
@@ -3698,7 +3734,11 @@ const COMMANDS = {
   "provider-attempt": ({ manifestArg, rawArgs }) => {
     let result;
     mutate(manifestArg, (locked) => {
-      result = authorizeProviderAttempt(locked, parseOptions(rawArgs));
+      result = authorizeProviderAttempt(
+        locked,
+        parseOptions(rawArgs),
+        manifestArg,
+      );
     });
     process.stdout.write(`${JSON.stringify(result)}\n`);
   },
@@ -3741,7 +3781,11 @@ const COMMANDS = {
   "mutation-attempt": ({ manifestArg, rawArgs }) => {
     let result;
     mutate(manifestArg, (locked) => {
-      result = authorizeMutationAttempt(locked, parseOptions(rawArgs));
+      result = authorizeMutationAttempt(
+        locked,
+        parseOptions(rawArgs),
+        manifestArg,
+      );
     });
     process.stdout.write(`${JSON.stringify(result)}\n`);
   },

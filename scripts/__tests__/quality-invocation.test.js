@@ -5752,6 +5752,71 @@ exit 1
     expect(updated.governor.activeExecution).toBeNull();
   }, 30_000);
 
+  it("persists an abandoned-execution reconciliation even when the immediate budget check then fails", () => {
+    // Regression: reconcileAbandonedExecution() cleared a timed-out
+    // activeExecution and credited its elapsed time to gateSecondsUsed in
+    // memory only. If the exhaustion check right after it then threw (a
+    // plain Error, not GateExecutionError), that error propagated out of
+    // mutate()'s operation() callback in withManifestLock() BEFORE
+    // saveManifest() ever ran -- silently discarding the reconciliation.
+    // Every retry re-read the same stale activeExecution from disk,
+    // recomputed the same "would exceed" result, and re-threw forever with
+    // no way for the manifest to ever recover on its own.
+    const root = repo("gate-abandoned-reconcile-persists");
+    const packageFile = path.join(root, "package.json");
+    const packageJson = JSON.parse(readFileSync(packageFile, "utf8"));
+    packageJson.scripts.build = "true";
+    writeFileSync(packageFile, JSON.stringify(packageJson));
+    git(root, ["add", "package.json"]);
+    git(root, ["commit", "-q", "-m", "add build script"]);
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.governor.gateSecondsLimit = 600;
+    manifest.governor.gateSecondsUsed = 197;
+    manifest.governor.activeExecution = {
+      kind: "gate",
+      name: "security",
+      startedAt: new Date(Date.now() - 500_000).toISOString(),
+      timeoutSeconds: 403,
+    };
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    // 197 + 403 == 600 == the limit: reconciling this abandoned execution
+    // exhausts the budget exactly, so the very next check throws.
+    const first = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(first.status).not.toBe(0);
+    expect(first.stderr).toMatch(
+      /total gate execution budget is exhausted before 'build'/,
+    );
+
+    // The reconciliation itself (activeExecution cleared, usage credited)
+    // must be durable even though the budget check failed -- otherwise the
+    // manifest is permanently stuck re-deriving and re-discarding the same
+    // reconciliation on every future invocation.
+    const afterFirst = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(afterFirst.governor.activeExecution).toBeNull();
+    expect(afterFirst.governor.gateSecondsUsed).toBe(600);
+
+    // A second attempt must fail with the SAME exhausted-budget error, not
+    // hang or throw a different/inconsistent error -- proving the state is
+    // now stable rather than re-deriving the same thing every time.
+    const second = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(second.status).not.toBe(0);
+    expect(second.stderr).toMatch(
+      /total gate execution budget is exhausted before 'build'/,
+    );
+    const afterSecond = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(afterSecond.governor.gateSecondsUsed).toBe(600);
+  }, 30_000);
+
   it("requires explicit revalidation after lifecycle inactivity", () => {
     const root = repo("lifecycle-stale");
     const manifestPath = create(root);
