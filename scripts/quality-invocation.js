@@ -648,6 +648,16 @@ function preferredRequiredGate({
   );
 }
 
+function optionalBuildGate({ nativeGates, scripts, manager }) {
+  if (nativeGates.has("build")) {
+    return nativeGate("build", nativeGates.get("build"));
+  }
+  if (typeof scripts.build === "string") {
+    return scriptGate("build", "build", manager);
+  }
+  return null;
+}
+
 function optionalTypeGate({
   root,
   head,
@@ -682,6 +692,7 @@ const NATIVE_GATE_NAMES = new Set([
   "build",
   "type",
   "consumer",
+  "verify-app",
 ]);
 
 function nativeGate(name, definition, allowSkip = false) {
@@ -805,11 +816,8 @@ function discoverRequiredGates(
       `quality requires executable npm or Python repository gates for: ${missing.join(", ")}`,
     );
   }
-  if (nativeGates.has("build")) {
-    required.push(nativeGate("build", nativeGates.get("build")));
-  } else if (typeof scripts.build === "string") {
-    required.push(scriptGate("build", "build", manager));
-  }
+  const buildGate = optionalBuildGate({ nativeGates, scripts, manager });
+  if (buildGate) required.push(buildGate);
   const typeGate = optionalTypeGate({
     root,
     head,
@@ -842,7 +850,31 @@ function discoverRequiredGates(
           },
     );
   }
+  const verifyAppGate = discoverVerifyAppGate(options, nativeGates);
+  if (verifyAppGate) required.push(verifyAppGate);
   return required;
+}
+
+// Opt-in only: verify-app boots the app (dev server / binary) and drives a
+// real page load, which is slow and can be flaky on a cold cache. Never
+// discovered unless the caller passed --verify-app (BUI-306). A repo can
+// still override the command via .quality-gates.json#verify-app. Kept as its
+// own function (rather than inline in discoverRequiredGates) to stay under
+// that function's complexity budget.
+function discoverVerifyAppGate(options, nativeGates) {
+  if (options["verify-app"] !== true) return null;
+  if (nativeGates.has("verify-app")) {
+    return nativeGate("verify-app", nativeGates.get("verify-app"));
+  }
+  const verifyAppScript = path.join(__dirname, "quality-verify-app.sh");
+  return {
+    name: "verify-app",
+    source: `script:${verifyAppScript}`,
+    command: `bash ${verifyAppScript}`,
+    executable: "bash",
+    args: [verifyAppScript],
+    allowSkip: false,
+  };
 }
 
 function unionRequiredGates(existing, discovered) {
@@ -1024,7 +1056,15 @@ function parseOptions(args) {
     const equals = token.indexOf("=");
     const name = equals === -1 ? token : token.slice(0, equals);
     const inlineValue = equals === -1 ? null : token.slice(equals + 1);
-    if (["--merge", "--skip-tests", "--skip", "--advisory"].includes(name)) {
+    if (
+      [
+        "--merge",
+        "--skip-tests",
+        "--skip",
+        "--advisory",
+        "--verify-app",
+      ].includes(name)
+    ) {
       if (inlineValue !== null && !["true", "false"].includes(inlineValue)) {
         throw new Error(`${name} accepts only true or false`);
       }
@@ -1207,6 +1247,7 @@ function createManifest(options) {
     level: firstValue(options.level, "auto"),
     scope,
     skipTests: options["skip-tests"] === true,
+    verifyApp: options["verify-app"] === true,
     reviewArm: reviewArm(options, provider),
   };
   const campaignIdentity = {
@@ -3699,7 +3740,10 @@ function runAdvance(manifestArg, manifest, rawArgs) {
     validateIdentity(locked, manifest.repo.realpath);
     const discovered = discoverRequiredGates(
       locked.repo.realpath,
-      { "skip-tests": locked.options?.skipTests === true },
+      {
+        "skip-tests": locked.options?.skipTests === true,
+        "verify-app": locked.options?.verifyApp === true,
+      },
       locked.revisions.currentHead,
     );
     locked.requiredGates = locked[NEEDS_REQUIRED_GATES_MIGRATION]

@@ -237,16 +237,85 @@ auto-fix loop, re-run `npm test` to verify they pass before continuing.
 
 ## Flags
 
-| Flag                                 | Default | Description                                                                                 |
-| ------------------------------------ | ------- | ------------------------------------------------------------------------------------------- |
-| `--level N`                          | auto    | Quality level: `auto` (read tier from harness-config.json), `95`, or `98`                   |
-| `--scope S`                          | branch  | Revision-bound branch scope; other values fail fast                                         |
-| `--merge`                            | false   | Auto-merge PR after quality                                                                 |
-| `--skip-tests`                       | false   | Skip hard test gate (config-only repos)                                                     |
-| `--pr <number>`                      | -       | Bind to one open PR                                                                         |
-| `approve --pr <number> --head <sha>` | -       | Legacy `human-required` policy only: mint signed approval for one exact PR/HEAD             |
-| `--manifest <path>`                  | -       | Resume one exact persisted invocation; accepts no other flags                               |
-| `--target-dir <path>`                | -       | Run against this repo (use when invoking from a forked/agent context with no inherited cwd) |
+| Flag                                 | Default | Description                                                                                  |
+| ------------------------------------ | ------- | -------------------------------------------------------------------------------------------- |
+| `--level N`                          | auto    | Quality level: `auto` (read tier from harness-config.json), `95`, or `98`                    |
+| `--scope S`                          | branch  | Revision-bound branch scope; other values fail fast                                          |
+| `--merge`                            | false   | Auto-merge PR after quality                                                                  |
+| `--skip-tests`                       | false   | Skip hard test gate (config-only repos)                                                      |
+| `--verify-app`                       | false   | Add the `verify-app` gate: boot the app and browser-check the root page (BUI-306, see below) |
+| `--pr <number>`                      | -       | Bind to one open PR                                                                          |
+| `approve --pr <number> --head <sha>` | -       | Legacy `human-required` policy only: mint signed approval for one exact PR/HEAD              |
+| `--manifest <path>`                  | -       | Resume one exact persisted invocation; accepts no other flags                                |
+| `--target-dir <path>`                | -       | Run against this repo (use when invoking from a forked/agent context with no inherited cwd)  |
+
+### `--verify-app` gate (BUI-306)
+
+Every deterministic gate up to this point (lint/type/build/test/security/
+consumer) proves the code compiles and its own test suite passes — none of
+them boot the app, so "green" has never meant "the thing runs." `--verify-app`
+closes that gap by discovering an additional `verify-app` required gate,
+implemented in `scripts/quality-verify-app.sh` and invoked exactly like every
+other gate through `quality-run-gate.sh` (same recording, same reuse-on-
+unchanged-HEAD, same evidence contract). It is opt-in only — never discovered
+without the flag — because booting a real process/browser is slower and more
+environment-sensitive than a static gate.
+
+Project-type detection is `package.json`-only, in this order:
+
+- **web** — `scripts.dev` or `scripts.start` exists, the process binds a
+  discoverable port, and an HTTP probe of that port returns HTML. The gate
+  drives `agent-browser` (see `skills/agent-browser/SKILL.md`) to load the
+  root page, then reads `agent-browser errors --json` and
+  `agent-browser console --json` and fails if either reports a JS error /
+  `console.error`.
+- **server** — a dev/start script exists but the booted port does not answer
+  with HTML (JSON API, gRPC, raw TCP, ...). The gate only requires the
+  process to bind its port and stay alive past the boot window; no browser
+  is invoked.
+- **CLI** — no dev/start script, but `package.json#bin` is set. The gate runs
+  `<bin> --help` and requires a clean exit.
+- **library** — none of the above. There is no runnable entrypoint, so the
+  gate exits 0 immediately with a "not applicable" message. It cannot use the
+  manifest's `status: "skipped"` path — `quality-invocation.js`
+  `gateEvidenceInput` hard-restricts that status to the `test` gate only, so
+  every other required gate (including `verify-app`) must report `success`
+  or `verifyGateEvidence` blocks the campaign. A library therefore records a
+  genuine clean pass, not a skip.
+
+Port discovery order: `.quality-app-flows.json`'s `"port"` field, then a
+literal `PORT=<n>` / `--port <n>` / `-p <n>` / `:<n>` found in the dev/start
+script string, then the conventional default `3000`. Boot and page timeouts
+default to 45s/30s and are overridable via `QUALITY_VERIFY_APP_BOOT_TIMEOUT`
+and `QUALITY_VERIFY_APP_PAGE_TIMEOUT`.
+
+The zero-config baseline — root page loads, zero JS errors, zero
+`console.error` — requires no repo opt-in beyond `--verify-app` itself, per
+BUI-306's own "no per-repo config bloat" resolution. A repo that wants deeper
+checks may declare 1+ named flows in a `.quality-app-flows.json` at the repo
+root:
+
+```json
+{
+  "port": 3000,
+  "flows": [
+    {
+      "name": "login",
+      "steps": ["open /login", "wait --load networkidle", "click @e1"]
+    }
+  ]
+}
+```
+
+Each step is one literal `agent-browser` subcommand + args (no shell
+metacharacters, no chaining); the gate runs each step in order and fails the
+same way as the baseline load if any step exits non-zero or the flow leaves
+behind a JS error. This file is entirely optional — its absence is not an
+error and does not change the baseline check.
+
+A repository can also override the gate's command entirely via
+`.quality-gates.json`'s native-gate policy (`gates.verify-app`, same schema as
+every other native gate name); the script above is only the default.
 
 ### Environment Variables
 

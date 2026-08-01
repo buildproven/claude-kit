@@ -4137,6 +4137,52 @@ exit 1
     );
   });
 
+  it("BUI-306: never discovers verify-app unless --verify-app is passed", () => {
+    const root = repo("verify-app-opt-in-default");
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.map((gate) => gate.name)).not.toContain("verify-app");
+  });
+
+  it("BUI-306: discovers the verify-app gate script when --verify-app is passed", () => {
+    const root = repo("verify-app-opt-in");
+    const manifest = create(root, ["--verify-app"]);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    const verifyApp = required.find((gate) => gate.name === "verify-app");
+    expect(verifyApp).toMatchObject({
+      executable: "bash",
+      allowSkip: false,
+    });
+    expect(verifyApp.source).toMatch(/quality-verify-app\.sh$/);
+    expect(verifyApp.args[0]).toMatch(/quality-verify-app\.sh$/);
+  });
+
+  it("BUI-306: a repo can override verify-app via .quality-gates.json", () => {
+    const root = repo("verify-app-native-override");
+    writeFileSync(
+      path.join(root, ".quality-gates.json"),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          "verify-app": {
+            executable: "node",
+            args: ["--check", "file.js"],
+          },
+        },
+      }),
+    );
+    git(root, ["add", ".quality-gates.json"]);
+    git(root, ["commit", "-q", "-m", "declare native verify-app gate"]);
+
+    const manifest = create(root, ["--verify-app"]);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.find((gate) => gate.name === "verify-app")).toMatchObject({
+      source: "quality-gates:.quality-gates.json#verify-app",
+      executable: "node",
+      args: ["--check", "file.js"],
+    });
+  });
+
   it("discovers security:check without requiring a redundant security alias", () => {
     const root = repo("security-check-gate");
     writeFileSync(
