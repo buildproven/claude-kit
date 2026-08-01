@@ -118,9 +118,24 @@ else
   esac
 fi
 
-# Add file pattern if specified
+# Add file pattern if specified. The documented usage (`/bs:test
+# "**/*.test.ts"`) expects glob expansion, not a literal string passed to
+# the runner — most runners treat positional args as path substrings, not
+# shell globs. Expand explicitly with globstar (recursive **) rather than
+# relying on eval's implicit re-parse, which only worked when the caller's
+# shell happened to have globstar enabled already.
 if [ -n "$FILE_PATTERN" ]; then
-  TEST_CMD+=("$FILE_PATTERN")
+  shopt -s globstar nullglob
+  # shellcheck disable=SC2206  # word-splitting is the point: expand into an array
+  FILE_MATCHES=($FILE_PATTERN)
+  shopt -u globstar nullglob
+  if [ "${#FILE_MATCHES[@]}" -gt 0 ]; then
+    TEST_CMD+=("${FILE_MATCHES[@]}")
+  else
+    # No glob metacharacters, or nothing matched — pass through literally so
+    # a plain filename (`/bs:test path/to/file.test`) still works.
+    TEST_CMD+=("$FILE_PATTERN")
+  fi
 fi
 
 # Execute
