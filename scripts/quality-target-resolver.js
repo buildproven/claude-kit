@@ -226,7 +226,7 @@ function normalizeTokens(rawArgs) {
  * @param {object} ctx
  * @param {string} ctx.cwd               - process.cwd()
  * @param {string|null} ctx.primaryCheckout
- * @param {(branch: string) => string|null} ctx.findWorktreeForBranch
+ * @param {(branch: string, cwd?: string|null) => string|null} ctx.findWorktreeForBranch
  * @param {(p: string) => boolean} ctx.dirExists
  * @param {(pr: number, repo?: string|null, cwd?: string|null) => { headRefName: string, headRepositoryOwnerLogin?: string, headRepositoryName?: string } | null} ctx.lookupPr
  * @param {(dir: string) => string|null} [ctx.getRepoForDir] - resolves
@@ -342,7 +342,7 @@ function resolveByPr(parsed, ctx) {
   }
 
   const wtPath = findWorktreeForBranch
-    ? findWorktreeForBranch(pr.headRefName)
+    ? findWorktreeForBranch(pr.headRefName, lookupCwd)
     : null;
   if (wtPath && dirExists(wtPath)) {
     return {
@@ -368,7 +368,7 @@ function resolveByPr(parsed, ctx) {
 function resolveByBranch(parsed, ctx) {
   const { findWorktreeForBranch, dirExists } = ctx;
   const wtPath = findWorktreeForBranch
-    ? findWorktreeForBranch(parsed.branch)
+    ? findWorktreeForBranch(parsed.branch, ctx.cwd)
     : null;
   if (wtPath && dirExists(wtPath)) {
     return {
@@ -484,8 +484,14 @@ if (require.main === module) {
     }
   };
 
-  const findWorktreeForBranch = (branch) => {
-    const out = runGit(["worktree", "list", "--porcelain"]);
+  const findWorktreeForBranch = (branch, cwd) => {
+    // Explicit -C: without it, `git worktree list` runs against whatever
+    // repo this process's own cwd happens to be in, which can silently
+    // return a same-named branch's worktree from an unrelated repo when
+    // invoked from outside the target checkout (BUI-390).
+    const out = cwd
+      ? runGit(["-C", cwd, "worktree", "list", "--porcelain"])
+      : runGit(["worktree", "list", "--porcelain"]);
     if (!out) return null;
     const lines = out.split("\n");
     let currentPath = null;

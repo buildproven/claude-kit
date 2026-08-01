@@ -251,6 +251,27 @@ describe("resolveTarget", () => {
     expect(seenCwd).toBe("/current/shell/cwd");
   });
 
+  it("scopes findWorktreeForBranch's 'git worktree list' to --target-dir, not ambient cwd (BUI-390)", () => {
+    // Without -C scoping, `git worktree list` runs against whatever repo
+    // this process's own cwd happens to be in — it could silently match a
+    // same-named branch's worktree from an unrelated repo, or miss the real
+    // one, when invoked from outside the target checkout.
+    const parsed = parseArgs("--merge --pr 410 --target-dir /checkout");
+    let seenWtCwd = null;
+    resolveTarget(parsed, {
+      ...baseCtx,
+      cwd: "/somewhere/else",
+      getRepoForDir: (dir) => (dir === "/checkout" ? "owner/repo" : null),
+      lookupPr: (n) =>
+        n === 410 ? { headRefName: "codex/foo", repo: "owner/repo" } : null,
+      findWorktreeForBranch: (branch, cwd) => {
+        seenWtCwd = cwd;
+        return null;
+      },
+    });
+    expect(seenWtCwd).toBe("/checkout");
+  });
+
   it("resolves branch to worktree path", () => {
     const parsed = parseArgs("--merge codex/phase-1");
     const out = resolveTarget(parsed, {

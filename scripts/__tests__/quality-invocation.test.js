@@ -838,6 +838,44 @@ process.exit(0);
     expect(observedCwd).not.toBe(elsewhereCwd);
   }, 30_000);
 
+  it("injects --target-dir into resolver args when only BS_QUALITY_TARGET_DIR env var is set (BUI-390)", () => {
+    // Documented precedence is --target-dir > env var > cwd. Without
+    // injecting an explicit --target-dir token, the resolver's own arg
+    // parser never sees a path (it only parses CLI tokens, not env vars),
+    // so it falls through to the ambient-cwd fallback and hard-refuses
+    // under --merge — breaking the documented env-var-only fallback for
+    // forked/agent invocations with no inherited cwd.
+    const target = repo("bootstrap-env-target-dir");
+    const setupRoot = makeTempDir("quality-fake-setup-root-envvar-");
+    const fakeScriptsDir = path.join(setupRoot, "scripts");
+    mkdirSync(fakeScriptsDir, { recursive: true });
+    const observedArgsFile = path.join(setupRoot, "observed-args.json");
+    writeFileSync(
+      path.join(fakeScriptsDir, "quality-target-resolver.js"),
+      `#!/usr/bin/env node
+const idx = process.argv.indexOf("--cli");
+const argv = idx >= 0 ? process.argv.slice(idx + 1) : [];
+require("fs").writeFileSync(${JSON.stringify(observedArgsFile)}, JSON.stringify(argv));
+process.stdout.write(JSON.stringify({ ok: false, reason: "test stub", resolution: "path", warnings: [] }));
+process.exit(0);
+`,
+    );
+    const elsewhereCwd = makeTempDir("quality-bootstrap-elsewhere-envvar-");
+    spawnSync("bash", [BOOTSTRAP, "--merge", "--level", "auto"], {
+      cwd: elsewhereCwd,
+      env: {
+        ...process.env,
+        CLAUDE_SETUP_ROOT: setupRoot,
+        BS_QUALITY_TARGET_DIR: target,
+      },
+      encoding: "utf8",
+    });
+    const observedArgs = JSON.parse(readFileSync(observedArgsFile, "utf8"));
+    const targetDirIdx = observedArgs.indexOf("--target-dir");
+    expect(targetDirIdx).toBeGreaterThanOrEqual(0);
+    expect(observedArgs[targetDirIdx + 1]).toBe(target);
+  }, 30_000);
+
   it("binds a non-merge PR bootstrap to the PR base branch and base SHA", () => {
     const root = repo("pr-bootstrap");
     const base = git(root, ["rev-parse", "origin/main"]);

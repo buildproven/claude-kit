@@ -206,13 +206,15 @@ if [ -z "$RESOLVER" ]; then
   fi
 else
   # Use the resolver. It returns a JSON plan we act on.
-  PRIMARY_CHECKOUT=$(git worktree list --porcelain 2>/dev/null \
-    | awk '/^worktree / {p=substr($0, 10)} /^branch refs\/heads\/main$/ {print p; exit}')
-  # QUALITY_CWD must reflect --target-dir when the caller supplied one —
-  # otherwise it silently carries this process's own launch directory into
-  # the resolver's fallback/cwd-relative resolution paths, which breaks when
+  #
+  # QUALITY_CWD (and, when only BS_QUALITY_TARGET_DIR set the target, the
+  # --target-dir flag itself) must reflect the target directory — otherwise
+  # this silently carries this process's own launch directory into the
+  # resolver's fallback/cwd-relative resolution paths, which breaks when
   # invoked from outside the target checkout (BUI-390). --target-dir, when
-  # present, is always authoritative over ambient $PWD.
+  # present (CLI flag or BS_QUALITY_TARGET_DIR env var, per the documented
+  # precedence: --target-dir > env var > cwd), is always authoritative over
+  # ambient $PWD.
   RESOLVER_TARGET_DIR=""
   prev_resolver_arg=""
   for resolver_arg in "$@"; do
@@ -224,20 +226,31 @@ else
     esac
     prev_resolver_arg="$resolver_arg"
   done
+  RESOLVER_ARGS=("$@")
   if [ -z "$RESOLVER_TARGET_DIR" ] && [ -n "${BS_QUALITY_TARGET_DIR:-}" ]; then
     RESOLVER_TARGET_DIR="$BS_QUALITY_TARGET_DIR"
+    # The env var alone leaves parsed.path unset inside the resolver (it only
+    # parses CLI tokens), which falls through to the ambient-cwd fallback
+    # paths and hard-refuses under --merge. Inject it as an explicit
+    # --target-dir token so the resolver treats it the same as if the caller
+    # had passed the flag directly.
+    RESOLVER_ARGS+=(--target-dir "$RESOLVER_TARGET_DIR")
   fi
   if [ -n "$RESOLVER_TARGET_DIR" ]; then
     RESOLVER_TARGET_DIR="${RESOLVER_TARGET_DIR/#\~/$HOME}"
     CWD_INPUT="$RESOLVER_TARGET_DIR"
+    PRIMARY_CHECKOUT=$(git -C "$RESOLVER_TARGET_DIR" worktree list --porcelain 2>/dev/null \
+      | awk '/^worktree / {p=substr($0, 10)} /^branch refs\/heads\/main$/ {print p; exit}')
   else
     CWD_INPUT=$(pwd)
+    PRIMARY_CHECKOUT=$(git worktree list --porcelain 2>/dev/null \
+      | awk '/^worktree / {p=substr($0, 10)} /^branch refs\/heads\/main$/ {print p; exit}')
   fi
 
   RESOLVER_STDERR=$(mktemp 2>/dev/null || echo "/tmp/quality-resolver-stderr.$$")
   RESOLUTION_JSON=$(QUALITY_CWD="$CWD_INPUT" \
                     QUALITY_PRIMARY_CHECKOUT="$PRIMARY_CHECKOUT" \
-                    node "$RESOLVER" --cli "$@" 2>"$RESOLVER_STDERR")
+                    node "$RESOLVER" --cli "${RESOLVER_ARGS[@]}" 2>"$RESOLVER_STDERR")
   RESOLVER_RC=$?
 
   # Distinguish a resolver *crash* (non-zero exit) from a clean empty/ok:false
