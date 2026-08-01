@@ -114,7 +114,17 @@ if [ -z "$DEV_SCRIPT_NAME" ] && [ -n "$BIN_FIELD" ]; then
   echo "[verify-app] detected CLI project (package.json#bin); running '--help'"
   BIN_PATH="$ROOT/$BIN_FIELD"
   [ -f "$BIN_PATH" ] || fail "package.json#bin points at '$BIN_FIELD', which does not exist"
-  HELP_OUTPUT="$(run_with_timeout "$BOOT_TIMEOUT_SECONDS" node "$BIN_PATH" --help 2>&1)"
+  # Invoke the bin's own shebang/executable bit rather than forcing `node`:
+  # a bin entry can legitimately be a shell script, Python script, or
+  # compiled binary — forcing `node <path>` on those rejects an otherwise
+  # valid CLI entrypoint. Fall back to `node` only when the file itself is
+  # not directly executable (e.g. checked out without the +x bit, which npm
+  # normally restores but a plain git checkout may not).
+  if [ -x "$BIN_PATH" ]; then
+    HELP_OUTPUT="$(run_with_timeout "$BOOT_TIMEOUT_SECONDS" "$BIN_PATH" --help 2>&1)"
+  else
+    HELP_OUTPUT="$(run_with_timeout "$BOOT_TIMEOUT_SECONDS" node "$BIN_PATH" --help 2>&1)"
+  fi
   HELP_STATUS=$?
   if [ "$HELP_STATUS" -eq 124 ]; then
     fail "CLI '$BIN_FIELD --help' did not exit within ${BOOT_TIMEOUT_SECONDS}s"
@@ -140,11 +150,31 @@ fi
 # to already be up, which is exactly what we're about to find out.
 PORT=""
 if [ -f "$FLOWS_FILE" ]; then
-  PORT="$(node -e '
+  # A present-but-malformed .quality-app-flows.json is a hard failure, not a
+  # silent fallback to zero-config: a repo that wrote this file intended to
+  # declare flows, and swallowing the parse error would convert "flows file
+  # is broken" into an invisible "zero flows declared" pass later in the
+  # script. An ABSENT file is the only case that legitimately falls back.
+  FLOWS_JSON_STATUS="$(node -e '
     try {
-      const cfg = require(process.argv[1]);
-      if (Number.isInteger(cfg.port)) process.stdout.write(String(cfg.port));
-    } catch { /* malformed flows file falls through to script-derived port */ }
+      JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+      process.stdout.write("ok");
+    } catch (err) {
+      process.stdout.write("malformed: " + err.message);
+    }
+  ' "$FLOWS_FILE" 2>/dev/null)"
+  case "$FLOWS_JSON_STATUS" in
+    ok) ;;
+    malformed:*)
+      fail ".quality-app-flows.json exists but is not valid JSON (${FLOWS_JSON_STATUS#malformed: }) — fix or remove it"
+      ;;
+    *)
+      fail "could not read .quality-app-flows.json to check for valid JSON"
+      ;;
+  esac
+  PORT="$(node -e '
+    const cfg = require(process.argv[1]);
+    if (Number.isInteger(cfg.port)) process.stdout.write(String(cfg.port));
   ' "$FLOWS_FILE" 2>/dev/null)"
 fi
 if [ -z "$PORT" ]; then
@@ -153,7 +183,46 @@ fi
 if [ -z "$PORT" ]; then
   PORT="$(printf '%s' "$DEV_SCRIPT" | grep -oE ':[0-9]{2,5}\b' | grep -oE '[0-9]{2,5}' | head -1)"
 fi
-[ -n "$PORT" ] || PORT=3000
+# PORT_IS_GUESS=1 means nothing declared/literal was found and we're about to
+# fall back to the conventional default of 3000. Many dev servers (vite,
+# webpack-dev-server, etc.) don't take an explicit --port/PORT and instead
+# print their own default (5173, 8080, ...) to stdout on boot. Rather than
+# trusting the 3000 guess blindly, wait_for_port below also sniffs DEV_LOG
+# for a "http://.../ :<port>" announcement and for any newly-opened listening
+# TCP port owned by DEV_PID (via lsof, when available) — either of which
+# overrides the guess. This is a best-effort heuristic, not a guarantee: a
+# server that prints nothing and whose listening socket lsof can't attribute
+# to the right PID (e.g. it forks) will still fall back to the guess.
+PORT_IS_GUESS=0
+if [ -z "$PORT" ]; then
+  PORT=3000
+  PORT_IS_GUESS=1
+fi
+
+# Scans the dev server's own boot log for a printed port announcement, e.g.
+# "Local: http://localhost:5173/" (vite), "listening on port 8080", etc.
+# Takes the first 2-5 digit number that follows a "://" host or the words
+# "port"/"listening" — good enough to beat a static 3000 guess without
+# needing a framework-specific parser.
+sniff_port_from_log() {
+  grep -oE '(://[^ ]*:|[Pp]ort[[:space:]:]+|[Ll]istening[^0-9]*)[0-9]{2,5}' "$DEV_LOG" 2>/dev/null \
+    | grep -oE '[0-9]{2,5}' | tail -1
+}
+
+# Scans for a TCP port newly opened by pid (or a descendant, since many dev
+# servers exec a child) via lsof, when available. Best-effort: silently
+# yields nothing if lsof is missing or the process forks in a way lsof can't
+# attribute.
+sniff_port_from_lsof() {
+  local pid="$1"
+  command -v lsof >/dev/null 2>&1 || return 0
+  lsof -a -p "$pid" -iTCP -sTCP:LISTEN -P -n 2>/dev/null \
+    | grep -oE ':[0-9]{2,5} ' | grep -oE '[0-9]{2,5}' | head -1
+}
+
+port_is_free() {
+  ! (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
+}
 
 wait_for_port() {
   local port="$1" deadline
@@ -167,6 +236,14 @@ wait_for_port() {
   done
   return 1
 }
+
+# Reject a pre-existing listener on the guessed/discovered port BEFORE we
+# spawn anything: if something unrelated is already listening there,
+# wait_for_port would report "ready" instantly against that other service,
+# and the browser check below would silently validate the wrong app.
+if ! port_is_free "$PORT"; then
+  fail "port $PORT is already in use by another process before booting '$DEV_SCRIPT_NAME' — free it or declare the correct port in .quality-app-flows.json"
+fi
 
 DEV_LOG="$(mktemp -t quality-verify-app-boot.XXXXXX)"
 cleanup() {
@@ -185,6 +262,23 @@ PORT="$PORT" "$PACKAGE_MANAGER" run "$DEV_SCRIPT_NAME" >"$DEV_LOG" 2>&1 &
 DEV_PID=$!
 set +m
 
+if [ "$PORT_IS_GUESS" = "1" ]; then
+  # Give the process a moment to announce its real port before we commit to
+  # polling the 3000 guess for the whole boot budget.
+  DISCOVERED=""
+  for _ in 1 2 3 4 5; do
+    sleep 1
+    DISCOVERED="$(sniff_port_from_log)"
+    [ -z "$DISCOVERED" ] && DISCOVERED="$(sniff_port_from_lsof "$DEV_PID")"
+    [ -n "$DISCOVERED" ] && break
+    kill -0 "$DEV_PID" 2>/dev/null || break
+  done
+  if [ -n "$DISCOVERED" ] && [ "$DISCOVERED" != "$PORT" ]; then
+    echo "[verify-app] discovered actual listening port $DISCOVERED (guessed $PORT); using it"
+    PORT="$DISCOVERED"
+  fi
+fi
+
 if ! wait_for_port "$PORT"; then
   if ! kill -0 "$DEV_PID" 2>/dev/null; then
     echo "--- boot log ---" >&2
@@ -195,7 +289,19 @@ if ! wait_for_port "$PORT"; then
   cat "$DEV_LOG" >&2
   fail "'$DEV_SCRIPT_NAME' did not bind port $PORT within ${BOOT_TIMEOUT_SECONDS}s"
 fi
-echo "[verify-app] port $PORT is accepting connections"
+
+# The port accepted a connection — but that alone doesn't prove OUR process
+# bound it. If something else grabbed the port in the gap between our
+# pre-launch free-check and the connect, or if DEV_PID bound it and then
+# immediately crashed (e.g. a second EADDRINUSE-triggered exit racing this
+# check), trusting the socket alone would validate an unrelated/dead
+# process. Require the spawned PID to still be alive right now too.
+kill -0 "$DEV_PID" 2>/dev/null || {
+  echo "--- boot log ---" >&2
+  cat "$DEV_LOG" >&2
+  fail "port $PORT is accepting connections but '$DEV_SCRIPT_NAME' (pid $DEV_PID) is no longer running — refusing to validate what is likely a pre-existing, unrelated service on that port"
+}
+echo "[verify-app] port $PORT is accepting connections and '$DEV_SCRIPT_NAME' (pid $DEV_PID) is alive"
 
 # --- Server-only path: no browser check, just confirm it stays up --------
 # "Web" is decided by probing the booted port for an actual HTML response,
@@ -205,7 +311,13 @@ echo "[verify-app] port $PORT is accepting connections"
 IS_WEB=0
 if command -v curl >/dev/null 2>&1; then
   PROBE_BODY="$(mktemp -t quality-verify-app-probe.XXXXXX)"
-  RESPONSE_HEADERS="$(curl -sS -m 5 -o "$PROBE_BODY" -D - "http://127.0.0.1:$PORT/" 2>/dev/null || true)"
+  # -L follows redirects (including bodyless 302s, e.g. a root route that
+  # bounces unauthenticated visitors to /login) so classification is based
+  # on the FINAL response, not an intermediate redirect that has neither an
+  # HTML content-type nor a body. Without -L, a real web app whose root
+  # redirects gets misclassified as "server-only" and browser verification
+  # (and any declared flows) is skipped entirely.
+  RESPONSE_HEADERS="$(curl -sS -L -m 5 -o "$PROBE_BODY" -D - "http://127.0.0.1:$PORT/" 2>/dev/null || true)"
   if printf '%s' "$RESPONSE_HEADERS" | grep -qi '^content-type:.*text/html'; then
     IS_WEB=1
   elif grep -qi '<html' "$PROBE_BODY" 2>/dev/null; then
@@ -235,13 +347,38 @@ ab() { agent-browser --session "$SESSION" "$@"; }
 ab_cleanup() { ab close >/dev/null 2>&1 || true; }
 trap 'ab_cleanup; cleanup' EXIT INT TERM
 
+# agent-browser's own JSON payloads carry a top-level "success" flag and can
+# print a well-formed `{"success":false,"error":...}` body while ALSO
+# exiting non-zero — or, worse, exiting zero with success:false. Blindly
+# parsing `.data.X // []` out of that shape yields an empty array either
+# way, silently turning a genuine diagnostics failure into "zero errors
+# found". This helper requires BOTH a zero exit status AND success==true
+# before the caller is allowed to trust anything under .data; any other
+# combination is treated as a gate failure with the raw output attached so
+# it's actionable rather than silently downgraded to a pass.
+read_ab_diagnostic() {
+  local label="$1"; shift
+  local output status
+  output="$(ab "$@" 2>&1)"
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    fail "agent-browser '$label' exited with status $status: $output"
+  fi
+  local ok
+  ok="$(printf '%s' "$output" | jq -r 'if .success == true then "yes" else "no" end' 2>/dev/null)"
+  if [ "$ok" != "yes" ]; then
+    fail "agent-browser '$label' did not report success — refusing to trust its diagnostics: $output"
+  fi
+  printf '%s' "$output"
+}
+
 echo "[verify-app] loading $BASE_URL"
 if ! run_with_timeout "$PAGE_TIMEOUT_SECONDS" agent-browser --session "$SESSION" open "$BASE_URL"; then
   fail "agent-browser could not load $BASE_URL"
 fi
 ab wait --load networkidle >/dev/null 2>&1 || true
 
-ERRORS_JSON="$(ab errors --json 2>/dev/null)"
+ERRORS_JSON="$(read_ab_diagnostic "errors --json" errors --json)"
 ERROR_COUNT="$(printf '%s' "$ERRORS_JSON" | jq '(.data.errors // []) | length' 2>/dev/null)"
 if [ -z "$ERROR_COUNT" ]; then
   fail "could not parse agent-browser 'errors --json' output: $ERRORS_JSON"
@@ -252,9 +389,12 @@ if [ "$ERROR_COUNT" -gt 0 ]; then
   fail "root page produced $ERROR_COUNT JavaScript error(s) on load"
 fi
 
-CONSOLE_JSON="$(ab console --json 2>/dev/null)"
+CONSOLE_JSON="$(read_ab_diagnostic "console --json" console --json)"
 CONSOLE_ERROR_COUNT="$(printf '%s' "$CONSOLE_JSON" | jq '[(.data.messages // [])[] | select(.type == "error")] | length' 2>/dev/null)"
-if [ -n "$CONSOLE_ERROR_COUNT" ] && [ "$CONSOLE_ERROR_COUNT" -gt 0 ]; then
+if [ -z "$CONSOLE_ERROR_COUNT" ]; then
+  fail "could not parse agent-browser 'console --json' output: $CONSOLE_JSON"
+fi
+if [ "$CONSOLE_ERROR_COUNT" -gt 0 ]; then
   echo "--- console.error output ---" >&2
   printf '%s' "$CONSOLE_JSON" | jq -r '.data.messages[] | select(.type == "error") | "  " + .text' >&2 2>/dev/null || true
   fail "root page logged $CONSOLE_ERROR_COUNT console.error message(s) on load"
@@ -294,13 +434,41 @@ if [ -f "$FLOWS_FILE" ]; then
           const step = cfg.flows[Number(process.argv[2])].steps[Number(process.argv[3])];
           process.stdout.write(JSON.stringify(String(step).split(" ")));
         ' "$FLOWS_FILE" "$flow_index" "$step_index" 2>/dev/null)"
-        readarray -t STEP_ARGS < <(printf '%s' "$STEP_ARGS_JSON" | node -e 'process.stdin.on("data", (d) => JSON.parse(d).forEach((s) => process.stdout.write(s + "\n")))')
+        # Build STEP_ARGS with a plain `for`/`while read` loop rather than
+        # readarray/mapfile: those are Bash-4+ builtins and stock macOS ships
+        # Bash 3.2 (Apple stopped bundling newer bash over the GPLv3
+        # relicense), so readarray would fail before running a single
+        # declared step on a default Mac dev machine.
+        STEP_ARGS=()
+        while IFS= read -r arg; do
+          STEP_ARGS+=("$arg")
+        done < <(printf '%s' "$STEP_ARGS_JSON" | node -e 'process.stdin.on("data", (d) => JSON.parse(d).forEach((s) => process.stdout.write(s + "\n")))')
         if ! ab "${STEP_ARGS[@]}" >/dev/null 2>&1; then
           fail "flow '$FLOW_NAME' step $((step_index + 1)) failed: agent-browser ${STEP_ARGS[*]}"
         fi
+        # Recheck console errors after EVERY step, not just once at the end
+        # of the whole flow: a step that logs console.error without an
+        # uncaught throw would otherwise slip past the end-of-flow-only
+        # `ab errors` check (errors only tracks uncaught exceptions, not
+        # console.error calls), letting a flow that violates the gate's own
+        # "no console errors" invariant report PASSED.
+        STEP_CONSOLE_JSON="$(read_ab_diagnostic "console --json" console --json)"
+        STEP_CONSOLE_ERROR_COUNT="$(printf '%s' "$STEP_CONSOLE_JSON" | jq '[(.data.messages // [])[] | select(.type == "error")] | length' 2>/dev/null)"
+        if [ -z "$STEP_CONSOLE_ERROR_COUNT" ]; then
+          fail "could not parse agent-browser 'console --json' output during flow '$FLOW_NAME' step $((step_index + 1)): $STEP_CONSOLE_JSON"
+        fi
+        if [ "$STEP_CONSOLE_ERROR_COUNT" -gt 0 ]; then
+          echo "--- console.error output ---" >&2
+          printf '%s' "$STEP_CONSOLE_JSON" | jq -r '.data.messages[] | select(.type == "error") | "  " + .text' >&2 2>/dev/null || true
+          fail "flow '$FLOW_NAME' step $((step_index + 1)) logged $STEP_CONSOLE_ERROR_COUNT console.error message(s)"
+        fi
       done
-      FLOW_ERRORS="$(ab errors --json 2>/dev/null | jq '(.data.errors // []) | length' 2>/dev/null)"
-      if [ -n "$FLOW_ERRORS" ] && [ "$FLOW_ERRORS" -gt 0 ]; then
+      FLOW_ERRORS_JSON="$(read_ab_diagnostic "errors --json" errors --json)"
+      FLOW_ERRORS="$(printf '%s' "$FLOW_ERRORS_JSON" | jq '(.data.errors // []) | length' 2>/dev/null)"
+      if [ -z "$FLOW_ERRORS" ]; then
+        fail "could not parse agent-browser 'errors --json' output for flow '$FLOW_NAME': $FLOW_ERRORS_JSON"
+      fi
+      if [ "$FLOW_ERRORS" -gt 0 ]; then
         fail "flow '$FLOW_NAME' produced $FLOW_ERRORS JavaScript error(s)"
       fi
       echo "[verify-app] flow '$FLOW_NAME' passed"
