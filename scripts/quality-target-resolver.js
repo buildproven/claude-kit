@@ -345,6 +345,37 @@ function resolveByPr(parsed, ctx) {
     ? findWorktreeForBranch(pr.headRefName, lookupCwd)
     : null;
   if (wtPath && dirExists(wtPath)) {
+    // findWorktreeForBranch runs `git worktree list` in the CALLER's
+    // ambient cwd (it has no repo to scope to until we find a match), then
+    // matches purely by branch NAME with no repo-identity check at all. If
+    // the caller's shell cwd happens to sit inside a DIFFERENT repo that
+    // also has a worktree checked out on a same-named branch (a realistic
+    // collision: this project's own convention names feature worktrees
+    // after the branch, e.g. "fix/some-name", and that pattern repeats
+    // across every repo using it), this returns that unrelated worktree
+    // with zero warning -- silently auditing and potentially merging the
+    // wrong repository entirely. Verify the found worktree's own origin
+    // remote actually matches the PR's confirmed repo before trusting it.
+    const wtRepo = getRepoForDir ? getRepoForDir(wtPath) : null;
+    if (!expectedRepo && !pr.repo) {
+      // Neither the --target-dir cross-check nor the PR URL could confirm
+      // an expected repo — nothing to verify against, fall through to the
+      // pre-existing behavior rather than block on an unrelated gap.
+    } else if (wtRepo !== (expectedRepo || pr.repo)) {
+      return {
+        ok: false,
+        reason:
+          `Found a local worktree for branch '${pr.headRefName}' at ` +
+          `'${wtPath}', but it belongs to repository ` +
+          `'${wtRepo || "unknown"}', not '${expectedRepo || pr.repo}' ` +
+          `(PR #${parsed.pr}'s actual repo). Refusing to audit a worktree ` +
+          `from a different repository just because its branch name ` +
+          `happens to match — point --target-dir at the correct checkout.`,
+        resolution: "pr",
+        warnings: [],
+        targetPr: parsed.pr,
+      };
+    }
     return {
       ok: true,
       targetPath: wtPath,
