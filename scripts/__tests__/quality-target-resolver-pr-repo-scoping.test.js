@@ -246,6 +246,75 @@ describe("resolveTarget / resolveByPr — cross-repo PR-number collision (BUI-39
     expect(result.reason).toContain("buildproven/claude-setup");
   });
 
+  it("fails closed when findWorktreeForBranch returns a worktree from a different repo (branch-name collision)", () => {
+    // Real bug found live: findWorktreeForBranch runs `git worktree list` in
+    // the CALLER's ambient cwd (it has no repo to scope to until a match is
+    // found) and matches purely by branch NAME, with no repo-identity check
+    // at all. If two different repos both happen to have a worktree checked
+    // out on a same-named branch -- entirely plausible, since this
+    // project's convention names worktrees after their branch -- the wrong
+    // repo's worktree is silently returned with no warning at all, even
+    // though --target-dir and the PR lookup both correctly identified the
+    // intended repo moments earlier.
+    const { getRepoForDir, lookupPr } = makeMockRepos();
+    const parsed = parseArgs([
+      "--pr",
+      "141",
+      "--target-dir",
+      "/repos/claude-kit",
+    ]);
+    const result = resolveTarget(parsed, {
+      cwd: "/somewhere",
+      primaryCheckout: null,
+      // Simulates the caller's shell being cwd'd inside claude-setup (or
+      // any repo) at the moment this ran, so `git worktree list` (no -C
+      // flag) enumerated THAT repo's worktrees and found one on a
+      // same-named branch by coincidence.
+      findWorktreeForBranch: (branch) =>
+        branch === "fix/kit-thing"
+          ? "/worktrees/claude-setup/fix-kit-thing"
+          : null,
+      dirExists: () => true,
+      lookupPr,
+      getRepoForDir: (dir) => {
+        if (dir === "/worktrees/claude-setup/fix-kit-thing") {
+          return "buildproven/claude-setup";
+        }
+        return getRepoForDir(dir);
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.resolution).toBe("pr");
+    expect(result.reason).toMatch(/different repository/i);
+    expect(result.reason).toContain("buildproven/claude-kit");
+    expect(result.reason).toContain("buildproven/claude-setup");
+    expect(result.targetPath).not.toBe("/worktrees/claude-setup/fix-kit-thing");
+  });
+
+  it("still resolves normally when the found worktree's repo matches the PR's repo", () => {
+    const { getRepoForDir, lookupPr } = makeMockRepos();
+    const parsed = parseArgs([
+      "--pr",
+      "141",
+      "--target-dir",
+      "/repos/claude-kit",
+    ]);
+    const result = resolveTarget(parsed, {
+      cwd: "/somewhere",
+      primaryCheckout: null,
+      findWorktreeForBranch: (branch) =>
+        branch === "fix/kit-thing" ? "/repos/claude-kit" : null,
+      dirExists: () => true,
+      lookupPr,
+      getRepoForDir,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.targetPath).toBe("/repos/claude-kit");
+    expect(result.targetBranch).toBe("fix/kit-thing");
+  });
+
   it("scopes the lookupPr call itself with the derived repo (--repo semantics)", () => {
     const { getRepoForDir, dirExists } = makeMockRepos();
     const seenRepos = [];
