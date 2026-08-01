@@ -5237,6 +5237,207 @@ exit 1
     );
   });
 
+  it("does not require mypy for a JS/TS-first repo whose diff never touches .py (BUI-467)", () => {
+    // Reproduces the claude-kit real-world shape: pyproject.toml declares
+    // [tool.mypy] for a handful of scripts/ .py files (committed on the
+    // base branch), but a given PR's diff never touches any .py file. mypy
+    // must not become a required, blocking gate for that PR — it's an
+    // environment dependency (mypy must be installed) unrelated to the
+    // change under review.
+    const root = repo("mypy-not-required-non-python-diff");
+    // repo() leaves the checkout on `feature`, one commit ahead of `main`.
+    // Land pyproject.toml/scripts/helper.py on `main` (the base) so they
+    // are NOT part of the diff being audited, then rebase feature onto it.
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(
+      path.join(root, "pyproject.toml"),
+      "[tool.ruff]\n\n[tool.mypy]\n",
+    );
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(path.join(root, "scripts", "helper.py"), "x = 1\n");
+    git(root, ["add", "pyproject.toml", "scripts/helper.py"]);
+    git(root, ["commit", "-q", "-m", "add Python tooling and a script"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["rebase", "-q", "main"]);
+
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.find((gate) => gate.name === "type")).toBeUndefined();
+  });
+
+  it("still requires mypy when the diff does touch a .py file (BUI-467)", () => {
+    const root = repo("mypy-required-python-diff");
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(
+      path.join(root, "pyproject.toml"),
+      "[tool.ruff]\n\n[tool.mypy]\n",
+    );
+    git(root, ["add", "pyproject.toml"]);
+    git(root, ["commit", "-q", "-m", "add Python tooling"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["rebase", "-q", "main"]);
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(path.join(root, "scripts", "helper.py"), "x = 1\n");
+    git(root, ["add", "scripts/helper.py"]);
+    git(root, ["commit", "-q", "-m", "add a python script"]);
+
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.find((gate) => gate.name === "type")).toMatchObject({
+      source: "python:mypy",
+      executable: "mypy",
+      args: ["."],
+    });
+  });
+
+  it("requires mypy when the diff touches only a .pyi stub (BUI-467)", () => {
+    const root = repo("mypy-required-pyi-diff");
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(
+      path.join(root, "pyproject.toml"),
+      "[tool.ruff]\n\n[tool.mypy]\n",
+    );
+    git(root, ["add", "pyproject.toml"]);
+    git(root, ["commit", "-q", "-m", "add Python tooling"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["rebase", "-q", "main"]);
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(path.join(root, "scripts", "helper.pyi"), "x: int\n");
+    git(root, ["add", "scripts/helper.pyi"]);
+    git(root, ["commit", "-q", "-m", "add a python stub"]);
+
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.find((gate) => gate.name === "type")).toMatchObject({
+      source: "python:mypy",
+    });
+  });
+
+  it("requires mypy when the diff touches a non-ASCII-named .py file (BUI-467)", () => {
+    // Reproduces the review finding: without -z, `git diff --name-only`
+    // quotes non-ASCII filenames by default (core.quotePath), which would
+    // break a plain .endsWith(".py") suffix check.
+    const root = repo("mypy-required-nonascii-diff");
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(
+      path.join(root, "pyproject.toml"),
+      "[tool.ruff]\n\n[tool.mypy]\n",
+    );
+    git(root, ["add", "pyproject.toml"]);
+    git(root, ["commit", "-q", "-m", "add Python tooling"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["rebase", "-q", "main"]);
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(path.join(root, "scripts", "café.py"), "x = 1\n");
+    git(root, ["add", "scripts/café.py"]);
+    git(root, ["commit", "-q", "-m", "add a non-ascii-named python script"]);
+
+    const manifest = create(root);
+    const required = JSON.parse(readFileSync(manifest, "utf8")).requiredGates;
+    expect(required.find((gate) => gate.name === "type")).toMatchObject({
+      source: "python:mypy",
+    });
+  });
+
+  it("does not require mypy for an upstream-only .py change after a rebase (BUI-467)", () => {
+    // Reproduces the rebase-carry review finding: if a rebase-only replay
+    // has happened, the diff check must anchor on the carried live base
+    // (baseRebaseCarry.baseSha), not the stale creation-time baseSha —
+    // otherwise upstream .py commits that landed on main between PR
+    // creation and the rebase leak into the diff and falsely require mypy
+    // for a PR that never touched Python itself.
+    const root = repo("mypy-rebase-carry-upstream-python");
+    const manifestPath = create(root);
+    const originalManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+
+    // Advance main with an unrelated Python change (simulating upstream
+    // activity between PR creation and the eventual rebase).
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(
+      path.join(root, "pyproject.toml"),
+      "[tool.ruff]\n\n[tool.mypy]\n",
+    );
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(path.join(root, "scripts", "upstream.py"), "x = 1\n");
+    git(root, ["add", "pyproject.toml", "scripts/upstream.py"]);
+    git(root, ["commit", "-q", "-m", "upstream adds python tooling"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+
+    // Rebase feature onto the advanced main — a pure replay, no new
+    // content, so this should register as a rebase-only carry.
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["rebase", "-q", "main"]);
+    const rebasedHead = git(root, ["rev-parse", "HEAD"]);
+    const advancedBase = git(root, ["rev-parse", "main"]);
+
+    execFileSync("node", [INVOCATION, "advance", manifestPath], {
+      cwd: root,
+    });
+    const advanced = JSON.parse(readFileSync(manifestPath, "utf8"));
+    // Sanity: the manifest's immutable baseSha is unchanged (still the
+    // original, now-stale value) while a carry was recorded.
+    expect(advanced.revisions.baseSha).toBe(originalManifest.revisions.baseSha);
+    expect(advanced.revisions.baseRebaseCarry?.baseSha).toBe(advancedBase);
+    expect(advanced.revisions.currentHead).toBe(rebasedHead);
+    // The mypy gate must NOT be required: the only .py file in the true
+    // (carried) diff scope belongs to main itself, not to this PR.
+    expect(
+      advanced.requiredGates.find((gate) => gate.name === "type"),
+    ).toBeUndefined();
+  });
+
+  it("drops a stale inferred python:mypy gate on a v2->v3 migration when the diff doesn't touch .py (BUI-467)", () => {
+    // A manifest created under the pre-BUI-467 policy (v2) may already
+    // carry an inferred python:mypy gate. Union-only advance would keep it
+    // forever; the policy-version bump forces a full recompute instead, so
+    // the stale gate is dropped once the diff is re-evaluated under v3.
+    const root = repo("mypy-v2-to-v3-migration");
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(
+      path.join(root, "pyproject.toml"),
+      "[tool.ruff]\n\n[tool.mypy]\n",
+    );
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(path.join(root, "scripts", "helper.py"), "x = 1\n");
+    git(root, ["add", "pyproject.toml", "scripts/helper.py"]);
+    git(root, ["commit", "-q", "-m", "add Python tooling and a script"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["rebase", "-q", "main"]);
+
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    // Simulate a manifest created under the old (v2) policy: inject the
+    // stale mypy gate the old (pre-fix) inference would have added, and
+    // roll the policy version back to 2.
+    manifest.requiredGates.push({
+      name: "type",
+      source: "python:mypy",
+      command: '"mypy" "."',
+      executable: "mypy",
+      args: ["."],
+      allowSkip: false,
+    });
+    manifest.requiredGatesPolicyVersion = 2;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    // A subsequent commit that touches no .py file at all — advance should
+    // trigger the v2->v3 migration and recompute (not union) requiredGates.
+    writeFileSync(path.join(root, "file.js"), "export const value = 3;\n");
+    git(root, ["commit", "-qam", "non-python change"]);
+    execFileSync("node", [INVOCATION, "advance", manifestPath], { cwd: root });
+
+    const migrated = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(migrated.requiredGatesPolicyVersion).toBe(3);
+    expect(
+      migrated.requiredGates.find((gate) => gate.name === "type"),
+    ).toBeUndefined();
+  });
+
   it("binds optional gate evidence to the persisted trusted source and command", () => {
     const root = repo("trusted-gate-runner");
     const marker = path.join(tmpdir(), `quality-build-${process.pid}.marker`);
@@ -5688,7 +5889,7 @@ exit 1
     const root = repo("future-gate-policy");
     const manifestPath = create(root);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    manifest.requiredGatesPolicyVersion = 3;
+    manifest.requiredGatesPolicyVersion = 4;
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     for (const command of ["validate", "advance"]) {
       const result = spawnSync("node", [INVOCATION, command, manifestPath], {
@@ -5743,7 +5944,7 @@ exit 1
 
     execFileSync("node", [INVOCATION, "advance", manifestPath], { cwd: root });
     const migrated = JSON.parse(readFileSync(manifestPath, "utf8"));
-    expect(migrated.requiredGatesPolicyVersion).toBe(2);
+    expect(migrated.requiredGatesPolicyVersion).toBe(3);
     expect(migrated.requiredGates.map((gate) => gate.name)).toEqual([
       "lint",
       "test",
