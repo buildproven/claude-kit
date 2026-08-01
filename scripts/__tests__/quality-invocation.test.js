@@ -923,6 +923,52 @@ process.exit(0);
     }
   }, 30_000);
 
+  it("does not let BS_QUALITY_TARGET_DIR override a literal ~/... path argument (BUI-390)", () => {
+    // Second Codex review finding on the same fix: an UNQUOTED ~/* case
+    // pattern undergoes bash tilde expansion and becomes rooted at $HOME,
+    // so it silently fails to match a literal "~/..." argument string
+    // (as opposed to a shell-expanded absolute path). Passes a literal
+    // ~/-prefixed token (not expanded by the test harness, since it's
+    // passed as a discrete argv entry, not through a shell) to prove the
+    // quoted-tilde pattern in quality-bootstrap.sh actually matches it.
+    const explicitTarget = repo("bootstrap-explicit-tilde-path");
+    const envTarget = repo("bootstrap-env-target-should-be-ignored-tilde");
+    const setupRoot = makeTempDir("quality-fake-setup-root-tilde-path-");
+    const fakeScriptsDir = path.join(setupRoot, "scripts");
+    mkdirSync(fakeScriptsDir, { recursive: true });
+    const observedArgsFile = path.join(setupRoot, "observed-args.json");
+    writeFileSync(
+      path.join(fakeScriptsDir, "quality-target-resolver.js"),
+      `#!/usr/bin/env node
+const idx = process.argv.indexOf("--cli");
+const argv = idx >= 0 ? process.argv.slice(idx + 1) : [];
+require("fs").writeFileSync(${JSON.stringify(observedArgsFile)}, JSON.stringify(argv));
+process.stdout.write(JSON.stringify({ ok: false, reason: "test stub", resolution: "path", warnings: [] }));
+process.exit(0);
+`,
+    );
+    const literalTildeArg = "~/some/literal/tilde/path";
+    spawnSync(
+      "bash",
+      [BOOTSTRAP, "--merge", literalTildeArg, "--level", "auto"],
+      {
+        cwd: explicitTarget,
+        env: {
+          ...process.env,
+          CLAUDE_SETUP_ROOT: setupRoot,
+          BS_QUALITY_TARGET_DIR: envTarget,
+        },
+        encoding: "utf8",
+      },
+    );
+    const observedArgs = JSON.parse(readFileSync(observedArgsFile, "utf8"));
+    expect(observedArgs).toContain(literalTildeArg);
+    const targetDirIdx = observedArgs.indexOf("--target-dir");
+    if (targetDirIdx >= 0) {
+      expect(observedArgs[targetDirIdx + 1]).not.toBe(envTarget);
+    }
+  }, 30_000);
+
   it("anchors worktree materialization to the resolved target, not ambient cwd (BUI-390)", () => {
     // Codex review finding: REPO_ROOT_FOR_WT used `git rev-parse
     // --show-toplevel` unscoped, which resolves against this process's own

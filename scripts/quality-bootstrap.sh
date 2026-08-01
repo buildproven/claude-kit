@@ -118,7 +118,12 @@ for ((argument_index = 0; argument_index < ${#BOOTSTRAP_ARGS[@]}; argument_index
         exit 1
       }
       ;;
-    /*|~/*|./*|../*) EXPLICIT_TARGET=true ;;
+    # "~/"* is deliberately quoted, not bare ~/* — an unquoted tilde in a
+    # case pattern undergoes bash tilde expansion (becomes rooted at $HOME)
+    # and so fails to match a literal "~/..." argument string. Quoting the
+    # tilde forces a literal match instead (same fix as the resolver-path
+    # scanner below, BUI-390 review).
+    /*|"~/"*|./*|../*) EXPLICIT_TARGET=true ;;
     */*)
       EXPLICIT_TARGET=true
       [[ "$argument" =~ ^[A-Za-z][A-Za-z0-9_.-]*/[A-Za-z0-9_./-]+$ ]] || {
@@ -236,7 +241,14 @@ else
       # the env-var-fallback injection below would wrongly override a
       # caller-supplied bare path (BUI-390 review finding), and CWD_INPUT
       # below would miss it too.
-      /*|~/*)
+      #
+      # The pattern's second alternative is deliberately quoted ("~/"*)
+      # rather than bare (~/*): an UNQUOTED ~/* undergoes tilde expansion in
+      # a case pattern and becomes rooted at $HOME, so it silently fails to
+      # match a literal "~/..." argument string (a second Codex review
+      # finding on this same line) — quoting the tilde forces a literal
+      # match instead.
+      /*|"~/"*)
         RESOLVER_SAW_EXPLICIT_PATH=true
         [ -z "$RESOLVER_TARGET_DIR" ] && RESOLVER_TARGET_DIR="$resolver_arg"
         ;;
