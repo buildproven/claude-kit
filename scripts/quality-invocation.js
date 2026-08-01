@@ -2157,6 +2157,31 @@ function authorizeProviderAttempt(manifest, options, manifestPath) {
     throw new Error("provider attempt governor is missing or invalid");
   }
   const hadActiveExecution = governor.activeExecution != null;
+  if (hadActiveExecution) {
+    // Validate BEFORE calling reconcileAbandonedExecution(), not after:
+    // that call mutates governor.activeExecution (clearing it) and credits
+    // gateSecondsUsed/providerSecondsUsed in memory as a side effect. If
+    // this guard ran after reconciling and a caller then caught the thrown
+    // error and retried the SAME manifest object with a manifestPath, the
+    // retry's hadActiveExecution would already read false (this call
+    // already cleared it), so the retry would never detect "a
+    // reconciliation happened" and would skip the persist entirely --
+    // silently losing the reconciliation forever. Refuse to mutate state
+    // we might not be able to persist in the first place (Codex review
+    // finding, 2026-08-01, medium).
+    //
+    // manifestPath is only required when an activeExecution actually
+    // exists to potentially reconcile -- not unconditionally at function
+    // entry -- so a caller with nothing to reconcile (the common case)
+    // isn't forced to supply a path it has no use for (Codex review
+    // finding, 2026-08-01, high: an unconditional entry-point throw was a
+    // broader contract change than the fix required).
+    if (typeof manifestPath !== "string" || manifestPath === "") {
+      throw new Error(
+        "authorizeProviderAttempt requires manifestPath to persist a reconciled execution",
+      );
+    }
+  }
   reconcileAbandonedExecution(manifest);
   if (hadActiveExecution && governor.activeExecution == null) {
     // Same bug as executeGate's gate-budget reconciliation: if the cap
@@ -2164,19 +2189,6 @@ function authorizeProviderAttempt(manifest, options, manifestPath) {
     // operation() call before saveManifest() runs, silently discarding
     // this reconciliation and re-triggering the same false exhaustion on
     // every retry. Persist it now, unconditionally.
-    //
-    // manifestPath is only required here, at the point persistence is
-    // actually needed -- not at function entry -- so a caller with no
-    // reconciliation to persist (the common case) isn't forced to supply
-    // a path it has no use for. Failing loudly here rather than silently
-    // skipping the persist is what actually closes the bug (Codex review
-    // finding, 2026-08-01, high: an unconditional entry-point throw was
-    // a broader contract change than the fix required).
-    if (typeof manifestPath !== "string" || manifestPath === "") {
-      throw new Error(
-        "authorizeProviderAttempt requires manifestPath to persist a reconciled execution",
-      );
-    }
     saveManifestMidTransaction(manifestPath, manifest);
   }
   const currentHead = manifest.revisions.currentHead;
@@ -2245,6 +2257,19 @@ function authorizeMutationAttempt(manifest, options, manifestPath) {
     );
   }
   const hadActiveExecution = manifest.governor.activeExecution != null;
+  if (hadActiveExecution) {
+    // Validate BEFORE reconcileAbandonedExecution() mutates state -- see
+    // authorizeProviderAttempt's identical guard for why: reconciling
+    // first and only then throwing would let a caught-and-retried call
+    // silently lose the reconciliation, since the retry's
+    // hadActiveExecution would already read false (Codex review finding,
+    // 2026-08-01, medium).
+    if (typeof manifestPath !== "string" || manifestPath === "") {
+      throw new Error(
+        "authorizeMutationAttempt requires manifestPath to persist a reconciled execution",
+      );
+    }
+  }
   reconcileAbandonedExecution(manifest);
   if (hadActiveExecution && manifest.governor.activeExecution == null) {
     // Same bug as executeGate's gate-budget reconciliation: if the cap
@@ -2252,15 +2277,6 @@ function authorizeMutationAttempt(manifest, options, manifestPath) {
     // operation() call before saveManifest() runs, silently discarding
     // this reconciliation and re-triggering the same false exhaustion on
     // every retry. Persist it now, unconditionally.
-    //
-    // manifestPath is only required here, at the point persistence is
-    // actually needed -- not at function entry (Codex review finding,
-    // 2026-08-01, high: see authorizeProviderAttempt's identical fix).
-    if (typeof manifestPath !== "string" || manifestPath === "") {
-      throw new Error(
-        "authorizeMutationAttempt requires manifestPath to persist a reconciled execution",
-      );
-    }
     saveManifestMidTransaction(manifestPath, manifest);
   }
   const remaining = executionRemaining(manifest, "gate");

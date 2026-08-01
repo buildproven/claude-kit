@@ -5866,6 +5866,52 @@ exit 1
     ).toThrow(/requires manifestPath/);
   });
 
+  it("authorizeProviderAttempt does not mutate activeExecution before the manifestPath guard can throw", () => {
+    // Regression (Codex review round 4, 2026-08-01, medium): the
+    // manifestPath guard originally ran AFTER reconcileAbandonedExecution()
+    // had already mutated the manifest in memory (clearing activeExecution,
+    // crediting elapsed time). If a caller caught that thrown error and
+    // retried the SAME manifest object with a manifestPath this time, the
+    // retry's hadActiveExecution would already read false -- the first call
+    // already cleared it -- so the retry would never detect "a
+    // reconciliation happened" and would skip the persist entirely,
+    // silently losing the reconciliation forever. The guard must validate
+    // BEFORE any mutation, so a retry with the same object still works.
+    const root = repo("provider-attempt-retry-preserves-reconciliation");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const abandonedExecution = {
+      kind: "provider",
+      name: "codex",
+      startedAt: new Date(Date.now() - 500_000).toISOString(),
+      timeoutSeconds: 60,
+    };
+    manifest.governor.activeExecution = { ...abandonedExecution };
+
+    // First call: no manifestPath, must throw WITHOUT mutating the manifest.
+    expect(() =>
+      invocation.authorizeProviderAttempt(manifest, { provider: "codex" }),
+    ).toThrow(/requires manifestPath/);
+    expect(manifest.governor.activeExecution).toEqual(abandonedExecution);
+
+    // Retry the SAME object, now with manifestPath: must still detect and
+    // persist the reconciliation -- proving no state was silently lost on
+    // the first, failed attempt. (The function then goes on to authorize
+    // and record a brand new provider attempt, which legitimately sets a
+    // fresh activeExecution of its own -- that's the function's actual
+    // job on success, not evidence the reconciliation was skipped.)
+    invocation.authorizeProviderAttempt(
+      manifest,
+      { provider: "codex" },
+      manifestPath,
+    );
+    const persisted = JSON.parse(readFileSync(manifestPath, "utf8"));
+    // The reconciled attempt's elapsed time must have been credited and
+    // durably written -- this is the actual evidence the reconciliation
+    // survived the failed-then-retried call, not lost to the discard bug.
+    expect(persisted.governor.providerSecondsUsed).toBeGreaterThan(0);
+  });
+
   it("authorizeMutationAttempt requires manifestPath only when a reconciliation actually needs persisting", () => {
     const root = repo("mutation-attempt-requires-manifest-path");
     const manifestPath = create(root);
