@@ -5830,6 +5830,32 @@ exit 1
     expect(afterSecond.governor.gateSecondsUsed).toBe(600);
   }, 30_000);
 
+  it("authorizeProviderAttempt requires manifestPath and fails loudly without it", () => {
+    // Regression (Codex review finding, 2026-08-01, medium): the
+    // mid-transaction reconciliation persist was gated on an OPTIONAL
+    // manifestPath parameter (`... && manifestPath`). Any call site that
+    // omitted it would silently skip the persist and reintroduce the exact
+    // discard-on-throw bug this whole fix exists to close, with zero
+    // signal that anything was wrong. manifestPath must be required so a
+    // missing value fails fast and loud instead of quietly regressing.
+    const root = repo("provider-attempt-requires-manifest-path");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(() =>
+      invocation.authorizeProviderAttempt(manifest, { provider: "codex" }),
+    ).toThrow(/requires manifestPath/);
+  });
+
+  it("authorizeMutationAttempt requires manifestPath and fails loudly without it", () => {
+    const root = repo("mutation-attempt-requires-manifest-path");
+    const manifestPath = create(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.risk = { ...manifest.risk, tier: "high" };
+    expect(() => invocation.authorizeMutationAttempt(manifest, {})).toThrow(
+      /requires manifestPath/,
+    );
+  });
+
   it("requires explicit revalidation after lifecycle inactivity", () => {
     const root = repo("lifecycle-stale");
     const manifestPath = create(root);

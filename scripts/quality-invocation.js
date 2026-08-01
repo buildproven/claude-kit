@@ -2136,6 +2136,15 @@ function providerPhaseSeconds(manifest) {
 }
 
 function authorizeProviderAttempt(manifest, options, manifestPath) {
+  if (!manifestPath) {
+    // manifestPath drives saveManifestMidTransaction() below, without which
+    // a reconciled-but-not-yet-saved activeExecution silently reverts to
+    // the exact discard-on-throw bug this persist exists to fix, with no
+    // signal that persistence was skipped. Fail loudly instead of letting
+    // a future/missed call site quietly regress (Codex review finding,
+    // 2026-08-01, medium).
+    throw new Error("authorizeProviderAttempt requires manifestPath");
+  }
   const provider = options.provider;
   if (!["claude", "codex", "gemini"].includes(provider)) {
     throw new Error(`invalid review provider '${provider}'`);
@@ -2158,7 +2167,7 @@ function authorizeProviderAttempt(manifest, options, manifestPath) {
   }
   const hadActiveExecution = governor.activeExecution != null;
   reconcileAbandonedExecution(manifest);
-  if (hadActiveExecution && governor.activeExecution == null && manifestPath) {
+  if (hadActiveExecution && governor.activeExecution == null) {
     // Same bug as executeGate's gate-budget reconciliation: if the cap
     // check below throws, that plain Error propagates out of mutate()'s
     // operation() call before saveManifest() runs, silently discarding
@@ -2219,6 +2228,14 @@ function completeProviderAttempt(manifest, options) {
 }
 
 function authorizeMutationAttempt(manifest, options, manifestPath) {
+  if (!manifestPath) {
+    // See authorizeProviderAttempt's identical guard: manifestPath drives
+    // saveManifestMidTransaction() below, without which reconciliation
+    // silently reverts to the discard-on-throw bug this exists to fix.
+    // Fail loudly rather than quietly regress (Codex review finding,
+    // 2026-08-01, medium).
+    throw new Error("authorizeMutationAttempt requires manifestPath");
+  }
   if (!["high", "critical"].includes(manifest.risk?.tier)) {
     throw new Error(
       "mutation execution is only available for high or critical campaigns",
@@ -2226,11 +2243,7 @@ function authorizeMutationAttempt(manifest, options, manifestPath) {
   }
   const hadActiveExecution = manifest.governor.activeExecution != null;
   reconcileAbandonedExecution(manifest);
-  if (
-    hadActiveExecution &&
-    manifest.governor.activeExecution == null &&
-    manifestPath
-  ) {
+  if (hadActiveExecution && manifest.governor.activeExecution == null) {
     // Same bug as executeGate's gate-budget reconciliation: if the cap
     // check below throws, that plain Error propagates out of mutate()'s
     // operation() call before saveManifest() runs, silently discarding
