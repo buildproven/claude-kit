@@ -188,11 +188,9 @@ fi
 # webpack-dev-server, etc.) don't take an explicit --port/PORT and instead
 # print their own default (5173, 8080, ...) to stdout on boot. Rather than
 # trusting the 3000 guess blindly, wait_for_port below also sniffs DEV_LOG
-# for a "http://.../ :<port>" announcement and for any newly-opened listening
-# TCP port owned by DEV_PID (via lsof, when available) — either of which
-# overrides the guess. This is a best-effort heuristic, not a guarantee: a
-# server that prints nothing and whose listening socket lsof can't attribute
-# to the right PID (e.g. it forks) will still fall back to the guess.
+# for a "http://.../ :<port>" announcement, which overrides the guess. This
+# is a best-effort heuristic, not a guarantee: a server that prints nothing
+# will still fall back to the conventional default.
 PORT_IS_GUESS=0
 if [ -z "$PORT" ]; then
   PORT=3000
@@ -207,17 +205,6 @@ fi
 sniff_port_from_log() {
   grep -oE '(://[^ ]*:|[Pp]ort[[:space:]:]+|[Ll]istening[^0-9]*)[0-9]{2,5}' "$DEV_LOG" 2>/dev/null \
     | grep -oE '[0-9]{2,5}' | tail -1
-}
-
-# Scans for a TCP port newly opened by pid (or a descendant, since many dev
-# servers exec a child) via lsof, when available. Best-effort: silently
-# yields nothing if lsof is missing or the process forks in a way lsof can't
-# attribute.
-sniff_port_from_lsof() {
-  local pid="$1"
-  command -v lsof >/dev/null 2>&1 || return 0
-  lsof -a -p "$pid" -iTCP -sTCP:LISTEN -P -n 2>/dev/null \
-    | grep -oE ':[0-9]{2,5} ' | grep -oE '[0-9]{2,5}' | head -1
 }
 
 port_is_free() {
@@ -269,7 +256,6 @@ if [ "$PORT_IS_GUESS" = "1" ]; then
   for _ in 1 2 3 4 5; do
     sleep 1
     DISCOVERED="$(sniff_port_from_log)"
-    [ -z "$DISCOVERED" ] && DISCOVERED="$(sniff_port_from_lsof "$DEV_PID")"
     [ -n "$DISCOVERED" ] && break
     kill -0 "$DEV_PID" 2>/dev/null || break
   done
