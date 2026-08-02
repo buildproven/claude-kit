@@ -7,6 +7,7 @@ const os = require("os");
 const path = require("path");
 const { execFileSync, spawnSync } = require("child_process");
 const riskScore = require("./risk-score.js");
+const conditionTaxonomy = require("./quality-condition-taxonomy.js");
 
 const SCHEMA_VERSION = 1;
 const EXECUTION_BUDGET_VERSION = 1;
@@ -1948,7 +1949,21 @@ function approvalHeadCarriedByRebase(manifest, approval, root) {
   return approval.patchId === currentPatchId(manifest, root);
 }
 
-function approvalRecordValid(manifest, approval, root) {
+// baseSha binding: an operator-override capability is signed against the
+// exact base it was diagnosed against (BUI-575 requirement 1/4). A normal
+// approval's baseSha is not force-checked byte-for-byte across a legitimate
+// base-rebase carry (recordBaseRebaseCarry already re-anchors trust for that
+// case via headMatches/patch-id), but an override capability is stricter:
+// any base drift at all — including a proven rebase-only replay — requires a
+// fresh, explicit override decision rather than silently carrying forward.
+function approvalBaseMatches(manifest, approval) {
+  return (
+    approval?.scope !== "operator-quality-override" ||
+    approval?.baseSha === manifest.revisions.baseSha
+  );
+}
+
+function approvalRecordIdentityMatches(manifest, approval, root) {
   const headMatches =
     approval?.head === manifest.revisions.currentHead ||
     approvalHeadCarriedByRebase(manifest, approval, root);
@@ -1957,18 +1972,29 @@ function approvalRecordValid(manifest, approval, root) {
     pr: manifest.repo.pr,
     invocationId: manifest.invocationId,
   };
-  const identityMatches =
+  return (
     headMatches &&
-    Object.entries(expected).every(([key, value]) => approval?.[key] === value);
+    approvalBaseMatches(manifest, approval) &&
+    Object.entries(expected).every(([key, value]) => approval?.[key] === value)
+  );
+}
+
+function approvalArtifactIntact(approval) {
   return Boolean(
-    approval?.approved === true &&
-    identityMatches &&
-    typeof approval.approver === "string" &&
-    approval.approver.trim() !== "" &&
-    Date.parse(approval.expiresAt) > Date.now() &&
     approval.artifactPath &&
     fs.existsSync(approval.artifactPath) &&
     sha256File(approval.artifactPath) === approval.artifactSha256,
+  );
+}
+
+function approvalRecordValid(manifest, approval, root) {
+  return Boolean(
+    approval?.approved === true &&
+    approvalRecordIdentityMatches(manifest, approval, root) &&
+    typeof approval.approver === "string" &&
+    approval.approver.trim() !== "" &&
+    Date.parse(approval.expiresAt) > Date.now() &&
+    approvalArtifactIntact(approval),
   );
 }
 
@@ -1989,6 +2015,42 @@ function capabilitySignatureValid(manifest, artifact) {
   );
 }
 
+// The signed payload always names the head that was actually reviewed and
+// signed (approval.head), never currentHead directly — a rebase never
+// re-signs. approvalRecordValid() is what proves approval.head is either
+// literally currentHead, or a prior head whose patch-id equals currentHead's
+// patch-id right now (rebase-only replay). An operator override's
+// accepted-condition list is part of what was signed; the attached approval
+// record must echo it exactly, so a capability minted for one diagnosed
+// condition set can never be silently reused as authorization for a
+// different one.
+function approvalPayloadCoreIdentityMatches(manifest, approval, payload) {
+  return (
+    payload?.repoKey === manifest.repo.key &&
+    payload?.pr === manifest.repo.pr &&
+    payload?.head === approval.head &&
+    payload?.invocationId === manifest.invocationId &&
+    payload?.approver === approval.approver &&
+    payload?.expiresAt === approval.expiresAt
+  );
+}
+
+function approvalPayloadScopeAndConditionsMatch(approval, payload) {
+  const scopeMatches =
+    (payload?.scope || "standard") === (approval.scope || "standard");
+  const conditionsMatch =
+    JSON.stringify(payload?.acceptedConditions || []) ===
+    JSON.stringify(approval.acceptedConditions || []);
+  return scopeMatches && conditionsMatch;
+}
+
+function approvalPayloadIdentityMatches(manifest, approval, payload) {
+  return (
+    approvalPayloadCoreIdentityMatches(manifest, approval, payload) &&
+    approvalPayloadScopeAndConditionsMatch(approval, payload)
+  );
+}
+
 function approvalValid(manifest, root) {
   const approval = manifest.approval;
   if (!approvalRecordValid(manifest, approval, root)) return false;
@@ -1998,20 +2060,10 @@ function approvalValid(manifest, root) {
       "approval capability",
     );
     const payload = artifact.payload;
-    // The signed payload always names the head that was actually reviewed
-    // and signed (approval.head), never currentHead directly — a rebase
-    // never re-signs. approvalRecordValid() is what proves approval.head is
-    // either literally currentHead, or a prior head whose patch-id equals
-    // currentHead's patch-id right now (rebase-only replay).
-    const identityMatches =
-      payload?.repoKey === manifest.repo.key &&
-      payload?.pr === manifest.repo.pr &&
-      payload?.head === approval.head &&
-      payload?.invocationId === manifest.invocationId &&
-      payload?.approver === approval.approver &&
-      payload?.expiresAt === approval.expiresAt &&
-      (payload?.scope || "standard") === (approval.scope || "standard");
-    return identityMatches && capabilitySignatureValid(manifest, artifact);
+    return (
+      approvalPayloadIdentityMatches(manifest, approval, payload) &&
+      capabilitySignatureValid(manifest, artifact)
+    );
   } catch {
     return false;
   }
@@ -2033,6 +2085,44 @@ function validateApprovalPayload(payload) {
   }
 }
 
+function assertApprovalChallengeMatches(manifest, payload) {
+  const digestMatches =
+    typeof payload?.challenge === "string" &&
+    crypto.createHash("sha256").update(payload.challenge).digest("hex") ===
+      manifest.approvalChallengeSha256;
+  if (!manifest.approvalChallengeSha256 || !digestMatches) {
+    throw new Error("approval capability outer-wrapper challenge mismatch");
+  }
+}
+
+function assertApprovalRequiredIdentityMatches(payload, requiredIdentity) {
+  for (const [key, value] of Object.entries(requiredIdentity)) {
+    if (payload?.[key] !== value) {
+      throw new Error(`approval capability ${key} identity mismatch`);
+    }
+  }
+}
+
+// An operator-override capability's signed payload must carry a non-empty
+// reason and a non-empty list of accepted condition ids — this is what makes
+// the attached approval an accountable, named decision rather than a blanket
+// bypass (BUI-575). A standard (non-override) payload is unaffected.
+function assertOverridePayloadShape(payload) {
+  if (payload?.scope !== "operator-quality-override") return;
+  if (typeof payload.reason !== "string" || payload.reason.trim() === "") {
+    throw new Error("operator override capability is missing --reason");
+  }
+  const validAcceptedConditions =
+    Array.isArray(payload.acceptedConditions) &&
+    payload.acceptedConditions.length > 0 &&
+    payload.acceptedConditions.every((id) => typeof id === "string");
+  if (!validAcceptedConditions) {
+    throw new Error(
+      "operator override capability is missing accepted condition ids",
+    );
+  }
+}
+
 function attachApproval(manifest, options) {
   if (!options.artifact) {
     throw new Error("approval attachment requires --artifact");
@@ -2051,21 +2141,12 @@ function attachApproval(manifest, options) {
     repoKey: manifest.repo.key,
     pr: manifest.repo.pr,
     head: manifest.revisions.currentHead,
+    baseSha: manifest.revisions.baseSha,
     invocationId: manifest.invocationId,
   };
-  if (
-    !manifest.approvalChallengeSha256 ||
-    typeof payload?.challenge !== "string" ||
-    crypto.createHash("sha256").update(payload.challenge).digest("hex") !==
-      manifest.approvalChallengeSha256
-  ) {
-    throw new Error("approval capability outer-wrapper challenge mismatch");
-  }
-  for (const [key, value] of Object.entries(requiredIdentity)) {
-    if (payload?.[key] !== value) {
-      throw new Error(`approval capability ${key} identity mismatch`);
-    }
-  }
+  assertApprovalChallengeMatches(manifest, payload);
+  assertApprovalRequiredIdentityMatches(payload, requiredIdentity);
+  assertOverridePayloadShape(payload);
   validateApprovalPayload(payload);
   if (!capabilitySignatureValid(manifest, artifact)) {
     throw new Error("approval capability signature is invalid");
@@ -2078,6 +2159,10 @@ function attachApproval(manifest, options) {
     expiresAt: payload.expiresAt,
     source: "outer-wrapper-capability",
     scope: payload.scope || "standard",
+    reason: payload.reason || null,
+    acceptedConditions: Array.isArray(payload.acceptedConditions)
+      ? payload.acceptedConditions
+      : [],
     artifactPath,
     artifactSha256: sha256File(artifactPath),
     // Patch-id of the reviewed diff at approval time, cached so a later
@@ -3481,7 +3566,10 @@ function validTestGate(manifest, gate) {
   );
 }
 
-function verifyGateEvidence(manifest) {
+// acceptedConditions is only ever non-empty on the operator-override path
+// (see reviewAuthorization); the normal path always calls this with no
+// arguments, so a caller cannot widen the normal merge path by accident.
+function verifyGateEvidence(manifest, acceptedConditions = []) {
   const current = manifest.gates.filter(
     (gate) => gate.head === manifest.revisions.currentHead,
   );
@@ -3493,7 +3581,7 @@ function verifyGateEvidence(manifest) {
         : gate?.status === "success" &&
           gateMatchesRequirement(gate, required) &&
           validGateArtifact(gate);
-    if (!valid) {
+    if (!valid && !acceptedConditions.includes(`gate:${required.name}`)) {
       throw new Error(
         `required ${required.name} gate evidence is missing or stale`,
       );
@@ -3580,8 +3668,9 @@ function mutationEvidenceValid(manifest, options = {}) {
   }
 }
 
-function assertMutationEvidence(manifest) {
+function assertMutationEvidence(manifest, acceptedConditions = []) {
   if (mutationEvidenceValid(manifest)) return;
+  if (acceptedConditions.includes("mutation:missing")) return;
   throw new Error(
     "required high/critical mutation evidence is missing, stale, or invalid",
   );
@@ -3616,6 +3705,13 @@ function recordMutation(manifest, options) {
   };
 }
 
+// A trailer value can never contain a newline (git-interpret-trailers reads
+// one logical value per line); reason text is operator-authored free text, so
+// collapse any embedded newlines/CR before it ever reaches a commit message.
+function singleLineTrailerValue(value) {
+  return String(value).replace(/\r?\n/g, " ").trim();
+}
+
 function reviewTrailers(manifest) {
   const authorization = reviewAuthorization(manifest);
   return [
@@ -3628,43 +3724,58 @@ function reviewTrailers(manifest) {
     `Quality-Findings: ${authorization.blockingCount}`,
     `Quality-Head: ${authorization.head}`,
     `Quality-Base: ${authorization.base}`,
+    // Operator-override merges must never look like a clean auto-merge:
+    // these trailers are additive to (never a replacement for) the evidence
+    // trailers above, so the original gate/review/CI status the operator
+    // accepted stays visible and reconstructable from the persisted manifest
+    // and its artifacts (BUI-575 requirement 6).
     ...(authorization.operatorOverride
-      ? ["Quality-Override: operator-quality-override"]
+      ? [
+          "Quality-Override: operator-quality-override",
+          `Quality-Override-Reason: ${singleLineTrailerValue(authorization.overrideReason || "")}`,
+          `Quality-Override-Accepted: ${(authorization.overrideAcceptedConditions || []).join(",")}`,
+          `Quality-Override-Approver: ${singleLineTrailerValue(authorization.overrideApprover || "")}`,
+        ]
       : []),
   ].join("\n");
 }
 
-function reviewAuthorization(manifest) {
-  // This is the authoritative provider-neutral merge evidence boundary. Repeat
-  // the strength assertion here so a caller cannot bypass resume/advance and
-  // authorize review artifacts produced under a stale, weaker risk contract.
-  assertCurrentReviewStrength(manifest, manifest.repo.realpath);
-  if (
+// This is a deliberate, narrow operator decision bound to the exact
+// condition ids the capability was signed against
+// (manifest.approval.acceptedConditions). Deterministic gate and mutation
+// evidence still gate the merge UNLESS the specific failing gate/mutation
+// condition id was explicitly accepted — an override never silently widens
+// beyond what the operator named. PR identity/freshness and CI still run in
+// the merge scripts regardless of what was accepted here.
+function operatorOverrideAuthorization(manifest) {
+  const acceptedConditions = manifest.approval.acceptedConditions || [];
+  verifyGateEvidence(manifest, acceptedConditions);
+  if (["high", "critical"].includes(manifest.risk?.tier)) {
+    assertMutationEvidence(manifest, acceptedConditions);
+  }
+  return {
+    base: manifest.revisions.baseSha,
+    head: manifest.revisions.currentHead,
+    provider: "operator-quality-override",
+    primary: "unavailable",
+    fallback: "unavailable",
+    tier: manifest.risk.tier,
+    blockingCount: 0,
+    operatorOverride: true,
+    overrideReason: manifest.approval.reason,
+    overrideAcceptedConditions: acceptedConditions,
+    overrideApprover: manifest.approval.approver,
+  };
+}
+
+function isOperatorOverrideActive(manifest) {
+  return (
     approvalValid(manifest, manifest.repo.realpath) &&
     manifest.approval?.scope === "operator-quality-override"
-  ) {
-    // This is a deliberately narrow operator decision: deterministic gates,
-    // PR identity/freshness, and CI still run in the merge scripts. It exists
-    // for a human to accept unavailable or malformed provider-review evidence
-    // without manufacturing a clean AI review or weakening the normal path.
-    verifyGateEvidence(manifest);
-    return {
-      base: manifest.revisions.baseSha,
-      head: manifest.revisions.currentHead,
-      provider: "operator-quality-override",
-      primary: "unavailable",
-      fallback: "unavailable",
-      tier: manifest.risk.tier,
-      blockingCount: 0,
-      operatorOverride: true,
-    };
-  }
-  const authorization = reviewCoverage(manifest);
-  const covered = coveredReviews(manifest);
-  const evidenceSha256 = crypto
-    .createHash("sha256")
-    .update(reviewedEvidence(manifest))
-    .digest("hex");
+  );
+}
+
+function assertJudgeResultFresh(manifest, covered, evidenceSha256) {
   if (
     manifest.judge?.head !== manifest.revisions.currentHead ||
     manifest.judge?.reviewCount !== covered.length ||
@@ -3674,6 +3785,44 @@ function reviewAuthorization(manifest) {
       "judge result is missing, stale, or not bound to review evidence",
     );
   }
+}
+
+function assertPersistedJudgeArtifactIntact(
+  manifest,
+  judgeArtifact,
+  covered,
+  evidenceSha256,
+  persistedBlockingCount,
+) {
+  const artifactMatches =
+    sha256File(manifest.judge.artifactPath) === manifest.judge.artifactSha256 &&
+    judgeArtifact.head === manifest.revisions.currentHead &&
+    judgeArtifact.invocationId === manifest.invocationId &&
+    judgeArtifact.repositoryKey === manifest.repo.key;
+  const coverageMatches =
+    judgeArtifact.reviewCount === covered.length &&
+    judgeArtifact.evidenceSha256 === evidenceSha256 &&
+    persistedBlockingCount === manifest.judge.blockingCount;
+  if (!artifactMatches || !coverageMatches) {
+    throw new Error("persisted judge artifact is stale or has been modified");
+  }
+}
+
+function reviewAuthorization(manifest) {
+  // This is the authoritative provider-neutral merge evidence boundary. Repeat
+  // the strength assertion here so a caller cannot bypass resume/advance and
+  // authorize review artifacts produced under a stale, weaker risk contract.
+  assertCurrentReviewStrength(manifest, manifest.repo.realpath);
+  if (isOperatorOverrideActive(manifest)) {
+    return operatorOverrideAuthorization(manifest);
+  }
+  const authorization = reviewCoverage(manifest);
+  const covered = coveredReviews(manifest);
+  const evidenceSha256 = crypto
+    .createHash("sha256")
+    .update(reviewedEvidence(manifest))
+    .digest("hex");
+  assertJudgeResultFresh(manifest, covered, evidenceSha256);
   const judgeArtifact = parseJson(
     fs.readFileSync(manifest.judge.artifactPath, "utf8"),
     "persisted judge artifact",
@@ -3681,17 +3830,13 @@ function reviewAuthorization(manifest) {
   const persistedBlockingCount = judgeArtifact.findings.filter(
     (finding) => finding.disposition === "BLOCKING",
   ).length;
-  if (
-    sha256File(manifest.judge.artifactPath) !== manifest.judge.artifactSha256 ||
-    judgeArtifact.head !== manifest.revisions.currentHead ||
-    judgeArtifact.invocationId !== manifest.invocationId ||
-    judgeArtifact.repositoryKey !== manifest.repo.key ||
-    judgeArtifact.reviewCount !== covered.length ||
-    judgeArtifact.evidenceSha256 !== evidenceSha256 ||
-    persistedBlockingCount !== manifest.judge.blockingCount
-  ) {
-    throw new Error("persisted judge artifact is stale or has been modified");
-  }
+  assertPersistedJudgeArtifactIntact(
+    manifest,
+    judgeArtifact,
+    covered,
+    evidenceSha256,
+    persistedBlockingCount,
+  );
   if (manifest.judge.blockingCount !== 0) {
     throw new Error(
       `${manifest.judge.blockingCount} unresolved BLOCKING finding(s)`,
@@ -3981,6 +4126,14 @@ const COMMANDS = {
     ),
   trailers: ({ manifest }) =>
     process.stdout.write(`${reviewTrailers(manifest)}\n`),
+  // Read-only enumeration of every currently diagnosed terminal condition
+  // for this exact manifest/HEAD, by stable id (BUI-575). This is what an
+  // operator (or the wrapper, before minting an override capability) reads
+  // to know exactly which --accept ids are required. It never mutates state.
+  "diagnose-conditions": ({ manifest }) =>
+    process.stdout.write(
+      `${JSON.stringify(conditionTaxonomy.diagnoseConditions(manifest, {}))}\n`,
+    ),
 };
 
 function runAdvance(manifestArg, manifest, rawArgs) {

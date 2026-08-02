@@ -99,8 +99,19 @@ if [ "$STAMP_PROVIDER" = "operator-quality-override" ]; then
     echo "operator override evidence is missing its override trailer" >&2
     exit 1
   }
-elif printf '%s\n' "$PARSED" | grep -q '^Quality-Override: '; then
-  echo "non-override evidence must not carry Quality-Override" >&2
+  for key in Quality-Override-Reason Quality-Override-Accepted Quality-Override-Approver; do
+    [ "$(printf '%s\n' "$PARSED" | grep -c "^${key}: ")" -eq 1 ] || {
+      echo "operator override evidence is missing or duplicating ${key}" >&2
+      exit 1
+    }
+  done
+  STAMP_OVERRIDE_ACCEPTED="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Override-Accepted: //p' | head -1)"
+  [ -n "$STAMP_OVERRIDE_ACCEPTED" ] || {
+    echo "operator override evidence has an empty accepted-conditions list" >&2
+    exit 1
+  }
+elif printf '%s\n' "$PARSED" | grep -q '^Quality-Override'; then
+  echo "non-override evidence must not carry Quality-Override trailers" >&2
   exit 1
 fi
 
