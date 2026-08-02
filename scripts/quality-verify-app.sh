@@ -344,8 +344,16 @@ BASE_URL="http://127.0.0.1:$PORT"
 
 ab() { agent-browser --session "$SESSION" "$@"; }
 
-ab_cleanup() { ab close >/dev/null 2>&1 || true; }
-trap 'ab_cleanup; cleanup' EXIT INT TERM
+# `agent-browser close` can itself block while its daemon is shutting down.
+# Cleanup must never turn a completed verification into an indefinitely hung
+# quality gate, so bound it just like the page load.  The browser session is
+# disposable and the app-process cleanup still runs after a timed-out close.
+ab_cleanup() {
+  run_with_timeout 5 agent-browser --session "$SESSION" close >/dev/null 2>&1 || true
+}
+# Release the application first: browser teardown can block on a wedged
+# daemon, and the dev server must never be left listening while that happens.
+trap 'cleanup; ab_cleanup' EXIT INT TERM
 
 # agent-browser's own JSON payloads carry a top-level "success" flag and can
 # print a well-formed `{"success":false,"error":...}` body while ALSO

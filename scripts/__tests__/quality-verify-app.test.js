@@ -553,7 +553,7 @@ describe("quality-verify-app.sh", () => {
           );
           expect(stderr).not.toMatch(/readarray: command not found/);
           expect(stderr).not.toMatch(/mapfile: command not found/);
-          expect(status).toBe(0);
+          expect(status, stderr).toBe(0);
           expect(stdout).toMatch(/flow 'noop' passed/);
         },
       );
