@@ -12,7 +12,7 @@ const path = require("node:path");
 
 const SCRIPT = path.resolve(__dirname, "..", "quality-bootstrap.sh");
 
-function run(args, { env } = {}) {
+function run(args, { env, cwd } = {}) {
   const errFile = path.join(
     os.tmpdir(),
     `qbg-err-${process.pid}-${Math.random().toString(36).slice(2)}`,
@@ -20,6 +20,7 @@ function run(args, { env } = {}) {
   try {
     const stdout = execFileSync("bash", [SCRIPT, ...args], {
       env: { ...process.env, ...env },
+      cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", fs.openSync(errFile, "w")],
     });
@@ -109,5 +110,33 @@ describe("quality-bootstrap explicit-target crash guard (BUI-401)", () => {
   it("preserves spaces in the primary checkout path", () => {
     const source = fs.readFileSync(SCRIPT, "utf8");
     expect(source).toContain("p=substr($0, 10)");
+  });
+});
+
+describe("BUI-306: --verify-app argument wiring", () => {
+  it("accepts --verify-app as a recognized bare boolean flag (not rejected by the argument grammar)", () => {
+    // Runs from a directory with no git repo: the flag must pass the
+    // argument-grammar allowlist (Step -1, before any git/GitHub call) and
+    // fail later on git-root resolution — never on "unexpected quality
+    // argument". This is the same shape as --skip-tests, which has no direct
+    // test either; the happy-path discovery is covered by
+    // quality-invocation.test.js's "BUI-306" cases.
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "qbg-verify-app-"));
+    try {
+      const r = run(["--verify-app"], { cwd });
+      expect(r.stderr).not.toMatch(/unexpected quality argument/i);
+      expect(r.code).not.toBe(0);
+      expect(r.stdout + r.stderr).toMatch(/could not resolve a git root/i);
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("forwards --verify-app to the create invocation only when passed", () => {
+    const source = fs.readFileSync(SCRIPT, "utf8");
+    expect(source).toContain(
+      '[ "$VERIFY_APP" = true ] && CREATE_ARGS+=(--verify-app)',
+    );
+    expect(source).toContain("--verify-app) VERIFY_APP=true ;;");
   });
 });

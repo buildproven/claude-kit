@@ -81,7 +81,7 @@ EXPLICIT_TARGET=false
 for ((argument_index = 0; argument_index < ${#BOOTSTRAP_ARGS[@]}; argument_index += 1)); do
   argument="${BOOTSTRAP_ARGS[$argument_index]}"
   case "$argument" in
-    --merge|--merge=true|--skip-tests) ;;
+    --merge|--merge=true|--skip-tests|--verify-app) ;;
     --merge=*)
       echo "❌ --merge accepts only the bare flag or --merge=true" >&2
       exit 1
@@ -518,6 +518,7 @@ done
 LEVEL_ARG=auto
 SCOPE_ARG=branch
 SKIP_TESTS=false
+VERIFY_APP=false
 REVIEW_ARM_ARG=""
 previous=""
 for argument in "$@"; do
@@ -534,6 +535,7 @@ for argument in "$@"; do
     --review-arm) previous="--review-arm" ;;
     --review-arm=*) REVIEW_ARM_ARG="${argument#*=}" ;;
     --skip-tests) SKIP_TESTS=true ;;
+    --verify-app) VERIFY_APP=true ;;
   esac
 done
 
@@ -573,6 +575,7 @@ BASE_HEAD_SHA_ARG="${FRESH_BASE_OID:-${PR_BASE_OID:-}}"
 [ -n "$BASE_HEAD_SHA_ARG" ] && CREATE_ARGS+=(--base-head-sha "$BASE_HEAD_SHA_ARG")
 [ "$ARGS_MERGE" = true ] && CREATE_ARGS+=(--merge)
 [ "$SKIP_TESTS" = true ] && CREATE_ARGS+=(--skip-tests)
+[ "$VERIFY_APP" = true ] && CREATE_ARGS+=(--verify-app)
 [ -n "${RES_PR:-}" ] && CREATE_ARGS+=(--pr "$RES_PR")
 if [ -n "${RES_PR:-}" ]; then
   GITHUB_REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
