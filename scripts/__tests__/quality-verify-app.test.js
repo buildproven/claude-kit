@@ -130,7 +130,7 @@ describe("quality-verify-app.sh", () => {
     });
     fs.writeFileSync(
       path.join(dir, "bin", "cli.js"),
-      '#!/usr/bin/env node\nsetTimeout(() => {}, 300000);\n',
+      "#!/usr/bin/env node\nsetTimeout(() => {}, 300000);\n",
     );
     const started = Date.now();
     const { status, stderr } = run(dir, {
