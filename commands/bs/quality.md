@@ -1,7 +1,7 @@
 ---
 name: bs:quality
 description: Autonomous quality loop with configurable thoroughness. Runs checks, revision-bound review, remediation, CI, and optional merge.
-argument-hint: "[status --manifest <path>] [--level auto|95|98] [--scope branch] [--review-arm native|bespoke] [--merge] [--pr <number>] [--manifest <path>] [--target-dir <path>]"
+argument-hint: "[status --manifest <path>] [--level auto|95|98] [--scope branch] [--review-arm native|bespoke] [--verify-app] [--merge] [--pr <number>] [--manifest <path>] [--target-dir <path>]"
 tags: [quality, ci, review]
 category: quality
 ---
@@ -80,6 +80,24 @@ arm and actual reviewer are recorded separately, so a fallback stays visible
 without relabeling the experiment treatment. Without this flag, ordinary
 provider policy remains unchanged and telemetry infers the received arm from
 the actual reviewer.
+
+`--verify-app` (BUI-306) is opt-in only — never enabled by default. Every
+other gate (lint/type/build/test/security) proves the code compiles and its
+unit tests pass; none of them boot the app. This flag adds a `verify-app`
+required gate that actually boots it: it detects the project's runtime shape
+(web / server / CLI / library) from `package.json`, boots the dev server or
+binary within a bounded timeout, and for a web project drives a real headless
+browser (`agent-browser`) to load the root page and assert zero JavaScript
+errors and zero `console.error` output. A library with no runnable
+entrypoint records a clean pass with a "not applicable" note rather than
+failing or being silently skipped. Boot cost and environmental flakiness are
+real (cold caches, port contention, a slow-starting dev server), which is why
+this stays opt-in rather than a default gate — use it on PRs that touch
+runtime-affecting code (bootstrap, routing, top-level providers) where
+"compiles and unit-tests pass" is not enough evidence that the app still
+starts. A repo can declare 1-2 richer critical flows in
+`.quality-app-flows.json` (see `scripts/quality-verify-app.sh`); the
+zero-config baseline requires no repo opt-in beyond this flag.
 
 Repositories that explicitly set `scorePolicy.mergeAuthority` to
 `"human-required"` retain the legacy signed break-glass capability. The

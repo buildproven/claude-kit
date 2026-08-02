@@ -83,8 +83,9 @@ is a persisted-policy invocation, never a caller-supplied command.
 ```bash
 QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
 [ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
-# Names must be present in requiredGates.
-for name in lint type test build security consumer; do
+# Names must be present in requiredGates. verify-app only appears when the
+# caller passed --verify-app (BUI-306); every other name is unconditional.
+for name in lint type test build security consumer verify-app; do
   bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
     --manifest "<exact-manifest-path>" --name "$name"
 done
@@ -94,7 +95,9 @@ The runner skips categories not required by the manifest. A config-only
 repository may use `--name test --skip --reason "<recorded reason>"` only when
 the manifest authorizes `options.skipTests`. Supported gate names and native
 `.quality-gates.json` policy are in `reference.md`; shell strings and unknown
-fields fail closed.
+fields fail closed. `verify-app` boots the app and, for a web project, drives
+`agent-browser` against it — see `reference.md` for its opt-in flag and
+detection rules.
 
 High/critical campaigns require the bounded detached-worktree mutation check
 after the recorded test gate succeeds. It must never modify the reviewed checkout.

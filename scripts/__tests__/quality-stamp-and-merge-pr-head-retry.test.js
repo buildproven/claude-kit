@@ -1,5 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { makeTempDir } from "./helpers/tmp.js";
@@ -34,7 +40,7 @@ function harness(ghBody) {
   return { root, bin };
 }
 
-function runRetryLoop({ bin, stampHead, pr, repository, countFile }) {
+function runRetryLoop({ bin, stampHead, pr, repository, countFile, env }) {
   const script = [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
@@ -50,6 +56,7 @@ function runRetryLoop({ bin, stampHead, pr, repository, countFile }) {
       PATH: `${bin}:${process.env.PATH}`,
       QUALITY_STAMP_PR_HEAD_RETRY_DELAY: "0",
       QUALITY_TEST_COUNT_FILE: countFile ?? "",
+      ...env,
     },
     encoding: "utf8",
   });
@@ -202,5 +209,119 @@ exit 1
     // 3 attempts total (PR_HEAD_RETRIES default), one gh call each — not 2x.
     expect(readFileSync(countFile, "utf8").trim()).toBe("3");
     expect(result.stderr).toContain("rate limit exceeded");
+  });
+
+  it.each([
+    // Note: an EMPTY env var value is intentionally excluded — bash's
+    // ${VAR:-default} treats unset and empty identically, so an empty
+    // QUALITY_STAMP_PR_HEAD_RETRIES legitimately falls back to the
+    // default (3), not an error.
+    ["not-a-number", "QUALITY_STAMP_PR_HEAD_RETRIES"],
+    ["-1", "QUALITY_STAMP_PR_HEAD_RETRIES"],
+    ["0", "QUALITY_STAMP_PR_HEAD_RETRIES"],
+  ])(
+    "fails closed with a clean MERGE BLOCKED message on invalid QUALITY_STAMP_PR_HEAD_RETRIES=%s (BUI-466)",
+    (value) => {
+      const { bin } = harness(`echo "matching000000000000000000000000000000"`);
+      const result = runRetryLoop({
+        bin,
+        stampHead: "matching000000000000000000000000000000",
+        pr: "42",
+        repository: "buildproven/claude-kit",
+        env: { QUALITY_STAMP_PR_HEAD_RETRIES: value },
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "MERGE BLOCKED: QUALITY_STAMP_PR_HEAD_RETRIES must be",
+      );
+      // Must not leak a raw bash arithmetic/comparison error instead of the
+      // clean validation message.
+      expect(result.stderr).not.toMatch(/integer expression expected/);
+    },
+  );
+
+  it.each(["not-a-number", "-1"])(
+    "fails closed with a clean MERGE BLOCKED message on invalid QUALITY_STAMP_PR_HEAD_RETRY_DELAY=%s (BUI-466)",
+    (value) => {
+      const { bin } = harness(`echo "matching000000000000000000000000000000"`);
+      const result = runRetryLoop({
+        bin,
+        stampHead: "matching000000000000000000000000000000",
+        pr: "42",
+        repository: "buildproven/claude-kit",
+        env: { QUALITY_STAMP_PR_HEAD_RETRY_DELAY: value },
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "MERGE BLOCKED: QUALITY_STAMP_PR_HEAD_RETRY_DELAY must be",
+      );
+      expect(result.stderr).not.toMatch(/integer expression expected/);
+    },
+  );
+
+  it("does not reference an empty $PR_HEAD in the retry log when gh itself failed (BUI-466)", () => {
+    // Before the fix, a failed gh call still logged "PR HEAD mismatch (got
+    // , want ...)" — confusing, since PR_HEAD is empty because gh failed,
+    // not because a real SHA was read and didn't match.
+    const { bin } = harness(`
+COUNT_FILE="\${QUALITY_TEST_COUNT_FILE}"
+count=0
+[ -f "$COUNT_FILE" ] && count=$(cat "$COUNT_FILE")
+count=$((count + 1))
+echo "$count" > "$COUNT_FILE"
+if [ "$count" -lt 2 ]; then
+  echo "gh: rate limit exceeded" >&2
+  exit 1
+else
+  echo "matching000000000000000000000000000000"
+fi
+`);
+    const countFile = path.join(bin, "..", "count");
+    const result = runRetryLoop({
+      bin,
+      stampHead: "matching000000000000000000000000000000",
+      pr: "42",
+      repository: "buildproven/claude-kit",
+      countFile,
+    });
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("PR HEAD mismatch on attempt 1");
+    expect(result.stderr).not.toMatch(/got\s*,\s*want/);
+    expect(result.stderr).toContain(
+      "retrying in 0s after the gh pr view failure above",
+    );
+  });
+
+  it("cleans up PR_HEAD_ERR_FILE even when the script exits early via set -e (BUI-466)", () => {
+    // Reproduces the real risk: an unrelated command AFTER the retry loop
+    // (but before the loop's own `rm -f` would otherwise run again) fails
+    // under `set -e` and exits the whole script. Runs the extracted retry
+    // loop followed by a deliberately failing command, then asserts the
+    // temp file the loop created does not survive the early exit — only
+    // the EXIT trap can guarantee that, since the loop's own end-of-block
+    // `rm -f` never executes on this path.
+    const { bin } = harness(`echo "matching000000000000000000000000000000"`);
+    const observeFile = path.join(bin, "..", "observed-err-file-path");
+    const script = [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      `PR=${JSON.stringify("42")}`,
+      `EXPECTED_REPOSITORY=${JSON.stringify("buildproven/claude-kit")}`,
+      `STAMP_HEAD=${JSON.stringify("matching000000000000000000000000000000")}`,
+      extractRetryLoop(),
+      `echo "$PR_HEAD_ERR_FILE" > ${JSON.stringify(observeFile)}`,
+      "false", // unrelated later failure — must still trigger the EXIT trap
+    ].join("\n");
+    const result = spawnSync("bash", ["-c", script], {
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        QUALITY_STAMP_PR_HEAD_RETRY_DELAY: "0",
+      },
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    const errFilePath = readFileSync(observeFile, "utf8").trim();
+    expect(existsSync(errFilePath)).toBe(false);
   });
 });

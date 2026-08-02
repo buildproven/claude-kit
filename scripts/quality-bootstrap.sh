@@ -81,7 +81,7 @@ EXPLICIT_TARGET=false
 for ((argument_index = 0; argument_index < ${#BOOTSTRAP_ARGS[@]}; argument_index += 1)); do
   argument="${BOOTSTRAP_ARGS[$argument_index]}"
   case "$argument" in
-    --merge|--merge=true|--skip-tests) ;;
+    --merge|--merge=true|--skip-tests|--verify-app) ;;
     --merge=*)
       echo "❌ --merge accepts only the bare flag or --merge=true" >&2
       exit 1
@@ -118,7 +118,12 @@ for ((argument_index = 0; argument_index < ${#BOOTSTRAP_ARGS[@]}; argument_index
         exit 1
       }
       ;;
-    /*|~/*|./*|../*) EXPLICIT_TARGET=true ;;
+    # "~/"* is deliberately quoted, not bare ~/* — an unquoted tilde in a
+    # case pattern undergoes bash tilde expansion (becomes rooted at $HOME)
+    # and so fails to match a literal "~/..." argument string. Quoting the
+    # tilde forces a literal match instead (same fix as the resolver-path
+    # scanner below, BUI-390 review).
+    /*|"~/"*|./*|../*) EXPLICIT_TARGET=true ;;
     */*)
       EXPLICIT_TARGET=true
       [[ "$argument" =~ ^[A-Za-z][A-Za-z0-9_.-]*/[A-Za-z0-9_./-]+$ ]] || {
@@ -206,14 +211,81 @@ if [ -z "$RESOLVER" ]; then
   fi
 else
   # Use the resolver. It returns a JSON plan we act on.
-  PRIMARY_CHECKOUT=$(git worktree list --porcelain 2>/dev/null \
-    | awk '/^worktree / {p=substr($0, 10)} /^branch refs\/heads\/main$/ {print p; exit}')
-  CWD_INPUT=$(pwd)
+  #
+  # QUALITY_CWD (and, when only BS_QUALITY_TARGET_DIR set the target, the
+  # --target-dir flag itself) must reflect the target directory — otherwise
+  # this silently carries this process's own launch directory into the
+  # resolver's fallback/cwd-relative resolution paths, which breaks when
+  # invoked from outside the target checkout (BUI-390). --target-dir, when
+  # present (CLI flag or BS_QUALITY_TARGET_DIR env var, per the documented
+  # precedence: --target-dir > env var > cwd), is always authoritative over
+  # ambient $PWD.
+  RESOLVER_TARGET_DIR=""
+  RESOLVER_SAW_EXPLICIT_PATH=false
+  prev_resolver_arg=""
+  for resolver_arg in "$@"; do
+    case "$prev_resolver_arg" in
+      # Mirrors quality-target-resolver.js's EXPLICIT_PATH_FLAG set exactly
+      # (--target-dir, --target, --worktree) — --worktree was missing here,
+      # so a --worktree-based invocation launched from another checkout
+      # could resolve/materialize against the wrong repo (BUI-390 review).
+      --target-dir|--target|--worktree)
+        RESOLVER_TARGET_DIR="$resolver_arg"
+        RESOLVER_SAW_EXPLICIT_PATH=true
+        ;;
+    esac
+    case "$resolver_arg" in
+      --target-dir=*|--target=*|--worktree=*)
+        RESOLVER_TARGET_DIR="${resolver_arg#*=}"
+        RESOLVER_SAW_EXPLICIT_PATH=true
+        ;;
+      # Mirrors quality-target-resolver.js's own applyPathPattern: a bare
+      # absolute or ~/-prefixed positional token is an explicit path target
+      # too, not just the --target-dir/--target flag forms. Without this,
+      # the env-var-fallback injection below would wrongly override a
+      # caller-supplied bare path (BUI-390 review finding), and CWD_INPUT
+      # below would miss it too.
+      #
+      # The pattern's second alternative is deliberately quoted ("~/"*)
+      # rather than bare (~/*): an UNQUOTED ~/* undergoes tilde expansion in
+      # a case pattern and becomes rooted at $HOME, so it silently fails to
+      # match a literal "~/..." argument string (a second Codex review
+      # finding on this same line) — quoting the tilde forces a literal
+      # match instead.
+      /*|"~/"*)
+        RESOLVER_SAW_EXPLICIT_PATH=true
+        [ -z "$RESOLVER_TARGET_DIR" ] && RESOLVER_TARGET_DIR="$resolver_arg"
+        ;;
+    esac
+    prev_resolver_arg="$resolver_arg"
+  done
+  RESOLVER_ARGS=("$@")
+  if [ "$RESOLVER_SAW_EXPLICIT_PATH" = false ] && [ -n "${BS_QUALITY_TARGET_DIR:-}" ]; then
+    RESOLVER_TARGET_DIR="$BS_QUALITY_TARGET_DIR"
+    # The env var alone leaves parsed.path unset inside the resolver (it only
+    # parses CLI tokens), which falls through to the ambient-cwd fallback
+    # paths and hard-refuses under --merge. Inject it as an explicit
+    # --target-dir token so the resolver treats it the same as if the caller
+    # had passed the flag directly. Only reached when the caller supplied no
+    # explicit path token of their own (checked above) — --target-dir must
+    # never override the caller's own explicit path.
+    RESOLVER_ARGS+=(--target-dir "$RESOLVER_TARGET_DIR")
+  fi
+  if [ -n "$RESOLVER_TARGET_DIR" ]; then
+    RESOLVER_TARGET_DIR="${RESOLVER_TARGET_DIR/#\~/$HOME}"
+    CWD_INPUT="$RESOLVER_TARGET_DIR"
+    PRIMARY_CHECKOUT=$(git -C "$RESOLVER_TARGET_DIR" worktree list --porcelain 2>/dev/null \
+      | awk '/^worktree / {p=substr($0, 10)} /^branch refs\/heads\/main$/ {print p; exit}')
+  else
+    CWD_INPUT=$(pwd)
+    PRIMARY_CHECKOUT=$(git worktree list --porcelain 2>/dev/null \
+      | awk '/^worktree / {p=substr($0, 10)} /^branch refs\/heads\/main$/ {print p; exit}')
+  fi
 
   RESOLVER_STDERR=$(mktemp 2>/dev/null || echo "/tmp/quality-resolver-stderr.$$")
   RESOLUTION_JSON=$(QUALITY_CWD="$CWD_INPUT" \
                     QUALITY_PRIMARY_CHECKOUT="$PRIMARY_CHECKOUT" \
-                    node "$RESOLVER" --cli "$@" 2>"$RESOLVER_STDERR")
+                    node "$RESOLVER" --cli "${RESOLVER_ARGS[@]}" 2>"$RESOLVER_STDERR")
   RESOLVER_RC=$?
 
   # Distinguish a resolver *crash* (non-zero exit) from a clean empty/ok:false
@@ -270,7 +342,14 @@ else
           echo "❌ Could not materialize '$RES_BRANCH': worktree-manager.js is unavailable."
           exit 1
         }
-        REPO_ROOT_FOR_WT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+        # CWD_INPUT reflects the resolved target directory (--target-dir, a
+        # bare path token, or BS_QUALITY_TARGET_DIR) when one was supplied;
+        # falling back to `git rev-parse --show-toplevel`/pwd here would
+        # anchor materialization to this process's own ambient directory
+        # instead, which can fetch/create the same-numbered PR in an
+        # unrelated repo, or fail outright from a non-repo directory
+        # (BUI-390 review finding).
+        REPO_ROOT_FOR_WT=$(git -C "$CWD_INPUT" rev-parse --show-toplevel 2>/dev/null || echo "$CWD_INPUT")
         WT_BASE_REF="origin/$RES_BRANCH"
         if [ "$RES_KIND" = pr ] && [ -n "${RES_PR:-}" ]; then
           WT_BASE_REF="refs/remotes/pull/$RES_PR/head"
@@ -439,6 +518,7 @@ done
 LEVEL_ARG=auto
 SCOPE_ARG=branch
 SKIP_TESTS=false
+VERIFY_APP=false
 REVIEW_ARM_ARG=""
 previous=""
 for argument in "$@"; do
@@ -455,6 +535,7 @@ for argument in "$@"; do
     --review-arm) previous="--review-arm" ;;
     --review-arm=*) REVIEW_ARM_ARG="${argument#*=}" ;;
     --skip-tests) SKIP_TESTS=true ;;
+    --verify-app) VERIFY_APP=true ;;
   esac
 done
 
@@ -494,6 +575,7 @@ BASE_HEAD_SHA_ARG="${FRESH_BASE_OID:-${PR_BASE_OID:-}}"
 [ -n "$BASE_HEAD_SHA_ARG" ] && CREATE_ARGS+=(--base-head-sha "$BASE_HEAD_SHA_ARG")
 [ "$ARGS_MERGE" = true ] && CREATE_ARGS+=(--merge)
 [ "$SKIP_TESTS" = true ] && CREATE_ARGS+=(--skip-tests)
+[ "$VERIFY_APP" = true ] && CREATE_ARGS+=(--verify-app)
 [ -n "${RES_PR:-}" ] && CREATE_ARGS+=(--pr "$RES_PR")
 if [ -n "${RES_PR:-}" ]; then
   GITHUB_REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1

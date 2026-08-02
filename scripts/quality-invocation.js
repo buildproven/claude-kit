@@ -11,7 +11,7 @@ const conditionTaxonomy = require("./quality-condition-taxonomy.js");
 
 const SCHEMA_VERSION = 1;
 const EXECUTION_BUDGET_VERSION = 1;
-const REQUIRED_GATES_POLICY_VERSION = 2;
+const REQUIRED_GATES_POLICY_VERSION = 3;
 const MAX_AGENT_TARGET = 9;
 const NEEDS_EXECUTION_BUDGET_MIGRATION = Symbol(
   "needs-execution-budget-migration",
@@ -238,8 +238,16 @@ function normalizeManifestCollections(manifest) {
   normalizeGovernor(manifest);
   if (
     manifest.requiredGatesPolicyVersion === undefined ||
-    manifest.requiredGatesPolicyVersion === 1
+    manifest.requiredGatesPolicyVersion === 1 ||
+    manifest.requiredGatesPolicyVersion === 2
   ) {
+    // v1->v2 and v2->v3 both migrate via full recompute (replace, not
+    // union) — v3 (BUI-467) changed inference semantics for the `type`
+    // gate specifically (mypy is no longer promoted merely because
+    // pyproject.toml declares [tool.mypy]; the diff must touch .py/.pyi
+    // too), so a v2 manifest that already inferred python:mypy must be
+    // recomputed under the new policy rather than keeping the stale entry
+    // via union.
     Object.defineProperty(manifest, NEEDS_REQUIRED_GATES_MIGRATION, {
       value: true,
       writable: true,
@@ -303,6 +311,22 @@ function saveManifest(file, manifest) {
   atomicWrite(file, manifest);
 }
 
+// A mid-mutation persist for progress that must survive even if the rest of
+// the current mutation() callback later throws (withManifestLock() only
+// calls saveManifest() on a callback that returns normally). Unlike
+// saveManifest(), this does NOT bump manifestRevision: withManifestLock()
+// compares manifestRevision before/after the SAME mutation() call to detect
+// a genuinely concurrent writer, and bumping it here would make that check
+// misfire against our own in-progress transaction, not an actual concurrent
+// writer. updatedAt IS refreshed, though — worktree-manager.js's
+// qualityManifestReleaseState() reads it to judge whether a locked
+// campaign is abandoned, and an execution reconciled moments ago is
+// definitionally not abandoned (Codex review finding, 2026-08-01, medium).
+function saveManifestMidTransaction(file, manifest) {
+  manifest.updatedAt = new Date().toISOString();
+  atomicWrite(file, manifest);
+}
+
 // manifest.revisions.baseSha is an immutable creation-time snapshot (it also
 // namespaces stateRoot and anchors review-trailer provenance, so it is never
 // reassigned). A base that has legitimately moved since then (main advanced
@@ -329,6 +353,18 @@ function baseIdentityMatches(manifest, actualRoot, currentHead, actualBase) {
     carry.baseSha === actualBase &&
     (carry.head === currentHead ||
       isAncestorOf(actualRoot, carry.head, currentHead)),
+  );
+}
+
+// The base to diff against for anything that needs "what changed relative
+// to the PR's true base" (e.g. diffTouchesPython) — the carried live base
+// after a proven rebase-only replay, or the immutable creation-time
+// baseSha otherwise. Using the stale baseSha post-rebase would include
+// upstream commits (that landed on main between PR creation and the
+// rebase) in the diff, which can falsely widen gate inference (BUI-467).
+function effectiveBaseSha(manifest) {
+  return (
+    manifest.revisions.baseRebaseCarry?.baseSha ?? manifest.revisions.baseSha
   );
 }
 
@@ -477,6 +513,42 @@ function committedFiles(root, head) {
   }
 }
 
+// Files changed between baseSha and head (diff scope), as opposed to
+// committedFiles' full repo-tree-at-head scope. Used to avoid promoting a
+// repo-wide-but-narrow tool (e.g. mypy for a handful of scripts/ files) into
+// a required, blocking gate for a PR that never touches that surface.
+function changedFiles(root, baseSha, head) {
+  if (!baseSha) return null;
+  try {
+    // -z: NUL-delimited, unquoted paths. Without it, git quotes filenames
+    // containing non-ASCII bytes (core.quotePath's default), which would
+    // otherwise break a suffix check like .endsWith(".py") on a path such
+    // as "café.py".
+    return git(root, ["diff", "-z", "--name-only", `${baseSha}..${head}`])
+      .split("\0")
+      .filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+// Unlike lint/test/security, a repo-wide mypy requirement is a real
+// environment dependency (mypy must be installed) for what may be a handful
+// of scripts/ files never touched by most PRs. Only promote it to a
+// required gate when the diff actually changes a .py file — a repo-wide
+// requirement can still be declared explicitly via .quality-gates.json
+// (handled upstream via nativeGates), which always takes precedence over
+// this inference. When baseSha/diff info is unavailable (changedFiles
+// returns null), fail open to the prior repo-wide behavior rather than
+// silently dropping required coverage.
+function diffTouchesPython(root, baseSha, head) {
+  const changed = changedFiles(root, baseSha, head);
+  return (
+    changed === null ||
+    changed.some((file) => file.endsWith(".py") || file.endsWith(".pyi"))
+  );
+}
+
 function isPythonRepository(root, head, pyproject) {
   if (pyproject !== "") return true;
   return committedFiles(root, head).some(
@@ -559,6 +631,7 @@ function hasCommittedPythonTests(root, head) {
 function pythonGate({
   root,
   head,
+  baseSha,
   name,
   pyproject,
   pythonRepository,
@@ -607,7 +680,11 @@ function pythonGate({
           allowSkip,
         });
   }
-  if (name === "type" && hasPythonTool(pyproject, "mypy")) {
+  if (
+    name === "type" &&
+    hasPythonTool(pyproject, "mypy") &&
+    diffTouchesPython(root, baseSha, head)
+  ) {
     return pythonDirectGate({
       root,
       head,
@@ -649,9 +726,20 @@ function preferredRequiredGate({
   );
 }
 
+function optionalBuildGate({ nativeGates, scripts, manager }) {
+  if (nativeGates.has("build")) {
+    return nativeGate("build", nativeGates.get("build"));
+  }
+  if (typeof scripts.build === "string") {
+    return scriptGate("build", "build", manager);
+  }
+  return null;
+}
+
 function optionalTypeGate({
   root,
   head,
+  baseSha,
   nativeGates,
   scripts,
   manager,
@@ -669,6 +757,7 @@ function optionalTypeGate({
     : pythonGate({
         root,
         head,
+        baseSha,
         name: "type",
         pyproject,
         pythonRepository,
@@ -683,6 +772,7 @@ const NATIVE_GATE_NAMES = new Set([
   "build",
   "type",
   "consumer",
+  "verify-app",
 ]);
 
 function nativeGate(name, definition, allowSkip = false) {
@@ -758,6 +848,7 @@ function discoverRequiredGates(
   root,
   options,
   head = git(root, ["rev-parse", "HEAD"]),
+  baseSha = null,
 ) {
   const packageContent = committedFile(root, head, "package.json");
   let scripts = {};
@@ -806,14 +897,12 @@ function discoverRequiredGates(
       `quality requires executable npm or Python repository gates for: ${missing.join(", ")}`,
     );
   }
-  if (nativeGates.has("build")) {
-    required.push(nativeGate("build", nativeGates.get("build")));
-  } else if (typeof scripts.build === "string") {
-    required.push(scriptGate("build", "build", manager));
-  }
+  const buildGate = optionalBuildGate({ nativeGates, scripts, manager });
+  if (buildGate) required.push(buildGate);
   const typeGate = optionalTypeGate({
     root,
     head,
+    baseSha,
     nativeGates,
     scripts,
     manager,
@@ -843,7 +932,31 @@ function discoverRequiredGates(
           },
     );
   }
+  const verifyAppGate = discoverVerifyAppGate(options, nativeGates);
+  if (verifyAppGate) required.push(verifyAppGate);
   return required;
+}
+
+// Opt-in only: verify-app boots the app (dev server / binary) and drives a
+// real page load, which is slow and can be flaky on a cold cache. Never
+// discovered unless the caller passed --verify-app (BUI-306). A repo can
+// still override the command via .quality-gates.json#verify-app. Kept as its
+// own function (rather than inline in discoverRequiredGates) to stay under
+// that function's complexity budget.
+function discoverVerifyAppGate(options, nativeGates) {
+  if (options["verify-app"] !== true) return null;
+  if (nativeGates.has("verify-app")) {
+    return nativeGate("verify-app", nativeGates.get("verify-app"));
+  }
+  const verifyAppScript = path.join(__dirname, "quality-verify-app.sh");
+  return {
+    name: "verify-app",
+    source: `script:${verifyAppScript}`,
+    command: `bash ${verifyAppScript}`,
+    executable: "bash",
+    args: [verifyAppScript],
+    allowSkip: false,
+  };
 }
 
 function unionRequiredGates(existing, discovered) {
@@ -1025,7 +1138,15 @@ function parseOptions(args) {
     const equals = token.indexOf("=");
     const name = equals === -1 ? token : token.slice(0, equals);
     const inlineValue = equals === -1 ? null : token.slice(equals + 1);
-    if (["--merge", "--skip-tests", "--skip", "--advisory"].includes(name)) {
+    if (
+      [
+        "--merge",
+        "--skip-tests",
+        "--skip",
+        "--advisory",
+        "--verify-app",
+      ].includes(name)
+    ) {
       if (inlineValue !== null && !["true", "false"].includes(inlineValue)) {
         throw new Error(`${name} accepts only true or false`);
       }
@@ -1208,6 +1329,7 @@ function createManifest(options) {
     level: firstValue(options.level, "auto"),
     scope,
     skipTests: options["skip-tests"] === true,
+    verifyApp: options["verify-app"] === true,
     reviewArm: reviewArm(options, provider),
   };
   const campaignIdentity = {
@@ -1304,7 +1426,7 @@ function createManifest(options) {
     provider,
     reviews: [],
     governor: buildGovernor(head),
-    requiredGates: discoverRequiredGates(root, options),
+    requiredGates: discoverRequiredGates(root, options, head, baseSha),
     requiredGatesPolicyVersion: REQUIRED_GATES_POLICY_VERSION,
     gates: [],
   };
@@ -2119,6 +2241,25 @@ function completeActiveExecution(
   return elapsed;
 }
 
+// Pure predicate, no mutation: true only if manifest.governor.activeExecution
+// exists AND its deadline has already passed. Callers that need to know
+// "will reconcileAbandonedExecution() actually reconcile something" without
+// triggering its mutation/throw side effects (e.g. to decide whether a
+// manifestPath is required before calling it) should use this instead of
+// duplicating the deadline arithmetic (Codex review finding, 2026-08-01,
+// medium: an activeExecution merely EXISTING is not the same as it being
+// abandoned -- a still-valid in-flight execution must surface
+// reconcileAbandonedExecution's own "already active" conflict error, not an
+// unrelated manifestPath requirement that only applies to actual
+// reconciliation).
+function hasAbandonedExecution(manifest, now = Date.now()) {
+  const active = manifest.governor.activeExecution;
+  if (!active) return false;
+  const started = Date.parse(active.startedAt);
+  const deadline = started + active.timeoutSeconds * 1000;
+  return Number.isFinite(deadline) && now >= deadline;
+}
+
 function reconcileAbandonedExecution(manifest, now = Date.now()) {
   const active = manifest.governor.activeExecution;
   if (!active) return;
@@ -2139,7 +2280,7 @@ function providerPhaseSeconds(manifest) {
     : (manifest.risk?.runtime?.reviewReserveSeconds ?? 300);
 }
 
-function authorizeProviderAttempt(manifest, options) {
+function authorizeProviderAttempt(manifest, options, manifestPath) {
   const provider = options.provider;
   if (!["claude", "codex", "gemini"].includes(provider)) {
     throw new Error(`invalid review provider '${provider}'`);
@@ -2160,7 +2301,53 @@ function authorizeProviderAttempt(manifest, options) {
   ) {
     throw new Error("provider attempt governor is missing or invalid");
   }
-  reconcileAbandonedExecution(manifest);
+  const hadActiveExecution = governor.activeExecution != null;
+  // A single captured timestamp shared by the preflight check and the
+  // reconciliation call below -- NOT two independent Date.now() calls.
+  // With two separate calls, an execution that expires in the (sub-
+  // millisecond but real) window between them would pass
+  // hasAbandonedExecution() as "not yet abandoned" (skipping the
+  // manifestPath guard) but then be reconciled anyway by
+  // reconcileAbandonedExecution()'s own later Date.now(), recreating the
+  // exact mutation-before-persistence-check race this guard exists to
+  // prevent (Codex review finding, 2026-08-01, medium).
+  const reconciliationNow = Date.now();
+  if (hasAbandonedExecution(manifest, reconciliationNow)) {
+    // Validate BEFORE calling reconcileAbandonedExecution(), not after:
+    // that call mutates governor.activeExecution (clearing it) and credits
+    // gateSecondsUsed/providerSecondsUsed in memory as a side effect. If
+    // this guard ran after reconciling and a caller then caught the thrown
+    // error and retried the SAME manifest object with a manifestPath, the
+    // retry's hadActiveExecution would already read false (this call
+    // already cleared it), so the retry would never detect "a
+    // reconciliation happened" and would skip the persist entirely --
+    // silently losing the reconciliation forever. Refuse to mutate state
+    // we might not be able to persist in the first place (Codex review
+    // finding, 2026-08-01, medium).
+    //
+    // manifestPath is only required when an activeExecution is actually
+    // ABANDONED (deadline passed) -- not merely present -- so a caller
+    // whose activeExecution is still validly in-flight gets
+    // reconcileAbandonedExecution's own actionable "already active"
+    // conflict error below instead of an unrelated manifestPath
+    // requirement that only applies to real reconciliation (Codex review
+    // finding, 2026-08-01, medium: an entry merely EXISTING was too broad
+    // a trigger for this guard, masking the more useful error).
+    if (typeof manifestPath !== "string" || manifestPath === "") {
+      throw new Error(
+        "authorizeProviderAttempt requires manifestPath to persist a reconciled execution",
+      );
+    }
+  }
+  reconcileAbandonedExecution(manifest, reconciliationNow);
+  if (hadActiveExecution && governor.activeExecution == null) {
+    // Same bug as executeGate's gate-budget reconciliation: if the cap
+    // check below throws, that plain Error propagates out of mutate()'s
+    // operation() call before saveManifest() runs, silently discarding
+    // this reconciliation and re-triggering the same false exhaustion on
+    // every retry. Persist it now, unconditionally.
+    saveManifestMidTransaction(manifestPath, manifest);
+  }
   const currentHead = manifest.revisions.currentHead;
   if (governor.providerAttempts.length >= governor.maxProviderAttempts) {
     throw new Error("absolute provider attempt cap exhausted");
@@ -2213,13 +2400,49 @@ function completeProviderAttempt(manifest, options) {
   completeActiveExecution(manifest, "provider", Date.now(), measuredSeconds);
 }
 
-function authorizeMutationAttempt(manifest, options) {
+function authorizeMutationAttempt(manifest, options, manifestPath) {
   if (!["high", "critical"].includes(manifest.risk?.tier)) {
+    // Throws before reconcileAbandonedExecution() runs, so a stale
+    // activeExecution on a non-high/critical manifest is never reconciled
+    // via THIS call path -- intentional, not a gap: executeGate() (the
+    // only place gates actually run) unconditionally reconciles on every
+    // invocation regardless of risk tier, so it still gets cleared the
+    // next time any gate runs (Codex review finding, 2026-08-01, medium:
+    // confirming this ordering is safe, not a leak).
     throw new Error(
       "mutation execution is only available for high or critical campaigns",
     );
   }
-  reconcileAbandonedExecution(manifest);
+  const hadActiveExecution = manifest.governor.activeExecution != null;
+  // One captured timestamp for both the preflight check and reconciliation
+  // -- see authorizeProviderAttempt's identical fix for why two
+  // independent Date.now() calls would reopen the exact race this guard
+  // exists to close (Codex review finding, 2026-08-01, medium).
+  const reconciliationNow = Date.now();
+  if (hasAbandonedExecution(manifest, reconciliationNow)) {
+    // Validate BEFORE reconcileAbandonedExecution() mutates state, and
+    // only for an actually-ABANDONED execution (not merely a present
+    // one) -- see authorizeProviderAttempt's identical guard for both
+    // reasons: reconciling first and only then throwing would let a
+    // caught-and-retried call silently lose the reconciliation, and
+    // gating on mere presence would mask reconcileAbandonedExecution's
+    // own "already active" conflict error for a still-valid execution
+    // (Codex review finding, 2026-08-01, medium, both rounds).
+    if (typeof manifestPath !== "string" || manifestPath === "") {
+      throw new Error(
+        "authorizeMutationAttempt requires manifestPath to persist a reconciled execution",
+      );
+    }
+  }
+  reconcileAbandonedExecution(manifest, reconciliationNow);
+  if (hadActiveExecution && manifest.governor.activeExecution == null) {
+    // Same bug as executeGate's gate-budget reconciliation: if the cap
+    // check below throws, that plain Error propagates out of mutate()'s
+    // operation() call before saveManifest() runs, silently discarding
+    // this reconciliation and re-triggering the same false exhaustion on
+    // every retry. Persist it now, unconditionally.
+    saveManifestMidTransaction(manifestPath, manifest);
+  }
   const remaining = executionRemaining(manifest, "gate");
   const runtime = manifest.risk?.runtime;
   const requestedTimeout = parseInteger(
@@ -3175,7 +3398,21 @@ function executeGate(manifest, required, name, log, manifestPath) {
   const runtime = manifest.risk?.runtime;
   const gateSeconds = runtime?.checkSeconds ?? 300;
   const gateReserveSeconds = runtime?.checkReserveSeconds ?? 0;
+  const hadActiveExecution = manifest.governor.activeExecution != null;
   reconcileAbandonedExecution(manifest);
+  if (hadActiveExecution && manifest.governor.activeExecution == null) {
+    // reconcileAbandonedExecution just cleared a timed-out execution and
+    // credited its elapsed time to gateSecondsUsed, in memory only. If the
+    // exhaustion check below throws, that plain Error propagates out of
+    // mutate()'s operation() call in withManifestLock() before
+    // saveManifest() ever runs -- so this reconciliation was silently
+    // discarded on every prior attempt, and a stale execution whose
+    // deadline had already passed kept getting "recovered" and immediately
+    // re-discarded, re-throwing the exhaustion error forever with no way to
+    // recover the manifest. Persist the reconciliation now, unconditionally,
+    // so it survives regardless of what happens next in this function.
+    saveManifestMidTransaction(manifestPath, manifest);
+  }
   const gateRemaining = executionRemaining(manifest, "gate");
   if (gateRemaining <= 0) {
     throw new Error(
@@ -3194,7 +3431,16 @@ function executeGate(manifest, required, name, log, manifestPath) {
   };
   manifest.governor.lastActivityAt =
     manifest.governor.activeExecution.startedAt;
-  atomicWrite(manifestPath, manifest);
+  // Refreshing updatedAt here (rather than only on completion) is
+  // intentional: a gate execution that just started is not abandoned, and
+  // worktree-manager.js's qualityManifestReleaseState() reads updatedAt to
+  // judge lock staleness. Nothing else touches updatedAt while the
+  // subprocess below runs, but that's covered by activeExecution's own
+  // startedAt+timeoutSeconds deadline (reconcileAbandonedExecution), which
+  // is independent of the lock-staleness heuristic (Codex review finding,
+  // 2026-08-01, medium: confirming this doesn't conflate in-flight vs
+  // abandoned state).
+  saveManifestMidTransaction(manifestPath, manifest);
   const boundedRunner = path.join(__dirname, "quality-run-bounded.sh");
   const monotonicStartedAt = process.hrtime.bigint();
   let result;
@@ -3224,7 +3470,7 @@ function executeGate(manifest, required, name, log, manifestPath) {
       Date.now(),
       Number(elapsedNanoseconds) / 1_000_000_000,
     );
-    atomicWrite(manifestPath, manifest);
+    saveManifestMidTransaction(manifestPath, manifest);
   }
   const output = `${result.stdout || ""}${result.stderr || ""}`;
   fs.writeFileSync(log, output, { mode: 0o600 });
@@ -3778,7 +4024,11 @@ const COMMANDS = {
   "provider-attempt": ({ manifestArg, rawArgs }) => {
     let result;
     mutate(manifestArg, (locked) => {
-      result = authorizeProviderAttempt(locked, parseOptions(rawArgs));
+      result = authorizeProviderAttempt(
+        locked,
+        parseOptions(rawArgs),
+        manifestArg,
+      );
     });
     process.stdout.write(`${JSON.stringify(result)}\n`);
   },
@@ -3821,7 +4071,11 @@ const COMMANDS = {
   "mutation-attempt": ({ manifestArg, rawArgs }) => {
     let result;
     mutate(manifestArg, (locked) => {
-      result = authorizeMutationAttempt(locked, parseOptions(rawArgs));
+      result = authorizeMutationAttempt(
+        locked,
+        parseOptions(rawArgs),
+        manifestArg,
+      );
     });
     process.stdout.write(`${JSON.stringify(result)}\n`);
   },
@@ -3897,8 +4151,12 @@ function runAdvance(manifestArg, manifest, rawArgs) {
     validateIdentity(locked, manifest.repo.realpath);
     const discovered = discoverRequiredGates(
       locked.repo.realpath,
-      { "skip-tests": locked.options?.skipTests === true },
+      {
+        "skip-tests": locked.options?.skipTests === true,
+        "verify-app": locked.options?.verifyApp === true,
+      },
       locked.revisions.currentHead,
+      effectiveBaseSha(locked),
     );
     locked.requiredGates = locked[NEEDS_REQUIRED_GATES_MIGRATION]
       ? discovered
@@ -3985,6 +4243,7 @@ module.exports = {
   recordJudge,
   recordGate,
   recordMutation,
+  hasAbandonedExecution,
   reconcileAbandonedExecution,
   executionRemaining,
   runGate,
