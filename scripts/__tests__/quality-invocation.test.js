@@ -4076,6 +4076,7 @@ exit 1
       manifest.provider.fallback = "claude";
     });
     const manifest = invocation.loadManifest(manifestPath).manifest;
+    manifest.governor.roundsUsed = 1;
     const artifactDir = invocation.reviewInfo(manifest).artifactDir;
     mkdirSync(artifactDir, { recursive: true });
     writeFileSync(
@@ -4138,6 +4139,58 @@ exit 1
     expect(() =>
       invocation.writeArtifactInventory(manifest, artifactDir, "claude"),
     ).toThrow(/inconclusive provider findings/);
+  });
+
+  it("uses Claude normalized panel payloads instead of their SDK envelopes", () => {
+    const root = repo("claude-normalized-inventory");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 2,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(manifest, ["reviewer-a", "reviewer-b"]);
+    });
+    const manifest = invocation.loadManifest(manifestPath).manifest;
+    const artifactDir = invocation.reviewInfo(manifest).artifactDir;
+    mkdirSync(artifactDir, { recursive: true });
+    for (const agent of manifest.agents) {
+      writeFileSync(
+        path.join(artifactDir, `${agent}.findings.txt`),
+        "NO FINDINGS.\n",
+      );
+      writeFileSync(
+        path.join(artifactDir, `${agent}.result.json`),
+        JSON.stringify({
+          structured_output: { verdict: "approve", findings: [] },
+        }),
+      );
+      writeFileSync(
+        path.join(artifactDir, `${agent}.normalized.json`),
+        JSON.stringify({
+          verdict: "approve",
+          summary: "Reviewed scoped change.",
+          findings: [],
+        }),
+      );
+    }
+
+    invocation.writeArtifactInventory(manifest, artifactDir, "claude");
+    const inventory = JSON.parse(
+      readFileSync(path.join(artifactDir, "artifact-inventory.json"), "utf8"),
+    );
+    expect(inventory.files.map((file) => file.name)).toEqual([
+      "reviewer-a.findings.txt",
+      "reviewer-a.normalized.json",
+      "reviewer-a.result.json",
+      "reviewer-b.findings.txt",
+      "reviewer-b.normalized.json",
+      "reviewer-b.result.json",
+    ]);
   });
 
   // An agent killed mid-write leaves a 0-byte artifact. It carries no

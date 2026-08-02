@@ -2674,13 +2674,23 @@ function providerFindings(manifest) {
     );
     const resultNames = new Set(resultFiles.map((file) => file.name));
     for (const item of resultFiles.filter((file) => {
+      // Claude panels write an SDK envelope as <agent>.result.json and a
+      // validated public payload as <agent>.normalized.json. The envelope
+      // deliberately has no top-level findings array; counting it alongside
+      // its normalized payload makes every usable Claude report look
+      // inconclusive and blocks record-review. Codex/Gemini use the same
+      // raw/normalized relationship with a different filename shape.
+      const normalizedName = file.name.replace(
+        /(?:\.result)?\.json$/,
+        ".normalized.json",
+      );
+      if (normalizedName !== file.name && resultNames.has(normalizedName)) {
+        return false;
+      }
       const rawPass = file.name.match(/^(codex|gemini)-(\d+)\.json$/);
       if (!rawPass) return true;
       const [, providerName, pass] = rawPass;
-      return (
-        !resultNames.has(`${providerName}-${pass}.normalized.json`) &&
-        !resultNames.has(`primary-${providerName}-${pass}.result.json`)
-      );
+      return !resultNames.has(`primary-${providerName}-${pass}.result.json`);
     })) {
       let parsed;
       try {
@@ -3046,7 +3056,9 @@ function providerEvidenceName(name, provider) {
   }
   if (provider === "claude") {
     return (
-      (name.endsWith(".findings.txt") || name.endsWith(".result.json")) &&
+      (name.endsWith(".findings.txt") ||
+        name.endsWith(".result.json") ||
+        name.endsWith(".normalized.json")) &&
       !/^(?:codex|gemini)(?:-|\.)/.test(name)
     );
   }
@@ -3070,6 +3082,7 @@ function writeArtifactInventory(
       (name) =>
         name.endsWith(".findings.txt") ||
         name.endsWith(".result.json") ||
+        name.endsWith(".normalized.json") ||
         /^(?:codex|gemini)-\d+(?:\.normalized)?\.json$/.test(name),
     )
     .filter((name) => providerEvidenceName(name, provider))
