@@ -12,6 +12,26 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.3.0](https://github.com/buildproven/claude-kit/compare/v4.2.0...v4.3.0) (2026-08-02)
+
+
+### Features
+
+* **quality:** add opt-in --verify-app gate that boots the app (BUI-306) ([#254](https://github.com/buildproven/claude-kit/issues/254)) ([9703f5f](https://github.com/buildproven/claude-kit/commit/9703f5fef6da0c204941ea3fa726ccf076928402))
+
+
+### Bug Fixes
+
+* **agents,skills:** tighten agent tool scoping and fix shell hygiene issues ([#249](https://github.com/buildproven/claude-kit/issues/249)) ([73e9f10](https://github.com/buildproven/claude-kit/commit/73e9f10bb7d14f4ec79cf5a99799b4a1a1527f96))
+* **hotfix:** make CI-timeout guard and empty-test-scope reporting correct ([#248](https://github.com/buildproven/claude-kit/issues/248)) ([937d04e](https://github.com/buildproven/claude-kit/commit/937d04e29fc9c5093c13774caa5a32d698c2550c))
+* **quality:** close remaining fail-open paths in risk scoring and evidence checks ([#246](https://github.com/buildproven/claude-kit/issues/246)) ([b0621be](https://github.com/buildproven/claude-kit/commit/b0621bedfaadf9671b0a4f527abef4bc2a413a87))
+* **quality:** fix PR resolution when invoked from outside the target checkout ([#253](https://github.com/buildproven/claude-kit/issues/253)) ([ba74935](https://github.com/buildproven/claude-kit/commit/ba7493539b692a580181e2cf8656706b5530c1b7))
+* **quality:** only require mypy when the diff actually touches .py ([#256](https://github.com/buildproven/claude-kit/issues/256)) ([8a7ccd4](https://github.com/buildproven/claude-kit/commit/8a7ccd496ee24c4a31107c63db305baf2d82c5e7))
+* **quality:** persist abandoned-execution reconciliation before budget checks can discard it ([#251](https://github.com/buildproven/claude-kit/issues/251)) ([4bfb85a](https://github.com/buildproven/claude-kit/commit/4bfb85ac9b112f5af81104146d921f4bb57474d0))
+* **quality:** pin gh pr view to GIT_ROOT's repo, not ambient CWD ([#250](https://github.com/buildproven/claude-kit/issues/250)) ([316f5ee](https://github.com/buildproven/claude-kit/commit/316f5ee8359eb8debfd217ac03386b8c15c79bba))
+* **quality:** polish PR HEAD retry loop in quality-stamp-and-merge.sh (BUI-466) ([#257](https://github.com/buildproven/claude-kit/issues/257)) ([ec24393](https://github.com/buildproven/claude-kit/commit/ec243932255795813762d13be0466c8fc50878a0))
+* **quality:** verify a branch-matched worktree actually belongs to the resolved PR's repo ([#252](https://github.com/buildproven/claude-kit/issues/252)) ([5492aed](https://github.com/buildproven/claude-kit/commit/5492aed7a24e9117e5a7e18f20d58a6a88d8ed0e))
+
 ## [4.2.0](https://github.com/buildproven/claude-kit/compare/v4.1.0...v4.2.0) (2026-08-01)
 
 
