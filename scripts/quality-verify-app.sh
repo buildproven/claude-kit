@@ -62,12 +62,24 @@ run_with_timeout() {
     gtimeout "$secs" "$@"
   else
     set -m
+    local timeout_marker
+    timeout_marker="$(mktemp -t quality-verify-app-timeout.XXXXXX)"
     "$@" &
     local pid=$!
-    ( sleep "$secs"; kill -TERM "-$pid" 2>/dev/null; sleep 2; kill -KILL "-$pid" 2>/dev/null ) &
+    # A background command is not reliably made its own process group by
+    # stock macOS Bash. Signal the direct child so `wait` is guaranteed to
+    # return; a negative process-group signal can otherwise leave this
+    # timeout wrapper waiting forever on a wedged child.
+    ( sleep "$secs"; printf 'timed out\n' >"$timeout_marker"; kill -TERM "$pid" 2>/dev/null; sleep 2; kill -KILL "$pid" 2>/dev/null ) &
     local killer=$!
     wait "$pid"; local rc=$?
     kill -KILL "-$killer" 2>/dev/null
+    if [ -s "$timeout_marker" ]; then
+      rm -f "$timeout_marker"
+      set +m
+      return 124
+    fi
+    rm -f "$timeout_marker"
     set +m
     return $rc
   fi

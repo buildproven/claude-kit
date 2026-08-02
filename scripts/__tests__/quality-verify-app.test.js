@@ -120,6 +120,27 @@ describe("quality-verify-app.sh", () => {
     expect(stderr).toMatch(/FAIL:.*exited with status 2/);
   });
 
+  it("times out a hanging CLI --help under the portable macOS timeout fallback", () => {
+    const dir = fixtureDir("cli-hangs");
+    fs.mkdirSync(path.join(dir, "bin"));
+    writePackageJson(dir, {
+      name: "hanging-cli",
+      version: "1.0.0",
+      bin: { "hanging-cli": "bin/cli.js" },
+    });
+    fs.writeFileSync(
+      path.join(dir, "bin", "cli.js"),
+      '#!/usr/bin/env node\nsetTimeout(() => {}, 300000);\n',
+    );
+    const started = Date.now();
+    const { status, stderr } = run(dir, {
+      QUALITY_VERIFY_APP_BOOT_TIMEOUT: "3",
+    });
+    expect(status).not.toBe(0);
+    expect(stderr).toMatch(/did not exit within 3s/);
+    expect((Date.now() - started) / 1000).toBeLessThan(12);
+  });
+
   it("fails clearly if package.json#bin points at a missing file", () => {
     const dir = fixtureDir("cli-missing-bin");
     writePackageJson(dir, {
