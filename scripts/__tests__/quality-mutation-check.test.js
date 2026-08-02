@@ -222,6 +222,24 @@ describe("quality-mutation-check", () => {
     expect(state.governor.gateSecondsUsed).toBeGreaterThanOrEqual(1);
   });
 
+  it("runs mutation tests in a private runtime environment", () => {
+    const { root, manifest } = fixture(
+      "runtime-isolation",
+      [
+        "const { spawnSync } = require('node:child_process');",
+        "const path = require('node:path');",
+        "const { isAllowed } = require('./logic');",
+        "if (!path.basename(path.dirname(process.env.HOME || '')).startsWith('quality-mutation.')) process.exit(2);",
+        "if (process.env.OPENCLAW_CONFIG !== path.join(process.env.HOME, '.openclaw', 'openclaw.json')) process.exit(3);",
+        "if (spawnSync('openclaw', ['status']).status !== 126) process.exit(4);",
+        "if (!isAllowed('admin')) process.exit(1);",
+      ].join("\n"),
+    );
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+  });
+
   it("uses the native Vitest bail option after the first mutation failure", () => {
     const { root, manifest } = fixture(
       "vitest-bail",

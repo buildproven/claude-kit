@@ -46,6 +46,37 @@ TEST_EXECUTABLE="$(printf '%s' "$TEST_PLAN" | jq -r '.executable')"
 TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/quality-mutation.XXXXXX")"
 ARTIFACT="$STATE_ROOT/mutation/$HEAD.json"
 MUTATION_ACTIVE=false
+MUTATION_HOME="$TEMP_ROOT/home"
+MUTATION_BIN="$TEMP_ROOT/bin"
+
+# A detached Git worktree is not an execution sandbox: tests can still resolve
+# the operator's HOME and invoke host tooling. Mutation checks must never use
+# the live OpenClaw runtime as a test fixture. Give every mutation execution a
+# private home/config root and shadow the control-plane entry points so a test
+# that accidentally reaches for them fails loudly instead of changing runtime
+# state. Tests that need a fake OpenClaw command can still place their own fake
+# binary before PATH inside their fixture.
+mkdir -p "$MUTATION_HOME" "$MUTATION_BIN"
+for BLOCKED_COMMAND in openclaw launchctl; do
+  cat > "$MUTATION_BIN/$BLOCKED_COMMAND" <<'EOF'
+#!/usr/bin/env bash
+echo "quality-mutation-check: live runtime command is unavailable in mutation tests" >&2
+exit 126
+EOF
+  chmod 700 "$MUTATION_BIN/$BLOCKED_COMMAND"
+done
+
+run_mutation_test() {
+  env \
+    HOME="$MUTATION_HOME" \
+    OPENCLAW_HOME="$MUTATION_HOME/.openclaw" \
+    OPENCLAW_CONFIG="$MUTATION_HOME/.openclaw/openclaw.json" \
+    XDG_CONFIG_HOME="$MUTATION_HOME/.config" \
+    XDG_STATE_HOME="$MUTATION_HOME/.local/state" \
+    PATH="$MUTATION_BIN:$PATH" \
+    bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$1" -- \
+    "$TEST_EXECUTABLE" "${MUTATION_TEST_ARGS[@]}"
+}
 
 cleanup() {
   STATUS=$?
@@ -256,8 +287,7 @@ if [ -n "$STRYKER_CONFIG" ] && \
   LOG="$STATE_ROOT/mutation/${HEAD}.stryker.log"
   set +e
   cd "$SANDBOX"
-  bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CHECK_SECONDS" -- \
-    "$TEST_EXECUTABLE" run test:mutation > "$LOG" 2>&1
+  run_mutation_test "$CHECK_SECONDS" > "$LOG" 2>&1
   RESULT=$?
   set -e
   cd "$ROOT"
@@ -299,8 +329,7 @@ for CANDIDATE in "${CANDIDATES[@]}"; do
 
   set +e
   cd "$SANDBOX"
-  bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$REMAINING" -- \
-    "$TEST_EXECUTABLE" "${MUTATION_TEST_ARGS[@]}" > "$LOG" 2>&1
+  run_mutation_test "$REMAINING" > "$LOG" 2>&1
   RESULT=$?
   set -e
   cd "$ROOT"
