@@ -225,8 +225,7 @@ port_is_free() {
 }
 
 wait_for_port() {
-  local port="$1" deadline
-  deadline=$((SECONDS + BOOT_TIMEOUT_SECONDS))
+  local port="$1" deadline="${2:-$((SECONDS + BOOT_TIMEOUT_SECONDS))}"
   while [ "$SECONDS" -lt "$deadline" ]; do
     if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
       exec 3>&- 3<&-
@@ -262,11 +261,18 @@ PORT="$PORT" "$PACKAGE_MANAGER" run "$DEV_SCRIPT_NAME" >"$DEV_LOG" 2>&1 &
 DEV_PID=$!
 set +m
 
+# The boot timeout is an end-to-end budget: port discovery must not consume
+# one full timeout and then hand a second full timeout to the port poll.  In
+# particular, a conventional-port guess with a process that never listens
+# used to take roughly twice the requested timeout before cleanup.  Keep one
+# absolute deadline from the instant the dev command is launched.
+BOOT_DEADLINE=$((SECONDS + BOOT_TIMEOUT_SECONDS))
+
 if [ "$PORT_IS_GUESS" = "1" ]; then
   # Give the process a moment to announce its real port before we commit to
   # polling the 3000 guess for the whole boot budget.
   DISCOVERED=""
-  for _ in 1 2 3 4 5; do
+  while [ "$SECONDS" -lt "$BOOT_DEADLINE" ]; do
     sleep 1
     DISCOVERED="$(sniff_port_from_log)"
     [ -z "$DISCOVERED" ] && DISCOVERED="$(sniff_port_from_lsof "$DEV_PID")"
@@ -279,7 +285,7 @@ if [ "$PORT_IS_GUESS" = "1" ]; then
   fi
 fi
 
-if ! wait_for_port "$PORT"; then
+if ! wait_for_port "$PORT" "$BOOT_DEADLINE"; then
   if ! kill -0 "$DEV_PID" 2>/dev/null; then
     echo "--- boot log ---" >&2
     cat "$DEV_LOG" >&2
