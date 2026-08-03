@@ -6,8 +6,7 @@
 # WHY THIS EXISTS (see docs / the 2026-07-01 investigation):
 #   The quality skill spawns review via the Task tool. Task-tool agents are
 #   fire-and-forget: their results arrive asynchronously as notifications to
-#   the PARENT session. A forked skill — and a Task agent (e.g. merge-train
-#   runs /bs:quality inside one) — therefore CANNOT block on them, so the
+#   the PARENT session. A forked skill therefore CANNOT block on them, so the
 #   merge gate downstream of review never runs. Empirically confirmed:
 #   nested Task agents are async too. The ONLY review mechanism synchronous
 #   in ALL three contexts is a blocking subprocess — the same reason the

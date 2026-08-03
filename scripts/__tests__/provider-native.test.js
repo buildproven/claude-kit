@@ -88,7 +88,7 @@ describe("provider-native platform", () => {
       .sort();
     expect(Object.keys(settings.skillOverrides).sort()).toEqual(names);
     expect(settings.skillOverrides.ralph).toBe("on");
-    for (const skill of ["ralph", "quality", "merge-train"]) {
+    for (const skill of ["ralph", "quality"]) {
       expect(
         readFileSync(path.join(ROOT, "skills", skill, "SKILL.md"), "utf8"),
       ).not.toMatch(/^context: fork$/m);

@@ -159,7 +159,7 @@ describe("quality runtime planning", () => {
     expect(huge.campaignSeconds).toBe(900);
   });
 
-  it("includes an initialized submodule's expanded delta in its workload", () => {
+  it("keeps a submodule pointer bump scoped to the parent integration diff", () => {
     const parent = makeTempDir("quality-submodule-");
     const submodule = path.join(parent, "core");
     const repo = path.join(parent, "consumer");
@@ -218,8 +218,11 @@ describe("quality runtime planning", () => {
         encoding: "utf8",
       }),
     );
-    expect(plan.diffStats.files).toBeGreaterThan(1);
-    expect(plan.diffStats.lines).toBeGreaterThanOrEqual(1000);
-    expect(plan.workload).toBe("medium");
+    // The nested repository is reviewed and merged under its own protection.
+    // Re-expanding it here duplicates that review and makes ordinary gitlink
+    // updates look like large parent-repository changes.
+    expect(plan.diffStats.files).toBe(1);
+    expect(plan.diffStats.lines).toBeLessThan(10);
+    expect(plan.workload).toBe("micro");
   });
 });

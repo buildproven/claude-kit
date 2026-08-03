@@ -1024,37 +1024,12 @@ function governorInteger(name, fallback, label, minimum = 0) {
 
 function buildGovernor(head) {
   const startedAtEpoch = Math.floor(Date.now() / 1000);
-  const sharedDeadlineConfigured =
-    process.env.BS_QUALITY_SHARED_DEADLINE_EPOCH !== undefined;
-  const trainReservationConfigured =
-    process.env.BS_QUALITY_TRAIN_RESERVATION_SECONDS !== undefined;
-  if (sharedDeadlineConfigured !== trainReservationConfigured) {
-    throw new Error(
-      "BS_QUALITY_SHARED_DEADLINE_EPOCH and BS_QUALITY_TRAIN_RESERVATION_SECONDS must be set together",
-    );
-  }
   const providerDeadlineSeconds = governorInteger(
     "BS_QUALITY_MAX_PROVIDER_SECONDS",
     "3600",
     "provider deadline seconds",
     1,
   );
-  const sharedDeadlineEpoch = sharedDeadlineConfigured
-    ? governorInteger(
-        "BS_QUALITY_SHARED_DEADLINE_EPOCH",
-        "0",
-        "shared merge-train deadline epoch",
-        1,
-      )
-    : null;
-  const trainReservationSeconds = trainReservationConfigured
-    ? governorInteger(
-        "BS_QUALITY_TRAIN_RESERVATION_SECONDS",
-        "0",
-        "shared merge-train reservation seconds",
-        1,
-      )
-    : null;
   const providerSecondsLimit = governorInteger(
     "BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS",
     String(15 * 60),
@@ -1078,12 +1053,8 @@ function buildGovernor(head) {
       1,
     ),
     gateSecondsUsed: 0,
-    providerSecondsLimit: trainReservationSeconds
-      ? Math.min(providerSecondsLimit, trainReservationSeconds)
-      : providerSecondsLimit,
+    providerSecondsLimit,
     providerSecondsUsed: 0,
-    sharedDeadlineEpoch,
-    trainReservationSeconds,
     activeExecution: null,
     maxFixCommits: governorInteger(
       "BS_QUALITY_MAX_FIX_COMMITS",
@@ -2287,15 +2258,6 @@ function authorizeProviderAttempt(manifest, options, manifestPath) {
     throw new Error(`invalid review provider '${provider}'`);
   }
   const governor = manifest.governor;
-  if (
-    governor.sharedDeadlineEpoch !== null &&
-    governor.sharedDeadlineEpoch !== undefined &&
-    Math.floor(Date.now() / 1000) >= governor.sharedDeadlineEpoch
-  ) {
-    throw new Error(
-      "shared merge-train deadline has elapsed; no new provider attempt may start",
-    );
-  }
   if (
     !Number.isInteger(governor.maxProviderAttempts) ||
     !Array.isArray(governor.providerAttempts)
