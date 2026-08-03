@@ -37,33 +37,6 @@ N="$AGENT_TARGET"
   exit 1
 }
 AGENTS=("${PANEL[@]:0:$N}")
-PANEL_INCOMPLETE=false
-
-# A merge-train may deliberately reserve only part of a non-critical Claude
-# panel from its shared batch budget. The required panel remains in the risk
-# contract; this selected subset is persisted as incomplete and can never
-# authorize a merge as if it were the full panel.
-if [ -n "${BS_QUALITY_PANEL_AGENTS:-}" ]; then
-  case "$BS_QUALITY_PANEL_AGENTS" in
-    *[!0-9]*|"")
-      echo "quality-select-agents: BS_QUALITY_PANEL_AGENTS must be a positive integer" >&2
-      exit 1
-      ;;
-  esac
-  if [ "$BS_QUALITY_PANEL_AGENTS" -lt 2 ] || [ "$BS_QUALITY_PANEL_AGENTS" -gt "$N" ]; then
-    echo "quality-select-agents: requested panel must be between 2 and $N agents" >&2
-    exit 1
-  fi
-  if [ "$TIER" = critical ] && [ "$BS_QUALITY_PANEL_AGENTS" -lt "$N" ]; then
-    echo "quality-select-agents: critical reviews require the full $N-agent panel" >&2
-    exit 1
-  fi
-  if [ "$BS_QUALITY_PANEL_AGENTS" -lt "$N" ]; then
-    AGENTS=("${PANEL[@]:0:$BS_QUALITY_PANEL_AGENTS}")
-    PANEL_INCOMPLETE=true
-    echo "⚠️  [quality] Deliberately reduced Claude panel: ${#AGENTS[@]}/$N agents (incomplete; cannot authorize merge)." >&2
-  fi
-fi
 
 MERGE_AUTHORITY="$(field risk.mergeAuthority)"
 # Older manifests lack the field and preserve their established manual
@@ -73,9 +46,5 @@ if [ "$TIER" = critical ] && [ "$MERGE_AUTHORITY" = autonomous ]; then
   echo "[quality] Critical tier: autonomous merge authority; running full critical review." >&2
 fi
 
-if [ "$PANEL_INCOMPLETE" = true ]; then
-  node "$SCRIPT_DIR/quality-invocation.js" agents "$MANIFEST" "${AGENTS[@]}" --incomplete || exit 1
-else
-  node "$SCRIPT_DIR/quality-invocation.js" agents "$MANIFEST" "${AGENTS[@]}" || exit 1
-fi
-echo "[quality] Selected ${#AGENTS[@]}/$N agents for tier=$TIER (incomplete=$PANEL_INCOMPLETE)"
+node "$SCRIPT_DIR/quality-invocation.js" agents "$MANIFEST" "${AGENTS[@]}" || exit 1
+echo "[quality] Selected ${#AGENTS[@]} agents for tier=$TIER"

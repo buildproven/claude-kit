@@ -124,18 +124,6 @@ contract so the branch stays green.
 /bs:ralph
 ```
 
-### Bounded merge sweep
-
-```bash
-/bs:merge-train --max-quality-minutes 45
-```
-
-Merge train fetches and reconciles each PR with its current base before it
-spends gate or provider time. Every ready PR reserves from one shared batch
-budget; a critical panel that cannot finish is deferred, while a deliberately
-reduced non-critical panel is recorded as incomplete and cannot authorize a
-merge.
-
 ### Emergency fix
 
 ```bash
@@ -151,17 +139,16 @@ merge.
 
 ## Command quick reference
 
-| Command           | Use For                         |
-| ----------------- | ------------------------------- |
-| `/bs:dev`         | Start feature work              |
-| `/bs:test`        | Tight test feedback loop        |
-| `/bs:quality`     | Quality gate before PR or merge |
-| `/bs:plan`        | Lightweight multi-repo planning |
-| `/bs:prd`         | Strict PRD + vertical slices    |
-| `/bs:ralph`       | Autonomous backlog execution    |
-| `/bs:merge-train` | Bounded cross-repo merge sweep  |
-| `/bs:backlog`     | Prioritization                  |
-| `/bs:help`        | Full command lookup             |
+| Command       | Use For                         |
+| ------------- | ------------------------------- |
+| `/bs:dev`     | Start feature work              |
+| `/bs:test`    | Tight test feedback loop        |
+| `/bs:quality` | Quality gate before PR or merge |
+| `/bs:plan`    | Lightweight multi-repo planning |
+| `/bs:prd`     | Strict PRD + vertical slices    |
+| `/bs:ralph`   | Autonomous backlog execution    |
+| `/bs:backlog` | Prioritization                  |
+| `/bs:help`    | Full command lookup             |
 
 ## Notes
 

@@ -489,54 +489,6 @@ describe("quality invocation manifest", () => {
     expect(manifest.governor).not.toHaveProperty("validationDeadlineEpoch");
   });
 
-  it("records a merge-train lease and refuses provider starts after its shared deadline", () => {
-    const root = repo("merge-train-lease");
-    const deadline = Math.floor(Date.now() / 1000) + 60;
-    const manifestPath = create(root, [], {
-      BS_QUALITY_SHARED_DEADLINE_EPOCH: String(deadline),
-      BS_QUALITY_TRAIN_RESERVATION_SECONDS: "120",
-      BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS: "300",
-    });
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    expect(manifest.governor).toMatchObject({
-      sharedDeadlineEpoch: deadline,
-      trainReservationSeconds: 120,
-      providerSecondsLimit: 120,
-    });
-    manifest.governor.sharedDeadlineEpoch = Math.floor(Date.now() / 1000);
-    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-    const result = spawnSync(
-      "node",
-      [INVOCATION, "provider-attempt", manifestPath, "--provider", "codex"],
-      { cwd: root, encoding: "utf8" },
-    );
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toMatch(/shared merge-train deadline has elapsed/);
-  });
-
-  it.each([
-    [
-      "BS_QUALITY_SHARED_DEADLINE_EPOCH",
-      String(Math.floor(Date.now() / 1000) + 60),
-    ],
-    ["BS_QUALITY_TRAIN_RESERVATION_SECONDS", "120"],
-  ])("rejects a partial merge-train lease environment: %s", (name, value) => {
-    const root = repo(`partial-merge-train-lease-${name}`);
-    const result = spawnSync(
-      "node",
-      [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
-      {
-        cwd: root,
-        encoding: "utf8",
-        env: { ...process.env, [name]: value },
-      },
-    );
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toMatch(
-      /BS_QUALITY_SHARED_DEADLINE_EPOCH and BS_QUALITY_TRAIN_RESERVATION_SECONDS must be set together/,
-    );
-  });
-
   it("authorizes Gemini inside the existing provider attempt budget", () => {
     const root = repo("gemini-provider-attempt");
     const manifest = create(root, []);
@@ -3649,30 +3601,6 @@ exit 1
     });
   });
 
-  it("persists a merge-train panel cap visibly through the selector seam", () => {
-    const root = repo("reduced-panel-selector");
-    const manifestPath = create(root);
-    invocation.withManifestLock(manifestPath, (manifest) => {
-      invocation.setRisk(manifest, {
-        tier: "high",
-        taskType: "bugfix",
-        score: 60,
-        agents: 4,
-        "codex-depth": "high",
-        "codex-rounds": 1,
-      });
-    });
-    execFileSync("bash", [SELECT, "--manifest", manifestPath], {
-      cwd: root,
-      env: { ...process.env, BS_QUALITY_PANEL_AGENTS: "2" },
-    });
-    expect(JSON.parse(readFileSync(manifestPath, "utf8")).panel).toEqual({
-      requiredAgents: 4,
-      selectedAgents: 2,
-      incomplete: true,
-    });
-  });
-
   it("refuses to persist a resolved target larger than the supported panel", () => {
     const root = repo("oversized-panel-target");
     const manifestPath = create(root);
@@ -3688,30 +3616,6 @@ exit 1
         });
       }),
     ).toThrow(/agent target 10 exceeds supported 9-agent panel/);
-  });
-
-  it("refuses to reduce a critical panel through the selector seam", () => {
-    const root = repo("critical-panel-selector");
-    const manifestPath = create(root);
-    invocation.withManifestLock(manifestPath, (manifest) => {
-      invocation.setRisk(manifest, {
-        tier: "critical",
-        taskType: "bugfix",
-        score: 80,
-        agents: 4,
-        "codex-depth": "xhigh",
-        "codex-rounds": 1,
-      });
-    });
-    const result = spawnSync("bash", [SELECT, "--manifest", manifestPath], {
-      cwd: root,
-      env: { ...process.env, BS_QUALITY_PANEL_AGENTS: "2" },
-      encoding: "utf8",
-    });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toMatch(
-      /critical reviews require the full 4-agent panel/,
-    );
   });
 
   it("rejects a resumed HEAD whose complete diff requires stronger review", () => {

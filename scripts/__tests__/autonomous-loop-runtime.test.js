@@ -91,7 +91,7 @@ describe("autonomous-loop runtime", () => {
     const third = runtime([
       "admit",
       "--kind",
-      "merge-train",
+      "ralph",
       "--id",
       "repo-three/run",
       ...common,
