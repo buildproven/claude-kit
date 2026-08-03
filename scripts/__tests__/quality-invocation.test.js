@@ -1944,13 +1944,14 @@ exec "${realGit}" "$@"
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
     const afterState = JSON.parse(readFileSync(manifest, "utf8"));
     expect(afterState.revisions.currentHead).toBe(rebasedHead);
-    expect(afterState.approval.approved).toBe(true);
-    expect(afterState.approval.rebaseCarriedHead).toBe(rebasedHead);
+    // Human approval is a signed capability for an exact HEAD. Unlike
+    // provider evidence, it is never silently carried across a rewrite.
+    expect(afterState.approval.approved).toBe(false);
     expect(
       spawnSync("node", [INVOCATION, "approval-valid", manifest], {
         cwd: root,
       }).status,
-    ).toBe(0);
+    ).not.toBe(0);
 
     // baseHeadSha (quality-authorize-merge.sh's live-freshness anchor at
     // merge time, EXPECTED_BASE_OID) must advance with the rebase too, or
@@ -1962,6 +1963,11 @@ exec "${realGit}" "$@"
     expect(afterState.revisions.baseRebaseCarry).toMatchObject({
       head: rebasedHead,
       baseSha: newMainHead,
+    });
+    expect(afterState.revisions.reviewRebaseCarry).toMatchObject({
+      reviewedHead: priorHead,
+      head: rebasedHead,
+      expectedTree: afterState.revisions.reviewRebaseCarry.actualTree,
     });
     expect(
       spawnSync(

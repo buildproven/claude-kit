@@ -59,17 +59,11 @@ function reconcilePr(discovered, current) {
   };
 }
 
-function patchId(value, name) {
-  if (typeof value !== "string" || !/^[0-9a-f]{40}$/.test(value)) {
-    throw new Error(`${name} must be a stable git patch-id`);
-  }
-  return value;
-}
-
 /**
  * Reconcile a PR after an earlier member of the same-repository batch landed.
- * A base change needs a new review unless the runtime can prove the rebased
- * patch is exactly identical to the reviewed one using stable patch IDs.
+ * A base change needs a new review unless the quality runtime proves the
+ * reviewed binary patch replays to the rebased HEAD's exact tree. This pure
+ * controller never accepts caller-supplied diff identity as that proof.
  */
 function reconcileRebasedPr(reviewed, rebased) {
   const before = prSnapshot(reviewed, "reviewed");
@@ -77,25 +71,17 @@ function reconcileRebasedPr(reviewed, rebased) {
   if (before.number !== after.number) {
     throw new Error("reviewed and rebased snapshots name different PRs");
   }
-  const reviewedPatchId = patchId(
-    rebased.reviewedPatchId,
-    "rebased.reviewedPatchId",
-  );
-  const currentPatchId = patchId(
-    rebased.currentPatchId,
-    "rebased.currentPatchId",
-  );
   const changed = {
     head: before.headSha !== after.headSha,
     base: before.baseSha !== after.baseSha,
   };
-  const rebaseOnly =
-    changed.head && changed.base && reviewedPatchId === currentPatchId;
+  const rebaseOnly = changed.head && changed.base;
   return {
     ...after,
     changed,
     rebaseOnly,
     requiresFreshReview: !rebaseOnly,
+    requiresRuntimeReplayProof: rebaseOnly,
   };
 }
 

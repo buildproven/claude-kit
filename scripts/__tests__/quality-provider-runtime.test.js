@@ -63,7 +63,7 @@ describe("provider review runtime", () => {
     ["critical", "900", "release-veto"],
   ])("maps %s to a mechanical review plan", (tier, timeout, focus) => {
     const result = spawnSync(
-      "bash",
+      "/bin/bash",
       [
         "-c",
         `TIER="$1"; source "$2"; printf '%s|%s' "$QUALITY_REVIEW_TIMEOUT" "$QUALITY_REVIEW_FOCUS"`,
@@ -78,20 +78,20 @@ describe("provider review runtime", () => {
     expect(result.stdout).toContain(focus);
   });
 
-  it("kills a hanging provider process group at the wall-clock cap", () => {
+  it("kills a hanging provider and a session-escaped helper at the wall-clock cap", () => {
     const directory = makeTempDir("bounded-tree-");
     const pidFile = path.join(directory, "native-helper.pid");
     const started = Date.now();
     const result = spawnSync(
-      "bash",
+      "/bin/bash",
       [
         BOUNDED,
         "--timeout",
         "1",
         "--",
-        "bash",
+        "/bin/bash",
         "-c",
-        'sleep 20 & echo $! > "$1"; wait',
+        'python3 -c \'import os,sys,time; os.setsid(); open(sys.argv[1], "w").write(str(os.getpid())); time.sleep(20)\' "$1" & wait',
         "provider",
         pidFile,
       ],
