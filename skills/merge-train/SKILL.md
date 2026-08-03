@@ -97,7 +97,7 @@ For each repo with PRs to process, spawn a Task agent **with `isolation: "worktr
 - The repo path
 - The PR list to process for its repo
 - The `--max-diff` threshold
-- Instruction to invoke `/bs:quality --merge` per PR
+- Instruction to invoke `/bs:quality` for review and `/bs:quality --merge` only in the landing phase
 
 **Same-repository batches are two-phase (mandatory):** review every admitted PR against the one frozen base before merging any of them. Then merge in dependency order. After each landed PR, rebase every remaining reviewed PR onto the new base. Do **not** launch another provider panel solely because that base moved: ask the quality runtime to advance the exact manifest, and carry its review only when `git patch-id --stable` proves the reviewed patch and rebased patch identical. The runtime records the carry, emits a fresh signed empty stamp, and reruns required CI on the rebased head. Any conflict, patch-id mismatch, changed code, missing proof, or failed CI is `deferred (rebase requires fresh review)`. This prevents the N-by-N review treadmill without treating stale or altered code as reviewed.
 
@@ -112,7 +112,7 @@ Worker contract:
    - If diff > `--max-diff`, do NOT auto-merge; mark for manual review
    - If the diff is over `--max-diff`, do NOT start a merge campaign; mark for manual review.
 3. **Landing phase — for each fully reviewed PR (oldest first):**
-   - Re-read its PR head/base. If an earlier landing moved its base, use the approved rebase/update path and call `merge-train-batch.js` with the reviewed and rebased snapshots plus both stable patch-ids. A carry is valid only when it reports `rebaseOnly: true`; otherwise defer it for a fresh campaign.
+   - Re-read its PR head/base. If an earlier landing moved its base, use the approved rebase/update path and send `{ "mode": "rebase-carry", "reviewed": <snapshot>, "rebased": <snapshot plus reviewedPatchId/currentPatchId> }` to `merge-train-batch.js` on stdin. A carry is valid only when it reports `rebaseOnly: true`; otherwise defer it for a fresh campaign.
    - Resume the exact manifest. The runtime must record the rebase carry and create a new signed empty stamp on the rebased reviewed head; required CI must pass on that head before `/bs:quality --merge` may land it.
    - Treat `/bs:quality --merge` as the merge outcome. It alone owns identity validation, review coverage, CI, authorization, and merge.
    - Post-merge: invoke `quality-merge-cleanup.sh` through the quality campaign, then reconcile the assigned worktree with `worktree-manager.js`. Never `git checkout main` from the worker: the primary checkout already owns that branch.

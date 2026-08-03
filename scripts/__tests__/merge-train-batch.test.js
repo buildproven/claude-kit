@@ -6,7 +6,7 @@ const {
   planBatch,
   reserveAdmission,
 } = require("../merge-train-batch");
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const { mkdirSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
 const { makeTempDir } = require("./helpers/tmp.js");
@@ -83,6 +83,32 @@ describe("merge-train batch controller", () => {
         currentPatchId: sha("f"),
       }),
     ).toMatchObject({ rebaseOnly: false, requiresFreshReview: true });
+  });
+
+  it("exposes rebase carry through its stdin controller contract", () => {
+    const result = spawnSync(
+      process.execPath,
+      [path.resolve(__dirname, "..", "merge-train-batch.js")],
+      {
+        encoding: "utf8",
+        input: JSON.stringify({
+          mode: "rebase-carry",
+          reviewed: { number: 42, headSha: sha("a"), baseSha: sha("b") },
+          rebased: {
+            number: 42,
+            headSha: sha("c"),
+            baseSha: sha("d"),
+            reviewedPatchId: sha("e"),
+            currentPatchId: sha("e"),
+          },
+        }),
+      },
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      rebaseOnly: true,
+      requiresFreshReview: false,
+    });
   });
 
   it("shares one batch clock instead of granting every PR a new campaign budget", () => {

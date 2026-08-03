@@ -43,6 +43,23 @@ set -m
 "$@" &
 CHILD_PID=$!
 set +m
+kill_process_tree() {
+  local signal="$1" pid="$2" child
+  # Native helpers can escape the shell's job-control group. Walk descendants
+  # even after a group kill succeeds so the cap cannot leave one running.
+  while IFS= read -r child; do
+    [ -n "$child" ] || continue
+    kill_process_tree "$signal" "$child"
+  done < <(pgrep -P "$pid" 2>/dev/null || true)
+  kill "-$signal" "$pid" 2>/dev/null || true
+}
+terminate_provider() {
+  kill -TERM "-${CHILD_PID}" 2>/dev/null || true
+  kill_process_tree TERM "$CHILD_PID"
+  sleep 1
+  kill -KILL "-${CHILD_PID}" 2>/dev/null || true
+  kill_process_tree KILL "$CHILD_PID"
+}
 set -m
 watchdog() {
   local sleeper=""
@@ -56,9 +73,7 @@ watchdog() {
   sleeper=$!
   wait "$sleeper" || exit 0
   : > "$MARKER"
-  kill -TERM "-${CHILD_PID}" 2>/dev/null || kill -TERM "$CHILD_PID" 2>/dev/null
-  sleep 1
-  kill -KILL "-${CHILD_PID}" 2>/dev/null || kill -KILL "$CHILD_PID" 2>/dev/null
+  terminate_provider
 }
 watchdog &
 WATCHDOG_PID=$!
@@ -66,9 +81,7 @@ set +m
 cleanup_provider() {
   local status="${1:-130}"
   trap - INT TERM HUP EXIT
-  kill -TERM "-${CHILD_PID}" 2>/dev/null || kill -TERM "$CHILD_PID" 2>/dev/null || true
-  sleep 1
-  kill -KILL "-${CHILD_PID}" 2>/dev/null || kill -KILL "$CHILD_PID" 2>/dev/null || true
+  terminate_provider
   kill -TERM "-${WATCHDOG_PID}" 2>/dev/null || kill "$WATCHDOG_PID" 2>/dev/null || true
   wait "$CHILD_PID" 2>/dev/null || true
   wait "$WATCHDOG_PID" 2>/dev/null || true

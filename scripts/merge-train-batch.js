@@ -472,6 +472,12 @@ function main() {
   } catch {
     throw new Error("expected one JSON batch plan on stdin");
   }
+  if (input.mode === "rebase-carry") {
+    process.stdout.write(
+      `${JSON.stringify(reconcileRebasedPr(input.reviewed, input.rebased), null, 2)}\n`,
+    );
+    return;
+  }
   process.stdout.write(`${JSON.stringify(planBatch(input), null, 2)}\n`);
 }
 
