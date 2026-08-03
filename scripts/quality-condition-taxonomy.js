@@ -106,6 +106,23 @@ function reviewCondition(manifest, reviewFailureReason) {
   ];
 }
 
+function inferredReviewFailureReason(manifest, suppliedReason) {
+  if (suppliedReason) return suppliedReason;
+  const governor = manifest.governor;
+  const hasCurrentCoverage = (manifest.reviews || []).some(
+    (review) => review.to === manifest.revisions.currentHead,
+  );
+  if (
+    !hasCurrentCoverage &&
+    Number.isFinite(governor?.providerSecondsUsed) &&
+    Number.isFinite(governor?.providerSecondsLimit) &&
+    governor.providerSecondsUsed >= governor.providerSecondsLimit
+  ) {
+    return "provider-exhaustion";
+  }
+  return null;
+}
+
 function findingConditions(manifest) {
   const judge = manifest.judge;
   if (!judge || judge.head !== manifest.revisions.currentHead) return [];
@@ -161,7 +178,10 @@ function diagnoseConditions(manifest, failure = {}) {
   return [
     ...gateConditions(manifest),
     ...mutationCondition(manifest),
-    ...reviewCondition(manifest, failure.reviewFailureReason),
+    ...reviewCondition(
+      manifest,
+      inferredReviewFailureReason(manifest, failure.reviewFailureReason),
+    ),
     ...findingConditions(manifest),
     ...ciCondition(manifest, failure.ciFailureReason),
   ];

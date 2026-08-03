@@ -202,6 +202,20 @@ describe("quality-condition-taxonomy", () => {
     );
   });
 
+  it("surfaces exhausted provider coverage without requiring a runner hint", () => {
+    const manifest = {
+      revisions: { currentHead: "h" },
+      requiredGates: [],
+      gates: [],
+      reviews: [],
+      governor: { providerSecondsUsed: 900, providerSecondsLimit: 900 },
+      risk: { tier: "low" },
+    };
+    expect(taxonomy.diagnoseConditions(manifest, {}).map((c) => c.id)).toEqual([
+      "review:provider-exhaustion",
+    ]);
+  });
+
   it("rejects an accept list missing a diagnosed condition", () => {
     const conditions = [
       { id: "gate:lint", description: "x", highRisk: false },
