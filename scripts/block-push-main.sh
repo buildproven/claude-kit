@@ -22,7 +22,7 @@ fi
 # `|| true` is required: under `set -euo pipefail` a no-match `grep` exits 1 and
 # kills the hook before it can deny anything. Commands without `-C` are the
 # common case, so omitting it silently disabled this guard entirely.
-GIT_DIR=$(echo "$COMMAND" | grep -oE 'git\s+-C\s+\S+' | head -1 | awk '{print $3}' || true)
+GIT_DIR=$(echo "$COMMAND" | grep -oE 'git[[:space:]]+-C[[:space:]]+[^[:space:]]+' | head -1 | awk '{print $3}' || true)
 if [ -n "$GIT_DIR" ]; then
   GIT_DIR="${GIT_DIR/#\~/$HOME}"  # expand ~ safely (no eval)
   GIT_CMD="git -C $GIT_DIR"
@@ -32,7 +32,7 @@ fi
 
 # Check for git push to main or master (with any remote name)
 # Matches: git push origin main, git push upstream master, git push -u origin main, etc.
-if echo "$COMMAND" | grep -qE 'git\s+(-C\s+\S+\s+)?push\s+.*\s(main|master)\s*$'; then
+if echo "$COMMAND" | grep -qE 'git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?push[[:space:]]+.*[[:space:]](main|master)[[:space:]]*$'; then
   # Allow force push (already gated by permissions.ask) and push --delete
   if echo "$COMMAND" | grep -qE '\-\-force|\-f|\-\-delete'; then
     exit 0
@@ -46,7 +46,7 @@ if echo "$COMMAND" | grep -qE 'git\s+(-C\s+\S+\s+)?push\s+.*\s(main|master)\s*$'
 fi
 
 # Block bare "git push" when on main/master (no explicit branch arg)
-if echo "$COMMAND" | grep -qE 'git\s+(-C\s+\S+\s+)?push\s*$'; then
+if echo "$COMMAND" | grep -qE 'git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?push[[:space:]]*$'; then
   CURRENT_BRANCH=$($GIT_CMD branch --show-current 2>/dev/null || echo "")
   if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ]; then
     echo "Blocked: bare 'git push' while on $CURRENT_BRANCH. Create a feature branch and PR instead."
