@@ -79,14 +79,29 @@ describe("provider review runtime", () => {
   });
 
   it("kills a hanging provider process group at the wall-clock cap", () => {
+    const directory = makeTempDir("bounded-tree-");
+    const pidFile = path.join(directory, "native-helper.pid");
     const started = Date.now();
     const result = spawnSync(
       "bash",
-      [BOUNDED, "--timeout", "1", "--", "bash", "-c", "sleep 20 & wait"],
+      [
+        BOUNDED,
+        "--timeout",
+        "1",
+        "--",
+        "bash",
+        "-c",
+        'sleep 20 & echo $! > "$1"; wait',
+        "provider",
+        pidFile,
+      ],
       { encoding: "utf8", timeout: 5000 },
     );
     expect(result.status).toBe(124);
     expect(Date.now() - started).toBeLessThan(4000);
+    const helperPid = Number(readFileSync(pidFile, "utf8").trim());
+    expect(Number.isSafeInteger(helperPid)).toBe(true);
+    expect(() => process.kill(helperPid, 0)).toThrow();
   });
 
   it("reaps the watchdog promptly after a successful command", () => {

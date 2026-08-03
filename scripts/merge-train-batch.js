@@ -59,6 +59,46 @@ function reconcilePr(discovered, current) {
   };
 }
 
+function patchId(value, name) {
+  if (typeof value !== "string" || !/^[0-9a-f]{40}$/.test(value)) {
+    throw new Error(`${name} must be a stable git patch-id`);
+  }
+  return value;
+}
+
+/**
+ * Reconcile a PR after an earlier member of the same-repository batch landed.
+ * A base change needs a new review unless the runtime can prove the rebased
+ * patch is exactly identical to the reviewed one using stable patch IDs.
+ */
+function reconcileRebasedPr(reviewed, rebased) {
+  const before = prSnapshot(reviewed, "reviewed");
+  const after = prSnapshot(rebased, "rebased");
+  if (before.number !== after.number) {
+    throw new Error("reviewed and rebased snapshots name different PRs");
+  }
+  const reviewedPatchId = patchId(
+    rebased.reviewedPatchId,
+    "rebased.reviewedPatchId",
+  );
+  const currentPatchId = patchId(
+    rebased.currentPatchId,
+    "rebased.currentPatchId",
+  );
+  const changed = {
+    head: before.headSha !== after.headSha,
+    base: before.baseSha !== after.baseSha,
+  };
+  const rebaseOnly =
+    changed.head && changed.base && reviewedPatchId === currentPatchId;
+  return {
+    ...after,
+    changed,
+    rebaseOnly,
+    requiresFreshReview: !rebaseOnly,
+  };
+}
+
 function remainingBudget({ startedAtEpoch, budgetSeconds }, nowEpoch) {
   const started = integer(startedAtEpoch, "startedAtEpoch", { minimum: 0 });
   const budget = integer(budgetSeconds, "budgetSeconds", { minimum: 1 });
@@ -432,6 +472,12 @@ function main() {
   } catch {
     throw new Error("expected one JSON batch plan on stdin");
   }
+  if (input.mode === "rebase-carry") {
+    process.stdout.write(
+      `${JSON.stringify(reconcileRebasedPr(input.reviewed, input.rebased), null, 2)}\n`,
+    );
+    return;
+  }
   process.stdout.write(`${JSON.stringify(planBatch(input), null, 2)}\n`);
 }
 
@@ -447,6 +493,7 @@ if (require.main === module) {
 module.exports = {
   MIN_PANEL_AGENTS,
   reconcilePr,
+  reconcileRebasedPr,
   remainingBudget,
   planPanel,
   planBatch,
