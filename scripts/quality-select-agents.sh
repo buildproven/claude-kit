@@ -47,4 +47,4 @@ if [ "$TIER" = critical ] && [ "$MERGE_AUTHORITY" = autonomous ]; then
 fi
 
 node "$SCRIPT_DIR/quality-invocation.js" agents "$MANIFEST" "${AGENTS[@]}" || exit 1
-echo "[quality] Selected ${#AGENTS[@]}/$N agents for tier=$TIER (incomplete=$PANEL_INCOMPLETE)"
+echo "[quality] Selected ${#AGENTS[@]} agents for tier=$TIER"
