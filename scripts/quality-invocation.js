@@ -2623,6 +2623,7 @@ function providerFindings(manifest) {
     usableReviewerReports = 0;
     requiredUsableReports = 0;
     let structuredProviderReports = 0;
+    const structuredProviderNames = new Set();
     // Reset too: a malformed agent in round 1 must not be reported against
     // round 2's panel now that the quorum is evaluated inside the loop.
     inconclusiveAgents = [];
@@ -2680,6 +2681,7 @@ function providerFindings(manifest) {
         continue;
       }
       const resultProvider = item.provider || inventory.provider;
+      structuredProviderNames.add(resultProvider);
       // Preserved primary evidence stays authoritative for its findings, but
       // only the selected panel can contribute a verdict toward that panel's
       // quorum. This matters when Claude falls back after a partial Codex run.
@@ -2707,6 +2709,11 @@ function providerFindings(manifest) {
       file.name.endsWith(".findings.txt"),
     )) {
       const isPanelReport = item.provider === inventory.provider;
+      const aggregateProvider = item.name.match(
+        /^(codex|gemini)\.findings\.txt$/,
+      )?.[1];
+      const aggregateHasStructuredResult =
+        !!aggregateProvider && structuredProviderNames.has(aggregateProvider);
       // A structured result with actual findings is canonical for its paired
       // aggregate. An empty structured result cannot silence conflicting
       // aggregate text, which remains fail-closed evidence.
@@ -2761,7 +2768,9 @@ function providerFindings(manifest) {
         continue;
       }
       if (isClean) {
-        if (isPanelReport) usableReviewerReports += 1;
+        if (isPanelReport && !aggregateHasStructuredResult) {
+          usableReviewerReports += 1;
+        }
         continue;
       }
       // Strip the trailing <<<FINDINGS REPORTED>>> delimiter line (if that's
@@ -2811,7 +2820,9 @@ function providerFindings(manifest) {
         inconclusiveAgents.push(item.name);
         continue;
       }
-      if (isPanelReport) usableReviewerReports += 1;
+      if (isPanelReport && !aggregateHasStructuredResult) {
+        usableReviewerReports += 1;
+      }
       const body = strippedBody;
       findings.push({
         id: crypto
