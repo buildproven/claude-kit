@@ -2622,6 +2622,7 @@ function providerFindings(manifest) {
     const reviewFindingsStart = findings.length;
     usableReviewerReports = 0;
     requiredUsableReports = 0;
+    let structuredProviderReports = 0;
     // Reset too: a malformed agent in round 1 must not be reported against
     // round 2's panel now that the quorum is evaluated inside the loop.
     inconclusiveAgents = [];
@@ -2679,6 +2680,7 @@ function providerFindings(manifest) {
       // reports findings or reports none. Text summaries for the same result
       // are skipped below to avoid double counting the provider pass.
       usableReviewerReports += 1;
+      structuredProviderReports += 1;
       items.forEach((finding, index) => {
         findings.push({
           ...finding,
@@ -2784,6 +2786,18 @@ function providerFindings(manifest) {
       // a retry path. Do NOT treat it as clean — absent findings text is not
       // evidence of an absent finding.
       if (!strippedBody.trim()) {
+        // The aggregate Codex/Gemini findings text belongs to the same
+        // provider pass as its structured result. A delimiter-only aggregate
+        // means that pass is malformed, so it must revoke one otherwise-valid
+        // structured verdict rather than being masked by it. Peer reviewer
+        // reports remain independently usable.
+        if (
+          structuredProviderReports > 0 &&
+          /^(?:codex|gemini)\.findings\.txt$/.test(item.name)
+        ) {
+          usableReviewerReports -= 1;
+          structuredProviderReports -= 1;
+        }
         inconclusiveAgents.push(item.name);
         continue;
       }
