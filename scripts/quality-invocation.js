@@ -1532,7 +1532,7 @@ function recordBaseRebaseCarry(manifest, priorHead, nextHead, replay) {
     actualTree,
     recordedAt: new Date().toISOString(),
   };
-  manifest.revisions.reviewRebaseCarry = {
+  const reviewCarry = {
     reviewedHead: priorHead,
     head: nextHead,
     baseSha: freshBaseSha,
@@ -1540,6 +1540,17 @@ function recordBaseRebaseCarry(manifest, priorHead, nextHead, replay) {
     actualTree,
     recordedAt: new Date().toISOString(),
   };
+  // A train member can be rebased repeatedly as earlier members land. Keep
+  // every exact replay proof so review coverage can traverse from the
+  // original provider-reviewed HEAD to the current head.
+  const priorCarries = Array.isArray(manifest.revisions.reviewRebaseCarries)
+    ? manifest.revisions.reviewRebaseCarries
+    : manifest.revisions.reviewRebaseCarry
+      ? [manifest.revisions.reviewRebaseCarry]
+      : [];
+  manifest.revisions.reviewRebaseCarries = [...priorCarries, reviewCarry];
+  // Compatibility pointer for consumers that only need the latest carry.
+  manifest.revisions.reviewRebaseCarry = reviewCarry;
   // baseHeadSha (unlike baseSha) does not namespace stateRoot or anchor
   // trailer provenance — it exists solely so quality-authorize-merge.sh can
   // do a final live-freshness check at merge time. Advance it with the
@@ -3282,14 +3293,25 @@ function reviewCoverage(manifest) {
     }
     expectedFrom = review.to;
   }
-  const carry = manifest.revisions.reviewRebaseCarry;
-  const carriedReview =
-    carry &&
-    carry.reviewedHead === expectedFrom &&
-    carry.head === manifest.revisions.currentHead &&
-    carry.expectedTree === carry.actualTree &&
-    /^[0-9a-f]{40}$/.test(carry.expectedTree);
-  if (carriedReview) expectedFrom = carry.head;
+  const carries = Array.isArray(manifest.revisions.reviewRebaseCarries)
+    ? manifest.revisions.reviewRebaseCarries
+    : manifest.revisions.reviewRebaseCarry
+      ? [manifest.revisions.reviewRebaseCarry]
+      : [];
+  const seenHeads = new Set();
+  while (expectedFrom !== manifest.revisions.currentHead) {
+    const carry = carries.find(
+      (candidate) => candidate.reviewedHead === expectedFrom,
+    );
+    const carriedReview =
+      carry &&
+      carry.expectedTree === carry.actualTree &&
+      /^[0-9a-f]{40}$/.test(carry.expectedTree) &&
+      !seenHeads.has(carry.head);
+    if (!carriedReview) break;
+    seenHeads.add(carry.head);
+    expectedFrom = carry.head;
+  }
   if (expectedFrom !== manifest.revisions.currentHead) {
     throw new Error("final HEAD has not been covered by review evidence");
   }

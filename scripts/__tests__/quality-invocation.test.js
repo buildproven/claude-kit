@@ -1982,6 +1982,29 @@ exec "${realGit}" "$@"
       ).status,
     ).toBe(0);
 
+    // A later train member can be rebased again after another earlier PR
+    // lands. Preserve both exact replay edges rather than overwriting the
+    // original provider-reviewed endpoint.
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(
+      path.join(root, "unrelated-two.js"),
+      "export const u2 = 1;\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "second unrelated main change"]);
+    git(root, ["push", "-q", "origin", "main"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["rebase", "-q", "origin/main"]);
+    const twiceRebasedHead = git(root, ["rev-parse", "HEAD"]);
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    const twiceRebased = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(twiceRebased.revisions.reviewRebaseCarries).toHaveLength(2);
+    expect(twiceRebased.revisions.reviewRebaseCarries).toMatchObject([
+      { reviewedHead: priorHead, head: rebasedHead },
+      { reviewedHead: rebasedHead, head: twiceRebasedHead },
+    ]);
+
     // A genuine new content change after the rebase must still invalidate
     // the carried approval — rebase tolerance must never become a blanket
     // pass.
