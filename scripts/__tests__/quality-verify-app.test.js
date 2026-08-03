@@ -146,8 +146,10 @@ describe("quality-verify-app.sh", () => {
     const elapsedSeconds = (Date.now() - started) / 1000;
     expect(status).not.toBe(0);
     expect(stderr).toMatch(/did not bind port 3000 within 3s/);
-    // Generous upper bound: must not hang anywhere near the 300s sleep.
-    expect(elapsedSeconds).toBeLessThan(20);
+    // This is a process-cleanup bound, not a CPU scheduling benchmark. The
+    // isolated case is normally ~9s; allow CI contention but reject anything
+    // remotely close to the 300s child sleep it must terminate.
+    expect(elapsedSeconds).toBeLessThan(35);
   });
 
   it("fails clearly if the dev script exits before binding its port", () => {

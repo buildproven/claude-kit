@@ -43,22 +43,28 @@ set -m
 "$@" &
 CHILD_PID=$!
 set +m
-kill_process_tree() {
-  local signal="$1" pid="$2" child
-  # Native helpers can escape the shell's job-control group. Walk descendants
-  # even after a group kill succeeds so the cap cannot leave one running.
+process_tree_postorder() {
+  local pid="$1" child
+  # Snapshot descendants before signalling the process group. A native helper
+  # can call setsid(2), and would otherwise survive a group kill then become
+  # reparented before we can find it with pgrep -P.
   while IFS= read -r child; do
     [ -n "$child" ] || continue
-    kill_process_tree "$signal" "$child"
+    process_tree_postorder "$child"
   done < <(pgrep -P "$pid" 2>/dev/null || true)
-  kill "-$signal" "$pid" 2>/dev/null || true
+  printf '%s\n' "$pid"
 }
 terminate_provider() {
-  kill -TERM "-${CHILD_PID}" 2>/dev/null || true
-  kill_process_tree TERM "$CHILD_PID"
+  local targets
+  targets="$(process_tree_postorder "$CHILD_PID")"
+  # Descendants first, then the provider leader. This ordering preserves the
+  # PID list long enough to kill escaped session leaders as well.
+  [ -z "$targets" ] || kill -TERM $targets 2>/dev/null || true
   sleep 1
+  [ -z "$targets" ] || kill -KILL $targets 2>/dev/null || true
+  # A normal descendant created after the snapshot remains in this group.
+  kill -TERM "-${CHILD_PID}" 2>/dev/null || true
   kill -KILL "-${CHILD_PID}" 2>/dev/null || true
-  kill_process_tree KILL "$CHILD_PID"
 }
 set -m
 watchdog() {
@@ -78,13 +84,29 @@ watchdog() {
 watchdog &
 WATCHDOG_PID=$!
 set +m
+stop_watchdog() {
+  local targets
+  # The timeout marker is written before terminate_provider's one-second TERM
+  # grace period. Once it exists, the watchdog owns escalation; stopping it
+  # here would cancel the required SIGKILL after the leader exits and leave a
+  # session-escaped, TERM-ignoring helper running.
+  if [ -f "$MARKER" ]; then
+    wait "$WATCHDOG_PID" 2>/dev/null || true
+    return
+  fi
+  # The watchdog is a shell with a sleeping child. Killing only the shell
+  # queues its trap until that sleep ends on macOS Bash, turning every fast
+  # command into a full timeout wait. Terminate its descendants first.
+  targets="$(process_tree_postorder "$WATCHDOG_PID")"
+  [ -z "$targets" ] || kill -TERM $targets 2>/dev/null || true
+  wait "$WATCHDOG_PID" 2>/dev/null || true
+}
 cleanup_provider() {
   local status="${1:-130}"
   trap - INT TERM HUP EXIT
   terminate_provider
-  kill -TERM "-${WATCHDOG_PID}" 2>/dev/null || kill "$WATCHDOG_PID" 2>/dev/null || true
+  stop_watchdog
   wait "$CHILD_PID" 2>/dev/null || true
-  wait "$WATCHDOG_PID" 2>/dev/null || true
   rm -f "$MARKER"
   exit "$status"
 }
@@ -93,8 +115,7 @@ trap 'cleanup_provider 143' TERM
 trap 'cleanup_provider 129' HUP
 trap 'cleanup_provider $?' EXIT
 wait "$CHILD_PID"; RC=$?
-kill -TERM "-${WATCHDOG_PID}" 2>/dev/null || kill "$WATCHDOG_PID" 2>/dev/null || true
-wait "$WATCHDOG_PID" 2>/dev/null || true
+stop_watchdog
 trap - INT TERM HUP EXIT
 if [ -f "$MARKER" ]; then rm -f "$MARKER"; exit 124; fi
 exit "$RC"

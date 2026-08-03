@@ -55,7 +55,7 @@ describe("merge-train batch controller", () => {
     });
   });
 
-  it("carries only a provably identical patch across a same-repository rebase", () => {
+  it("requires runtime replay proof for a same-repository rebase", () => {
     const reviewed = {
       number: 42,
       headSha: sha("a"),
@@ -66,21 +66,18 @@ describe("merge-train batch controller", () => {
         number: 42,
         headSha: sha("c"),
         baseSha: sha("d"),
-        reviewedPatchId: sha("e"),
-        currentPatchId: sha("e"),
       }),
     ).toMatchObject({
       changed: { head: true, base: true },
       rebaseOnly: true,
       requiresFreshReview: false,
+      requiresRuntimeReplayProof: true,
     });
     expect(
       reconcileRebasedPr(reviewed, {
         number: 42,
         headSha: sha("c"),
-        baseSha: sha("d"),
-        reviewedPatchId: sha("e"),
-        currentPatchId: sha("f"),
+        baseSha: sha("b"),
       }),
     ).toMatchObject({ rebaseOnly: false, requiresFreshReview: true });
   });
@@ -98,8 +95,6 @@ describe("merge-train batch controller", () => {
             number: 42,
             headSha: sha("c"),
             baseSha: sha("d"),
-            reviewedPatchId: sha("e"),
-            currentPatchId: sha("e"),
           },
         }),
       },
@@ -108,6 +103,7 @@ describe("merge-train batch controller", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({
       rebaseOnly: true,
       requiresFreshReview: false,
+      requiresRuntimeReplayProof: true,
     });
   });
 

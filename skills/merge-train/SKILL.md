@@ -97,9 +97,9 @@ For each repo with PRs to process, spawn a Task agent **with `isolation: "worktr
 - The repo path
 - The PR list to process for its repo
 - The `--max-diff` threshold
-- Instruction to invoke `/bs:quality` for review and `/bs:quality --merge` only in the landing phase
+- Instruction to create one `/bs:quality --merge` manifest during review, but not to invoke its stamp/merge step until landing
 
-**Same-repository batches are two-phase (mandatory):** review every admitted PR against the one frozen base before merging any of them. Then merge in dependency order. After each landed PR, rebase every remaining reviewed PR onto the new base. Do **not** launch another provider panel solely because that base moved: ask the quality runtime to advance the exact manifest, and carry its review only when `git patch-id --stable` proves the reviewed patch and rebased patch identical. The runtime records the carry, emits a fresh signed empty stamp, and reruns required CI on the rebased head. Any conflict, patch-id mismatch, changed code, missing proof, or failed CI is `deferred (rebase requires fresh review)`. This prevents the N-by-N review treadmill without treating stale or altered code as reviewed.
+**Same-repository batches are two-phase (mandatory):** review every admitted PR against the one frozen base before merging any of them. Then merge in dependency order. After each landed PR, rebase every remaining reviewed PR onto the new base. Do **not** launch another provider panel solely because that base moved: advance the exact merge-intent manifest, and carry its review only when the runtime proves that replaying the exact reviewed binary patch onto the new base yields the rebased HEAD's exact tree. The runtime records that proof, carries the reviewed range, emits a fresh signed empty stamp, and reruns required CI on the rebased head. Any conflict, replay mismatch, changed code, missing proof, or failed CI is `deferred (rebase requires fresh review)`. This prevents the N-by-N review treadmill without treating stale or altered code as reviewed.
 
 Worker contract:
 
@@ -108,12 +108,12 @@ Worker contract:
    - Fetch the PR head and base, reconcile the PR with its base, and capture the current `headRefOid`/`baseRefOid` before running any gate. Feed the discovery/current snapshots plus the shared batch clock to `scripts/merge-train-batch.js`.
    - `gh pr checkout <num>` into the agent's isolated worktree only after that reconciliation succeeds.
    - Verify no pre-existing broken CI (lint, tests). If broken, **fix as part of this PR's work** — do not defer (per workflow rule)
-   - Run `/bs:quality` without merge intent against the exact reconciled PR target and persist its exact manifest, completed review, clean gates, and patch-id. Never invoke `gh pr merge` directly.
+   - Start `/bs:quality --merge` against the exact reconciled PR target and persist its exact merge-intent manifest, completed review, and clean gates. Do not invoke the stamp/merge step in this phase, and never invoke `gh pr merge` directly.
    - If diff > `--max-diff`, do NOT auto-merge; mark for manual review
    - If the diff is over `--max-diff`, do NOT start a merge campaign; mark for manual review.
 3. **Landing phase — for each fully reviewed PR (oldest first):**
-   - Re-read its PR head/base. If an earlier landing moved its base, use the approved rebase/update path and send `{ "mode": "rebase-carry", "reviewed": <snapshot>, "rebased": <snapshot plus reviewedPatchId/currentPatchId> }` to `merge-train-batch.js` on stdin. A carry is valid only when it reports `rebaseOnly: true`; otherwise defer it for a fresh campaign.
-   - Resume the exact manifest. The runtime must record the rebase carry and create a new signed empty stamp on the rebased reviewed head; required CI must pass on that head before `/bs:quality --merge` may land it.
+   - Re-read its PR head/base. If an earlier landing moved its base, use the approved rebase/update path and send `{ "mode": "rebase-carry", "reviewed": <snapshot>, "rebased": <snapshot> }` to `merge-train-batch.js` on stdin. Only `rebaseOnly: true` permits an attempt; the quality runtime must then prove exact binary replay, otherwise defer it for a fresh campaign.
+   - Resume the exact manifest. The runtime must record the rebase carry and create a new signed empty stamp on the rebased reviewed head; required CI must pass on that head before the existing merge-intent campaign may land it.
    - Treat `/bs:quality --merge` as the merge outcome. It alone owns identity validation, review coverage, CI, authorization, and merge.
    - Post-merge: invoke `quality-merge-cleanup.sh` through the quality campaign, then reconcile the assigned worktree with `worktree-manager.js`. Never `git checkout main` from the worker: the primary checkout already owns that branch.
 4. Return a per-repo summary
@@ -143,7 +143,7 @@ For each "Manual review" or "Failed" PR, if a `--linear-team`/`$BS_MERGE_TRAIN_L
 - **Never invoke `gh pr merge` from a worker** — `/bs:quality --merge` is the only merge authority.
 - **Never push directly to main** — every change goes through a PR.
 - **Reconcile worktrees after every successful merge** — quality cleanup owns the primary checkout; workers never check out its branch.
-- **Never reuse stale review evidence** — a changed PR head or base starts a new exact-head campaign, except for the runtime-verified, patch-id-identical rebase carry described above. The carry still requires a fresh signed stamp and CI on the new head.
+- **Never reuse stale review evidence** — a changed PR head or base starts a new exact-head campaign, except for the runtime-verified exact-binary-replay carry described above. The carry still requires a fresh signed stamp and CI on the new head.
 - **Never hide a reduced panel** — a budget-reduced review is marked incomplete and cannot be represented as full merge evidence.
 
 ## Failure Modes & Recovery

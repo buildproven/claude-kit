@@ -61,50 +61,51 @@ function canonicalRoot(input) {
   return fs.realpathSync(git(resolved, ["rev-parse", "--show-toplevel"]));
 }
 
-// Stable identity for "the reviewed diff" that survives a pure rebase (same
-// tree changes replayed onto a newer base, no new content). `git patch-id`
-// hashes the diff hunks independent of blob/commit SHAs, so a rebase-only
-// HEAD change yields the same patch-id while any real content change does
-// not. Returns null if the ref has no diff against base (e.g. identical to
-// base) or patch-id computation fails, so callers must treat null as
-// "cannot prove equivalence" rather than a wildcard match.
-function computePatchId(root, base, head) {
+// Prove that applying the exact binary diff reviewed at oldHead onto newBase
+// produces nextHead's tree. This is stronger than git patch-id: patch-id
+// deliberately ignores whitespace and cannot safely authorize a carry.
+function replayedTree(root, oldBase, oldHead, newBase) {
   try {
-    const diff = execFileSync("git", ["diff", `${base}..${head}`], {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      maxBuffer: 1024 * 1024 * 64,
-    });
-    if (!diff.trim()) return null;
-    const patchId = execFileSync("git", ["patch-id", "--stable"], {
-      cwd: root,
-      encoding: "utf8",
-      input: diff,
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
-    const hash = patchId.split(/\s+/)[0];
-    return /^[0-9a-f]{40}$/.test(hash) ? hash : null;
+    const diff = execFileSync(
+      "git",
+      ["diff", "--binary", "--full-index", oldBase, oldHead],
+      {
+        cwd: root,
+        encoding: "buffer",
+        stdio: ["ignore", "pipe", "pipe"],
+        maxBuffer: 1024 * 1024 * 64,
+      },
+    );
+    const indexFile = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "quality-rebase-index-")),
+      "index",
+    );
+    try {
+      const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+      execFileSync("git", ["read-tree", newBase], {
+        cwd: root,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      execFileSync("git", ["apply", "--cached", "--whitespace=nowarn", "-"], {
+        cwd: root,
+        env,
+        input: diff,
+        stdio: ["pipe", "pipe", "pipe"],
+        maxBuffer: 1024 * 1024 * 64,
+      });
+      return execFileSync("git", ["write-tree"], {
+        cwd: root,
+        env,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    } finally {
+      fs.rmSync(path.dirname(indexFile), { recursive: true, force: true });
+    }
   } catch {
     return null;
   }
-}
-
-// Patch-id of the currently reviewed HEAD against a freshly resolved base.
-// Always recompute the base from the live ref rather than the manifest's
-// stored baseSha snapshot — the stored value is fixed at creation time and
-// would make every post-creation rebase look like a diff change even when
-// only the base moved.
-function currentPatchId(manifest, root) {
-  const baseRef = manifest.revisions.baseRef;
-  if (!baseRef) return null;
-  let base;
-  try {
-    base = git(root, ["merge-base", "HEAD", baseRef]);
-  } catch {
-    return null;
-  }
-  return computePatchId(root, base, "HEAD");
 }
 
 function isAncestorOf(root, ancestor, descendant) {
@@ -1487,20 +1488,31 @@ function assertCurrentReviewStrength(manifest, root) {
 
 // A real rebase rewrites commits, so nextHead is typically NOT a descendant
 // of priorHead even when the reviewed diff is unchanged (only the base
-// moved). Returns true only when the diff against each head's own live base
-// is provably identical (patch-id match) — a rebase-only replay, not new
-// content.
+// moved). The exact binary patch reviewed at priorHead must replay onto the
+// new base to the rebased head's exact tree; anything weaker is not a carry.
 function isRebaseOnlyReplay(manifest, root, priorHead) {
   const baseRef = manifest.revisions.baseRef;
-  let priorBase;
+  let priorBase, freshBaseSha;
   try {
-    priorBase = baseRef && git(root, ["merge-base", priorHead, baseRef]);
+    const carried = manifest.revisions.baseRebaseCarry;
+    // A remediation/fix commit may be a normal descendant of a previously
+    // carried rebase. Its next rebase must still use that carried base, not
+    // the immutable campaign-creation base.
+    priorBase =
+      carried && isAncestorOf(root, carried.head, priorHead)
+        ? carried.baseSha
+        : manifest.revisions.baseSha;
+    freshBaseSha = baseRef && git(root, ["merge-base", "HEAD", baseRef]);
   } catch {
-    priorBase = null;
+    return null;
   }
-  const priorPatchId = priorBase && computePatchId(root, priorBase, priorHead);
-  const nextPatchId = currentPatchId(manifest, root);
-  return Boolean(priorPatchId && nextPatchId && priorPatchId === nextPatchId);
+  const expectedTree =
+    priorBase &&
+    freshBaseSha &&
+    replayedTree(root, priorBase, priorHead, freshBaseSha);
+  const actualTree = git(root, ["rev-parse", "HEAD^{tree}"]);
+  if (!expectedTree || expectedTree !== actualTree) return null;
+  return { priorBase, freshBaseSha, expectedTree, actualTree };
 }
 
 // Persist proof that baseSha (immutable — it namespaces stateRoot and
@@ -1513,16 +1525,37 @@ function isRebaseOnlyReplay(manifest, root, priorHead) {
 // isAncestor branch on the next advance call) must NOT clear this record —
 // it still correctly names the reconciled live base for the whole
 // descendant chain.
-function recordBaseRebaseCarry(manifest, root, nextHead) {
-  const baseRef = manifest.revisions.baseRef;
-  const freshBaseSha = baseRef
-    ? git(root, ["merge-base", nextHead, baseRef])
-    : null;
+function recordBaseRebaseCarry(manifest, priorHead, nextHead, replay) {
+  const { priorBase, freshBaseSha, expectedTree, actualTree } = replay;
   manifest.revisions.baseRebaseCarry = {
     head: nextHead,
     baseSha: freshBaseSha,
+    priorHead,
+    priorBaseSha: priorBase,
+    expectedTree,
+    actualTree,
     recordedAt: new Date().toISOString(),
   };
+  const reviewCarry = {
+    reviewedHead: priorHead,
+    head: nextHead,
+    baseSha: freshBaseSha,
+    priorBaseSha: priorBase,
+    expectedTree,
+    actualTree,
+    recordedAt: new Date().toISOString(),
+  };
+  // A train member can be rebased repeatedly as earlier members land. Keep
+  // every exact replay proof so review coverage can traverse from the
+  // original provider-reviewed HEAD to the current head.
+  const priorCarries = Array.isArray(manifest.revisions.reviewRebaseCarries)
+    ? manifest.revisions.reviewRebaseCarries
+    : manifest.revisions.reviewRebaseCarry
+      ? [manifest.revisions.reviewRebaseCarry]
+      : [];
+  manifest.revisions.reviewRebaseCarries = [...priorCarries, reviewCarry];
+  // Compatibility pointer for consumers that only need the latest carry.
+  manifest.revisions.reviewRebaseCarry = reviewCarry;
   // baseHeadSha (unlike baseSha) does not namespace stateRoot or anchor
   // trailer provenance — it exists solely so quality-authorize-merge.sh can
   // do a final live-freshness check at merge time. Advance it with the
@@ -1532,32 +1565,18 @@ function recordBaseRebaseCarry(manifest, root, nextHead) {
   if (freshBaseSha) manifest.revisions.baseHeadSha = freshBaseSha;
 }
 
-function invalidateOrCarryApproval(manifest, root, nextHead, rebaseOnly) {
+function invalidateApproval(manifest, nextHead) {
   if (
     manifest.approval?.approved !== true ||
     manifest.approval.head === nextHead
   ) {
     return;
   }
-  if (
-    rebaseOnly &&
-    typeof manifest.approval.patchId === "string" &&
-    manifest.approval.patchId === currentPatchId(manifest, root)
-  ) {
-    // Rebase-only HEAD change with a patch-id-identical diff: the approved
-    // capability's signed payload still names the old head, so it cannot
-    // authorize a merge of nextHead directly (approvalValid() checks the
-    // signature payload, not this cache), but preserve the record instead
-    // of discarding it — the rebase-tolerant check in approvalValid()
-    // re-derives validity from the patch-id match, not this flag alone.
-    manifest.approval.rebaseCarriedHead = nextHead;
-  } else {
-    manifest.approval = {
-      approved: false,
-      invalidatedAt: new Date().toISOString(),
-      reason: `HEAD advanced from ${manifest.approval.head} to ${nextHead}`,
-    };
-  }
+  manifest.approval = {
+    approved: false,
+    invalidatedAt: new Date().toISOString(),
+    reason: `HEAD advanced from ${manifest.approval.head} to ${nextHead}`,
+  };
 }
 
 function advanceHead(manifest, root) {
@@ -1579,18 +1598,18 @@ function advanceHead(manifest, root) {
     if (nextHead === stampHead) return false;
   }
   const isAncestor = isAncestorOf(root, priorHead, nextHead);
-  let rebaseOnly = false;
+  let replay = null;
   if (!isAncestor) {
-    rebaseOnly = isRebaseOnlyReplay(manifest, root, priorHead);
-    if (!rebaseOnly) {
+    replay = isRebaseOnlyReplay(manifest, root, priorHead);
+    if (!replay) {
       throw new Error(
         `quality resume refused: ${priorHead} is not an ancestor of ${nextHead} ` +
           `and the diff is not a provable rebase-only replay`,
       );
     }
   }
-  if (rebaseOnly) recordBaseRebaseCarry(manifest, root, nextHead);
-  invalidateOrCarryApproval(manifest, root, nextHead, rebaseOnly);
+  if (replay) recordBaseRebaseCarry(manifest, priorHead, nextHead, replay);
+  invalidateApproval(manifest, nextHead);
   if (stampHead) {
     manifest.merge.invalidatedStamps.push({
       head: stampHead,
@@ -1934,21 +1953,6 @@ function bindPrRepositoryIdentity(manifest, options) {
   }
 }
 
-// True when the approval's signed head no longer equals currentHead, but
-// advanceHead() recorded it as carried across a provable rebase-only replay
-// (identical patch-id) and that equivalence still holds right now. Recomputed
-// fresh rather than trusting the cached flag alone, so a later real content
-// change (which would call advanceHead again and clear rebaseCarriedHead,
-// or leave a stale flag if inspected out-of-band) can never wrongly pass.
-function approvalHeadCarriedByRebase(manifest, approval, root) {
-  if (!root) return false;
-  if (approval?.rebaseCarriedHead !== manifest.revisions.currentHead) {
-    return false;
-  }
-  if (typeof approval.patchId !== "string") return false;
-  return approval.patchId === currentPatchId(manifest, root);
-}
-
 // baseSha binding: an operator-override capability is signed against the
 // exact base it was diagnosed against (BUI-575 requirement 1/4). A normal
 // approval's baseSha is not force-checked byte-for-byte across a legitimate
@@ -1963,10 +1967,8 @@ function approvalBaseMatches(manifest, approval) {
   );
 }
 
-function approvalRecordIdentityMatches(manifest, approval, root) {
-  const headMatches =
-    approval?.head === manifest.revisions.currentHead ||
-    approvalHeadCarriedByRebase(manifest, approval, root);
+function approvalRecordIdentityMatches(manifest, approval) {
+  const headMatches = approval?.head === manifest.revisions.currentHead;
   const expected = {
     repoKey: manifest.repo.key,
     pr: manifest.repo.pr,
@@ -1987,10 +1989,10 @@ function approvalArtifactIntact(approval) {
   );
 }
 
-function approvalRecordValid(manifest, approval, root) {
+function approvalRecordValid(manifest, approval) {
   return Boolean(
     approval?.approved === true &&
-    approvalRecordIdentityMatches(manifest, approval, root) &&
+    approvalRecordIdentityMatches(manifest, approval) &&
     typeof approval.approver === "string" &&
     approval.approver.trim() !== "" &&
     Date.parse(approval.expiresAt) > Date.now() &&
@@ -2051,9 +2053,9 @@ function approvalPayloadIdentityMatches(manifest, approval, payload) {
   );
 }
 
-function approvalValid(manifest, root) {
+function approvalValid(manifest) {
   const approval = manifest.approval;
-  if (!approvalRecordValid(manifest, approval, root)) return false;
+  if (!approvalRecordValid(manifest, approval)) return false;
   try {
     const artifact = parseJson(
       fs.readFileSync(approval.artifactPath, "utf8"),
@@ -2169,7 +2171,6 @@ function attachApproval(manifest, options) {
     // rebase-only HEAD change (advanceHead()) can prove the diff is still
     // identical without re-signing. Best-effort: null if unavailable (e.g.
     // empty diff against base), in which case rebase-carry never applies.
-    patchId: currentPatchId(manifest, manifest.repo.realpath),
   };
   manifest.approvalChallengeSha256 = null;
 }
@@ -3297,6 +3298,36 @@ function reviewCoverage(manifest) {
     }
     expectedFrom = review.to;
   }
+  const carries = Array.isArray(manifest.revisions.reviewRebaseCarries)
+    ? manifest.revisions.reviewRebaseCarries
+    : manifest.revisions.reviewRebaseCarry
+      ? [manifest.revisions.reviewRebaseCarry]
+      : [];
+  const seenHeads = new Set();
+  while (expectedFrom !== manifest.revisions.currentHead) {
+    const carry = carries.find(
+      (candidate) => candidate.reviewedHead === expectedFrom,
+    );
+    const replayed =
+      carry &&
+      replayedTree(
+        manifest.repo.realpath,
+        carry.priorBaseSha,
+        carry.reviewedHead,
+        carry.baseSha,
+      );
+    const actualTree =
+      carry &&
+      git(manifest.repo.realpath, ["rev-parse", `${carry.head}^{tree}`]);
+    const carriedReview =
+      carry &&
+      replayed &&
+      replayed === actualTree &&
+      !seenHeads.has(carry.head);
+    if (!carriedReview) break;
+    seenHeads.add(carry.head);
+    expectedFrom = carry.head;
+  }
   if (expectedFrom !== manifest.revisions.currentHead) {
     throw new Error("final HEAD has not been covered by review evidence");
   }
@@ -4230,8 +4261,6 @@ module.exports = {
   completeProviderAttempt,
   atomicWrite,
   canonicalRoot,
-  computePatchId,
-  currentPatchId,
   createManifest,
   loadManifest,
   lifecycleStale,
