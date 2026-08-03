@@ -201,11 +201,9 @@ describe("quality terminal diagnosis", () => {
       }).status,
     ).toBe(0);
 
-    // Rebase-only HEAD change (BUI-380): the approval's signed payload
-    // still names the pre-rebase head, so approvalValid() can only prove it
-    // still applies by recomputing a live patch-id against manifest.repo.
-    // realpath — this is the exact path that silently breaks if
-    // breakGlassStatus() forgets to pass root through to approvalValid().
+    // A rebase-only HEAD change invalidates a human approval. Provider review
+    // carry is separately proven by exact binary replay; a human capability
+    // remains bound to the exact commit the human approved.
     git(root, ["switch", "-q", "main"]);
     writeFileSync(path.join(root, "unrelated.js"), "export const u = 1;\n");
     git(root, ["add", "."]);
@@ -219,7 +217,7 @@ describe("quality terminal diagnosis", () => {
       spawnSync("node", [INVOCATION, "approval-valid", manifestPath], {
         cwd: root,
       }).status,
-    ).toBe(0);
+    ).not.toBe(0);
 
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     manifest.risk.tier = "critical";
@@ -227,11 +225,8 @@ describe("quality terminal diagnosis", () => {
     manifest.risk.mergeAuthority = "human-required";
     const output = buildDiagnosis(manifestPath, manifest, {});
     expect(output).toMatch(
-      new RegExp(
-        `Break-glass: approved through ${manifest.approval.expiresAt}`,
-      ),
+      new RegExp("Break-glass: required and missing or stale"),
     );
-    expect(output).not.toContain("required and missing or stale");
     expect(output).toContain("Worktree lock: not tracked");
   });
 });

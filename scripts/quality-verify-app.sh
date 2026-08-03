@@ -246,11 +246,24 @@ if ! port_is_free "$PORT"; then
 fi
 
 DEV_LOG="$(mktemp -t quality-verify-app-boot.XXXXXX)"
+process_tree_postorder() {
+  local pid="$1" child
+  while IFS= read -r child; do
+    [ -n "$child" ] || continue
+    process_tree_postorder "$child"
+  done < <(pgrep -P "$pid" 2>/dev/null || true)
+  printf '%s\n' "$pid"
+}
 cleanup() {
   if [ -n "${DEV_PID:-}" ] && kill -0 "$DEV_PID" 2>/dev/null; then
-    kill -TERM "-$DEV_PID" 2>/dev/null || kill -TERM "$DEV_PID" 2>/dev/null
+    local targets
+    targets="$(process_tree_postorder "$DEV_PID")"
+    # npm commonly starts a shell which starts the dev server. Kill that
+    # captured tree before the shell can reparent a sleeping child.
+    [ -z "$targets" ] || kill -TERM $targets 2>/dev/null || true
     sleep 1
-    kill -KILL "-$DEV_PID" 2>/dev/null || kill -KILL "$DEV_PID" 2>/dev/null
+    [ -z "$targets" ] || kill -KILL $targets 2>/dev/null || true
+    kill -TERM "-$DEV_PID" 2>/dev/null || true
   fi
   rm -f "$DEV_LOG"
 }
