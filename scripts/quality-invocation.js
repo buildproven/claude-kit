@@ -2646,11 +2646,11 @@ function providerFindings(manifest) {
     // not only Claude. Artifact inventory already applies the same floor when
     // it is written; keeping the denominator aligned prevents an unparseable
     // JSON result from disappearing after inventory succeeds.
-    if (review.status !== "advisory") {
+    if (review.status !== "advisory" && reviewerResultFiles.length > 0) {
       const panelSize =
         inventory.provider === "claude"
           ? manifest.agents.length
-          : Math.max(1, reviewerResultFiles.length);
+          : reviewerResultFiles.length;
       requiredUsableReports = Math.floor(panelSize / 2) + 1;
     }
     for (const item of reviewerResultFiles) {
@@ -2675,6 +2675,10 @@ function providerFindings(manifest) {
         inconclusiveAgents.push(item.name);
         continue;
       }
+      // A valid structured result is one usable reviewer verdict whether it
+      // reports findings or reports none. Text summaries for the same result
+      // are skipped below to avoid double counting the provider pass.
+      usableReviewerReports += 1;
       items.forEach((finding, index) => {
         findings.push({
           ...finding,

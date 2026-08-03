@@ -4234,6 +4234,7 @@ exit 1
     expect(fn).toContain('inventory.provider === "claude"');
     expect(fn).toContain("reviewerResultFiles.length");
     expect(fn).toContain("Math.floor(panelSize / 2) + 1");
+    expect(fn).toContain("usableReviewerReports += 1;");
   });
 
   it("treats an empty findings artifact as inconclusive at read time", () => {
