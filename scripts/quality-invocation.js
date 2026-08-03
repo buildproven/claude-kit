@@ -1494,9 +1494,13 @@ function isRebaseOnlyReplay(manifest, root, priorHead) {
   const baseRef = manifest.revisions.baseRef;
   let priorBase, freshBaseSha;
   try {
+    const carried = manifest.revisions.baseRebaseCarry;
+    // A remediation/fix commit may be a normal descendant of a previously
+    // carried rebase. Its next rebase must still use that carried base, not
+    // the immutable campaign-creation base.
     priorBase =
-      manifest.revisions.baseRebaseCarry?.head === priorHead
-        ? manifest.revisions.baseRebaseCarry.baseSha
+      carried && isAncestorOf(root, carried.head, priorHead)
+        ? carried.baseSha
         : manifest.revisions.baseSha;
     freshBaseSha = baseRef && git(root, ["merge-base", "HEAD", baseRef]);
   } catch {
@@ -3303,10 +3307,21 @@ function reviewCoverage(manifest) {
     const carry = carries.find(
       (candidate) => candidate.reviewedHead === expectedFrom,
     );
+    const replayed =
+      carry &&
+      replayedTree(
+        manifest.repo.realpath,
+        carry.priorBaseSha,
+        carry.reviewedHead,
+        carry.baseSha,
+      );
+    const actualTree =
+      carry &&
+      git(manifest.repo.realpath, ["rev-parse", `${carry.head}^{tree}`]);
     const carriedReview =
       carry &&
-      carry.expectedTree === carry.actualTree &&
-      /^[0-9a-f]{40}$/.test(carry.expectedTree) &&
+      replayed &&
+      replayed === actualTree &&
       !seenHeads.has(carry.head);
     if (!carriedReview) break;
     seenHeads.add(carry.head);
