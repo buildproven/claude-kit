@@ -2643,15 +2643,18 @@ function providerFindings(manifest) {
           candidate.name === `primary-${providerName}-${pass}.result.json`,
       );
     });
+    const quorumResultFiles = reviewerResultFiles.filter(
+      (file) => file.provider === inventory.provider,
+    );
     // Every non-advisory provider panel needs a usable majority at read time,
     // not only Claude. Artifact inventory already applies the same floor when
     // it is written; keeping the denominator aligned prevents an unparseable
     // JSON result from disappearing after inventory succeeds.
-    if (review.status !== "advisory" && reviewerResultFiles.length > 0) {
+    if (review.status !== "advisory") {
       const panelSize =
         inventory.provider === "claude"
           ? manifest.agents.length
-          : reviewerResultFiles.length;
+          : quorumResultFiles.length;
       requiredUsableReports = Math.floor(panelSize / 2) + 1;
     }
     for (const item of reviewerResultFiles) {
@@ -2676,11 +2679,14 @@ function providerFindings(manifest) {
         inconclusiveAgents.push(item.name);
         continue;
       }
-      // A valid structured result is one usable reviewer verdict whether it
-      // reports findings or reports none. Text summaries for the same result
-      // are skipped below to avoid double counting the provider pass.
-      usableReviewerReports += 1;
-      structuredProviderReports += 1;
+      const resultProvider = item.provider || inventory.provider;
+      // Preserved primary evidence stays authoritative for its findings, but
+      // only the selected panel can contribute a verdict toward that panel's
+      // quorum. This matters when Claude falls back after a partial Codex run.
+      if (resultProvider === inventory.provider) {
+        usableReviewerReports += 1;
+        structuredProviderReports += 1;
+      }
       items.forEach((finding, index) => {
         findings.push({
           ...finding,
@@ -2692,17 +2698,20 @@ function providerFindings(manifest) {
             .digest("hex"),
           severity: finding.severity || "unknown",
           title: finding.title || "provider finding",
-          provider: item.provider || inventory.provider,
-          source: `${item.provider || inventory.provider}:${item.name}#${index}`,
+          provider: resultProvider,
+          source: `${resultProvider}:${item.name}#${index}`,
         });
       });
     }
-    const hasStructuredFindings = findings.length > reviewFindingsStart;
     for (const item of inventory.files.filter((file) =>
       file.name.endsWith(".findings.txt"),
     )) {
+      const isPanelReport = item.provider === inventory.provider;
+      // A structured result with actual findings is canonical for its paired
+      // aggregate. An empty structured result cannot silence conflicting
+      // aggregate text, which remains fail-closed evidence.
       if (
-        hasStructuredFindings &&
+        findings.length > reviewFindingsStart &&
         /^(?:codex|gemini)\.findings\.txt$/.test(item.name)
       ) {
         continue;
@@ -2748,11 +2757,11 @@ function providerFindings(manifest) {
       // result, never a silent absence of evidence. This must match the
       // write-time inventory gate's treatment of empty reports.
       if (!text) {
-        inconclusiveAgents.push(item.name);
+        if (isPanelReport) inconclusiveAgents.push(item.name);
         continue;
       }
       if (isClean) {
-        usableReviewerReports += 1;
+        if (isPanelReport) usableReviewerReports += 1;
         continue;
       }
       // Strip the trailing <<<FINDINGS REPORTED>>> delimiter line (if that's
@@ -2792,6 +2801,7 @@ function providerFindings(manifest) {
         // structured verdict rather than being masked by it. Peer reviewer
         // reports remain independently usable.
         if (
+          isPanelReport &&
           structuredProviderReports > 0 &&
           /^(?:codex|gemini)\.findings\.txt$/.test(item.name)
         ) {
@@ -2801,7 +2811,7 @@ function providerFindings(manifest) {
         inconclusiveAgents.push(item.name);
         continue;
       }
-      usableReviewerReports += 1;
+      if (isPanelReport) usableReviewerReports += 1;
       const body = strippedBody;
       findings.push({
         id: crypto

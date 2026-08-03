@@ -4232,7 +4232,7 @@ exit 1
       source.indexOf("function priorFindings(manifest)"),
     );
     expect(fn).toContain('inventory.provider === "claude"');
-    expect(fn).toContain("reviewerResultFiles.length");
+    expect(fn).toContain("quorumResultFiles.length");
     expect(fn).toContain("Math.floor(panelSize / 2) + 1");
     expect(fn).toContain("usableReviewerReports += 1;");
   });
@@ -4244,7 +4244,7 @@ exit 1
       source.indexOf("function priorFindings(manifest)"),
     );
     expect(fn).toContain(
-      "if (!text) {\n        inconclusiveAgents.push(item.name);",
+      "if (!text) {\n        if (isPanelReport) inconclusiveAgents.push(item.name);",
     );
   });
 

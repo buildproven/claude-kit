@@ -142,7 +142,8 @@ rejected. Accepting a high-risk condition (a security or test gate, missing
 CI, or an unresolved code finding) additionally requires the matching
 acknowledgement flag: `--i-understand-security-risk`,
 `--i-understand-test-risk`, `--i-understand-missing-ci`, or
-`--i-understand-code-finding`. These flags are deliberately available to the
+`--i-understand-code-finding`; accepting exhausted provider review also
+requires `--i-understand-missing-review`. These flags are deliberately available to the
 repository owner, never technically blocked — they exist to make accepting
 serious risk a harder-to-fat-finger action than the ordinary accept path.
 

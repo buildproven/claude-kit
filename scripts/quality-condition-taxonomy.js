@@ -101,7 +101,7 @@ function reviewCondition(manifest, reviewFailureReason) {
     {
       id: `review:${reviewFailureReason}`,
       description,
-      highRisk: false,
+      highRisk: reviewFailureReason === "provider-exhaustion",
     },
   ];
 }
