@@ -294,6 +294,27 @@ describe("quality-wrapper override command surface", () => {
     expect(parsed.reason).toMatch(/known transient outage/);
   });
 
+  it("requires an explicit acknowledgement for exhausted provider review", () => {
+    const { parseApprovalCommand } = require(WRAPPER);
+    const args = [
+      "override",
+      "--pr",
+      "1",
+      "--head",
+      "a".repeat(40),
+      "--reason",
+      "provider budget exhausted after deterministic gates passed",
+      "--accept",
+      "review:provider-exhaustion",
+    ];
+    expect(() => parseApprovalCommand(args)).toThrow(
+      /i-understand-missing-review/,
+    );
+    expect(() =>
+      parseApprovalCommand([...args, "--i-understand-missing-review"]),
+    ).not.toThrow();
+  });
+
   it("does not require an acknowledgement flag for a standard-risk condition", () => {
     const { parseApprovalCommand } = require(WRAPPER);
     expect(() =>

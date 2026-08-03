@@ -2632,6 +2632,16 @@ function providerFindings(manifest) {
     const resultFiles = inventory.files.filter((file) =>
       file.name.endsWith(".json"),
     );
+    const reviewerResultFiles = resultFiles.filter((file) => {
+      const rawPass = file.name.match(/^(codex|gemini)-(\d+)\.json$/);
+      if (!rawPass) return true;
+      const [, providerName, pass] = rawPass;
+      return !resultFiles.some(
+        (candidate) =>
+          candidate.name === `${providerName}-${pass}.normalized.json` ||
+          candidate.name === `primary-${providerName}-${pass}.result.json`,
+      );
+    });
     // Every non-advisory provider panel needs a usable majority at read time,
     // not only Claude. Artifact inventory already applies the same floor when
     // it is written; keeping the denominator aligned prevents an unparseable
@@ -2640,19 +2650,10 @@ function providerFindings(manifest) {
       const panelSize =
         inventory.provider === "claude"
           ? manifest.agents.length
-          : resultFiles.length;
+          : Math.max(1, reviewerResultFiles.length);
       requiredUsableReports = Math.floor(panelSize / 2) + 1;
     }
-    const resultNames = new Set(resultFiles.map((file) => file.name));
-    for (const item of resultFiles.filter((file) => {
-      const rawPass = file.name.match(/^(codex|gemini)-(\d+)\.json$/);
-      if (!rawPass) return true;
-      const [, providerName, pass] = rawPass;
-      return (
-        !resultNames.has(`${providerName}-${pass}.normalized.json`) &&
-        !resultNames.has(`primary-${providerName}-${pass}.result.json`)
-      );
-    })) {
+    for (const item of reviewerResultFiles) {
       let parsed;
       try {
         parsed = parseJson(

@@ -4232,7 +4232,7 @@ exit 1
       source.indexOf("function priorFindings(manifest)"),
     );
     expect(fn).toContain('inventory.provider === "claude"');
-    expect(fn).toContain("resultFiles.length");
+    expect(fn).toContain("reviewerResultFiles.length");
     expect(fn).toContain("Math.floor(panelSize / 2) + 1");
   });
 
