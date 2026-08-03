@@ -1967,6 +1967,7 @@ exec "${realGit}" "$@"
     expect(afterState.revisions.reviewRebaseCarry).toMatchObject({
       reviewedHead: priorHead,
       head: rebasedHead,
+      priorBaseSha: beforeState.revisions.baseSha,
       expectedTree: afterState.revisions.reviewRebaseCarry.actualTree,
     });
     expect(
@@ -2001,8 +2002,16 @@ exec "${realGit}" "$@"
     const twiceRebased = JSON.parse(readFileSync(manifest, "utf8"));
     expect(twiceRebased.revisions.reviewRebaseCarries).toHaveLength(2);
     expect(twiceRebased.revisions.reviewRebaseCarries).toMatchObject([
-      { reviewedHead: priorHead, head: rebasedHead },
-      { reviewedHead: rebasedHead, head: twiceRebasedHead },
+      {
+        reviewedHead: priorHead,
+        head: rebasedHead,
+        priorBaseSha: beforeState.revisions.baseSha,
+      },
+      {
+        reviewedHead: rebasedHead,
+        head: twiceRebasedHead,
+        priorBaseSha: newMainHead,
+      },
     ]);
 
     // A genuine new content change after the rebase must still invalidate

@@ -1540,6 +1540,7 @@ function recordBaseRebaseCarry(manifest, priorHead, nextHead, replay) {
     reviewedHead: priorHead,
     head: nextHead,
     baseSha: freshBaseSha,
+    priorBaseSha: priorBase,
     expectedTree,
     actualTree,
     recordedAt: new Date().toISOString(),
