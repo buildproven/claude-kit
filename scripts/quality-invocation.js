@@ -2629,12 +2629,20 @@ function providerFindings(manifest) {
       fs.readFileSync(path.join(review.artifactDir, "artifact-inventory.json")),
       "provider artifact inventory",
     );
-    if (inventory.provider === "claude" && review.status !== "advisory") {
-      requiredUsableReports = Math.floor(manifest.agents.length / 2) + 1;
-    }
     const resultFiles = inventory.files.filter((file) =>
       file.name.endsWith(".json"),
     );
+    // Every non-advisory provider panel needs a usable majority at read time,
+    // not only Claude. Artifact inventory already applies the same floor when
+    // it is written; keeping the denominator aligned prevents an unparseable
+    // JSON result from disappearing after inventory succeeds.
+    if (review.status !== "advisory") {
+      const panelSize =
+        inventory.provider === "claude"
+          ? manifest.agents.length
+          : resultFiles.length;
+      requiredUsableReports = Math.floor(panelSize / 2) + 1;
+    }
     const resultNames = new Set(resultFiles.map((file) => file.name));
     for (const item of resultFiles.filter((file) => {
       const rawPass = file.name.match(/^(codex|gemini)-(\d+)\.json$/);
@@ -2729,7 +2737,13 @@ function providerFindings(manifest) {
               ),
           );
       }
-      if (!text) continue;
+      // A zero-byte findings artifact is a truncated or failed reviewer
+      // result, never a silent absence of evidence. This must match the
+      // write-time inventory gate's treatment of empty reports.
+      if (!text) {
+        inconclusiveAgents.push(item.name);
+        continue;
+      }
       if (isClean) {
         usableReviewerReports += 1;
         continue;

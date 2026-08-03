@@ -4222,6 +4222,31 @@ exit 1
     ).toHaveLength(2);
   });
 
+  it("requires a usable majority for every non-advisory provider panel", () => {
+    // Codex and Gemini may run multiple passes. Their read-time quorum must
+    // use the same panel denominator as writeArtifactInventory(), rather than
+    // accepting one usable result while malformed siblings disappear.
+    const source = readFileSync(INVOCATION, "utf8");
+    const fn = source.slice(
+      source.indexOf("function providerFindings(manifest)"),
+      source.indexOf("function priorFindings(manifest)"),
+    );
+    expect(fn).toContain('inventory.provider === "claude"');
+    expect(fn).toContain("resultFiles.length");
+    expect(fn).toContain("Math.floor(panelSize / 2) + 1");
+  });
+
+  it("treats an empty findings artifact as inconclusive at read time", () => {
+    const source = readFileSync(INVOCATION, "utf8");
+    const fn = source.slice(
+      source.indexOf("function providerFindings(manifest)"),
+      source.indexOf("function priorFindings(manifest)"),
+    );
+    expect(fn).toContain(
+      "if (!text) {\n        inconclusiveAgents.push(item.name);",
+    );
+  });
+
   it("still inventories a panel whose reports are all non-empty", () => {
     const root = repo("nonempty-findings-usable");
     const manifestPath = create(root);

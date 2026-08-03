@@ -1,0 +1,4 @@
+# Public-kit secret scanning policy. Start from Gitleaks' maintained default
+# rules rather than carrying project-specific suppressions in a security gate.
+[extend]
+useDefault = true
