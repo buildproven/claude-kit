@@ -1,5 +1,6 @@
 const {
   reconcilePr,
+  reconcileRebasedPr,
   remainingBudget,
   planPanel,
   planBatch,
@@ -52,6 +53,36 @@ describe("merge-train batch controller", () => {
       changed: { head: true, base: false },
       requiresFreshReview: true,
     });
+  });
+
+  it("carries only a provably identical patch across a same-repository rebase", () => {
+    const reviewed = {
+      number: 42,
+      headSha: sha("a"),
+      baseSha: sha("b"),
+    };
+    expect(
+      reconcileRebasedPr(reviewed, {
+        number: 42,
+        headSha: sha("c"),
+        baseSha: sha("d"),
+        reviewedPatchId: sha("e"),
+        currentPatchId: sha("e"),
+      }),
+    ).toMatchObject({
+      changed: { head: true, base: true },
+      rebaseOnly: true,
+      requiresFreshReview: false,
+    });
+    expect(
+      reconcileRebasedPr(reviewed, {
+        number: 42,
+        headSha: sha("c"),
+        baseSha: sha("d"),
+        reviewedPatchId: sha("e"),
+        currentPatchId: sha("f"),
+      }),
+    ).toMatchObject({ rebaseOnly: false, requiresFreshReview: true });
   });
 
   it("shares one batch clock instead of granting every PR a new campaign budget", () => {
