@@ -255,6 +255,7 @@ process_tree_postorder() {
   printf '%s\n' "$pid"
 }
 cleanup() {
+  trap - EXIT INT TERM
   if [ -n "${DEV_PID:-}" ] && kill -0 "$DEV_PID" 2>/dev/null; then
     local targets
     targets="$(process_tree_postorder "$DEV_PID")"
@@ -264,6 +265,10 @@ cleanup() {
     sleep 1
     [ -z "$targets" ] || kill -KILL $targets 2>/dev/null || true
     kill -TERM "-$DEV_PID" 2>/dev/null || true
+    # Reap the npm launcher. Without this explicit wait, macOS Bash can
+    # keep the EXIT trap alive while its former job table drains, turning a
+    # three-second boot failure into a multi-dozen-second gate.
+    wait "$DEV_PID" 2>/dev/null || true
   fi
   rm -f "$DEV_LOG"
 }
