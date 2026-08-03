@@ -86,6 +86,14 @@ WATCHDOG_PID=$!
 set +m
 stop_watchdog() {
   local targets
+  # The timeout marker is written before terminate_provider's one-second TERM
+  # grace period. Once it exists, the watchdog owns escalation; stopping it
+  # here would cancel the required SIGKILL after the leader exits and leave a
+  # session-escaped, TERM-ignoring helper running.
+  if [ -f "$MARKER" ]; then
+    wait "$WATCHDOG_PID" 2>/dev/null || true
+    return
+  fi
   # The watchdog is a shell with a sleeping child. Killing only the shell
   # queues its trap until that sleep ends on macOS Bash, turning every fast
   # command into a full timeout wait. Terminate its descendants first.

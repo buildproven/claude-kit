@@ -91,7 +91,7 @@ describe("provider review runtime", () => {
         "--",
         "/bin/bash",
         "-c",
-        'python3 -c \'import os,sys,time; os.setsid(); open(sys.argv[1], "w").write(str(os.getpid())); time.sleep(20)\' "$1" & wait',
+        'python3 -c \'import os,signal,sys,time; os.setsid(); signal.signal(signal.SIGTERM, signal.SIG_IGN); open(sys.argv[1], "w").write(str(os.getpid())); time.sleep(20)\' "$1" & wait',
         "provider",
         pidFile,
       ],
