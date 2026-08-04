@@ -4243,9 +4243,8 @@ exit 1
       source.indexOf("function providerFindings(manifest)"),
       source.indexOf("function priorFindings(manifest)"),
     );
-    expect(fn).toContain(
-      "if (!text) {\n        if (isPanelReport) inconclusiveAgents.push(item.name);",
-    );
+    expect(fn).toContain("if (!text) {\n        revokeAggregateVerdict();");
+    expect(fn).toContain("const revokeAggregateVerdict = () => {");
   });
 
   it("still inventories a panel whose reports are all non-empty", () => {

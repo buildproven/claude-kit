@@ -2714,6 +2714,16 @@ function providerFindings(manifest) {
       )?.[1];
       const aggregateHasStructuredResult =
         !!aggregateProvider && structuredProviderNames.has(aggregateProvider);
+      const revokeAggregateVerdict = () => {
+        if (
+          isPanelReport &&
+          aggregateHasStructuredResult &&
+          structuredProviderReports > 0
+        ) {
+          usableReviewerReports -= 1;
+          structuredProviderReports -= 1;
+        }
+      };
       // A structured result with actual findings is canonical for its paired
       // aggregate. An empty structured result cannot silence conflicting
       // aggregate text, which remains fail-closed evidence.
@@ -2764,6 +2774,7 @@ function providerFindings(manifest) {
       // result, never a silent absence of evidence. This must match the
       // write-time inventory gate's treatment of empty reports.
       if (!text) {
+        revokeAggregateVerdict();
         if (isPanelReport) inconclusiveAgents.push(item.name);
         continue;
       }
@@ -2809,14 +2820,7 @@ function providerFindings(manifest) {
         // means that pass is malformed, so it must revoke one otherwise-valid
         // structured verdict rather than being masked by it. Peer reviewer
         // reports remain independently usable.
-        if (
-          isPanelReport &&
-          structuredProviderReports > 0 &&
-          /^(?:codex|gemini)\.findings\.txt$/.test(item.name)
-        ) {
-          usableReviewerReports -= 1;
-          structuredProviderReports -= 1;
-        }
+        revokeAggregateVerdict();
         inconclusiveAgents.push(item.name);
         continue;
       }
