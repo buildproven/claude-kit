@@ -694,9 +694,14 @@ function matchesSecurityFloor(file, cfg = DEFAULTS) {
       pattern.toLowerCase(),
     ),
   );
-  const added = (
-    Array.isArray(cfg?.securityFloor) ? cfg.securityFloor : []
-  ).filter((pattern) => !builtIn.has(String(pattern).toLowerCase()));
+  // Lowercase the patterns too. `normalized` is already lowercased (see
+  // normalizeFloorPath), so a repo pattern with any capitals — `**/Compliance/**`
+  // — could never match, silently voiding the opt-in this branch exists to
+  // honor. additiveFloorPatterns lowercases for exactly this reason; the
+  // built-in comparison above already did, and only the match did not.
+  const added = (Array.isArray(cfg?.securityFloor) ? cfg.securityFloor : [])
+    .map((pattern) => String(pattern).toLowerCase())
+    .filter((pattern) => !builtIn.has(pattern));
   if (added.length > 0 && matchesPattern(normalized, added)) {
     return true;
   }

@@ -275,6 +275,17 @@ describe("repo-declared securityFloor patterns survive the carve-out", () => {
     );
   });
 
+  it("honors a repo-added pattern regardless of its casing", () => {
+    // normalizeFloorPath lowercases the PATH, so a pattern carrying any
+    // capitals could never match and the opt-in was silently voided.
+    const upper = {
+      ...DEFAULTS,
+      securityFloor: [...DEFAULTS.securityFloor, "**/Compliance/**"],
+    };
+    expect(matchesSecurityFloor("Compliance/soc2.md", upper)).toBe(true);
+    expect(matchesSecurityFloor("compliance/soc2.md", upper)).toBe(true);
+  });
+
   it("honors a repo-added pattern for code", () => {
     expect(matchesSecurityFloor("compliance/app.js", withCompliance)).toBe(
       true,
