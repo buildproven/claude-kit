@@ -3360,7 +3360,10 @@ function reviewCoverage(manifest) {
   }
   verifyGateEvidence(manifest);
   return {
-    base: manifest.revisions.baseSha,
+    // A carried review is proven against the rebased live base. The immutable
+    // creation base still namespaces the campaign, but it is not the base the
+    // stamped tree now merges from (and must not be signed into Quality-Base).
+    base: effectiveBaseSha(manifest),
     head: manifest.revisions.currentHead,
     provider: manifest.provider.reviewer,
     primary: manifest.provider.primary,
