@@ -257,6 +257,42 @@ describe("no credential-shaped path escapes the floor", () => {
   });
 });
 
+describe("repo-declared securityFloor patterns survive the carve-out", () => {
+  // The carve-out narrows the BUILT-IN floor, whose breadth is an accident of
+  // substring matching. A pattern a repository deliberately adds to
+  // harness-config.json is a decision, and additiveFloorPatterns exists so repo
+  // policy can only ever ADD strictness. Running isProsePath() first silently
+  // voided those opt-ins — no test exercised matchesSecurityFloor with a custom
+  // cfg, so nothing caught it.
+  const withCompliance = {
+    ...DEFAULTS,
+    securityFloor: [...DEFAULTS.securityFloor, "**/compliance/**"],
+  };
+
+  it("honors a repo-added pattern for prose", () => {
+    expect(matchesSecurityFloor("compliance/soc2.md", withCompliance)).toBe(
+      true,
+    );
+  });
+
+  it("honors a repo-added pattern for code", () => {
+    expect(matchesSecurityFloor("compliance/app.js", withCompliance)).toBe(
+      true,
+    );
+  });
+
+  // …without disabling the carve-out for the built-in patterns. Diffing against
+  // DEFAULTS is what separates the two: cfg.securityFloor legitimately contains
+  // the built-in list, so treating the whole array as repo-declared would undo
+  // this entire change.
+  it.each(["docs/monkey.md", "docs/monkeys.md", "docs/token-budget.md"])(
+    "%s still escapes the built-in floor under a custom cfg",
+    (file) => {
+      expect(matchesSecurityFloor(file, withCompliance)).toBe(false);
+    },
+  );
+});
+
 describe("scored tier for ordinary documentation work", () => {
   // End-to-end: a docs-only change must land far below the critical band, not
   // merely below the floor.

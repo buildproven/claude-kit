@@ -548,8 +548,15 @@ const KEY_WORD_FALSE_POSITIVES = new Set([
   "lackeys",
   "mickey",
   "hokey",
+  "hokeys",
   "pinkey",
+  "pinkeys",
   "malarkey",
+  "malarkeys",
+  "hickey",
+  "hickeys",
+  "mickeys",
+  "hockeys",
 ]);
 
 // A token is credential-shaped when it ends in `key`/`keys` and is not one of
@@ -664,8 +671,37 @@ function matchesSecurityFloor(file, cfg = DEFAULTS) {
   // security-sensitive instead of trying to assign ordinary risk to an
   // ambiguous/adversarial display surface.
   if (hasControlCharacters(file)) return true;
+  const normalized = normalizeFloorPath(file);
+  // A repo-declared securityFloor pattern is an explicit opt-in and is NEVER
+  // subject to the prose carve-out. The carve-out narrows the BUILT-IN floor,
+  // whose breadth is an accident of substring matching; a pattern a repository
+  // deliberately added to harness-config.json is a decision, not an accident.
+  //
+  // Checking it after isProsePath() silently voided that decision — with
+  // scorePolicy.securityFloor: ["**/compliance/**"], `compliance/soc2.md`
+  // scored 40 instead of 85 while `compliance/app.js` correctly stayed 85.
+  // That breaks the documented additive contract (additiveFloorPatterns exists
+  // precisely so repo policy can only ever ADD strictness, never remove it),
+  // and no built-in trade-off covers it: the accepted trade-offs are about
+  // built-in security *concepts*, not repo-declared surface.
+  // Only patterns the repo ADDED count. cfg.securityFloor legitimately contains
+  // the built-in list (loadConfig merges over DEFAULTS), so treating the whole
+  // array as repo-declared would bypass the carve-out for every built-in
+  // pattern and undo this change entirely — `docs/monkeys.md` floored again.
+  // Diff against DEFAULTS to isolate the genuine opt-ins.
+  const builtIn = new Set(
+    [...DEFAULTS.securityFloor, ...DEFAULTS.humanFloor].map((pattern) =>
+      pattern.toLowerCase(),
+    ),
+  );
+  const added = (
+    Array.isArray(cfg?.securityFloor) ? cfg.securityFloor : []
+  ).filter((pattern) => !builtIn.has(String(pattern).toLowerCase()));
+  if (added.length > 0 && matchesPattern(normalized, added)) {
+    return true;
+  }
   if (isProsePath(file)) return false;
-  return matchesPattern(normalizeFloorPath(file), effectiveSecurityFloor(cfg));
+  return matchesPattern(normalized, effectiveSecurityFloor(cfg));
 }
 
 function securityFloorScore(cfg = DEFAULTS) {
