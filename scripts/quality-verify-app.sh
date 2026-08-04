@@ -269,10 +269,10 @@ cleanup() {
     # observe. Match the captured-tree escalation so TERM-ignoring servers
     # cannot survive the gate and retain its port.
     kill -KILL "-$DEV_PID" 2>/dev/null || true
-    # Reap the npm launcher. Without this explicit wait, macOS Bash can
-    # keep the EXIT trap alive while its former job table drains, turning a
+    # Do not wait indefinitely for npm's launcher here. The completed
+    # TERM→KILL tree/group teardown is the process-cleanup contract; an
+    # unbounded `wait` can remain tied to a reparented descendant and turn a
     # three-second boot failure into a multi-dozen-second gate.
-    wait "$DEV_PID" 2>/dev/null || true
   fi
   rm -f "$DEV_LOG"
 }
