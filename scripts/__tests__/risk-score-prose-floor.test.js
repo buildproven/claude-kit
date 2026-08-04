@@ -39,6 +39,26 @@ describe("security-relevant prose keeps the floor", () => {
   // Prose living inside a sensitive directory documents the very surface the
   // floor protects. Escaping by extension would be a real weakening.
   const stillSensitive = [
+    // Regressions caught by independent review of this PR — each was on the
+    // floor before the prose carve-out and silently fell off it. Kept as
+    // explicit cases because the original suite tested only paths the
+    // implementation already handled, so it was not red-capable against the
+    // actual weakening.
+    [".github/workflows/README.md", "CI dir is top-tier supply-chain surface"],
+    [".github/workflows/notes.txt", "same, .txt"],
+    [".husky/README.md", "git hooks directory"],
+    ["my-secret-key.txt", "qualifier-prefixed credential name"],
+    ["prod-api-key.txt", "qualifier-prefixed api key"],
+    ["license-key.md", "license key"],
+    ["key-prod.md", "trailing-token credential name"],
+    ["session-key-notes.md", "credential stem mid-name"],
+    [".env.md", "prose suffix must not launder .env"],
+    [".env.production.md", "multi-extension .env"],
+    ["prod.env.md", ".env as inner extension"],
+    ["docs/id_rsa.md", "ssh private key under a prose suffix"],
+    ["id_rsa.txt", "same, .txt"],
+    ["docs/id_ed25519.txt", "ed25519 private key"],
+    ["passwd/README.md", "prose inside a passwd directory"],
     ["src/api-key.txt", "a .txt named api-key may BE the credential"],
     ["src/api_key.txt", "underscore variant"],
     ["src/apikey.txt", "unseparated variant"],
@@ -77,6 +97,70 @@ describe("non-prose security surfaces are untouched", () => {
   ];
 
   it.each(sensitive)("%s stays on the floor", (file) => {
+    expect(matchesSecurityFloor(file)).toBe(true);
+  });
+});
+
+describe("no credential-shaped path escapes the floor", () => {
+  // The hand-written lists above only cover cases someone thought of, which is
+  // how three regression classes shipped past the first draft. This derives its
+  // candidates FROM the floor patterns themselves, so a newly-added floor
+  // pattern is swept automatically rather than needing a matching test.
+  //
+  // It asserts the narrow, non-negotiable property: a path whose basename
+  // denotes credential MATERIAL keeps the floor under every prose extension.
+  // Security-topic prose (docs/auth.md) is deliberately excluded — see the
+  // trade-off note in risk-score.js.
+  const CREDENTIAL_MATERIAL = [
+    ".env",
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "api-key",
+    "api_key",
+    "apikey",
+    "access-key",
+    "private-key",
+    "secret-key",
+    "signing-key",
+    "key",
+    "keys",
+    "keystore",
+    "keyring",
+    "keychain",
+    "credentials",
+    "secrets",
+  ];
+  const PROSE_EXTS = [".md", ".mdx", ".markdown", ".txt", ".rst", ".adoc"];
+  const SENSITIVE_DIRS = [
+    ".github/workflows",
+    ".husky",
+    "secrets",
+    "auth",
+    "keys",
+    "deploy",
+    "passwd",
+    "passwords",
+  ];
+
+  const materialCases = CREDENTIAL_MATERIAL.flatMap((stem) =>
+    PROSE_EXTS.flatMap((ext) => [
+      `${stem}${ext}`,
+      `docs/${stem}${ext}`,
+      `src/prod-${stem}${ext}`,
+    ]),
+  );
+
+  it.each(materialCases)("%s keeps the security floor", (file) => {
+    expect(matchesSecurityFloor(file)).toBe(true);
+  });
+
+  const dirCases = SENSITIVE_DIRS.flatMap((dir) =>
+    PROSE_EXTS.map((ext) => `${dir}/README${ext}`),
+  );
+
+  it.each(dirCases)("%s keeps the security floor", (file) => {
     expect(matchesSecurityFloor(file)).toBe(true);
   });
 });

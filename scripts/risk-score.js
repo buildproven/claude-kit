@@ -342,11 +342,22 @@ function effectiveSecurityFloor(cfg = DEFAULTS) {
 // documentation edit and blocked the mechanical downgrade that would otherwise
 // apply.
 //
-// This does NOT weaken the floor. Real credential material never carries these
-// extensions: a .pem/.key/.p12/.env is matched by its own extension pattern and
-// is unaffected, and anything whose CONTENT is sensitive is still caught by the
-// secret-content scanners and by the explicit-path patterns below. Only the
-// name-substring path is narrowed, and only for prose.
+// This does NOT weaken the floor for credential MATERIAL. A .pem/.key/.p12/.env
+// keeps the floor even under a prose suffix (see CREDENTIAL_STEM), prose inside
+// a sensitive directory keeps it (PROSE_DIRECTORY_FLOOR), credential-shaped
+// basenames keep it (hasCredentialToken + PROSE_NAME_FLOOR), and anything whose
+// CONTENT is sensitive is still caught by the secret scanners.
+//
+// DELIBERATE TRADE-OFF, decided rather than inherited: prose *named after* a
+// security topic — `docs/auth.md`, `docs/token.md`, `docs/deploy.md`,
+// `docs/middleware.md` — does drop from the critical band to ordinary review.
+// These are files ABOUT the protected surface, not the surface itself, and
+// treating every such document as critical is what produced the 44%-critical
+// rate this change exists to fix. Two things bound the risk: the human floor
+// (touchesHumanFloor) is untouched and still catches them for manual-governance
+// repos, and any real secret pasted into one is caught by content scanning
+// rather than by its filename. Revisit by extending PROSE_NAME_FLOOR if a
+// specific document turns out to warrant the floor on its name alone.
 const PROSE_EXTENSIONS = new Set([
   ".md",
   ".mdx",
@@ -366,6 +377,14 @@ const PROSE_EXTENSIONS = new Set([
 // is satisfied by its own basename. If any floor pattern matches by virtue of a
 // parent directory, the floor still applies.
 const PROSE_DIRECTORY_FLOOR = [
+  // CI and hook directories are the top-tier supply-chain surface: a .md or
+  // .txt added under .github/workflows/ is exactly the shape used to smuggle
+  // content a workflow later reads. These were missing from the first draft of
+  // this list, which silently dropped `.github/workflows/README.md` off the
+  // floor — the most sensitive directories in DEFAULTS.securityFloor.
+  "**/.github/workflows/**",
+  "**/.husky/**",
+  "**/*.husky/**",
   "**/security/**",
   "**/*secret*/**",
   "**/*credential*/**",
@@ -376,6 +395,7 @@ const PROSE_DIRECTORY_FLOOR = [
   "**/*key*/**",
   "**/*token*/**",
   "**/*password*/**",
+  "**/*passwd*/**",
   "**/*licens*/**",
   "**/deploy/**",
   "**/*deploy*/**",
@@ -383,6 +403,29 @@ const PROSE_DIRECTORY_FLOOR = [
   "**/*keystore*/**",
   "**/*keyring*/**",
   "**/*keychain*/**",
+];
+
+// Credential-bearing stems that keep the floor even under a prose extension.
+// A prose SUFFIX must not launder a credential filename: `.env.md`,
+// `id_rsa.txt`, and `cert.pem.md` are routine ways to stage or leak secret
+// material, and classifying by the LAST extension alone lets all three through.
+// These are tested against the basename with prose extensions stripped.
+const CREDENTIAL_STEM = [
+  "**/.env*",
+  "**/id_rsa*",
+  "**/id_dsa*",
+  "**/id_ecdsa*",
+  "**/id_ed25519*",
+  "**/*.pem",
+  "**/*.key",
+  "**/*.p12",
+  "**/*.pfx",
+  "**/*.jks",
+  "**/*.keystore",
+  "**/*.ppk",
+  "**/*.pk8",
+  "**/*.kdb",
+  "**/*.kdbx",
 ];
 
 // Prose whose own name marks it as a security document keeps the floor too.
@@ -399,6 +442,18 @@ const PROSE_NAME_FLOOR = [
   "**/*passwd*.*",
   "**/credentials.*",
   "**/secrets.*",
+  // Compound credential nouns anywhere in the basename. These are names for the
+  // secret itself rather than writing about one, and the original floor caught
+  // every one via `**/*apikey*.*` and friends. Distinct from hasCredentialToken
+  // above, which handles the separated `<qualifier>-key` forms.
+  "**/*apikey*.*",
+  "**/*privatekey*.*",
+  "**/*secretkey*.*",
+  "**/*accesskey*.*",
+  "**/*signingkey*.*",
+  "**/*keystore*.*",
+  "**/*keyring*.*",
+  "**/*keychain*.*",
 ];
 
 // Credential-shaped basenames such as `api-key.txt`, `apikey.txt`, or
@@ -409,12 +464,83 @@ const PROSE_NAME_FLOOR = [
 // Anchored to the BASENAME so `monkey.md` and `api-keyboard.md` are excluded:
 // the token before "key" must be a real qualifier, or "key"/"keys" must stand
 // alone as the whole stem.
-const CREDENTIAL_BASENAME =
-  /^((api|access|private|public|secret|signing|ssh|host|master|encryption)[-_.]?keys?|keys?)(\.[a-z0-9]+)$/;
+//
+// An optional leading token is allowed before the qualifier — anchoring the
+// qualifier at ^ meant `my-secret-key.txt`, `prod-api-key.txt`, and
+// `license-key.md` all escaped while the bare `secret-key.txt` was caught, even
+// though the original floor caught every one of them via `**/*-key*.*`. The
+// leading group must end in a [-_.] separator, which is what still excludes
+// `monkey.md` (no separator before "key") and `api-keyboard.md` (fails the
+// `keys?` stem anchor — "keyboard" is not "key").
+// A trailing token after the stem is allowed too, so `key-prod.md` and
+// `session-key-notes.md` keep the floor — the original caught them via
+// `**/key-*.*` and `**/*-key*.*`. `monkey.md` is still excluded (the leading
+// group must end in a separator) and `api-keyboard.md` still is too (a trailing
+// token must START with a separator, and "board" does not).
+// Implemented as a token scan rather than one regex: the natural expression
+// (`^(.*[-_.])?<stem>([-_.].*)?\.ext$`) nests unbounded wildcards on both sides
+// of the stem, which is a catastrophic-backtracking risk on a
+// partially-attacker-influenced filename (eslint security/detect-unsafe-regex).
+// Splitting the basename on separators is linear and easier to reason about.
+const CREDENTIAL_QUALIFIERS = new Set([
+  "api",
+  "access",
+  "private",
+  "public",
+  "secret",
+  "signing",
+  "ssh",
+  "host",
+  "master",
+  "encryption",
+]);
+const KEY_STEMS = new Set(["key", "keys"]);
+
+function hasCredentialToken(basename) {
+  const dot = basename.lastIndexOf(".");
+  if (dot <= 0) return false;
+  const tokens = basename
+    .slice(0, dot)
+    .split(/[-_.]+/)
+    .filter(Boolean);
+  return tokens.some((token, index) => {
+    // A bare `key` / `keys` token anywhere: key.md, key-prod.md,
+    // session-key-notes.md. Excludes `monkey` and `keyboard`, which tokenize
+    // whole and never equal "key".
+    if (KEY_STEMS.has(token)) return true;
+    // An unseparated compound: apikey.txt, privatekey.md.
+    for (const qualifier of CREDENTIAL_QUALIFIERS) {
+      if (
+        token.startsWith(qualifier) &&
+        KEY_STEMS.has(token.slice(qualifier.length))
+      ) {
+        return true;
+      }
+    }
+    // A separated pair: api-key.txt, my-secret-key.txt.
+    const next = tokens[index + 1];
+    return CREDENTIAL_QUALIFIERS.has(token) && next !== undefined
+      ? KEY_STEMS.has(next)
+      : false;
+  });
+}
+
+// Strip prose extensions repeatedly so `.env.production.md` reduces to `.env`
+// and `id_rsa.txt` to `id_rsa` before the credential-stem patterns are applied.
+function stripProseExtensions(basename) {
+  let stem = basename;
+  for (let guard = 0; guard < 5; guard += 1) {
+    const dot = stem.lastIndexOf(".");
+    if (dot <= 0) break;
+    if (!PROSE_EXTENSIONS.has(stem.slice(dot))) break;
+    stem = stem.slice(0, dot);
+  }
+  return stem;
+}
 
 function hasCredentialBasename(normalized) {
   const basename = normalized.slice(normalized.lastIndexOf("/") + 1);
-  return CREDENTIAL_BASENAME.test(basename);
+  return hasCredentialToken(basename);
 }
 
 function isProsePath(file) {
@@ -426,6 +552,12 @@ function isProsePath(file) {
   if (matchesPattern(normalized, PROSE_DIRECTORY_FLOOR)) return false;
   if (matchesPattern(normalized, PROSE_NAME_FLOOR)) return false;
   if (hasCredentialBasename(normalized)) return false;
+  // A prose suffix must not launder a credential filename: re-test the path
+  // with prose extensions stripped, so `.env.md` is judged as `.env` and
+  // `id_rsa.txt` as `id_rsa`.
+  const basename = normalized.slice(normalized.lastIndexOf("/") + 1);
+  const stem = stripProseExtensions(basename);
+  if (stem !== basename && matchesPattern(stem, CREDENTIAL_STEM)) return false;
   return true;
 }
 
