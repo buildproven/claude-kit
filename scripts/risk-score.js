@@ -358,6 +358,11 @@ function effectiveSecurityFloor(cfg = DEFAULTS) {
 // repos, and any real secret pasted into one is caught by content scanning
 // rather than by its filename. Revisit by extending PROSE_NAME_FLOOR if a
 // specific document turns out to warrant the floor on its name alone.
+//
+// One exception to the human-floor backstop: `middleware.*` is in
+// DEFAULTS.securityFloor but NOT in DEFAULTS.humanFloor, so `docs/middleware.md`
+// is off both. Accepted — a middleware design doc is genuinely prose — but
+// stated here so the backstop is not read as universal.
 const PROSE_EXTENSIONS = new Set([
   ".md",
   ".mdx",
@@ -426,6 +431,16 @@ const CREDENTIAL_STEM = [
   "**/*.pk8",
   "**/*.kdb",
   "**/*.kdbx",
+  // The same laundering trick applies along the NOUN axis, not just the
+  // key-material-extension axis: `token.json.md` and `access_token.yaml.md`
+  // strip to `token.json` / `access_token.yaml`, which the original floor
+  // caught via `**/*token*`. Fixing only the extensions left this class open —
+  // the same "fixed the named instances, not the class" error twice over.
+  "**/*token*.*",
+  "**/*secret*.*",
+  "**/*password*.*",
+  "**/*passwd*.*",
+  "**/*credential*.*",
 ];
 
 // Prose whose own name marks it as a security document keeps the floor too.
@@ -440,8 +455,19 @@ const PROSE_NAME_FLOOR = [
   "**/*security-policy*.*",
   "**/*secret*-policy*.*",
   "**/*passwd*.*",
+  // Exact-stem, both numbers. Hardcoding only the plurals meant
+  // `secrets.json.md` kept the floor while `secret.json.md` did not — an
+  // asymmetry with no defensible reading. These must stay exact-stem globs:
+  // widening to `**/*token*.*` here would drag `docs/token-budget.md` back into
+  // the critical band and undo the change this PR exists to make.
+  "**/credential.*",
   "**/credentials.*",
+  "**/secret.*",
   "**/secrets.*",
+  "**/password.*",
+  "**/passwords.*",
+  "**/token.*",
+  "**/tokens.*",
   // Compound credential nouns anywhere in the basename. These are names for the
   // secret itself rather than writing about one, and the original floor caught
   // every one via `**/*apikey*.*` and friends. Distinct from hasCredentialToken
@@ -499,9 +525,12 @@ const KEY_STEMS = new Set(["key", "keys"]);
 function hasCredentialToken(basename) {
   const dot = basename.lastIndexOf(".");
   if (dot <= 0) return false;
+  // Split on any non-alphanumeric run, not just [-_.] — `api key.md` (space)
+  // and `api+key.md` (plus) must tokenize the way `api-key.md` does; the
+  // original floor caught them via its substring globs.
   const tokens = basename
     .slice(0, dot)
-    .split(/[-_.]+/)
+    .split(/[^a-z0-9]+/)
     .filter(Boolean);
   return tokens.some((token, index) => {
     // A bare `key` / `keys` token anywhere: key.md, key-prod.md,

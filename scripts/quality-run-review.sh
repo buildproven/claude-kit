@@ -99,7 +99,7 @@ terminal_diagnosis() {
     *) state=blocked ;;
   esac
   node "$SCRIPT_DIR/quality-invocation.js" terminal-state "$MANIFEST" \
-    --state "$state" --detail "$category" >/dev/null 2>&1 || true
+    --state "$state" --detail "$category" >/dev/null || true
 }
 
 authorize_provider_attempt() {

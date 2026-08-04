@@ -131,7 +131,21 @@ describe("no credential-shaped path escapes the floor", () => {
     "keychain",
     "credentials",
     "secrets",
+    // Credential NOUNS, singular and plural. The first repair generalized over
+    // key-material extensions only, so `token.json.md` and `password.txt` still
+    // dropped — the same "fixed the instances, not the class" miss. Listing the
+    // nouns here makes the derived sweep cover them automatically.
+    "credential",
+    "secret",
+    "password",
+    "passwd",
+    "token",
+    "tokens",
+    "access_token",
+    "refresh-token",
   ];
+  // Multi-extension forms: a prose suffix must not launder any of the above.
+  const LAUNDERED_SUFFIXES = [".json", ".yaml", ".yml", ".conf"];
   const PROSE_EXTS = [".md", ".mdx", ".markdown", ".txt", ".rst", ".adoc"];
   const SENSITIVE_DIRS = [
     ".github/workflows",
@@ -149,8 +163,22 @@ describe("no credential-shaped path escapes the floor", () => {
       `${stem}${ext}`,
       `docs/${stem}${ext}`,
       `src/prod-${stem}${ext}`,
+      // Laundered through a config extension: token.json.md, password.yaml.txt
+      ...LAUNDERED_SUFFIXES.map((inner) => `${stem}${inner}${ext}`),
     ]),
   );
+
+  // Separator variants must tokenize like the hyphen form.
+  const separatorCases = [
+    "api key.md",
+    "api+key.md",
+    "api~key.txt",
+    "api key.txt",
+  ];
+
+  it.each(separatorCases)("%s keeps the security floor", (file) => {
+    expect(matchesSecurityFloor(file)).toBe(true);
+  });
 
   it.each(materialCases)("%s keeps the security floor", (file) => {
     expect(matchesSecurityFloor(file)).toBe(true);
