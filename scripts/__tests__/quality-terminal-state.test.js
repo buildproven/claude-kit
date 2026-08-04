@@ -16,19 +16,43 @@ const invocation = require("../quality-invocation");
 // ---------------------------------------------------------------------------
 
 // loadManifest re-derives stateRoot from (repoKey, pr, baseSha, invocationId)
-// and rejects any manifest whose path does not match, so the fixture must build
-// the canonical path rather than an arbitrary temp dir.
+// under qualityTmpRoot() and rejects any manifest whose path does not match, so
+// the fixture cannot simply use an arbitrary temp dir — it must produce the
+// canonical path.
+//
+// Building that path directly under the shared os.tmpdir() would be a
+// predictable location another user could pre-create or symlink before us
+// (CodeQL js/insecure-temporary-file, high). Instead, create ONE unpredictable
+// private root with mkdtemp and point TMPDIR at it for the duration of the
+// suite: qualityTmpRoot() reads TMPDIR, so the derivation still resolves, but
+// every path now sits inside a directory only this process can name.
+let sandboxRoot;
+let previousTmpdir;
 let uniqueKey = 0;
+
+beforeAll(() => {
+  previousTmpdir = process.env.TMPDIR;
+  sandboxRoot = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "quality-terminal-state-")),
+  );
+  process.env.TMPDIR = sandboxRoot;
+});
+
+afterAll(() => {
+  if (previousTmpdir === undefined) delete process.env.TMPDIR;
+  else process.env.TMPDIR = previousTmpdir;
+  fs.rmSync(sandboxRoot, { recursive: true, force: true });
+});
 
 function writeManifest(overrides = {}) {
   const invocationId = "2f1a9c60-1c9d-5b2e-9a44-7c0d1e2f3a4b";
   const baseSha = "a".repeat(40);
   const pr = 1;
-  // A distinct repo key per manifest keeps concurrent tests from colliding on
-  // the same canonical state root.
+  // A distinct repo key per manifest keeps tests from colliding on the same
+  // canonical state root.
   const repoKey = `test${String(uniqueKey++).padStart(12, "0")}`;
   const stateRoot = path.join(
-    fs.realpathSync(process.env.TMPDIR || os.tmpdir()),
+    sandboxRoot,
     "bs-quality",
     repoKey,
     `pr-${pr}`,
