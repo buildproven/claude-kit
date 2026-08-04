@@ -360,6 +360,27 @@ describe("content promotes prose the filename released (BUI-641)", () => {
     );
   });
 
+  // NAME-INDEPENDENCE. The first version of this branch was gated on
+  // isProsePath — a NAME test — so a file the name logic had already
+  // disqualified could never be promoted by its content. That reintroduced the
+  // exact coupling the content check exists to break, and left BUI-640's
+  // dangerous case open: certs/server.pem.md with a real key scored 10.
+  it.each([
+    "certs/server.pem.md",
+    "foo.p12.txt",
+    "x.pfx.md",
+    "bar.jks.md",
+    "z.kdbx.md",
+    "src/config.js",
+    "data/fixture.json",
+    "README.rst",
+  ])("%s reaches the floor on content alone, whatever its name", (file) => {
+    const result = scoreOf(file, "+-----BEGIN RSA PRIVATE KEY-----\n");
+    expect(result.riskScore).toBeGreaterThanOrEqual(
+      DEFAULTS.base.securityFloor,
+    );
+  });
+
   it("REMOVING a leaked secret is remediation, not risk", () => {
     // Penalising the cleanup with a critical-tier review would discourage it.
     const result = scoreOf(
