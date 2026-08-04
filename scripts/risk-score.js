@@ -1479,12 +1479,21 @@ function descriptorBaseRisk(descriptor, cfg) {
         "workflow diff touches only version pins/comments/triggers → high, not security floor",
     };
   }
-  // Content promotes a path the NAME released. The name-based floor cannot see
-  // a private key pasted into `docs/setup-guide.md`; this can. Runs only for
-  // paths the floor already released, so it adds strictness and never removes
-  // it — and only for prose, where the carve-out created the blind spot.
+  // Content promotes ANY path the name-based floor released. The floor cannot
+  // see a private key pasted into `docs/setup-guide.md`; this can.
+  //
+  // NOT gated on isProsePath. The first version of this branch was, which
+  // reintroduced the very coupling it exists to break: isProsePath is a NAME
+  // test, so a file the name logic had already disqualified could never be
+  // promoted by its content. `certs/server.pem.md` containing a real
+  // BEGIN RSA PRIVATE KEY block still scored 10 (BUI-640) — fail-open by
+  // exclusion, and precisely the case the content check was written for.
+  //
+  // The `!matchesSecurityFloor` guard is what keeps this a pure strictness
+  // increase: it only ever runs on paths already released, so it can add the
+  // floor and never remove it. Name and content are now independent signals —
+  // either one alone is sufficient to hold a file at the floor.
   if (
-    isProsePath(descriptor.file) &&
     !matchesSecurityFloor(descriptor.file, cfg) &&
     diffAddsCredentialContent(descriptor.patch)
   ) {
