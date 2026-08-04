@@ -363,6 +363,18 @@ function effectiveSecurityFloor(cfg = DEFAULTS) {
 // DEFAULTS.securityFloor but NOT in DEFAULTS.humanFloor, so `docs/middleware.md`
 // is off both. Accepted — a middleware design doc is genuinely prose — but
 // stated here so the backstop is not read as universal.
+//
+// WHERE THE LINE IS, precisely. Decoration around a credential noun keeps the
+// floor (`secrets (1).md`, `token .md`, `password copy.txt`) because the stem
+// still IS the noun. An alphanumeric SUFFIX does not (`token0.md`, `tokenA.md`)
+// because it is indistinguishable from ordinary word-formation: the same
+// substring rule that would catch `token0` also catches `tokenizer.md`,
+// `secretary.md`, `passwordless.md`, and `token-budget.md` — which the original
+// floor did catch, and which are the precise false positives this change
+// exists to remove. There is no filename-only test that separates `token0`
+// from `tokenizer`, so this boundary is a deliberate limit of name-based
+// classification, not an oversight. Content scanning, not the path floor, is
+// what catches a secret pasted into `token0.md`.
 const PROSE_EXTENSIONS = new Set([
   ".md",
   ".mdx",
@@ -508,19 +520,44 @@ const PROSE_NAME_FLOOR = [
 // of the stem, which is a catastrophic-backtracking risk on a
 // partially-attacker-influenced filename (eslint security/detect-unsafe-regex).
 // Splitting the basename on separators is linear and easier to reason about.
-const CREDENTIAL_QUALIFIERS = new Set([
-  "api",
-  "access",
-  "private",
-  "public",
-  "secret",
-  "signing",
-  "ssh",
-  "host",
-  "master",
-  "encryption",
+// INVERTED on purpose. An allowlist of credential qualifiers is open-ended —
+// three review rounds each added more (`deploykey`, `privkey`, `pubkey`,
+// `gpgkey`, `sessionkey`, `hmackey`, `rootkey`, …) and the next reader will
+// think of more still. The set of ordinary English words that merely END in
+// "key" is small, closed, and enumerable. Deny-listing that instead means a
+// qualifier nobody anticipated fails SAFE (keeps the floor) rather than
+// silently escaping.
+//
+// `privkey.pem` is the OpenSSL/Let's Encrypt default name and "deploy key" is
+// GitHub's own term, so these are literal conventional credential filenames —
+// and the separated forms (`deploy-key.md`) already kept the floor, making the
+// allowlist's asymmetry indefensible.
+const KEY_WORD_FALSE_POSITIVES = new Set([
+  "monkey",
+  "monkeys",
+  "donkey",
+  "donkeys",
+  "turkey",
+  "turkeys",
+  "hockey",
+  "jockey",
+  "jockeys",
+  "whiskey",
+  "whiskeys",
+  "lackey",
+  "lackeys",
+  "mickey",
+  "hokey",
+  "pinkey",
+  "malarkey",
 ]);
-const KEY_STEMS = new Set(["key", "keys"]);
+
+// A token is credential-shaped when it ends in `key`/`keys` and is not one of
+// the ordinary words above. Bare `key`/`keys` counts too.
+function isKeyToken(token) {
+  if (KEY_WORD_FALSE_POSITIVES.has(token)) return false;
+  return token.endsWith("key") || token.endsWith("keys");
+}
 
 function hasCredentialToken(basename) {
   const dot = basename.lastIndexOf(".");
@@ -532,26 +569,44 @@ function hasCredentialToken(basename) {
     .slice(0, dot)
     .split(/[^a-z0-9]+/)
     .filter(Boolean);
-  return tokens.some((token, index) => {
-    // A bare `key` / `keys` token anywhere: key.md, key-prod.md,
-    // session-key-notes.md. Excludes `monkey` and `keyboard`, which tokenize
-    // whole and never equal "key".
-    if (KEY_STEMS.has(token)) return true;
-    // An unseparated compound: apikey.txt, privatekey.md.
-    for (const qualifier of CREDENTIAL_QUALIFIERS) {
-      if (
-        token.startsWith(qualifier) &&
-        KEY_STEMS.has(token.slice(qualifier.length))
-      ) {
-        return true;
-      }
-    }
-    // A separated pair: api-key.txt, my-secret-key.txt.
-    const next = tokens[index + 1];
-    return CREDENTIAL_QUALIFIERS.has(token) && next !== undefined
-      ? KEY_STEMS.has(next)
-      : false;
-  });
+  // Any token ending in key/keys — bare (`key-prod.md`, `session-key-notes.md`)
+  // or compound (`apikey.txt`, `privkey.md`, `deploykey.md`) — except the
+  // ordinary English words above. `keyboard` and `keynote` are excluded because
+  // they only START with "key"; the test is on the ending.
+  return tokens.some(isKeyToken);
+}
+
+// Drop decoration from the basename's stem while preserving its extension, so
+// `docs/secrets (1).md` reduces to `docs/secrets.md` and `docs/token<U+200B>.md`
+// to `docs/token.md` before the exact-stem credential globs are applied.
+// Alphanumerics and the word separators [-_.] survive, so genuine compounds
+// (`token-budget`, `secret-santa`, `rate-limit`) are untouched and stay
+// released.
+function decorationStrippedNames(normalized) {
+  const slash = normalized.lastIndexOf("/");
+  const dir = slash === -1 ? "" : normalized.slice(0, slash + 1);
+  const basename = normalized.slice(slash + 1);
+  const dot = basename.lastIndexOf(".");
+  if (dot <= 0) return [];
+  const extension = basename.slice(dot);
+  const rawStem = basename.slice(0, dot);
+  // Decoration is a word BOUNDARY, not nothing: deleting it outright would turn
+  // `secrets (1)` into `secrets1`, which is not the credential noun either.
+  // Map decoration to `-`, collapse runs, and trim the ends.
+  const stem = rawStem
+    .replace(/[^a-z0-9\-_.]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-_.]+|[-_.]+$/g, "");
+  if (!stem || stem === rawStem) return [];
+  const candidates = [`${dir}${stem}${extension}`];
+  // `password copy.txt` and `secrets (1).md` normalize to `password-copy` /
+  // `secrets-1`, which still are not the bare noun. The decoration marked a
+  // boundary, so the leading segment is the real name — test it too. Safe
+  // against genuine compounds: `token-budget.md` is unchanged by the
+  // normalization above, so it never reaches this branch.
+  const lead = stem.split(/[-_.]/)[0];
+  if (lead && lead !== stem) candidates.push(`${dir}${lead}${extension}`);
+  return candidates;
 }
 
 // Strip prose extensions repeatedly so `.env.production.md` reduces to `.env`
@@ -581,6 +636,20 @@ function isProsePath(file) {
   if (matchesPattern(normalized, PROSE_DIRECTORY_FLOOR)) return false;
   if (matchesPattern(normalized, PROSE_NAME_FLOOR)) return false;
   if (hasCredentialBasename(normalized)) return false;
+  // Decoration is not word-compounding. PROSE_NAME_FLOOR pins credential nouns
+  // as EXACT stems (`**/token.*`), so any trailing character defeats it —
+  // `token .md`, `secrets (1).md`, `password copy.txt`, and the invisible
+  // variants (U+200B, U+FEFF, U+00A0, U+202E) all escaped. Those are exactly
+  // the OS-generated duplicate names a pasted credential dump arrives under,
+  // and the zero-width forms are visually identical to `token.md`, which the
+  // floor DOES catch — an evasion primitive, not a false-positive fix.
+  //
+  // Re-test with decoration stripped: keep only alphanumerics and the word
+  // separators [-_.], which is the same normalization hasCredentialToken
+  // already applies on the key path.
+  for (const candidate of decorationStrippedNames(normalized)) {
+    if (matchesPattern(candidate, PROSE_NAME_FLOOR)) return false;
+  }
   // A prose suffix must not launder a credential filename: re-test the path
   // with prose extensions stripped, so `.env.md` is judged as `.env` and
   // `id_rsa.txt` as `id_rsa`.

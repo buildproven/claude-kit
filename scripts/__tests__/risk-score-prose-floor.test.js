@@ -19,6 +19,23 @@ const {
 
 describe("prose files do not reach the security floor by filename alone", () => {
   const falsePositives = [
+    // Ordinary words ending in "key". The deny-list replaced an open-ended
+    // qualifier allowlist, so these pin the other side of that inversion — a
+    // future widening must not swallow them.
+    ["docs/monkeys.md", "plural of monkey"],
+    ["docs/donkey.md", "donkey"],
+    ["docs/turkey.md", "turkey"],
+    ["docs/whiskey.md", "whiskey"],
+    ["docs/keynote.md", "'keynote' only starts with key"],
+    // Word-formation suffixes. These are the false positives the whole change
+    // exists to remove; catching them again would reintroduce the 44% rate.
+    ["docs/tokenizer.md", "'tokenizer' is not a token"],
+    ["docs/secretary.md", "'secretary' is not a secret"],
+    ["docs/passwordless.md", "'passwordless' is an auth-flow doc"],
+    ["docs/token-prod.md", "compound, not a decorated bare noun"],
+    ["docs/secret-santa.md", "compound"],
+    ["docs/rate-limit (1).md", "decoration on a non-credential noun"],
+    ["docs/monkey (1).md", "decoration on monkey"],
     ["docs/monkey.md", "'monkey' contains the substring 'key'"],
     ["docs/api-keyboard.md", "'api-keyboard' is not an api key"],
     ["docs/keyboard-shortcuts.md", "'keyboard' contains 'key'"],
@@ -169,6 +186,53 @@ describe("no credential-shaped path escapes the floor", () => {
   );
 
   // Separator variants must tokenize like the hyphen form.
+  // Decoration around a credential noun — the OS-generated duplicate names a
+  // pasted credential dump actually arrives under, plus the invisible-character
+  // variants that render identically to the bare noun.
+  const DECORATED = ["token", "secrets", "password", "credentials"].flatMap(
+    (noun) => [
+      `docs/${noun} (1).md`,
+      `docs/${noun} copy.txt`,
+      `docs/${noun}(copy).md`,
+      `docs/${noun} .md`,
+      `docs/${noun}!.md`,
+      `docs/[${noun}].md`,
+      `docs/${noun}\u200b.md`,
+      `docs/${noun}\ufeff.md`,
+      `docs/${noun}\u00a0.md`,
+      `docs/${noun}\u202e.md`,
+    ],
+  );
+
+  it.each(DECORATED)("%j keeps the security floor", (file) => {
+    expect(matchesSecurityFloor(file)).toBe(true);
+  });
+
+  // Unseparated <qualifier>key compounds. The old allowlist was open-ended and
+  // three review rounds each added more; this asserts the inverted deny-list
+  // handles qualifiers nobody enumerated.
+  const QUALIFIER_KEYS = [
+    "deploy",
+    "priv",
+    "pub",
+    "root",
+    "gpg",
+    "rsa",
+    "hmac",
+    "session",
+    "service",
+    "jwt",
+    "bearer",
+    "refresh",
+    "client",
+    "aes",
+    "pgp",
+  ].flatMap((q) => [`docs/${q}key.md`, `docs/${q}keys.txt`]);
+
+  it.each(QUALIFIER_KEYS)("%s keeps the security floor", (file) => {
+    expect(matchesSecurityFloor(file)).toBe(true);
+  });
+
   const separatorCases = [
     "api key.md",
     "api+key.md",
