@@ -236,6 +236,17 @@ function normalizeManifestCollections(manifest) {
   manifest.mutation ??= null;
   manifest.merge ??= {};
   manifest.merge.invalidatedStamps ??= [];
+  // Every campaign ends in exactly ONE recorded terminal state. Without this a
+  // campaign killed mid-flight (timeout, ^C, crashed provider) leaves a
+  // manifest byte-identical to one that is still running: activeExecution is
+  // null either way, so the only signal is a stale lastActivityAt. Nine PR-267
+  // manifests were in precisely that condition — interrupted before review,
+  // with no way to tell "paused" from "in progress" from disk.
+  //
+  // null = still open. Anything else is final and must never be overwritten
+  // (see recordTerminalState), so the first terminal cause wins and a late
+  // cleanup path cannot relabel a failure as success.
+  manifest.terminalState ??= null;
   normalizeGovernor(manifest);
   if (
     manifest.requiredGatesPolicyVersion === undefined ||
@@ -1117,6 +1128,7 @@ function parseOptions(args) {
         "--skip",
         "--advisory",
         "--verify-app",
+        "--read",
       ].includes(name)
     ) {
       if (inlineValue !== null && !["true", "false"].includes(inlineValue)) {
@@ -3941,6 +3953,70 @@ function withManifestLock(file, mutation) {
   }
 }
 
+// The complete set of ways a campaign can end. Anything not in this set is a
+// programming error, not a runtime condition — an unknown terminal cause must
+// fail loudly rather than be persisted as an unrecognized string that later
+// readers silently treat as "not terminal".
+const TERMINAL_STATES = new Set([
+  "merged", // evidence complete, PR merged
+  "verified-unmerged", // evidence complete, merge deliberately not attempted
+  "blocked", // a gate/review/CI failure the operator must resolve
+  "timeout", // exceeded a bounded budget (campaign, provider, or gate)
+  "interrupted", // signal or host death before any other terminal state
+  "superseded", // head moved; this campaign no longer describes the revision
+]);
+
+/**
+ * Record the single terminal state of a campaign, write-once.
+ *
+ * Write-once is the point: interruption and cleanup race, and whichever path
+ * runs second must not be able to relabel the outcome. A campaign killed for
+ * timeout that then runs a cleanup handler stays "timeout"; it does not become
+ * "interrupted" because a signal arrived during teardown. Re-recording the SAME
+ * state is a no-op so idempotent cleanup paths are safe to call more than once.
+ *
+ * Returns the state actually in force (which may differ from `state` when the
+ * campaign was already terminal).
+ */
+function recordTerminalState(manifestPath, state, detail = null) {
+  if (!TERMINAL_STATES.has(state)) {
+    throw new Error(`unknown terminal state '${state}'`);
+  }
+  // Written under the manifest lock, but persisted WITHOUT bumping
+  // manifestRevision. A terminal state is metadata about a campaign that has
+  // already ended, not a state transition another writer contends for, and the
+  // recorder runs as a separate process after the failing step has exited.
+  // Bumping the revision would make an enclosing withManifestLock() in that
+  // step's own transaction see a phantom "concurrent writer" —
+  // quality-invocation.test.js pins exactly this for the abandoned-execution
+  // reconciliation path. withManifestLock() cannot be used here because it
+  // unconditionally calls saveManifest() (which does bump) on return.
+  const lock = `${path.resolve(manifestPath)}.lock`;
+  const descriptor = openManifestLock(lock);
+  try {
+    const loaded = loadManifest(manifestPath);
+    if (loaded.manifest.terminalState) {
+      // Already terminal — keep the first cause, whatever it was.
+      return loaded.manifest.terminalState.state;
+    }
+    loaded.manifest.terminalState = {
+      state,
+      detail: detail ? String(detail).slice(0, 500) : null,
+      head: loaded.manifest.revisions?.currentHead ?? null,
+      recordedAt: new Date().toISOString(),
+    };
+    saveManifestMidTransaction(loaded.manifestPath, loaded.manifest);
+    return state;
+  } finally {
+    fs.closeSync(descriptor);
+    fs.unlinkSync(lock);
+  }
+}
+
+function isTerminal(manifest) {
+  return Boolean(manifest?.terminalState);
+}
+
 function getPath(value, dottedPath) {
   return dottedPath
     .split(".")
@@ -4235,6 +4311,22 @@ function runCommand(command, rawArgs) {
     process.stdout.write(`${manifest.repo.realpath}\n`);
     return;
   }
+  if (command === "terminal-state") {
+    const options = parseOptions(rawArgs);
+    if (options.read) {
+      process.stdout.write(
+        `${manifest.terminalState ? manifest.terminalState.state : "open"}\n`,
+      );
+      return;
+    }
+    const inForce = recordTerminalState(
+      manifestArg,
+      options.state,
+      options.detail,
+    );
+    process.stdout.write(`${inForce}\n`);
+    return;
+  }
   if (command === "advance") return runAdvance(manifestArg, manifest, rawArgs);
   if (
     manifest[NEEDS_EXECUTION_BUDGET_MIGRATION] &&
@@ -4295,6 +4387,9 @@ module.exports = {
   recordJudge,
   recordGate,
   recordMutation,
+  recordTerminalState,
+  isTerminal,
+  TERMINAL_STATES,
   hasAbandonedExecution,
   reconcileAbandonedExecution,
   executionRemaining,

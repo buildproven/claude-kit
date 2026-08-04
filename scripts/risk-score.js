@@ -329,11 +329,112 @@ function effectiveSecurityFloor(cfg = DEFAULTS) {
   );
 }
 
+// Extensions whose contents are prose, not executable or credential-bearing
+// material. A file with one of these extensions cannot reach the security floor
+// on the strength of its NAME alone.
+//
+// Why: the floor patterns are deliberately token-broad (`**/*key*.*`,
+// `**/*token*.*`, `**/*deploy*.*`) so that id_rsa, .p12, and oauth-config
+// cannot evade them. Applied to prose, that same breadth misfires badly —
+// `docs/monkey.md` matches `**/*key*.*`, and `docs/token-budget.md` matches
+// `**/*token*.*`. Both scored 85 (critical band) purely because of a substring
+// in the filename, which forced a full mutation + xhigh-Codex campaign onto a
+// documentation edit and blocked the mechanical downgrade that would otherwise
+// apply.
+//
+// This does NOT weaken the floor. Real credential material never carries these
+// extensions: a .pem/.key/.p12/.env is matched by its own extension pattern and
+// is unaffected, and anything whose CONTENT is sensitive is still caught by the
+// secret-content scanners and by the explicit-path patterns below. Only the
+// name-substring path is narrowed, and only for prose.
+const PROSE_EXTENSIONS = new Set([
+  ".md",
+  ".mdx",
+  ".markdown",
+  ".txt",
+  ".rst",
+  ".adoc",
+]);
+
+// The narrowing above applies to the FILENAME only. Prose that lives inside a
+// security-sensitive DIRECTORY keeps the floor: `secrets/rotation.md`,
+// `auth/README.md`, and `keys/README.txt` are runbooks for the very surface the
+// floor exists to protect, and an edit to them is a security-relevant change
+// even though the file is Markdown.
+//
+// So: a prose file escapes the floor only when every floor pattern it matches
+// is satisfied by its own basename. If any floor pattern matches by virtue of a
+// parent directory, the floor still applies.
+const PROSE_DIRECTORY_FLOOR = [
+  "**/security/**",
+  "**/*secret*/**",
+  "**/*credential*/**",
+  "**/auth/**",
+  "**/*auth*/**",
+  "**/key/**",
+  "**/keys/**",
+  "**/*key*/**",
+  "**/*token*/**",
+  "**/*password*/**",
+  "**/*licens*/**",
+  "**/deploy/**",
+  "**/*deploy*/**",
+  "**/*webhook*/**",
+  "**/*keystore*/**",
+  "**/*keyring*/**",
+  "**/*keychain*/**",
+];
+
+// Prose whose own name marks it as a security document keeps the floor too.
+//
+// This list also covers names that may denote the CREDENTIAL ITSELF rather than
+// writing about one. `src/api-key.txt` is far more likely to be a pasted key
+// than an essay, so a credential-shaped basename keeps the floor even with a
+// prose extension. Only descriptive/compound names (monkey, token-budget,
+// auth-guide) are allowed through.
+const PROSE_NAME_FLOOR = [
+  "**/threat-model*.*",
+  "**/*security-policy*.*",
+  "**/*secret*-policy*.*",
+  "**/*passwd*.*",
+  "**/credentials.*",
+  "**/secrets.*",
+];
+
+// Credential-shaped basenames such as `api-key.txt`, `apikey.txt`, or
+// `access_key.txt`: the file may BE the credential rather than prose about one.
+// Expressed as a regex rather than a glob because the distinction is
+// "<qualifier>key" as a whole word-ish token — `api-keyboard.md` must NOT match,
+// and a `?` single-char glob both misses `apikey` and catches `api-keyboard`.
+// Anchored to the BASENAME so `monkey.md` and `api-keyboard.md` are excluded:
+// the token before "key" must be a real qualifier, or "key"/"keys" must stand
+// alone as the whole stem.
+const CREDENTIAL_BASENAME =
+  /^((api|access|private|public|secret|signing|ssh|host|master|encryption)[-_.]?keys?|keys?)(\.[a-z0-9]+)$/;
+
+function hasCredentialBasename(normalized) {
+  const basename = normalized.slice(normalized.lastIndexOf("/") + 1);
+  return CREDENTIAL_BASENAME.test(basename);
+}
+
+function isProsePath(file) {
+  const normalized = normalizeFloorPath(file);
+  const dot = normalized.lastIndexOf(".");
+  if (dot === -1) return false;
+  if (!PROSE_EXTENSIONS.has(normalized.slice(dot))) return false;
+  // Security-relevant prose — by directory or by document name — keeps the floor.
+  if (matchesPattern(normalized, PROSE_DIRECTORY_FLOOR)) return false;
+  if (matchesPattern(normalized, PROSE_NAME_FLOOR)) return false;
+  if (hasCredentialBasename(normalized)) return false;
+  return true;
+}
+
 function matchesSecurityFloor(file, cfg = DEFAULTS) {
   // Git accepts control characters in filenames. Treat every such path as
   // security-sensitive instead of trying to assign ordinary risk to an
   // ambiguous/adversarial display surface.
   if (hasControlCharacters(file)) return true;
+  if (isProsePath(file)) return false;
   return matchesPattern(normalizeFloorPath(file), effectiveSecurityFloor(cfg));
 }
 
