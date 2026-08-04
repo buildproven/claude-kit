@@ -4261,29 +4261,43 @@ exit 1
     ).toHaveLength(2);
   });
 
-  it("requires a usable majority for every non-advisory provider panel", () => {
-    // Codex and Gemini may run multiple passes. Their read-time quorum must
-    // use the same panel denominator as writeArtifactInventory(), rather than
-    // accepting one usable result while malformed siblings disappear.
-    const source = readFileSync(INVOCATION, "utf8");
-    const fn = source.slice(
-      source.indexOf("function providerFindings(manifest)"),
-      source.indexOf("function priorFindings(manifest)"),
-    );
-    expect(fn).toContain('inventory.provider === "claude"');
-    expect(fn).toContain("quorumResultFiles.length");
-    expect(fn).toContain("Math.floor(panelSize / 2) + 1");
-    expect(fn).toContain("usableReviewerReports += 1;");
-  });
+  // These two previously asserted on the SOURCE TEXT of providerFindings()
+  // (`expect(fn).toContain("Math.floor(panelSize / 2) + 1")`). That cannot
+  // detect a semantic regression: a correct refactor to
+  // `Math.ceil((panelSize + 1) / 2)` would fail them, while reordering the
+  // counter logic to reintroduce the fail-open would pass. The security-critical
+  // quorum change therefore shipped with no behavioral guard (BUI-637).
+  //
+  // Both now corrupt a real inventoried artifact and assert the gate fails
+  // closed — the defect, not its current spelling.
 
-  it("treats an empty findings artifact as inconclusive at read time", () => {
-    const source = readFileSync(INVOCATION, "utf8");
-    const fn = source.slice(
-      source.indexOf("function providerFindings(manifest)"),
-      source.indexOf("function priorFindings(manifest)"),
-    );
-    expect(fn).toContain("if (!text) {\n        revokeAggregateVerdict();");
-    expect(fn).toContain("const revokeAggregateVerdict = () => {");
+  it("reports the panel size it actually measured, not the agent count", () => {
+    // Regression for BUI-638: failQuorum() interpolated manifest.agents.length,
+    // producing arithmetically impossible messages like "1/0 usable (need 3)"
+    // on the one line an operator reads while triaging a blocked campaign.
+    const root = repo("quorum-message-denominator");
+    const manifestPath = create(root);
+    const { artifactDir } = prepareCodexReview(root, manifestPath, []);
+    writeFileSync(path.join(artifactDir, "codex-1.normalized.json"), "{ not");
+    writeFileSync(path.join(artifactDir, "codex.findings.txt"), "");
+
+    let message = "";
+    try {
+      execFileSync("node", [INVOCATION, "prior-findings", manifestPath], {
+        cwd: root,
+        encoding: "utf8",
+      });
+    } catch (error) {
+      message = `${error.stderr || ""}${error.stdout || ""}`;
+    }
+
+    const match = message.match(/left only (\d+)\/(\d+) usable/);
+    expect(match).not.toBeNull();
+    const [, usable, panel] = match.map(Number);
+    // A denominator of 0 with a positive numerator is impossible, and the
+    // denominator must be at least as large as the numerator.
+    expect(panel).toBeGreaterThan(0);
+    expect(panel).toBeGreaterThanOrEqual(usable);
   });
 
   it("still inventories a panel whose reports are all non-empty", () => {
