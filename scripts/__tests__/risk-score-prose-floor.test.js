@@ -275,6 +275,17 @@ describe("repo-declared securityFloor patterns survive the carve-out", () => {
     );
   });
 
+  it("honors a repo-added pattern regardless of its casing", () => {
+    // normalizeFloorPath lowercases the PATH, so a pattern carrying any
+    // capitals could never match and the opt-in was silently voided.
+    const upper = {
+      ...DEFAULTS,
+      securityFloor: [...DEFAULTS.securityFloor, "**/Compliance/**"],
+    };
+    expect(matchesSecurityFloor("Compliance/soc2.md", upper)).toBe(true);
+    expect(matchesSecurityFloor("compliance/soc2.md", upper)).toBe(true);
+  });
+
   it("honors a repo-added pattern for code", () => {
     expect(matchesSecurityFloor("compliance/app.js", withCompliance)).toBe(
       true,
@@ -316,6 +327,55 @@ describe("scored tier for ordinary documentation work", () => {
   it("still escalates when real security surface is touched", () => {
     const result = scoreFor(["docs/monkey.md", "config/auth/session.js"]);
     expect(result.riskScore).toBeGreaterThanOrEqual(
+      DEFAULTS.base.securityFloor,
+    );
+  });
+});
+
+describe("content promotes prose the filename released (BUI-641)", () => {
+  // The root cause behind four review rounds: the floor asked "is this
+  // credential material?" — a question about CONTENT — using only the
+  // filename. No pattern refinement can answer it, which is why six
+  // name-matching mechanisms accreted and each review found another variant.
+  //
+  // This is the mirror of contentAwareFloor/workflowDiffIsRiskBearing: those
+  // DEMOTE a floor path whose diff is inert, this PROMOTES a released path
+  // whose diff carries a secret.
+  const descriptor = (file, patch) => ({ status: "M", file, patch });
+  const scoreOf = (file, patch) =>
+    computeScore([descriptor(file, patch)], { files: 1, lines: 5 }, DEFAULTS);
+
+  const SECRETS = [
+    ["-----BEGIN RSA PRIVATE KEY-----", "PEM private key"],
+    ["-----BEGIN OPENSSH PRIVATE KEY-----", "OpenSSH private key"],
+    ["AKIAIOSFODNN7EXAMPLE", "AWS access key id"],
+    ["ghp_0123456789abcdefghijklmnopqrstuvwxyz", "GitHub token"],
+    ["sk-ant-0123456789abcdefghijklmn", "Anthropic key"],
+  ];
+
+  it.each(SECRETS)("a doc that ADDS %s reaches the floor (%s)", (secret) => {
+    const result = scoreOf("docs/setup-guide.md", `+${secret}\n`);
+    expect(result.riskScore).toBeGreaterThanOrEqual(
+      DEFAULTS.base.securityFloor,
+    );
+  });
+
+  it("REMOVING a leaked secret is remediation, not risk", () => {
+    // Penalising the cleanup with a critical-tier review would discourage it.
+    const result = scoreOf(
+      "docs/guide.md",
+      "ـ".replace("ـ", "-") + "-----BEGIN RSA PRIVATE KEY-----\n",
+    );
+    expect(result.riskScore).toBeLessThan(DEFAULTS.base.securityFloor);
+  });
+
+  it.each([
+    ["docs/notes.md", "+ordinary prose about the system\n"],
+    ["CHANGELOG.md", "+### Added\n+- a feature\n"],
+    ["docs/monkey.md", "+monkeys are primates\n"],
+    ["docs/token-budget.md", "+We spent 40k tokens this week.\n"],
+  ])("%s stays released when its diff carries no secret", (file, patch) => {
+    expect(scoreOf(file, patch).riskScore).toBeLessThan(
       DEFAULTS.base.securityFloor,
     );
   });

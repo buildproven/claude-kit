@@ -2623,10 +2623,17 @@ function providerFindings(manifest) {
   // ever reviewed. Every covered review must carry its own majority.
   let usableReviewerReports = 0;
   let requiredUsableReports = 0;
+  // The panel this review's quorum is actually measured against. For a Claude
+  // panel that is manifest.agents.length; for codex/gemini it is the number of
+  // that provider's own result files. Reporting manifest.agents.length for all
+  // of them produced impossible messages like "1/0 usable (need 3)" — a
+  // denominator smaller than the numerator, matching neither number, on the one
+  // line an operator reads while triaging a blocked critical campaign.
+  let quorumPanelSize = 0;
   const failQuorum = () => {
     throw new Error(
       `inconclusive provider findings: ${inconclusiveAgents.join(", ")} ` +
-        `left only ${usableReviewerReports}/${manifest.agents.length} usable ` +
+        `left only ${usableReviewerReports}/${quorumPanelSize} usable ` +
         `reviewer reports (need ${requiredUsableReports || 1})`,
     );
   };
@@ -2634,6 +2641,7 @@ function providerFindings(manifest) {
     const reviewFindingsStart = findings.length;
     usableReviewerReports = 0;
     requiredUsableReports = 0;
+    quorumPanelSize = 0;
     let structuredProviderReports = 0;
     const structuredProviderNames = new Set();
     // Reset too: a malformed agent in round 1 must not be reported against
@@ -2663,12 +2671,12 @@ function providerFindings(manifest) {
     // not only Claude. Artifact inventory already applies the same floor when
     // it is written; keeping the denominator aligned prevents an unparseable
     // JSON result from disappearing after inventory succeeds.
+    quorumPanelSize =
+      inventory.provider === "claude"
+        ? manifest.agents.length
+        : quorumResultFiles.length;
     if (review.status !== "advisory") {
-      const panelSize =
-        inventory.provider === "claude"
-          ? manifest.agents.length
-          : quorumResultFiles.length;
-      requiredUsableReports = Math.floor(panelSize / 2) + 1;
+      requiredUsableReports = Math.floor(quorumPanelSize / 2) + 1;
     }
     for (const item of reviewerResultFiles) {
       let parsed;

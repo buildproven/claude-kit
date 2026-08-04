@@ -694,9 +694,14 @@ function matchesSecurityFloor(file, cfg = DEFAULTS) {
       pattern.toLowerCase(),
     ),
   );
-  const added = (
-    Array.isArray(cfg?.securityFloor) ? cfg.securityFloor : []
-  ).filter((pattern) => !builtIn.has(String(pattern).toLowerCase()));
+  // Lowercase the patterns too. `normalized` is already lowercased (see
+  // normalizeFloorPath), so a repo pattern with any capitals — `**/Compliance/**`
+  // — could never match, silently voiding the opt-in this branch exists to
+  // honor. additiveFloorPatterns lowercases for exactly this reason; the
+  // built-in comparison above already did, and only the match did not.
+  const added = (Array.isArray(cfg?.securityFloor) ? cfg.securityFloor : [])
+    .map((pattern) => String(pattern).toLowerCase())
+    .filter((pattern) => !builtIn.has(pattern));
   if (added.length > 0 && matchesPattern(normalized, added)) {
     return true;
   }
@@ -1413,6 +1418,50 @@ function workflowDiffIsRiskBearing(patch) {
   return false;
 }
 
+// Credential material visible in a diff. The mirror image of
+// WORKFLOW_RISK_PATTERNS: those DEMOTE a floor path whose diff turns out to be
+// inert, these PROMOTE a released path whose diff turns out to carry a secret.
+//
+// This is the answer to the question the name-based floor cannot answer. A
+// prose file is released or held on what it CONTAINS, not what it is called —
+// so `docs/setup-guide.md` with a pasted private key is caught, while
+// `docs/api-key.md` that merely discusses API keys is not.
+//
+// Deliberately narrow: unambiguous credential FORMATS, not "looks secret-ish".
+// A broad entropy heuristic would re-import the false-positive problem this
+// exists to remove. gitleaks (.gitleaks.toml + credential-history-scan.yml)
+// remains the exhaustive scanner; this is the review-depth signal.
+const CREDENTIAL_CONTENT_PATTERNS = [
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+  /-----BEGIN OPENSSH PRIVATE KEY-----/,
+  /-----BEGIN PGP PRIVATE KEY BLOCK-----/,
+  /\bAKIA[0-9A-Z]{16}\b/, // AWS access key id
+  /\bASIA[0-9A-Z]{16}\b/, // AWS temporary access key id
+  /\bgh[pousr]_[A-Za-z0-9]{36,}/, // GitHub token family
+  /\bglpat-[A-Za-z0-9_-]{20,}/, // GitLab PAT
+  /\bxox[abposr]-[A-Za-z0-9-]{10,}/, // Slack token
+  /\bsk-[A-Za-z0-9]{32,}/, // OpenAI-style secret key
+  /\bsk-ant-[A-Za-z0-9_-]{24,}/, // Anthropic key
+  /\bAIza[0-9A-Za-z_-]{35}\b/, // Google API key
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, // JWT
+  /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b(?=[\s"']*$)/i,
+];
+
+// True when a diff ADDS credential-shaped content. Only added lines count:
+// removing a leaked secret is remediation and must not be penalised with a
+// critical-tier review, which would discourage the cleanup.
+function diffAddsCredentialContent(patch) {
+  if (!patch) return false;
+  for (const line of patch.split("\n")) {
+    if (!line.startsWith("+") || line.startsWith("+++")) continue;
+    const content = line.slice(1);
+    if (CREDENTIAL_CONTENT_PATTERNS.some((pattern) => pattern.test(content))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function descriptorBaseRisk(descriptor, cfg) {
   if (
     matchesPattern(descriptor.file, ["**/package.json"]) &&
@@ -1428,6 +1477,20 @@ function descriptorBaseRisk(descriptor, cfg) {
       score: cfg.base.high,
       reason:
         "workflow diff touches only version pins/comments/triggers → high, not security floor",
+    };
+  }
+  // Content promotes a path the NAME released. The name-based floor cannot see
+  // a private key pasted into `docs/setup-guide.md`; this can. Runs only for
+  // paths the floor already released, so it adds strictness and never removes
+  // it — and only for prose, where the carve-out created the blind spot.
+  if (
+    isProsePath(descriptor.file) &&
+    !matchesSecurityFloor(descriptor.file, cfg) &&
+    diffAddsCredentialContent(descriptor.patch)
+  ) {
+    return {
+      score: securityFloorScore(cfg),
+      reason: "diff adds credential-shaped content → security floor",
     };
   }
   return { score: pathBase(descriptor.file, cfg), reason: "" };
