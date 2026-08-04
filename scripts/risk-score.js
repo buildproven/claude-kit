@@ -329,12 +329,379 @@ function effectiveSecurityFloor(cfg = DEFAULTS) {
   );
 }
 
+// Extensions whose contents are prose, not executable or credential-bearing
+// material. A file with one of these extensions cannot reach the security floor
+// on the strength of its NAME alone.
+//
+// Why: the floor patterns are deliberately token-broad (`**/*key*.*`,
+// `**/*token*.*`, `**/*deploy*.*`) so that id_rsa, .p12, and oauth-config
+// cannot evade them. Applied to prose, that same breadth misfires badly —
+// `docs/monkey.md` matches `**/*key*.*`, and `docs/token-budget.md` matches
+// `**/*token*.*`. Both scored 85 (critical band) purely because of a substring
+// in the filename, which forced a full mutation + xhigh-Codex campaign onto a
+// documentation edit and blocked the mechanical downgrade that would otherwise
+// apply.
+//
+// This does NOT weaken the floor for credential MATERIAL. A .pem/.key/.p12/.env
+// keeps the floor even under a prose suffix (see CREDENTIAL_STEM), prose inside
+// a sensitive directory keeps it (PROSE_DIRECTORY_FLOOR), credential-shaped
+// basenames keep it (hasCredentialToken + PROSE_NAME_FLOOR), and anything whose
+// CONTENT is sensitive is still caught by the secret scanners.
+//
+// DELIBERATE TRADE-OFF, decided rather than inherited: prose *named after* a
+// security topic — `docs/auth.md`, `docs/token.md`, `docs/deploy.md`,
+// `docs/middleware.md` — does drop from the critical band to ordinary review.
+// These are files ABOUT the protected surface, not the surface itself, and
+// treating every such document as critical is what produced the 44%-critical
+// rate this change exists to fix. Two things bound the risk: the human floor
+// (touchesHumanFloor) is untouched and still catches them for manual-governance
+// repos, and any real secret pasted into one is caught by content scanning
+// rather than by its filename. Revisit by extending PROSE_NAME_FLOOR if a
+// specific document turns out to warrant the floor on its name alone.
+//
+// One exception to the human-floor backstop: `middleware.*` is in
+// DEFAULTS.securityFloor but NOT in DEFAULTS.humanFloor, so `docs/middleware.md`
+// is off both. Accepted — a middleware design doc is genuinely prose — but
+// stated here so the backstop is not read as universal.
+//
+// WHERE THE LINE IS, precisely. Decoration around a credential noun keeps the
+// floor (`secrets (1).md`, `token .md`, `password copy.txt`) because the stem
+// still IS the noun. An alphanumeric SUFFIX does not (`token0.md`, `tokenA.md`)
+// because it is indistinguishable from ordinary word-formation: the same
+// substring rule that would catch `token0` also catches `tokenizer.md`,
+// `secretary.md`, `passwordless.md`, and `token-budget.md` — which the original
+// floor did catch, and which are the precise false positives this change
+// exists to remove. There is no filename-only test that separates `token0`
+// from `tokenizer`, so this boundary is a deliberate limit of name-based
+// classification, not an oversight. Content scanning, not the path floor, is
+// what catches a secret pasted into `token0.md`.
+const PROSE_EXTENSIONS = new Set([
+  ".md",
+  ".mdx",
+  ".markdown",
+  ".txt",
+  ".rst",
+  ".adoc",
+]);
+
+// The narrowing above applies to the FILENAME only. Prose that lives inside a
+// security-sensitive DIRECTORY keeps the floor: `secrets/rotation.md`,
+// `auth/README.md`, and `keys/README.txt` are runbooks for the very surface the
+// floor exists to protect, and an edit to them is a security-relevant change
+// even though the file is Markdown.
+//
+// So: a prose file escapes the floor only when every floor pattern it matches
+// is satisfied by its own basename. If any floor pattern matches by virtue of a
+// parent directory, the floor still applies.
+const PROSE_DIRECTORY_FLOOR = [
+  // CI and hook directories are the top-tier supply-chain surface: a .md or
+  // .txt added under .github/workflows/ is exactly the shape used to smuggle
+  // content a workflow later reads. These were missing from the first draft of
+  // this list, which silently dropped `.github/workflows/README.md` off the
+  // floor — the most sensitive directories in DEFAULTS.securityFloor.
+  "**/.github/workflows/**",
+  "**/.husky/**",
+  "**/*.husky/**",
+  "**/security/**",
+  "**/*secret*/**",
+  "**/*credential*/**",
+  "**/auth/**",
+  "**/*auth*/**",
+  "**/key/**",
+  "**/keys/**",
+  "**/*key*/**",
+  "**/*token*/**",
+  "**/*password*/**",
+  "**/*passwd*/**",
+  "**/*licens*/**",
+  "**/deploy/**",
+  "**/*deploy*/**",
+  "**/*webhook*/**",
+  "**/*keystore*/**",
+  "**/*keyring*/**",
+  "**/*keychain*/**",
+];
+
+// Credential-bearing stems that keep the floor even under a prose extension.
+// A prose SUFFIX must not launder a credential filename: `.env.md`,
+// `id_rsa.txt`, and `cert.pem.md` are routine ways to stage or leak secret
+// material, and classifying by the LAST extension alone lets all three through.
+// These are tested against the basename with prose extensions stripped.
+const CREDENTIAL_STEM = [
+  "**/.env*",
+  "**/id_rsa*",
+  "**/id_dsa*",
+  "**/id_ecdsa*",
+  "**/id_ed25519*",
+  "**/*.pem",
+  "**/*.key",
+  "**/*.p12",
+  "**/*.pfx",
+  "**/*.jks",
+  "**/*.keystore",
+  "**/*.ppk",
+  "**/*.pk8",
+  "**/*.kdb",
+  "**/*.kdbx",
+  // The same laundering trick applies along the NOUN axis, not just the
+  // key-material-extension axis: `token.json.md` and `access_token.yaml.md`
+  // strip to `token.json` / `access_token.yaml`, which the original floor
+  // caught via `**/*token*`. Fixing only the extensions left this class open —
+  // the same "fixed the named instances, not the class" error twice over.
+  "**/*token*.*",
+  "**/*secret*.*",
+  "**/*password*.*",
+  "**/*passwd*.*",
+  "**/*credential*.*",
+];
+
+// Prose whose own name marks it as a security document keeps the floor too.
+//
+// This list also covers names that may denote the CREDENTIAL ITSELF rather than
+// writing about one. `src/api-key.txt` is far more likely to be a pasted key
+// than an essay, so a credential-shaped basename keeps the floor even with a
+// prose extension. Only descriptive/compound names (monkey, token-budget,
+// auth-guide) are allowed through.
+const PROSE_NAME_FLOOR = [
+  "**/threat-model*.*",
+  "**/*security-policy*.*",
+  "**/*secret*-policy*.*",
+  "**/*passwd*.*",
+  // Exact-stem, both numbers. Hardcoding only the plurals meant
+  // `secrets.json.md` kept the floor while `secret.json.md` did not — an
+  // asymmetry with no defensible reading. These must stay exact-stem globs:
+  // widening to `**/*token*.*` here would drag `docs/token-budget.md` back into
+  // the critical band and undo the change this PR exists to make.
+  "**/credential.*",
+  "**/credentials.*",
+  "**/secret.*",
+  "**/secrets.*",
+  "**/password.*",
+  "**/passwords.*",
+  "**/token.*",
+  "**/tokens.*",
+  // Compound credential nouns anywhere in the basename. These are names for the
+  // secret itself rather than writing about one, and the original floor caught
+  // every one via `**/*apikey*.*` and friends. Distinct from hasCredentialToken
+  // above, which handles the separated `<qualifier>-key` forms.
+  "**/*apikey*.*",
+  "**/*privatekey*.*",
+  "**/*secretkey*.*",
+  "**/*accesskey*.*",
+  "**/*signingkey*.*",
+  "**/*keystore*.*",
+  "**/*keyring*.*",
+  "**/*keychain*.*",
+];
+
+// Credential-shaped basenames such as `api-key.txt`, `apikey.txt`, or
+// `access_key.txt`: the file may BE the credential rather than prose about one.
+// Expressed as a regex rather than a glob because the distinction is
+// "<qualifier>key" as a whole word-ish token — `api-keyboard.md` must NOT match,
+// and a `?` single-char glob both misses `apikey` and catches `api-keyboard`.
+// Anchored to the BASENAME so `monkey.md` and `api-keyboard.md` are excluded:
+// the token before "key" must be a real qualifier, or "key"/"keys" must stand
+// alone as the whole stem.
+//
+// An optional leading token is allowed before the qualifier — anchoring the
+// qualifier at ^ meant `my-secret-key.txt`, `prod-api-key.txt`, and
+// `license-key.md` all escaped while the bare `secret-key.txt` was caught, even
+// though the original floor caught every one of them via `**/*-key*.*`. The
+// leading group must end in a [-_.] separator, which is what still excludes
+// `monkey.md` (no separator before "key") and `api-keyboard.md` (fails the
+// `keys?` stem anchor — "keyboard" is not "key").
+// A trailing token after the stem is allowed too, so `key-prod.md` and
+// `session-key-notes.md` keep the floor — the original caught them via
+// `**/key-*.*` and `**/*-key*.*`. `monkey.md` is still excluded (the leading
+// group must end in a separator) and `api-keyboard.md` still is too (a trailing
+// token must START with a separator, and "board" does not).
+// Implemented as a token scan rather than one regex: the natural expression
+// (`^(.*[-_.])?<stem>([-_.].*)?\.ext$`) nests unbounded wildcards on both sides
+// of the stem, which is a catastrophic-backtracking risk on a
+// partially-attacker-influenced filename (eslint security/detect-unsafe-regex).
+// Splitting the basename on separators is linear and easier to reason about.
+// INVERTED on purpose. An allowlist of credential qualifiers is open-ended —
+// three review rounds each added more (`deploykey`, `privkey`, `pubkey`,
+// `gpgkey`, `sessionkey`, `hmackey`, `rootkey`, …) and the next reader will
+// think of more still. The set of ordinary English words that merely END in
+// "key" is small, closed, and enumerable. Deny-listing that instead means a
+// qualifier nobody anticipated fails SAFE (keeps the floor) rather than
+// silently escaping.
+//
+// `privkey.pem` is the OpenSSL/Let's Encrypt default name and "deploy key" is
+// GitHub's own term, so these are literal conventional credential filenames —
+// and the separated forms (`deploy-key.md`) already kept the floor, making the
+// allowlist's asymmetry indefensible.
+const KEY_WORD_FALSE_POSITIVES = new Set([
+  "monkey",
+  "monkeys",
+  "donkey",
+  "donkeys",
+  "turkey",
+  "turkeys",
+  "hockey",
+  "jockey",
+  "jockeys",
+  "whiskey",
+  "whiskeys",
+  "lackey",
+  "lackeys",
+  "mickey",
+  "hokey",
+  "hokeys",
+  "pinkey",
+  "pinkeys",
+  "malarkey",
+  "malarkeys",
+  "hickey",
+  "hickeys",
+  "mickeys",
+  "hockeys",
+]);
+
+// A token is credential-shaped when it ends in `key`/`keys` and is not one of
+// the ordinary words above. Bare `key`/`keys` counts too.
+function isKeyToken(token) {
+  if (KEY_WORD_FALSE_POSITIVES.has(token)) return false;
+  return token.endsWith("key") || token.endsWith("keys");
+}
+
+function hasCredentialToken(basename) {
+  const dot = basename.lastIndexOf(".");
+  if (dot <= 0) return false;
+  // Split on any non-alphanumeric run, not just [-_.] — `api key.md` (space)
+  // and `api+key.md` (plus) must tokenize the way `api-key.md` does; the
+  // original floor caught them via its substring globs.
+  const tokens = basename
+    .slice(0, dot)
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  // Any token ending in key/keys — bare (`key-prod.md`, `session-key-notes.md`)
+  // or compound (`apikey.txt`, `privkey.md`, `deploykey.md`) — except the
+  // ordinary English words above. `keyboard` and `keynote` are excluded because
+  // they only START with "key"; the test is on the ending.
+  return tokens.some(isKeyToken);
+}
+
+// Drop decoration from the basename's stem while preserving its extension, so
+// `docs/secrets (1).md` reduces to `docs/secrets.md` and `docs/token<U+200B>.md`
+// to `docs/token.md` before the exact-stem credential globs are applied.
+// Alphanumerics and the word separators [-_.] survive, so genuine compounds
+// (`token-budget`, `secret-santa`, `rate-limit`) are untouched and stay
+// released.
+function decorationStrippedNames(normalized) {
+  const slash = normalized.lastIndexOf("/");
+  const dir = slash === -1 ? "" : normalized.slice(0, slash + 1);
+  const basename = normalized.slice(slash + 1);
+  const dot = basename.lastIndexOf(".");
+  if (dot <= 0) return [];
+  const extension = basename.slice(dot);
+  const rawStem = basename.slice(0, dot);
+  // Decoration is a word BOUNDARY, not nothing: deleting it outright would turn
+  // `secrets (1)` into `secrets1`, which is not the credential noun either.
+  // Map decoration to `-`, collapse runs, and trim the ends.
+  const stem = rawStem
+    .replace(/[^a-z0-9\-_.]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-_.]+|[-_.]+$/g, "");
+  if (!stem || stem === rawStem) return [];
+  const candidates = [`${dir}${stem}${extension}`];
+  // `password copy.txt` and `secrets (1).md` normalize to `password-copy` /
+  // `secrets-1`, which still are not the bare noun. The decoration marked a
+  // boundary, so the leading segment is the real name — test it too. Safe
+  // against genuine compounds: `token-budget.md` is unchanged by the
+  // normalization above, so it never reaches this branch.
+  const lead = stem.split(/[-_.]/)[0];
+  if (lead && lead !== stem) candidates.push(`${dir}${lead}${extension}`);
+  return candidates;
+}
+
+// Strip prose extensions repeatedly so `.env.production.md` reduces to `.env`
+// and `id_rsa.txt` to `id_rsa` before the credential-stem patterns are applied.
+function stripProseExtensions(basename) {
+  let stem = basename;
+  for (let guard = 0; guard < 5; guard += 1) {
+    const dot = stem.lastIndexOf(".");
+    if (dot <= 0) break;
+    if (!PROSE_EXTENSIONS.has(stem.slice(dot))) break;
+    stem = stem.slice(0, dot);
+  }
+  return stem;
+}
+
+function hasCredentialBasename(normalized) {
+  const basename = normalized.slice(normalized.lastIndexOf("/") + 1);
+  return hasCredentialToken(basename);
+}
+
+function isProsePath(file) {
+  const normalized = normalizeFloorPath(file);
+  const dot = normalized.lastIndexOf(".");
+  if (dot === -1) return false;
+  if (!PROSE_EXTENSIONS.has(normalized.slice(dot))) return false;
+  // Security-relevant prose — by directory or by document name — keeps the floor.
+  if (matchesPattern(normalized, PROSE_DIRECTORY_FLOOR)) return false;
+  if (matchesPattern(normalized, PROSE_NAME_FLOOR)) return false;
+  if (hasCredentialBasename(normalized)) return false;
+  // Decoration is not word-compounding. PROSE_NAME_FLOOR pins credential nouns
+  // as EXACT stems (`**/token.*`), so any trailing character defeats it —
+  // `token .md`, `secrets (1).md`, `password copy.txt`, and the invisible
+  // variants (U+200B, U+FEFF, U+00A0, U+202E) all escaped. Those are exactly
+  // the OS-generated duplicate names a pasted credential dump arrives under,
+  // and the zero-width forms are visually identical to `token.md`, which the
+  // floor DOES catch — an evasion primitive, not a false-positive fix.
+  //
+  // Re-test with decoration stripped: keep only alphanumerics and the word
+  // separators [-_.], which is the same normalization hasCredentialToken
+  // already applies on the key path.
+  for (const candidate of decorationStrippedNames(normalized)) {
+    if (matchesPattern(candidate, PROSE_NAME_FLOOR)) return false;
+  }
+  // A prose suffix must not launder a credential filename: re-test the path
+  // with prose extensions stripped, so `.env.md` is judged as `.env` and
+  // `id_rsa.txt` as `id_rsa`.
+  const basename = normalized.slice(normalized.lastIndexOf("/") + 1);
+  const stem = stripProseExtensions(basename);
+  if (stem !== basename && matchesPattern(stem, CREDENTIAL_STEM)) return false;
+  return true;
+}
+
 function matchesSecurityFloor(file, cfg = DEFAULTS) {
   // Git accepts control characters in filenames. Treat every such path as
   // security-sensitive instead of trying to assign ordinary risk to an
   // ambiguous/adversarial display surface.
   if (hasControlCharacters(file)) return true;
-  return matchesPattern(normalizeFloorPath(file), effectiveSecurityFloor(cfg));
+  const normalized = normalizeFloorPath(file);
+  // A repo-declared securityFloor pattern is an explicit opt-in and is NEVER
+  // subject to the prose carve-out. The carve-out narrows the BUILT-IN floor,
+  // whose breadth is an accident of substring matching; a pattern a repository
+  // deliberately added to harness-config.json is a decision, not an accident.
+  //
+  // Checking it after isProsePath() silently voided that decision — with
+  // scorePolicy.securityFloor: ["**/compliance/**"], `compliance/soc2.md`
+  // scored 40 instead of 85 while `compliance/app.js` correctly stayed 85.
+  // That breaks the documented additive contract (additiveFloorPatterns exists
+  // precisely so repo policy can only ever ADD strictness, never remove it),
+  // and no built-in trade-off covers it: the accepted trade-offs are about
+  // built-in security *concepts*, not repo-declared surface.
+  // Only patterns the repo ADDED count. cfg.securityFloor legitimately contains
+  // the built-in list (loadConfig merges over DEFAULTS), so treating the whole
+  // array as repo-declared would bypass the carve-out for every built-in
+  // pattern and undo this change entirely — `docs/monkeys.md` floored again.
+  // Diff against DEFAULTS to isolate the genuine opt-ins.
+  const builtIn = new Set(
+    [...DEFAULTS.securityFloor, ...DEFAULTS.humanFloor].map((pattern) =>
+      pattern.toLowerCase(),
+    ),
+  );
+  const added = (
+    Array.isArray(cfg?.securityFloor) ? cfg.securityFloor : []
+  ).filter((pattern) => !builtIn.has(String(pattern).toLowerCase()));
+  if (added.length > 0 && matchesPattern(normalized, added)) {
+    return true;
+  }
+  if (isProsePath(file)) return false;
+  return matchesPattern(normalized, effectiveSecurityFloor(cfg));
 }
 
 function securityFloorScore(cfg = DEFAULTS) {

@@ -88,6 +88,18 @@ terminal_diagnosis() {
   [ -n "$provider" ] && args+=(--provider "$provider")
   [ -n "$reset_at" ] && args+=(--reset-at "$reset_at")
   node "$SCRIPT_DIR/quality-terminal-status.js" "${args[@]}" || true
+  # Persist the terminal state alongside the human-readable diagnosis, so a
+  # campaign that ended is distinguishable from one still running by reading
+  # the manifest alone. Without this the two are byte-identical on disk
+  # (activeExecution is null either way) and only a stale lastActivityAt hints
+  # at the difference. Write-once: the first cause recorded wins.
+  local state
+  case "$category" in
+    provider-timeout | provider-governor) state=timeout ;;
+    *) state=blocked ;;
+  esac
+  node "$SCRIPT_DIR/quality-invocation.js" terminal-state "$MANIFEST" \
+    --state "$state" --detail "$category" >/dev/null || true
 }
 
 authorize_provider_attempt() {

@@ -149,7 +149,14 @@ describe("quality-verify-app.sh", () => {
     // This is a process-cleanup bound, not a CPU scheduling benchmark. The
     // isolated case is normally ~9s; allow CI contention but reject anything
     // remotely close to the 300s child sleep it must terminate.
-    expect(elapsedSeconds).toBeLessThan(35);
+    //
+    // The bound was 35s, which flaked at 36.01s under full-suite CPU contention
+    // (it passes in isolation on both main and this branch). 35s was never a
+    // meaningful threshold — the defect this guards against is "the harness
+    // waits out the child's 300s sleep", so any bound comfortably under 300s
+    // proves it. Widened to 90s to remove the false failure without weakening
+    // what is actually asserted.
+    expect(elapsedSeconds).toBeLessThan(90);
   });
 
   it("fails clearly if the dev script exits before binding its port", () => {
