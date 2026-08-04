@@ -19,6 +19,10 @@ const HIGH_RISK_ACK_FLAGS = [
   { prefix: "gate:test", flag: "--i-understand-test-risk" },
   { prefix: "ci:", flag: "--i-understand-missing-ci" },
   { prefix: "review:finding:", flag: "--i-understand-code-finding" },
+  {
+    prefix: "review:provider-exhaustion",
+    flag: "--i-understand-missing-review",
+  },
   { prefix: "mutation:", flag: "--i-understand-security-risk" },
 ];
 

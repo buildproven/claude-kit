@@ -2038,6 +2038,45 @@ exec "${realGit}" "$@"
     expect(afterState.approval.rebaseCarriedHead).toBeUndefined();
   });
 
+  it("authorizes a carried provider review against the rebased live base (BUI-380)", () => {
+    const root = repo("review-authorization-rebase-carry-base");
+    const manifest = create(root);
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
+    prepareCodexReview(root, manifest);
+    recordJudgeArtifact(root, manifest);
+    const original = JSON.parse(readFileSync(manifest, "utf8"));
+
+    git(root, ["switch", "-q", "main"]);
+    writeFileSync(
+      path.join(root, "upstream-only.js"),
+      "export const upstream = 1;\n",
+    );
+    git(root, ["add", "upstream-only.js"]);
+    git(root, ["commit", "-q", "-m", "advance base"]);
+    git(root, ["push", "-q", "origin", "main"]);
+    const rebasedBase = git(root, ["rev-parse", "HEAD"]);
+    git(root, ["switch", "-q", "feature"]);
+    git(root, ["fetch", "-q", "origin", "main"]);
+    git(root, ["rebase", "-q", "origin/main"]);
+
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+    // Rebase carry preserves the reviewed diff, but deterministic gates and
+    // mutation evidence are always revision-bound and must be fresh at HEAD.
+    for (const name of ["lint", "test", "security"])
+      recordGateFixture(manifest, name);
+    recordMutationFixture(manifest);
+    recordJudgeArtifact(root, manifest);
+    const authorization = JSON.parse(
+      execFileSync("node", [INVOCATION, "review-authorization", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(authorization.base).toBe(rebasedBase);
+    expect(authorization.base).not.toBe(original.revisions.baseSha);
+    expect(authorization.head).toBe(git(root, ["rev-parse", "HEAD"]));
+  });
+
   it("rejects approve commands from nested or headless quality children", () => {
     const root = repo("approval-command-child");
     const head = git(root, ["rev-parse", "HEAD"]);
@@ -4220,6 +4259,31 @@ exit 1
     expect(
       parseBlock.match(/inconclusiveAgents\.push\(item\.name\)/g),
     ).toHaveLength(2);
+  });
+
+  it("requires a usable majority for every non-advisory provider panel", () => {
+    // Codex and Gemini may run multiple passes. Their read-time quorum must
+    // use the same panel denominator as writeArtifactInventory(), rather than
+    // accepting one usable result while malformed siblings disappear.
+    const source = readFileSync(INVOCATION, "utf8");
+    const fn = source.slice(
+      source.indexOf("function providerFindings(manifest)"),
+      source.indexOf("function priorFindings(manifest)"),
+    );
+    expect(fn).toContain('inventory.provider === "claude"');
+    expect(fn).toContain("quorumResultFiles.length");
+    expect(fn).toContain("Math.floor(panelSize / 2) + 1");
+    expect(fn).toContain("usableReviewerReports += 1;");
+  });
+
+  it("treats an empty findings artifact as inconclusive at read time", () => {
+    const source = readFileSync(INVOCATION, "utf8");
+    const fn = source.slice(
+      source.indexOf("function providerFindings(manifest)"),
+      source.indexOf("function priorFindings(manifest)"),
+    );
+    expect(fn).toContain("if (!text) {\n        revokeAggregateVerdict();");
+    expect(fn).toContain("const revokeAggregateVerdict = () => {");
   });
 
   it("still inventories a panel whose reports are all non-empty", () => {

@@ -2622,6 +2622,8 @@ function providerFindings(manifest) {
     const reviewFindingsStart = findings.length;
     usableReviewerReports = 0;
     requiredUsableReports = 0;
+    let structuredProviderReports = 0;
+    const structuredProviderNames = new Set();
     // Reset too: a malformed agent in round 1 must not be reported against
     // round 2's panel now that the quorum is evaluated inside the loop.
     inconclusiveAgents = [];
@@ -2629,22 +2631,34 @@ function providerFindings(manifest) {
       fs.readFileSync(path.join(review.artifactDir, "artifact-inventory.json")),
       "provider artifact inventory",
     );
-    if (inventory.provider === "claude" && review.status !== "advisory") {
-      requiredUsableReports = Math.floor(manifest.agents.length / 2) + 1;
-    }
     const resultFiles = inventory.files.filter((file) =>
       file.name.endsWith(".json"),
     );
-    const resultNames = new Set(resultFiles.map((file) => file.name));
-    for (const item of resultFiles.filter((file) => {
+    const reviewerResultFiles = resultFiles.filter((file) => {
       const rawPass = file.name.match(/^(codex|gemini)-(\d+)\.json$/);
       if (!rawPass) return true;
       const [, providerName, pass] = rawPass;
-      return (
-        !resultNames.has(`${providerName}-${pass}.normalized.json`) &&
-        !resultNames.has(`primary-${providerName}-${pass}.result.json`)
+      return !resultFiles.some(
+        (candidate) =>
+          candidate.name === `${providerName}-${pass}.normalized.json` ||
+          candidate.name === `primary-${providerName}-${pass}.result.json`,
       );
-    })) {
+    });
+    const quorumResultFiles = reviewerResultFiles.filter(
+      (file) => file.provider === inventory.provider,
+    );
+    // Every non-advisory provider panel needs a usable majority at read time,
+    // not only Claude. Artifact inventory already applies the same floor when
+    // it is written; keeping the denominator aligned prevents an unparseable
+    // JSON result from disappearing after inventory succeeds.
+    if (review.status !== "advisory") {
+      const panelSize =
+        inventory.provider === "claude"
+          ? manifest.agents.length
+          : quorumResultFiles.length;
+      requiredUsableReports = Math.floor(panelSize / 2) + 1;
+    }
+    for (const item of reviewerResultFiles) {
       let parsed;
       try {
         parsed = parseJson(
@@ -2666,6 +2680,15 @@ function providerFindings(manifest) {
         inconclusiveAgents.push(item.name);
         continue;
       }
+      const resultProvider = item.provider || inventory.provider;
+      structuredProviderNames.add(resultProvider);
+      // Preserved primary evidence stays authoritative for its findings, but
+      // only the selected panel can contribute a verdict toward that panel's
+      // quorum. This matters when Claude falls back after a partial Codex run.
+      if (resultProvider === inventory.provider) {
+        usableReviewerReports += 1;
+        structuredProviderReports += 1;
+      }
       items.forEach((finding, index) => {
         findings.push({
           ...finding,
@@ -2677,17 +2700,35 @@ function providerFindings(manifest) {
             .digest("hex"),
           severity: finding.severity || "unknown",
           title: finding.title || "provider finding",
-          provider: item.provider || inventory.provider,
-          source: `${item.provider || inventory.provider}:${item.name}#${index}`,
+          provider: resultProvider,
+          source: `${resultProvider}:${item.name}#${index}`,
         });
       });
     }
-    const hasStructuredFindings = findings.length > reviewFindingsStart;
     for (const item of inventory.files.filter((file) =>
       file.name.endsWith(".findings.txt"),
     )) {
+      const isPanelReport = item.provider === inventory.provider;
+      const aggregateProvider = item.name.match(
+        /^(codex|gemini)\.findings\.txt$/,
+      )?.[1];
+      const aggregateHasStructuredResult =
+        !!aggregateProvider && structuredProviderNames.has(aggregateProvider);
+      const revokeAggregateVerdict = () => {
+        if (
+          isPanelReport &&
+          aggregateHasStructuredResult &&
+          structuredProviderReports > 0
+        ) {
+          usableReviewerReports -= 1;
+          structuredProviderReports -= 1;
+        }
+      };
+      // A structured result with actual findings is canonical for its paired
+      // aggregate. An empty structured result cannot silence conflicting
+      // aggregate text, which remains fail-closed evidence.
       if (
-        hasStructuredFindings &&
+        findings.length > reviewFindingsStart &&
         /^(?:codex|gemini)\.findings\.txt$/.test(item.name)
       ) {
         continue;
@@ -2729,9 +2770,18 @@ function providerFindings(manifest) {
               ),
           );
       }
-      if (!text) continue;
+      // A zero-byte findings artifact is a truncated or failed reviewer
+      // result, never a silent absence of evidence. This must match the
+      // write-time inventory gate's treatment of empty reports.
+      if (!text) {
+        revokeAggregateVerdict();
+        if (isPanelReport) inconclusiveAgents.push(item.name);
+        continue;
+      }
       if (isClean) {
-        usableReviewerReports += 1;
+        if (isPanelReport && !aggregateHasStructuredResult) {
+          usableReviewerReports += 1;
+        }
         continue;
       }
       // Strip the trailing <<<FINDINGS REPORTED>>> delimiter line (if that's
@@ -2765,10 +2815,18 @@ function providerFindings(manifest) {
       // a retry path. Do NOT treat it as clean — absent findings text is not
       // evidence of an absent finding.
       if (!strippedBody.trim()) {
+        // The aggregate Codex/Gemini findings text belongs to the same
+        // provider pass as its structured result. A delimiter-only aggregate
+        // means that pass is malformed, so it must revoke one otherwise-valid
+        // structured verdict rather than being masked by it. Peer reviewer
+        // reports remain independently usable.
+        revokeAggregateVerdict();
         inconclusiveAgents.push(item.name);
         continue;
       }
-      usableReviewerReports += 1;
+      if (isPanelReport && !aggregateHasStructuredResult) {
+        usableReviewerReports += 1;
+      }
       const body = strippedBody;
       findings.push({
         id: crypto
@@ -3302,7 +3360,10 @@ function reviewCoverage(manifest) {
   }
   verifyGateEvidence(manifest);
   return {
-    base: manifest.revisions.baseSha,
+    // A carried review is proven against the rebased live base. The immutable
+    // creation base still namespaces the campaign, but it is not the base the
+    // stamped tree now merges from (and must not be signed into Quality-Base).
+    base: effectiveBaseSha(manifest),
     head: manifest.revisions.currentHead,
     provider: manifest.provider.reviewer,
     primary: manifest.provider.primary,
