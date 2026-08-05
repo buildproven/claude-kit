@@ -366,7 +366,7 @@ function preparePolicyExemptReview(root, manifestPath) {
   );
 }
 
-function prepareIncompleteReview(root, manifestPath) {
+function prepareIncompleteReview(root, manifestPath, partialFindings = []) {
   execFileSync("node", [GOVERNOR, "bump-round", manifestPath], { cwd: root });
   const info = JSON.parse(
     execFileSync("node", [INVOCATION, "review-info", manifestPath], {
@@ -400,6 +400,16 @@ function prepareIncompleteReview(root, manifestPath) {
       failureCategory: "provider-unavailable",
     }),
   );
+  if (partialFindings.length > 0) {
+    writeFileSync(
+      path.join(info.artifactDir, "codex-1.normalized.json"),
+      JSON.stringify({
+        verdict: "needs-attention",
+        summary: "partial provider result before transport failure",
+        findings: partialFindings,
+      }),
+    );
+  }
   execFileSync(
     "node",
     [
@@ -3552,9 +3562,10 @@ exit 1
     });
     prepareCodexReview(root, manifest);
 
+    unlinkSync(path.join(root, "src", "auth", "session.js"));
     mkdirSync(path.join(root, "scripts"), { recursive: true });
     writeFileSync(path.join(root, "scripts", "repair.sh"), "exit 0\n");
-    git(root, ["add", "scripts/repair.sh"]);
+    git(root, ["add", "src/auth/session.js", "scripts/repair.sh"]);
     git(root, ["commit", "-q", "-m", "fix: harden repair"]);
     invocation.withManifestLock(manifest, (loaded) => {
       invocation.advanceHead(loaded, root);
@@ -3562,6 +3573,99 @@ exit 1
 
     expect(() => prepareCodexReview(root, manifest)).not.toThrow();
     expect(invocation.loadManifest(manifest).manifest.reviews).toHaveLength(2);
+  });
+
+  it("binds the immutable selection head into review evidence", () => {
+    const root = repo("v2-selection-head-binding");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "medium",
+        taskType: "bugfix",
+        score: 35,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["code-reviewer"], {
+        domain: "general",
+        rule: "general-review",
+      });
+    });
+    prepareCodexReview(root, manifest);
+    invocation.withManifestLock(manifest, (loaded) => {
+      loaded.panel.selectionHead = loaded.revisions.baseSha;
+    });
+
+    expect(() =>
+      invocation.reviewAuthorization(
+        invocation.loadManifest(manifest).manifest,
+      ),
+    ).toThrow(
+      /panelSelectionHead identity mismatch|inventory identity\/status mismatch/,
+    );
+  });
+
+  it("retains structured leads produced before an incomplete provider run", () => {
+    const root = repo("incomplete-partial-leads");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "medium",
+        taskType: "bugfix",
+        score: 35,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["code-reviewer"], {
+        domain: "general",
+        rule: "general-review",
+      });
+    });
+    prepareIncompleteReview(root, manifest, [
+      {
+        severity: "high",
+        title: "partial lead",
+        body: "The provider found this before its transport failed.",
+        failure_scenario: "A caller reaches the changed export with bad input.",
+        file: "file.js",
+        line_start: 1,
+        proof: { kind: "static-analysis", evidence: "changed export path" },
+        recommendation: "Verify the partial lead.",
+      },
+    ]);
+    recordMutationFixture(manifest);
+
+    const authorization = JSON.parse(
+      execFileSync("node", [INVOCATION, "review-authorization", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(authorization).toMatchObject({
+      reviewStatus: "incomplete",
+      leads: 1,
+      blockingCount: 0,
+    });
+    const inventory = JSON.parse(
+      readFileSync(
+        path.join(
+          invocation.loadManifest(manifest).manifest.reviews[0].artifactDir,
+          "artifact-inventory.json",
+        ),
+        "utf8",
+      ),
+    );
+    expect(inventory.files).toContainEqual(
+      expect.objectContaining({
+        name: "codex-1.normalized.json",
+        provider: "codex",
+      }),
+    );
+    expect(
+      invocation.loadManifest(manifest).manifest.reviews[0].leadCount,
+    ).toBe(1);
   });
 
   it("authorizes an explicit zero-reviewer policy exemption at low risk", () => {

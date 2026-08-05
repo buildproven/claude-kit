@@ -1911,6 +1911,11 @@ function setAgents(
     incomplete,
     domain,
     rule,
+    ...((manifest.reviewContractVersion || 1) >= 2 &&
+    domain !== "legacy" &&
+    !rule.startsWith("legacy")
+      ? { selectionHead: manifest.revisions.currentHead }
+      : {}),
   };
 }
 
@@ -2552,6 +2557,7 @@ function reviewIdentity(manifest) {
     reviewPolicyDigest: manifest.risk.reviewPolicyDigest || null,
     panelDomain: manifest.panel?.domain || "legacy",
     panelRule: manifest.panel?.rule || "legacy-panel",
+    panelSelectionHead: manifest.panel?.selectionHead || null,
   };
 }
 
@@ -2688,12 +2694,9 @@ function providerFindings(manifest) {
     );
   };
   for (const review of coveredReviews(manifest)) {
-    if (
-      review.status === "exempt" ||
-      (review.status === "incomplete" &&
-        review.provider === "review-incomplete")
-    )
-      continue;
+    if (review.status === "exempt") continue;
+    const incompleteSpecial =
+      review.status === "incomplete" && review.provider === "review-incomplete";
     const reviewFindingsStart = findings.length;
     usableReviewerReports = 0;
     requiredUsableReports = 0;
@@ -2713,6 +2716,14 @@ function providerFindings(manifest) {
       file.name.endsWith(".json"),
     );
     const reviewerResultFiles = resultFiles.filter((file) => {
+      if (
+        incompleteSpecial &&
+        ["review-incomplete.result.json", "policy-exempt.result.json"].includes(
+          file.name,
+        )
+      ) {
+        return false;
+      }
       const rawPass = file.name.match(/^(codex|gemini)-(\d+)\.json$/);
       if (rawPass) {
         const [, providerName, pass] = rawPass;
@@ -2739,7 +2750,7 @@ function providerFindings(manifest) {
       inventory.provider === "claude"
         ? manifest.agents.length
         : quorumResultFiles.length;
-    if (review.status !== "advisory") {
+    if (review.status !== "advisory" && !incompleteSpecial) {
       requiredUsableReports = quorumPanelSize;
     }
     for (const item of reviewerResultFiles) {
@@ -2796,6 +2807,9 @@ function providerFindings(manifest) {
     for (const item of inventory.files.filter((file) =>
       file.name.endsWith(".findings.txt"),
     )) {
+      if (incompleteSpecial && item.name === "review-incomplete.findings.txt") {
+        continue;
+      }
       const isPanelReport = item.provider === inventory.provider;
       const aggregateProvider = item.name.match(
         /^(codex|gemini)\.findings\.txt$/,
@@ -3293,6 +3307,11 @@ function recordIncompleteReview(manifest, options) {
     governorAttemptToken: authorizedAttempt.token,
     completedAt: new Date().toISOString(),
   });
+  const priorLeadCount = manifest.reviews
+    .slice(0, -1)
+    .reduce((sum, review) => sum + (review.leadCount || 0), 0);
+  manifest.reviews.at(-1).leadCount =
+    providerFindings(manifest).length - priorLeadCount;
   manifest.provider = {
     ...manifest.provider,
     primary: options.primary,
@@ -3316,10 +3335,16 @@ function providerEvidenceName(name, provider) {
     );
   }
   if (provider === "review-incomplete") {
-    return [
-      "review-incomplete.findings.txt",
-      "review-incomplete.result.json",
-    ].includes(name);
+    return (
+      [
+        "review-incomplete.findings.txt",
+        "review-incomplete.result.json",
+      ].includes(name) ||
+      /^primary-(?:codex|gemini|claude)-.+\.result\.json$/.test(name) ||
+      /^(?:codex|gemini)-\d+\.normalized\.json$/.test(name) ||
+      (!/^(?:codex|gemini|primary)-/.test(name) &&
+        name.endsWith(".normalized.json"))
+    );
   }
   if (/^primary-(?:codex|gemini|claude)-/.test(name)) return true;
   if (provider === "codex") {
@@ -3430,9 +3455,21 @@ function writeArtifactInventory(
       // sets it after this inventory is written — so it cannot be trusted
       // here; the filename is always correct regardless of round ordering.
       const preservedMatch = name.match(/^primary-(codex|gemini|claude)-/);
+      const nativeMatch = name.match(/^(codex|gemini)-\d+\.normalized\.json$/);
+      const partialClaude =
+        provider === "review-incomplete" &&
+        !preservedMatch &&
+        !nativeMatch &&
+        name.endsWith(".normalized.json");
       return {
         name,
-        provider: preservedMatch ? preservedMatch[1] : provider,
+        provider: preservedMatch
+          ? preservedMatch[1]
+          : nativeMatch
+            ? nativeMatch[1]
+            : partialClaude
+              ? "claude"
+              : provider,
         sha256: sha256File(path.join(resolved, name)),
       };
     }),
@@ -3486,6 +3523,7 @@ function verifyIdentityFile(manifest, review, identityFile) {
     reviewPolicyDigest: manifest.risk.reviewPolicyDigest || null,
     panelDomain: manifest.panel?.domain || "legacy",
     panelRule: manifest.panel?.rule || "legacy-panel",
+    panelSelectionHead: manifest.panel?.selectionHead || null,
   };
   for (const [key, value] of Object.entries(expected)) {
     if (identity[key] !== value) {
@@ -3509,7 +3547,12 @@ function verifyInventory(manifest, review, inventoryFile, artifactDir) {
     inventory.invocationId === manifest.invocationId &&
     inventory.headSha === review.to &&
     inventory.provider ===
-      (review.status === "advisory" ? review.failedProvider : review.provider);
+      (review.status === "advisory"
+        ? review.failedProvider
+        : review.provider) &&
+    ((manifest.reviewContractVersion || 1) < 2 ||
+      JSON.stringify(canonicalJson(inventory.panel)) ===
+        JSON.stringify(canonicalJson(manifest.panel)));
   const usable =
     ["success", "exempt", "incomplete"].includes(inventory.status) &&
     Array.isArray(inventory.files) &&
@@ -3573,7 +3616,8 @@ function verifyReviewArtifact(manifest, review) {
     (manifest.reviewContractVersion || 1) >= 2 &&
     (!manifest.panel?.domain ||
       !manifest.panel?.rule ||
-      manifest.panel.rule.startsWith("legacy"))
+      manifest.panel.rule.startsWith("legacy") ||
+      !/^[0-9a-f]{40}$/.test(manifest.panel?.selectionHead || ""))
   ) {
     throw new Error("contract v2 review lacks bound domain selection");
   }
@@ -3581,6 +3625,17 @@ function verifyReviewArtifact(manifest, review) {
     (manifest.reviewContractVersion || 1) >= 2 &&
     manifest.risk.reviewPolicyDigest
   ) {
+    const selectionIsAncestor =
+      spawnSync(
+        "git",
+        [
+          "merge-base",
+          "--is-ancestor",
+          manifest.panel.selectionHead,
+          review.to,
+        ],
+        { cwd: manifest.repo.realpath, stdio: "ignore" },
+      ).status === 0;
     const expectedSelection = agentSelection.selectReviewersForRange({
       tier: manifest.risk.tier,
       repo: manifest.repo.realpath,
@@ -3589,9 +3644,10 @@ function verifyReviewArtifact(manifest, review) {
       // selector over that delta can switch domains and falsely invalidate the
       // immutable campaign identity.
       base: manifest.revisions.baseSha,
-      head: review.to,
+      head: manifest.panel.selectionHead,
     });
     if (
+      !selectionIsAncestor ||
       manifest.risk.reviewPolicyDigest !==
         reviewPolicyDigest(buildReviewPolicy(manifest)) ||
       JSON.stringify(expectedSelection.agents) !==
