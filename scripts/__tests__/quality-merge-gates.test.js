@@ -100,6 +100,9 @@ describe("quality merge gates", () => {
     expect(VALIDATOR).toContain(
       "high/critical evidence requires the configured primary reviewer",
     );
+    expect(VALIDATOR).toMatch(
+      /\[ -z "\$STAMP_CONTRACT" \].*configured primary reviewer/s,
+    );
   });
 
   it("requires signed evidence at the merge authorization boundary", () => {
