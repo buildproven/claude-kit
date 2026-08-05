@@ -14,8 +14,53 @@ function git(cwd, args) {
 
 function fixtureTestScript(options) {
   if (options.vitestRunner) return "vitest run";
+  if (options.npmCompoundPytestRunner) return "pytest && eslint .";
   if (options.npmPytestRunner) return "pytest -n auto";
   return "node logic.test.js";
+}
+
+function installPytestRunner(root, options) {
+  if (
+    !options.pytestRunner &&
+    !options.npmPytestRunner &&
+    !options.npmCompoundPytestRunner
+  ) {
+    return;
+  }
+  const bin = path.join(root, "test-bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(
+    path.join(bin, "pytest"),
+    options.npmCompoundPytestRunner
+      ? `#!/usr/bin/env bash
+printf "%s\\n" "$*"
+node logic.test.js
+`
+      : `#!/usr/bin/env bash
+printf "%s\\n" "$*"
+node logic.test.js
+status=$?
+case " $* " in
+  *" -x "*) exit "$status" ;;
+esac
+sleep 10
+exit "$status"
+`,
+    { mode: 0o755 },
+  );
+  if (options.npmCompoundPytestRunner) {
+    writeFileSync(
+      path.join(bin, "eslint"),
+      `#!/usr/bin/env bash
+printf "%s\\n" "$*"
+case " $* " in
+  *" -x "*) exit 2 ;;
+esac
+exit 0
+`,
+      { mode: 0o755 },
+    );
+  }
 }
 
 function fixture(label, testBody, options = {}) {
@@ -97,24 +142,7 @@ function fixture(label, testBody, options = {}) {
       { mode: 0o755 },
     );
   }
-  if (options.pytestRunner || options.npmPytestRunner) {
-    const bin = path.join(root, "test-bin");
-    mkdirSync(bin, { recursive: true });
-    writeFileSync(
-      path.join(bin, "pytest"),
-      `#!/usr/bin/env bash
-printf "%s\\n" "$*"
-node logic.test.js
-status=$?
-case " $* " in
-  *" -x "*) exit "$status" ;;
-esac
-sleep 10
-exit "$status"
-`,
-      { mode: 0o755 },
-    );
-  }
+  installPytestRunner(root, options);
   const manifest = execFileSync(
     "node",
     [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
@@ -375,6 +403,18 @@ describe("quality-mutation-check", () => {
       "utf8",
     );
     expect(log).toContain("-n auto -x");
+  });
+
+  it("does not manufacture evidence from a compound npm pytest script", () => {
+    const { root, manifest } = fixture(
+      "npm-compound-pytest",
+      "const { isAllowed } = require('./logic');\nif (typeof isAllowed !== 'function') process.exit(1);\n",
+      { npmCompoundPytestRunner: true },
+    );
+
+    expect(() => runMutation(root, manifest)).toThrow(
+      /no red-capable evidence/,
+    );
   });
 
   it("removes an added source file to produce revision-bound evidence", () => {
