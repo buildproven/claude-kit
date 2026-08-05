@@ -168,6 +168,22 @@ function coveredFiles(manifest, execFileSync) {
  */
 function deriveVerdict(manifest) {
   if ((manifest.reviewContractVersion || 1) >= 2) {
+    const terminal = manifest.terminalState?.state;
+    if (terminal === "blocked") return "blocked";
+    if (
+      [
+        "timeout",
+        "interrupted",
+        "superseded",
+        "policy-superseded",
+        "provider-incomplete",
+        "provider-contract-failed",
+      ].includes(terminal)
+    ) {
+      return "incomplete";
+    }
+    if (terminal === "merged") return "authorized";
+    if (terminal === "verified-unmerged") return "passed";
     const hasCurrentAttestation = (manifest.reviews || []).some(
       (review) =>
         ["success", "exempt", "incomplete"].includes(review.status) &&
@@ -241,15 +257,15 @@ function reviewFields(manifest) {
       : ["codex", "gemini"].includes(provider.reviewer)
         ? "native"
         : null;
-  const currentReviews = (manifest.reviews || []).filter(
-    (review) => review.to === manifest.revisions?.currentHead,
+  const coveredReviews = (manifest.reviews || []).filter((review) =>
+    ["success", "advisory", "exempt", "incomplete"].includes(review.status),
   );
-  const incomplete = currentReviews.some(
+  const incomplete = coveredReviews.some(
     (review) => review.status === "incomplete",
   );
   const exempt =
-    currentReviews.length > 0 &&
-    currentReviews.every((review) => review.status === "exempt");
+    coveredReviews.length > 0 &&
+    coveredReviews.every((review) => review.status === "exempt");
   return {
     // Older manifests predate the experiment and remain reportable as null.
     // All newly-created manifests persist one of these arms at creation time.
@@ -263,15 +279,25 @@ function reviewFields(manifest) {
       ? "incomplete"
       : exempt
         ? "policy-exempt"
-        : currentReviews.length > 0
+        : coveredReviews.length > 0
           ? "complete"
           : null,
-    leadCount: currentReviews.reduce(
+    leadCount: coveredReviews.reduce(
       (sum, review) =>
         sum + (Number.isInteger(review.leadCount) ? review.leadCount : 0),
       0,
     ),
   };
+}
+
+function deterministicBlockingCount(manifest) {
+  if ((manifest.reviewContractVersion || 1) < 2) return null;
+  const head = manifest.revisions?.currentHead;
+  const failedGates = (manifest.gates || []).filter(
+    (gate) => gate.head === head && ["failed", "timeout"].includes(gate.status),
+  ).length;
+  if (failedGates > 0) return failedGates;
+  return manifest.terminalState?.state === "blocked" ? 1 : 0;
 }
 
 function validateRecord(record) {
@@ -315,7 +341,7 @@ function buildRecord(manifest, { execFileSync, nowIso }) {
     agentsRun: Array.isArray(manifest.agents) ? manifest.agents.length : 0,
     blockingCount:
       (manifest.reviewContractVersion || 1) >= 2
-        ? 0
+        ? deterministicBlockingCount(manifest)
         : Number.isFinite(judge.blockingCount)
           ? judge.blockingCount
           : null,
@@ -416,6 +442,7 @@ module.exports = {
   coveredFiles,
   deriveVerdict,
   buildRecord,
+  deterministicBlockingCount,
   validateRecord,
   alreadyRecorded,
   recordCampaign,

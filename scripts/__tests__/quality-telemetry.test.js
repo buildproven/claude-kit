@@ -7,6 +7,7 @@ const {
   successfulReviewCount,
   deriveVerdict,
   buildRecord,
+  deterministicBlockingCount,
   validateRecord,
   alreadyRecorded,
   recordCampaign,
@@ -36,7 +37,7 @@ function baseManifest(overrides = {}) {
     agents: [{ name: "code-reviewer" }, { name: "security-auditor" }],
     provider: { reviewer: "codex", effort: "high" },
     reviews: [
-      { status: "success", round: 1 },
+      { status: "success", round: 1, to: "bbb", leadCount: 0 },
       { status: "failed", round: 1 },
     ],
     governor: { startedAtEpoch: 1000 },
@@ -116,6 +117,17 @@ describe("deriveVerdict", () => {
     });
     expect(deriveVerdict(m)).toBe("incomplete");
   });
+
+  it("does not report a v2 deterministic block as authorized", () => {
+    const manifest = baseManifest({
+      reviewContractVersion: 2,
+      options: { merge: true },
+      judge: undefined,
+      terminalState: { state: "blocked", detail: "ci:required" },
+    });
+    expect(deriveVerdict(manifest)).toBe("blocked");
+    expect(deterministicBlockingCount(manifest)).toBe(1);
+  });
 });
 
 describe("buildRecord", () => {
@@ -135,7 +147,7 @@ describe("buildRecord", () => {
       reviewProvider: "codex",
       reviewEffort: "high",
       reviewTokens: null,
-      reviewStatus: null,
+      reviewStatus: "complete",
       leadCount: 0,
       durationSeconds: 0, // start 1000 > now 600 → clamps to 0
       reviewRounds: 1,
@@ -170,6 +182,56 @@ describe("buildRecord", () => {
       reviewStatus: "incomplete",
       leadCount: 0,
     });
+  });
+
+  it("retains leads and incomplete status across all covered review rounds", () => {
+    const manifest = baseManifest({
+      reviewContractVersion: 2,
+      judge: undefined,
+      reviews: [
+        {
+          status: "incomplete",
+          round: 1,
+          from: "aaa",
+          to: "ccc",
+          leadCount: 2,
+        },
+        {
+          status: "success",
+          round: 2,
+          from: "ccc",
+          to: "bbb",
+          leadCount: 1,
+        },
+      ],
+    });
+    const record = buildRecord(manifest, {
+      execFileSync: NO_FILES,
+      nowIso: NOW,
+    });
+    expect(record).toMatchObject({
+      reviewStatus: "incomplete",
+      leadCount: 3,
+      blockingCount: 0,
+    });
+  });
+
+  it("counts current-head deterministic gate failures for v2", () => {
+    const manifest = baseManifest({
+      reviewContractVersion: 2,
+      judge: undefined,
+      terminalState: { state: "blocked", detail: "gate:test" },
+      gates: [
+        { name: "test", head: "bbb", status: "failed" },
+        { name: "lint", head: "bbb", status: "timeout" },
+        { name: "security", head: "old", status: "failed" },
+      ],
+    });
+    const record = buildRecord(manifest, {
+      execFileSync: NO_FILES,
+      nowIso: NOW,
+    });
+    expect(record).toMatchObject({ verdict: "blocked", blockingCount: 2 });
   });
 
   it("never records the absolute repo path (no host-path leak — BUI-351)", () => {
