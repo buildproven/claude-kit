@@ -265,10 +265,10 @@ run_codex_review() {
       || return 77
     attempt_started=$SECONDS
     if [ "$REVIEW_ROUND" -eq 1 ]; then
+      # A review needs Codex authentication, but not a developer's optional
+      # MCP configuration. Loading it makes unrelated, stale OAuth grants
+      # capable of blocking every quality campaign before review begins.
       bash "$bounded" --timeout "$pass_timeout" -- \
-        # A review needs Codex authentication, but not a developer's optional
-        # MCP configuration. Loading it makes unrelated, stale OAuth grants
-        # capable of blocking every quality campaign before review begins.
         codex exec --ephemeral --ignore-user-config -s read-only --json \
         -C "$GIT_ROOT" \
         -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
