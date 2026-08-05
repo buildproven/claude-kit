@@ -2,24 +2,29 @@
 # Pin a merge campaign's repository-lease credential once per phase process.
 
 quality_pin_repository_lease() {
-  local manifest="$1" script_dir merge_requested
+  local manifest="$1" script_dir merge_requested manifest_token
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
   merge_requested="$(node "$script_dir/quality-invocation.js" field "$manifest" options.merge)" || return 1
   [ "$merge_requested" = true ] || return 0
-  if [ -z "${BS_QUALITY_REPOSITORY_LEASE_TOKEN:-}" ]; then
-    BS_QUALITY_REPOSITORY_LEASE_TOKEN="$(
-      node "$script_dir/quality-invocation.js" field "$manifest" merge.repositoryLease.token
-    )" || return 1
-  fi
-  if [ -z "$BS_QUALITY_REPOSITORY_LEASE_TOKEN" ] && \
-    [ "${NODE_ENV:-}" = test ] && [ "${VITEST:-}" = true ] && \
+  manifest_token="$(
+    node "$script_dir/quality-invocation.js" field \
+      "$manifest" merge.repositoryLease.token
+  )" || return 1
+  if [ "${NODE_ENV:-}" = test ] && [ "${VITEST:-}" = true ] && \
     [ -n "${VITEST_WORKER_ID:-}" ]; then
-    node "$script_dir/quality-repo-lease.js" acquire \
-      --manifest "$manifest" >/dev/null || return 1
-    BS_QUALITY_REPOSITORY_LEASE_TOKEN="$(
-      node "$script_dir/quality-invocation.js" field \
-        "$manifest" merge.repositoryLease.token
-    )" || return 1
+    if [ -z "$manifest_token" ]; then
+      node "$script_dir/quality-repo-lease.js" acquire \
+        --manifest "$manifest" >/dev/null || return 1
+      manifest_token="$(
+        node "$script_dir/quality-invocation.js" field \
+          "$manifest" merge.repositoryLease.token
+      )" || return 1
+    fi
+    # A self-hosted quality gate inherits the outer repository credential.
+    # Vitest fixtures are independent campaigns and must pin their own token.
+    BS_QUALITY_REPOSITORY_LEASE_TOKEN="$manifest_token"
+  elif [ -z "${BS_QUALITY_REPOSITORY_LEASE_TOKEN:-}" ]; then
+    BS_QUALITY_REPOSITORY_LEASE_TOKEN="$manifest_token"
   fi
   [ -n "$BS_QUALITY_REPOSITORY_LEASE_TOKEN" ] || {
     echo "quality: merge campaign has no repository lease credential" >&2
