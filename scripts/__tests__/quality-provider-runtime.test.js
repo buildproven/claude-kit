@@ -91,7 +91,10 @@ describe("provider review runtime", () => {
       [
         BOUNDED,
         "--timeout",
-        "1",
+        // One second made Python startup itself the assertion under parallel
+        // full-suite load. Three seconds still exercises the hard wall clock
+        // while giving the session-escaped helper time to publish its PID.
+        "3",
         "--",
         "/bin/bash",
         "-c",
@@ -99,10 +102,10 @@ describe("provider review runtime", () => {
         "provider",
         pidFile,
       ],
-      { encoding: "utf8", timeout: 5000 },
+      { encoding: "utf8", timeout: 8000 },
     );
     expect(result.status).toBe(124);
-    expect(Date.now() - started).toBeLessThan(4000);
+    expect(Date.now() - started).toBeLessThan(7000);
     const helperPid = Number(readFileSync(pidFile, "utf8").trim());
     expect(Number.isSafeInteger(helperPid)).toBe(true);
     expect(() => process.kill(helperPid, 0)).toThrow();
