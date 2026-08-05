@@ -84,16 +84,19 @@ is a persisted-policy invocation, never a caller-supplied command.
 ```bash
 QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
 [ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
-# Names must be present in requiredGates. verify-app only appears when the
-# caller passed --verify-app (BUI-306); every other name is unconditional.
-for name in lint type test build security consumer verify-app; do
+# Execute exactly the persisted gate contract. Replaying a name that is not in
+# requiredGates is a policy error, not a skip; verify-app is present only when
+# the caller passed --verify-app (BUI-306).
+MANIFEST="<exact-manifest-path>"
+while IFS= read -r name; do
   bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
-    --manifest "<exact-manifest-path>" --name "$name"
-done
+    --manifest "$MANIFEST" --name "$name" || exit 1
+done < <(jq -r '.requiredGates[].name' "$MANIFEST")
 ```
 
-The runner skips categories not required by the manifest. A config-only
-repository may use `--name test --skip --reason "<recorded reason>"` only when
+The caller enumerates only categories required by the manifest; the runner
+rejects any other name. A config-only repository may use
+`--name test --skip --reason "<recorded reason>"` only when
 the manifest authorizes `options.skipTests`. Supported gate names and native
 `.quality-gates.json` policy are in `reference.md`; shell strings and unknown
 fields fail closed. `verify-app` boots the app and, for a web project, drives
