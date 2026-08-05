@@ -92,6 +92,24 @@ if [ "$TEST_EXECUTABLE" = npm ] &&
   esac
 fi
 
+PYTEST_COMMAND=false
+case "$TEST_EXECUTABLE" in
+  pytest) PYTEST_COMMAND=true ;;
+  uv|poetry|pipenv)
+    if [ "${TEST_ARGS[0]:-}" = run ] && [ "${TEST_ARGS[1]:-}" = pytest ]; then
+      PYTEST_COMMAND=true
+    fi
+    ;;
+  python|python3)
+    if [ "${TEST_ARGS[0]:-}" = -m ] && [ "${TEST_ARGS[1]:-}" = pytest ]; then
+      PYTEST_COMMAND=true
+    fi
+    ;;
+esac
+if [ "$PYTEST_COMMAND" = true ]; then
+  MUTATION_TEST_ARGS+=(-x)
+fi
+
 CANDIDATES=()
 while IFS= read -r CANDIDATE; do
   CANDIDATES+=("$CANDIDATE")

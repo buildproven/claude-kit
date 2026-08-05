@@ -27,7 +27,21 @@ function fixture(label, testBody, options = {}) {
       },
     }),
   );
-  writeFileSync(path.join(root, ".gitignore"), "node_modules/\n");
+  writeFileSync(path.join(root, ".gitignore"), "node_modules/\ntest-bin/\n");
+  if (options.pytestRunner) {
+    writeFileSync(
+      path.join(root, ".quality-gates.json"),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          test: {
+            executable: "pytest",
+            args: ["-q", "-n", "3", "--dist", "worksteal"],
+          },
+        },
+      }),
+    );
+  }
   const source = options.shellSource
     ? "policy.sh"
     : options.addedSource
@@ -71,6 +85,24 @@ function fixture(label, testBody, options = {}) {
       { mode: 0o755 },
     );
   }
+  if (options.pytestRunner) {
+    const bin = path.join(root, "test-bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(
+      path.join(bin, "pytest"),
+      `#!/usr/bin/env bash
+printf "%s\\n" "$*"
+node logic.test.js
+status=$?
+case " $* " in
+  *" -x "*) exit "$status" ;;
+esac
+sleep 10
+exit "$status"
+`,
+      { mode: 0o755 },
+    );
+  }
   const manifest = execFileSync(
     "node",
     [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
@@ -111,6 +143,10 @@ function runMutation(root, manifest) {
     return execFileSync("bash", [MUTATION, "--manifest", manifest], {
       cwd: root,
       encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${path.join(root, "test-bin")}:${process.env.PATH}`,
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (error) {
@@ -246,6 +282,33 @@ describe("quality-mutation-check", () => {
       "utf8",
     );
     expect(log).toContain("run --bail=1");
+  });
+
+  it("uses pytest fail-fast after the first controlled-revert failure", () => {
+    const { root, manifest } = fixture(
+      "pytest-fail-fast",
+      "const { isAllowed } = require('./logic');\nif (!isAllowed('admin')) process.exit(1);\n",
+      { pytestRunner: true, checkSeconds: 3 },
+    );
+
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+    const stateRoot = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "stateRoot"],
+      { encoding: "utf8" },
+    ).trim();
+    const head = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "revisions.currentHead"],
+      { encoding: "utf8" },
+    ).trim();
+    const log = readFileSync(
+      path.join(stateRoot, "mutation", `${head}.logic.js.log`),
+      "utf8",
+    );
+    expect(log).toContain("-q -n 3 --dist worksteal -x");
   });
 
   it("removes an added source file to produce revision-bound evidence", () => {
