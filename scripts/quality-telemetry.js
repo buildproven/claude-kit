@@ -419,6 +419,7 @@ function recordCampaign(manifestPath, deps = {}) {
   const execFileSync =
     deps.execFileSync || require("child_process").execFileSync;
   const nowIso = deps.nowIso || new Date().toISOString();
+  const quiet = deps.quiet === true;
   let manifest;
   try {
     manifest = readManifest(manifestPath);
@@ -430,9 +431,11 @@ function recordCampaign(manifestPath, deps = {}) {
   }
   const logPath = resolveTelemetryFile(manifest);
   if (alreadyRecorded(logPath, manifest.invocationId)) {
-    process.stdout.write(
-      `[quality] telemetry: campaign ${manifest.invocationId} already recorded — skipping.\n`,
-    );
+    if (!quiet) {
+      process.stdout.write(
+        `[quality] telemetry: campaign ${manifest.invocationId} already recorded — skipping.\n`,
+      );
+    }
     return 0;
   }
   const record = buildRecord(manifest, { execFileSync, nowIso });
@@ -444,9 +447,11 @@ function recordCampaign(manifestPath, deps = {}) {
     );
     return 0;
   }
-  process.stdout.write(
-    `[quality] telemetry: recorded campaign ${manifest.invocationId} (${record.verdict}, ${record.durationSeconds}s) -> ${logPath}\n`,
-  );
+  if (!quiet) {
+    process.stdout.write(
+      `[quality] telemetry: recorded campaign ${manifest.invocationId} (${record.verdict}, ${record.durationSeconds}s) -> ${logPath}\n`,
+    );
+  }
   return 0;
 }
 

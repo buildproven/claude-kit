@@ -321,6 +321,13 @@ Quality-Base: ${base}`;
     expect(source).toMatch(
       /codex exec --ephemeral --ignore-user-config -s read-only --json/,
     );
+    const boundedCodexCalls = source.match(
+      /bash "\$bounded" --timeout "\$pass_timeout" -- \\\n\s+codex exec/g,
+    );
+    expect(boundedCodexCalls).toHaveLength(2);
+    expect(source).not.toMatch(
+      /bash "\$bounded" --timeout "\$pass_timeout" -- \\\n\s*#/,
+    );
     expect(source).toMatch(
       /optional[\s\S]*MCP configuration[\s\S]*unrelated, stale OAuth grants/i,
     );

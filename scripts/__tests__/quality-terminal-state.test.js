@@ -97,6 +97,91 @@ describe("terminal state normalization", () => {
 });
 
 describe("recordTerminalState", () => {
+  it("records terminal telemetry through the public CLI seam", () => {
+    const manifestPath = writeManifest({ reviewContractVersion: 2 });
+    const telemetryPath = path.join(sandboxRoot, "terminal-telemetry.jsonl");
+    const result = spawnSync(
+      "node",
+      [
+        INVOCATION,
+        "terminal-state",
+        manifestPath,
+        "--state",
+        "verified-unmerged",
+        "--detail",
+        "deterministic evidence complete",
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          BS_QUALITY_TELEMETRY_FILE: telemetryPath,
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("verified-unmerged\n");
+    const repeated = spawnSync(
+      "node",
+      [
+        INVOCATION,
+        "terminal-state",
+        manifestPath,
+        "--state",
+        "verified-unmerged",
+        "--detail",
+        "deterministic evidence complete",
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          BS_QUALITY_TELEMETRY_FILE: telemetryPath,
+        },
+      },
+    );
+    expect(repeated.status).toBe(0);
+    expect(repeated.stdout).toBe("verified-unmerged\n");
+    const records = fs
+      .readFileSync(telemetryPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      invocationId: "2f1a9c60-1c9d-5b2e-9a44-7c0d1e2f3a4b",
+      terminalState: "verified-unmerged",
+      verdict: "passed",
+    });
+  });
+
+  it("keeps the terminal outcome when telemetry persistence fails", () => {
+    const manifestPath = writeManifest({ reviewContractVersion: 2 });
+    const result = spawnSync(
+      "node",
+      [
+        INVOCATION,
+        "terminal-state",
+        manifestPath,
+        "--state",
+        "verified-unmerged",
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          BS_QUALITY_TELEMETRY_FILE: sandboxRoot,
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("verified-unmerged\n");
+    expect(result.stderr).toMatch(/telemetry: could not write/);
+    expect(readState(manifestPath).state).toBe("verified-unmerged");
+  });
+
   it("records the state, head, and timestamp", () => {
     const manifestPath = writeManifest();
     invocation.recordTerminalState(manifestPath, "timeout", "provider-timeout");

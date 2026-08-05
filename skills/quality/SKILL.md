@@ -232,17 +232,21 @@ non-Actions failures.
 On every exit path (merge, no-merge report, blocked, incomplete), record exactly
 one idempotent manifest-derived telemetry line. A recorder failure warns without
 changing the quality outcome; a missing/unreadable manifest remains a hard error.
+The public `terminal-state` command performs that fail-soft telemetry write
+automatically after it persists the write-once terminal state. Do not depend on
+a separate agent-authored recorder step.
 
 ```bash
 QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
 [ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
 node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" terminal-state \
   "<exact-manifest-path>" --state verified-unmerged \
-  --detail "deterministic evidence complete; merge not requested" >/dev/null || true
-node "$QUALITY_SCRIPTS_DIR/quality-telemetry.js" record "<exact-manifest-path>" \
-  || echo "[quality] telemetry failed; campaign outcome stands" >&2
+  --detail "deterministic evidence complete; merge not requested" >/dev/null
 ```
 
 The recorder writes to `$BS_QUALITY_TELEMETRY_FILE` or the operator state
-directory, never the audited checkout by default. Use the quality-value report
-for escaped-defect rate, finding precision, and token-based cost per caught bug.
+directory, never the audited checkout by default. For recovery or historical
+backfill only, `node "$QUALITY_SCRIPTS_DIR/quality-telemetry.js" record
+"<exact-manifest-path>"` remains an idempotent direct entrypoint. Use the
+quality-value report for escaped-defect rate, heuristic capture-rate proxy, and
+cost per deterministic failure.

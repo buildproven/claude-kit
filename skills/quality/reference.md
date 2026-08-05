@@ -422,8 +422,9 @@ scanned the agent's cwd" failure mode.
 
 ### Campaign telemetry (closed-loop value measurement)
 
-At the terminal step (SKILL.md Step 7), `scripts/quality-telemetry.js record`
-appends one JSON line per finished campaign, summarizing the invocation manifest
+At the terminal step (SKILL.md Step 6), the public `quality-invocation.js
+terminal-state` command automatically asks `scripts/quality-telemetry.js` to
+append one JSON line per finished campaign, summarizing the invocation manifest
 — no model judgment. Fields: invocation id, repo/PR/branch, base/head SHAs,
 resolved risk tier + score, duration (from `governor.startedAtEpoch`), successful
 review rounds, agents run, AI review status and lead count, deterministic
