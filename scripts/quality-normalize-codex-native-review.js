@@ -12,7 +12,7 @@ const SEVERITY = {
 const SAFE_CHANGE_DESCRIPTION =
   /\bapplied consistently\b|\bwithout (?:altering|changing|affecting)\b/i;
 const VERIFICATION_SUBJECT =
-  /\b(?:tests?|checks?|lint(?:ing)?|type checking|build|verification|changed files?)\b|`[^`]+`/i;
+  /\b(?:tests?|checks?|lint(?:ing)?|type checking|build|verification|changed files?)\b/i;
 const VERIFICATION_SUCCESS =
   /\b(?:pass(?:es|ed|ing)?|succeed(?:s|ed|ing)?|successful|green)\b/i;
 
@@ -67,35 +67,54 @@ function hasBalancedInlineCode(value) {
   return ((String(value).match(/`/g) || []).length & 1) === 0;
 }
 
-function isSuccessfulVerificationSentence(sentence, negativePrefix) {
+function isSuccessfulVerificationSentence(
+  sentence,
+  { negativePrefix, contrast, incomplete },
+) {
   return (
     VERIFICATION_SUBJECT.test(sentence) &&
     VERIFICATION_SUCCESS.test(sentence) &&
-    !negativePrefix.test(sentence)
+    !negativePrefix.test(sentence) &&
+    !contrast.test(sentence) &&
+    !incomplete.test(sentence)
+  );
+}
+
+function isSafeChangeSentence(sentence, { negativePrefix, contrast }) {
+  return (
+    SAFE_CHANGE_DESCRIPTION.test(sentence) &&
+    !negativePrefix.test(sentence) &&
+    !contrast.test(sentence)
   );
 }
 
 function hasVerifiedDescriptiveVerdict({
-  rawText,
   sentences,
   incomplete,
   adverse,
   negativePrefix,
+  contrast,
+  incompletePhrase,
 }) {
-  if (incomplete || adverse || !SAFE_CHANGE_DESCRIPTION.test(rawText)) {
+  const predicates = { negativePrefix, contrast, incomplete: incompletePhrase };
+  if (
+    incomplete ||
+    adverse ||
+    !sentences.some((sentence) => isSafeChangeSentence(sentence, predicates))
+  ) {
     return false;
   }
   if (
     !sentences.some((sentence) =>
-      isSuccessfulVerificationSentence(sentence, negativePrefix),
+      isSuccessfulVerificationSentence(sentence, predicates),
     )
   ) {
     return false;
   }
   return sentences.every(
     (sentence) =>
-      SAFE_CHANGE_DESCRIPTION.test(sentence) ||
-      isSuccessfulVerificationSentence(sentence, negativePrefix),
+      isSafeChangeSentence(sentence, predicates) ||
+      isSuccessfulVerificationSentence(sentence, predicates),
   );
 }
 
@@ -185,11 +204,12 @@ function parseNativeReview(raw, root = process.cwd()) {
   // signals, and require the verification subject and success verb to share a
   // sentence. The existing global incomplete/adverse vetoes still win.
   const verifiedDescriptiveVerdict = hasVerifiedDescriptiveVerdict({
-    rawText,
     sentences,
     incomplete: incompleteVerdict,
     adverse: adverseVerdict,
     negativePrefix: NEGATIVE_PREFIX,
+    contrast: CONTRAST,
+    incompletePhrase: INCOMPLETE,
   });
   if (findings.length === 0 && !cleanVerdict && !verifiedDescriptiveVerdict) {
     throw new Error("native Codex review has no recognizable verdict");
