@@ -2655,74 +2655,6 @@ function recordJudge(manifest, options) {
   };
 }
 
-function findingTouchesChangedLine(manifest, review, finding) {
-  if (
-    typeof finding.file !== "string" ||
-    finding.file === "" ||
-    path.isAbsolute(finding.file) ||
-    finding.file.split(/[\\/]+/).includes("..") ||
-    !Number.isInteger(finding.line_start) ||
-    finding.line_start < 1
-  ) {
-    return false;
-  }
-  let patch;
-  try {
-    patch = execFileSync(
-      "git",
-      [
-        "diff",
-        "--unified=0",
-        "--no-ext-diff",
-        `${review.from}..${review.to}`,
-        "--",
-        `:(literal)${finding.file}`,
-      ],
-      { cwd: manifest.repo.realpath, encoding: "utf8" },
-    );
-  } catch {
-    return false;
-  }
-  return patch.split(/\r?\n/).some((line) => {
-    if (!line.startsWith("@@ ")) return false;
-    const plusRange = line.split(" ")[2];
-    if (!plusRange?.startsWith("+")) return false;
-    const [startValue, countValue] = plusRange.slice(1).split(",");
-    const start = Number(startValue);
-    const count = countValue === undefined ? 1 : Number(countValue);
-    if (!Number.isInteger(start) || !Number.isInteger(count)) return false;
-    return finding.line_start >= start && finding.line_start < start + count;
-  });
-}
-
-function assertV2FindingProof(manifest, review, findings) {
-  if (
-    (manifest.reviewContractVersion || 1) < 2 ||
-    !manifest.panel?.rule ||
-    manifest.panel.rule.startsWith("legacy")
-  ) {
-    return;
-  }
-  for (const finding of findings) {
-    const proof = finding.proof;
-    if (
-      typeof finding.failure_scenario !== "string" ||
-      finding.failure_scenario.trim() === "" ||
-      !proof ||
-      !["reproduction", "regression-test", "static-analysis"].includes(
-        proof.kind,
-      ) ||
-      typeof proof.evidence !== "string" ||
-      proof.evidence.trim() === "" ||
-      !findingTouchesChangedLine(manifest, review, finding)
-    ) {
-      throw new Error(
-        `provider finding '${finding.title}' lacks the required changed-line failure scenario and auditable proof`,
-      );
-    }
-  }
-}
-
 function providerFindings(manifest) {
   const findings = [];
   // BUI-521: agents whose findings artifact was a bare delimiter with no body.
@@ -3006,7 +2938,6 @@ function providerFindings(manifest) {
         source: item.name,
       });
     }
-    assertV2FindingProof(manifest, review, findings.slice(reviewFindingsStart));
     if (
       (manifest.reviewContractVersion || 1) >= 2 &&
       manifest.risk.tier === "critical" &&
@@ -3132,7 +3063,13 @@ function recordReview(manifest, options) {
       ),
     ),
     artifactDir: path.resolve(options["artifact-dir"]),
-    status: options.incomplete === true ? "incomplete" : "success",
+    status:
+      options.incomplete === true ||
+      ((manifest.reviewContractVersion || 1) >= 2 &&
+        manifest.risk.tier === "critical" &&
+        options.provider !== "claude")
+        ? "incomplete"
+        : "success",
     tier: boundExpected.tier,
     agentsSha256: boundExpected.agentsSha256,
     incompletePanel: Boolean(manifest.panel?.incomplete),
@@ -3634,9 +3571,15 @@ function verifyReviewArtifact(manifest, review) {
   }
   if (
     (manifest.reviewContractVersion || 1) >= 2 &&
-    manifest.risk.reviewPolicyDigest &&
-    manifest.panel?.rule &&
-    !manifest.panel.rule.startsWith("legacy")
+    (!manifest.panel?.domain ||
+      !manifest.panel?.rule ||
+      manifest.panel.rule.startsWith("legacy"))
+  ) {
+    throw new Error("contract v2 review lacks bound domain selection");
+  }
+  if (
+    (manifest.reviewContractVersion || 1) >= 2 &&
+    manifest.risk.reviewPolicyDigest
   ) {
     const expectedSelection = agentSelection.selectReviewersForRange({
       tier: manifest.risk.tier,
@@ -4613,7 +4556,7 @@ const COMMANDS = {
     process.stdout.write(`${manifest.invocationId}\n`),
   risk: ({ manifestArg, rawArgs }) =>
     mutate(manifestArg, (locked) => setRisk(locked, parseOptions(rawArgs))),
-  agents: ({ manifestArg, rawArgs }) => {
+  agents: ({ manifestArg, manifest, rawArgs }) => {
     const incomplete = rawArgs.includes("--incomplete");
     const separator = rawArgs.indexOf("--");
     const optionArgs = separator === -1 ? [] : rawArgs.slice(0, separator);
@@ -4621,6 +4564,14 @@ const COMMANDS = {
     const options = parseOptions(
       optionArgs.filter((argument) => argument !== "--incomplete"),
     );
+    if (
+      (manifest.reviewContractVersion || 1) >= 2 &&
+      (!options.domain || !options.rule)
+    ) {
+      throw new Error(
+        "contract v2 agent selection requires --domain and --rule",
+      );
+    }
     mutate(manifestArg, (locked) =>
       setAgents(locked, names, {
         incomplete,
@@ -4942,7 +4893,6 @@ module.exports = {
   hasAbandonedExecution,
   reconcileAbandonedExecution,
   executionRemaining,
-  findingTouchesChangedLine,
   runGate,
   recordStamp,
   judgeContext,

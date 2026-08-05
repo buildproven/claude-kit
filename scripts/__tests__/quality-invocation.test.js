@@ -181,6 +181,15 @@ function prepareCodexReview(
   providerFindings = [],
   findingsText = null,
 ) {
+  // Most fixtures in this file exercise the historical v1 parser/judge path
+  // and deliberately use the legacy panel identity. Production v2 campaigns
+  // must enter through quality-select-agents.sh and are covered by the explicit
+  // v2 fixtures below.
+  invocation.withManifestLock(manifestPath, (manifest) => {
+    if (!manifest.panel?.rule || manifest.panel.rule.startsWith("legacy")) {
+      manifest.reviewContractVersion = 1;
+    }
+  });
   execFileSync("node", [GOVERNOR, "bump-round", manifestPath], { cwd: root });
   const info = JSON.parse(
     execFileSync("node", [INVOCATION, "review-info", manifestPath], {
@@ -551,26 +560,27 @@ describe("mutationEvidenceValid — BUI-603 #1 fail-closed on unresolved risk", 
 });
 
 describe("quality invocation manifest", () => {
-  it("treats provider finding paths as literal git paths", () => {
-    const root = repo("literal-finding-path");
-    const review = {
-      from: git(root, ["rev-parse", "origin/main"]),
-      to: git(root, ["rev-parse", "HEAD"]),
-    };
-    const manifest = { repo: { realpath: root } };
+  it("requires a bound domain selector for v2 agent selection", () => {
+    const root = repo("v2-agent-selection-identity");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "medium",
+        taskType: "bugfix",
+        score: 35,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+    });
 
-    expect(
-      invocation.findingTouchesChangedLine(manifest, review, {
-        file: "file.js",
-        line_start: 1,
-      }),
-    ).toBe(true);
-    expect(
-      invocation.findingTouchesChangedLine(manifest, review, {
-        file: ":(glob)**",
-        line_start: 1,
-      }),
-    ).toBe(false);
+    const result = spawnSync(
+      "node",
+      [INVOCATION, "agents", manifest, "code-reviewer"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/requires --domain and --rule/);
   });
 
   it("reuses one durable campaign for the same exact repo, PR, base, HEAD, and options", () => {
@@ -3497,10 +3507,10 @@ exit 1
         severity: "high",
         title: "two",
         body: "second lead",
-        failure_scenario: "input two reaches the changed export",
+        failure_scenario: "input two reaches related unchanged code",
         file: "file.js",
-        line_start: 1,
-        proof: { kind: "static-analysis", evidence: "changed line one" },
+        line_start: 99,
+        proof: { kind: "static-analysis", evidence: "related source lead" },
         recommendation: "verify second lead",
       },
     ]);
@@ -3598,6 +3608,33 @@ exit 1
     });
     expect(trailers).toMatch(/^Quality-Review-Status: incomplete$/m);
     expect(trailers).toMatch(/^Quality-Leads: 0$/m);
+  });
+
+  it("derives incomplete status for a single-provider critical review", () => {
+    const root = repo("critical-native-incomplete");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "critical",
+        taskType: "bugfix",
+        score: 90,
+        agents: 2,
+        "codex-depth": "xhigh",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["code-reviewer", "silent-failure-hunter"], {
+        domain: "general",
+        rule: "critical-reliability-backstop",
+      });
+    });
+    prepareCodexReview(root, manifest);
+
+    const saved = invocation.loadManifest(manifest).manifest;
+    expect(saved.reviews[0].status).toBe("incomplete");
+    expect(invocation.reviewAuthorization(saved)).toMatchObject({
+      reviewStatus: "incomplete",
+      blockingCount: 0,
+    });
   });
 
   it("stamps a distinct Quality-Reviewer trailer for a policy exemption", () => {
@@ -4340,7 +4377,10 @@ exit 1
         "codex-depth": "high",
         "codex-rounds": 1,
       });
-      invocation.setAgents(manifest, ["code-reviewer"]);
+      invocation.setAgents(manifest, ["code-reviewer"], {
+        domain: "general",
+        rule: "general-review",
+      });
     });
     execFileSync("node", [GOVERNOR, "bump-round", manifestPath], {
       cwd: root,
@@ -4842,6 +4882,7 @@ exit 1
         "codex-rounds": 1,
       });
       invocation.setAgents(loaded, ["reviewer-a", "reviewer-b"]);
+      loaded.reviewContractVersion = 1;
     });
     execFileSync("node", [GOVERNOR, "bump-round", manifest], { cwd: root });
     const loaded = invocation.loadManifest(manifest).manifest;
