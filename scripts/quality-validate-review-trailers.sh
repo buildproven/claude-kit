@@ -207,7 +207,11 @@ if [ -n "$REQUIRED_TIER" ] && [ "$REQUIRED_RANK" -ge 2 ]; then
     echo "high/critical evidence requires --require-signature" >&2
     exit 1
   }
-  if [ "$STAMP_PROVIDER" != "operator-quality-override" ]; then
+  # Contract v2 makes provider discovery advisory. A signed fallback or typed
+  # incomplete attempt is valid evidence that bounded discovery ran; requiring
+  # the configured primary here would make provider availability merge
+  # authority again. Legacy v1 retains its stricter primary-provider rule.
+  if [ -z "$STAMP_CONTRACT" ] && [ "$STAMP_PROVIDER" != "operator-quality-override" ]; then
     [ -n "$STAMP_PRIMARY" ] || {
       echo "high/critical evidence requires a configured primary reviewer" >&2
       exit 1
