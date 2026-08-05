@@ -469,6 +469,28 @@ describe("mutationEvidenceValid — BUI-603 #1 fail-closed on unresolved risk", 
 });
 
 describe("quality invocation manifest", () => {
+  it("treats provider finding paths as literal git paths", () => {
+    const root = repo("literal-finding-path");
+    const review = {
+      from: git(root, ["rev-parse", "origin/main"]),
+      to: git(root, ["rev-parse", "HEAD"]),
+    };
+    const manifest = { repo: { realpath: root } };
+
+    expect(
+      invocation.findingTouchesChangedLine(manifest, review, {
+        file: "file.js",
+        line_start: 1,
+      }),
+    ).toBe(true);
+    expect(
+      invocation.findingTouchesChangedLine(manifest, review, {
+        file: ":(glob)**",
+        line_start: 1,
+      }),
+    ).toBe(false);
+  });
+
   it("reuses one durable campaign for the same exact repo, PR, base, HEAD, and options", () => {
     const root = repo("durable-campaign");
     const args = ["--level", "98", "--pr", "7", "--merge"];
@@ -4139,6 +4161,101 @@ exit 1
         { cwd: root },
       ),
     ).not.toThrow();
+  });
+
+  it("uses Claude structured findings once instead of reparsing their text summary", () => {
+    const root = repo("claude-structured-finding-dedup");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(manifest, ["code-reviewer"]);
+    });
+    execFileSync("node", [GOVERNOR, "bump-round", manifestPath], {
+      cwd: root,
+    });
+    const loaded = invocation.loadManifest(manifestPath).manifest;
+    const info = invocation.reviewInfo(loaded);
+    mkdirSync(info.artifactDir, { recursive: true });
+    writeFileSync(
+      path.join(info.artifactDir, "diff.txt"),
+      execFileSync("git", ["diff", `${info.from}..${info.to}`], { cwd: root }),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "identity.json"),
+      execFileSync("node", [INVOCATION, "review-identity", manifestPath], {
+        cwd: root,
+      }),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "review-focus.txt"),
+      "fixture review focus\n",
+    );
+    const finding = {
+      severity: "high",
+      title: "Changed behavior",
+      body: "The changed value causes the wrong result.",
+      failure_scenario: "Read file.js after the feature commit.",
+      file: "file.js",
+      line_start: 1,
+      proof: {
+        kind: "static-analysis",
+        evidence: "file.js:1 changes the exported value from 1 to 2.",
+      },
+      recommendation: "Restore the expected value.",
+    };
+    const normalized = {
+      verdict: "needs-attention",
+      summary: "One issue",
+      findings: [finding],
+    };
+    writeFileSync(
+      path.join(info.artifactDir, "code-reviewer.normalized.json"),
+      JSON.stringify(normalized),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "code-reviewer.result.json"),
+      JSON.stringify({ structured_output: normalized }),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "code-reviewer.findings.txt"),
+      "high: file.js:1 — Changed behavior\nThe changed value causes the wrong result.\n<<<FINDINGS REPORTED>>>\n",
+    );
+    invocation.writeArtifactInventory(loaded, info.artifactDir, "claude");
+    const diffSha = createHash("sha256")
+      .update(readFileSync(path.join(info.artifactDir, "diff.txt")))
+      .digest("hex");
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.recordReview(manifest, {
+        from: info.from,
+        to: info.to,
+        provider: "claude",
+        primary: "claude",
+        fallback: "codex",
+        "artifact-dir": info.artifactDir,
+        "diff-sha": diffSha,
+      });
+    });
+    for (const name of ["lint", "test", "security"]) {
+      recordGateFixture(manifestPath, name);
+    }
+    recordMutationFixture(manifestPath);
+
+    const context = invocation.judgeContext(
+      invocation.loadManifest(manifestPath).manifest,
+    );
+    expect(context.findings).toHaveLength(1);
+    expect(context.findings[0]).toMatchObject({
+      title: "Changed behavior",
+      source: "claude:code-reviewer.normalized.json#0",
+      proof: finding.proof,
+    });
   });
 
   it("inventories preserved Codex findings with a complete Claude fallback panel", () => {

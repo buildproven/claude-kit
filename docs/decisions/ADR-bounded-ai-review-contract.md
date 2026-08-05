@@ -23,6 +23,14 @@ This makes review cost scale mainly with filenames and panel width while oversta
 
    Specialist matching always evaluates rules 1–6 independently of the unconditional Critical `code-reviewer` slot. A multi-domain Medium/High diff uses the highest-priority matching role. Critical always selects two distinct roles: `code-reviewer` plus the highest-priority matching specialist; a specialist rule may never resolve to `code-reviewer`. When no domain rule matches, `silent-failure-hunter` is the designated reliability backstop. Selection output records distinct rule identities (`reliability-domain` for a real match, `critical-reliability-backstop` for no match) so the result is explainable and fixture-testable. Two is therefore a real Critical floor, not a target that selection may weaken.
 
+   Domain selection is a cost-routing heuristic, not a security boundary or a
+   claim that keyword matching recognizes every semantic concern. A disguised
+   or novel security flow can fall through to `code-reviewer` at Medium/High;
+   deterministic security gates, risk floors, proof requirements, and branch
+   protection remain the enforcement layers. The selector must be evaluated
+   against confirmed missed-domain escapes and widened when a stable signal is
+   demonstrated; it must not pretend to solve general semantic classification.
+
 3. Every selected reviewer must return usable schema-valid evidence. There is no majority quorum.
 4. Every exemption and AI-review artifact is signed and bound to contract version, repository, base, from/to HEADs, diff hash, resolved tier, selected roles, selection rule/domain, provider policy, and review-policy digest. The reviewed range must be the complete merge-base-to-current-HEAD diff that the merge would apply; callers cannot supply a narrowed file set, patch, or alternate base. Stamp/merge independently recomputes merge base, changed-file inventory, diff hash, risk tier, reviewer count, selected roles, and selection rule/domain from the protected target branch and PR HEAD and requires exact equality with the evidence. The policy digest is SHA-256 over canonical JSON: object keys sorted recursively; array order preserved because curve and selector priority are semantic; numbers and strings encoded as JSON; no insignificant whitespace. It covers the built-in target curve, effective repository overrides, selector/classifier version, exemption semantics, and proof schema version. Policy drift invalidates completed evidence rather than grandfathering a weaker reviewer set.
 

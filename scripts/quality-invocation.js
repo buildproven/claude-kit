@@ -2675,7 +2675,7 @@ function findingTouchesChangedLine(manifest, review, finding) {
         "--no-ext-diff",
         `${review.from}..${review.to}`,
         "--",
-        finding.file,
+        `:(literal)${finding.file}`,
       ],
       { cwd: manifest.repo.realpath, encoding: "utf8" },
     );
@@ -2774,12 +2774,18 @@ function providerFindings(manifest) {
     );
     const reviewerResultFiles = resultFiles.filter((file) => {
       const rawPass = file.name.match(/^(codex|gemini)-(\d+)\.json$/);
-      if (!rawPass) return true;
-      const [, providerName, pass] = rawPass;
+      if (rawPass) {
+        const [, providerName, pass] = rawPass;
+        return !resultFiles.some(
+          (candidate) =>
+            candidate.name === `${providerName}-${pass}.normalized.json` ||
+            candidate.name === `primary-${providerName}-${pass}.result.json`,
+        );
+      }
+      const rawClaude = file.name.match(/^(.+)\.result\.json$/);
+      if (!rawClaude) return true;
       return !resultFiles.some(
-        (candidate) =>
-          candidate.name === `${providerName}-${pass}.normalized.json` ||
-          candidate.name === `primary-${providerName}-${pass}.result.json`,
+        (candidate) => candidate.name === `${rawClaude[1]}.normalized.json`,
       );
     });
     const quorumResultFiles = reviewerResultFiles.filter(
@@ -2850,8 +2856,16 @@ function providerFindings(manifest) {
       const aggregateProvider = item.name.match(
         /^(codex|gemini)\.findings\.txt$/,
       )?.[1];
+      const claudeAgent = item.name.match(/^(.+)\.findings\.txt$/)?.[1];
+      const pairedClaudeResult =
+        inventory.provider === "claude" &&
+        !!claudeAgent &&
+        resultFiles.some(
+          (candidate) => candidate.name === `${claudeAgent}.normalized.json`,
+        );
       const aggregateHasStructuredResult =
-        !!aggregateProvider && structuredProviderNames.has(aggregateProvider);
+        pairedClaudeResult ||
+        (!!aggregateProvider && structuredProviderNames.has(aggregateProvider));
       const revokeAggregateVerdict = () => {
         if (
           isPanelReport &&
@@ -2865,6 +2879,9 @@ function providerFindings(manifest) {
       // A structured result with actual findings is canonical for its paired
       // aggregate. An empty structured result cannot silence conflicting
       // aggregate text, which remains fail-closed evidence.
+      if (pairedClaudeResult) {
+        continue;
+      }
       if (
         findings.length > reviewFindingsStart &&
         /^(?:codex|gemini)\.findings\.txt$/.test(item.name)
@@ -3276,7 +3293,9 @@ function providerEvidenceName(name, provider) {
   }
   if (provider === "claude") {
     return (
-      (name.endsWith(".findings.txt") || name.endsWith(".result.json")) &&
+      (name.endsWith(".findings.txt") ||
+        name.endsWith(".result.json") ||
+        name.endsWith(".normalized.json")) &&
       !/^(?:codex|gemini)(?:-|\.)/.test(name)
     );
   }
@@ -3300,6 +3319,7 @@ function writeArtifactInventory(
       (name) =>
         name.endsWith(".findings.txt") ||
         name.endsWith(".result.json") ||
+        name.endsWith(".normalized.json") ||
         /^(?:codex|gemini)-\d+(?:\.normalized)?\.json$/.test(name),
     )
     .filter((name) => providerEvidenceName(name, provider))
@@ -4777,6 +4797,7 @@ module.exports = {
   hasAbandonedExecution,
   reconcileAbandonedExecution,
   executionRemaining,
+  findingTouchesChangedLine,
   runGate,
   recordStamp,
   judgeContext,
