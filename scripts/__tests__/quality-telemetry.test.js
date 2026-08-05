@@ -137,7 +137,7 @@ describe("buildRecord", () => {
       nowIso: NOW,
     });
     expect(rec).toMatchObject({
-      telemetrySchemaVersion: 3,
+      telemetrySchemaVersion: 4,
       invocationId: "11111111-1111-4111-8111-111111111111",
       repoKey: "target-repo",
       taskType: "feature",
@@ -150,6 +150,8 @@ describe("buildRecord", () => {
       reviewStatus: "complete",
       leadCount: 0,
       durationSeconds: 0, // start 1000 > now 600 → clamps to 0
+      providerDurationSeconds: null,
+      terminalState: null,
       reviewRounds: 1,
       agentsRun: 2,
       blockingCount: 0,
@@ -181,6 +183,24 @@ describe("buildRecord", () => {
       blockingCount: 0,
       reviewStatus: "incomplete",
       leadCount: 0,
+    });
+  });
+
+  it("separates provider execution time and exact terminal outcome", () => {
+    const manifest = baseManifest({
+      reviewContractVersion: 2,
+      terminalState: { state: "superseded", detail: "head moved" },
+      governor: { startedAtEpoch: 1000, providerSecondsUsed: 137 },
+    });
+    const record = buildRecord(manifest, {
+      execFileSync: NO_FILES,
+      nowIso: NOW,
+    });
+    expect(record).toMatchObject({
+      durationSeconds: 0,
+      providerDurationSeconds: 137,
+      terminalState: "superseded",
+      verdict: "incomplete",
     });
   });
 

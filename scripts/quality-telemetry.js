@@ -43,7 +43,18 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const TELEMETRY_SCHEMA_VERSION = 3;
+const TELEMETRY_SCHEMA_VERSION = 4;
+const TELEMETRY_TERMINAL_STATES = new Set([
+  "merged",
+  "verified-unmerged",
+  "blocked",
+  "timeout",
+  "interrupted",
+  "superseded",
+  "policy-superseded",
+  "provider-incomplete",
+  "provider-contract-failed",
+]);
 
 /**
  * Read a finished invocation manifest for summarization.
@@ -307,6 +318,13 @@ function validateRecord(record) {
   const validTokens =
     record.reviewTokens === null ||
     (Number.isInteger(record.reviewTokens) && record.reviewTokens >= 0);
+  const validProviderDuration =
+    record.providerDurationSeconds === null ||
+    (Number.isInteger(record.providerDurationSeconds) &&
+      record.providerDurationSeconds >= 0);
+  const validTerminalState =
+    record.terminalState === null ||
+    TELEMETRY_TERMINAL_STATES.has(record.terminalState);
   return Boolean(
     record.telemetrySchemaVersion === TELEMETRY_SCHEMA_VERSION &&
     typeof record.invocationId === "string" &&
@@ -316,6 +334,8 @@ function validateRecord(record) {
       typeof record.reviewProvider === "string") &&
     (record.reviewEffort === null || typeof record.reviewEffort === "string") &&
     validTokens &&
+    validProviderDuration &&
+    validTerminalState &&
     [null, "complete", "incomplete", "policy-exempt"].includes(
       record.reviewStatus,
     ) &&
@@ -337,6 +357,12 @@ function buildRecord(manifest, { execFileSync, nowIso }) {
     ...identityFields(manifest),
     ...reviewFields(manifest),
     durationSeconds: campaignDuration(manifest, nowIso),
+    providerDurationSeconds: Number.isInteger(
+      manifest.governor?.providerSecondsUsed,
+    )
+      ? manifest.governor.providerSecondsUsed
+      : null,
+    terminalState: manifest.terminalState?.state ?? null,
     reviewRounds: successfulReviewCount(manifest),
     agentsRun: Array.isArray(manifest.agents) ? manifest.agents.length : 0,
     blockingCount:

@@ -104,6 +104,26 @@ describe("quality merge gates", () => {
     expect(AUTHORIZE).toMatch(/\.mergeCommit\.oid/);
   });
 
+  it("persists success terminal states before cleanup or telemetry", () => {
+    const alreadyMerged = STAMP_AND_MERGE.indexOf(
+      "BS_QUALITY_ALREADY_MERGED=true",
+    );
+    const earlyTerminal = STAMP_AND_MERGE.indexOf(
+      "--state merged",
+      alreadyMerged,
+    );
+    const earlyCleanup = STAMP_AND_MERGE.indexOf(
+      "quality-merge-cleanup.sh",
+      alreadyMerged,
+    );
+    expect(earlyTerminal).toBeGreaterThan(alreadyMerged);
+    expect(earlyTerminal).toBeLessThan(earlyCleanup);
+    expect(SKILL).toMatch(/--state verified-unmerged/);
+    expect(SKILL.indexOf("--state verified-unmerged")).toBeLessThan(
+      SKILL.indexOf('quality-telemetry.js" record'),
+    );
+  });
+
   it("preflights without mutation and pushes one exact persisted remote ref", () => {
     expect(STAMP_AND_MERGE).toMatch(/--manifest "\$MANIFEST" --preflight/);
     expect(STAMP_AND_MERGE.indexOf("--preflight")).toBeLessThan(
