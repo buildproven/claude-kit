@@ -9,6 +9,7 @@ const LEASE_CLI = path.resolve(__dirname, "..", "quality-repo-lease.js");
 const FIXTURE_REPOSITORY = `vitest/${"a".repeat(16)}`;
 
 let sandbox;
+let originalTmpdir;
 const stateRoots = [];
 
 function git(cwd, args) {
@@ -16,9 +17,11 @@ function git(cwd, args) {
 }
 
 beforeAll(() => {
+  originalTmpdir = process.env.TMPDIR;
   sandbox = fs.realpathSync(
     fs.mkdtempSync(path.join(os.tmpdir(), "quality-repo-lease-test-")),
   );
+  process.env.TMPDIR = sandbox;
 });
 
 afterAll(() => {
@@ -26,6 +29,8 @@ afterAll(() => {
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }
   fs.rmSync(sandbox, { recursive: true, force: true });
+  if (originalTmpdir === undefined) delete process.env.TMPDIR;
+  else process.env.TMPDIR = originalTmpdir;
 });
 
 function fixture(name, overrides = {}) {
@@ -57,7 +62,7 @@ function fixture(name, overrides = {}) {
   const invocationId = overrides.invocationId || crypto.randomUUID();
   const githubRepository = overrides.githubRepository || FIXTURE_REPOSITORY;
   const stateRoot = path.join(
-    fs.realpathSync(process.env.TMPDIR || os.tmpdir()),
+    sandbox,
     "bs-quality",
     repoKey,
     "pr-7",
