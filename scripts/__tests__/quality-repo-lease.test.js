@@ -6,44 +6,31 @@ const { execFileSync, spawn } = require("child_process");
 const invocation = require("../quality-invocation");
 const lease = require("../quality-repo-lease");
 const LEASE_CLI = path.resolve(__dirname, "..", "quality-repo-lease.js");
+const FIXTURE_REPOSITORY = `vitest/${"a".repeat(16)}`;
 
 let sandbox;
-let account;
-let priorTmpdir;
-let priorUserInfo;
-let priorVitest;
+let originalTmpdir;
+const stateRoots = [];
 
 function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
 beforeAll(() => {
-  priorTmpdir = process.env.TMPDIR;
-  priorVitest = process.env.VITEST;
-  priorUserInfo = os.userInfo;
+  originalTmpdir = process.env.TMPDIR;
   sandbox = fs.realpathSync(
     fs.mkdtempSync(path.join(os.tmpdir(), "quality-repo-lease-test-")),
   );
-  account = path.join(sandbox, "account");
-  fs.mkdirSync(account, { mode: 0o700 });
   process.env.TMPDIR = sandbox;
-  delete process.env.VITEST;
-  os.userInfo = () => ({
-    uid: process.geteuid(),
-    gid: process.getegid(),
-    username: "quality-test",
-    homedir: account,
-    shell: "/bin/zsh",
-  });
 });
 
 afterAll(() => {
-  os.userInfo = priorUserInfo;
-  if (priorTmpdir === undefined) delete process.env.TMPDIR;
-  else process.env.TMPDIR = priorTmpdir;
-  if (priorVitest === undefined) delete process.env.VITEST;
-  else process.env.VITEST = priorVitest;
+  for (const stateRoot of stateRoots) {
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  }
   fs.rmSync(sandbox, { recursive: true, force: true });
+  if (originalTmpdir === undefined) delete process.env.TMPDIR;
+  else process.env.TMPDIR = originalTmpdir;
 });
 
 function fixture(name, overrides = {}) {
@@ -64,7 +51,7 @@ function fixture(name, overrides = {}) {
   const head = git(root, ["rev-parse", "HEAD"]);
   const repoKey = crypto.randomBytes(8).toString("hex");
   const invocationId = overrides.invocationId || crypto.randomUUID();
-  const githubRepository = overrides.githubRepository || "BuildProven/Fixture";
+  const githubRepository = overrides.githubRepository || FIXTURE_REPOSITORY;
   const stateRoot = path.join(
     sandbox,
     "bs-quality",
@@ -73,6 +60,7 @@ function fixture(name, overrides = {}) {
     head,
     invocationId,
   );
+  stateRoots.push(stateRoot);
   fs.mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
   const manifestPath = path.join(stateRoot, "invocation.json");
   fs.writeFileSync(
@@ -112,6 +100,11 @@ function fixture(name, overrides = {}) {
       2,
     )}\n`,
   );
+  fs.writeFileSync(
+    path.join(root, ".git", ".quality-vitest-fixture"),
+    `${repoKey}\n`,
+    { mode: 0o600 },
+  );
   return { root, manifestPath };
 }
 
@@ -120,16 +113,18 @@ describe("repository merge lease", () => {
     const { manifestPath } = fixture("idempotent");
     const first = lease.acquire(manifestPath);
     const firstRoot = lease.stateRoot();
+    const priorTmpdir = process.env.TMPDIR;
     process.env.TMPDIR = path.join(sandbox, "different-tmp");
     const secondRoot = lease.stateRoot();
-    process.env.TMPDIR = sandbox;
+    if (priorTmpdir === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = priorTmpdir;
 
     expect(secondRoot).toBe(firstRoot);
     expect(lease.acquire(manifestPath)).toEqual(first);
     expect(lease.status(manifestPath)).toMatchObject({
       state: "active",
       owned: true,
-      repository: "buildproven/fixture",
+      repository: FIXTURE_REPOSITORY,
     });
     lease.release(manifestPath, first.token, "test-complete");
   });
@@ -185,7 +180,9 @@ describe("repository merge lease", () => {
   });
 
   it("does not let ambient Vitest variables redirect a real repository", () => {
-    const { root, manifestPath } = fixture("ambient-test-namespace");
+    const { root, manifestPath } = fixture("ambient-test-namespace", {
+      githubRepository: "BuildProven/Fixture",
+    });
     const { manifest } = invocation.loadManifest(manifestPath);
     fs.writeFileSync(
       path.join(root, ".quality-vitest-fixture"),
@@ -241,8 +238,9 @@ describe("repository merge lease", () => {
   it("refuses to release a pending lease generation", () => {
     const { manifestPath } = fixture("pending-release");
     const owner = lease.acquire(manifestPath);
+    const { manifest } = invocation.loadManifest(manifestPath);
     const ownerFile = path.join(
-      lease._pathsFor("buildproven/fixture").lease,
+      lease._pathsFor(FIXTURE_REPOSITORY, manifest).lease,
       "owner.json",
     );
     const record = JSON.parse(fs.readFileSync(ownerFile, "utf8"));
@@ -369,8 +367,9 @@ describe("repository merge lease", () => {
   it("rejects a symlink substituted for an opened lease record", () => {
     const { manifestPath } = fixture("symlink-record");
     const owner = lease.acquire(manifestPath);
+    const { manifest } = invocation.loadManifest(manifestPath);
     const ownerFile = path.join(
-      lease._pathsFor("buildproven/fixture").lease,
+      lease._pathsFor(FIXTURE_REPOSITORY, manifest).lease,
       "owner.json",
     );
     const backingFile = path.join(
@@ -439,8 +438,9 @@ describe("repository merge lease", () => {
       /recent/,
     );
 
+    const { manifest } = invocation.loadManifest(first.manifestPath);
     const ownerFile = path.join(
-      lease._pathsFor("buildproven/fixture").lease,
+      lease._pathsFor(FIXTURE_REPOSITORY, manifest).lease,
       "owner.json",
     );
     const record = JSON.parse(fs.readFileSync(ownerFile, "utf8"));
@@ -468,8 +468,9 @@ describe("repository merge lease", () => {
     for (const crashPoint of ["before-manifest", "after-manifest"]) {
       const { manifestPath } = fixture(`rotation-${crashPoint}`);
       const owner = lease.acquire(manifestPath);
+      const { manifest } = invocation.loadManifest(manifestPath);
       const ownerFile = path.join(
-        lease._pathsFor("buildproven/fixture").lease,
+        lease._pathsFor(FIXTURE_REPOSITORY, manifest).lease,
         "owner.json",
       );
       const record = JSON.parse(fs.readFileSync(ownerFile, "utf8"));
@@ -487,7 +488,7 @@ describe("repository merge lease", () => {
       if (crashPoint === "after-manifest") {
         invocation.withManifestLockRaw(manifestPath, (manifest) => {
           manifest.merge.repositoryLease = {
-            repository: "buildproven/fixture",
+            repository: FIXTURE_REPOSITORY,
             generation: pending.generation,
             token: nextToken,
           };
@@ -506,7 +507,7 @@ describe("repository merge lease", () => {
     }
   });
 
-  it("reconciles a crashed merge guard from exact authoritative GitHub state", () => {
+  it("reconciles a crashed merge guard without the lost process token", () => {
     const { manifestPath } = fixture("merge-reconcile");
     const owner = lease.acquire(manifestPath);
     lease.acquireMergeGuard(manifestPath, owner.token, { admin: true });
@@ -534,15 +535,38 @@ printf '%s\\n' '${JSON.stringify({
     const previousPath = process.env.PATH;
     process.env.PATH = `${bin}:${previousPath}`;
     try {
-      expect(lease.releaseIfMerged(manifestPath, owner.token)).toBe(true);
+      expect(() =>
+        lease.reconcileMergeOutcome(manifestPath, undefined, {
+          confirmOwnerInvocationId: "wrong",
+          confirmOwnerPr: manifest.repo.pr,
+        }),
+      ).toThrow(/exact current owner/);
+      const reconcileEnv = { ...process.env };
+      delete reconcileEnv.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+      expect(
+        JSON.parse(
+          execFileSync(
+            "node",
+            [
+              LEASE_CLI,
+              "reconcile-merge",
+              "--manifest",
+              manifestPath,
+              "--confirm-owner-invocation-id",
+              manifest.invocationId,
+              "--confirm-owner-pr",
+              String(manifest.repo.pr),
+            ],
+            { encoding: "utf8", env: reconcileEnv },
+          ),
+        ),
+      ).toMatchObject({ reconciled: true, outcome: "merged" });
       expect(lease.status(manifestPath)).toEqual({
         required: true,
         state: "missing",
       });
       expect(
-        fs.existsSync(
-          lease._pathsFor("buildproven/fixture", manifest).mergeGuard,
-        ),
+        fs.existsSync(lease._pathsFor(FIXTURE_REPOSITORY, manifest).mergeGuard),
       ).toBe(false);
     } finally {
       process.env.PATH = previousPath;

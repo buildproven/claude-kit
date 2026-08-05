@@ -101,16 +101,13 @@ function pathsFor(identity, manifest = null) {
   const root =
     manifest && isVitestFixture(manifest)
       ? path.join(
-          fs.realpathSync(
-            path.resolve(
-              manifest.repo.realpath,
-              execFileSync("git", ["rev-parse", "--git-common-dir"], {
-                cwd: manifest.repo.realpath,
-                encoding: "utf8",
-              }).trim(),
-            ),
-          ),
+          fs.realpathSync(os.tmpdir()),
           "quality-test-repository-leases",
+          crypto
+            .createHash("sha256")
+            .update(process.env.VITEST_WORKER_ID)
+            .digest("hex")
+            .slice(0, 16),
         )
       : stateRoot();
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -881,8 +878,34 @@ function exactRemoteOutcome(manifest, remote) {
   return null;
 }
 
+function reconciliationCredential(manifestPath, presentedToken, options = {}) {
+  if (presentedToken) {
+    return verify(manifestPath, presentedToken, { renew: false });
+  }
+  const loaded = loadManifest(manifestPath);
+  const tuple = ownerTuple(loaded.manifest, loaded.manifestPath);
+  return withMetadataGuard(loaded.manifest, (paths) => {
+    const record = leaseRecord(paths.lease);
+    if (
+      record.disposition !== "active" ||
+      !tupleMatches(record, tuple) ||
+      options.confirmOwnerInvocationId !== record.invocationId ||
+      String(options.confirmOwnerPr || "") !== String(record.pr)
+    ) {
+      throw new Error(
+        "merge reconciliation requires the exact current owner invocation ID and pull request",
+      );
+    }
+    return record;
+  });
+}
+
 function reconcileMergeOutcome(manifestPath, presentedToken, options = {}) {
-  verify(manifestPath, presentedToken, { renew: false });
+  const credential = reconciliationCredential(
+    manifestPath,
+    presentedToken,
+    options,
+  );
   const { manifest } = loadManifest(manifestPath);
   const remote = remotePullRequest(manifest);
   const outcome = exactRemoteOutcome(manifest, remote);
@@ -893,7 +916,7 @@ function reconcileMergeOutcome(manifestPath, presentedToken, options = {}) {
     if (!fs.existsSync(paths.mergeGuard)) return;
     const owner = guardOwner(paths.mergeGuard);
     if (
-      owner.token !== presentedToken ||
+      owner.token !== credential.token ||
       owner.repository !== repositoryIdentity(manifest) ||
       owner.pr !== manifest.repo.pr ||
       owner.head !== mergeHead(manifest)
@@ -905,7 +928,7 @@ function reconcileMergeOutcome(manifestPath, presentedToken, options = {}) {
     const released = tombstone(paths.mergeGuard);
     exactCleanup(released);
   });
-  release(manifestPath, presentedToken, `verified-remote-${outcome}`);
+  release(manifestPath, credential.token, `verified-remote-${outcome}`);
   return { reconciled: true, outcome, remote };
 }
 
@@ -971,8 +994,9 @@ function performMerge(manifestPath, presentedToken, options = {}) {
   throw new Error(
     `merge outcome is ambiguous and quarantined (gh status ${merge.status ?? "timeout"}): ` +
       `${merge.stderr || remoteReadError?.message || `GitHub returned ${JSON.stringify(remote)}`}`.trim() +
-      `; after verifying GitHub, run BS_QUALITY_REPOSITORY_LEASE_TOKEN=<pinned-token> ` +
-      `node quality-repo-lease.js reconcile-merge --manifest ${loaded.manifestPath}`,
+      `; after verifying GitHub, run node quality-repo-lease.js reconcile-merge ` +
+      `--manifest ${loaded.manifestPath} --confirm-owner-invocation-id ${loaded.manifest.invocationId} ` +
+      `--confirm-owner-pr ${loaded.manifest.repo.pr}`,
   );
 }
 
@@ -1037,7 +1061,11 @@ function commandHandlers(manifest, options) {
         admin: options.admin === "true",
       }),
     "release-if-merged": () => releaseIfMerged(manifest, presentedToken()),
-    "reconcile-merge": () => reconcileMergeOutcome(manifest, presentedToken()),
+    "reconcile-merge": () =>
+      reconcileMergeOutcome(manifest, presentedToken(), {
+        confirmOwnerInvocationId: options["confirm-owner-invocation-id"],
+        confirmOwnerPr: options["confirm-owner-pr"],
+      }),
     recover: () => publicCredential(recoverFromOptions(manifest, options)),
   };
 }

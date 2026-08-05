@@ -176,6 +176,10 @@ merging. Any open-PR ambiguity, inconsistent, changing, or unavailable remote
 state remains quarantined and blocks repository merges for operator resolution.
 Status names the quarantined exact head and whether the remote request began;
 the merge failure prints the explicit authoritative-reconciliation command.
+That command proves the current on-disk owner with the exact invocation ID and
+pull request, so it remains usable after the crashed merge process loses its
+pinned credential. It still releases nothing unless GitHub proves the exact
+head merged or the exact pull request closed without merge.
 Post-merge cleanup treats a `false` authoritative reconciliation result as an
 unreleased lease and prints that condition instead of discarding boolean output.
 Missing, malformed, symlinked, or unverifiable identity
@@ -248,7 +252,9 @@ critical section, not to the campaign lease or its six-hour policy.
 - Merge-guard crash tests leave the guard quarantined until the entire process
   group is absent and GitHub proves the exact head merged or the operator closes
   the PR without merge. Time and negative observations alone never admit
-  another campaign.
+  another campaign. The reconciliation regression test removes the process
+  credential and proves the explicit invocation/PR confirmation path remains
+  available.
 - Full repository verification, mutation evidence, protected CI, and
   exact-head review pass before release.
 
