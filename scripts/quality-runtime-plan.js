@@ -27,7 +27,10 @@ const WORKLOAD_BANDS = [
     verificationSeconds: 60,
     checkSeconds: 120,
     reviewReserveSeconds: 90,
-    checkReserveSeconds: 180,
+    // A tiny diff does not make a repository's fixed-cost full suite tiny.
+    // Let one micro gate use the existing ten-minute global gate ledger; the
+    // ledger still bounds hangs and the remaining gates consume the balance.
+    checkReserveSeconds: 480,
   },
   {
     name: "small",
