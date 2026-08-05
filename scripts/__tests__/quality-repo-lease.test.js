@@ -183,6 +183,27 @@ describe("repository merge lease", () => {
     lease.release(manifestPath, owner.token, "test-complete");
   });
 
+  it("rejects a symlink substituted for an opened lease record", () => {
+    const { manifestPath } = fixture("symlink-record");
+    const owner = lease.acquire(manifestPath);
+    const ownerFile = path.join(
+      lease._pathsFor("buildproven/fixture").lease,
+      "owner.json",
+    );
+    const backingFile = path.join(
+      path.dirname(ownerFile),
+      "owner.backing.json",
+    );
+    fs.renameSync(ownerFile, backingFile);
+    fs.symlinkSync(backingFile, ownerFile);
+    expect(() => lease.verify(manifestPath, owner.token)).toThrow(
+      /non-symlink regular file/,
+    );
+    fs.unlinkSync(ownerFile);
+    fs.renameSync(backingFile, ownerFile);
+    lease.release(manifestPath, owner.token, "test-complete");
+  });
+
   it("rejects the same invocation id from an independent clone tuple", () => {
     const invocationId = crypto.randomUUID();
     const first = fixture("clone-one", { invocationId });

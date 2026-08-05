@@ -103,15 +103,36 @@ function pathsFor(identity, manifest = null) {
   };
 }
 
-function readJson(file, label) {
-  const stat = fs.lstatSync(file);
-  if (stat.isSymbolicLink() || !stat.isFile()) {
-    throw new Error(`${label} must be a non-symlink file`);
-  }
+function parseJson(raw, label) {
   try {
-    return JSON.parse(fs.readFileSync(file, "utf8"));
+    return JSON.parse(raw);
   } catch (error) {
     throw new Error(`${label} is not valid JSON`, { cause: error });
+  }
+}
+
+function readJson(file, label) {
+  let descriptor;
+  try {
+    descriptor = fs.openSync(
+      file,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+    );
+  } catch (error) {
+    if (error.code === "ELOOP") {
+      throw new Error(`${label} must be a non-symlink regular file`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  try {
+    if (!fs.fstatSync(descriptor).isFile()) {
+      throw new Error(`${label} must be a regular file`);
+    }
+    return parseJson(fs.readFileSync(descriptor, "utf8"), label);
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
   }
 }
 
