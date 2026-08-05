@@ -384,6 +384,19 @@ discovery, not the outer cycle of lead → deterministic verification → fix �
 delta discovery across the whole invocation. `scripts/quality-run-governor.js`
 tracks governor state inside the explicit invocation manifest with:
 
+#### Fixed-cost repository gates
+
+Diff size controls review depth and the initial per-gate slice, but it does not
+predict the fixed cost of a repository's full suite. A micro change therefore
+retains a 120-second planned check slice plus enough bounded reserve to use the
+existing 600-second gate ledger when one required gate legitimately needs it.
+The shared ledger still covers every required gate in the campaign, so time
+used by lint or another gate reduces what remains for tests. Nothing becomes
+unbounded: a hung command is killed at the smaller of its slice plus reserve
+and the remaining global gate ledger. This floor prevents tiny changes in
+repositories with large integration suites from timing out solely because the
+diff is small (BUI-389).
+
 - **Fix-commit cap** (`BS_QUALITY_MAX_FIX_COMMITS`, default and hard maximum
   1. — one batched remediation commit, checked before every fix attempt and
      verification. Environment configuration may lower this cap but cannot raise

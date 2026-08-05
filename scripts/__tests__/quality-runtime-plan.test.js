@@ -41,6 +41,14 @@ describe("quality runtime planning", () => {
     expect(plan(10, 20, 20).workload).not.toBe(plan(10, 1, 20).workload);
   });
 
+  it("lets a micro change use the bounded gate ledger for a fixed-cost suite", () => {
+    const micro = plan(10, 1, 5);
+
+    expect(micro.checkSeconds).toBe(120);
+    expect(micro.checkReserveSeconds).toBe(480);
+    expect(micro.checkSeconds + micro.checkReserveSeconds).toBe(600);
+  });
+
   it("keeps tiny critical changes deep without granting a huge-change clock", () => {
     const low = plan(10, 1, 5);
     const critical = plan(90, 1, 5);
