@@ -3529,6 +3529,41 @@ exit 1
     });
   });
 
+  it("keeps campaign-bound domain selection valid across a different-domain delta", () => {
+    const root = repo("v2-cross-domain-delta");
+    mkdirSync(path.join(root, "src", "auth"), { recursive: true });
+    writeFileSync(path.join(root, "src", "auth", "session.js"), "secure\n");
+    git(root, ["add", "src/auth/session.js"]);
+    git(root, ["commit", "-q", "-m", "fix: secure session"]);
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "critical",
+        taskType: "bugfix",
+        score: 90,
+        agents: 2,
+        "codex-depth": "xhigh",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["code-reviewer", "security-auditor"], {
+        domain: "security",
+        rule: "security-domain",
+      });
+    });
+    prepareCodexReview(root, manifest);
+
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(path.join(root, "scripts", "repair.sh"), "exit 0\n");
+    git(root, ["add", "scripts/repair.sh"]);
+    git(root, ["commit", "-q", "-m", "fix: harden repair"]);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.advanceHead(loaded, root);
+    });
+
+    expect(() => prepareCodexReview(root, manifest)).not.toThrow();
+    expect(invocation.loadManifest(manifest).manifest.reviews).toHaveLength(2);
+  });
+
   it("authorizes an explicit zero-reviewer policy exemption at low risk", () => {
     const root = repo("low-risk-policy-exempt-review");
     git(root, ["reset", "--hard", "-q", "origin/main"]);

@@ -113,6 +113,23 @@ describe("loadConfig — per-repo harness-config.json", () => {
       ),
     ).toThrow(/may not change the built-in reviewer target/i);
   });
+
+  it("rejects a shifted band boundary even when every band keeps its agent value", () => {
+    expect(() =>
+      loadConfig(
+        repoWith({
+          scorePolicy: {
+            curve: [
+              { maxScore: 20, agents: 0, codex: "skip", codexRounds: 0 },
+              { maxScore: 50, agents: 1, codex: "high", codexRounds: 1 },
+              { maxScore: 98, agents: 1, codex: "high", codexRounds: 1 },
+              { maxScore: 100, agents: 2, codex: "xhigh", codexRounds: 1 },
+            ],
+          },
+        }),
+      ),
+    ).toThrow(/may not change the built-in reviewer target at score 75/i);
+  });
 });
 
 describe("score — Git-valid control-character paths", () => {

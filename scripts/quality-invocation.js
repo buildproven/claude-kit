@@ -3584,7 +3584,11 @@ function verifyReviewArtifact(manifest, review) {
     const expectedSelection = agentSelection.selectReviewersForRange({
       tier: manifest.risk.tier,
       repo: manifest.repo.realpath,
-      base: review.from,
+      // The panel is campaign-bound from the complete base..HEAD change. A
+      // remediation review may cover only priorHead..HEAD, but recomputing the
+      // selector over that delta can switch domains and falsely invalidate the
+      // immutable campaign identity.
+      base: manifest.revisions.baseSha,
       head: review.to,
     });
     if (
