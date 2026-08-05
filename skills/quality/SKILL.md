@@ -236,6 +236,9 @@ changing the quality outcome; a missing/unreadable manifest remains a hard error
 ```bash
 QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
 [ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
+node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" terminal-state \
+  "<exact-manifest-path>" --state verified-unmerged \
+  --detail "deterministic evidence complete; merge not requested" >/dev/null || true
 node "$QUALITY_SCRIPTS_DIR/quality-telemetry.js" record "<exact-manifest-path>" \
   || echo "[quality] telemetry failed; campaign outcome stands" >&2
 ```
