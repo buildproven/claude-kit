@@ -60,6 +60,16 @@ Full review comments:
     expect(parseNativeReview(prose).verdict).toBe("approve");
   });
 
+  // BUI-629: Codex can describe a safe change in one sentence and report
+  // successful verification in another without emitting a stock approval
+  // phrase. These are captured native outputs, not synthetic parser tokens.
+  it.each([
+    "The setup-node version bump is applied consistently across all workflow references without altering existing inputs. The changed files also pass `./scripts/verify-fast`.",
+    "The dependency upgrades and lockfile changes are consistent, resolve cleanly, and introduce no evident compatibility regressions. Type checking, linting, dependency resolution, and the affected runtime APIs succeeded.",
+  ])("approves verified descriptive prose: %s", (prose) => {
+    expect(parseNativeReview(prose).verdict).toBe("approve");
+  });
+
   it("rejects unrecognized prose instead of inventing approval", () => {
     expect(() => parseNativeReview("Review ended unexpectedly.")).toThrow(
       /no recognizable verdict/,
@@ -87,6 +97,13 @@ Full review comments:
     "The fallback never retains compatibility.",
     "The implementation fails to preserve required checks.",
     "The implementation does not fully preserve required checks.",
+    "The bump is applied consistently without altering existing inputs. Tests pass, but a regression remains in the fallback path.",
+    "The bump is applied consistently without altering existing inputs. Tests pass, but another path could not be reviewed.",
+    "The bump is applied consistently without altering existing inputs. Tests pass. It silently corrupts cached state.",
+    "The bump is applied consistently without altering existing inputs. Tests pass `./verify. It silently corrupts cached state.",
+    "The bump is applied consistently without altering existing inputs.",
+    "Tests pass.",
+    "The bump is applied consistently without altering existing inputs. Tests were not run.",
   ])("rejects qualified no-finding prose: %s", (prose) => {
     expect(() => parseNativeReview(prose)).toThrow(/no recognizable verdict/);
   });

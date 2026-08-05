@@ -9,6 +9,12 @@ const SEVERITY = {
   2: "medium",
   3: "low",
 };
+const SAFE_CHANGE_DESCRIPTION =
+  /\bapplied consistently\b|\bwithout (?:altering|changing|affecting)\b/i;
+const VERIFICATION_SUBJECT =
+  /\b(?:tests?|checks?|lint(?:ing)?|type checking|build|verification|changed files?)\b|`[^`]+`/i;
+const VERIFICATION_SUCCESS =
+  /\b(?:pass(?:es|ed|ing)?|succeed(?:s|ed|ing)?|successful|green)\b/i;
 
 function parseHeader(line) {
   const prefix = line.match(/^- \[P([0-3])\] /);
@@ -34,6 +40,63 @@ function parseHeader(line) {
 function normalizeFile(file, root) {
   const prefix = `${root.replace(/\/+$/, "")}/`;
   return file.startsWith(prefix) ? file.slice(prefix.length) : file;
+}
+
+function splitSentences(value) {
+  const sentences = [];
+  let current = "";
+  let inInlineCode = false;
+  for (const character of String(value)) {
+    if (character === "`") {
+      inInlineCode = !inInlineCode;
+      current += character;
+      continue;
+    }
+    if (!inInlineCode && /[.\n!?]/.test(character)) {
+      if (current.trim()) sentences.push(current);
+      current = "";
+      continue;
+    }
+    current += character;
+  }
+  if (current.trim()) sentences.push(current);
+  return sentences;
+}
+
+function hasBalancedInlineCode(value) {
+  return ((String(value).match(/`/g) || []).length & 1) === 0;
+}
+
+function isSuccessfulVerificationSentence(sentence, negativePrefix) {
+  return (
+    VERIFICATION_SUBJECT.test(sentence) &&
+    VERIFICATION_SUCCESS.test(sentence) &&
+    !negativePrefix.test(sentence)
+  );
+}
+
+function hasVerifiedDescriptiveVerdict({
+  rawText,
+  sentences,
+  incomplete,
+  adverse,
+  negativePrefix,
+}) {
+  if (incomplete || adverse || !SAFE_CHANGE_DESCRIPTION.test(rawText)) {
+    return false;
+  }
+  if (
+    !sentences.some((sentence) =>
+      isSuccessfulVerificationSentence(sentence, negativePrefix),
+    )
+  ) {
+    return false;
+  }
+  return sentences.every(
+    (sentence) =>
+      SAFE_CHANGE_DESCRIPTION.test(sentence) ||
+      isSuccessfulVerificationSentence(sentence, negativePrefix),
+  );
 }
 
 function parseNativeReview(raw, root = process.cwd()) {
@@ -92,10 +155,11 @@ function parseNativeReview(raw, root = process.cwd()) {
   const CONTRAST = /\b(?:but|however)\b|;/i;
   const INCOMPLETE =
     /\b(?:could ?n[o']?t be reviewed|ended unexpectedly|was (?:truncated|interrupted|incomplete)|(?:review|analysis) was (?:not )?completed|another (?:path|file))\b/i;
-  const sentences = String(raw).split(/[.\n!?]+/);
-  const incompleteVerdict = sentences.some((sentence) =>
-    INCOMPLETE.test(sentence),
-  );
+  const rawText = String(raw);
+  const sentences = splitSentences(rawText);
+  const incompleteVerdict =
+    !hasBalancedInlineCode(rawText) ||
+    sentences.some((sentence) => INCOMPLETE.test(sentence));
   // Evaluate adverse language per clause. A global `not`/`however` check made
   // unrelated clean prose ("not risky. No concerns found.") poison the entire
   // review. Clause boundaries still ensure that "No issues, but a bug remains"
@@ -116,7 +180,18 @@ function parseNativeReview(raw, root = process.cwd()) {
     }
     return NEGATION.test(sentence) && NOUN.test(sentence);
   });
-  if (findings.length === 0 && !cleanVerdict) {
+  // BUI-629: native Codex approvals can split the safety judgment and the
+  // successful verification across sentences. Require both independent
+  // signals, and require the verification subject and success verb to share a
+  // sentence. The existing global incomplete/adverse vetoes still win.
+  const verifiedDescriptiveVerdict = hasVerifiedDescriptiveVerdict({
+    rawText,
+    sentences,
+    incomplete: incompleteVerdict,
+    adverse: adverseVerdict,
+    negativePrefix: NEGATIVE_PREFIX,
+  });
+  if (findings.length === 0 && !cleanVerdict && !verifiedDescriptiveVerdict) {
     throw new Error("native Codex review has no recognizable verdict");
   }
   const summary =
