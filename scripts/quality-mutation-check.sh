@@ -89,6 +89,12 @@ if [ "$TEST_EXECUTABLE" = npm ] &&
     vitest\ *|jest\ *|npx\ vitest\ *|npx\ jest\ *)
       MUTATION_TEST_ARGS+=(-- --bail=1)
       ;;
+    pytest|pytest\ *|python\ -m\ pytest|python\ -m\ pytest\ *|python3\ -m\ pytest|python3\ -m\ pytest\ *|uv\ run\ pytest|uv\ run\ pytest\ *|poetry\ run\ pytest|poetry\ run\ pytest\ *|pipenv\ run\ pytest|pipenv\ run\ pytest\ *)
+      case " $TEST_SCRIPT " in
+        *" -- "*) ;;
+        *) MUTATION_TEST_ARGS+=(-- -x) ;;
+      esac
+      ;;
   esac
 fi
 
@@ -107,7 +113,19 @@ case "$TEST_EXECUTABLE" in
     ;;
 esac
 if [ "$PYTEST_COMMAND" = true ]; then
-  MUTATION_TEST_ARGS+=(-x)
+  PYTEST_MUTATION_ARGS=()
+  PYTEST_FAIL_FAST_INSERTED=false
+  for ARGUMENT in "${MUTATION_TEST_ARGS[@]}"; do
+    if [ "$PYTEST_FAIL_FAST_INSERTED" = false ] && [ "$ARGUMENT" = -- ]; then
+      PYTEST_MUTATION_ARGS+=(-x)
+      PYTEST_FAIL_FAST_INSERTED=true
+    fi
+    PYTEST_MUTATION_ARGS+=("$ARGUMENT")
+  done
+  if [ "$PYTEST_FAIL_FAST_INSERTED" = false ]; then
+    PYTEST_MUTATION_ARGS+=(-x)
+  fi
+  MUTATION_TEST_ARGS=("${PYTEST_MUTATION_ARGS[@]}")
 fi
 
 CANDIDATES=()
