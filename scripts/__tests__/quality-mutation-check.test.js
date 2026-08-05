@@ -12,6 +12,12 @@ function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
+function fixtureTestScript(options) {
+  if (options.vitestRunner) return "vitest run";
+  if (options.npmPytestRunner) return "pytest -n auto";
+  return "node logic.test.js";
+}
+
 function fixture(label, testBody, options = {}) {
   const root = makeTempDir(`quality-mutation-${label}-`);
   git(root, ["init", "-q", "-b", "main"]);
@@ -22,12 +28,32 @@ function fixture(label, testBody, options = {}) {
     JSON.stringify({
       scripts: {
         lint: "true",
-        test: options.vitestRunner ? "vitest run" : "node logic.test.js",
+        test: fixtureTestScript(options),
         "security:audit": "true",
       },
     }),
   );
-  writeFileSync(path.join(root, ".gitignore"), "node_modules/\n");
+  writeFileSync(path.join(root, ".gitignore"), "node_modules/\ntest-bin/\n");
+  if (options.pytestRunner) {
+    writeFileSync(
+      path.join(root, ".quality-gates.json"),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          test: {
+            executable: "pytest",
+            args: options.pytestArgs ?? [
+              "-q",
+              "-n",
+              "3",
+              "--dist",
+              "worksteal",
+            ],
+          },
+        },
+      }),
+    );
+  }
   const source = options.shellSource
     ? "policy.sh"
     : options.addedSource
@@ -71,6 +97,24 @@ function fixture(label, testBody, options = {}) {
       { mode: 0o755 },
     );
   }
+  if (options.pytestRunner || options.npmPytestRunner) {
+    const bin = path.join(root, "test-bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(
+      path.join(bin, "pytest"),
+      `#!/usr/bin/env bash
+printf "%s\\n" "$*"
+node logic.test.js
+status=$?
+case " $* " in
+  *" -x "*) exit "$status" ;;
+esac
+sleep 10
+exit "$status"
+`,
+      { mode: 0o755 },
+    );
+  }
   const manifest = execFileSync(
     "node",
     [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
@@ -111,6 +155,10 @@ function runMutation(root, manifest) {
     return execFileSync("bash", [MUTATION, "--manifest", manifest], {
       cwd: root,
       encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${path.join(root, "test-bin")}:${process.env.PATH}`,
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (error) {
@@ -246,6 +294,87 @@ describe("quality-mutation-check", () => {
       "utf8",
     );
     expect(log).toContain("run --bail=1");
+  });
+
+  it("uses pytest fail-fast after the first controlled-revert failure", () => {
+    const { root, manifest } = fixture(
+      "pytest-fail-fast",
+      "const { isAllowed } = require('./logic');\nif (!isAllowed('admin')) process.exit(1);\n",
+      { pytestRunner: true, checkSeconds: 3 },
+    );
+
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+    const stateRoot = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "stateRoot"],
+      { encoding: "utf8" },
+    ).trim();
+    const head = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "revisions.currentHead"],
+      { encoding: "utf8" },
+    ).trim();
+    const log = readFileSync(
+      path.join(stateRoot, "mutation", `${head}.logic.js.log`),
+      "utf8",
+    );
+    expect(log).toContain("-q -n 3 --dist worksteal -x");
+  });
+
+  it("places pytest fail-fast before the option terminator", () => {
+    const { root, manifest } = fixture(
+      "pytest-option-terminator",
+      "const { isAllowed } = require('./logic');\nif (!isAllowed('admin')) process.exit(1);\n",
+      { pytestRunner: true, pytestArgs: ["-q", "--", "tests"] },
+    );
+
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+    const stateRoot = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "stateRoot"],
+      { encoding: "utf8" },
+    ).trim();
+    const head = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "revisions.currentHead"],
+      { encoding: "utf8" },
+    ).trim();
+    const log = readFileSync(
+      path.join(stateRoot, "mutation", `${head}.logic.js.log`),
+      "utf8",
+    );
+    expect(log).toContain("-q -x -- tests");
+  });
+
+  it("uses pytest fail-fast for an npm test script backed by pytest", () => {
+    const { root, manifest } = fixture(
+      "npm-pytest-fail-fast",
+      "const { isAllowed } = require('./logic');\nif (!isAllowed('admin')) process.exit(1);\n",
+      { npmPytestRunner: true, checkSeconds: 3 },
+    );
+
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+    const stateRoot = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "stateRoot"],
+      { encoding: "utf8" },
+    ).trim();
+    const head = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "revisions.currentHead"],
+      { encoding: "utf8" },
+    ).trim();
+    const log = readFileSync(
+      path.join(stateRoot, "mutation", `${head}.logic.js.log`),
+      "utf8",
+    );
+    expect(log).toContain("-n auto -x");
   });
 
   it("removes an added source file to produce revision-bound evidence", () => {
