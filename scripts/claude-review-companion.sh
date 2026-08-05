@@ -117,7 +117,6 @@ case "$EFFECTIVE_MODEL" in
     EFFECTIVE_MODEL="$DEFAULT_REVIEW_MODEL"
     ;;
 esac
-MODEL_ARGS=(--model "$EFFECTIVE_MODEL")
 
 # --- resolve an agent name to its .md system-prompt file ---------------------
 # Search order: kit-local agents/, then the pr-review-toolkit plugin. The
@@ -257,8 +256,8 @@ record_structured_failure() {
 }
 
 run_agent() {
-  local agent="$1" sysfile out raw rc stderr_file error_json failure_rc
-  local normalized_file salvage_warning
+  local agent="$1" slot_model="$2" sysfile out raw rc stderr_file error_json failure_rc
+  local normalized_file salvage_warning enriched_file
   out="$OUT_DIR/${agent##*:}.findings.txt"
   stderr_file="$OUT_DIR/${agent##*:}.stderr"
   if ! sysfile="$(resolve_agent_file "$agent")"; then
@@ -293,9 +292,8 @@ run_agent() {
   # and hit the timeout without returning a verdict. Force a single bounded
   # reasoning turn; deterministic gates already prove repository behavior.
   #
-  # NOTE: "${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"}" is the bash-3.2-safe expansion
-  # for a possibly-empty array under `set -u` (macOS /bin/bash 3.2 treats a
-  # bare "${arr[@]}" on an empty array as an unbound-variable fatal error).
+  # Critical's second slot uses a different Claude model family. The effective
+  # model is written into each normalized, hash-inventoried result.
   raw="$(run_with_timeout "$TIMEOUT" \
         env BS_QUALITY_HEADLESS=1 \
         claude -p "$(cat "$CTX_FILE")" \
@@ -304,7 +302,7 @@ run_agent() {
           --permission-mode bypassPermissions \
           --tools "" \
           --json-schema "$REVIEW_SCHEMA_JSON" \
-          ${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"} \
+          --model "$slot_model" \
           --output-format json 2>>"$stderr_file" )"
   rc=$?
   printf '%s\n' "$raw" > "$OUT_DIR/${agent##*:}.result.json"
@@ -398,6 +396,16 @@ run_agent() {
     echo "INCONCLUSIVE: agent '$agent' structured output was missing or contradictory — human review required" > "$out"
     return 3
   fi
+  enriched_file="$normalized_file.slot"
+  if ! jq --arg role "${agent##*:}" --arg provider claude \
+    --arg model "$slot_model" \
+    '. + {_qualitySlot: {role: $role, provider: $provider, model: $model}}' \
+    "$normalized_file" > "$enriched_file"; then
+    rm -f "$normalized_file" "$enriched_file"
+    echo "INCONCLUSIVE: agent '$agent' slot identity could not be bound" > "$out"
+    return 3
+  fi
+  mv "$enriched_file" "$normalized_file"
 
   if ! jq -r '
     if (.findings | length) == 0 then
@@ -417,13 +425,22 @@ run_agent() {
 # Bash `wait` blocks the caller's Bash tool call synchronously in every context.
 pids=()
 mandatory=0
+slot_index=0
 IFS=',' read -ra AGENT_LIST <<< "$AGENTS"
 for agent in "${AGENT_LIST[@]}"; do
   agent="$(printf '%s' "$agent" | tr -d '[:space:]')"
   [ -z "$agent" ] && continue
   mandatory=$((mandatory + 1))
-  run_agent "$agent" &
+  slot_model="$EFFECTIVE_MODEL"
+  if [ "$RISK_TIER" = critical ] && [ "$slot_index" -eq 1 ]; then
+    case "$EFFECTIVE_MODEL" in
+      *opus*) slot_model="claude-sonnet-5" ;;
+      *) slot_model="claude-opus-5" ;;
+    esac
+  fi
+  run_agent "$agent" "$slot_model" &
   pids+=("$!")
+  slot_index=$((slot_index + 1))
 done
 
 if [ "$mandatory" -eq 0 ]; then

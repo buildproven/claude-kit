@@ -87,7 +87,6 @@ describe("loadConfig — per-repo harness-config.json", () => {
         scorePolicy: {
           securityFloor: [],
           base: { securityFloor: 0 },
-          curve: [{ maxScore: 100, agents: 2, codex: "skip", codexRounds: 0 }],
           codexForceFloor: 101,
         },
       }),
@@ -96,6 +95,23 @@ describe("loadConfig — per-repo harness-config.json", () => {
       expect.arrayContaining(DEFAULTS.securityFloor),
     );
     expect(cfg.base.securityFloor).toBe(DEFAULTS.base.securityFloor);
+  });
+
+  it("rejects repository changes to the built-in reviewer targets", () => {
+    expect(() =>
+      loadConfig(
+        repoWith({
+          scorePolicy: {
+            curve: [
+              { maxScore: 20, agents: 0, codex: "skip", codexRounds: 0 },
+              { maxScore: 50, agents: 1, codex: "high", codexRounds: 1 },
+              { maxScore: 74, agents: 1, codex: "high", codexRounds: 1 },
+              { maxScore: 100, agents: 1, codex: "xhigh", codexRounds: 1 },
+            ],
+          },
+        }),
+      ),
+    ).toThrow(/may not change the built-in reviewer target/i);
   });
 });
 
@@ -215,6 +231,35 @@ describe("deepMerge", () => {
 });
 
 describe("score — the end-to-end entry point", () => {
+  it("attributes equal path risk to production code instead of its test", () => {
+    const config = deepMerge(DEFAULTS, { high: ["**/scripts/**"] });
+    const result = score({
+      base: "BASE",
+      config,
+      gitRunner: gitRunner([
+        {
+          path: "scripts/__tests__/install-safety.test.js",
+          status: "M",
+          added: 20,
+          deleted: 0,
+          patch: "+expect(result.status).toBe(0)",
+        },
+        {
+          path: "scripts/install-safe-fs.py",
+          status: "M",
+          added: 10,
+          deleted: 0,
+          patch: "+if existing_target == src: return ''",
+        },
+      ]),
+    });
+    expect(result.riskScore).toBe(60);
+    expect(result.reasons).toContain(
+      "path base 60 (most-sensitive: scripts/install-safe-fs.py)",
+    );
+    expect(result.knobs.agents).toBe(1);
+  });
+
   it("scores a mechanical doc change low and a security-surface change high", () => {
     const docs = score({
       gitRunner: gitRunner([

@@ -357,6 +357,88 @@ function preparePolicyExemptReview(root, manifestPath) {
   );
 }
 
+function prepareIncompleteReview(root, manifestPath) {
+  execFileSync("node", [GOVERNOR, "bump-round", manifestPath], { cwd: root });
+  const info = JSON.parse(
+    execFileSync("node", [INVOCATION, "review-info", manifestPath], {
+      cwd: root,
+      encoding: "utf8",
+    }),
+  );
+  mkdirSync(info.artifactDir, { recursive: true });
+  writeFileSync(
+    path.join(info.artifactDir, "diff.txt"),
+    execFileSync("git", ["diff", `${info.from}..${info.to}`], { cwd: root }),
+  );
+  writeFileSync(
+    path.join(info.artifactDir, "identity.json"),
+    execFileSync("node", [INVOCATION, "review-identity", manifestPath], {
+      cwd: root,
+    }),
+  );
+  writeFileSync(
+    path.join(info.artifactDir, "review-focus.txt"),
+    "fixture review focus\n",
+  );
+  writeFileSync(
+    path.join(info.artifactDir, "review-incomplete.findings.txt"),
+    "AI REVIEW INCOMPLETE: provider unavailable.\n",
+  );
+  writeFileSync(
+    path.join(info.artifactDir, "review-incomplete.result.json"),
+    JSON.stringify({
+      status: "incomplete",
+      failureCategory: "provider-unavailable",
+    }),
+  );
+  execFileSync(
+    "node",
+    [
+      INVOCATION,
+      "inventory",
+      manifestPath,
+      "--artifact-dir",
+      info.artifactDir,
+      "--provider",
+      "review-incomplete",
+      "--incomplete",
+    ],
+    { cwd: root },
+  );
+  const diffSha = createHash("sha256")
+    .update(readFileSync(path.join(info.artifactDir, "diff.txt")))
+    .digest("hex");
+  execFileSync(
+    "node",
+    [
+      INVOCATION,
+      "record-incomplete-review",
+      manifestPath,
+      "--from",
+      info.from,
+      "--to",
+      info.to,
+      "--primary",
+      "codex",
+      "--fallback",
+      "claude",
+      "--failed-provider",
+      "claude",
+      "--failure-category",
+      "provider-unavailable",
+      "--artifact-dir",
+      info.artifactDir,
+      "--diff-sha",
+      diffSha,
+    ],
+    { cwd: root },
+  );
+  for (const name of ["lint", "test", "security"]) {
+    recordGateFixture(manifestPath, name);
+  }
+  return info;
+}
+
 function recordJudgeArtifact(root, manifest, dispositions = []) {
   const artifact = path.join(path.dirname(manifest), "judge-input.json");
   const context = JSON.parse(
@@ -3033,6 +3115,10 @@ exit 99
         authorization.fallback,
         "--contractVersion",
         String(authorization.contractVersion),
+        "--leads",
+        String(authorization.leads),
+        "--reviewStatus",
+        authorization.reviewStatus,
         "--policyDigest",
         authorization.policyDigest,
         "--agentsSha256",
@@ -3379,21 +3465,58 @@ exit 1
     ).not.toBe(0);
   });
 
-  it("blocks authorization when the persisted judge reports findings", () => {
+  it("records v2 AI leads without granting a model judge merge authority", () => {
     const root = repo("judge-block");
     const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "medium",
+        taskType: "bugfix",
+        score: 35,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["code-reviewer"], {
+        domain: "general",
+        rule: "general-review",
+      });
+    });
     prepareCodexReview(root, manifest, [
-      { severity: "high", title: "one" },
-      { severity: "high", title: "two" },
+      {
+        severity: "high",
+        title: "one",
+        body: "first lead",
+        failure_scenario: "input one reaches the changed export",
+        file: "file.js",
+        line_start: 1,
+        proof: { kind: "static-analysis", evidence: "changed line one" },
+        recommendation: "verify first lead",
+      },
+      {
+        severity: "high",
+        title: "two",
+        body: "second lead",
+        failure_scenario: "input two reaches the changed export",
+        file: "file.js",
+        line_start: 1,
+        proof: { kind: "static-analysis", evidence: "changed line one" },
+        recommendation: "verify second lead",
+      },
     ]);
     recordJudgeArtifact(root, manifest, ["BLOCKING", "BLOCKING"]);
-    const result = spawnSync(
-      "node",
-      [INVOCATION, "review-authorization", manifest],
-      { cwd: root, encoding: "utf8" },
+    recordMutationFixture(manifest);
+    const authorization = JSON.parse(
+      execFileSync("node", [INVOCATION, "review-authorization", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
     );
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toMatch(/2 unresolved BLOCKING/);
+    expect(authorization).toMatchObject({
+      blockingCount: 0,
+      leads: 2,
+      reviewStatus: "complete",
+    });
   });
 
   it("authorizes an explicit zero-reviewer policy exemption at low risk", () => {
@@ -3437,6 +3560,46 @@ exit 1
     ]);
   });
 
+  it("authorizes deterministic gates while signing incomplete AI discovery", () => {
+    const root = repo("incomplete-advisory-review");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "medium",
+        taskType: "bugfix",
+        score: 35,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["code-reviewer"], {
+        domain: "general",
+        rule: "general-review",
+      });
+    });
+    prepareIncompleteReview(root, manifest);
+    recordMutationFixture(manifest);
+
+    const authorization = JSON.parse(
+      execFileSync("node", [INVOCATION, "review-authorization", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(authorization).toMatchObject({
+      provider: "review-incomplete",
+      reviewStatus: "incomplete",
+      leads: 0,
+      blockingCount: 0,
+    });
+    const trailers = execFileSync("node", [INVOCATION, "trailers", manifest], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(trailers).toMatch(/^Quality-Review-Status: incomplete$/m);
+    expect(trailers).toMatch(/^Quality-Leads: 0$/m);
+  });
+
   it("stamps a distinct Quality-Reviewer trailer for a policy exemption", () => {
     // Merge evidence must record which authorization path produced a merge
     // (full AI review vs CI-only advisory) so it's queryable via a plain
@@ -3472,6 +3635,8 @@ exit 1
       encoding: "utf8",
     });
     expect(trailers).toMatch(/^Quality-Reviewer: policy-exempt$/m);
+    expect(trailers).toMatch(/^Quality-Leads: 0$/m);
+    expect(trailers).toMatch(/^Quality-Review-Status: policy-exempt$/m);
     expect(trailers).not.toMatch(/^Quality-Reviewer: (claude|codex|gemini)$/m);
   });
 
@@ -4893,17 +5058,12 @@ exit 1
     // but with a diagnosis that names the real problem and has a retry route.
     const root = repo("bare-findings-reported-delimiter-only");
     const manifest = create(root);
-    prepareCodexReview(root, manifest, [], "<<<FINDINGS REPORTED>>>");
     let stderr = "";
     expect(() => {
       try {
-        execFileSync("node", [INVOCATION, "judge-context", manifest], {
-          cwd: root,
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"],
-        });
+        prepareCodexReview(root, manifest, [], "<<<FINDINGS REPORTED>>>");
       } catch (err) {
-        stderr = err.stderr || "";
+        stderr = String(err.stderr || "");
         throw err;
       }
     }).toThrow();

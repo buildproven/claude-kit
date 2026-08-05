@@ -90,6 +90,8 @@ describe("quality review evidence signatures", () => {
       tier: "low",
       reviewer: "policy-exempt",
       contractVersion: 2,
+      leads: 0,
+      reviewStatus: "policy-exempt",
       policyDigest: "c".repeat(64),
       agentsSha256: "d".repeat(64),
       domain: "policy-exempt",
@@ -112,6 +114,28 @@ describe("quality review evidence signatures", () => {
         keyPair().privateKey,
       ),
     ).toThrow(/fallback reviewer is invalid/);
+  });
+
+  it("signs an explicit incomplete discovery attestation", () => {
+    const incomplete = {
+      ...fields,
+      reviewer: "review-incomplete",
+      contractVersion: 2,
+      leads: 0,
+      reviewStatus: "incomplete",
+      policyDigest: "c".repeat(64),
+      agentsSha256: "d".repeat(64),
+      domain: "security",
+      selectionRule: "security-domain",
+      repositoryKey: "repository-key",
+      diffSha256: "e".repeat(64),
+      evidenceSha256: "f".repeat(64),
+    };
+    const keys = keyPair();
+    const signature = signEvidence(incomplete, keys.privateKey);
+    expect(verifyEvidence(incomplete, signature, keys.publicKey)).toMatchObject(
+      incomplete,
+    );
   });
 
   it("signs a primary-only policy with no fallback", () => {

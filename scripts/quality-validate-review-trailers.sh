@@ -27,6 +27,8 @@ if [ -n "$MANIFEST" ]; then
   AUTH_TIER="$(printf '%s' "$AUTHORIZATION" | jq -r '.tier')"
   AUTH_CONTRACT="$(printf '%s' "$AUTHORIZATION" | jq -r '.contractVersion // 1')"
   if [ "$AUTH_CONTRACT" -ge 2 ]; then
+    AUTH_LEADS="$(printf '%s' "$AUTHORIZATION" | jq -r '.leads')"
+    AUTH_REVIEW_STATUS="$(printf '%s' "$AUTHORIZATION" | jq -r '.reviewStatus')"
     AUTH_POLICY="$(printf '%s' "$AUTHORIZATION" | jq -r '.policyDigest')"
     AUTH_AGENTS="$(printf '%s' "$AUTHORIZATION" | jq -r '.agentsSha256')"
     AUTH_DOMAIN="$(printf '%s' "$AUTHORIZATION" | jq -r '.domain')"
@@ -73,13 +75,16 @@ if [ -n "$STAMP_CONTRACT" ]; then
     exit 1
   }
   for key in Quality-Policy Quality-Agents Quality-Domain Quality-Selection \
-    Quality-Repository Quality-Diff Quality-Review-Evidence; do
+    Quality-Repository Quality-Diff Quality-Review-Evidence Quality-Leads \
+    Quality-Review-Status; do
     [ "$(printf '%s\n' "$PARSED" | grep -c "^${key}: ")" -eq 1 ] || {
       echo "quality trailer ${key} is missing or duplicated" >&2
       exit 1
     }
   done
   STAMP_POLICY="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Policy: //p' | head -1)"
+  STAMP_LEADS="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Leads: //p' | head -1)"
+  STAMP_REVIEW_STATUS="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Review-Status: //p' | head -1)"
   STAMP_AGENTS="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Agents: //p' | head -1)"
   STAMP_DOMAIN="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Domain: //p' | head -1)"
   STAMP_SELECTION="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Selection: //p' | head -1)"
@@ -87,7 +92,8 @@ if [ -n "$STAMP_CONTRACT" ]; then
   STAMP_DIFF="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Diff: //p' | head -1)"
   STAMP_EVIDENCE="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Review-Evidence: //p' | head -1)"
   SIGNATURE_V2_ARGS=(
-    --contractVersion "$STAMP_CONTRACT" --policyDigest "$STAMP_POLICY"
+    --contractVersion "$STAMP_CONTRACT" --leads "$STAMP_LEADS"
+    --reviewStatus "$STAMP_REVIEW_STATUS" --policyDigest "$STAMP_POLICY"
     --agentsSha256 "$STAMP_AGENTS" --domain "$STAMP_DOMAIN"
     --selectionRule "$STAMP_SELECTION"
     --repositoryKey "$STAMP_REPOSITORY" --diffSha256 "$STAMP_DIFF"
@@ -110,6 +116,8 @@ if [ -n "$AUTHORIZATION" ] && [ "${STAMP_CONTRACT:-1}" != "$AUTH_CONTRACT" ]; th
   exit 1
 fi
 if [ -n "$AUTHORIZATION" ] && [ "$AUTH_CONTRACT" -ge 2 ] && {
+  [ "$STAMP_LEADS" != "$AUTH_LEADS" ] ||
+  [ "$STAMP_REVIEW_STATUS" != "$AUTH_REVIEW_STATUS" ] ||
   [ "$STAMP_POLICY" != "$AUTH_POLICY" ] ||
   [ "$STAMP_AGENTS" != "$AUTH_AGENTS" ] ||
   [ "$STAMP_DOMAIN" != "$AUTH_DOMAIN" ] ||

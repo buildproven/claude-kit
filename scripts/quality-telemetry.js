@@ -7,9 +7,9 @@
  * open-loop: it ran, but nothing measured whether it was worth its tokens.
  * This module closes the loop by appending ONE JSON line per finished campaign
  * to a telemetry log, from which a weekly report derives escaped-defect rate,
- * a heuristic capture-rate proxy, and cost per recorded blocking disposition.
- * The proxy is not statistical precision because the ledger does not contain
- * a false-positive denominator.
+ * AI lead/status attribution, a heuristic capture-rate proxy, and deterministic
+ * failure outcomes. The proxy is not statistical precision because the ledger
+ * does not contain a false-positive denominator.
  *
  * Every field recorded already exists in the invocation manifest — the single
  * source of campaign truth (see quality-invocation.js createManifest). We do
@@ -43,7 +43,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const TELEMETRY_SCHEMA_VERSION = 2;
+const TELEMETRY_SCHEMA_VERSION = 3;
 
 /**
  * Read a finished invocation manifest for summarization.
@@ -145,7 +145,10 @@ function coveredFiles(manifest, execFileSync) {
 /**
  * Derive the campaign verdict from persisted state alone — no model judgment.
  *
- *  - "authorized"   : merge requested and the judge cleared it (0 blocking).
+ * Version 2 derives completion from exact-head discovery attestation; legacy
+ * version 1 retains judge-based interpretation for historical records.
+ *
+ *  - "authorized"   : merge requested and deterministic authorization passed.
  *                     This is "authorized to merge", NOT "merged" — the actual
  *                     GitHub merge is async/CI-owned and can still abort after
  *                     the judge clears (red CI, stale trailers, push failure).
@@ -164,6 +167,15 @@ function coveredFiles(manifest, execFileSync) {
  *                     quality-invocation.js review-authorization.
  */
 function deriveVerdict(manifest) {
+  if ((manifest.reviewContractVersion || 1) >= 2) {
+    const hasCurrentAttestation = (manifest.reviews || []).some(
+      (review) =>
+        ["success", "exempt", "incomplete"].includes(review.status) &&
+        review.to === manifest.revisions?.currentHead,
+    );
+    if (!hasCurrentAttestation) return "incomplete";
+    return manifest.options?.merge === true ? "authorized" : "passed";
+  }
   const judge = manifest.judge;
   if (!judge || !Number.isFinite(judge.blockingCount)) return "incomplete";
   if (judge.head !== manifest.revisions?.currentHead) return "incomplete";
@@ -229,6 +241,15 @@ function reviewFields(manifest) {
       : ["codex", "gemini"].includes(provider.reviewer)
         ? "native"
         : null;
+  const currentReviews = (manifest.reviews || []).filter(
+    (review) => review.to === manifest.revisions?.currentHead,
+  );
+  const incomplete = currentReviews.some(
+    (review) => review.status === "incomplete",
+  );
+  const exempt =
+    currentReviews.length > 0 &&
+    currentReviews.every((review) => review.status === "exempt");
   return {
     // Older manifests predate the experiment and remain reportable as null.
     // All newly-created manifests persist one of these arms at creation time.
@@ -238,6 +259,18 @@ function reviewFields(manifest) {
     // Provider CLIs do not expose a stable cross-provider token counter yet.
     // Preserve the absence explicitly rather than estimating from wall time.
     reviewTokens: null,
+    reviewStatus: incomplete
+      ? "incomplete"
+      : exempt
+        ? "policy-exempt"
+        : currentReviews.length > 0
+          ? "complete"
+          : null,
+    leadCount: currentReviews.reduce(
+      (sum, review) =>
+        sum + (Number.isInteger(review.leadCount) ? review.leadCount : 0),
+      0,
+    ),
   };
 }
 
@@ -256,7 +289,12 @@ function validateRecord(record) {
     (record.reviewProvider === null ||
       typeof record.reviewProvider === "string") &&
     (record.reviewEffort === null || typeof record.reviewEffort === "string") &&
-    validTokens,
+    validTokens &&
+    [null, "complete", "incomplete", "policy-exempt"].includes(
+      record.reviewStatus,
+    ) &&
+    Number.isInteger(record.leadCount) &&
+    record.leadCount >= 0,
   );
 }
 
@@ -275,9 +313,12 @@ function buildRecord(manifest, { execFileSync, nowIso }) {
     durationSeconds: campaignDuration(manifest, nowIso),
     reviewRounds: successfulReviewCount(manifest),
     agentsRun: Array.isArray(manifest.agents) ? manifest.agents.length : 0,
-    blockingCount: Number.isFinite(judge.blockingCount)
-      ? judge.blockingCount
-      : null,
+    blockingCount:
+      (manifest.reviewContractVersion || 1) >= 2
+        ? 0
+        : Number.isFinite(judge.blockingCount)
+          ? judge.blockingCount
+          : null,
     mergeRequested: manifest.options?.merge === true,
     verdict: deriveVerdict(manifest),
     coveredFiles: coveredFiles(manifest, execFileSync),

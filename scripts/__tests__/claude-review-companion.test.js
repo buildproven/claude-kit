@@ -408,6 +408,50 @@ describe("claude-review-companion.sh", () => {
     expect(args).not.toContain("--allowedTools");
   });
 
+  it("binds Critical Claude slots to two model families", () => {
+    const d = tmpdir();
+    const bin = path.join(d, "bin");
+    const argsFile = path.join(d, "claude-args.txt");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+    fs.writeFileSync(path.join(d, "identity.json"), "{}\n");
+    fs.writeFileSync(
+      path.join(bin, "claude"),
+      `#!/usr/bin/env bash\nprintf '%s ' "$@" >> "${argsFile}"\nprintf '\\n' >> "${argsFile}"\nprintf '%s\\n' '{"structured_output":{"verdict":"approve","summary":"Clean","findings":[]},"is_error":false,"stop_reason":"end_turn"}'\n`,
+      { mode: 0o755 },
+    );
+
+    const r = run(
+      [
+        "--diff-file",
+        path.join(d, "diff.txt"),
+        "--out-dir",
+        path.join(d, "out"),
+        "--agents",
+        "code-reviewer,security-auditor",
+        "--identity-file",
+        path.join(d, "identity.json"),
+        "--tier",
+        "critical",
+        "--focus",
+        "release-veto review",
+      ],
+      { env: { PATH: `${bin}:${process.env.PATH}` } },
+    );
+
+    expect(r.code, r.stderr).toBe(0);
+    const args = fs.readFileSync(argsFile, "utf8");
+    expect(args).toContain("--model claude-sonnet-5");
+    expect(args).toContain("--model claude-opus-5");
+    const slots = ["code-reviewer", "security-auditor"].map(
+      (agent) =>
+        JSON.parse(
+          fs.readFileSync(path.join(d, "out", `${agent}.normalized.json`)),
+        )._qualitySlot,
+    );
+    expect(new Set(slots.map((slot) => slot.model)).size).toBe(2);
+  });
+
   it("preserves a complete review emitted just before watchdog termination", () => {
     const d = tmpdir();
     const bin = path.join(d, "bin");

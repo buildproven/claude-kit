@@ -37,13 +37,13 @@ const STAMP_AND_MERGE = readFileSync(
  * PASSED. These tests pin the gate that closes that hole.
  */
 describe("quality merge gates", () => {
-  it("blocks the merge when BLOCKING_COUNT is non-zero", () => {
-    expect(SKILL).toMatch(/Any BLOCKING finding must be fixed/);
-    expect(SKILL).toMatch(/BLOCKING findings remain/);
+  it("keeps deterministic failures blocking while AI leads stay advisory", () => {
+    expect(SKILL).toMatch(/zero deterministic findings/);
+    expect(SKILL).toMatch(/AI leads and completion status are advisory/);
   });
 
-  it("the blocking-findings gate runs BEFORE the trailer gate", () => {
-    const findingsGate = SKILL.indexOf("Any BLOCKING finding must be fixed");
+  it("states the deterministic-findings gate before the trailer contract", () => {
+    const findingsGate = SKILL.indexOf("zero deterministic findings");
     const trailerGate = SKILL.indexOf("Reviewed-By: quality");
     expect(findingsGate).toBeGreaterThan(-1);
     expect(trailerGate).toBeGreaterThan(-1);
@@ -587,26 +587,12 @@ describe("quality merge gates", () => {
     );
   });
 
-  it("permits CI-only coverage only for typed low-risk provider unavailability", () => {
+  it("removes synthetic CI-only clean coverage", () => {
     expect(RUN_REVIEW).toMatch(/if \[ "\$TIER" = low \]; then/);
-    expect(RUN_REVIEW).toMatch(
-      /2\) ADVISORY_FAILURE_CATEGORY=provider-unavailable/,
-    );
-    expect(RUN_REVIEW).toMatch(
-      /75\) ADVISORY_FAILURE_CATEGORY=provider-exhaustion/,
-    );
-    expect(RUN_REVIEW).toMatch(
-      /79\) ADVISORY_FAILURE_CATEGORY=provider-billing/,
-    );
-    expect(RUN_REVIEW).toMatch(
-      /76\) ADVISORY_FAILURE_CATEGORY=provider-timeout/,
-    );
-    expect(RUN_REVIEW).toMatch(/record-advisory-review/);
-    expect(RUN_REVIEW).not.toMatch(/4\) ADVISORY_FAILURE_CATEGORY=/);
-    expect(RUN_REVIEW).not.toMatch(/77\) ADVISORY_FAILURE_CATEGORY=/);
-    expect(RUN_REVIEW.indexOf('if [ "$TIER" = low ]; then')).toBeLessThan(
-      RUN_REVIEW.indexOf("❌ MERGE BLOCKED"),
-    );
+    expect(RUN_REVIEW).toMatch(/record-policy-exempt-review/);
+    expect(RUN_REVIEW).toMatch(/record-incomplete-review/);
+    expect(RUN_REVIEW).not.toMatch(/ci-only\.findings\.txt/);
+    expect(RUN_REVIEW).not.toMatch(/record-advisory-review/);
   });
 
   it("preserves conclusive findings when a later primary pass is inconclusive", () => {
@@ -757,13 +743,9 @@ describe("quality merge gates", () => {
     expect(SKILL).toMatch(/contiguous review checkpoints/);
   });
 
-  it("BLOCKING_COUNT is not merely decorative in the trailer", () => {
-    // It must be COMPARED, not just interpolated. Guard against a regression
-    // that drops the check but keeps `findings=${BLOCKING_COUNT}` in the stamp.
-    const compared =
-      /Any BLOCKING finding must be fixed/.test(SKILL) &&
-      /BLOCKING findings remain/.test(SKILL);
-    expect(compared).toBe(true);
+  it("Quality-Findings is explicitly deterministic, not a model vote", () => {
+    expect(SKILL).toMatch(/zero deterministic findings/);
+    expect(SKILL).toMatch(/lead becomes merge-blocking only when converted/);
   });
 
   /** The gate is worthless if the model never sees it — see check-skill-size.sh. */

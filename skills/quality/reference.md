@@ -379,9 +379,9 @@ on your plan.
 ### Run Governor (runaway-loop guardrails)
 
 Two PRs run in one night (#529: 128min/6 commits, #532: 167min/13 commits)
-completed with no circuit breaker — `CODEX_ROUNDS` only bounds the inner Codex
-adversarial loop, not the outer cycle of BLOCKING-finding → auto-fix →
-re-review across the whole invocation. `scripts/quality-run-governor.js`
+completed with no circuit breaker — `CODEX_ROUNDS` only bounds provider
+discovery, not the outer cycle of lead → deterministic verification → fix →
+delta discovery across the whole invocation. `scripts/quality-run-governor.js`
 tracks governor state inside the explicit invocation manifest with:
 
 - **Fix-commit cap** (`BS_QUALITY_MAX_FIX_COMMITS`, default and hard maximum
@@ -395,8 +395,9 @@ tracks governor state inside the explicit invocation manifest with:
   measured xhigh review latency; lower-risk discovery and the single
   verification reserve remain workload-scaled inside that campaign cap.
 - **Two-review convergence** — one discovery review and one targeted
-  verification are allowed. A blocker discovered by verification is reported
-  as the terminal result; it cannot trigger another fix/review recursion.
+  delta discovery are allowed. A deterministic failure discovered by
+  verification is reported as the terminal result; it cannot trigger another
+  fix/review recursion.
 - **Repeated-pattern detection** — findings are recorded round-over-round;
   if a round's findings mostly repeat a shape seen in an earlier round (e.g.
   the same on-disk-vs-loaded-job gap at 4 different call sites), the skill is
@@ -425,14 +426,15 @@ At the terminal step (SKILL.md Step 7), `scripts/quality-telemetry.js record`
 appends one JSON line per finished campaign, summarizing the invocation manifest
 — no model judgment. Fields: invocation id, repo/PR/branch, base/head SHAs,
 resolved risk tier + score, duration (from `governor.startedAtEpoch`), successful
-review rounds, agents run, judge blocking count, merge-requested flag, a derived
-verdict (`authorized` / `passed` / `blocked` / `incomplete`), and the covered file
-list (`baseSha..head`). Recording is **idempotent on invocation id** (a run that
+review rounds, agents run, AI review status and lead count, deterministic
+finding count, merge-requested flag, a derived verdict (`authorized` / `passed`
+/ `blocked` / `incomplete`), and the covered file list (`baseSha..head`).
+Recording is **idempotent on invocation id** (a run that
 both merges and reports records once) and **fail-soft on write** (a bad log path
 warns but never blocks the campaign's real outcome). A missing/unreadable
 manifest is a hard failure. The log feeds the fleet escaped-defect tagger and the
 monthly quality-value report (escaped-defect rate, heuristic capture-rate
-proxy, cost per recorded blocking disposition) — see the overlay's
+proxy, cost per deterministic failure) — see the overlay's
 `weekly-improve.sh`. The proxy is not statistical precision: its numerator and
 denominator do not record false positives.
 

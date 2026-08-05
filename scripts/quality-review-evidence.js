@@ -18,6 +18,8 @@ const FIELDS = [
 ];
 const V2_FIELDS = [
   "contractVersion",
+  "leads",
+  "reviewStatus",
   "policyDigest",
   "agentsSha256",
   "domain",
@@ -33,6 +35,7 @@ const REVIEWERS = new Set([
   "gemini",
   "ci-only",
   "policy-exempt",
+  "review-incomplete",
 ]);
 const OPERATOR_OVERRIDE_REVIEWER = "operator-quality-override";
 const UNAVAILABLE_REVIEWER = "unavailable";
@@ -79,7 +82,7 @@ function evidencePayload(fields) {
     }
     if (
       !REVIEWERS.has(fields.primary) ||
-      ["ci-only", "policy-exempt"].includes(fields.primary)
+      ["ci-only", "policy-exempt", "review-incomplete"].includes(fields.primary)
     ) {
       throw new Error("evidence primary reviewer is invalid");
     }
@@ -87,7 +90,9 @@ function evidencePayload(fields) {
     if (
       hasFallback &&
       (!REVIEWERS.has(fields.fallback) ||
-        ["ci-only", "policy-exempt"].includes(fields.fallback))
+        ["ci-only", "policy-exempt", "review-incomplete"].includes(
+          fields.fallback,
+        ))
     ) {
       throw new Error("evidence fallback reviewer is invalid");
     }
@@ -98,7 +103,9 @@ function evidencePayload(fields) {
     // unavailable. policy-exempt is the v2 contract's explicit low-risk path:
     // no provider was called and no AI verdict is represented.
     if (
-      !["ci-only", "policy-exempt"].includes(fields.reviewer) &&
+      !["ci-only", "policy-exempt", "review-incomplete"].includes(
+        fields.reviewer,
+      ) &&
       fields.reviewer !== fields.primary &&
       (!hasFallback || fields.reviewer !== fields.fallback)
     ) {
@@ -113,6 +120,15 @@ function evidencePayload(fields) {
   if (fields.reviewer === "policy-exempt" && fields.tier !== "low") {
     throw new Error("policy exemption evidence is valid only at low tier");
   }
+  if (
+    fields.reviewer === "review-incomplete" &&
+    (Number(fields.contractVersion) !== 2 ||
+      fields.reviewStatus !== "incomplete")
+  ) {
+    throw new Error(
+      "review-incomplete evidence requires contract v2 incomplete status",
+    );
+  }
   const v2 =
     fields.reviewer === "policy-exempt" ||
     V2_FIELDS.some((field) => fields[field] !== undefined);
@@ -122,6 +138,14 @@ function evidencePayload(fields) {
     }
     if (Number(fields.contractVersion) !== 2) {
       throw new Error("evidence contractVersion must be 2");
+    }
+    if (!Number.isInteger(fields.leads) || fields.leads < 0) {
+      throw new Error("evidence leads must be a non-negative integer");
+    }
+    if (
+      !["complete", "incomplete", "policy-exempt"].includes(fields.reviewStatus)
+    ) {
+      throw new Error("evidence reviewStatus is invalid");
     }
     for (const field of [
       "policyDigest",
@@ -151,6 +175,8 @@ function evidencePayload(fields) {
     ...(v2
       ? {
           contractVersion: 2,
+          leads: fields.leads,
+          reviewStatus: fields.reviewStatus,
           policyDigest: fields.policyDigest.toLowerCase(),
           agentsSha256: fields.agentsSha256.toLowerCase(),
           domain: fields.domain,
@@ -271,7 +297,9 @@ function cliFields(argv) {
     if (!key?.startsWith("--") || value === undefined) {
       throw new Error("review-evidence arguments must be --name value pairs");
     }
-    fields[key.slice(2)] = key === "--findings" ? Number(value) : value;
+    fields[key.slice(2)] = ["--findings", "--leads"].includes(key)
+      ? Number(value)
+      : value;
   }
   return fields;
 }

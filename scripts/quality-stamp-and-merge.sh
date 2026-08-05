@@ -103,6 +103,8 @@ else
       --primary "$REVIEW_PRIMARY" --fallback "$REVIEW_FALLBACK"
     )
     if [ "$REVIEW_CONTRACT" -ge 2 ]; then
+      REVIEW_LEADS="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.leads')"
+      REVIEW_STATUS="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.reviewStatus')"
       REVIEW_POLICY="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.policyDigest')"
       REVIEW_AGENTS="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.agentsSha256')"
       REVIEW_DOMAIN="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.domain')"
@@ -111,7 +113,8 @@ else
       REVIEW_DIFF="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.diffSha256')"
       REVIEW_EVIDENCE="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.evidenceSha256')"
       SIGNATURE_ARGS+=(
-        --contractVersion "$REVIEW_CONTRACT" --policyDigest "$REVIEW_POLICY"
+        --contractVersion "$REVIEW_CONTRACT" --leads "$REVIEW_LEADS"
+        --reviewStatus "$REVIEW_STATUS" --policyDigest "$REVIEW_POLICY"
         --agentsSha256 "$REVIEW_AGENTS" --domain "$REVIEW_DOMAIN"
         --selectionRule "$REVIEW_SELECTION"
         --repositoryKey "$REVIEW_REPOSITORY" --diffSha256 "$REVIEW_DIFF"

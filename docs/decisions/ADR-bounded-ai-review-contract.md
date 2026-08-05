@@ -1,99 +1,187 @@
-# ADR: Bounded AI review contract
+# ADR: Signed AI lead discovery, deterministic merge authority
 
 ## Status
 
-Accepted for BUI-652 after independent high-effort review. Implemented by this change.
+Accepted for BUI-652/BUI-657 through BUI-661. Implementation is complete only
+when the protected change passes every verification item below. This decision
+supersedes the model-judged blocking-review contract in earlier commits on this
+branch.
 
 ## Context
 
-The quality runtime currently turns risk score into a fixed prefix of a six-role Claude panel. The roles share one bounded diff, one provider model, and one base prompt. Majority completion can be recorded as a successful panel, tier-specific focus is not passed to the Claude companion, and structured findings cannot carry reproduction or static-proof evidence. Low-risk provider unavailability can also be represented as a synthetic clean `ci-only` review.
+The former quality runtime treated several correlated model invocations as a
+merge verdict. The roles shared one diff, prompt shape, pinned model, and
+tool-less execution. Majority completion, prose severity, and a second model
+judge overstated the independence and meaning of that evidence. Provider
+failure at Low could also be serialized as a synthetic clean `ci-only` review.
 
-This makes review cost scale mainly with filenames and panel width while overstating the independence and completeness of the resulting evidence. Exact-head identity, signed evidence, deterministic gates, CI freshness, and branch protection are separate strengths and must remain unchanged.
+AI review is useful stochastic defect discovery, but it is not proof that a
+change is correct. SWR-Bench reports substantial run-to-run variation and low
+precision for current automated review systems. Research on intrinsic
+self-correction likewise shows that another model opinion is not a reliable
+substitute for external feedback.
+
+An attempted design on this branch added a fresh settlement model. Independent
+architecture review found that a semantic `REFUTED` outcome still depended on
+model prose. Hashing an unrelated passing test cannot prove that the test covers
+the claimed execution path. Making `UNRESOLVED` block would preserve the false-
+positive availability problem; letting it merge would recreate a hidden
+warning loophole. The general settlement layer therefore cannot be both
+automatic and mechanically sound.
+
+Primary evidence:
+
+- [SWR-Bench, arXiv:2509.01494](https://arxiv.org/abs/2509.01494)
+- [Large Language Models Cannot Self-Correct Reasoning Yet, ICLR 2024](https://openreview.net/forum?id=IkmD3fKBPQ)
+- [Can Large Language Models Really Improve by Self-critiquing Their Own Plans?, ICLR 2025](https://openreview.net/forum?id=4O0v4s3IzY)
 
 ## Decision
 
-1. Resolve AI-review targets to Low `0`, Medium `1`, High `1`, Critical `2`.
-2. Select reviewers deterministically from the committed diff domain rather than slicing a fixed prefix. Domain classification is a versioned pure function of the complete changed-file inventory and diff content; it accepts no caller, provider, task-label, or environment input. Stamp/merge recomputes its output from the protected base and PR HEAD. One-review tiers select the first matching eligible specialist in this fixed priority order, otherwise `code-reviewer`:
-   1. `security-auditor` — authentication, authorization, credentials, secrets, signing, deployment, hooks, or CI/workflow policy;
-   2. `silent-failure-hunter` — shell/runtime lifecycle, installers, retries, concurrency, error handling, or recovery;
-   3. `type-design-analyzer` — public API, schema, protocol, serialized data, or type-contract changes;
-   4. `performance-engineer` — deterministic performance-domain paths or changed performance primitives;
-   5. `pr-test-analyzer` — a Medium test-only change; it is ineligible at High/Critical, where the risk-bearing specialist or reliability backstop wins;
-   6. `architect-reviewer` — module-boundary or dependency-graph changes not matched above.
+### 1. Trust boundary
 
-   Specialist matching always evaluates rules 1–6 independently of the unconditional Critical `code-reviewer` slot. A multi-domain Medium/High diff uses the highest-priority matching role. Critical always selects two distinct roles: `code-reviewer` plus the highest-priority matching specialist; a specialist rule may never resolve to `code-reviewer`. When no domain rule matches, `silent-failure-hunter` is the designated reliability backstop. Selection output records distinct rule identities (`reliability-domain` for a real match, `critical-reliability-backstop` for no match) so the result is explainable and fixture-testable. Two is therefore a real Critical floor, not a target that selection may weaken.
+AI output is a set of review leads, never a merge verdict. Detector severity,
+agreement, absence of leads, provider availability, and model-authored
+settlement do not authorize or block a merge.
 
-   Domain selection is a cost-routing heuristic, not a security boundary or a
-   claim that keyword matching recognizes every semantic concern. A disguised
-   or novel security flow can fall through to `code-reviewer` at Medium/High;
-   deterministic security gates, risk floors, proof requirements, and branch
-   protection remain the enforcement layers. The selector must be evaluated
-   against confirmed missed-domain escapes and widened when a stable signal is
-   demonstrated; it must not pretend to solve general semantic classification.
+Merge authority remains deterministic gates, CI, exact-head freshness, signed
+evidence, mutation checks, and branch protection. A lead becomes blocking only
+when converted into deterministic evidence that already participates in those
+gates: a reproducible failing command from the repository's allowlisted gate
+contract, a regression test, or an auditable static rule executed by the
+runtime. The model may propose that conversion but cannot attest that it ran.
 
-3. Every selected reviewer must return usable schema-valid evidence. There is no majority quorum.
-4. Every exemption and AI-review artifact is signed and bound to contract version, repository, base, from/to HEADs, diff hash, resolved tier, selected roles, selection rule/domain, provider policy, and review-policy digest. The reviewed range must be the complete merge-base-to-current-HEAD diff that the merge would apply; callers cannot supply a narrowed file set, patch, or alternate base. Stamp/merge independently recomputes merge base, changed-file inventory, diff hash, risk tier, reviewer count, selected roles, and selection rule/domain from the protected target branch and PR HEAD and requires exact equality with the evidence. The policy digest is SHA-256 over canonical JSON: object keys sorted recursively; array order preserved because curve and selector priority are semantic; numbers and strings encoded as JSON; no insignificant whitespace. It covers the built-in target curve, effective repository overrides, selector/classifier version, exemption semantics, and proof schema version. Policy drift invalidates completed evidence rather than grandfathering a weaker reviewer set.
+The signed trailer distinguishes:
 
-   Low risk requires a policy-exemption artifact with `aiReviewRequired: false` rather than a synthetic clean provider verdict. The exemption is mandatory evidence at Low whenever the current admission policy permits it; absent or malformed exemption evidence fails closed. Both recorded and recomputed tiers must be Low. Medium and above reject the exemption regardless of manifest content. Merge authorization may use it only with current deterministic gates, CI, freshness, and branch protection. If signing is unavailable, authorization blocks. If a superseding policy removes or narrows the exemption, the old campaign terminalizes and a new campaign must resolve under the current policy. The existing Low manifest is never mutated or silently degraded.
+- `Quality-Leads`: raw AI leads produced for the exact HEAD;
+- `Quality-Review-Status`: `complete`, `incomplete`, or `policy-exempt`;
+- `Quality-Findings`: deterministic unresolved failures, which remains the
+  existing merge-blocking count.
 
-5. Tier and verification focus are required fields in every provider prompt artifact, including the Claude companion. Prompt construction refuses to invoke a provider when either is absent, and the prompt artifact hash covers both values.
-6. Every provider finding includes a concrete failure scenario and a proof object. Proof is one of `reproduction`, `regression-test`, or `static-analysis`, with non-empty evidence. Static-analysis proof must identify changed file and line spans present in the reviewed diff and give a falsifiable input/execution path. The verifier checks span coverage; the judge separately assesses the execution-path reasoning and must record why it is sufficient for BLOCKING or why the finding is downgraded. A schema-valid finding whose reasoning is insufficient remains a preserved `WARNING` with the judge reason; the review is usable and complete, but the warning is not erased or counted as a clean provider finding set. Only zero `BLOCKING` dispositions authorize merge. A finding without structurally valid proof is schema-invalid provider content: it fails the checkpoint, is not silently clean, and is not retryable.
-7. One initial review and one post-remediation delta review remain the hard limit. A provider may be retried once only for a typed transport failure, timeout/absent response, or a response that cannot be parsed at all. After that retry, any selected reviewer with no usable response atomically terminalizes the campaign as `provider-incomplete`; parsed but schema-invalid content terminalizes it as `provider-contract-failed`. Either state forbids provider re-entry for that campaign. Evidence reuse requires an exact match on repository, base, from/to HEADs, diff hash, contract version, provider policy, verification focus, and effective review-policy digest; an unchanged HEAD alone is insufficient. Matching evidence is reused, not rerun for a preferable verdict.
+No unavailable or incomplete AI run is represented as clean. It is signed as
+`incomplete`; because AI is advisory, it does not gain merge authority by being
+complete and does not remove deterministic merge authority by being
+unavailable.
 
-The selected review roles are complementary perspectives, not statistically independent votes. Agreement does not promote severity. Critical keeps two roles for domain coverage; cross-provider corroboration may be added later only if the evidence schema can identify both providers without weakening exact-head coverage. The reduction is justified by the verified current implementation using one shared bounded context, one pinned provider model, no tools, and fixed role suffixes; retained telemetry is used only as a cost alarm, not as proof of reviewer accuracy. After deployment, telemetry must report provider execution separately. The weekly quality-value job audits the first 30 Medium+ terminal campaigns, with an interim audit at day 30 and a mandatory available-sample audit at day 90; if fewer than 30 exist, monthly audits continue and are labeled inconclusive. A post-merge defect counts only when its Linear issue or linked fix PR identifies a concrete missed domain and a human or independent review confirms that the omitted specialist was mapped to that domain by this selector. Two confirmed attributable escapes at the same tier trigger rollback of that tier to its version-1 reviewer count until a corrected selector passes protected delivery. Raw heuristic fix-overlap counts do not trigger rollback.
+### 2. Discovery depth and selection
 
-## Alternatives
+Targets are Low `0`, Medium `1`, High `1`, Critical `2`. Counts and deterministic
+domain selection deploy atomically. Repository configuration cannot change
+these built-in score-band targets; a differing curve is rejected as visible
+policy drift.
 
-- **Tests only:** rejected because deterministic gates cannot discover requirements and failure modes they never encoded.
-- **Keep the six-role majority panel:** rejected because shared provider context makes the votes correlated and review cost grows without demonstrated additional findings.
-- **Require two providers for every Critical change:** deferred because current coverage and signature schemas model one provider checkpoint. Retrofitting overlapping provider coverage in this change would enlarge the authorization surface.
-- **Delete path-based risk floors:** rejected because path is the only reliable signal for missing, truncated, or binary patches.
+Low performs no provider invocation and records a signed exact-head
+`policy-exempt` attestation. Medium and High select one domain-appropriate role
+from the complete committed diff. Critical selects a general reviewer and a
+distinct specialist or reliability backstop.
+
+Critical attempts provider/model-family diversity when the configured providers
+support it and records the effective identity per slot. Missing diversity is
+recorded as incomplete discovery, not silently called independent evidence and
+not converted into a merge block. This availability behavior is safe because
+the AI status has no merge authority.
+
+Domain selection is a versioned cost-routing heuristic, not a security
+boundary. It consumes the complete changed-file inventory and diff content,
+accepts no caller-supplied narrowing, and is recomputed during stamping. Stable
+path evidence remains a fallback when content is missing, truncated, or binary.
+
+### 3. Completion and retries
+
+Every selected slot either returns schema-valid evidence or records a typed
+incomplete state. There is no majority quorum, severity promotion, vote, or
+model judge.
+
+Each slot gets one initial attempt and at most one replacement with a different
+provider for rc `2` (unavailable), `75` (quota), `76` (timeout), `77` (governor
+declined before launch), `79` (billing), or rc `4` when no schema-valid object
+could be extracted. Parsed schema-invalid content is not retried. Attempt and
+wall-clock caps remain finite and manifest-bound.
+
+The legacy `ci-only` synthetic-clean execution path is unreachable for version
+2 and retained only by the historical version-1 reader until migration deletes
+that reader. Version 2 cannot create or authorize it. The correlated
+adversarial-vote script is deleted. Low never calls a provider, so there is no
+Low provider-failure exception to preserve.
+
+### 4. Leads and remediation
+
+Each lead carries its detector identity, changed file and line, concrete failure
+scenario, and proposed verification path. The signed artifact inventory binds
+the immutable source artifact hash. All leads are preserved as a union.
+Agreement, intersection, frequency, or another model's opinion does not
+suppress or promote them.
+
+The delivery agent reads each lead as a hypothesis, reproduces or refutes it
+against source and deterministic execution, and may make one batched fix commit.
+Any fix changes HEAD and therefore requires a delta discovery attestation. The
+hard limit remains one initial round, at most one batched fix, and one delta
+round. After that, remaining decisions require the existing signed operator
+override; the evidence is not rewritten as clean.
+
+### 5. Authorization and evidence
+
+Signed evidence binds contract version, repository, protected base, reviewed
+HEAD, complete diff hash, risk tier, policy digest, selected slots, effective
+provider/model identities, prompt/focus hashes, discovery artifacts, lead count,
+review status, deterministic gates, and mutation evidence.
+
+Authorization requires deterministic gates and CI green, exact-head freshness,
+current signed evidence, and branch protection. It does not require zero AI
+leads or a model clean verdict. `Quality-Findings == 0` continues to mean zero
+deterministic unresolved failures, never zero model suggestions.
+
+## Ordering
+
+The executable contract ships atomically within one protected change:
+
+1. lead/status evidence fields and authorization semantics;
+2. domain selection and `0/1/1/2` targets;
+3. removal of judge, majority, agreement promotion, and synthetic clean paths;
+4. typed incomplete states and bounded replacement;
+5. prompt/focus/model identity propagation;
+6. telemetry terminology and attribution.
+
+Counts must not deploy before the advisory authorization boundary. Reducing
+discovery while an old model verdict still authorizes merges is a fail-open.
+Risk-score path/content refinement follows telemetry because it has the highest
+classification regression risk.
 
 ## Invariants
 
-- Deterministic gates, mutation checks, CI, exact-head freshness, signed evidence, merge authority, and branch protection are unchanged.
-- Medium and above never receive an AI-review exemption.
-- Missing, malformed, incomplete, stale, or unproved evidence required by the resolved contract fails closed. At Low, the required evidence is the signed policy exemption; at Medium and above, it is completed AI-review evidence.
-- Preserved `WARNING` and `SUPPRESSED` dispositions remain auditable but do not block merge; authorization requires exactly zero `BLOCKING` dispositions.
-- Review-policy digest mismatch is stale evidence. On the next manifest-mutating operation or authorization check, the invocation runtime atomically records terminal state `policy-superseded` and rejects the operation. Terminal historical evidence remains readable but never authorizes a new merge.
-- A policy exemption is distinguishable from an AI approval in manifests, telemetry, merge evidence, and signatures.
-- Provider output cannot choose its own risk tier, reviewer count, or merge authority.
-- Repository configuration cannot weaken the built-in reviewer-count floor for a risk tier.
-
-## Migration and rollback
-
-New campaigns persist `reviewContractVersion: 2` and use the new contract. Existing manifests without that field are version 1: they remain readable and cannot acquire version-2 exemption or proof evidence, while shared verification may enforce a stronger all-selected completion rule. A version-2 manifest cannot be rewritten to version 1.
-
-Rollback means restoring the prior target curve and selector for newly created campaigns while retaining the version-2 reader/verifier. The invocation runtime owns lazy migration: on the next manifest-mutating operation or authorization check it recomputes the current policy digest, atomically terminalizes a non-terminal mismatch as `policy-superseded`, and requires restart. No deploy-time sweep is required. Historical version-2 evidence remains auditable but cannot authorize a new merge after digest drift. Deploying an old binary that cannot read version 2 is not a supported rollback; new-campaign admission must be stopped until a compatibility build is installed.
+- Exact-head binding, signing, CI, mutation checks, and branch protection are
+  never weakened.
+- AI completion, absence, severity, or agreement never changes merge authority.
+- Missing AI evidence is called `incomplete`, never clean or passed.
+- Provider output cannot choose risk tier, reviewer count, merge authority, or
+  its evidence identity.
+- No free-form model command is executed.
+- Historical evidence remains readable but policy drift cannot authorize a new
+  merge.
 
 ## Verification
 
-- Public CLI tests prove each tier selects the expected count and domain role.
-- Mutation tests show removing a selected reviewer blocks the checkpoint.
-- Schema fixtures prove findings without failure scenario or proof are rejected and valid proof survives judge immutability checks.
-- Low-risk fixtures prove the signed, exact-head exemption is mandatory, risk is recomputed, tampering fails, and exemption evidence is rejected at Medium/High/Critical; the former synthetic `ci-only` path cannot authorize a version-2 campaign.
-- Prompt fixtures prove tier/focus reaches Claude.
-- Prompt fixtures prove missing tier or focus blocks provider invocation and both values affect the artifact hash.
-- Retry fixtures prove transport/unparseable failures get at most one retry while parsed schema-invalid findings get none.
-- Version fixtures prove version-1 campaigns retain old semantics, version-2 campaigns cannot downgrade, and version-2 exemption evidence remains readable after target-curve rollback.
-- Configuration fixtures prove repository policy cannot lower the built-in reviewer-count floor.
-- Critical no-domain fixtures prove the designated reliability backstop preserves the two-reviewer floor.
-- Critical specialist fixtures prove matching is independent of the unconditional `code-reviewer` slot and always yields two distinct roles.
-- Policy-digest fixtures prove a historical Low exemption stays readable but cannot authorize after curve, selector, or exemption-policy changes.
-- Ordinary AI-evidence fixtures prove policy drift invalidates Medium/High/Critical authorization too.
-- Judge fixtures prove insufficient static reasoning is retained as a reasoned WARNING rather than erased or treated as malformed.
-- Judge fixtures prove preserved warnings do not block while any blocking disposition does.
-- Rollback fixtures prove non-terminal mismatched campaigns become `policy-superseded` and require restart.
-- Reuse fixtures prove a changed verification focus invalidates otherwise identical evidence.
-- Authorization fixtures prove narrowed file sets, alternate bases, changed from/to heads, or changed diff hashes cannot authorize the complete merge.
-- Authorization fixtures prove signed tier, reviewer count, selected roles, and selection rule/domain must exactly match stamp-time recomputation.
-- Provider fixtures prove schema-invalid content terminalizes as `provider-contract-failed` and cannot re-enter review.
-- Provider fixtures prove one-of-two missing Critical evidence gets one typed retry, then terminalizes as `provider-incomplete` and cannot authorize or re-enter review.
-- Existing exact-head coverage, signature, CI, and merge-gate suites remain green.
-- Full `scripts/verify` passes before protected delivery.
+- Tier fixtures prove `0/1/1/2`, atomic selection, and rejection of lowered
+  repository targets.
+- Low fixtures prove no provider invocation and no `ci-only` artifact or signer.
+- Completion fixtures prove every selected slot is accounted for and retry
+  categories are bounded.
+- Lead fixtures prove union preservation, immutable identity, and no
+  agreement-based promotion or suppression.
+- Authorization fixtures prove AI leads and incomplete AI status cannot bypass
+  or veto deterministic gates.
+- Tamper fixtures prove missing, altered, stale, or narrowed evidence cannot
+  authorize.
+- Full tests, lint, formatting, security, license, mutation, exact-head review,
+  protected CI, and merge gates pass before delivery.
 
-## Independent review
+## Measurement and rollback
 
-Passes one through four: BLOCK. Resolved Low exemption integrity, deterministic specialist ordering, retry classification, versioned migration, all-tier policy-digest binding, warning preservation, complete-diff authorization, and rollback state.
+Telemetry records every terminal campaign with discovery status, provider time,
+gate time, slot identities, lead count, deterministic finding count, and merge
+result. It does not label heuristic ratios as precision.
 
-Final bounded Opus/high review: **APPROVE**. No blocking or high-severity contract defect remained.
+After 20 Medium+ campaigns, evaluate median campaign time, terminal telemetry
+coverage, leads converted to deterministic failures, attributable escaped
+defects, and defects in the quality machinery. If discovery does not justify its
+cost, remove AI from the required campaign entirely and retain it as an optional
+developer aid. This rollback cannot weaken deterministic merge authority.

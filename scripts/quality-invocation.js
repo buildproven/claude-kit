@@ -1152,6 +1152,7 @@ function parseOptions(args) {
         "--skip",
         "--advisory",
         "--exempt",
+        "--incomplete",
         "--verify-app",
         "--read",
       ].includes(name)
@@ -2521,7 +2522,7 @@ function reviewInfo(manifest) {
 
 function coveredReviews(manifest) {
   return manifest.reviews.filter((review) =>
-    ["success", "advisory", "exempt"].includes(review.status),
+    ["success", "advisory", "exempt", "incomplete"].includes(review.status),
   );
 }
 
@@ -2755,13 +2756,20 @@ function providerFindings(manifest) {
     );
   };
   for (const review of coveredReviews(manifest)) {
-    if (review.status === "exempt") continue;
+    if (
+      review.status === "exempt" ||
+      (review.status === "incomplete" &&
+        review.provider === "review-incomplete")
+    )
+      continue;
     const reviewFindingsStart = findings.length;
     usableReviewerReports = 0;
     requiredUsableReports = 0;
     quorumPanelSize = 0;
     let structuredProviderReports = 0;
     const structuredProviderNames = new Set();
+    const claudeSlotModels = new Set();
+    const claudeSlotRoles = new Set();
     // Reset too: a malformed agent in round 1 must not be reported against
     // round 2's panel now that the quorum is evaluated inside the loop.
     inconclusiveAgents = [];
@@ -2826,6 +2834,10 @@ function providerFindings(manifest) {
       }
       const resultProvider = item.provider || inventory.provider;
       structuredProviderNames.add(resultProvider);
+      if (resultProvider === "claude" && parsed._qualitySlot) {
+        claudeSlotModels.add(parsed._qualitySlot.model);
+        claudeSlotRoles.add(parsed._qualitySlot.role);
+      }
       // Preserved primary evidence stays authoritative for its findings, but
       // only the selected panel can contribute a verdict toward that panel's
       // quorum. This matters when Claude falls back after a partial Codex run.
@@ -2995,6 +3007,17 @@ function providerFindings(manifest) {
       });
     }
     assertV2FindingProof(manifest, review, findings.slice(reviewFindingsStart));
+    if (
+      (manifest.reviewContractVersion || 1) >= 2 &&
+      manifest.risk.tier === "critical" &&
+      inventory.provider === "claude" &&
+      (claudeSlotModels.size < 2 ||
+        manifest.agents.some((agent) => !claudeSlotRoles.has(agent)))
+    ) {
+      throw new Error(
+        "critical Claude discovery lacks two role-bound model families",
+      );
+    }
     // Fail closed per review, and distinctly from "actionable code findings
     // remain" — the operator needs to know THIS panel produced no usable
     // verdict, not hunt for a defect that was never described. Evaluating here
@@ -3109,13 +3132,18 @@ function recordReview(manifest, options) {
       ),
     ),
     artifactDir: path.resolve(options["artifact-dir"]),
-    status: "success",
+    status: options.incomplete === true ? "incomplete" : "success",
     tier: boundExpected.tier,
     agentsSha256: boundExpected.agentsSha256,
     incompletePanel: Boolean(manifest.panel?.incomplete),
     governorAttemptToken: authorizedAttempt.token,
     completedAt: new Date().toISOString(),
   });
+  const priorLeadCount = manifest.reviews
+    .slice(0, -1)
+    .reduce((sum, review) => sum + (review.leadCount || 0), 0);
+  manifest.reviews.at(-1).leadCount =
+    providerFindings(manifest).length - priorLeadCount;
   manifest.provider = {
     ...manifest.provider,
     primary: options.primary,
@@ -3235,6 +3263,7 @@ function recordPolicyExemptReview(manifest, options) {
     diffSha256: options["diff-sha"],
     provider: "policy-exempt",
     status: "exempt",
+    leadCount: 0,
   };
   verifyReviewArtifact(manifest, boundExpected);
   manifest.reviews.push({
@@ -3265,6 +3294,77 @@ function recordPolicyExemptReview(manifest, options) {
   };
 }
 
+function recordIncompleteReview(manifest, options) {
+  if ((manifest.reviewContractVersion || 1) < 2) {
+    throw new Error("incomplete discovery attestation requires contract v2");
+  }
+  if (manifest.risk.tier === "low") {
+    throw new Error("low risk uses policy exemption, not incomplete discovery");
+  }
+  if (manifest.governor.activeExecution?.kind === "provider") {
+    completeActiveExecution(manifest, "provider");
+  }
+  const expected = reviewInfo(manifest);
+  const authorizedAttempt = manifest.governor.authorizedAttempts.find(
+    (attempt) =>
+      attempt.number === expected.attempt &&
+      attempt.head === manifest.revisions.currentHead &&
+      attempt.consumedAt === null &&
+      !attempt.invalidatedAt,
+  );
+  if (!authorizedAttempt) {
+    throw new Error("incomplete review lacks an authorized governor attempt");
+  }
+  if (
+    options.from !== expected.from ||
+    options.to !== expected.to ||
+    path.resolve(options["artifact-dir"]) !== path.resolve(expected.artifactDir)
+  ) {
+    throw new Error("review artifact identity does not match manifest");
+  }
+  const boundExpected = {
+    ...expected,
+    tier: manifest.risk.tier,
+    agentsSha256: agentsSha256(manifest),
+    artifactDir: options["artifact-dir"],
+    diffSha256: options["diff-sha"],
+    provider: "review-incomplete",
+    status: "incomplete",
+    leadCount: 0,
+  };
+  verifyReviewArtifact(manifest, boundExpected);
+  manifest.reviews.push({
+    round: expected.round,
+    attempt: expected.attempt,
+    from: options.from,
+    to: options.to,
+    provider: "review-incomplete",
+    diffSha256: options["diff-sha"],
+    inventorySha256: sha256File(
+      path.join(
+        path.resolve(options["artifact-dir"]),
+        "artifact-inventory.json",
+      ),
+    ),
+    artifactDir: path.resolve(options["artifact-dir"]),
+    status: "incomplete",
+    failureCategory: options["failure-category"] || "provider-error",
+    failedProvider: options["failed-provider"] || "unknown",
+    tier: boundExpected.tier,
+    agentsSha256: boundExpected.agentsSha256,
+    incompletePanel: false,
+    governorAttemptToken: authorizedAttempt.token,
+    completedAt: new Date().toISOString(),
+  });
+  manifest.provider = {
+    ...manifest.provider,
+    primary: options.primary,
+    fallback: options.fallback,
+    reviewer: "review-incomplete",
+  };
+  authorizedAttempt.consumedAt = new Date().toISOString();
+}
+
 function sha256File(file) {
   return crypto
     .createHash("sha256")
@@ -3277,6 +3377,12 @@ function providerEvidenceName(name, provider) {
     return ["policy-exempt.findings.txt", "policy-exempt.result.json"].includes(
       name,
     );
+  }
+  if (provider === "review-incomplete") {
+    return [
+      "review-incomplete.findings.txt",
+      "review-incomplete.result.json",
+    ].includes(name);
   }
   if (/^primary-(?:codex|gemini|claude)-/.test(name)) return true;
   if (provider === "codex") {
@@ -3306,7 +3412,7 @@ function writeArtifactInventory(
   manifest,
   artifactDir,
   provider,
-  { advisory = false, exempt = false } = {},
+  { advisory = false, exempt = false, incomplete = false } = {},
 ) {
   const resolved = path.resolve(artifactDir);
   const info = reviewInfo(manifest);
@@ -3347,11 +3453,12 @@ function writeArtifactInventory(
     if (!text.trim()) return true;
     return text.split(/\r?\n/).some((line) => line.startsWith("INCONCLUSIVE:"));
   });
-  const panelSize = exempt
-    ? 0
-    : provider === "claude" && !advisory
-      ? manifest.agents.length
-      : findings.length;
+  const panelSize =
+    exempt || incomplete
+      ? 0
+      : provider === "claude" && !advisory
+        ? manifest.agents.length
+        : findings.length;
   const requiredUsableFindings = panelSize;
   const usableFindings = findings.length - inconclusiveFindings.length;
   if (usableFindings < requiredUsableFindings) {
@@ -3366,7 +3473,7 @@ function writeArtifactInventory(
     invocationId: manifest.invocationId,
     headSha: manifest.revisions.currentHead,
     provider,
-    status: exempt ? "exempt" : "success",
+    status: exempt ? "exempt" : incomplete ? "incomplete" : "success",
     tier: manifest.risk.tier,
     focusSha256:
       (manifest.reviewContractVersion || 1) >= 2 &&
@@ -3467,7 +3574,7 @@ function verifyInventory(manifest, review, inventoryFile, artifactDir) {
     inventory.provider ===
       (review.status === "advisory" ? review.failedProvider : review.provider);
   const usable =
-    ["success", "exempt"].includes(inventory.status) &&
+    ["success", "exempt", "incomplete"].includes(inventory.status) &&
     Array.isArray(inventory.files) &&
     inventory.files.length > 0;
   const focusFile = path.join(artifactDir, "review-focus.txt");
@@ -3590,6 +3697,18 @@ function verifyReviewAuthorization(manifest, review) {
       throw new Error("invalid advisory review coverage");
     }
     return;
+  }
+  if (review.status === "incomplete") {
+    const invalidSpecial =
+      review.provider === "review-incomplete" &&
+      (typeof review.failureCategory !== "string" || !review.failureCategory);
+    if (
+      (manifest.reviewContractVersion || 1) < 2 ||
+      manifest.risk.tier === "low" ||
+      invalidSpecial
+    ) {
+      throw new Error("invalid incomplete discovery coverage");
+    }
   }
   const authorizedAttempt = manifest.governor.authorizedAttempts.find(
     (attempt) =>
@@ -4101,6 +4220,8 @@ function reviewTrailers(manifest) {
     ...(authorization.contractVersion >= 2
       ? [
           `Quality-Contract: ${authorization.contractVersion}`,
+          `Quality-Leads: ${authorization.leads}`,
+          `Quality-Review-Status: ${authorization.reviewStatus}`,
           `Quality-Policy: ${authorization.policyDigest}`,
           `Quality-Agents: ${authorization.agentsSha256}`,
           `Quality-Domain: ${authorization.domain}`,
@@ -4162,6 +4283,8 @@ function operatorOverrideAuthorization(manifest) {
     fallback: "unavailable",
     tier: manifest.risk.tier,
     blockingCount: 0,
+    leads: 0,
+    reviewStatus: "incomplete",
     contractVersion: manifest.reviewContractVersion || 1,
     policyDigest: manifest.risk.reviewPolicyDigest || null,
     agentsSha256: agentsSha256(manifest),
@@ -4231,6 +4354,22 @@ function reviewAuthorization(manifest) {
     .createHash("sha256")
     .update(reviewedEvidence(manifest))
     .digest("hex");
+  if ((manifest.reviewContractVersion || 1) >= 2) {
+    const leads = providerFindings(manifest).length;
+    const reviewStatus = covered.every((review) => review.status === "exempt")
+      ? "policy-exempt"
+      : covered.some((review) => review.status === "incomplete")
+        ? "incomplete"
+        : "complete";
+    assertMutationEvidence(manifest);
+    return {
+      ...authorization,
+      blockingCount: 0,
+      leads,
+      reviewStatus,
+      evidenceSha256,
+    };
+  }
   assertJudgeResultFresh(manifest, covered, evidenceSha256);
   const judgeArtifact = parseJson(
     fs.readFileSync(manifest.judge.artifactPath, "utf8"),
@@ -4549,6 +4688,10 @@ const COMMANDS = {
     mutate(manifestArg, (locked) =>
       recordPolicyExemptReview(locked, parseOptions(rawArgs)),
     ),
+  "record-incomplete-review": ({ manifestArg, rawArgs }) =>
+    mutate(manifestArg, (locked) =>
+      recordIncompleteReview(locked, parseOptions(rawArgs)),
+    ),
   judge: ({ manifestArg, rawArgs }) =>
     mutate(manifestArg, (locked) => recordJudge(locked, parseOptions(rawArgs))),
   "gate-run": ({ manifestArg, rawArgs }) => {
@@ -4607,6 +4750,7 @@ const COMMANDS = {
       {
         advisory: options.advisory === true,
         exempt: options.exempt === true,
+        incomplete: options.incomplete === true,
       },
     );
   },
@@ -4707,6 +4851,7 @@ function runCommand(command, rawArgs) {
       "review-info",
       "record-review",
       "record-policy-exempt-review",
+      "record-incomplete-review",
       "inventory",
     ].includes(command)
   ) {

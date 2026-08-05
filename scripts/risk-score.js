@@ -1521,7 +1521,10 @@ function computeScore(descriptors, diffStats, cfg) {
   let topReason = "";
   for (const d of descriptors) {
     const risk = descriptorBaseRisk(d, cfg);
-    if (risk.score > base) {
+    if (
+      risk.score > base ||
+      (risk.score === base && isTestPath(topFile) && !isTestPath(d.file))
+    ) {
       base = risk.score;
       topFile = d.file;
       topReason = risk.reason;
@@ -1721,6 +1724,18 @@ function validateCurve(curve) {
   }
 }
 
+function assertBuiltInAgentCurve(curve) {
+  for (let score = 0; score <= 100; score += 1) {
+    const configured = configuredKnobs(score, { curve }).agents;
+    const builtIn = configuredKnobs(score, DEFAULTS).agents;
+    if (configured !== builtIn) {
+      throw new Error(
+        `invalid risk policy: curve may not change the built-in reviewer target at score ${score} (${configured} != ${builtIn})`,
+      );
+    }
+  }
+}
+
 function validateScoreConfig(cfg) {
   if (!["autonomous", "human-required"].includes(cfg?.mergeAuthority)) {
     throw new Error(
@@ -1781,7 +1796,9 @@ function loadConfig(repoRoot) {
     ...cfg.base,
     securityFloor: securityFloorScore(cfg),
   };
-  return validateScoreConfig(cfg);
+  validateScoreConfig(cfg);
+  assertBuiltInAgentCurve(cfg.curve);
+  return cfg;
 }
 
 // ---------------------------------------------------------------------------
