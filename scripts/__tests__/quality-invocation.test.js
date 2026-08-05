@@ -3068,7 +3068,9 @@ exit 99
     const validationState = JSON.parse(readFileSync(manifest, "utf8"));
     expect(validationState.governor.gateSecondsUsed).toBe(0);
     expect(validationState.governor.providerSecondsUsed).toBe(0);
-    expect(validationState.governor.gateSecondsLimit).toBe(600);
+    // The budget is allocated before review for both the initial exact head and
+    // the one permitted remediation head; advancing does not mint more time.
+    expect(validationState.governor.gateSecondsLimit).toBe(1200);
     expect(validationState.governor.providerSecondsLimit).toBe(900);
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
     expect(
