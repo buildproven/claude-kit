@@ -14,26 +14,24 @@ function git(cwd, args) {
 
 function fixtureTestScript(options) {
   if (options.vitestRunner) return "vitest run";
-  if (options.npmCompoundPytestRunner) return "pytest && eslint .";
-  if (options.npmPytestRunner) return "pytest -n auto";
+  if (options.npmPytestScript) return options.npmPytestScript;
   return "node logic.test.js";
 }
 
 function installPytestRunner(root, options) {
-  if (
-    !options.pytestRunner &&
-    !options.npmPytestRunner &&
-    !options.npmCompoundPytestRunner
-  ) {
+  if (!options.pytestRunner && !options.npmPytestScript) {
     return;
   }
   const bin = path.join(root, "test-bin");
   mkdirSync(bin, { recursive: true });
   writeFileSync(
     path.join(bin, "pytest"),
-    options.npmCompoundPytestRunner
+    options.npmUnsafePytestRunner
       ? `#!/usr/bin/env bash
 printf "%s\\n" "$*"
+case " $* " in
+  *" -- -x "*) exit 2 ;;
+esac
 node logic.test.js
 `
       : `#!/usr/bin/env bash
@@ -48,7 +46,7 @@ exit "$status"
 `,
     { mode: 0o755 },
   );
-  if (options.npmCompoundPytestRunner) {
+  if (options.npmUnsafePytestRunner) {
     writeFileSync(
       path.join(bin, "eslint"),
       `#!/usr/bin/env bash
@@ -382,7 +380,7 @@ describe("quality-mutation-check", () => {
     const { root, manifest } = fixture(
       "npm-pytest-fail-fast",
       "const { isAllowed } = require('./logic');\nif (!isAllowed('admin')) process.exit(1);\n",
-      { npmPytestRunner: true, checkSeconds: 3 },
+      { npmPytestScript: "pytest -n auto", checkSeconds: 3 },
     );
 
     expect(runMutation(root, manifest)).toMatch(
@@ -409,7 +407,40 @@ describe("quality-mutation-check", () => {
     const { root, manifest } = fixture(
       "npm-compound-pytest",
       "const { isAllowed } = require('./logic');\nif (typeof isAllowed !== 'function') process.exit(1);\n",
-      { npmCompoundPytestRunner: true },
+      {
+        npmPytestScript: "pytest && eslint .",
+        npmUnsafePytestRunner: true,
+      },
+    );
+
+    expect(() => runMutation(root, manifest)).toThrow(
+      /no red-capable evidence/,
+    );
+  });
+
+  it("does not append fail-fast after an npm pytest option terminator", () => {
+    const { root, manifest } = fixture(
+      "npm-pytest-terminator",
+      "const { isAllowed } = require('./logic');\nif (typeof isAllowed !== 'function') process.exit(1);\n",
+      {
+        npmPytestScript: "pytest -q --",
+        npmUnsafePytestRunner: true,
+      },
+    );
+
+    expect(() => runMutation(root, manifest)).toThrow(
+      /no red-capable evidence/,
+    );
+  });
+
+  it("does not manufacture evidence from newline-separated npm commands", () => {
+    const { root, manifest } = fixture(
+      "npm-newline-pytest",
+      "const { isAllowed } = require('./logic');\nif (typeof isAllowed !== 'function') process.exit(1);\n",
+      {
+        npmPytestScript: "pytest -q\neslint .",
+        npmUnsafePytestRunner: true,
+      },
     );
 
     expect(() => runMutation(root, manifest)).toThrow(

@@ -91,9 +91,13 @@ if [ "$TEST_EXECUTABLE" = npm ] &&
       ;;
     pytest|pytest\ *|python\ -m\ pytest|python\ -m\ pytest\ *|python3\ -m\ pytest|python3\ -m\ pytest\ *|uv\ run\ pytest|uv\ run\ pytest\ *|poetry\ run\ pytest|poetry\ run\ pytest\ *|pipenv\ run\ pytest|pipenv\ run\ pytest\ *)
       case "$TEST_SCRIPT" in
-        *[!A-Za-z0-9_./:=,@%+[:space:]-]*) ;;
-        *" -- "*) ;;
-        *) MUTATION_TEST_ARGS+=(-- -x) ;;
+        *[!A-Za-z0-9_./:=,@%+[:blank:]-]*) ;;
+        *)
+          case " $TEST_SCRIPT " in
+            *" -- "*) ;;
+            *) MUTATION_TEST_ARGS+=(-- -x) ;;
+          esac
+          ;;
       esac
       ;;
   esac
