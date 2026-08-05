@@ -50,6 +50,7 @@ if [ "$REVIEW_ROUND" -gt 1 ]; then
 else
   QUALITY_REVIEW_TIMEOUT="$(field risk.runtime.reviewSeconds)"
 fi
+
 REVIEW_DIFF_BASE="$(printf '%s' "$REVIEW_INFO" | jq -r '.from')"
 REVIEWED_HEAD="$(printf '%s' "$REVIEW_INFO" | jq -r '.to')"
 REVIEW_OUT="$(printf '%s' "$REVIEW_INFO" | jq -r '.artifactDir')"
@@ -64,12 +65,47 @@ git diff --name-only "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" > "$REVIEW_OUT/file
 git log "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" --oneline > "$REVIEW_OUT/log.txt"
 node "$SCRIPT_DIR/quality-invocation.js" review-identity "$MANIFEST" \
   > "$REVIEW_OUT/identity.json" || exit 1
+printf '%s\n' "$QUALITY_REVIEW_FOCUS" > "$REVIEW_OUT/review-focus.txt"
 PRIOR_FINDINGS_FILE=""
 PROVIDER_HEALTH="$SCRIPT_DIR/quality-provider-health.js"
 if [ "$REVIEW_ROUND" -gt 1 ]; then
   PRIOR_FINDINGS_FILE="$REVIEW_OUT/prior-findings.json"
   node "$SCRIPT_DIR/quality-invocation.js" prior-findings "$MANIFEST" \
     > "$PRIOR_FINDINGS_FILE" || exit 1
+fi
+
+if [ "$TIER" = low ]; then
+  printf '%s\n' \
+    "AI REVIEW NOT REQUIRED. This exact diff is covered by the low-risk zero-reviewer policy." \
+    > "$REVIEW_OUT/policy-exempt.findings.txt"
+  DIFF_SHA="$(shasum -a 256 "$REVIEW_OUT/diff.txt" | awk '{print $1}')"
+  jq --arg diffSha256 "$DIFF_SHA" '{
+    schemaVersion: 1,
+    aiReviewRequired: false,
+    head: .headSha,
+    tier,
+    reviewContractVersion,
+    reviewPolicyDigest,
+    agentsSha256,
+    domain: .panelDomain,
+    selectionRule: .panelRule,
+    diffSha256: $diffSha256
+  }' "$REVIEW_OUT/identity.json" > "$REVIEW_OUT/policy-exempt.result.json" || exit 1
+  node "$SCRIPT_DIR/quality-invocation.js" inventory "$MANIFEST" \
+    --artifact-dir "$REVIEW_OUT" --provider policy-exempt --exempt || exit 1
+  node "$SCRIPT_DIR/quality-invocation.js" record-policy-exempt-review "$MANIFEST" \
+    --from "$REVIEW_DIFF_BASE" \
+    --to "$REVIEWED_HEAD" \
+    --primary "$QUALITY_PRIMARY" \
+    --fallback "$QUALITY_FALLBACK" \
+    --artifact-dir "$REVIEW_OUT" \
+    --diff-sha "$DIFF_SHA" || exit 1
+  echo "ℹ️  [quality] low-risk policy requires deterministic gates and no AI reviewer." >&2
+  echo "REVIEW_OUT=$REVIEW_OUT"
+  echo "REVIEW_BASE=$RESOLVED_BASE"
+  echo "REVIEW_DIFF_BASE=$REVIEW_DIFF_BASE"
+  echo "REVIEW_PROVIDER=policy-exempt"
+  exit 0
 fi
 
 record_provider_exhaustion() {
@@ -95,6 +131,8 @@ terminal_diagnosis() {
   # at the difference. Write-once: the first cause recorded wins.
   local state
   case "$category" in
+    parser-inconclusive) state=provider-incomplete ;;
+    provider-contract-failed) state=provider-contract-failed ;;
     provider-timeout | provider-governor) state=timeout ;;
     *) state=blocked ;;
   esac
@@ -140,6 +178,8 @@ run_claude_review() {
     --identity-file "$REVIEW_OUT/identity.json" \
     --out-dir "$REVIEW_OUT" \
     --agents "$agents_csv" \
+    --tier "$TIER" \
+    --focus "$QUALITY_REVIEW_FOCUS" \
     --timeout "$attempt_timeout"
   )
   if [ "$REVIEW_ROUND" -gt 1 ]; then
@@ -556,7 +596,11 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
       ;;
     4)
       echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER review was inconclusive $FALLBACK_NOTE." >&2
-      terminal_diagnosis parser-inconclusive "$REVIEW_PROVIDER"
+      if [ -f "$REVIEW_OUT/provider-contract-failed" ]; then
+        terminal_diagnosis provider-contract-failed "$REVIEW_PROVIDER"
+      else
+        terminal_diagnosis parser-inconclusive "$REVIEW_PROVIDER"
+      fi
       ;;
     *)
       echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER review runner failed (rc=$PROVIDER_RC)." >&2

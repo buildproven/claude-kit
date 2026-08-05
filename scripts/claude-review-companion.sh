@@ -56,6 +56,8 @@ OUT_DIR=""
 DRY_RUN=false
 REVIEW_MODE=discovery
 PRIOR_FINDINGS_FILE=""
+RISK_TIER=""
+REVIEW_FOCUS=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -69,6 +71,8 @@ while [ $# -gt 0 ]; do
     --model)      MODEL="$2"; shift 2 ;;
     --review-mode) REVIEW_MODE="$2"; shift 2 ;;
     --prior-findings-file) PRIOR_FINDINGS_FILE="$2"; shift 2 ;;
+    --tier) RISK_TIER="$2"; shift 2 ;;
+    --focus) REVIEW_FOCUS="$2"; shift 2 ;;
     # --dry-run: validate args, apply guards, resolve agent files, and write a
     # DRY-RUN marker per agent — but DO NOT call `claude`. For fast, no-token
     # unit tests of the guard/degradation paths.
@@ -77,8 +81,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-if [ -z "$AGENTS" ] || [ -z "$OUT_DIR" ] || [ -z "$DIFF_FILE" ] || [ -z "$IDENTITY_FILE" ]; then
-  echo "claude-review-companion: --agents, --out-dir, --diff-file, --identity-file required" >&2
+if [ -z "$AGENTS" ] || [ -z "$OUT_DIR" ] || [ -z "$DIFF_FILE" ] || [ -z "$IDENTITY_FILE" ] || [ -z "$RISK_TIER" ] || [ -z "$REVIEW_FOCUS" ]; then
+  echo "claude-review-companion: --agents, --out-dir, --diff-file, --identity-file, --tier, --focus required" >&2
   exit 1
 fi
 if [ "$REVIEW_MODE" = verification ] &&
@@ -158,6 +162,8 @@ CTX_FILE="$OUT_DIR/review-context.txt"
 {
   echo "Review ONLY the following diff. Do NOT scan unchanged code."
   echo "Review mode: $REVIEW_MODE"
+  echo "Risk tier: $RISK_TIER"
+  echo "Review focus: $REVIEW_FOCUS"
   if [ "$REVIEW_MODE" = verification ]; then
     echo
     echo "## Prior findings to verify"
@@ -371,11 +377,15 @@ run_agent() {
           (.severity | type) == "string" and
           (.title | type) == "string" and (.title | test("\\S")) and
           (.body | type) == "string" and (.body | test("\\S")) and
+          (.failure_scenario | type) == "string" and (.failure_scenario | test("\\S")) and
           (.file | type) == "string" and (.file | test("\\S")) and
           (.line_start | type) == "number" and
           (.line_start | floor) == .line_start and .line_start >= 1 and
           (.recommendation | type) == "string" and
-          (.recommendation | test("\\S"))
+          (.recommendation | test("\\S")) and
+          (.proof | type) == "object" and
+          (.proof.kind == "reproduction" or .proof.kind == "regression-test" or .proof.kind == "static-analysis") and
+          (.proof.evidence | type) == "string" and (.proof.evidence | test("\\S"))
         ) and
         (
           (.verdict == "approve" and (.findings | length) == 0) or
@@ -384,6 +394,7 @@ run_agent() {
       )
   ' > "$normalized_file" 2>/dev/null; then
     rm -f "$normalized_file"
+    : > "$OUT_DIR/provider-contract-failed"
     echo "INCONCLUSIVE: agent '$agent' structured output was missing or contradictory — human review required" > "$out"
     return 3
   fi
@@ -393,7 +404,7 @@ run_agent() {
       "NO FINDINGS. Verdict: \(.verdict). \(.summary)"
     else
       .findings[]
-      | "\(.severity): \(.file):\(.line_start) — \(.title)\n\(.body)\nFix: \(.recommendation)"
+      | "\(.severity): \(.file):\(.line_start) — \(.title)\n\(.body)\nScenario: \(.failure_scenario)\nProof (\(.proof.kind)): \(.proof.evidence)\nFix: \(.recommendation)"
     end
   ' "$normalized_file" > "$out"; then
     echo "INCONCLUSIVE: agent '$agent' structured output could not be rendered — human review required" > "$out"
@@ -421,10 +432,9 @@ if [ "$mandatory" -eq 0 ]; then
 fi
 
 # Collect each agent's rc. run_agent returns 3 for INCONCLUSIVE (timeout /
-# error / unparseable / unresolved). A strict majority of the mandatory panel
-# must return usable evidence. This tolerates one transient agent failure in a
-# four-agent panel without allowing a single surviving agent to mask a
-# degraded majority.
+# error / unparseable / unresolved). Every selected reviewer must return usable
+# evidence. Provider-level retry/fallback owns transient availability; a
+# partially completed panel is never restated as a complete review.
 inconclusive=0
 unresolved_agents=()
 provider_failure_rc=0
@@ -462,7 +472,7 @@ fi
 
 echo "claude-review-companion: wrote findings for $mandatory mandatory agent(s) to $OUT_DIR ($inconclusive inconclusive)" >&2
 usable=$((mandatory - inconclusive))
-required_usable=$((mandatory / 2 + 1))
+required_usable=$mandatory
 if [ "$usable" -lt "$required_usable" ]; then
   echo "claude-review-companion: only $usable/$mandatory mandatory agents produced usable evidence (need $required_usable) — checkpoint blocked" >&2
   exit 4

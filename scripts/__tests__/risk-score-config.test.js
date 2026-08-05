@@ -123,7 +123,7 @@ describe("score — Git-valid control-character paths", () => {
       DEFAULTS.base.securityFloor,
     );
     expect(result.knobs).toEqual({
-      agents: 6,
+      agents: 2,
       codex: "xhigh",
       codexRounds: 1,
     });
@@ -348,7 +348,7 @@ describe("score — task-type risk routing", () => {
       });
       expect(result.riskScore).toBe(DEFAULTS.base.medium);
       expect(result.knobs).toEqual({
-        agents: 4,
+        agents: 1,
         codex: "high",
         codexRounds: 1,
       });
@@ -379,7 +379,7 @@ describe("score — task-type risk routing", () => {
     expect(result.taskType).toBe("bugfix");
     expect(result.riskScore).toBe(DEFAULTS.base.low);
     expect(result.knobs).toEqual({
-      agents: 2,
+      agents: 0,
       codex: "skip",
       codexRounds: 0,
     });

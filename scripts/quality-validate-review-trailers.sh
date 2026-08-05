@@ -25,6 +25,16 @@ if [ -n "$MANIFEST" ]; then
   AUTH_FALLBACK="$(printf '%s' "$AUTHORIZATION" | jq -r '.fallback')"
   AUTH_FINDINGS="$(printf '%s' "$AUTHORIZATION" | jq -r '.blockingCount')"
   AUTH_TIER="$(printf '%s' "$AUTHORIZATION" | jq -r '.tier')"
+  AUTH_CONTRACT="$(printf '%s' "$AUTHORIZATION" | jq -r '.contractVersion // 1')"
+  if [ "$AUTH_CONTRACT" -ge 2 ]; then
+    AUTH_POLICY="$(printf '%s' "$AUTHORIZATION" | jq -r '.policyDigest')"
+    AUTH_AGENTS="$(printf '%s' "$AUTHORIZATION" | jq -r '.agentsSha256')"
+    AUTH_DOMAIN="$(printf '%s' "$AUTHORIZATION" | jq -r '.domain')"
+    AUTH_SELECTION="$(printf '%s' "$AUTHORIZATION" | jq -r '.selectionRule')"
+    AUTH_REPOSITORY="$(printf '%s' "$AUTHORIZATION" | jq -r '.repositoryKey')"
+    AUTH_DIFF="$(printf '%s' "$AUTHORIZATION" | jq -r '.diffSha256')"
+    AUTH_EVIDENCE="$(printf '%s' "$AUTHORIZATION" | jq -r '.evidenceSha256')"
+  fi
 fi
 
 PARSED="$(git log -1 --format=%B | git interpret-trailers --parse 2>/dev/null)"
@@ -45,6 +55,7 @@ STAMP_FINDINGS="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Findings: //p' | 
 STAMP_PRIMARY="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Primary: //p' | head -1)"
 STAMP_FALLBACK="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Fallback: //p' | head -1)"
 STAMP_SIGNATURE="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Evidence-Signature: //p' | head -1)"
+STAMP_CONTRACT="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Contract: //p' | head -1)"
 CURRENT_HEAD="$(git rev-parse HEAD)"
 CURRENT_PARENT="$(git rev-parse HEAD~1 2>/dev/null || true)"
 CURRENT_BASE="$(git merge-base HEAD "$BASE_REF")"
@@ -55,6 +66,34 @@ if { [ "$STAMP_HEAD" != "$CURRENT_HEAD" ] && [ "$STAMP_HEAD" != "$CURRENT_PARENT
   echo "quality trailer is stale or malformed" >&2
   exit 1
 fi
+SIGNATURE_V2_ARGS=()
+if [ -n "$STAMP_CONTRACT" ]; then
+  [ "$STAMP_CONTRACT" = 2 ] || {
+    echo "quality trailer contract version is unsupported" >&2
+    exit 1
+  }
+  for key in Quality-Policy Quality-Agents Quality-Domain Quality-Selection \
+    Quality-Repository Quality-Diff Quality-Review-Evidence; do
+    [ "$(printf '%s\n' "$PARSED" | grep -c "^${key}: ")" -eq 1 ] || {
+      echo "quality trailer ${key} is missing or duplicated" >&2
+      exit 1
+    }
+  done
+  STAMP_POLICY="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Policy: //p' | head -1)"
+  STAMP_AGENTS="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Agents: //p' | head -1)"
+  STAMP_DOMAIN="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Domain: //p' | head -1)"
+  STAMP_SELECTION="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Selection: //p' | head -1)"
+  STAMP_REPOSITORY="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Repository: //p' | head -1)"
+  STAMP_DIFF="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Diff: //p' | head -1)"
+  STAMP_EVIDENCE="$(printf '%s\n' "$PARSED" | sed -n 's/^Quality-Review-Evidence: //p' | head -1)"
+  SIGNATURE_V2_ARGS=(
+    --contractVersion "$STAMP_CONTRACT" --policyDigest "$STAMP_POLICY"
+    --agentsSha256 "$STAMP_AGENTS" --domain "$STAMP_DOMAIN"
+    --selectionRule "$STAMP_SELECTION"
+    --repositoryKey "$STAMP_REPOSITORY" --diffSha256 "$STAMP_DIFF"
+    --evidenceSha256 "$STAMP_EVIDENCE"
+  )
+fi
 if [ -n "$AUTHORIZATION" ] && {
   [ "$STAMP_HEAD" != "$AUTH_HEAD" ] || [ "$STAMP_BASE" != "$AUTH_BASE" ] ||
   [ "$STAMP_PROVIDER" != "$AUTH_PROVIDER" ] ||
@@ -64,6 +103,22 @@ if [ -n "$AUTHORIZATION" ] && {
   [ "$STAMP_TIER" != "$AUTH_TIER" ]
 }; then
   echo "quality trailer does not match manifest authorization" >&2
+  exit 1
+fi
+if [ -n "$AUTHORIZATION" ] && [ "${STAMP_CONTRACT:-1}" != "$AUTH_CONTRACT" ]; then
+  echo "quality trailer contract does not match manifest authorization" >&2
+  exit 1
+fi
+if [ -n "$AUTHORIZATION" ] && [ "$AUTH_CONTRACT" -ge 2 ] && {
+  [ "$STAMP_POLICY" != "$AUTH_POLICY" ] ||
+  [ "$STAMP_AGENTS" != "$AUTH_AGENTS" ] ||
+  [ "$STAMP_DOMAIN" != "$AUTH_DOMAIN" ] ||
+  [ "$STAMP_SELECTION" != "$AUTH_SELECTION" ] ||
+  [ "$STAMP_REPOSITORY" != "$AUTH_REPOSITORY" ] ||
+  [ "$STAMP_DIFF" != "$AUTH_DIFF" ] ||
+  [ "$STAMP_EVIDENCE" != "$AUTH_EVIDENCE" ]
+}; then
+  echo "quality policy trailers do not match manifest authorization" >&2
   exit 1
 fi
 if [ "$STAMP_HEAD" = "$CURRENT_PARENT" ] && ! git diff --quiet HEAD~1 HEAD; then
@@ -90,6 +145,7 @@ if [ "$REQUIRE_SIGNATURE" = true ]; then
     --head "$STAMP_HEAD" --base "$STAMP_BASE" --tier "$STAMP_TIER" \
     --findings "$STAMP_FINDINGS" --reviewer "$STAMP_PROVIDER" \
     --primary "$STAMP_PRIMARY" --fallback "$STAMP_FALLBACK" \
+    "${SIGNATURE_V2_ARGS[@]}" \
     --signature "$STAMP_SIGNATURE" || exit 1
 fi
 

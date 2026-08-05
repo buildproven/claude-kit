@@ -617,31 +617,31 @@ describe("score — base resolution is deterministic and fails closed", () => {
 
 // ─── score → knobs (Moderate curve) ──────────────────────────────────────────
 
-describe("scoreToKnobs — Moderate curve", () => {
-  it("score 10 → 2 agents, no codex", () => {
+describe("scoreToKnobs — bounded independent review", () => {
+  it("score 10 → deterministic gates only", () => {
     expect(scoreToKnobs(10, DEFAULTS)).toEqual({
-      agents: 2,
+      agents: 0,
       codex: "skip",
       codexRounds: 0,
     });
   });
-  it("score 40 → 4 agents, codex high x1", () => {
+  it("score 40 → one focused reviewer", () => {
     expect(scoreToKnobs(40, DEFAULTS)).toEqual({
-      agents: 4,
+      agents: 1,
       codex: "high",
       codexRounds: 1,
     });
   });
-  it("score 70 → 6 agents, codex high x1", () => {
+  it("score 70 → one focused reviewer", () => {
     expect(scoreToKnobs(70, DEFAULTS)).toEqual({
-      agents: 6,
+      agents: 1,
       codex: "high",
       codexRounds: 1,
     });
   });
-  it("score 90 → 6 agents, one xhigh discovery pass", () => {
+  it("score 90 → two complementary reviewers", () => {
     expect(scoreToKnobs(90, DEFAULTS)).toEqual({
-      agents: 6,
+      agents: 2,
       codex: "xhigh",
       codexRounds: 1,
     });
@@ -652,6 +652,13 @@ describe("scoreToKnobs — Moderate curve", () => {
       curve: [{ maxScore: 100, agents: 2, codex: "skip", codexRounds: 0 }],
     });
     expect(scoreToKnobs(80, cfg).codex).not.toBe("skip");
+  });
+  it("does not let repository curves restore oversized correlated panels", () => {
+    const cfg = deepMerge(DEFAULTS, {
+      curve: [{ maxScore: 100, agents: 9, codex: "xhigh", codexRounds: 1 }],
+    });
+    expect(scoreToKnobs(40, cfg).agents).toBe(1);
+    expect(scoreToKnobs(90, cfg).agents).toBe(2);
   });
   it("a repo-committed curve cannot weaken review below the built-in baseline for scores under 75", () => {
     // BUI-603 #2: previously the baseline clamp only fired at
@@ -674,7 +681,7 @@ describe("scoreToKnobs — Moderate curve", () => {
         codexForceFloor: 101,
       });
       expect(scoreToKnobs(score, cfg)).toEqual({
-        agents: 6,
+        agents: 2,
         codex: "xhigh",
         codexRounds: 1,
       });
