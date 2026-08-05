@@ -548,6 +548,9 @@ describe("repository merge lease", () => {
     const { manifestPath } = fixture("merge-reconcile");
     const owner = lease.acquire(manifestPath);
     lease.acquireMergeGuard(manifestPath, owner.token, { admin: true });
+    expect(() =>
+      lease.release(manifestPath, owner.token, "provider-incomplete"),
+    ).toThrow(/quarantined/);
     expect(lease.status(manifestPath).mergeGuard).toMatchObject({
       admin: true,
       adminReason: "ci-billing-waiver",
@@ -640,6 +643,9 @@ printf '%s\\n' '${JSON.stringify({
     });
     const successor = lease.acquire(second.manifestPath, { waitMs: 0 });
     expect(successor.generation).toBe(1);
+    expect(
+      invocation.loadManifest(first.manifestPath).manifest.terminalState,
+    ).toMatchObject({ state: "merged", head: manifest.revisions.currentHead });
     lease.release(second.manifestPath, successor.token, "test-complete");
     expect(owner.token).not.toBe(successor.token);
   });
@@ -659,5 +665,39 @@ printf '%s\\n' '${JSON.stringify({
         delete process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
       else process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = previous;
     }
+  });
+
+  it("does not reclaim an unverified released lease with a merge guard", () => {
+    const first = fixture("unverified-release-guard");
+    const owner = lease.acquire(first.manifestPath);
+    lease.acquireMergeGuard(first.manifestPath, owner.token);
+    const { manifest } = invocation.loadManifest(first.manifestPath);
+    const paths = lease._pathsFor(FIXTURE_REPOSITORY, manifest);
+    const record = JSON.parse(
+      fs.readFileSync(path.join(paths.lease, "owner.json"), "utf8"),
+    );
+    record.disposition = "released";
+    record.releaseReason = "provider-incomplete";
+    fs.writeFileSync(
+      path.join(paths.lease, "owner.json"),
+      `${JSON.stringify(record, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    const second = fixture("unverified-release-successor", {
+      linkedFrom: first,
+      repoKey: first.repoKey,
+      advanceHead: true,
+    });
+    expect(() => lease.acquire(second.manifestPath, { waitMs: 0 })).toThrow(
+      /quarantined/,
+    );
+    record.disposition = "active";
+    fs.writeFileSync(
+      path.join(paths.lease, "owner.json"),
+      `${JSON.stringify(record, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    lease.releaseMergeGuard(first.manifestPath, owner.token, "not-started");
+    lease.release(first.manifestPath, owner.token, "test-complete");
   });
 });

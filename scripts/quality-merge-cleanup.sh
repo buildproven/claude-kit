@@ -27,21 +27,25 @@ if [ -n "$MANIFEST" ] && [ -f "$MANIFEST" ]; then
       LEASE_RESULT="$(node "$SCRIPT_DIR/quality-repo-lease.js" release-if-merged \
         --manifest "$MANIFEST")" || LEASE_RESULT=error
       if [ "$LEASE_RESULT" = error ]; then
+        PRESERVE_BRANCH=true
         echo "[quality] merge succeeded; repository lease reconciliation failed." >&2
         echo "  Recovery: node \"$SCRIPT_DIR/quality-repo-lease.js\" status --manifest \"$MANIFEST\"" >&2
       elif [ "$(printf '%s' "$LEASE_RESULT" | jq -r '.reconciled // false')" != true ]; then
         LEASE_STATUS="$(node "$SCRIPT_DIR/quality-repo-lease.js" status \
           --manifest "$MANIFEST" 2>/dev/null || true)"
         if [ "$(printf '%s' "$LEASE_STATUS" | jq -r '.mergeGuard != null' 2>/dev/null)" = true ]; then
+          PRESERVE_BRANCH=true
           INVOCATION_ID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" invocationId)"
           PR="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" repo.pr)"
           echo "[quality] merge succeeded; repository merge remains quarantined pending exact remote verification." >&2
           echo "  Recovery: node \"$SCRIPT_DIR/quality-repo-lease.js\" reconcile-merge --manifest \"$MANIFEST\" --confirm-owner-invocation-id \"$INVOCATION_ID\" --confirm-owner-pr \"$PR\"" >&2
         else
+          PRESERVE_BRANCH=true
           echo "[quality] merge succeeded; repository lease remains active because GitHub did not prove the exact head merged." >&2
         fi
       fi
     else
+      PRESERVE_BRANCH=true
       echo "[quality] merge succeeded; repository lease cleanup was fenced; resume the exact campaign shown by lease status." >&2
     fi
   fi

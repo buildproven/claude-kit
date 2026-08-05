@@ -132,6 +132,8 @@ describe("quality merge gates", () => {
     expect(REPOSITORY_LEASE).toMatch(/remote\.state === "MERGED"/);
     expect(REPOSITORY_LEASE).toMatch(/remote\.mergeCommit\?\.oid/);
     expect(AUTHORIZE).toMatch(/quality-repo-lease\.js" merge/);
+    expect(AUTHORIZE).toMatch(/--expected-head "\$ACTUAL_HEAD"/);
+    expect(REPOSITORY_LEASE).toMatch(/options\.expectedHead !== head/);
   });
 
   it("keeps post-merge cleanup on the phase-pinned lease credential", () => {
@@ -143,6 +145,7 @@ describe("quality merge gates", () => {
     expect(MERGE_CLEANUP).toMatch(/LEASE_RESULT="\$\(node/);
     expect(MERGE_CLEANUP).toMatch(/\.reconciled \/\/ false/);
     expect(MERGE_CLEANUP).toMatch(/repository merge remains quarantined/);
+    expect(MERGE_CLEANUP).toMatch(/PRESERVE_BRANCH=true/);
     expect(REPOSITORY_LEASE).toMatch(
       /function releaseMergeGuard[\s\S]*withMetadataGuard/,
     );

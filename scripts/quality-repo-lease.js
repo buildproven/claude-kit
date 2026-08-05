@@ -143,7 +143,9 @@ function readRegularFile(file, label) {
       0o600,
     );
   } catch (error) {
-    if (error.code === "ELOOP") {
+    // Linux reports ELOOP for O_NOFOLLOW on a symlink; Darwin/BSD may report
+    // EMLINK. Both mean the defensive single-descriptor read refused a link.
+    if (["ELOOP", "EMLINK"].includes(error.code)) {
       throw new Error(`${label} must be a non-symlink regular file`, {
         cause: error,
       });
@@ -484,6 +486,22 @@ function acquireOnce(manifestPath, options = {}) {
       if (fs.existsSync(paths.lease)) {
         const current = leaseRecord(paths.lease);
         if (current.disposition === "released") {
+          const remotelyVerified = String(
+            current.releaseReason || "",
+          ).startsWith("verified-remote-");
+          if (fs.existsSync(paths.mergeGuard)) {
+            if (!remotelyVerified) {
+              throw new Error(
+                "ambiguous merge operation is quarantined; reconcile GitHub before acquiring another repository lease",
+              );
+            }
+          }
+          if (
+            current.releaseReason === "verified-remote-merged" &&
+            fs.existsSync(current.manifestPath)
+          ) {
+            recordMergedTerminalRaw(current.manifestPath);
+          }
           if (fs.existsSync(paths.mergeGuard)) {
             const releasedGuard = tombstone(paths.mergeGuard);
             exactCleanup(releasedGuard);
@@ -695,6 +713,11 @@ function release(manifestPath, presentedToken, reason = "completed") {
   if (loaded.manifest.options?.merge !== true) return false;
   const tuple = ownerTuple(loaded.manifest, loaded.manifestPath);
   return withMetadataGuard(loaded.manifest, (paths) => {
+    if (fs.existsSync(paths.mergeGuard)) {
+      throw new Error(
+        "ambiguous merge operation is quarantined; reconcile GitHub before releasing the repository lease",
+      );
+    }
     const record = leaseRecord(paths.lease);
     if (
       record.disposition !== "active" ||
@@ -1018,6 +1041,11 @@ function performMerge(manifestPath, presentedToken, options = {}) {
   const expectedRepository = manifest.repo.githubRepository;
   const pr = String(manifest.repo.pr);
   const head = mergeHead(manifest);
+  if (options.expectedHead !== head) {
+    throw new Error(
+      `validated PR head ${options.expectedHead || "missing"} does not match manifest merge head ${head}`,
+    );
+  }
   acquireMergeGuard(manifestPath, presentedToken, options);
   try {
     assertBase(manifestPath, presentedToken);
@@ -1139,6 +1167,7 @@ function commandHandlers(manifest, options) {
     merge: () =>
       performMerge(manifest, presentedToken(), {
         admin: options.admin === "true",
+        expectedHead: options["expected-head"],
       }),
     "release-if-merged": () => releaseIfMerged(manifest, presentedToken()),
     "reconcile-merge": () =>

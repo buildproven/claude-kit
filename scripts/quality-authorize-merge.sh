@@ -429,6 +429,7 @@ if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
 fi
 if node "$SCRIPT_DIR/quality-repo-lease.js" merge \
   --manifest "$MANIFEST" \
+  --expected-head "$ACTUAL_HEAD" \
   --admin "$LEASE_ADMIN" >/dev/null; then
   echo "[quality] merged exact reviewed revision $ACTUAL_HEAD"
   exit 0
