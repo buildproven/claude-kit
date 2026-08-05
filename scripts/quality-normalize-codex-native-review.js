@@ -9,12 +9,12 @@ const SEVERITY = {
   2: "medium",
   3: "low",
 };
-const SAFE_CHANGE_DESCRIPTION =
-  /\bapplied consistently\b|\bwithout (?:altering|changing|affecting)\b/i;
-const VERIFICATION_SUBJECT =
-  /\b(?:tests?|checks?|lint(?:ing)?|type checking|build|verification|changed files?)\b/i;
-const VERIFICATION_SUCCESS =
-  /\b(?:pass(?:es|ed|ing)?|succeed(?:s|ed|ing)?|successful|green)\b/i;
+const SAFE_CHANGE_SENTENCES = new Set([
+  "the setup-node version bump is applied consistently across all workflow references without altering existing inputs",
+]);
+const AFFIRMATIVE_VERIFICATION_SENTENCES = new Set([
+  "the changed files also pass `./scripts/verify-fast`",
+]);
 
 function parseHeader(line) {
   const prefix = line.match(/^- \[P([0-3])\] /);
@@ -67,13 +67,16 @@ function hasBalancedInlineCode(value) {
   return ((String(value).match(/`/g) || []).length & 1) === 0;
 }
 
+function normalizedSentence(sentence) {
+  return String(sentence).trim().replace(/\s+/g, " ").toLowerCase();
+}
+
 function isSuccessfulVerificationSentence(
   sentence,
   { negativePrefix, contrast, incomplete },
 ) {
   return (
-    VERIFICATION_SUBJECT.test(sentence) &&
-    VERIFICATION_SUCCESS.test(sentence) &&
+    AFFIRMATIVE_VERIFICATION_SENTENCES.has(normalizedSentence(sentence)) &&
     !negativePrefix.test(sentence) &&
     !contrast.test(sentence) &&
     !incomplete.test(sentence)
@@ -82,7 +85,7 @@ function isSuccessfulVerificationSentence(
 
 function isSafeChangeSentence(sentence, { negativePrefix, contrast }) {
   return (
-    SAFE_CHANGE_DESCRIPTION.test(sentence) &&
+    SAFE_CHANGE_SENTENCES.has(normalizedSentence(sentence)) &&
     !negativePrefix.test(sentence) &&
     !contrast.test(sentence)
   );
