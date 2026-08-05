@@ -101,13 +101,16 @@ function pathsFor(identity, manifest = null) {
   const root =
     manifest && isVitestFixture(manifest)
       ? path.join(
-          fs.realpathSync(os.tmpdir()),
+          fs.realpathSync(
+            path.resolve(
+              manifest.repo.realpath,
+              execFileSync("git", ["rev-parse", "--git-common-dir"], {
+                cwd: manifest.repo.realpath,
+                encoding: "utf8",
+              }).trim(),
+            ),
+          ),
           "quality-test-repository-leases",
-          crypto
-            .createHash("sha256")
-            .update(process.env.VITEST_WORKER_ID)
-            .digest("hex")
-            .slice(0, 16),
         )
       : stateRoot();
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -135,6 +138,9 @@ function readRegularFile(file, label) {
     descriptor = fs.openSync(
       file,
       fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+      // Ignored for a read-only open, but keeps the security contract explicit
+      // for static analyzers that treat every openSync call as a possible create.
+      0o600,
     );
   } catch (error) {
     if (error.code === "ELOOP") {
@@ -163,17 +169,24 @@ function atomicWrite(file, value) {
     path.dirname(file),
     `.${path.basename(file)}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`,
   );
-  let renamed = false;
   try {
     fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, {
       flag: "wx",
       mode: 0o600,
     });
     fs.renameSync(temporary, file);
-    renamed = true;
     fs.chmodSync(file, 0o600);
-  } finally {
-    if (!renamed) removeAtomicTemporary(temporary);
+  } catch (error) {
+    try {
+      removeAtomicTemporary(temporary);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        `${error.message}; repository lease temporary cleanup also failed: ${cleanupError.message}`,
+        { cause: cleanupError },
+      );
+    }
+    throw error;
   }
 }
 
@@ -331,7 +344,8 @@ function acquireGuard(directory, timeoutMs = DEFAULT_WAIT_MS, options = {}) {
       continue;
     }
     try {
-      atomicWrite(path.join(directory, "owner.json"), {
+      const writeOwner = options.writeOwner || atomicWrite;
+      writeOwner(path.join(directory, "owner.json"), {
         schemaVersion: SCHEMA_VERSION,
         pid: process.pid,
         uid: process.geteuid?.(),
@@ -404,10 +418,21 @@ function tupleMatches(record, tuple) {
 }
 
 function leaseRecord(leaseDirectory) {
-  const record = readJson(
-    path.join(leaseDirectory, "owner.json"),
-    "repository lease owner",
-  );
+  let record;
+  try {
+    record = readJson(
+      path.join(leaseDirectory, "owner.json"),
+      "repository lease owner",
+    );
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      throw new Error(
+        "repository merge lease is missing or has already been released",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
   if (record.schemaVersion !== SCHEMA_VERSION) {
     throw new Error(
       `unsupported repository lease schema ${record.schemaVersion}`,
@@ -458,34 +483,43 @@ function acquireOnce(manifestPath, options = {}) {
     (paths, identity) => {
       if (fs.existsSync(paths.lease)) {
         const current = leaseRecord(paths.lease);
-        const credential = loaded.manifest.merge?.repositoryLease;
-        if (
-          current.disposition === "rotation-pending" &&
-          current.priorToken == null &&
-          tupleMatches(current, tuple)
-        ) {
-          return completePending(paths, identity, loaded, current);
+        if (current.disposition === "released") {
+          if (fs.existsSync(paths.mergeGuard)) {
+            const releasedGuard = tombstone(paths.mergeGuard);
+            exactCleanup(releasedGuard);
+          }
+          const releasedLease = tombstone(paths.lease);
+          exactCleanup(releasedLease);
+        } else {
+          const credential = loaded.manifest.merge?.repositoryLease;
+          if (
+            current.disposition === "rotation-pending" &&
+            current.priorToken == null &&
+            tupleMatches(current, tuple)
+          ) {
+            return completePending(paths, identity, loaded, current);
+          }
+          if (
+            current.disposition === "active" &&
+            tupleMatches(current, tuple) &&
+            credential?.token === current.token &&
+            credential?.generation === current.generation
+          ) {
+            current.renewedAt = new Date().toISOString();
+            atomicWrite(path.join(paths.lease, "owner.json"), current);
+            return {
+              token: current.token,
+              generation: current.generation,
+              identity,
+            };
+          }
+          const error = new Error(
+            `repository merge lease is owned by ${current.repository} PR #${current.pr} ` +
+              `(${current.manifestPath}); recover or resume that exact campaign`,
+          );
+          error.code = "LEASE_OWNED";
+          throw error;
         }
-        if (
-          current.disposition === "active" &&
-          tupleMatches(current, tuple) &&
-          credential?.token === current.token &&
-          credential?.generation === current.generation
-        ) {
-          current.renewedAt = new Date().toISOString();
-          atomicWrite(path.join(paths.lease, "owner.json"), current);
-          return {
-            token: current.token,
-            generation: current.generation,
-            identity,
-          };
-        }
-        const error = new Error(
-          `repository merge lease is owned by ${current.repository} PR #${current.pr} ` +
-            `(${current.manifestPath}); recover or resume that exact campaign`,
-        );
-        error.code = "LEASE_OWNED";
-        throw error;
       }
 
       fs.mkdirSync(paths.lease, { mode: 0o700 });
@@ -912,24 +946,68 @@ function reconcileMergeOutcome(manifestPath, presentedToken, options = {}) {
   if (!outcome || (options.mergedOnly && outcome !== "merged")) {
     return { reconciled: false, outcome: null, remote };
   }
-  withMetadataGuard(manifest, (paths) => {
-    if (!fs.existsSync(paths.mergeGuard)) return;
-    const owner = guardOwner(paths.mergeGuard);
+  releaseVerifiedOutcome(manifestPath, credential.token, outcome);
+  return { reconciled: true, outcome, remote };
+}
+
+function recordMergedTerminalRaw(manifestPath) {
+  require("./quality-invocation").withManifestLockRaw(
+    manifestPath,
+    (manifest) => {
+      if (manifest.terminalState) return;
+      manifest.terminalState = {
+        state: "merged",
+        detail: `pr:${manifest.repo.pr}`,
+        head: manifest.revisions?.currentHead ?? null,
+        recordedAt: new Date().toISOString(),
+      };
+    },
+  );
+}
+
+function releaseVerifiedOutcome(manifestPath, presentedToken, outcome) {
+  const loaded = loadManifest(manifestPath);
+  const tuple = ownerTuple(loaded.manifest, loaded.manifestPath);
+  return withMetadataGuard(loaded.manifest, (paths) => {
+    const record = leaseRecord(paths.lease);
     if (
-      owner.token !== credential.token ||
-      owner.repository !== repositoryIdentity(manifest) ||
-      owner.pr !== manifest.repo.pr ||
-      owner.head !== mergeHead(manifest)
+      record.disposition !== "active" ||
+      !tupleMatches(record, tuple) ||
+      record.token !== presentedToken
     ) {
       throw new Error(
-        "merge operation guard does not match this exact campaign",
+        "verified remote outcome does not belong to the active repository lease",
       );
     }
-    const released = tombstone(paths.mergeGuard);
-    exactCleanup(released);
+    if (fs.existsSync(paths.mergeGuard)) {
+      const owner = guardOwner(paths.mergeGuard);
+      if (
+        owner.token !== presentedToken ||
+        owner.repository !== repositoryIdentity(loaded.manifest) ||
+        owner.pr !== loaded.manifest.repo.pr ||
+        owner.head !== mergeHead(loaded.manifest)
+      ) {
+        throw new Error(
+          "merge operation guard does not match this exact campaign",
+        );
+      }
+    }
+    // This durable disposition is the recovery commit point. If the process
+    // dies after GitHub proved the outcome, a later acquire can remove any
+    // leftover guard/lease directories without waiting for staleness.
+    record.disposition = "released";
+    record.releaseReason = `verified-remote-${outcome}`;
+    record.releasedAt = new Date().toISOString();
+    atomicWrite(path.join(paths.lease, "owner.json"), record);
+    if (outcome === "merged") recordMergedTerminalRaw(manifestPath);
+    if (fs.existsSync(paths.mergeGuard)) {
+      const released = tombstone(paths.mergeGuard);
+      exactCleanup(released);
+    }
+    const releasedLease = tombstone(paths.lease);
+    exactCleanup(releasedLease);
+    return true;
   });
-  release(manifestPath, credential.token, `verified-remote-${outcome}`);
-  return { reconciled: true, outcome, remote };
 }
 
 function performMerge(manifestPath, presentedToken, options = {}) {
@@ -986,7 +1064,7 @@ function performMerge(manifestPath, presentedToken, options = {}) {
     // operation remains quarantined when authoritative read-back also fails.
   }
   if (exactRemoteOutcome(manifest, remote) === "merged") {
-    releaseMergeGuard(manifestPath, presentedToken, "merged");
+    releaseVerifiedOutcome(manifestPath, presentedToken, "merged");
     return { merged: true, remote };
   }
   // A failed/timeout client can have submitted an accepted request. Preserve
@@ -1002,10 +1080,12 @@ function performMerge(manifestPath, presentedToken, options = {}) {
 
 function releaseIfMerged(manifestPath, presentedToken) {
   const { manifest } = loadManifest(manifestPath);
-  if (manifest.options?.merge !== true) return false;
+  if (manifest.options?.merge !== true) {
+    return { reconciled: false, outcome: null, remote: null };
+  }
   return reconcileMergeOutcome(manifestPath, presentedToken, {
     mergedOnly: true,
-  }).reconciled;
+  });
 }
 
 function parseArgs(argv) {
@@ -1111,6 +1191,7 @@ module.exports = {
   withManifestMutation,
   withMetadataGuard,
   _acquireGuard: acquireGuard,
+  _atomicWrite: atomicWrite,
   _recoverDeadGuard: recoverDeadGuard,
   _pathsFor: pathsFor,
 };

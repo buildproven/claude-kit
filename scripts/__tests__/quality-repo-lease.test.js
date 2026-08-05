@@ -9,7 +9,6 @@ const LEASE_CLI = path.resolve(__dirname, "..", "quality-repo-lease.js");
 const FIXTURE_REPOSITORY = `vitest/${"a".repeat(16)}`;
 
 let sandbox;
-let originalTmpdir;
 const stateRoots = [];
 
 function git(cwd, args) {
@@ -17,11 +16,9 @@ function git(cwd, args) {
 }
 
 beforeAll(() => {
-  originalTmpdir = process.env.TMPDIR;
   sandbox = fs.realpathSync(
     fs.mkdtempSync(path.join(os.tmpdir(), "quality-repo-lease-test-")),
   );
-  process.env.TMPDIR = sandbox;
 });
 
 afterAll(() => {
@@ -29,31 +26,38 @@ afterAll(() => {
     fs.rmSync(stateRoot, { recursive: true, force: true });
   }
   fs.rmSync(sandbox, { recursive: true, force: true });
-  if (originalTmpdir === undefined) delete process.env.TMPDIR;
-  else process.env.TMPDIR = originalTmpdir;
 });
 
 function fixture(name, overrides = {}) {
   const root = path.join(sandbox, name);
-  fs.mkdirSync(root, { recursive: true });
-  git(root, ["init", "-q", "-b", "main"]);
-  git(root, ["config", "user.email", "quality@example.test"]);
-  git(root, ["config", "user.name", "Quality Test"]);
-  fs.writeFileSync(path.join(root, "file.txt"), `${name}\n`);
-  git(root, ["add", "file.txt"]);
-  git(root, ["commit", "-q", "-m", "fixture"]);
-  git(root, [
-    "remote",
-    "add",
-    "origin",
-    "git@github.com:buildproven/fixture.git",
-  ]);
+  if (overrides.linkedFrom) {
+    git(overrides.linkedFrom.root, ["worktree", "add", "-q", "--detach", root]);
+    if (overrides.advanceHead) {
+      fs.writeFileSync(path.join(root, "file.txt"), `${name}\n`);
+      git(root, ["add", "file.txt"]);
+      git(root, ["commit", "-q", "-m", `fixture ${name}`]);
+    }
+  } else {
+    fs.mkdirSync(root, { recursive: true });
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.email", "quality@example.test"]);
+    git(root, ["config", "user.name", "Quality Test"]);
+    fs.writeFileSync(path.join(root, "file.txt"), `${name}\n`);
+    git(root, ["add", "file.txt"]);
+    git(root, ["commit", "-q", "-m", "fixture"]);
+    git(root, [
+      "remote",
+      "add",
+      "origin",
+      "git@github.com:buildproven/fixture.git",
+    ]);
+  }
   const head = git(root, ["rev-parse", "HEAD"]);
-  const repoKey = crypto.randomBytes(8).toString("hex");
+  const repoKey = overrides.repoKey || crypto.randomBytes(8).toString("hex");
   const invocationId = overrides.invocationId || crypto.randomUUID();
   const githubRepository = overrides.githubRepository || FIXTURE_REPOSITORY;
   const stateRoot = path.join(
-    sandbox,
+    fs.realpathSync(process.env.TMPDIR || os.tmpdir()),
     "bs-quality",
     repoKey,
     "pr-7",
@@ -101,11 +105,16 @@ function fixture(name, overrides = {}) {
     )}\n`,
   );
   fs.writeFileSync(
-    path.join(root, ".git", ".quality-vitest-fixture"),
+    path.join(
+      fs.realpathSync(
+        path.resolve(root, git(root, ["rev-parse", "--git-common-dir"])),
+      ),
+      ".quality-vitest-fixture",
+    ),
     `${repoKey}\n`,
     { mode: 0o600 },
   );
-  return { root, manifestPath };
+  return { root, manifestPath, repoKey };
 }
 
 describe("repository merge lease", () => {
@@ -320,23 +329,16 @@ describe("repository merge lease", () => {
 
   it("cleans a newly created guard when its owner write fails", () => {
     const directory = path.join(sandbox, "guard-owner-write-failure");
-    const originalWrite = fs.writeFileSync;
-    fs.writeFileSync = (file, ...args) => {
-      if (path.dirname(String(file)) === directory) {
-        const error = new Error("injected owner write failure");
-        error.code = "EIO";
-        throw error;
-      }
-      return originalWrite(file, ...args);
-    };
-    try {
-      expect(() => lease._acquireGuard(directory, 10)).toThrow(
-        /injected owner write failure/,
-      );
-      expect(fs.existsSync(directory)).toBe(false);
-    } finally {
-      fs.writeFileSync = originalWrite;
-    }
+    expect(() =>
+      lease._acquireGuard(directory, 10, {
+        writeOwner() {
+          const error = new Error("injected owner write failure");
+          error.code = "EIO";
+          throw error;
+        },
+      }),
+    ).toThrow(/injected owner write failure/);
+    expect(fs.existsSync(directory)).toBe(false);
   });
 
   it("retries when a contended guard disappears before its owner read", async () => {
@@ -389,7 +391,12 @@ describe("repository merge lease", () => {
   it("rejects the same invocation id from an independent clone tuple", () => {
     const invocationId = crypto.randomUUID();
     const first = fixture("clone-one", { invocationId });
-    const second = fixture("clone-two", { invocationId });
+    const second = fixture("clone-two", {
+      invocationId,
+      linkedFrom: first,
+      repoKey: first.repoKey,
+      advanceHead: true,
+    });
     const owner = lease.acquire(first.manifestPath);
     expect(() => lease.acquire(second.manifestPath, { waitMs: 0 })).toThrow(
       /owned by/,
@@ -432,7 +439,10 @@ describe("repository merge lease", () => {
 
   it("requires the exact token and six-hour staleness before fenced recovery", () => {
     const first = fixture("recover-one");
-    const second = fixture("recover-two");
+    const second = fixture("recover-two", {
+      linkedFrom: first,
+      repoKey: first.repoKey,
+    });
     const owner = lease.acquire(first.manifestPath);
     expect(() => lease.recover(second.manifestPath, owner.token)).toThrow(
       /recent/,
@@ -507,6 +517,33 @@ describe("repository merge lease", () => {
     }
   });
 
+  it("preserves both the primary atomic-write and cleanup failures", () => {
+    const directory = path.join(sandbox, "atomic-write-double-failure");
+    fs.mkdirSync(directory, { mode: 0o700 });
+    const target = path.join(directory, "owner.json");
+    const originalWrite = fs.writeFileSync;
+    const originalUnlink = fs.unlinkSync;
+    fs.writeFileSync = (file, data, options = {}) => {
+      originalWrite(file, data, { ...options, mode: 0o600 });
+      throw new Error("primary write failure");
+    };
+    fs.unlinkSync = () => {
+      throw new Error("cleanup unlink failure");
+    };
+    try {
+      expect(() => lease._atomicWrite(target, { value: true })).toThrow(
+        /primary write failure.*cleanup.*cleanup unlink failure/,
+      );
+    } finally {
+      fs.writeFileSync = originalWrite;
+      fs.unlinkSync = originalUnlink;
+      for (const file of fs.readdirSync(directory)) {
+        originalUnlink(path.join(directory, file));
+      }
+      fs.rmdirSync(directory);
+    }
+  });
+
   it("reconciles a crashed merge guard without the lost process token", () => {
     const { manifestPath } = fixture("merge-reconcile");
     const owner = lease.acquire(manifestPath);
@@ -566,10 +603,61 @@ printf '%s\\n' '${JSON.stringify({
         state: "missing",
       });
       expect(
+        invocation.loadManifest(manifestPath).manifest.terminalState,
+      ).toMatchObject({
+        state: "merged",
+        head: manifest.revisions.currentHead,
+      });
+      expect(
         fs.existsSync(lease._pathsFor(FIXTURE_REPOSITORY, manifest).mergeGuard),
       ).toBe(false);
     } finally {
       process.env.PATH = previousPath;
+    }
+  });
+
+  it("reclaims a durably released lease after a cleanup crash", () => {
+    const first = fixture("released-cleanup-crash");
+    const owner = lease.acquire(first.manifestPath);
+    const { manifest } = invocation.loadManifest(first.manifestPath);
+    const paths = lease._pathsFor(FIXTURE_REPOSITORY, manifest);
+    lease.acquireMergeGuard(first.manifestPath, owner.token);
+    const record = JSON.parse(
+      fs.readFileSync(path.join(paths.lease, "owner.json"), "utf8"),
+    );
+    record.disposition = "released";
+    record.releaseReason = "verified-remote-merged";
+    fs.writeFileSync(
+      path.join(paths.lease, "owner.json"),
+      `${JSON.stringify(record, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+
+    const second = fixture("released-cleanup-successor", {
+      linkedFrom: first,
+      repoKey: first.repoKey,
+      advanceHead: true,
+    });
+    const successor = lease.acquire(second.manifestPath, { waitMs: 0 });
+    expect(successor.generation).toBe(1);
+    lease.release(second.manifestPath, successor.token, "test-complete");
+    expect(owner.token).not.toBe(successor.token);
+  });
+
+  it("reports a late manifest mutation after release as released", () => {
+    const { manifestPath } = fixture("late-mutation");
+    const owner = lease.acquire(manifestPath);
+    lease.release(manifestPath, owner.token, "test-complete");
+    const previous = process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+    process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = owner.token;
+    try {
+      expect(() => invocation.withManifestLock(manifestPath, () => {})).toThrow(
+        /missing or has already been released/,
+      );
+    } finally {
+      if (previous === undefined)
+        delete process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+      else process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = previous;
     }
   });
 });

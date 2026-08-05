@@ -70,9 +70,6 @@ if printf '%s\n' "$PREFLIGHT_OUTPUT" |
   grep -Fxq 'BS_QUALITY_ALREADY_MERGED=true'; then
   node "$SCRIPT_DIR/quality-invocation.js" terminal-state "$MANIFEST" \
     --state merged --detail "pr:$PR" >/dev/null || true
-  node "$SCRIPT_DIR/quality-repo-lease.js" release \
-    --manifest "$MANIFEST" \
-    --reason already-merged || exit 1
   bash "$SCRIPT_DIR/quality-merge-cleanup.sh" --manifest "$MANIFEST"
   exit 0
 fi
@@ -301,7 +298,4 @@ fi
 # cause stands and this is a no-op.
 node "$SCRIPT_DIR/quality-invocation.js" terminal-state "$MANIFEST" \
   --state merged --detail "pr:$PR" >/dev/null || true
-node "$SCRIPT_DIR/quality-repo-lease.js" release \
-  --manifest "$MANIFEST" \
-  --reason merged || exit 1
 bash "$SCRIPT_DIR/quality-merge-cleanup.sh" --manifest "$MANIFEST"

@@ -3287,6 +3287,20 @@ exit 99
     expect(queueOnly.status).not.toBe(0);
     expect(queueOnly.stderr).toMatch(/queue-aware monitored merge path/);
 
+    expect(
+      spawnSync("bash", [AUTHORIZE, "--manifest", manifest, "--preflight"], {
+        cwd: caller,
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          QUALITY_TEST_STRICT_PROTECTION: "true",
+          QUALITY_TEST_EFFECTIVE_RULES: "unavailable",
+          QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY: verificationKey,
+        },
+        encoding: "utf8",
+      }).status,
+    ).toBe(0);
+
     const acceptedDespiteClientFailure = spawnSync(
       "bash",
       [AUTHORIZE, "--manifest", manifest],
@@ -3305,20 +3319,6 @@ exit 99
     expect(
       acceptedDespiteClientFailure.status,
       acceptedDespiteClientFailure.stderr,
-    ).toBe(0);
-
-    expect(
-      spawnSync("bash", [AUTHORIZE, "--manifest", manifest], {
-        cwd: caller,
-        env: {
-          ...process.env,
-          PATH: `${bin}:${process.env.PATH}`,
-          QUALITY_TEST_STRICT_PROTECTION: "true",
-          QUALITY_TEST_EFFECTIVE_RULES: "unavailable",
-          QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY: verificationKey,
-        },
-        encoding: "utf8",
-      }).status,
     ).toBe(0);
     lifecycle.push("merge");
     expect(lifecycle).toEqual(["push", "ci:success", "merge"]);

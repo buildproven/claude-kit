@@ -85,11 +85,14 @@ Add a repository-scoped merge lease to the public quality runtime.
    `released` dispositions. An observed and verified remote PR merge releases
    an exact active lease even if an earlier diagnostic terminal state remains
    `blocked`; that historical outcome is never relabelled. Explicitly
-   non-reenterable outcomes and `verified-unmerged` also release. A blocked,
-   interrupted, or budget-exhausted campaign retains the lease only when the
-   runtime's existing resume preflight proves the manifest can still execute;
-   otherwise it is marked non-resumable and released. Release decisions never
-   infer success merely from a terminal label.
+   non-reenterable outcomes and `verified-unmerged` also release. Parsed
+   provider output that is incomplete or violates the review contract is
+   explicitly non-reenterable: the bounded attempt has been consumed and a new
+   invocation is required, so those terminal states release immediately. A
+   blocked, interrupted, or timed-out campaign retains the lease for exact
+   manifest resumption and eventually requires the explicit stale-owner
+   recovery path if abandoned. Release decisions never infer merge success
+   merely from a terminal label.
 8. Crash recovery is conservative. Lease state lives outside versioned files
    in one fixed per-operator namespace derived from the operating-system account
    record for the effective UID (Node `os.userInfo()`, not `HOME`,

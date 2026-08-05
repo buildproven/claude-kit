@@ -140,11 +140,16 @@ describe("quality merge gates", () => {
     );
     expect(MERGE_CLEANUP).toMatch(/quality_pin_repository_lease "\$MANIFEST"/);
     expect(MERGE_CLEANUP).not.toMatch(/merge\.repositoryLease\.token/);
-    expect(MERGE_CLEANUP).toMatch(/LEASE_RELEASED="\$\(node/);
-    expect(MERGE_CLEANUP).toMatch(/\[ "\$LEASE_RELEASED" != true \]/);
+    expect(MERGE_CLEANUP).toMatch(/LEASE_RESULT="\$\(node/);
+    expect(MERGE_CLEANUP).toMatch(/\.reconciled \/\/ false/);
+    expect(MERGE_CLEANUP).toMatch(/repository merge remains quarantined/);
     expect(REPOSITORY_LEASE).toMatch(
       /function releaseMergeGuard[\s\S]*withMetadataGuard/,
     );
+    expect(REPOSITORY_LEASE).toMatch(
+      /function releaseVerifiedOutcome[\s\S]*record\.disposition = "released"[\s\S]*recordMergedTerminalRaw/,
+    );
+    expect(STAMP_AND_MERGE).not.toMatch(/quality-repo-lease\.js" release/);
   });
 
   it("persists success terminal states before cleanup or telemetry", () => {
