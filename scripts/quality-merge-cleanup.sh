@@ -14,6 +14,25 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+# Repository serialization is independent of worktree cleanup. Release a lease
+# from authoritative remote merge evidence before a dirty primary can make the
+# ordinary cleanup path return early.
+if [ -n "$MANIFEST" ] && [ -f "$MANIFEST" ]; then
+  LEASE_STATUS="$(node "$SCRIPT_DIR/quality-repo-lease.js" status \
+    --manifest "$MANIFEST" 2>/dev/null || true)"
+  if [ "$(printf '%s' "$LEASE_STATUS" | jq -r '.state // empty' 2>/dev/null)" = active ]; then
+    LEASE_TOKEN="$(node "$SCRIPT_DIR/quality-invocation.js" field \
+      "$MANIFEST" merge.repositoryLease.token 2>/dev/null || true)"
+    if [ -n "$LEASE_TOKEN" ]; then
+      BS_QUALITY_REPOSITORY_LEASE_TOKEN="$LEASE_TOKEN" \
+        node "$SCRIPT_DIR/quality-repo-lease.js" release-if-merged \
+          --manifest "$MANIFEST" >/dev/null 2>&1 || {
+        echo "[quality] merge succeeded; repository lease release awaits exact remote verification." >&2
+      }
+    fi
+  fi
+fi
+
 WORKTREE_PATH="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 FEATURE_BRANCH="$(git branch --show-current 2>/dev/null || true)"
 MANAGER="$SCRIPT_DIR/worktree-manager.js"

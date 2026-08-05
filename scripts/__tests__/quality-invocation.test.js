@@ -589,7 +589,7 @@ describe("quality invocation manifest", () => {
       [INVOCATION, "agents", manifest, "code-reviewer"],
       { cwd: root, encoding: "utf8" },
     );
-    expect(result.status).not.toBe(0);
+    expect(result.status, `${result.stderr}\n${result.stdout}`).not.toBe(0);
     expect(result.stderr).toMatch(/requires --domain and --rule/);
   });
 
@@ -3242,8 +3242,10 @@ exit 99
     expect(queueOnly.status).not.toBe(0);
     expect(queueOnly.stderr).toMatch(/queue-aware monitored merge path/);
 
-    expect(
-      spawnSync("bash", [AUTHORIZE, "--manifest", manifest], {
+    const acceptedDespiteClientFailure = spawnSync(
+      "bash",
+      [AUTHORIZE, "--manifest", manifest],
+      {
         cwd: caller,
         env: {
           ...process.env,
@@ -3253,7 +3255,11 @@ exit 99
           QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY: verificationKey,
         },
         encoding: "utf8",
-      }).status,
+      },
+    );
+    expect(
+      acceptedDespiteClientFailure.status,
+      acceptedDespiteClientFailure.stderr,
     ).toBe(0);
 
     expect(
@@ -6227,11 +6233,14 @@ exit 1
     const result = spawnSync(
       "bash",
       [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
-      { cwd: linked, encoding: "utf8" },
+      { cwd: linked, encoding: "utf8", env: process.env },
     );
-    expect(result.status).not.toBe(0);
+    expect(result.status, `${result.stderr}\n${result.stdout}`).not.toBe(0);
     const updated = JSON.parse(readFileSync(manifestPath, "utf8"));
-    expect(updated.gates.find((gate) => gate.name === "build")).toMatchObject({
+    expect(
+      updated.gates.find((gate) => gate.name === "build"),
+      `${result.stderr}\n${result.stdout}`,
+    ).toMatchObject({
       status: "failed",
       reason: "gate 'build' failed with exit status 1",
     });

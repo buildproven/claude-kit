@@ -12,6 +12,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ -n "$MANIFEST" ] || { echo "quality-select-agents: --manifest is required" >&2; exit 1; }
+source "$SCRIPT_DIR/quality-repo-lease-pin.sh" || exit 1
+quality_pin_repository_lease "$MANIFEST" || exit 1
 
 bash "$SCRIPT_DIR/quality-load-root.sh" --manifest "$MANIFEST" >/dev/null || exit 1
 field() { node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" "$1"; }

@@ -2,8 +2,8 @@
 
 ## Status
 
-Proposed for BUI-572. Implementation may begin only after an independent
-high-reasoning architecture review finds no unresolved correctness defect.
+Accepted for BUI-572 after an independent high-reasoning architecture review
+found no unresolved correctness defect.
 
 ## Context
 
@@ -68,13 +68,13 @@ Add a repository-scoped merge lease to the public quality runtime.
    holding both immediately before its atomic write.
    Phase entry/exit checks supplement this mutation boundary; they do not
    replace it. The remote
-   merge is additionally enclosed by a repository-scoped operation guard: the
-   owner acquires that guard, revalidates its token and live base while holding
-   it, performs the synchronous GitHub merge, and releases the guard only after
-   the call returns. Recovery must acquire the same guard before replacing a
-   token. Thus a suspended old owner is either fenced before it enters the
-   merge critical section or prevents recovery until its in-flight external
-   side effect completes; no local token check is mistaken for server fencing.
+   merge is additionally enclosed by a repository-scoped operation guard. The
+   owner acquires that guard atomically with its final token validation, then
+   revalidates the live base while holding it, performs the synchronous GitHub
+   merge, and releases the guard only after authoritative read-back. Recovery
+   checks for the same guard while holding the metadata guard, so token rotation
+   and entry into the merge critical section have one linearized order. No local
+   token check is mistaken for server fencing.
 7. Lease lifecycle is explicit and separate from the manifest's write-once
    `terminalState`. The lease record has `active`, `rotation-pending`, and
    `released` dispositions. An observed and verified remote PR merge releases
@@ -94,7 +94,8 @@ Add a repository-scoped merge lease to the public quality runtime.
    owner UID, and directory modes are validated before use. A different invocation may
    reclaim automatically only from a final owner manifest. A six-hour-old
    resumable owner is reported as stale but requires an explicit recovery
-   command naming its current fencing token. The lease record is authoritative
+   command explicitly confirming the current owner; credentials are never
+   printed in status or command output. The lease record is authoritative
    and token acquisition/rotation uses a recoverable state machine: create the
    record as `rotation-pending` with old/new token metadata, persist the new
    token and generation to the exact manifest under its lock, then atomically
@@ -102,10 +103,9 @@ Add a repository-scoped merge lease to the public quality runtime.
    is pending. The exact owner may reconcile a pending initial acquisition;
    explicit recovery may reconcile a pending rotation after proving the
    manifest contains either its recorded old or new generation. Any other
-   combination fails closed with a repair command. Recovery acquires the merge
-   operation guard and completes this rotation while holding it, which
-   fences any suspended old process that has not entered the merge critical
-   section. An unsafe, malformed,
+   combination fails closed with a repair command. Recovery checks and rotates
+   under the metadata guard, which fences any suspended old process that has
+   not entered the merge critical section. An unsafe, malformed,
    symlinked, cross-repository, or recent owner fails closed.
 
 ## Lease record
@@ -145,13 +145,11 @@ after it can leave only an inert tombstone that cannot block acquisition. It
 never recursively deletes a path or follows a symlink.
 
 The merge operation guard uses the same defensive record rules and atomic
-directory acquisition. Its record includes the holding process group, exact PR,
-head, base, request start, and bounded client deadline. The `gh` merge runs in
-that recorded process group. A contender or recovery command never steals a
-live guard. Parent death alone is insufficient: ambiguous recovery first proves
-the complete process group absent and reconciles the exact PR/head and
-protected-base state. A deadline, safety margin, or stable negative observation
-is never treated as proof that an accepted request cannot complete later. The
+directory acquisition. Its record includes the holding process, exact PR, head,
+base, and request start. A contender or recovery command never steals the guard.
+Parent death alone is insufficient: ambiguous recovery reconciles the exact
+PR/head and protected-base state. A deadline, safety margin, or stable negative
+observation is never treated as proof that an accepted request cannot complete. The
 guard is released only after GitHub exposes an authoritative terminal fact:
 either the exact head is merged, or the PR is closed without merge by the
 operator recovery flow, which server-side prevents that request from later
@@ -185,9 +183,9 @@ critical section, not to the campaign lease or its six-hour policy.
   release it.
 - An independent clone with the same deterministic invocation ID but a
   different manifest/common-directory tuple is rejected as a collision.
-- Final owners are automatically reclaimable. Six-hour-stale resumable owners
-  require an exact-token recovery; recent, malformed, symlinked, missing, and
-  cross-repository owners fail closed.
+- Six-hour-stale resumable owners require explicit current-owner recovery;
+  recent, malformed, symlinked, missing, and cross-repository owners fail
+  closed.
 - Fresh bootstrap and manifest resume both acquire the lease for `--merge` and
   skip it for review-only work.
 - A base movement after manifest creation stops before gates, retains ownership,
@@ -201,15 +199,14 @@ critical section, not to the campaign lease or its six-hour policy.
   gates, review, CI, stamp publication, and immediately before merge.
 - Phase tests suspend a process, rotate the shared token, and prove its pinned
   old credential fails even though the manifest now contains the new token.
-- Recovery and remote merge contend on the same operation guard. Tests suspend
-  an owner immediately before and inside the critical section to prove recovery
-  cannot authorize two remote merges.
+- Recovery and merge-guard acquisition share the metadata linearization point;
+  tests prove a rotated token cannot enter the remote merge.
 - Release disappears from the acquisition namespace in one rename. Fault
   injection before and after that rename proves neither state creates an
   ownerless blocking lease.
-- Acquisition and recovery fault injection stops after each pending-record,
-  manifest-token, and active-record write. Exact-owner reconciliation succeeds;
-  contenders remain fenced; no half-committed generation authorizes two owners.
+- Pending initial acquisition and recovery rotation reconcile only for the
+  exact owner tuple; contenders remain fenced and no pending generation is
+  accepted by verification.
 - A campaign older than six hours that continues successful fenced phase checks
   renews `renewedAt` and remains unrecoverable. Exhausted-timeout and
   blocked-resume-then-merge paths verify explicit lease disposition without

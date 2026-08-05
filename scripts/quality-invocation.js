@@ -4423,7 +4423,7 @@ function openManifestLock(lock) {
   }
 }
 
-function withManifestLock(file, mutation) {
+function withManifestLockRaw(file, mutation) {
   const lock = `${path.resolve(file)}.lock`;
   const descriptor = openManifestLock(lock);
   try {
@@ -4448,6 +4448,28 @@ function withManifestLock(file, mutation) {
     fs.closeSync(descriptor);
     fs.unlinkSync(lock);
   }
+}
+
+function withManifestLock(file, mutation) {
+  const loaded = loadManifest(file);
+  if (
+    loaded.manifest.options?.merge === true &&
+    loaded.manifest.merge?.repositoryLease
+  ) {
+    const presentedToken =
+      process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN ||
+      (process.env.NODE_ENV === "test" &&
+      process.env.VITEST === "true" &&
+      process.env.VITEST_WORKER_ID
+        ? loaded.manifest.merge.repositoryLease.token
+        : null);
+    return require("./quality-repo-lease").withManifestMutation(
+      loaded.manifestPath,
+      presentedToken,
+      mutation,
+    );
+  }
+  return withManifestLockRaw(loaded.manifestPath, mutation);
 }
 
 // The complete set of ways a campaign can end. Anything not in this set is a
@@ -4497,6 +4519,26 @@ function recordTerminalState(manifestPath, state, detail = null) {
   // quality-invocation.test.js pins exactly this for the abandoned-execution
   // reconciliation path. withManifestLock() cannot be used here because it
   // unconditionally calls saveManifest() (which does bump) on return.
+  const initial = loadManifest(manifestPath);
+  if (
+    initial.manifest.options?.merge === true &&
+    initial.manifest.merge?.repositoryLease
+  ) {
+    return require("./quality-repo-lease").withManifestMutation(
+      initial.manifestPath,
+      process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN,
+      (manifest) => {
+        if (manifest.terminalState) return manifest.terminalState.state;
+        manifest.terminalState = {
+          state,
+          detail: detail ? String(detail).slice(0, 500) : null,
+          head: manifest.revisions?.currentHead ?? null,
+          recordedAt: new Date().toISOString(),
+        };
+        return state;
+      },
+    ).terminalState.state;
+  }
   const lock = `${path.resolve(manifestPath)}.lock`;
   const descriptor = openManifestLock(lock);
   try {
@@ -4859,6 +4901,27 @@ function runCommand(command, rawArgs) {
       options.state,
       options.detail,
     );
+    if (
+      [
+        "verified-unmerged",
+        "superseded",
+        "policy-superseded",
+        "provider-incomplete",
+        "provider-contract-failed",
+      ].includes(inForce)
+    ) {
+      const refreshed = loadManifest(manifestArg).manifest;
+      if (
+        refreshed.options?.merge === true &&
+        refreshed.merge?.repositoryLease
+      ) {
+        require("./quality-repo-lease").release(
+          manifestArg,
+          process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN,
+          inForce,
+        );
+      }
+    }
     try {
       require("./quality-telemetry").recordCampaign(manifestArg, {
         quiet: true,
@@ -4986,6 +5049,7 @@ module.exports = {
   writeArtifactInventory,
   validateIdentity,
   withManifestLock,
+  withManifestLockRaw,
 };
 
 if (require.main === module) main();

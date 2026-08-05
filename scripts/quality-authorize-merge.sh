@@ -17,6 +17,8 @@ done
   echo "quality-authorize-merge: --manifest is required" >&2
   exit 1
 }
+source "$SCRIPT_DIR/quality-repo-lease-pin.sh" || exit 1
+quality_pin_repository_lease "$MANIFEST" || exit 1
 
 node "$SCRIPT_DIR/quality-invocation.js" review-authorization "$MANIFEST" >/dev/null || exit 1
 MERGE_REQUESTED="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" options.merge)"
@@ -401,10 +403,7 @@ FINAL_BASE_OID="$(printf '%s' "$FINAL_BASE_LS" | awk 'NR==1 {print $1}')"
     echo "❌ MERGE BLOCKED: PR identity changed immediately before merge." >&2
     exit 1
   }
-MERGE_ARGS=(
-  "$PR" --repo "$EXPECTED_REPOSITORY" --squash
-  --match-head-commit "$ACTUAL_HEAD"
-)
+LEASE_ADMIN=false
 if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
   if [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ]; then
     # Revalidate the operator scope immediately before --admin, same
@@ -425,24 +424,14 @@ if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
     echo "❌ MERGE BLOCKED: CI billing waiver changed before merge." >&2
     exit 1
   }
-  MERGE_ARGS+=(--admin)
+  LEASE_ADMIN=true
   echo "⚠️  [quality] using admin merge only for verified GitHub Actions billing preallocation failures." >&2
 fi
-MERGE_RC=0
-gh pr merge "${MERGE_ARGS[@]}" || MERGE_RC=$?
-MERGED_JSON="$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
-  --json state,mergedAt,mergeCommit,headRefName,headRefOid)" || exit 1
-if { [ "$(printf '%s' "$MERGED_JSON" | jq -r '.state')" = MERGED ] &&
-  [ "$(printf '%s' "$MERGED_JSON" | jq -r '.mergedAt // empty')" != "" ] &&
-  [ "$(printf '%s' "$MERGED_JSON" | jq -r '.mergeCommit.oid // empty')" != "" ] &&
-  [ "$(printf '%s' "$MERGED_JSON" | jq -r '.headRefName')" = "$EXPECTED_HEAD_REF" ] &&
-  [ "$(printf '%s' "$MERGED_JSON" | jq -r '.headRefOid')" = "$ACTUAL_HEAD" ]; }; then
+if node "$SCRIPT_DIR/quality-repo-lease.js" merge \
+  --manifest "$MANIFEST" \
+  --admin "$LEASE_ADMIN" >/dev/null; then
   echo "[quality] merged exact reviewed revision $ACTUAL_HEAD"
   exit 0
 fi
-if [ "$MERGE_RC" -ne 0 ]; then
-  echo "❌ MERGE BLOCKED: GitHub rejected the exact-head merge and the PR is not merged at that head." >&2
-else
-  echo "❌ MERGE BLOCKED: GitHub did not complete the exact-head merge synchronously." >&2
-fi
+echo "❌ MERGE BLOCKED: GitHub did not prove the exact-head merge; the repository merge guard remains quarantined." >&2
 exit 1
