@@ -59,6 +59,73 @@ describe("provider-native platform", () => {
     expect(invocation).not.toContain("--fork-session");
   });
 
+  it("routes cross-review through provider-run without a same-model fallback", () => {
+    const skill = readFileSync(
+      path.join(ROOT, "skills", "cross-review", "SKILL.md"),
+      "utf8",
+    );
+    // The point of a cross-review is that the reviewer is a DIFFERENT model
+    // than the author. `--fallback none` is load-bearing: with a fallback, an
+    // exhausted counterpart silently degrades to the authoring provider and
+    // returns same-model agreement that reads as independent corroboration
+    // (BUI-468, from the Codex side).
+    expect(skill).toContain("--fallback none");
+    expect(skill).toContain("--sandbox read-only");
+    expect(skill).toContain("provider-run.sh");
+    // Must not bypass the runner: a direct CLI shell-out loses the deadline,
+    // the structured error classification, and the 74/75/76 exit contract.
+    expect(skill).not.toMatch(/^\s*claude -p /m);
+    expect(skill).not.toMatch(/^\s*codex exec /m);
+    // A failed cross-review must say no second opinion happened, never
+    // silently substitute a self-review.
+    expect(skill).toMatch(/no cross-review happened/i);
+  });
+
+  it("never selects the reviewing provider with --provider auto", () => {
+    const skill = readFileSync(
+      path.join(ROOT, "skills", "cross-review", "SKILL.md"),
+      "utf8",
+    );
+    // `bs_provider_invoker` reports WHICH PROVIDER IS RUNNING, not the
+    // counterpart. `--provider auto` from a Codex session therefore picks
+    // codex to review codex's own output — verified end-to-end: with
+    // CODEX_THREAD_ID set, auto resolved to codex and never invoked the stub
+    // claude on PATH. The run SUCCEEDS, so the same-model review is silent.
+    // Assert on the INVOCATION line, not the prose — the skill deliberately
+    // mentions `--provider auto` when explaining why it must not be used, so a
+    // whole-file match would flag the warning that prevents the bug.
+    // Match only shell continuation lines (trailing `\`), which excludes both
+    // the prose warning and the `--provider claude|codex|auto` usage string.
+    const invocation = skill
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("--provider") && line.endsWith("\\"));
+    expect(invocation).toEqual(['--provider "$REVIEWER" \\']);
+    // The inversion must be present and explicit.
+    expect(skill).toMatch(/codex\)\s+REVIEWER=claude/);
+    expect(skill).toMatch(/claude\)\s+REVIEWER=codex/);
+  });
+
+  it("reports Codex->Claude delegation health, not just the outbound direction", () => {
+    const check = readFileSync(
+      path.join(ROOT, "scripts", "codex-check.sh"),
+      "utf8",
+    );
+    // Without this the health check reports a green surface while Codex has no
+    // path to Claude at all.
+    expect(check).toMatch(/command -v claude/);
+    // Manifest lines are `name|target`; anchoring the pipe stops `cross-review`
+    // from matching a longer skill name that merely starts with it.
+    expect(check).toContain("'^cross-review|'");
+  });
+
+  it("exposes cross-review to Codex, where the reverse path is actually needed", () => {
+    const allowlist = JSON.parse(
+      readFileSync(path.join(ROOT, "config", "codex-skills.json"), "utf8"),
+    );
+    expect(allowlist.skills).toContain("cross-review");
+  });
+
   it("keeps cc:update-claudemd bounded and avoids no-op commits", () => {
     const command = readFileSync(
       path.join(ROOT, "commands", "cc", "update-claudemd.md"),
