@@ -83,11 +83,9 @@ function isVitestFixture(manifest) {
   );
   const sentinel = path.join(gitCommonDir, ".quality-vitest-fixture");
   try {
-    const stat = fs.lstatSync(sentinel);
     return (
-      stat.isFile() &&
-      !stat.isSymbolicLink() &&
-      fs.readFileSync(sentinel, "utf8").trim() === manifest.repo.key
+      readRegularFile(sentinel, "quality Vitest fixture sentinel").trim() ===
+      manifest.repo.key
     );
   } catch (error) {
     if (error.code === "ENOENT") return false;
@@ -134,7 +132,7 @@ function parseJson(raw, label) {
   }
 }
 
-function readJson(file, label) {
+function readRegularFile(file, label) {
   let descriptor;
   try {
     descriptor = fs.openSync(
@@ -153,10 +151,14 @@ function readJson(file, label) {
     if (!fs.fstatSync(descriptor).isFile()) {
       throw new Error(`${label} must be a regular file`);
     }
-    return parseJson(fs.readFileSync(descriptor, "utf8"), label);
+    return fs.readFileSync(descriptor, "utf8");
   } finally {
-    if (descriptor !== undefined) fs.closeSync(descriptor);
+    fs.closeSync(descriptor);
   }
+}
+
+function readJson(file, label) {
+  return parseJson(readRegularFile(file, label), label);
 }
 
 function atomicWrite(file, value) {

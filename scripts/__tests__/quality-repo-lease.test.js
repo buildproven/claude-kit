@@ -64,6 +64,7 @@ function fixture(name, overrides = {}) {
   const head = git(root, ["rev-parse", "HEAD"]);
   const repoKey = crypto.randomBytes(8).toString("hex");
   const invocationId = overrides.invocationId || crypto.randomUUID();
+  const githubRepository = overrides.githubRepository || "BuildProven/Fixture";
   const stateRoot = path.join(
     sandbox,
     "bs-quality",
@@ -88,8 +89,8 @@ function fixture(name, overrides = {}) {
           key: repoKey,
           pr: 7,
           origin: "git@github.com:buildproven/fixture.git",
-          githubRepository: "BuildProven/Fixture",
-          headRepository: "BuildProven/Fixture",
+          githubRepository,
+          headRepository: githubRepository,
           headRefName: `fix/${name}`,
           isCrossRepository: false,
         },
@@ -199,6 +200,36 @@ describe("repository merge lease", () => {
       expect(lease._pathsFor("buildproven/fixture", manifest).root).toBe(
         lease.stateRoot(),
       );
+    } finally {
+      if (previousVitest === undefined) delete process.env.VITEST;
+      else process.env.VITEST = previousVitest;
+      if (previousWorker === undefined) delete process.env.VITEST_WORKER_ID;
+      else process.env.VITEST_WORKER_ID = previousWorker;
+    }
+  });
+
+  it("reads a test-fixture sentinel from one non-symlink descriptor", () => {
+    const githubRepository = `vitest/${crypto.randomBytes(12).toString("hex")}`;
+    const { root, manifestPath } = fixture("fixture-sentinel", {
+      githubRepository,
+    });
+    const { manifest } = invocation.loadManifest(manifestPath);
+    const sentinel = path.join(root, ".git", ".quality-vitest-fixture");
+    fs.writeFileSync(sentinel, `${manifest.repo.key}\n`, { mode: 0o600 });
+    const previousVitest = process.env.VITEST;
+    const previousWorker = process.env.VITEST_WORKER_ID;
+    process.env.VITEST = "true";
+    process.env.VITEST_WORKER_ID = "fixture-sentinel";
+    try {
+      expect(lease.isVitestFixture(manifest)).toBe(true);
+      const backing = path.join(root, ".git", ".fixture-sentinel-backing");
+      fs.renameSync(sentinel, backing);
+      fs.symlinkSync(backing, sentinel);
+      expect(() => lease.isVitestFixture(manifest)).toThrow(
+        /non-symlink regular file/,
+      );
+      fs.unlinkSync(sentinel);
+      fs.renameSync(backing, sentinel);
     } finally {
       if (previousVitest === undefined) delete process.env.VITEST;
       else process.env.VITEST = previousVitest;
