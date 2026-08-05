@@ -94,6 +94,24 @@ function worktreeLockStatus(manifest) {
   }
 }
 
+function repositoryLeaseStatus(manifestPath, manifest) {
+  if (manifest.options?.merge !== true) return "not required";
+  try {
+    const status = require("./quality-repo-lease").status(manifestPath);
+    if (status.state === "missing") return "missing — merge remains blocked";
+    return (
+      `${status.state} for ${status.repository} PR #${status.pr}; ` +
+      `owner=${status.manifestPath}; generation=${status.generation}; renewed=${status.renewedAt}` +
+      (status.mergeGuard
+        ? `; merge-quarantine=head ${status.mergeGuard.head}, request-started=${status.mergeGuard.requestStartedAt || "no"}, admin=${status.mergeGuard.admin === true}`
+        : "") +
+      (status.recoveryCommand ? `; recovery=${status.recoveryCommand}` : "")
+    );
+  } catch (error) {
+    return `status unavailable — ${error.message}`;
+  }
+}
+
 function buildDiagnosis(manifestPath, manifest, failure = {}) {
   const gates = (manifest.requiredGates || [])
     .map(
@@ -113,6 +131,7 @@ function buildDiagnosis(manifestPath, manifest, failure = {}) {
     `Provider review/checkpoint: ${providerStatus(manifest, failure)}`,
     `Break-glass: ${breakGlassStatus(manifest)}`,
     `Worktree lock: ${worktreeLockStatus(manifest)}`,
+    `Repository merge lease: ${repositoryLeaseStatus(manifestPath, manifest)}`,
     `GitHub CI: ${ciStatus}`,
     `Retry/resume: /bs:quality --manifest ${manifestPath}`,
   ].join("\n");
@@ -159,4 +178,5 @@ module.exports = {
   currentGateStatus,
   parseArgs,
   worktreeLockStatus,
+  repositoryLeaseStatus,
 };

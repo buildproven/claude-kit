@@ -150,6 +150,15 @@ if [ -n "$MANIFEST_ARG" ]; then
   RESUME_ROOT="$(node -e 'const q=require(process.argv[1]); process.stdout.write(q.loadManifest(process.argv[2]).manifest.repo.realpath)' \
     "$SCRIPT_DIR/quality-invocation.js" "$MANIFEST_ARG")" || exit 1
   cd "$RESUME_ROOT" || exit 1
+  RESUME_MERGE="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" options.merge)"
+  BS_QUALITY_REPOSITORY_LEASE_TOKEN=""
+  if [ "$RESUME_MERGE" = true ]; then
+    node "$SCRIPT_DIR/quality-repo-lease.js" acquire \
+      --manifest "$MANIFEST_ARG" >/dev/null || exit 1
+    BS_QUALITY_REPOSITORY_LEASE_TOKEN="$(node "$SCRIPT_DIR/quality-invocation.js" field \
+      "$MANIFEST_ARG" merge.repositoryLease.token)" || exit 1
+    export BS_QUALITY_REPOSITORY_LEASE_TOKEN
+  fi
   RESUME_PR="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" repo.pr)"
   ADVANCE_ARGS=(advance "$MANIFEST_ARG")
   if [ -n "$RESUME_PR" ] && [ "$RESUME_PR" != null ]; then
@@ -166,6 +175,10 @@ if [ -n "$MANIFEST_ARG" ]; then
       --cross-repository "$RESUME_CROSS_REPOSITORY")
   fi
   node "$SCRIPT_DIR/quality-invocation.js" "${ADVANCE_ARGS[@]}" >/dev/null || exit 1
+  if [ "$RESUME_MERGE" = true ]; then
+    node "$SCRIPT_DIR/quality-repo-lease.js" assert-base \
+      --manifest "$MANIFEST_ARG" >/dev/null || exit 1
+  fi
   INVOCATION_ID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" invocationId)"
   HEAD_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" revisions.currentHead)"
   echo "BS_QUALITY_MANIFEST=$MANIFEST_ARG"
@@ -584,6 +597,16 @@ if [ -n "${RES_PR:-}" ]; then
     --cross-repository "$PR_IS_CROSS_REPOSITORY")
 fi
 BS_QUALITY_MANIFEST="$(node "$SCRIPT_DIR/quality-invocation.js" "${CREATE_ARGS[@]}")" || exit 1
+BS_QUALITY_REPOSITORY_LEASE_TOKEN=""
+if [ "$ARGS_MERGE" = true ]; then
+  node "$SCRIPT_DIR/quality-repo-lease.js" acquire \
+    --manifest "$BS_QUALITY_MANIFEST" >/dev/null || exit 1
+  BS_QUALITY_REPOSITORY_LEASE_TOKEN="$(node "$SCRIPT_DIR/quality-invocation.js" field \
+    "$BS_QUALITY_MANIFEST" merge.repositoryLease.token)" || exit 1
+  export BS_QUALITY_REPOSITORY_LEASE_TOKEN
+  node "$SCRIPT_DIR/quality-repo-lease.js" assert-base \
+    --manifest "$BS_QUALITY_MANIFEST" >/dev/null || exit 1
+fi
 INVOCATION_ID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$BS_QUALITY_MANIFEST" invocationId)"
 LOCK_OWNER="$(node "$SCRIPT_DIR/quality-invocation.js" lock-owner "$BS_QUALITY_MANIFEST")" || exit 1
 BASE_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$BS_QUALITY_MANIFEST" revisions.baseSha)"

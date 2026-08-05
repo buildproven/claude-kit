@@ -22,8 +22,16 @@ const AUTHORIZE = readFileSync(
   path.join(ROOT, "scripts/quality-authorize-merge.sh"),
   "utf8",
 );
+const REPOSITORY_LEASE = readFileSync(
+  path.join(ROOT, "scripts/quality-repo-lease.js"),
+  "utf8",
+);
 const STAMP_AND_MERGE = readFileSync(
   path.join(ROOT, "scripts/quality-stamp-and-merge.sh"),
+  "utf8",
+);
+const MERGE_CLEANUP = readFileSync(
+  path.join(ROOT, "scripts/quality-merge-cleanup.sh"),
   "utf8",
 );
 const QUALITY_COMMAND = readFileSync(
@@ -116,12 +124,35 @@ describe("quality merge gates", () => {
   });
 
   it("head-binds the merge and verifies terminal merged state", () => {
-    expect(AUTHORIZE).toMatch(/--match-head-commit "\$ACTUAL_HEAD"/);
-    expect(AUTHORIZE).toMatch(/MERGE_RC=0/);
-    expect(AUTHORIZE).toMatch(/gh pr merge[\s\S]*MERGE_RC=\$\?/);
-    expect(AUTHORIZE).toMatch(/gh pr view[\s\S]*state,mergedAt,mergeCommit/);
-    expect(AUTHORIZE).toMatch(/\.state.*MERGED/s);
-    expect(AUTHORIZE).toMatch(/\.mergeCommit\.oid/);
+    expect(REPOSITORY_LEASE).toMatch(/"--match-head-commit",\s*head/);
+    expect(REPOSITORY_LEASE).toMatch(/spawnSync\("gh", args/);
+    expect(REPOSITORY_LEASE).toMatch(
+      /"pr",\s*"view"[\s\S]*state,mergedAt,mergeCommit/,
+    );
+    expect(REPOSITORY_LEASE).toMatch(/remote\.state === "MERGED"/);
+    expect(REPOSITORY_LEASE).toMatch(/remote\.mergeCommit\?\.oid/);
+    expect(AUTHORIZE).toMatch(/quality-repo-lease\.js" merge/);
+    expect(AUTHORIZE).toMatch(/--expected-head "\$ACTUAL_HEAD"/);
+    expect(REPOSITORY_LEASE).toMatch(/options\.expectedHead !== head/);
+  });
+
+  it("keeps post-merge cleanup on the phase-pinned lease credential", () => {
+    expect(MERGE_CLEANUP).toMatch(
+      /source "\$SCRIPT_DIR\/quality-repo-lease-pin\.sh"/,
+    );
+    expect(MERGE_CLEANUP).toMatch(/quality_pin_repository_lease "\$MANIFEST"/);
+    expect(MERGE_CLEANUP).not.toMatch(/merge\.repositoryLease\.token/);
+    expect(MERGE_CLEANUP).toMatch(/LEASE_RESULT="\$\(node/);
+    expect(MERGE_CLEANUP).toMatch(/\.reconciled \/\/ false/);
+    expect(MERGE_CLEANUP).toMatch(/repository merge remains quarantined/);
+    expect(MERGE_CLEANUP).toMatch(/PRESERVE_BRANCH=true/);
+    expect(REPOSITORY_LEASE).toMatch(
+      /function releaseMergeGuard[\s\S]*withMetadataGuard/,
+    );
+    expect(REPOSITORY_LEASE).toMatch(
+      /function releaseVerifiedOutcome[\s\S]*record\.disposition = "released"[\s\S]*recordMergedTerminalRaw/,
+    );
+    expect(STAMP_AND_MERGE).not.toMatch(/quality-repo-lease\.js" release/);
   });
 
   it("persists success terminal states before cleanup or telemetry", () => {
@@ -205,7 +236,7 @@ describe("quality merge gates", () => {
       /quality-wait-required-checks\.sh" --pr "\$PR" \|\| RC=\$\?/,
     );
     expect(AUTHORIZE).toMatch(
-      /quality-ci-billing-waiver\.js[\s\S]*MERGE_ARGS\+=\(--admin\)/,
+      /quality-ci-billing-waiver\.js[\s\S]*LEASE_ADMIN=true/,
     );
   });
 
@@ -219,7 +250,7 @@ describe("quality merge gates", () => {
     const finalWaiverValidation = AUTHORIZE.lastIndexOf(
       'node "$SCRIPT_DIR/quality-ci-billing-waiver.js"',
     );
-    const adminMerge = AUTHORIZE.indexOf("MERGE_ARGS+=(--admin)");
+    const adminMerge = AUTHORIZE.indexOf("LEASE_ADMIN=true");
     expect(firstWaiverValidation).toBeGreaterThan(-1);
     expect(requiredChecks).toBeGreaterThan(firstWaiverValidation);
     expect(finalWaiverValidation).toBeGreaterThan(requiredChecks);
@@ -228,10 +259,10 @@ describe("quality merge gates", () => {
       /if \[ "\$PREFLIGHT" = false \] && \[ "\$\{CI_BILLING_WAIVED:-false\}" = false \]; then[\s\S]*gh pr checks/,
     );
     expect(AUTHORIZE).toMatch(
-      /if \[ "\$\{CI_BILLING_WAIVED:-false\}" = true \]; then[\s\S]*MERGE_ARGS\+=\(--admin\)/,
+      /if \[ "\$\{CI_BILLING_WAIVED:-false\}" = true \]; then[\s\S]*LEASE_ADMIN=true/,
     );
     expect(AUTHORIZE).toMatch(
-      /\[ "\$ATOMIC_BASE_FRESHNESS" = unprotectable \][\s\S]*quality-ci-billing-waiver\.js[\s\S]*MERGE_ARGS\+=\(--admin\)/,
+      /\[ "\$ATOMIC_BASE_FRESHNESS" = unprotectable \][\s\S]*quality-ci-billing-waiver\.js[\s\S]*LEASE_ADMIN=true/,
     );
   });
 
@@ -239,7 +270,7 @@ describe("quality merge gates", () => {
     const restriction = AUTHORIZE.indexOf(
       '[ "$ATOMIC_BASE_FRESHNESS" != unprotectable ]',
     );
-    const adminMerge = AUTHORIZE.indexOf("MERGE_ARGS+=(--admin)");
+    const adminMerge = AUTHORIZE.indexOf("LEASE_ADMIN=true");
     expect(restriction).toBeGreaterThan(-1);
     expect(adminMerge).toBeGreaterThan(restriction);
     expect(AUTHORIZE).toMatch(

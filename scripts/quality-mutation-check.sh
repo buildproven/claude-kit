@@ -18,6 +18,8 @@ done
   echo "quality-mutation-check: --manifest is required" >&2
   exit 2
 }
+source "$SCRIPT_DIR/quality-repo-lease-pin.sh" || exit 1
+quality_pin_repository_lease "$MANIFEST" || exit 1
 
 ROOT="$(node "$SCRIPT_DIR/quality-invocation.js" locate "$MANIFEST")" || exit 1
 TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"

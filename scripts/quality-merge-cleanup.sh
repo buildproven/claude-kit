@@ -4,6 +4,8 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=quality-repo-lease-pin.sh
+source "$SCRIPT_DIR/quality-repo-lease-pin.sh"
 PRESERVE_BRANCH=false
 MANIFEST=""
 while [ "$#" -gt 0 ]; do
@@ -13,6 +15,41 @@ while [ "$#" -gt 0 ]; do
     *) echo "[quality] merge succeeded; cleanup incomplete: unknown cleanup argument '$1'." >&2; exit 0 ;;
   esac
 done
+
+# Repository serialization is independent of worktree cleanup. Release a lease
+# from authoritative remote merge evidence before a dirty primary can make the
+# ordinary cleanup path return early.
+if [ -n "$MANIFEST" ] && [ -f "$MANIFEST" ]; then
+  LEASE_STATUS="$(node "$SCRIPT_DIR/quality-repo-lease.js" status \
+    --manifest "$MANIFEST" 2>/dev/null || true)"
+  if [ "$(printf '%s' "$LEASE_STATUS" | jq -r '.state // empty' 2>/dev/null)" = active ]; then
+    if quality_pin_repository_lease "$MANIFEST"; then
+      LEASE_RESULT="$(node "$SCRIPT_DIR/quality-repo-lease.js" release-if-merged \
+        --manifest "$MANIFEST")" || LEASE_RESULT=error
+      if [ "$LEASE_RESULT" = error ]; then
+        PRESERVE_BRANCH=true
+        echo "[quality] merge succeeded; repository lease reconciliation failed." >&2
+        echo "  Recovery: node \"$SCRIPT_DIR/quality-repo-lease.js\" status --manifest \"$MANIFEST\"" >&2
+      elif [ "$(printf '%s' "$LEASE_RESULT" | jq -r '.reconciled // false')" != true ]; then
+        LEASE_STATUS="$(node "$SCRIPT_DIR/quality-repo-lease.js" status \
+          --manifest "$MANIFEST" 2>/dev/null || true)"
+        if [ "$(printf '%s' "$LEASE_STATUS" | jq -r '.mergeGuard != null' 2>/dev/null)" = true ]; then
+          PRESERVE_BRANCH=true
+          INVOCATION_ID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" invocationId)"
+          PR="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" repo.pr)"
+          echo "[quality] merge succeeded; repository merge remains quarantined pending exact remote verification." >&2
+          echo "  Recovery: node \"$SCRIPT_DIR/quality-repo-lease.js\" reconcile-merge --manifest \"$MANIFEST\" --confirm-owner-invocation-id \"$INVOCATION_ID\" --confirm-owner-pr \"$PR\"" >&2
+        else
+          PRESERVE_BRANCH=true
+          echo "[quality] merge succeeded; repository lease remains active because GitHub did not prove the exact head merged." >&2
+        fi
+      fi
+    else
+      PRESERVE_BRANCH=true
+      echo "[quality] merge succeeded; repository lease cleanup was fenced; resume the exact campaign shown by lease status." >&2
+    fi
+  fi
+fi
 
 WORKTREE_PATH="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 FEATURE_BRANCH="$(git branch --show-current 2>/dev/null || true)"

@@ -9,6 +9,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ -n "$MANIFEST" ] || { echo "quality-stamp-and-merge: --manifest is required" >&2; exit 1; }
+source "$SCRIPT_DIR/quality-repo-lease-pin.sh" || exit 1
+quality_pin_repository_lease "$MANIFEST" || exit 1
 ROOT="$(node "$SCRIPT_DIR/quality-invocation.js" locate "$MANIFEST")"
 cd "$ROOT"
 bash "$SCRIPT_DIR/quality-assert-clean.sh" \
