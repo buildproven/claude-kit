@@ -54,12 +54,14 @@ locked, dirty, unpushed, open-PR, recent, and inconclusive worktrees. Use
 `migrate --dry-run` before adopting legacy layouts and `repair --apply` after
 an explicitly reviewed repository move or rename.
 
-Quality merges autonomously at every risk tier once all revision-bound review,
-gate, CI, and base-freshness evidence is clean. Critical changes get deeper
-review; they do not require a routine approval command. A run stops for human
-direction only when the evidence is unresolved (for example, actionable
-findings, malformed or inconclusive review output, stale identity, or failed
-CI).
+Quality merges autonomously at every risk tier once all revision-bound
+deterministic gate, CI, signature, and base-freshness evidence is clean.
+Critical changes get deeper bounded AI discovery; they do not require a routine
+approval command. Under review contract v2, AI leads and completion status are
+advisory: unavailable or malformed provider output is signed as `incomplete`,
+never presented as a clean review. A run stops for human direction when
+deterministic evidence is unresolved, revision identity is stale, required CI
+fails, or repository policy explicitly requires a human.
 
 Repositories that explicitly set `scorePolicy.mergeAuthority` to
 `"human-required"` retain the legacy signed, expiring approval command; it is

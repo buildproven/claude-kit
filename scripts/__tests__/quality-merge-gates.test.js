@@ -26,6 +26,14 @@ const STAMP_AND_MERGE = readFileSync(
   path.join(ROOT, "scripts/quality-stamp-and-merge.sh"),
   "utf8",
 );
+const QUALITY_COMMAND = readFileSync(
+  path.join(ROOT, "commands/bs/quality.md"),
+  "utf8",
+);
+const WORKFLOW_COMMAND = readFileSync(
+  path.join(ROOT, "commands/bs/workflow.md"),
+  "utf8",
+);
 
 /**
  * On 2026-07-12 a review panel returned FAIL with 2 blocking findings; the skill
@@ -40,6 +48,15 @@ describe("quality merge gates", () => {
   it("keeps deterministic failures blocking while AI leads stay advisory", () => {
     expect(SKILL).toMatch(/zero deterministic findings/);
     expect(SKILL).toMatch(/AI leads and completion status are advisory/);
+    expect(QUALITY_COMMAND).toMatch(
+      /AI leads and completion status are\s+advisory/,
+    );
+    expect(WORKFLOW_COMMAND).toMatch(
+      /AI leads and completion status are\s+advisory/,
+    );
+    expect(QUALITY_COMMAND).not.toMatch(
+      /malformed or inconclusive review output.*hard merge blocks/s,
+    );
   });
 
   it("states the deterministic-findings gate before the trailer contract", () => {

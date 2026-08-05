@@ -4851,6 +4851,15 @@ function runCommand(command, rawArgs) {
       options.state,
       options.detail,
     );
+    try {
+      require("./quality-telemetry").recordCampaign(manifestArg, {
+        quiet: true,
+      });
+    } catch (error) {
+      process.stderr.write(
+        `[quality] telemetry: terminal state recorded but telemetry failed — ${error.message}\n`,
+      );
+    }
     process.stdout.write(`${inForce}\n`);
     return;
   }
