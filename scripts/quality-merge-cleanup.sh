@@ -4,6 +4,8 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=quality-repo-lease-pin.sh
+source "$SCRIPT_DIR/quality-repo-lease-pin.sh"
 PRESERVE_BRANCH=false
 MANIFEST=""
 while [ "$#" -gt 0 ]; do
@@ -21,14 +23,13 @@ if [ -n "$MANIFEST" ] && [ -f "$MANIFEST" ]; then
   LEASE_STATUS="$(node "$SCRIPT_DIR/quality-repo-lease.js" status \
     --manifest "$MANIFEST" 2>/dev/null || true)"
   if [ "$(printf '%s' "$LEASE_STATUS" | jq -r '.state // empty' 2>/dev/null)" = active ]; then
-    LEASE_TOKEN="$(node "$SCRIPT_DIR/quality-invocation.js" field \
-      "$MANIFEST" merge.repositoryLease.token 2>/dev/null || true)"
-    if [ -n "$LEASE_TOKEN" ]; then
-      BS_QUALITY_REPOSITORY_LEASE_TOKEN="$LEASE_TOKEN" \
-        node "$SCRIPT_DIR/quality-repo-lease.js" release-if-merged \
-          --manifest "$MANIFEST" >/dev/null 2>&1 || {
+    if quality_pin_repository_lease "$MANIFEST"; then
+      node "$SCRIPT_DIR/quality-repo-lease.js" release-if-merged \
+        --manifest "$MANIFEST" >/dev/null || {
         echo "[quality] merge succeeded; repository lease release awaits exact remote verification." >&2
       }
+    else
+      echo "[quality] merge succeeded; repository lease cleanup was fenced; resume the exact campaign shown by lease status." >&2
     fi
   fi
 fi

@@ -183,6 +183,78 @@ function processAlive(pid) {
   }
 }
 
+function processIdentity(pid) {
+  if (!Number.isInteger(pid) || pid < 1) return null;
+  const result = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+    encoding: "utf8",
+    timeout: 5_000,
+  });
+  if (result.status !== 0) return null;
+  const identity = result.stdout.trim();
+  return identity || null;
+}
+
+function sameGuardOwner(current, observed) {
+  return (
+    current.pid === observed.pid &&
+    current.uid === observed.uid &&
+    current.nonce === observed.nonce &&
+    current.acquiredAt === observed.acquiredAt
+  );
+}
+
+function removeRecoveryLock(file) {
+  const stat = fs.lstatSync(file);
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error("repository lease recovery lock changed");
+  }
+  fs.unlinkSync(file);
+}
+
+function recoverDeadGuard(directory, observed) {
+  const recoveryLock = `${directory}.recovery-lock`;
+  let descriptor;
+  try {
+    descriptor = fs.openSync(recoveryLock, "wx", 0o600);
+    fs.writeFileSync(
+      descriptor,
+      `${JSON.stringify({
+        schemaVersion: SCHEMA_VERSION,
+        pid: process.pid,
+        uid: process.geteuid?.(),
+        nonce: crypto.randomBytes(16).toString("hex"),
+      })}\n`,
+    );
+  } catch (error) {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+    if (error.code === "EEXIST") return false;
+    throw error;
+  }
+  fs.closeSync(descriptor);
+  try {
+    if (!fs.existsSync(directory)) return false;
+    const current = guardOwner(directory);
+    if (!sameGuardOwner(current, observed)) return false;
+    const alive = processAlive(current.pid);
+    if (alive !== false) {
+      if (
+        alive === true &&
+        current.processIdentity &&
+        processIdentity(current.pid) !== current.processIdentity
+      ) {
+        // The PID was reused by another process; it is not this guard owner.
+      } else {
+        return false;
+      }
+    }
+    const released = tombstone(directory);
+    exactCleanup(released);
+    return true;
+  } finally {
+    removeRecoveryLock(recoveryLock);
+  }
+}
+
 function exactCleanup(directory, recordName = "owner.json") {
   const record = path.join(directory, recordName);
   if (fs.existsSync(record)) {
@@ -217,6 +289,8 @@ function acquireGuard(directory, timeoutMs = DEFAULT_WAIT_MS, options = {}) {
         schemaVersion: SCHEMA_VERSION,
         pid: process.pid,
         uid: process.geteuid?.(),
+        nonce: crypto.randomBytes(16).toString("hex"),
+        processIdentity: processIdentity(process.pid),
         acquiredAt: new Date().toISOString(),
       });
       return;
@@ -224,10 +298,12 @@ function acquireGuard(directory, timeoutMs = DEFAULT_WAIT_MS, options = {}) {
       if (error.code !== "EEXIST") throw error;
       const owner = guardOwner(directory);
       const alive = processAlive(owner.pid);
-      if (alive === false && options.recoverDead !== false) {
-        const released = tombstone(directory);
-        exactCleanup(released);
-        continue;
+      const reused =
+        alive === true &&
+        owner.processIdentity &&
+        processIdentity(owner.pid) !== owner.processIdentity;
+      if ((alive === false || reused) && options.recoverDead !== false) {
+        if (recoverDeadGuard(directory, owner)) continue;
       }
       if (Date.now() >= deadline) {
         throw new Error(
@@ -961,5 +1037,6 @@ module.exports = {
   verify,
   withManifestMutation,
   withMetadataGuard,
+  _recoverDeadGuard: recoverDeadGuard,
   _pathsFor: pathsFor,
 };

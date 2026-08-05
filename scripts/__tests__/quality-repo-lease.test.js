@@ -229,6 +229,66 @@ describe("repository merge lease", () => {
     lease.release(manifestPath, owner.token, "test-complete");
   });
 
+  it("serializes dead-guard recovery and never removes a replacement owner", () => {
+    const directory = path.join(sandbox, "guard-recovery-race");
+    fs.mkdirSync(directory, { mode: 0o700 });
+    const observed = {
+      schemaVersion: 1,
+      pid: 99999999,
+      uid: process.geteuid(),
+      nonce: crypto.randomBytes(16).toString("hex"),
+      processIdentity: null,
+      acquiredAt: "2026-08-05T00:00:00.000Z",
+    };
+    fs.writeFileSync(
+      path.join(directory, "owner.json"),
+      `${JSON.stringify(observed)}\n`,
+      { mode: 0o600 },
+    );
+    const recoveryLock = `${directory}.recovery-lock`;
+    fs.writeFileSync(recoveryLock, "busy\n", { mode: 0o600 });
+    expect(lease._recoverDeadGuard(directory, observed)).toBe(false);
+
+    const replacement = {
+      ...observed,
+      pid: process.pid,
+      nonce: crypto.randomBytes(16).toString("hex"),
+      acquiredAt: "2026-08-05T00:00:01.000Z",
+    };
+    fs.writeFileSync(
+      path.join(directory, "owner.json"),
+      `${JSON.stringify(replacement)}\n`,
+      { mode: 0o600 },
+    );
+    fs.unlinkSync(recoveryLock);
+    expect(lease._recoverDeadGuard(directory, observed)).toBe(false);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(directory, "owner.json"), "utf8")),
+    ).toEqual(replacement);
+    fs.unlinkSync(path.join(directory, "owner.json"));
+    fs.rmdirSync(directory);
+  });
+
+  it("distinguishes a recycled PID from the recorded guard process", () => {
+    const directory = path.join(sandbox, "guard-reused-pid");
+    fs.mkdirSync(directory, { mode: 0o700 });
+    const observed = {
+      schemaVersion: 1,
+      pid: process.pid,
+      uid: process.geteuid(),
+      nonce: crypto.randomBytes(16).toString("hex"),
+      processIdentity: "a different process start time",
+      acquiredAt: "2026-08-05T00:00:00.000Z",
+    };
+    fs.writeFileSync(
+      path.join(directory, "owner.json"),
+      `${JSON.stringify(observed)}\n`,
+      { mode: 0o600 },
+    );
+    expect(lease._recoverDeadGuard(directory, observed)).toBe(true);
+    expect(fs.existsSync(directory)).toBe(false);
+  });
+
   it("rejects a symlink substituted for an opened lease record", () => {
     const { manifestPath } = fixture("symlink-record");
     const owner = lease.acquire(manifestPath);

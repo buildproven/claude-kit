@@ -67,7 +67,9 @@ Add a repository-scoped merge lease to the public quality runtime.
    then the manifest mutation lock, and validates that pinned credential while
    holding both immediately before its atomic write.
    Phase entry/exit checks supplement this mutation boundary; they do not
-   replace it. The remote
+   replace it. Post-merge cleanup uses the same phase-pinned credential and
+   surfaces fencing rejection; it never replaces an inherited credential from
+   the mutable manifest. The remote
    merge is additionally enclosed by a repository-scoped operation guard. The
    owner acquires that guard atomically with its final token validation, then
    revalidates the live base while holding it, performs the synchronous GitHub
@@ -135,9 +137,15 @@ Acquisition, renewal, rotation, reconciliation, and release all execute under
 one short repository-scoped metadata guard. That guard is the linearization
 point for reading and replacing lease generations; no code may write a lease
 record outside it. Its crash recovery may reclaim only a guard whose recorded
-process identity is provably absent, because metadata critical sections perform
-no external side effect. This prevents a stale renewal from overwriting a newer
-recovery generation. The mandatory global order for any path needing both
+process identity (PID plus process start identity and random nonce) is provably
+absent, because metadata critical sections perform no external side effect.
+Dead-owner reclamation is itself serialized by a non-recovering sibling claim;
+after acquiring that claim, the reclaimer compares the complete observed guard
+generation immediately before the atomic rename. A concurrent reclaimer can
+therefore never rename a newly acquired guard. A crash before the rename leaves
+a visible recovery claim and fails closed for operator repair; a crash after the
+rename cannot admit two owners. This prevents a stale renewal from overwriting
+a newer recovery generation. The mandatory global order for any path needing both
 locks is metadata guard first, manifest lock second; no manifest-locked path may
 attempt to acquire the metadata guard.
 
@@ -223,6 +231,8 @@ critical section, not to the campaign lease or its six-hour policy.
 - Concurrent renewal/rotation tests prove the metadata guard prevents an old
   generation from being republished. Different `TMPDIR` values still contend
   in the same fixed operator namespace.
+- Dead metadata-guard recovery serializes concurrent contenders, distinguishes
+  PID reuse by process start identity, and never removes a replacement guard.
 - Opposing manifest-mutation and recovery processes acquire metadata then
   manifest locks and complete without deadlock; a lock-order tripwire rejects
   any reverse-order caller.

@@ -30,6 +30,10 @@ const STAMP_AND_MERGE = readFileSync(
   path.join(ROOT, "scripts/quality-stamp-and-merge.sh"),
   "utf8",
 );
+const MERGE_CLEANUP = readFileSync(
+  path.join(ROOT, "scripts/quality-merge-cleanup.sh"),
+  "utf8",
+);
 const QUALITY_COMMAND = readFileSync(
   path.join(ROOT, "commands/bs/quality.md"),
   "utf8",
@@ -128,6 +132,17 @@ describe("quality merge gates", () => {
     expect(REPOSITORY_LEASE).toMatch(/remote\.state === "MERGED"/);
     expect(REPOSITORY_LEASE).toMatch(/remote\.mergeCommit\?\.oid/);
     expect(AUTHORIZE).toMatch(/quality-repo-lease\.js" merge/);
+  });
+
+  it("keeps post-merge cleanup on the phase-pinned lease credential", () => {
+    expect(MERGE_CLEANUP).toMatch(
+      /source "\$SCRIPT_DIR\/quality-repo-lease-pin\.sh"/,
+    );
+    expect(MERGE_CLEANUP).toMatch(/quality_pin_repository_lease "\$MANIFEST"/);
+    expect(MERGE_CLEANUP).not.toMatch(/merge\.repositoryLease\.token/);
+    expect(MERGE_CLEANUP).toMatch(
+      /release-if-merged \\\n\s+--manifest "\$MANIFEST" >\/dev\/null \|\|/,
+    );
   });
 
   it("persists success terminal states before cleanup or telemetry", () => {
