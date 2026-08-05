@@ -166,12 +166,27 @@ function atomicWrite(file, value) {
     path.dirname(file),
     `.${path.basename(file)}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`,
   );
-  fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, {
-    flag: "wx",
-    mode: 0o600,
-  });
-  fs.renameSync(temporary, file);
-  fs.chmodSync(file, 0o600);
+  let renamed = false;
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, {
+      flag: "wx",
+      mode: 0o600,
+    });
+    fs.renameSync(temporary, file);
+    renamed = true;
+    fs.chmodSync(file, 0o600);
+  } finally {
+    if (!renamed) removeAtomicTemporary(temporary);
+  }
+}
+
+function removeAtomicTemporary(file) {
+  if (!fs.existsSync(file)) return;
+  const stat = fs.lstatSync(file);
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error("repository lease atomic-write temporary changed");
+  }
+  fs.unlinkSync(file);
 }
 
 function processAlive(pid) {
@@ -287,18 +302,18 @@ function acquireGuard(directory, timeoutMs = DEFAULT_WAIT_MS, options = {}) {
   for (;;) {
     try {
       fs.mkdirSync(directory, { mode: 0o700 });
-      atomicWrite(path.join(directory, "owner.json"), {
-        schemaVersion: SCHEMA_VERSION,
-        pid: process.pid,
-        uid: process.geteuid?.(),
-        nonce: crypto.randomBytes(16).toString("hex"),
-        processIdentity: processIdentity(process.pid),
-        acquiredAt: new Date().toISOString(),
-      });
-      return;
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
-      const owner = guardOwner(directory);
+      let owner;
+      try {
+        owner = guardOwner(directory);
+      } catch (ownerError) {
+        if (ownerError.code === "ENOENT" && Date.now() < deadline) {
+          sleep(50);
+          continue;
+        }
+        throw ownerError;
+      }
       const alive = processAlive(owner.pid);
       const reused =
         alive === true &&
@@ -316,6 +331,21 @@ function acquireGuard(directory, timeoutMs = DEFAULT_WAIT_MS, options = {}) {
         );
       }
       sleep(50);
+      continue;
+    }
+    try {
+      atomicWrite(path.join(directory, "owner.json"), {
+        schemaVersion: SCHEMA_VERSION,
+        pid: process.pid,
+        uid: process.geteuid?.(),
+        nonce: crypto.randomBytes(16).toString("hex"),
+        processIdentity: processIdentity(process.pid),
+        acquiredAt: new Date().toISOString(),
+      });
+      return;
+    } catch (error) {
+      exactCleanup(directory);
+      throw error;
     }
   }
 }
@@ -669,6 +699,8 @@ function status(manifestPath) {
         head: guard.head,
         base: guard.base,
         requestStartedAt: guard.requestStartedAt,
+        admin: guard.admin === true,
+        adminReason: guard.adminReason ?? null,
       };
     }
     return {
@@ -741,7 +773,7 @@ function mergeHead(manifest) {
   return manifest.merge?.stampHead ?? manifest.revisions.currentHead;
 }
 
-function acquireMergeGuard(manifestPath, presentedToken) {
+function acquireMergeGuard(manifestPath, presentedToken, options = {}) {
   const loaded = loadManifest(manifestPath);
   const tuple = ownerTuple(loaded.manifest, loaded.manifestPath);
   return withMetadataGuard(loaded.manifest, (paths) => {
@@ -769,6 +801,8 @@ function acquireMergeGuard(manifestPath, presentedToken) {
         loaded.manifest.revisions.baseRebaseCarry?.baseSha ??
         loaded.manifest.revisions.baseHeadSha,
       token: presentedToken,
+      admin: options.admin === true,
+      adminReason: options.admin === true ? "ci-billing-waiver" : null,
       requestStartedAt: null,
     });
     record.renewedAt = new Date().toISOString();
@@ -779,21 +813,22 @@ function acquireMergeGuard(manifestPath, presentedToken) {
 
 function releaseMergeGuard(manifestPath, presentedToken, outcome) {
   const loaded = loadManifest(manifestPath);
-  const paths = pathsFor(repositoryIdentity(loaded.manifest), loaded.manifest);
-  const owner = guardOwner(paths.mergeGuard);
-  if (
-    owner.token !== presentedToken ||
-    owner.repository !== repositoryIdentity(loaded.manifest) ||
-    owner.pr !== loaded.manifest.repo.pr ||
-    owner.head !== mergeHead(loaded.manifest)
-  ) {
-    throw new Error("merge operation guard owner changed");
-  }
-  if (!["merged", "closed-unmerged", "not-started"].includes(outcome)) {
-    throw new Error("ambiguous merge operation remains quarantined");
-  }
-  const released = tombstone(paths.mergeGuard);
-  exactCleanup(released);
+  return withMetadataGuard(loaded.manifest, (paths) => {
+    const owner = guardOwner(paths.mergeGuard);
+    if (
+      owner.token !== presentedToken ||
+      owner.repository !== repositoryIdentity(loaded.manifest) ||
+      owner.pr !== loaded.manifest.repo.pr ||
+      owner.head !== mergeHead(loaded.manifest)
+    ) {
+      throw new Error("merge operation guard owner changed");
+    }
+    if (!["merged", "closed-unmerged", "not-started"].includes(outcome)) {
+      throw new Error("ambiguous merge operation remains quarantined");
+    }
+    const released = tombstone(paths.mergeGuard);
+    exactCleanup(released);
+  });
 }
 
 function remotePullRequest(manifest) {
@@ -882,11 +917,19 @@ function performMerge(manifestPath, presentedToken, options = {}) {
   const expectedRepository = manifest.repo.githubRepository;
   const pr = String(manifest.repo.pr);
   const head = mergeHead(manifest);
-  acquireMergeGuard(manifestPath, presentedToken);
+  acquireMergeGuard(manifestPath, presentedToken, options);
   try {
     assertBase(manifestPath, presentedToken);
   } catch (error) {
-    releaseMergeGuard(manifestPath, presentedToken, "not-started");
+    try {
+      releaseMergeGuard(manifestPath, presentedToken, "not-started");
+    } catch (releaseError) {
+      throw new AggregateError(
+        [error, releaseError],
+        `${error.message}; merge guard cleanup also failed: ${releaseError.message}`,
+        { cause: releaseError },
+      );
+    }
     throw error;
   }
   const paths = pathsFor(repository, manifest);
@@ -1039,6 +1082,7 @@ module.exports = {
   verify,
   withManifestMutation,
   withMetadataGuard,
+  _acquireGuard: acquireGuard,
   _recoverDeadGuard: recoverDeadGuard,
   _pathsFor: pathsFor,
 };

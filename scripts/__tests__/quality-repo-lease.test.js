@@ -2,7 +2,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawn } = require("child_process");
 const invocation = require("../quality-invocation");
 const lease = require("../quality-repo-lease");
 const LEASE_CLI = path.resolve(__dirname, "..", "quality-repo-lease.js");
@@ -320,6 +320,52 @@ describe("repository merge lease", () => {
     expect(fs.existsSync(directory)).toBe(false);
   });
 
+  it("cleans a newly created guard when its owner write fails", () => {
+    const directory = path.join(sandbox, "guard-owner-write-failure");
+    const originalWrite = fs.writeFileSync;
+    fs.writeFileSync = (file, ...args) => {
+      if (path.dirname(String(file)) === directory) {
+        const error = new Error("injected owner write failure");
+        error.code = "EIO";
+        throw error;
+      }
+      return originalWrite(file, ...args);
+    };
+    try {
+      expect(() => lease._acquireGuard(directory, 10)).toThrow(
+        /injected owner write failure/,
+      );
+      expect(fs.existsSync(directory)).toBe(false);
+    } finally {
+      fs.writeFileSync = originalWrite;
+    }
+  });
+
+  it("retries when a contended guard disappears before its owner read", async () => {
+    const directory = path.join(sandbox, "guard-release-race");
+    fs.mkdirSync(directory, { mode: 0o700 });
+    const child = spawn(
+      "node",
+      [
+        "-e",
+        `require(${JSON.stringify(path.resolve(__dirname, "..", "quality-repo-lease.js"))})._acquireGuard(${JSON.stringify(directory)}, 1000)`,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    fs.rmdirSync(directory);
+    const result = await new Promise((resolve) => {
+      let stderr = "";
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      child.on("close", (code) => resolve({ code, stderr }));
+    });
+    expect(result.code, result.stderr).toBe(0);
+    fs.unlinkSync(path.join(directory, "owner.json"));
+    fs.rmdirSync(directory);
+  });
+
   it("rejects a symlink substituted for an opened lease record", () => {
     const { manifestPath } = fixture("symlink-record");
     const owner = lease.acquire(manifestPath);
@@ -463,7 +509,11 @@ describe("repository merge lease", () => {
   it("reconciles a crashed merge guard from exact authoritative GitHub state", () => {
     const { manifestPath } = fixture("merge-reconcile");
     const owner = lease.acquire(manifestPath);
-    lease.acquireMergeGuard(manifestPath, owner.token);
+    lease.acquireMergeGuard(manifestPath, owner.token, { admin: true });
+    expect(lease.status(manifestPath).mergeGuard).toMatchObject({
+      admin: true,
+      adminReason: "ci-billing-waiver",
+    });
     const { manifest } = invocation.loadManifest(manifestPath);
     const bin = path.join(sandbox, "merge-reconcile-bin");
     fs.mkdirSync(bin);

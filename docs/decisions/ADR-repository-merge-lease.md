@@ -73,7 +73,10 @@ Add a repository-scoped merge lease to the public quality runtime.
    merge is additionally enclosed by a repository-scoped operation guard. The
    owner acquires that guard atomically with its final token validation, then
    revalidates the live base while holding it, performs the synchronous GitHub
-   merge, and releases the guard only after authoritative read-back. Recovery
+   merge, and releases the guard under the same metadata linearization point
+   only after authoritative read-back. A guarded admin merge records that fact
+   and its validated CI-billing-waiver reason so an ambiguous quarantine keeps
+   its audit context. Recovery
    checks for the same guard while holding the metadata guard, so token rotation
    and entry into the merge critical section have one linearized order. No local
    token check is mistaken for server fencing.
@@ -158,8 +161,11 @@ after it can leave only an inert tombstone that cannot block acquisition. It
 never recursively deletes a path or follows a symlink.
 
 The merge operation guard uses the same defensive record rules and atomic
-directory acquisition. Its record includes the holding process, exact PR, head,
-base, and request start. A contender or recovery command never steals the guard.
+directory acquisition. If the owner-record write fails, the creator removes
+only its exact empty/partial guard; a contender whose incumbent disappears
+before owner read simply retries. Its record includes the holding process,
+exact PR, head, base, admin mode/reason, and request start. A contender or
+recovery command never steals the guard.
 Parent death alone is insufficient: ambiguous recovery reconciles the exact
 PR/head and protected-base state. A deadline, safety margin, or stable negative
 observation is never treated as proof that an accepted request cannot complete. The
@@ -170,6 +176,8 @@ merging. Any open-PR ambiguity, inconsistent, changing, or unavailable remote
 state remains quarantined and blocks repository merges for operator resolution.
 Status names the quarantined exact head and whether the remote request began;
 the merge failure prints the explicit authoritative-reconciliation command.
+Post-merge cleanup treats a `false` authoritative reconciliation result as an
+unreleased lease and prints that condition instead of discarding boolean output.
 Missing, malformed, symlinked, or unverifiable identity
 also fails closed. This conservative recovery applies only to the short merge
 critical section, not to the campaign lease or its six-hour policy.
@@ -217,7 +225,8 @@ critical section, not to the campaign lease or its six-hour policy.
 - Phase tests suspend a process, rotate the shared token, and prove its pinned
   old credential fails even though the manifest now contains the new token.
 - Recovery and merge-guard acquisition share the metadata linearization point;
-  tests prove a rotated token cannot enter the remote merge.
+  merge-guard release does too, and tests prove a rotated token cannot enter or
+  dismantle the remote merge boundary.
 - Release disappears from the acquisition namespace in one rename. Fault
   injection before and after that rename proves neither state creates an
   ownerless blocking lease.

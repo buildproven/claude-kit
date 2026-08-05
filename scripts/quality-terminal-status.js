@@ -103,7 +103,7 @@ function repositoryLeaseStatus(manifestPath, manifest) {
       `${status.state} for ${status.repository} PR #${status.pr}; ` +
       `owner=${status.manifestPath}; generation=${status.generation}; renewed=${status.renewedAt}` +
       (status.mergeGuard
-        ? `; merge-quarantine=head ${status.mergeGuard.head}, request-started=${status.mergeGuard.requestStartedAt || "no"}`
+        ? `; merge-quarantine=head ${status.mergeGuard.head}, request-started=${status.mergeGuard.requestStartedAt || "no"}, admin=${status.mergeGuard.admin === true}`
         : "") +
       (status.recoveryCommand ? `; recovery=${status.recoveryCommand}` : "")
     );

@@ -24,10 +24,11 @@ if [ -n "$MANIFEST" ] && [ -f "$MANIFEST" ]; then
     --manifest "$MANIFEST" 2>/dev/null || true)"
   if [ "$(printf '%s' "$LEASE_STATUS" | jq -r '.state // empty' 2>/dev/null)" = active ]; then
     if quality_pin_repository_lease "$MANIFEST"; then
-      node "$SCRIPT_DIR/quality-repo-lease.js" release-if-merged \
-        --manifest "$MANIFEST" >/dev/null || {
+      LEASE_RELEASED="$(node "$SCRIPT_DIR/quality-repo-lease.js" release-if-merged \
+        --manifest "$MANIFEST")" || LEASE_RELEASED=error
+      if [ "$LEASE_RELEASED" != true ]; then
         echo "[quality] merge succeeded; repository lease release awaits exact remote verification." >&2
-      }
+      fi
     else
       echo "[quality] merge succeeded; repository lease cleanup was fenced; resume the exact campaign shown by lease status." >&2
     fi

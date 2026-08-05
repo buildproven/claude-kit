@@ -140,8 +140,10 @@ describe("quality merge gates", () => {
     );
     expect(MERGE_CLEANUP).toMatch(/quality_pin_repository_lease "\$MANIFEST"/);
     expect(MERGE_CLEANUP).not.toMatch(/merge\.repositoryLease\.token/);
-    expect(MERGE_CLEANUP).toMatch(
-      /release-if-merged \\\n\s+--manifest "\$MANIFEST" >\/dev\/null \|\|/,
+    expect(MERGE_CLEANUP).toMatch(/LEASE_RELEASED="\$\(node/);
+    expect(MERGE_CLEANUP).toMatch(/\[ "\$LEASE_RELEASED" != true \]/);
+    expect(REPOSITORY_LEASE).toMatch(
+      /function releaseMergeGuard[\s\S]*withMetadataGuard/,
     );
   });
 
