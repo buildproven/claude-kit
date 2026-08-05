@@ -22,21 +22,22 @@ AGENT_TARGET="$(field risk.agentTarget)"
   exit 1
 }
 
-# The first six positions are all read-only review roles with compatible
-# evidence output. code-simplifier is an implementation agent, not a review
-# agent, so reserve it for the broader advisory panel rather than selecting it
-# for ordinary high-tier review.
-PANEL=(code-reviewer silent-failure-hunter security-auditor type-design-analyzer \
-       pr-test-analyzer architect-reviewer code-simplifier \
-       accessibility-tester performance-engineer)
-N="$AGENT_TARGET"
-# setRisk owns the 2..9 target invariant. Retain this boundary check so older
-# or tampered manifests fail visibly instead of silently truncating coverage.
-[ "$N" -le "${#PANEL[@]}" ] || {
-  echo "quality-select-agents: resolved target $N exceeds supported ${#PANEL[@]}-agent panel" >&2
+GIT_ROOT="$(field repo.realpath)"
+BASE_SHA="$(field revisions.baseSha)"
+HEAD_SHA="$(field revisions.currentHead)"
+SELECTION_JSON="$(node "$SCRIPT_DIR/quality-agent-selection.js" \
+  --tier "$TIER" --repo "$GIT_ROOT" --base "$BASE_SHA" --head "$HEAD_SHA")" || exit 1
+DOMAIN="$(printf '%s' "$SELECTION_JSON" | jq -er '.domain')" || exit 1
+RULE="$(printf '%s' "$SELECTION_JSON" | jq -er '.rule')" || exit 1
+SELECTED_COUNT="$(printf '%s' "$SELECTION_JSON" | jq -er '.agents | length')" || exit 1
+[ "$SELECTED_COUNT" -eq "$AGENT_TARGET" ] || {
+  echo "quality-select-agents: selector produced $SELECTED_COUNT agents for persisted target $AGENT_TARGET" >&2
   exit 1
 }
-AGENTS=("${PANEL[@]:0:$N}")
+AGENTS=()
+while IFS= read -r agent; do
+  [ -n "$agent" ] && AGENTS+=("$agent")
+done < <(printf '%s' "$SELECTION_JSON" | jq -r '.agents[]')
 
 MERGE_AUTHORITY="$(field risk.mergeAuthority)"
 # Older manifests lack the field and preserve their established manual
@@ -46,5 +47,6 @@ if [ "$TIER" = critical ] && [ "$MERGE_AUTHORITY" = autonomous ]; then
   echo "[quality] Critical tier: autonomous merge authority; running full critical review." >&2
 fi
 
-node "$SCRIPT_DIR/quality-invocation.js" agents "$MANIFEST" "${AGENTS[@]}" || exit 1
-echo "[quality] Selected ${#AGENTS[@]} agents for tier=$TIER"
+node "$SCRIPT_DIR/quality-invocation.js" agents "$MANIFEST" \
+  --domain "$DOMAIN" --rule "$RULE" -- "${AGENTS[@]}" || exit 1
+echo "[quality] Selected ${#AGENTS[@]} agents for tier=$TIER domain=$DOMAIN rule=$RULE"

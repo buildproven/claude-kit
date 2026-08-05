@@ -26,7 +26,7 @@ QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}"
 ```
 
 Use `reference.md` only when resolving flags, target paths, manifest schema,
-budgets, or history. Read `checklist.md` before gates, findings, judge, or merge.
+budgets, or history. Read `checklist.md` before gates, leads, remediation, or merge.
 Those references are part of the policy, not optional background reading.
 
 ## Status
@@ -60,12 +60,13 @@ Path/security floors always win. The initial task type is bound to the campaign;
 a remediation commit cannot change task context or reset budget. Bug-fix and
 performance labels are context; path sensitivity, change nature, and magnitude
 set depth. Critical increases review depth, not routine human approval. Low-tier
-typed provider unavailability may record revision-bound `ci-only` coverage only
-after its configured fallback path. Medium+ provider failure, malformed output,
-stale coverage, findings, and CI failure block unless the outer operator issues
+review invokes no provider and records an exact-head policy exemption. Provider
+failure or malformed output at Medium+ is recorded as incomplete discovery,
+never as clean. AI leads and completion status are advisory; deterministic gate
+failure, stale coverage, and CI failure block unless the outer operator issues
 the signed exact-identity `approve --override-quality` capability. That override
-preserves gates, CI, freshness, and audit evidence; it never converts failed
-evidence into a clean review. Explicit `mergeAuthority=human-required` policy
+preserves gates, CI, freshness, and audit evidence. Explicit
+`mergeAuthority=human-required` policy
 still needs the wrapper-created, identity-bound, unexpired capability; nested
 processes cannot create one.
 
@@ -83,16 +84,19 @@ is a persisted-policy invocation, never a caller-supplied command.
 ```bash
 QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
 [ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
-# Names must be present in requiredGates. verify-app only appears when the
-# caller passed --verify-app (BUI-306); every other name is unconditional.
-for name in lint type test build security consumer verify-app; do
+# Execute exactly the persisted gate contract. Replaying a name that is not in
+# requiredGates is a policy error, not a skip; verify-app is present only when
+# the caller passed --verify-app (BUI-306).
+MANIFEST="<exact-manifest-path>"
+while IFS= read -r name; do
   bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" \
-    --manifest "<exact-manifest-path>" --name "$name"
-done
+    --manifest "$MANIFEST" --name "$name" || exit 1
+done < <(jq -r '.requiredGates[].name' "$MANIFEST")
 ```
 
-The runner skips categories not required by the manifest. A config-only
-repository may use `--name test --skip --reason "<recorded reason>"` only when
+The caller enumerates only categories required by the manifest; the runner
+rejects any other name. A config-only repository may use
+`--name test --skip --reason "<recorded reason>"` only when
 the manifest authorizes `options.skipTests`. Supported gate names and native
 `.quality-gates.json` policy are in `reference.md`; shell strings and unknown
 fields fail closed. `verify-app` boots the app and, for a web project, drives
@@ -142,30 +146,30 @@ and fallback share one provider ledger. A successful initial review covers
 `base..HEAD`; after one batched fix, resume the same manifest for the incremental
 review. A verification finding is terminal: do not start a third review.
 
-For high/critical, independent-review requirements are strict: a fallback that
-would make reviewer identity equal the implementing/primary model must block,
-not silently authorize. See `checklist.md` for provider failure handling.
+Critical discovery records effective slot identities and is complete only when
+the two Claude slots use distinct model families. A one-provider native run or
+missing diversity is signed as incomplete, never independent or clean. See
+`checklist.md` for provider failure handling.
 
-## 4. Judge, remediation, and terminal diagnosis
+## 4. Lead verification, remediation, and terminal diagnosis
 
-Read only manifest-listed artifacts and verify their identity. Generate judge
-context, classify every provider finding as `BLOCKING`, `WARNING`, or
-`SUPPRESSED`, preserve every ID, and let the runtime derive the blocking count.
+Provider findings are leads, not verdicts. Read only manifest-listed artifacts
+and verify their identity. Settle each lead by reading the cited path and using
+deterministic repository evidence. Do not ask another model to vote, promote a
+finding because multiple agents repeated it, or treat a model clean verdict as
+proof.
 
-```bash
-QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
-[ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
-JUDGE_ARTIFACT="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" field "<exact-manifest-path>" stateRoot)/judge-input.json"
-node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" judge-context "<exact-manifest-path>" > "$JUDGE_ARTIFACT"
-# Add disposition and reason to every findings[] entry without changing identity.
-node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" judge "<exact-manifest-path>" --artifact "$JUDGE_ARTIFACT"
-```
+A lead becomes merge-blocking only when converted into an allowlisted failing
+gate, regression test, or executable static rule. Batch confirmed repairs into
+at most one fix commit, rerun affected gates, then produce one incremental
+discovery attestation for the changed HEAD. Refuted or unproved leads remain in
+the signed lead count; they are not rewritten as clean and do not control merge
+authority. After the bounded fix/delta cycle, use the existing signed operator
+override for any unresolved policy decision instead of starting another model
+round.
 
-Fix every blocking finding in one batched commit, run affected gates, then one
-incremental review. If the second review blocks, report its evidence and stop.
-Any BLOCKING finding must be fixed. If BLOCKING findings remain, merge is
-forbidden before any trailer is emitted.
-Before any terminal code-finding stop, print the categorized diagnosis:
+Before any terminal deterministic-finding stop, print the categorized
+diagnosis:
 
 ```bash
 QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
@@ -178,7 +182,7 @@ node "$QUALITY_SCRIPTS_DIR/quality-terminal-status.js" --manifest "<exact-manife
 If `options.merge` is false, report the verified result after telemetry. If true,
 only `quality-stamp-and-merge.sh` may authorize the merge. It requires contiguous
 review checkpoints covering the final change, valid canonical `Quality-*` evidence,
-zero findings, current manifest identity, required green CI, fresh base, and the
+zero deterministic findings, current manifest identity, required green CI, fresh base, and the
 required merge authority. Never use `gh pr merge`, `--no-verify`, a forged
 trailer, a skipped review, or a weaker tier to bypass these checks.
 
@@ -192,6 +196,8 @@ Quality-Reviewer: <provider>
 Quality-Primary: <provider>
 Quality-Fallback: <provider-or-none>
 Quality-Findings: 0
+Quality-Leads: <advisory-lead-count>
+Quality-Review-Status: <complete|incomplete|policy-exempt>
 Quality-Head: <reviewed-head>
 Quality-Base: <base-sha>
 ```

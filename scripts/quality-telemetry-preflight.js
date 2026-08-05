@@ -28,6 +28,8 @@ function preflightRecord(reviewArm, recordedAt) {
     reviewProvider: reviewArm === "native" ? "codex" : "claude",
     reviewEffort: "high",
     reviewTokens: null,
+    reviewStatus: null,
+    leadCount: 0,
     durationSeconds: null,
     reviewRounds: 0,
     agentsRun: 0,

@@ -312,9 +312,9 @@ esac
 # trailer evidence is clean. Repositories that explicitly select
 # `human-required` retain the signed break-glass check below.
 #
-# In either mode, BLOCKING findings, malformed/inconclusive review output,
-# failed/stale CI, or changed base/HEAD remain hard stops. Those are the rare
-# cases where quality cannot mechanically converge on a safe merge decision.
+# In either mode, deterministic findings, failed/stale CI, or changed base/HEAD
+# remain hard stops. AI leads and incomplete discovery are signed advisory
+# evidence and never replace those deterministic authorities.
 #
 # In human-required mode, two independent conditions require a signed capability:
 #

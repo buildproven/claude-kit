@@ -125,7 +125,7 @@ describe("buildRecord", () => {
       nowIso: NOW,
     });
     expect(rec).toMatchObject({
-      telemetrySchemaVersion: 2,
+      telemetrySchemaVersion: 3,
       invocationId: "11111111-1111-4111-8111-111111111111",
       repoKey: "target-repo",
       taskType: "feature",
@@ -135,12 +135,40 @@ describe("buildRecord", () => {
       reviewProvider: "codex",
       reviewEffort: "high",
       reviewTokens: null,
+      reviewStatus: null,
+      leadCount: 0,
       durationSeconds: 0, // start 1000 > now 600 → clamps to 0
       reviewRounds: 1,
       agentsRun: 2,
       blockingCount: 0,
       mergeRequested: false,
       verdict: "passed",
+    });
+  });
+
+  it("records v2 lead/status attribution without a judge", () => {
+    const manifest = baseManifest({
+      reviewContractVersion: 2,
+      judge: undefined,
+      reviews: [
+        {
+          status: "incomplete",
+          round: 1,
+          to: "bbb",
+          leadCount: 0,
+        },
+      ],
+      provider: { reviewer: "review-incomplete", effort: "high" },
+    });
+    const record = buildRecord(manifest, {
+      execFileSync: NO_FILES,
+      nowIso: NOW,
+    });
+    expect(record).toMatchObject({
+      verdict: "passed",
+      blockingCount: 0,
+      reviewStatus: "incomplete",
+      leadCount: 0,
     });
   });
 

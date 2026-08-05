@@ -175,14 +175,20 @@ function ciCondition(manifest, ciFailureReason) {
 // evidence, and duplicating that classification here would risk drifting out
 // of sync with the authoritative classifier).
 function diagnoseConditions(manifest, failure = {}) {
+  const modelConditions =
+    (manifest.reviewContractVersion || 1) >= 2
+      ? []
+      : [
+          ...reviewCondition(
+            manifest,
+            inferredReviewFailureReason(manifest, failure.reviewFailureReason),
+          ),
+          ...findingConditions(manifest),
+        ];
   return [
     ...gateConditions(manifest),
     ...mutationCondition(manifest),
-    ...reviewCondition(
-      manifest,
-      inferredReviewFailureReason(manifest, failure.reviewFailureReason),
-    ),
-    ...findingConditions(manifest),
+    ...modelConditions,
     ...ciCondition(manifest, failure.ciFailureReason),
   ];
 }

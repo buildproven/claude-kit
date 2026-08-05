@@ -55,6 +55,11 @@ function parseNativeReview(raw, root = process.cwd()) {
       ...header,
       file: normalizeFile(header.file, root),
       body: body.join(" "),
+      failure_scenario: body.join(" "),
+      proof: {
+        kind: "static-analysis",
+        evidence: `${normalizeFile(header.file, root)}:${header.line_start} — ${body.join(" ")}`,
+      },
       recommendation: "Address the described review finding.",
     });
   }

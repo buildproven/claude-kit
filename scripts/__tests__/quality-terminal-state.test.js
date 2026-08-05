@@ -1,7 +1,9 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { spawnSync } = require("child_process");
 const invocation = require("../quality-invocation");
+const INVOCATION = path.join(__dirname, "..", "quality-invocation.js");
 
 // ---------------------------------------------------------------------------
 // A campaign ends in exactly ONE recorded terminal state.
@@ -175,5 +177,21 @@ describe("recordTerminalState", () => {
     invocation.recordTerminalState(manifestPath, "verified-unmerged");
     const { manifest } = invocation.loadManifest(manifestPath);
     expect(invocation.isTerminal(manifest)).toBe(true);
+  });
+
+  it.each([
+    "provider-incomplete",
+    "provider-contract-failed",
+    "policy-superseded",
+  ])("prevents review re-entry after %s", (state) => {
+    const manifestPath = writeManifest();
+    invocation.recordTerminalState(manifestPath, state, "bounded failure");
+    const result = spawnSync(
+      "node",
+      [INVOCATION, "review-info", manifestPath],
+      { encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/campaign is terminal/);
   });
 });
