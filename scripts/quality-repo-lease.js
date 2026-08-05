@@ -830,7 +830,9 @@ function recoverFromOptions(manifest, options) {
 function commandHandlers(manifest, options) {
   return {
     acquire: () => publicCredential(acquire(manifest)),
-    verify: () => verify(manifest, presentedToken()),
+    verify() {
+      verify(manifest, presentedToken());
+    },
     release: () => release(manifest, presentedToken(), options.reason),
     status: () => status(manifest),
     "merge-guard-acquire": () => acquireMergeGuard(manifest, presentedToken()),

@@ -5,6 +5,7 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const invocation = require("../quality-invocation");
 const lease = require("../quality-repo-lease");
+const LEASE_CLI = path.resolve(__dirname, "..", "quality-repo-lease.js");
 
 let sandbox;
 let account;
@@ -130,6 +131,41 @@ describe("repository merge lease", () => {
       repository: "buildproven/fixture",
     });
     lease.release(manifestPath, first.token, "test-complete");
+  });
+
+  it("keeps the fencing credential out of CLI verification output", () => {
+    const { manifestPath } = fixture("silent-verification");
+    const childEnv = {
+      ...process.env,
+      NODE_ENV: "test",
+      VITEST: "true",
+      VITEST_WORKER_ID: "credential-output",
+    };
+    execFileSync("node", [LEASE_CLI, "acquire", "--manifest", manifestPath], {
+      env: childEnv,
+    });
+    const ownerToken =
+      invocation.loadManifest(manifestPath).manifest.merge.repositoryLease
+        .token;
+    const output = execFileSync(
+      "node",
+      [LEASE_CLI, "verify", "--manifest", manifestPath],
+      {
+        encoding: "utf8",
+        env: {
+          ...childEnv,
+          BS_QUALITY_REPOSITORY_LEASE_TOKEN: ownerToken,
+        },
+      },
+    );
+    expect(output).toBe("");
+    expect(output).not.toContain(ownerToken);
+    execFileSync("node", [LEASE_CLI, "release", "--manifest", manifestPath], {
+      env: {
+        ...childEnv,
+        BS_QUALITY_REPOSITORY_LEASE_TOKEN: ownerToken,
+      },
+    });
   });
 
   it("rejects stale credentials at verification, mutation, and release", () => {
