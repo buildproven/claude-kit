@@ -1774,6 +1774,14 @@ function applyRuntimeGovernor(manifest, options, runtime) {
       "max fix commits",
     );
   }
+  if (process.env.BS_QUALITY_MAX_GATE_SECONDS === undefined) {
+    // A campaign may validate the initial head and one permitted remediation
+    // head. Fund both exact-head passes up front so advancing cannot mint time,
+    // while the per-gate watchdog and the one-fix cap keep execution bounded.
+    governor.gateSecondsLimit =
+      (governor.maxFixCommits + 1) *
+      (runtime.checkSeconds + runtime.checkReserveSeconds);
+  }
   if (process.env.BS_QUALITY_MAX_REMEDIATION_SECONDS === undefined) {
     governor.remediationSeconds = Math.max(
       60,
