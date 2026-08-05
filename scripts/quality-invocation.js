@@ -4456,16 +4456,9 @@ function withManifestLock(file, mutation) {
     loaded.manifest.options?.merge === true &&
     loaded.manifest.merge?.repositoryLease
   ) {
-    const vitestFixture =
-      process.env.NODE_ENV === "test" &&
-      process.env.VITEST === "true" &&
-      process.env.VITEST_WORKER_ID;
-    const presentedToken = vitestFixture
-      ? loaded.manifest.merge.repositoryLease.token
-      : process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
     return require("./quality-repo-lease").withManifestMutation(
       loaded.manifestPath,
-      presentedToken,
+      process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN,
       mutation,
     );
   }

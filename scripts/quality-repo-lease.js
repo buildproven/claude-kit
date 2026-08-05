@@ -53,14 +53,6 @@ function stateRoot() {
 function repositoryIdentity(manifest) {
   const identity = manifest.repo?.githubRepository;
   if (typeof identity !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(identity)) {
-    if (
-      process.env.NODE_ENV === "test" &&
-      process.env.VITEST === "true" &&
-      process.env.VITEST_WORKER_ID &&
-      /^[a-z0-9]+$/i.test(manifest.repo?.key || "")
-    ) {
-      return `vitest/${manifest.repo.key.toLowerCase()}`;
-    }
     throw new Error(
       "repository lease requires a protected GitHub repository identity",
     );
@@ -68,17 +60,48 @@ function repositoryIdentity(manifest) {
   return identity.toLowerCase();
 }
 
+function isVitestFixture(manifest) {
+  if (
+    process.env.NODE_ENV !== "test" ||
+    process.env.VITEST !== "true" ||
+    !process.env.VITEST_WORKER_ID ||
+    !/^vitest\/[a-f0-9]{16,64}$/.test(repositoryIdentity(manifest))
+  ) {
+    return false;
+  }
+  const repositoryRoot = fs.realpathSync(manifest.repo.realpath);
+  const temporaryRoot = `${fs.realpathSync(os.tmpdir())}${path.sep}`;
+  if (!repositoryRoot.startsWith(temporaryRoot)) return false;
+  const gitCommonDir = fs.realpathSync(
+    path.resolve(
+      repositoryRoot,
+      execFileSync("git", ["rev-parse", "--git-common-dir"], {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+      }).trim(),
+    ),
+  );
+  const sentinel = path.join(gitCommonDir, ".quality-vitest-fixture");
+  try {
+    const stat = fs.lstatSync(sentinel);
+    return (
+      stat.isFile() &&
+      !stat.isSymbolicLink() &&
+      fs.readFileSync(sentinel, "utf8").trim() === manifest.repo.key
+    );
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 function repositoryKey(identity) {
   return crypto.createHash("sha256").update(identity).digest("hex");
 }
 
 function pathsFor(identity, manifest = null) {
-  const vitestWorker =
-    process.env.NODE_ENV === "test" &&
-    process.env.VITEST === "true" &&
-    process.env.VITEST_WORKER_ID;
   const root =
-    vitestWorker && manifest?.repo?.realpath
+    manifest && isVitestFixture(manifest)
       ? path.join(
           fs.realpathSync(
             path.resolve(
@@ -534,7 +557,11 @@ function release(manifestPath, presentedToken, reason = "completed") {
   const tuple = ownerTuple(loaded.manifest, loaded.manifestPath);
   return withMetadataGuard(loaded.manifest, (paths) => {
     const record = leaseRecord(paths.lease);
-    if (!tupleMatches(record, tuple) || record.token !== presentedToken) {
+    if (
+      record.disposition !== "active" ||
+      !tupleMatches(record, tuple) ||
+      record.token !== presentedToken
+    ) {
       throw new Error("only the exact repository lease owner may release it");
     }
     record.disposition = "released";
@@ -555,6 +582,17 @@ function status(manifestPath) {
       return { required: true, state: "missing" };
     const record = leaseRecord(paths.lease);
     const stale = Date.now() - Date.parse(record.renewedAt || "") >= STALE_MS;
+    let mergeGuard = null;
+    if (fs.existsSync(paths.mergeGuard)) {
+      const guard = guardOwner(paths.mergeGuard);
+      mergeGuard = {
+        repository: guard.repository,
+        pr: guard.pr,
+        head: guard.head,
+        base: guard.base,
+        requestStartedAt: guard.requestStartedAt,
+      };
+    }
     return {
       required: true,
       state: record.disposition,
@@ -569,8 +607,10 @@ function status(manifestPath) {
         ownerTuple(loaded.manifest, loaded.manifestPath),
       ),
       stale,
+      mergeGuard,
       recoveryCommand: stale
-        ? `node quality-repo-lease.js recover --manifest ${loaded.manifestPath} --confirm-current-owner true`
+        ? `node quality-repo-lease.js recover --manifest ${loaded.manifestPath} ` +
+          `--confirm-owner-invocation-id ${record.invocationId} --confirm-owner-pr ${record.pr}`
         : null,
     };
   });
@@ -663,13 +703,19 @@ function releaseMergeGuard(manifestPath, presentedToken, outcome) {
   const loaded = loadManifest(manifestPath);
   const paths = pathsFor(repositoryIdentity(loaded.manifest), loaded.manifest);
   const owner = guardOwner(paths.mergeGuard);
-  if (owner.token !== presentedToken || owner.pid !== process.pid) {
+  if (
+    owner.token !== presentedToken ||
+    owner.repository !== repositoryIdentity(loaded.manifest) ||
+    owner.pr !== loaded.manifest.repo.pr ||
+    owner.head !== mergeHead(loaded.manifest)
+  ) {
     throw new Error("merge operation guard owner changed");
   }
   if (!["merged", "closed-unmerged", "not-started"].includes(outcome)) {
     throw new Error("ambiguous merge operation remains quarantined");
   }
-  releaseGuard(paths.mergeGuard);
+  const released = tombstone(paths.mergeGuard);
+  exactCleanup(released);
 }
 
 function remotePullRequest(manifest) {
@@ -752,7 +798,8 @@ function reconcileMergeOutcome(manifestPath, presentedToken, options = {}) {
 
 function performMerge(manifestPath, presentedToken, options = {}) {
   verify(manifestPath, presentedToken);
-  const { manifest } = loadManifest(manifestPath);
+  const loaded = loadManifest(manifestPath);
+  const { manifest } = loaded;
   const repository = repositoryIdentity(manifest);
   const expectedRepository = manifest.repo.githubRepository;
   const pr = String(manifest.repo.pr);
@@ -802,7 +849,9 @@ function performMerge(manifestPath, presentedToken, options = {}) {
   // the operation guard until GitHub proves merge or the operator closes the PR.
   throw new Error(
     `merge outcome is ambiguous and quarantined (gh status ${merge.status ?? "timeout"}): ` +
-      `${merge.stderr || remoteReadError?.message || `GitHub returned ${JSON.stringify(remote)}`}`.trim(),
+      `${merge.stderr || remoteReadError?.message || `GitHub returned ${JSON.stringify(remote)}`}`.trim() +
+      `; after verifying GitHub, run BS_QUALITY_REPOSITORY_LEASE_TOKEN=<pinned-token> ` +
+      `node quality-repo-lease.js reconcile-merge --manifest ${loaded.manifestPath}`,
   );
 }
 
@@ -836,16 +885,18 @@ function presentedToken() {
 }
 
 function recoverFromOptions(manifest, options) {
-  let recoveryToken;
-  if (options["confirm-current-owner"] === "true") {
-    const loaded = loadManifest(manifest);
-    const paths = pathsFor(
-      repositoryIdentity(loaded.manifest),
-      loaded.manifest,
+  const loaded = loadManifest(manifest);
+  const paths = pathsFor(repositoryIdentity(loaded.manifest), loaded.manifest);
+  const record = leaseRecord(paths.lease);
+  if (
+    options["confirm-owner-invocation-id"] !== record.invocationId ||
+    String(options["confirm-owner-pr"] || "") !== String(record.pr)
+  ) {
+    throw new Error(
+      "recovery requires the exact current owner invocation ID and pull request",
     );
-    recoveryToken = leaseRecord(paths.lease).token;
   }
-  return recover(manifest, recoveryToken);
+  return recover(manifest, record.token);
 }
 
 function commandHandlers(manifest, options) {
@@ -902,6 +953,7 @@ module.exports = {
   releaseIfMerged,
   release,
   releaseMergeGuard,
+  isVitestFixture,
   repositoryIdentity,
   recover,
   stateRoot,

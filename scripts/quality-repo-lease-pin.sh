@@ -10,20 +10,7 @@ quality_pin_repository_lease() {
     node "$script_dir/quality-invocation.js" field \
       "$manifest" merge.repositoryLease.token
   )" || return 1
-  if [ "${NODE_ENV:-}" = test ] && [ "${VITEST:-}" = true ] && \
-    [ -n "${VITEST_WORKER_ID:-}" ]; then
-    if [ -z "$manifest_token" ]; then
-      node "$script_dir/quality-repo-lease.js" acquire \
-        --manifest "$manifest" >/dev/null || return 1
-      manifest_token="$(
-        node "$script_dir/quality-invocation.js" field \
-          "$manifest" merge.repositoryLease.token
-      )" || return 1
-    fi
-    # A self-hosted quality gate inherits the outer repository credential.
-    # Vitest fixtures are independent campaigns and must pin their own token.
-    BS_QUALITY_REPOSITORY_LEASE_TOKEN="$manifest_token"
-  elif [ -z "${BS_QUALITY_REPOSITORY_LEASE_TOKEN:-}" ]; then
+  if [ -z "${BS_QUALITY_REPOSITORY_LEASE_TOKEN:-}" ]; then
     BS_QUALITY_REPOSITORY_LEASE_TOKEN="$manifest_token"
   fi
   [ -n "$BS_QUALITY_REPOSITORY_LEASE_TOKEN" ] || {

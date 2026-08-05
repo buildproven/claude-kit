@@ -90,7 +90,7 @@ Add a repository-scoped merge lease to the public quality runtime.
    record for the effective UID (Node `os.userInfo()`, not `HOME`,
    `XDG_STATE_HOME`, or another caller environment variable), plus
    `.local/state/claude-kit/repository-leases`. `TMPDIR`, checkout location, and
-   caller environment cannot select another namespace; canonical account home,
+   caller environment cannot select another production namespace; canonical account home,
    owner UID, and directory modes are validated before use. A different invocation may
    reclaim automatically only from a final owner manifest. A six-hour-old
    resumable owner is reported as stale but requires an explicit recovery
@@ -102,7 +102,12 @@ Add a repository-scoped merge lease to the public quality runtime.
    publish the record as `active`. Verification denies all work while a record
    is pending. The exact owner may reconcile a pending initial acquisition;
    explicit recovery may reconcile a pending rotation after proving the
-   manifest contains either its recorded old or new generation. Any other
+   manifest contains either its recorded old or new generation. Automated tests
+   may use a repository-local namespace only when the manifest has a reserved
+   `vitest/<hash>` repository identity, the checkout is below the temporary
+   directory, and a non-symlink sentinel binds that checkout to the manifest's
+   repository key. Ambient test variables alone cannot redirect a real
+   repository lease. Any other
    combination fails closed with a repair command. Recovery checks and rotates
    under the metadata guard, which fences any suspended old process that has
    not entered the merge critical section. An unsafe, malformed,
@@ -155,6 +160,8 @@ either the exact head is merged, or the PR is closed without merge by the
 operator recovery flow, which server-side prevents that request from later
 merging. Any open-PR ambiguity, inconsistent, changing, or unavailable remote
 state remains quarantined and blocks repository merges for operator resolution.
+Status names the quarantined exact head and whether the remote request began;
+the merge failure prints the explicit authoritative-reconciliation command.
 Missing, malformed, symlinked, or unverifiable identity
 also fails closed. This conservative recovery applies only to the short merge
 critical section, not to the campaign lease or its six-hour policy.
@@ -183,7 +190,9 @@ critical section, not to the campaign lease or its six-hour policy.
   release it.
 - An independent clone with the same deterministic invocation ID but a
   different manifest/common-directory tuple is rejected as a collision.
-- Six-hour-stale resumable owners require explicit current-owner recovery;
+- Six-hour-stale resumable owners require explicit confirmation of the recorded
+  invocation ID and pull request before recovery reads and rotates its internal
+  credential;
   recent, malformed, symlinked, missing, and cross-repository owners fail
   closed.
 - Fresh bootstrap and manifest resume both acquire the lease for `--merge` and

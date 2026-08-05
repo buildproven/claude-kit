@@ -183,6 +183,52 @@ describe("repository merge lease", () => {
     lease.release(manifestPath, owner.token, "test-complete");
   });
 
+  it("does not let ambient Vitest variables redirect a real repository", () => {
+    const { root, manifestPath } = fixture("ambient-test-namespace");
+    const { manifest } = invocation.loadManifest(manifestPath);
+    fs.writeFileSync(
+      path.join(root, ".quality-vitest-fixture"),
+      `${manifest.repo.key}\n`,
+    );
+    const previousVitest = process.env.VITEST;
+    const previousWorker = process.env.VITEST_WORKER_ID;
+    process.env.VITEST = "true";
+    process.env.VITEST_WORKER_ID = "ambient-test-namespace";
+    try {
+      expect(lease.isVitestFixture(manifest)).toBe(false);
+      expect(lease._pathsFor("buildproven/fixture", manifest).root).toBe(
+        lease.stateRoot(),
+      );
+    } finally {
+      if (previousVitest === undefined) delete process.env.VITEST;
+      else process.env.VITEST = previousVitest;
+      if (previousWorker === undefined) delete process.env.VITEST_WORKER_ID;
+      else process.env.VITEST_WORKER_ID = previousWorker;
+    }
+  });
+
+  it("refuses to release a pending lease generation", () => {
+    const { manifestPath } = fixture("pending-release");
+    const owner = lease.acquire(manifestPath);
+    const ownerFile = path.join(
+      lease._pathsFor("buildproven/fixture").lease,
+      "owner.json",
+    );
+    const record = JSON.parse(fs.readFileSync(ownerFile, "utf8"));
+    record.disposition = "rotation-pending";
+    fs.writeFileSync(ownerFile, `${JSON.stringify(record, null, 2)}\n`, {
+      mode: 0o600,
+    });
+    expect(() => lease.release(manifestPath, owner.token)).toThrow(
+      /exact.*owner/,
+    );
+    record.disposition = "active";
+    fs.writeFileSync(ownerFile, `${JSON.stringify(record, null, 2)}\n`, {
+      mode: 0o600,
+    });
+    lease.release(manifestPath, owner.token, "test-complete");
+  });
+
   it("rejects a symlink substituted for an opened lease record", () => {
     const { manifestPath } = fixture("symlink-record");
     const owner = lease.acquire(manifestPath);
@@ -279,6 +325,48 @@ describe("repository merge lease", () => {
       generation: 2,
     });
     lease.release(second.manifestPath, recovered.token, "test-complete");
+  });
+
+  it("completes either crash point in the pending rotation write pair", () => {
+    for (const crashPoint of ["before-manifest", "after-manifest"]) {
+      const { manifestPath } = fixture(`rotation-${crashPoint}`);
+      const owner = lease.acquire(manifestPath);
+      const ownerFile = path.join(
+        lease._pathsFor("buildproven/fixture").lease,
+        "owner.json",
+      );
+      const record = JSON.parse(fs.readFileSync(ownerFile, "utf8"));
+      const nextToken = crypto.randomBytes(32).toString("hex");
+      const pending = {
+        ...record,
+        disposition: "rotation-pending",
+        priorToken: owner.token,
+        token: nextToken,
+        generation: owner.generation + 1,
+      };
+      fs.writeFileSync(ownerFile, `${JSON.stringify(pending, null, 2)}\n`, {
+        mode: 0o600,
+      });
+      if (crashPoint === "after-manifest") {
+        invocation.withManifestLockRaw(manifestPath, (manifest) => {
+          manifest.merge.repositoryLease = {
+            repository: "buildproven/fixture",
+            generation: pending.generation,
+            token: nextToken,
+          };
+        });
+      }
+      const recovered = lease.recover(manifestPath, owner.token);
+      expect(recovered).toMatchObject({
+        token: nextToken,
+        generation: owner.generation + 1,
+      });
+      expect(() => lease.verify(manifestPath, owner.token)).toThrow(/stale/);
+      expect(lease.verify(manifestPath, nextToken)).toMatchObject({
+        disposition: "active",
+      });
+      lease.release(manifestPath, nextToken, "test-complete");
+    }
   });
 
   it("reconciles a crashed merge guard from exact authoritative GitHub state", () => {

@@ -41,6 +41,34 @@ const REVIEW_EVIDENCE = path.join(
 );
 const require = createRequire(import.meta.url);
 const invocation = require(INVOCATION);
+const lease = require("../quality-repo-lease");
+
+function fixtureRepository(root) {
+  const identity = `${realpathSync(root)}\0${git(root, ["rev-parse", "HEAD"])}`;
+  return `vitest/${createHash("sha256").update(identity).digest("hex").slice(0, 24)}`;
+}
+
+function fixtureGitCommonDir(root) {
+  return realpathSync(
+    path.resolve(root, git(root, ["rev-parse", "--git-common-dir"])),
+  );
+}
+
+function prepareFixtureNamespace(root, githubRepository) {
+  const gitCommonDir = fixtureGitCommonDir(root);
+  const repoKey = createHash("sha256")
+    .update(gitCommonDir)
+    .digest("hex")
+    .slice(0, 16);
+  writeFileSync(
+    path.join(gitCommonDir, ".quality-vitest-fixture"),
+    `${repoKey}\n`,
+  );
+  writeFileSync(
+    path.join(gitCommonDir, ".quality-vitest-repository"),
+    `${githubRepository}\n`,
+  );
+}
 
 function recordGateFixture(manifestPath, name, overrides = {}) {
   invocation.withManifestLock(manifestPath, (manifest) => {
@@ -120,19 +148,25 @@ function repo(label) {
 }
 
 function create(root, extra = [], env = {}) {
-  const prIdentity = extra.includes("--pr")
-    ? [
-        "--github-repo",
-        "owner/repo",
-        "--head-ref",
-        "feature",
-        "--head-repository",
-        "owner/repo",
-        "--cross-repository",
-        "false",
-      ]
-    : [];
-  return execFileSync(
+  const mergeFixture = extra.includes("--merge");
+  const githubRepository = mergeFixture
+    ? fixtureRepository(root)
+    : "owner/repo";
+  const prIdentity =
+    extra.includes("--pr") || mergeFixture
+      ? [
+          "--github-repo",
+          githubRepository,
+          "--head-ref",
+          "feature",
+          "--head-repository",
+          githubRepository,
+          "--cross-repository",
+          "false",
+        ]
+      : [];
+  if (mergeFixture) prepareFixtureNamespace(root, githubRepository);
+  const manifestPath = execFileSync(
     "node",
     [
       INVOCATION,
@@ -150,6 +184,11 @@ function create(root, extra = [], env = {}) {
       encoding: "utf8",
     },
   ).trim();
+  if (mergeFixture) {
+    const owner = lease.acquire(manifestPath);
+    process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = owner.token;
+  }
+  return manifestPath;
 }
 
 function createAsync(root) {
@@ -485,6 +524,10 @@ function fakeGh(root, head) {
   const gh = path.join(bin, "gh");
   const merged = path.join(bin, "merged");
   const base = git(root, ["rev-parse", "origin/main"]);
+  const repository = readFileSync(
+    path.join(fixtureGitCommonDir(root), ".quality-vitest-repository"),
+    "utf8",
+  ).trim();
   writeFileSync(
     gh,
     `#!/usr/bin/env bash
@@ -507,7 +550,7 @@ if [ "$1 $2" = "pr merge" ]; then
   exit $?
 fi
 if [ "$1 $2" = "repo view" ]; then
-  if [[ "$*" == *"nameWithOwner"* ]]; then printf '%s\\n' "\${QUALITY_TEST_REPOSITORY:-owner/repo}"; else printf '%s\\n' 'main'; fi
+  if [[ "$*" == *"nameWithOwner"* ]]; then printf '%s\\n' "\${QUALITY_TEST_REPOSITORY:-${repository}}"; else printf '%s\\n' 'main'; fi
   exit 0
 fi
 if [ "$1" = "api" ]; then
@@ -1264,13 +1307,15 @@ exit 1
       linked,
       "main",
     ]);
+    const fixtureIdentity = fixtureRepository(linked);
+    prepareFixtureNamespace(linked, fixtureIdentity);
     const bin = makeTempDir("quality-bootstrap-gh-");
     const gh = path.join(bin, "gh");
     writeFileSync(
       gh,
       `#!/usr/bin/env bash
 if [ "$1 $2" = "repo view" ]; then
-  printf '%s\\n' 'owner/repo'
+  printf '%s\\n' '${fixtureIdentity}'
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
@@ -1294,7 +1339,7 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   done
   [ "$saw_repo" = true ] || { echo "gh pr view called without --repo" >&2; exit 1; }
   [ "$saw_selector" = true ] || { echo "argument required when using the --repo flag" >&2; exit 1; }
-  printf '%s\\n' '{"number":23,"headRefName":"quality-merge-noarg-branch","headRefOid":"${git(linked, ["rev-parse", "HEAD"])}","headRepository":{"nameWithOwner":"owner/repo"},"isCrossRepository":false,"baseRefName":"main","baseRefOid":"${git(primary, ["rev-parse", "origin/main"])}"}'
+  printf '%s\\n' '{"number":23,"headRefName":"quality-merge-noarg-branch","headRefOid":"${git(linked, ["rev-parse", "HEAD"])}","headRepository":{"nameWithOwner":"${fixtureIdentity}"},"isCrossRepository":false,"baseRefName":"main","baseRefOid":"${git(primary, ["rev-parse", "origin/main"])}"}'
   exit 0
 fi
 exit 1
@@ -3321,6 +3366,7 @@ exit 99
     git(root, ["push", "-q", "-u", "origin", "feature"]);
 
     const manifest = create(root, ["--level", "95", "--pr", "1", "--merge"]);
+    const fixtureIdentity = fixtureRepository(root);
     execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
     execFileSync("bash", [SELECT, "--manifest", manifest], { cwd: root });
     prepareCodexReview(root, manifest);
@@ -3366,7 +3412,7 @@ fi
 if [ "$1 $2" = "pr checks" ]; then [ ! -f ${JSON.stringify(fail)} ]; exit $?; fi
 if [ "$1 $2" = "pr merge" ]; then touch ${JSON.stringify(merged)}; exit 0; fi
 if [ "$1 $2" = "repo view" ]; then
-  if [[ "$*" == *"nameWithOwner"* ]]; then printf '%s\\n' 'owner/repo'; else printf '%s\\n' 'main'; fi
+  if [[ "$*" == *"nameWithOwner"* ]]; then printf '%s\\n' '${fixtureIdentity}'; else printf '%s\\n' 'main'; fi
   exit 0
 fi
 if [ "$1" = "api" ]; then
