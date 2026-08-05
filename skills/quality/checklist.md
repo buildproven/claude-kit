@@ -4,17 +4,16 @@
 
 Review depth scales with the resolved risk tier (see `reference.md` §Quality Levels). The configured primary can be Claude or Codex; fallback is availability-only. Other gates apply at every tier.
 
-| Gate                                    | low | medium | high | critical |
-| --------------------------------------- | --- | ------ | ---- | -------- |
-| Behavioral test evidence + suite passes | ✓   | ✓      | ✓    | ✓        |
-| ESLint / TypeScript / build clean       | ✓   | ✓      | ✓    | ✓        |
-| Defensive pattern analysis              | ✓   | ✓      | ✓    | ✓        |
-| code-reviewer + silent-failure-hunter   | ✓   | ✓      | ✓    | ✓        |
-| type-design-analyzer + security-auditor |     | ✓      | ✓    | ✓        |
-| pr-test-analyzer                        |     |        | ✓    | ✓        |
-| critical-depth provider review          |     |        |      | ✓        |
-| provider review completed               | ✓   | ✓      | ✓    | ✓        |
-| `Reviewed-By: quality` trailer          | ✓   | ✓      | ✓    | ✓        |
+| Gate                                        | low | medium | high | critical |
+| ------------------------------------------- | --- | ------ | ---- | -------- |
+| Behavioral test evidence + suite passes     | ✓   | ✓      | ✓    | ✓        |
+| ESLint / TypeScript / build clean           | ✓   | ✓      | ✓    | ✓        |
+| Defensive pattern analysis                  | ✓   | ✓      | ✓    | ✓        |
+| Signed exact-head policy exemption          | ✓   |        |      |          |
+| Domain-selected AI reviewers                | 0   | 1      | 1    | 2        |
+| Every selected reviewer returns evidence    |     | ✓      | ✓    | ✓        |
+| Finding proof validates against the diff    |     | ✓      | ✓    | ✓        |
+| `Reviewed-By: quality` signed authorization | ✓   | ✓      | ✓    | ✓        |
 
 ## Level 95 Exit Criteria (legacy, full panel)
 
@@ -93,11 +92,15 @@ Every finding MUST be classified into exactly one category:
 | **WARNING**    | Missing edge cases, perf concerns, weak error handling, missing tests        | Should fix            |
 | **SUPPRESSED** | Style nits, import order, naming preferences, suggestions for unchanged code | Never shown           |
 
-### Confidence Boosting
+### Correlated Reviewer Evidence
 
-- Finding flagged by 1 agent: standard severity
-- Finding flagged by 2+ agents independently: promote one level (WARNING → BLOCKING)
-- Finding flagged by both Claude AND Codex: highest confidence — always BLOCKING
+- Reviewer agreement does not promote severity. Roles that share a model,
+  context, or provider are complementary coverage, not independent votes.
+- Severity follows the concrete failure scenario and proof attached to the
+  finding.
+- Every blocking or warning finding must include a changed file and line, an
+  expected-versus-actual failure scenario, and either a reproduction, a
+  regression test, or auditable static proof.
 
 ### Suppression Rules (NEVER report these)
 

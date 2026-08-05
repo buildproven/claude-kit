@@ -7,7 +7,9 @@
  * open-loop: it ran, but nothing measured whether it was worth its tokens.
  * This module closes the loop by appending ONE JSON line per finished campaign
  * to a telemetry log, from which a weekly report derives escaped-defect rate,
- * finding precision, and cost per caught bug.
+ * a heuristic capture-rate proxy, and cost per recorded blocking disposition.
+ * The proxy is not statistical precision because the ledger does not contain
+ * a false-positive denominator.
  *
  * Every field recorded already exists in the invocation manifest — the single
  * source of campaign truth (see quality-invocation.js createManifest). We do

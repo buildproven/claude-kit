@@ -96,9 +96,12 @@ not corrupt intent-to-treat attribution. Campaigns without an explicit arm
 keep ordinary provider policy and infer the received arm from the actual
 reviewer.
 
-Claude panels share a cancellation sentinel: the first exhausted reviewer
-causes sibling process groups to terminate. A successful review records HEAD;
-later fix rounds use that SHA as their diff base so unchanged commits are not
+Selected Claude reviewers share a cancellation sentinel: the first exhausted
+reviewer causes sibling process groups to terminate. Medium and High select
+one reviewer by changed-domain evidence; Critical selects `code-reviewer` plus
+one distinct domain specialist or the reliability backstop. Every selected
+reviewer must return usable evidence. A successful review records HEAD; later
+fix rounds use that SHA as their diff base so unchanged commits are not
 reviewed again. Bootstrap clears this state for every new invocation.
 
 When structured exhaustion metadata includes a reset timestamp, quality prints
@@ -327,7 +330,9 @@ every other native gate name); the script above is only the default.
 | `BS_QUALITY_PROVIDER_HEALTH_FILE`     | state   | Operator-state provider circuit file/prefix. Legacy aggregate files are read; writes use race-safe per-provider records beside it.                 |
 | `BS_QUALITY_CI_BILLING_WAIVER_UNTIL`  | config  | ISO timestamp overriding `ciBillingWaiverUntil` in the shared provider config; authorizes only exact-HEAD zero-runner/zero-step Actions failures.  |
 | `BS_QUALITY_TARGET_DIR`               | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd.                                                 |
-| `BS_QUALITY_MAX_FIX_COMMITS`          | 1       | Explicit override for the default one-commit batched-remediation cap.                                                                              |
+| `BS_QUALITY_MAX_FIX_COMMITS`          | 1       | May lower the one-commit batched-remediation cap; values above the hard maximum are rejected.                                                      |
+| `BS_QUALITY_MAX_REVIEW_ROUNDS`        | 2       | May lower the discovery-plus-verification cap; values above the hard maximum are rejected.                                                         |
+| `BS_QUALITY_MAX_PROVIDER_ATTEMPTS`    | 2       | May lower the primary-plus-one-typed-retry cap; values above the hard maximum are rejected.                                                        |
 | `BS_QUALITY_MAX_REMEDIATION_SECONDS`  | planned | Batched-fix allowance remaining after proportional discovery and verification reserves.                                                            |
 | `BS_QUALITY_REREVIEW_RESERVE_SECONDS` | planned | Workload-scaled allowance for one targeted validation review after fixes.                                                                          |
 | `BS_QUALITY_TELEMETRY_FILE`           | -       | Absolute path for the campaign telemetry log. Default: operator state under `$XDG_STATE_HOME/claude-kit/quality-telemetry/` (or `~/.local/state`). |
@@ -379,8 +384,11 @@ adversarial loop, not the outer cycle of BLOCKING-finding → auto-fix →
 re-review across the whole invocation. `scripts/quality-run-governor.js`
 tracks governor state inside the explicit invocation manifest with:
 
-- **Fix-commit cap** (`BS_QUALITY_MAX_FIX_COMMITS`, default 1) — one batched
-  remediation commit, checked before every fix attempt and verification.
+- **Fix-commit cap** (`BS_QUALITY_MAX_FIX_COMMITS`, default and hard maximum
+  1. — one batched remediation commit, checked before every fix attempt and
+     verification. Environment configuration may lower this cap but cannot raise
+     it. The review-round and provider-attempt hard maxima are 2 under the same
+     rule.
 - **Proportional phase caps** — changed lines plus 25 units per changed file
   select a micro/small/medium/large/huge band. The whole default campaign is
   capped at 900 seconds. Critical discovery receives up to 540 seconds based on
@@ -423,8 +431,10 @@ list (`baseSha..head`). Recording is **idempotent on invocation id** (a run that
 both merges and reports records once) and **fail-soft on write** (a bad log path
 warns but never blocks the campaign's real outcome). A missing/unreadable
 manifest is a hard failure. The log feeds the fleet escaped-defect tagger and the
-monthly quality-value report (escaped-defect rate, finding precision, cost per
-caught bug) — see the overlay's `weekly-improve.sh`.
+monthly quality-value report (escaped-defect rate, heuristic capture-rate
+proxy, cost per recorded blocking disposition) — see the overlay's
+`weekly-improve.sh`. The proxy is not statistical precision: its numerator and
+denominator do not record false positives.
 
 ### Auto-stamped review trailer
 
@@ -513,25 +523,33 @@ Quality-Fallback: claude
 Quality-Findings: 0
 Quality-Head: <SHA>
 Quality-Base: <SHA>
+Quality-Contract: 2
+Quality-Policy: <policy-digest>
+Quality-Agents: <selected-agent-set-hash>
+Quality-Domain: <selected-domain>
+Quality-Selection: <selection-rule>
+Quality-Repository: <repository-key>
+Quality-Diff: <complete-base-to-head-diff-hash>
+Quality-Review-Evidence: <artifact-chain-hash>
 ```
 
 - `Reviewed-By: quality` is the provider-neutral authorization record.
 - `Quality-Reviewer` records which reviewer actually completed; it can differ
   from `Quality-Primary` when fallback was required.
-- Every `Quality-*` trailer is required exactly once. `Quality-Findings` is the
-  integer `0`, and `Quality-Tier` must meet the selected risk tier.
+- Every trailer required by the campaign's contract version is present exactly
+  once. `Quality-Findings` is the integer `0`, and `Quality-Tier` must meet the
+  recomputed risk tier. Version 2 binds the effective policy, selected agents,
+  domain rule, repository, complete diff, and retained review artifacts.
 - `Quality-Head` must equal HEAD or HEAD~1 (a dedicated stamp commit), and
   `Quality-Base` must equal the current merge-base. Any later code commit
   invalidates the stamp.
 - Parenthetical `Reviewed-By` metadata is legacy reader compatibility only and
   must not be emitted by new quality campaigns.
-- **Authorization path is queryable from the trailer, no separate telemetry
-  needed.** At low risk tier, a merge authorized on CI-only evidence (AI
-  review unavailable after the configured fallback path) stamps
-  `Quality-Reviewer: ci-only` — a distinct value from an actual completed
-  review (`Quality-Reviewer: claude` / `codex` / `gemini`). Find how often the
-  advisory path fired across recent merges with:
-  `git log --all --grep="Quality-Reviewer: ci-only"`.
+- **Authorization path is queryable from the trailer, no telemetry inference
+  needed.** A version-2 Low campaign uses a signed `policy-exempt` artifact
+  with `aiReviewRequired: false`; it never synthesizes a clean provider
+  verdict. Medium and above require completed evidence from every selected
+  reviewer.
 
 ## Deep Review Mode (`--audit --deep`)
 
