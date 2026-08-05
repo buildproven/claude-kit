@@ -31,6 +31,8 @@ function preflightRecord(reviewArm, recordedAt) {
     reviewStatus: null,
     leadCount: 0,
     durationSeconds: null,
+    providerDurationSeconds: null,
+    terminalState: null,
     reviewRounds: 0,
     agentsRun: 0,
     blockingCount: null,
