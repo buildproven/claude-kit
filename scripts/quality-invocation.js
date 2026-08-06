@@ -1279,6 +1279,153 @@ function canFailOverProvider(existing, existingIdentity, campaignIdentity) {
   );
 }
 
+function sameWorkIgnoringReviewArm(existingIdentity, campaignIdentity) {
+  const left = identityWithoutProvider(existingIdentity);
+  const right = identityWithoutProvider(campaignIdentity);
+  delete left.options.reviewArm;
+  delete right.options.reviewArm;
+  return (
+    JSON.stringify(canonicalJson(left)) === JSON.stringify(canonicalJson(right))
+  );
+}
+
+// A diversity upgrade is deliberately narrower than provider failover.  It is
+// the one recovery path for a completed critical native review whose evidence
+// says it cannot satisfy the independent-provider requirement.  It is not a
+// way to mint another provider budget for a timeout, malformed response,
+// finding, changed revision, or ordinary provider preference change.
+function diversityUpgradeEligibility(
+  existing,
+  existingIdentity,
+  campaignIdentity,
+) {
+  if (!sameWorkIgnoringReviewArm(existingIdentity, campaignIdentity))
+    return null;
+  if (campaignIdentity.options?.reviewArm !== "bespoke") return null;
+  if (existing.options?.reviewArm === "bespoke") return null;
+  if (existing.terminalState?.state !== "provider-incomplete") return null;
+  if (existing.terminalState?.detail !== "critical-provider-diversity")
+    return null;
+  if (existing.risk?.tier !== "critical") return null;
+  if (!Array.isArray(existing.reviews) || existing.reviews.length === 0)
+    return null;
+  if (
+    !existing.reviews.some(
+      (review) =>
+        review.status === "incomplete" && review.provider !== "claude",
+    )
+  )
+    return null;
+  try {
+    verifyGateEvidence(existing);
+    if (!mutationEvidenceValid(existing)) return null;
+    // `leadCount` is persisted when the native evidence is recorded.  Any
+    // non-zero count means the prior run has an unresolved code lead; do not
+    // reopen it under a different provider policy.
+    if (existing.reviews.some((review) => (review.leadCount || 0) !== 0))
+      return null;
+  } catch {
+    return null;
+  }
+  return "critical exact-head discovery lacked required provider diversity";
+}
+
+function diversityUpgradeManifest(
+  existingPath,
+  existing,
+  campaignIdentity,
+  reason,
+) {
+  const upgradeKey = {
+    campaign: campaignIdentity,
+    diversityUpgradeOf: existing.invocationId,
+  };
+  const invocationId = deterministicInvocationId(upgradeKey);
+  const stateRoot = path.join(
+    qualityTmpRoot(),
+    "bs-quality",
+    repoKey(campaignIdentity.root),
+    `pr-${campaignIdentity.pr ?? "none"}`,
+    campaignIdentity.baseSha,
+    invocationId,
+  );
+  const manifestPath = path.join(stateRoot, "invocation.json");
+  if (fs.existsSync(manifestPath)) return manifestPath;
+  const now = new Date().toISOString();
+  const manifest = {
+    schemaVersion: SCHEMA_VERSION,
+    reviewContractVersion: REVIEW_CONTRACT_VERSION,
+    manifestRevision: 0,
+    invocationId,
+    createdAt: now,
+    updatedAt: now,
+    stateRoot,
+    options: campaignIdentity.options,
+    repo: {
+      realpath: campaignIdentity.root,
+      key: repoKey(campaignIdentity.root),
+      pr: campaignIdentity.pr,
+      githubRepository: campaignIdentity.githubRepository,
+      headRefName: campaignIdentity.headRefName,
+      headRepository: campaignIdentity.headRepository,
+      isCrossRepository: campaignIdentity.isCrossRepository,
+      gitCommonDir: campaignIdentity.gitCommonDir,
+      origin: campaignIdentity.origin,
+    },
+    revisions: {
+      baseRef: campaignIdentity.baseRef,
+      baseSha: campaignIdentity.baseSha,
+      baseHeadSha: campaignIdentity.baseHeadSha,
+      initialHead: campaignIdentity.head,
+      currentHead: campaignIdentity.head,
+    },
+    approval: { approved: false },
+    approvalTrust: null,
+    approvalChallengeSha256: null,
+    risk: { requestedLevel: campaignIdentity.options.level, resolved: false },
+    agents: [],
+    provider: campaignIdentity.provider,
+    reviews: [],
+    governor: buildGovernor(campaignIdentity.head),
+    requiredGates: discoverRequiredGates(
+      campaignIdentity.root,
+      campaignIdentity.options,
+      campaignIdentity.head,
+      campaignIdentity.baseSha,
+    ),
+    requiredGatesPolicyVersion: REQUIRED_GATES_POLICY_VERSION,
+    gates: [],
+    supersedes: {
+      invocationId: existing.invocationId,
+      manifestPath: existingPath,
+      reason,
+      at: now,
+    },
+  };
+  if (!atomicCreate(manifestPath, manifest)) return manifestPath;
+  const lease = require("./quality-repo-lease");
+  const credential =
+    existing.options?.merge === true
+      ? lease.acquire(existingPath, { waitMs: 0 })
+      : null;
+  const previousToken = process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+  if (credential)
+    process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = credential.token;
+  try {
+    withManifestLock(existingPath, (locked) => {
+      if (locked.supersededBy) return;
+      locked.supersededBy = { invocationId, manifestPath, reason, at: now };
+    });
+  } finally {
+    if (credential)
+      lease.release(existingPath, credential.token, "diversity-upgraded");
+    if (previousToken === undefined)
+      delete process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+    else process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = previousToken;
+  }
+  return manifestPath;
+}
+
 function existingCampaign(manifestPath, campaignIdentity) {
   const existing = loadManifest(manifestPath).manifest;
   const existingIdentity = manifestIdentity(existing);
@@ -1286,6 +1433,19 @@ function existingCampaign(manifestPath, campaignIdentity) {
     JSON.stringify(canonicalJson(existingIdentity)) !==
     JSON.stringify(canonicalJson(campaignIdentity))
   ) {
+    const diversityReason = diversityUpgradeEligibility(
+      existing,
+      existingIdentity,
+      campaignIdentity,
+    );
+    if (diversityReason) {
+      return diversityUpgradeManifest(
+        manifestPath,
+        existing,
+        campaignIdentity,
+        diversityReason,
+      );
+    }
     if (!canFailOverProvider(existing, existingIdentity, campaignIdentity)) {
       throw new Error("deterministic quality campaign identity collision");
     }

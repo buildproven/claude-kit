@@ -645,6 +645,18 @@ node "$SCRIPT_DIR/quality-invocation.js" record-review "$MANIFEST" \
   --diff-sha "$DIFF_SHA" \
   ${INCOMPLETE_DISCOVERY_ARGS[@]+"${INCOMPLETE_DISCOVERY_ARGS[@]}"} || exit 1
 
+# A successful native provider run is still terminally incomplete for a
+# critical campaign: one native slot cannot demonstrate the required
+# independent-provider/model-family diversity.  Record the precise, narrow
+# cause so createManifest can admit the one bespoke recovery campaign; do not
+# leave a superficially successful review resumable as a generic retry.
+if [ "$TIER" = critical ] && [ "$REVIEW_PROVIDER" != claude ]; then
+  node "$SCRIPT_DIR/quality-invocation.js" terminal-state "$MANIFEST" \
+    --state provider-incomplete --detail critical-provider-diversity >/dev/null || exit 1
+  echo "❌ MERGE BLOCKED: critical discovery requires a diverse provider panel." >&2
+  exit 1
+fi
+
 echo "REVIEW_OUT=$REVIEW_OUT"
 echo "REVIEW_BASE=$RESOLVED_BASE"
 echo "REVIEW_DIFF_BASE=$REVIEW_DIFF_BASE"

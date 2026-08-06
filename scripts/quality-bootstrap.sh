@@ -147,8 +147,15 @@ if [ -n "$MANIFEST_ARG" ]; then
     echo "❌ quality invocation manifest not found: $MANIFEST_ARG" >&2
     exit 1
   }
-  RESUME_ROOT="$(node -e 'const q=require(process.argv[1]); process.stdout.write(q.loadManifest(process.argv[2]).manifest.repo.realpath)' \
-    "$SCRIPT_DIR/quality-invocation.js" "$MANIFEST_ARG")" || exit 1
+  # Read the resume identity through the loader, not `field`: field validates
+  # the manifest's recorded HEAD, which is deliberately stale immediately
+  # after a normal descendant repair.  `advance` is the operation that proves
+  # and persists that transition; validated field access resumes only after it.
+  RESUME_METADATA="$(node -e '
+    const q=require(process.argv[1]); const m=q.loadManifest(process.argv[2]).manifest;
+    process.stdout.write(JSON.stringify({root:m.repo.realpath, merge:m.options.merge === true, pr:m.repo.pr, lease:m.merge?.repositoryLease?.token || ""}));
+  ' "$SCRIPT_DIR/quality-invocation.js" "$MANIFEST_ARG")" || exit 1
+  RESUME_ROOT="$(printf '%s' "$RESUME_METADATA" | jq -er '.root')" || exit 1
   cd "$RESUME_ROOT" || exit 1
   APPROVAL_ONLY="${BS_QUALITY_APPROVAL_ONLY:-0}"
   { [ "$APPROVAL_ONLY" = 0 ] || [ "$APPROVAL_ONLY" = 1 ]; } || {
@@ -175,17 +182,16 @@ if [ -n "$MANIFEST_ARG" ]; then
       exit 1
     fi
   fi
-  RESUME_MERGE="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" options.merge)"
+  RESUME_MERGE="$(printf '%s' "$RESUME_METADATA" | jq -r '.merge')" || exit 1
   BS_QUALITY_REPOSITORY_LEASE_TOKEN=""
   if [ "$RESUME_MERGE" = true ]; then
     node "$SCRIPT_DIR/quality-repo-lease.js" acquire \
       --manifest "$MANIFEST_ARG" >/dev/null || exit 1
-    BS_QUALITY_REPOSITORY_LEASE_TOKEN="$(node "$SCRIPT_DIR/quality-invocation.js" field \
-      "$MANIFEST_ARG" merge.repositoryLease.token)" || exit 1
+    BS_QUALITY_REPOSITORY_LEASE_TOKEN="$(printf '%s' "$RESUME_METADATA" | jq -er '.lease')" || exit 1
     export BS_QUALITY_REPOSITORY_LEASE_TOKEN
   fi
   if [ "$APPROVAL_ONLY" != 1 ]; then
-    RESUME_PR="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" repo.pr)"
+    RESUME_PR="$(printf '%s' "$RESUME_METADATA" | jq -r '.pr')" || exit 1
     ADVANCE_ARGS=(advance "$MANIFEST_ARG")
     if [ -n "$RESUME_PR" ] && [ "$RESUME_PR" != null ]; then
       RESUME_GITHUB_REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
@@ -200,7 +206,6 @@ if [ -n "$MANIFEST_ARG" ]; then
         --head-repository "$RESUME_HEAD_REPOSITORY" \
         --cross-repository "$RESUME_CROSS_REPOSITORY")
     fi
-    node "$SCRIPT_DIR/quality-invocation.js" "${ADVANCE_ARGS[@]}" >/dev/null || exit 1
   fi
   if [ "$RESUME_MERGE" = true ]; then
     node "$SCRIPT_DIR/quality-repo-lease.js" assert-base \
