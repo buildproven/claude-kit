@@ -181,6 +181,28 @@ describe("provider review runtime", () => {
     expect(companion).not.toContain('category: "marker-only-findings"');
   });
 
+  it("routes every caller-built provider prompt through the review-input artifact", () => {
+    const runner = readFileSync(RUN_REVIEW, "utf8");
+    const companion = readFileSync(
+      path.resolve(ROOT, "scripts", "claude-review-companion.sh"),
+      "utf8",
+    );
+
+    expect(runner).toContain('--prompt-file "$REVIEW_OUT/review-prompt.txt"');
+    expect(
+      runner.match(/cat "\$REVIEW_OUT\/review-prompt\.txt"/g),
+    ).toHaveLength(2);
+    expect(runner).toContain('cat "$schema"');
+    expect(runner).toContain(
+      "trusted JSON Schema definition for validation, not the response instance",
+    );
+    expect(companion).toContain(
+      'CTX_FILE="${PROMPT_FILE:-$OUT_DIR/review-context.txt}"',
+    );
+    expect(companion).toContain('node "$SCRIPT_DIR/quality-review-input.js"');
+    expect(companion).not.toContain('cat "$DIFF_FILE"');
+  });
+
   it("fails over when Codex cannot refresh an MCP OAuth token", () => {
     const runner = readFileSync(RUN_REVIEW, "utf8");
     expect(runner).toContain("OAuth token refresh failed:.*invalid_grant");
@@ -437,10 +459,13 @@ Quality-Evidence-Signature: ${signature}`;
     expect(source).toMatch(/-C "\$GIT_ROOT"/);
     expect(source).toMatch(/review_selector=--base/);
     expect(source).not.toMatch(/review_selector=--commit/);
-    expect(source).toMatch(/Prior reviewed findings requiring verification/);
+    expect(source).toMatch(/quality-review-input\.js/);
+    expect(source).toMatch(
+      /fixed envelope below is the sole repository-controlled review data/,
+    );
     expect(source).toMatch(/Automated gates already passed/);
     expect(source).toMatch(/do not run commands or tests/);
-    expect(source).toMatch(/cat "\$REVIEW_OUT\/diff\.txt"/);
+    expect(source).toMatch(/cat "\$REVIEW_OUT\/review-prompt\.txt"/);
     expect(source).not.toMatch(/\$review_selector_value" -/);
     expect(source).toMatch(/Codex review passes must be 1 or 2/);
     expect(source).toMatch(/record_provider_exhaustion Codex/);

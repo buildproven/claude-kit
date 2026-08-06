@@ -76,7 +76,6 @@ if [ "$REVIEW_ROUND" -gt 1 ]; then
   node "$SCRIPT_DIR/quality-invocation.js" prior-findings "$MANIFEST" \
     > "$PRIOR_FINDINGS_FILE" || exit 1
 fi
-
 if [ "$TIER" = low ]; then
   printf '%s\n' \
     "AI REVIEW NOT REQUIRED. This exact diff is covered by the low-risk zero-reviewer policy." \
@@ -110,6 +109,26 @@ if [ "$TIER" = low ]; then
   echo "REVIEW_PROVIDER=policy-exempt"
   exit 0
 fi
+
+REVIEW_INPUT_MODE=discovery
+if [ "$REVIEW_ROUND" -gt 1 ]; then
+  REVIEW_INPUT_MODE=verification
+fi
+REVIEW_INPUT_ARGS=(
+  build
+  --output "$REVIEW_OUT/review-prompt.txt"
+  --input-output "$REVIEW_OUT/review-input.json"
+  --mode "$REVIEW_INPUT_MODE"
+  --focus "$REVIEW_OUT/review-focus.txt"
+  --identity "$REVIEW_OUT/identity.json"
+  --files "$REVIEW_OUT/files.txt"
+  --log "$REVIEW_OUT/log.txt"
+  --diff "$REVIEW_OUT/diff.txt"
+)
+if [ "$REVIEW_ROUND" -gt 1 ]; then
+  REVIEW_INPUT_ARGS+=(--prior-findings "$PRIOR_FINDINGS_FILE")
+fi
+node "$SCRIPT_DIR/quality-review-input.js" "${REVIEW_INPUT_ARGS[@]}" || exit 1
 
 record_provider_exhaustion() {
   local provider="$1" evidence="$2" reset_at
@@ -183,6 +202,7 @@ run_claude_review() {
     --agents "$agents_csv" \
     --tier "$TIER" \
     --focus "$QUALITY_REVIEW_FOCUS" \
+    --prompt-file "$REVIEW_OUT/review-prompt.txt" \
     --timeout "$attempt_timeout"
   )
   if [ "$REVIEW_ROUND" -gt 1 ]; then
@@ -280,11 +300,8 @@ run_codex_review() {
     else
       prompt_file="$REVIEW_OUT/codex-${pass}.prompt"
       {
-        echo "$QUALITY_REVIEW_FOCUS"
-        echo "Prior reviewed findings requiring verification:"
-        node "$SCRIPT_DIR/quality-invocation.js" prior-findings "$MANIFEST"
-        echo "Review the complete supplied remediation delta only:"
-        cat "$REVIEW_OUT/diff.txt"
+        echo "Perform the targeted verification pass. The fixed envelope below is the sole repository-controlled review data."
+        cat "$REVIEW_OUT/review-prompt.txt"
       } > "$prompt_file"
       bash "$bounded" --timeout "$pass_timeout" -- \
         codex exec --ephemeral --ignore-user-config -s read-only --json \
@@ -358,27 +375,13 @@ run_gemini_review() {
       focus="test adequacy, performance, architecture, and accidental complexity"
     fi
     {
-      echo "$QUALITY_REVIEW_FOCUS"
       echo "Review focus for pass $pass/$QUALITY_REVIEW_PASSES: $focus."
-      echo "Review ONLY the supplied committed diff. Automated gates already passed."
-      echo "Do not run commands, edit files, or use tools."
-      if [ "$REVIEW_ROUND" -gt 1 ]; then
-        echo "Prior reviewed findings requiring verification:"
-        cat "$PRIOR_FINDINGS_FILE"
-      fi
-      echo "Repository and revision identity:"
-      cat "$REVIEW_OUT/identity.json"
-      echo "Changed files:"
-      cat "$REVIEW_OUT/files.txt"
-      echo "Commit log:"
-      cat "$REVIEW_OUT/log.txt"
-      echo "The next block is a JSON Schema definition for validation, not the response instance."
-      cat "$schema"
       echo "Return one response INSTANCE with exactly the top-level keys verdict, summary, and findings."
       echo "Never return JSON Schema definition keys such as \$schema, type, properties, required, or additionalProperties."
       echo "Use verdict=approve only with zero findings. Use needs-attention with one or more actionable findings."
-      echo "Diff:"
-      cat "$REVIEW_OUT/diff.txt"
+      echo "The next block is the trusted JSON Schema definition for validation, not the response instance."
+      cat "$schema"
+      cat "$REVIEW_OUT/review-prompt.txt"
     } > "$prompt_file"
     pass_timeout="$(authorize_provider_attempt gemini "$pass_timeout")" \
       || return 77
