@@ -92,9 +92,14 @@ if [ "$TEST_EXECUTABLE" = npm ] &&
       MUTATION_TEST_ARGS+=(-- --bail=1)
       ;;
     pytest|pytest\ *|python\ -m\ pytest|python\ -m\ pytest\ *|python3\ -m\ pytest|python3\ -m\ pytest\ *|uv\ run\ pytest|uv\ run\ pytest\ *|poetry\ run\ pytest|poetry\ run\ pytest\ *|pipenv\ run\ pytest|pipenv\ run\ pytest\ *)
-      case " $TEST_SCRIPT " in
-        *" -- "*) ;;
-        *) MUTATION_TEST_ARGS+=(-- -x) ;;
+      case "$TEST_SCRIPT" in
+        *[!A-Za-z0-9_./:=,@%+[:blank:]-]*) ;;
+        *)
+          case " $TEST_SCRIPT " in
+            *" -- "*) ;;
+            *) MUTATION_TEST_ARGS+=(-- -x) ;;
+          esac
+          ;;
       esac
       ;;
   esac
