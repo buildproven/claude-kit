@@ -252,9 +252,22 @@ esac
   exit 1
 }
 echo "[quality] waiting up to ${CI_TIMEOUT}s for required CI on stamp $STAMP_HEAD"
+BASE_BRANCH="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseRef)"
+BASE_BRANCH="${BASE_BRANCH#refs/heads/}"
+BASE_BRANCH="${BASE_BRANCH#origin/}"
+[ -n "$BASE_BRANCH" ] || {
+  echo "❌ MERGE BLOCKED: manifest base branch is missing." >&2
+  exit 1
+}
+node "$SCRIPT_DIR/quality-required-checks.js" ensure \
+  --repo "$EXPECTED_REPOSITORY" --base "$BASE_BRANCH" \
+  --source-head "$REVIEWED_HEAD" --head "$STAMP_HEAD" \
+  --head-ref "$EXPECTED_HEAD_REF" >/dev/null || exit 1
 RC=0
 bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CI_TIMEOUT" -- \
-  bash "$SCRIPT_DIR/quality-wait-required-checks.sh" --pr "$PR" || RC=$?
+  node "$SCRIPT_DIR/quality-required-checks.js" wait \
+    --repo "$EXPECTED_REPOSITORY" --base "$BASE_BRANCH" \
+    --head "$STAMP_HEAD" --timeout "$CI_TIMEOUT" --interval 10 || RC=$?
 CI_BILLING_WAIVED=false
 if [ "$RC" -ne 0 ]; then
   CI_WAIVER_ARTIFACT="$(dirname "$MANIFEST")/ci-billing-waiver.json"

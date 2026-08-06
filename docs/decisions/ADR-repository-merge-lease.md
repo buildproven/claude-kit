@@ -149,6 +149,17 @@ Add a repository-scoped merge lease to the public quality runtime.
     time for the retry; an explicit operator provider-time cap remains
     authoritative and may stop it fail-closed. A legacy manifest without cap
     provenance is treated as operator-owned and is never expanded on resume.
+11. The empty signed stamp remains the protected pull-request head, so required
+    CI is re-run for that exact commit before merge. Stamp publication resolves
+    the required contexts and GitHub App IDs from classic branch protection and
+    effective rulesets, maps each missing context to its reviewed-head Actions
+    workflow, and dispatches that workflow on the stamped branch. Registration,
+    completion, and final authorization read check-runs from the exact stamp SHA
+    and match both context and required App ID. They do not rely on the pull
+    request check rollup, which can omit a workflow-dispatch run even though its
+    commit check-run is authoritative. Missing mappings, unavailable required
+    contexts, wrong-app checks, unsuccessful conclusions, and timeouts all fail
+    closed; no status is synthesized and no protection is bypassed.
 
 ## Lease record
 
@@ -240,6 +251,9 @@ critical section, not to the campaign lease or its six-hour policy.
   complete attestation advances the review checkpoint.
 - Direct or break-glass merges outside quality remain visible policy violations;
   the lease does not pretend it can serialize actors that bypass the workflow.
+- A stamp is never merge-authorized from reviewed-head CI or a PR-level rollup;
+  every required context must be successful from its required GitHub App on the
+  exact persisted stamp SHA.
 
 ## Verification
 
@@ -302,6 +316,10 @@ critical section, not to the campaign lease or its six-hour policy.
   incomplete and merge-blocking.
 - Full repository verification, mutation evidence, protected CI, and
   exact-head review pass before release.
+- Stamp-CI regressions prove missing exact-head checks dispatch the corresponding
+  reviewed-head workflow once, wrong-app and stale failed runs do not authorize,
+  and final authorization reads the exact stamp check-runs rather than PR-level
+  check aggregation.
 
 ## Consequences
 

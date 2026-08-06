@@ -259,7 +259,9 @@ if [ "$PREFLIGHT" = false ] && [ "${CI_BILLING_WAIVED:-false}" = false ]; then
       exit 1
     }
   else
-    gh pr checks "$PR" --repo "$EXPECTED_REPOSITORY" --required >/dev/null || {
+    node "$SCRIPT_DIR/quality-required-checks.js" assert \
+      --repo "$EXPECTED_REPOSITORY" --base "$ACTUAL_BASE_NAME" \
+      --head "$ACTUAL_HEAD" >/dev/null || {
       echo "❌ MERGE BLOCKED: required CI is not successful." >&2
       exit 1
     }
