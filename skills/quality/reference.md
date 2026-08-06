@@ -322,21 +322,21 @@ every other native gate name); the script above is only the default.
 
 ### Environment Variables
 
-| Variable                              | Default | Description                                                                                                                                        |
-| ------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BS_QUALITY_PRIMARY`                  | config  | Per-run primary override: `claude`, `codex`, or opt-in `gemini`.                                                                                   |
-| `BS_QUALITY_FALLBACK`                 | config  | Per-run fallback override: `claude`, `codex`, opt-in `gemini`, or `none`.                                                                          |
-| `BS_QUALITY_FALLBACK_ON_TIMEOUT`      | `1`     | On `1`, a primary timeout fails over once. Set `0` to hard-block on the first timeout.                                                             |
-| `BS_QUALITY_PROVIDER_HEALTH_FILE`     | state   | Operator-state provider circuit file/prefix. Legacy aggregate files are read; writes use race-safe per-provider records beside it.                 |
-| `BS_QUALITY_CI_BILLING_WAIVER_UNTIL`  | config  | ISO timestamp overriding `ciBillingWaiverUntil` in the shared provider config; authorizes only exact-HEAD zero-runner/zero-step Actions failures.  |
-| `BS_QUALITY_TARGET_DIR`               | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd.                                                 |
-| `BS_QUALITY_MAX_FIX_COMMITS`          | 1       | May lower the one-commit batched-remediation cap; values above the hard maximum are rejected.                                                      |
-| `BS_QUALITY_MAX_REVIEW_ROUNDS`        | 2       | May lower the discovery-plus-verification cap; values above the hard maximum are rejected.                                                         |
-| `BS_QUALITY_MAX_PROVIDER_ATTEMPTS`    | 2       | May lower the primary-plus-one-typed-retry cap; values above the hard maximum are rejected.                                                        |
-| `BS_QUALITY_MAX_REMEDIATION_SECONDS`  | planned | Batched-fix allowance remaining after proportional discovery and verification reserves.                                                            |
-| `BS_QUALITY_REREVIEW_RESERVE_SECONDS` | planned | Workload-scaled allowance for one targeted validation review after fixes.                                                                          |
-| `BS_QUALITY_TELEMETRY_FILE`           | -       | Absolute path for the campaign telemetry log. Default: operator state under `$XDG_STATE_HOME/claude-kit/quality-telemetry/` (or `~/.local/state`). |
-| `BS_QUALITY_ALLOW_UNPROTECTABLE_BASE` | `false` | Accepts non-atomic base freshness on a private repo whose plan cannot enforce branch protection at all. See below.                                 |
+| Variable                              | Default | Description                                                                                                                                                                                            |
+| ------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `BS_QUALITY_PRIMARY`                  | config  | Per-run primary override: `claude`, `codex`, or opt-in `gemini`.                                                                                                                                       |
+| `BS_QUALITY_FALLBACK`                 | config  | Per-run fallback override: `claude`, `codex`, opt-in `gemini`, or `none`.                                                                                                                              |
+| `BS_QUALITY_FALLBACK_ON_TIMEOUT`      | `1`     | On `1`, a primary timeout fails over once. Set `0` to hard-block on the first timeout.                                                                                                                 |
+| `BS_QUALITY_PROVIDER_HEALTH_FILE`     | state   | Operator-state provider circuit file/prefix. Legacy aggregate files are read; writes use race-safe per-provider records beside it.                                                                     |
+| `BS_QUALITY_CI_BILLING_WAIVER_UNTIL`  | config  | ISO timestamp overriding `ciBillingWaiverUntil` in the shared provider config; authorizes only exact-HEAD zero-runner/zero-step Actions failures.                                                      |
+| `BS_QUALITY_TARGET_DIR`               | -       | Default target repo path for forked/agent invocations. Precedence: `--target-dir` > env var > cwd.                                                                                                     |
+| `BS_QUALITY_MAX_FIX_COMMITS`          | 1       | May lower the one-commit batched-remediation cap; values above the hard maximum are rejected.                                                                                                          |
+| `BS_QUALITY_MAX_REVIEW_ROUNDS`        | 2       | May lower the discovery-plus-verification cap; values above the hard maximum are rejected.                                                                                                             |
+| `BS_QUALITY_MAX_PROVIDER_ATTEMPTS`    | 2       | May lower the primary-plus-one-fallback start allowance per review pass. The runtime reserves the same allowance for the one exact-head verification pass; values above the hard maximum are rejected. |
+| `BS_QUALITY_MAX_REMEDIATION_SECONDS`  | planned | Batched-fix allowance remaining after proportional discovery and verification reserves.                                                                                                                |
+| `BS_QUALITY_REREVIEW_RESERVE_SECONDS` | planned | Workload-scaled allowance for one targeted validation review after fixes.                                                                                                                              |
+| `BS_QUALITY_TELEMETRY_FILE`           | -       | Absolute path for the campaign telemetry log. Default: operator state under `$XDG_STATE_HOME/claude-kit/quality-telemetry/` (or `~/.local/state`).                                                     |
+| `BS_QUALITY_ALLOW_UNPROTECTABLE_BASE` | `false` | Accepts non-atomic base freshness on a private repo whose plan cannot enforce branch protection at all. See below.                                                                                     |
 
 ### `BS_QUALITY_ALLOW_UNPROTECTABLE_BASE` (base-protection escape hatch)
 
