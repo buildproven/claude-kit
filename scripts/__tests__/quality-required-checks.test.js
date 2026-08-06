@@ -274,6 +274,78 @@ esac
     );
   });
 
+  it("maps a required workflow from reviewed first-parent history", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
+    const fixture = fakeGh(
+      root,
+      [],
+      [],
+      [
+        {
+          id: 3,
+          name: "quality",
+          status: "queued",
+          conclusion: null,
+          app: { id: 15368 },
+        },
+      ],
+    );
+    fs.writeFileSync(
+      path.join(fixture.bin, "git"),
+      `#!/usr/bin/env bash
+set -eu
+printf '%s\\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa cccccccccccccccccccccccccccccccccccccccc
+`,
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(
+      path.join(fixture.bin, "gh"),
+      `#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *protection/required_status_checks*) printf '%s\\n' '{"checks":[{"context":"quality","app_id":15368}]}' ;;
+  *rules/branches/main*) printf '%s\\n' '[]' ;;
+  *commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/check-runs*) printf '%s\\n' '{"check_runs":[]}' ;;
+  *commits/cccccccccccccccccccccccccccccccccccccccc/check-runs*) printf '%s\\n' '{"check_runs":[{"id":1,"name":"quality","status":"completed","conclusion":"success","app":{"id":15368},"details_url":"https://github.com/o/r/actions/runs/123/job/456"}]}' ;;
+  *commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs*)
+    if [ -f '${fixture.log}' ]; then
+      printf '%s\\n' '{"check_runs":[{"id":3,"name":"quality","status":"queued","conclusion":null,"app":{"id":15368}}]}'
+    else
+      printf '%s\\n' '{"check_runs":[]}'
+    fi
+    ;;
+  *actions/runs/123*) printf '%s\\n' '{"workflow_id":77}' ;;
+  *actions/workflows/77/dispatches*) printf '%s\\n' "$*" >> '${fixture.log}' ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    const result = run(
+      root,
+      [
+        "ensure",
+        "--repo",
+        "owner/repo",
+        "--base",
+        "main",
+        "--source-head",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--head",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "--head-ref",
+        "feature/fix",
+        "--registration-timeout",
+        "0",
+      ],
+      fixture,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).dispatched).toEqual([
+      { context: "quality", workflowId: 77 },
+    ]);
+  });
+
   it("fails quickly when a dispatched required context never registers", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
     const sourceRuns = [

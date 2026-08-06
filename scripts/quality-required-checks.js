@@ -76,6 +76,20 @@ function runGh(args) {
   return result.stdout;
 }
 
+function runGit(args) {
+  const result = spawnSync("git", args, {
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(
+      `git ${args[0]} failed (${result.status}): ${(result.stderr || result.stdout || "").trim()}`,
+    );
+  }
+  return result.stdout;
+}
+
 function apiJson(path) {
   const output = runGh(["api", "-X", "GET", path]);
   try {
@@ -241,6 +255,34 @@ function workflowIdForRun(repository, run) {
   return workflowRun.workflow_id;
 }
 
+function sourceRunForRequirement(
+  repository,
+  sourceHead,
+  sourceRuns,
+  requirement,
+) {
+  const exact = matchingRuns(sourceRuns, requirement)[0];
+  if (exact) return exact;
+  const ancestors = runGit([
+    "rev-list",
+    "--first-parent",
+    "--max-count=100",
+    sourceHead,
+  ])
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .slice(1);
+  for (const ancestor of ancestors) {
+    const historical = matchingRuns(
+      checkRuns(repository, ancestor),
+      requirement,
+    )[0];
+    if (historical) return historical;
+  }
+  return null;
+}
+
 function dispatchWorkflow(repository, workflowId, ref) {
   let failure = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -310,10 +352,15 @@ function ensureChecks({
   for (const requirement of requirements) {
     const target = checkState(targetRuns, requirement);
     if (["pending", "success"].includes(target.state)) continue;
-    const source = matchingRuns(sourceRuns, requirement)[0];
+    const source = sourceRunForRequirement(
+      repository,
+      sourceHead,
+      sourceRuns,
+      requirement,
+    );
     if (!source) {
       throw new Error(
-        `cannot map required check '${requirement.context}' to a reviewed-head workflow`,
+        `cannot map required check '${requirement.context}' to a workflow from the reviewed head or its first-parent history`,
       );
     }
     const workflowId = workflowIdForRun(repository, source);
