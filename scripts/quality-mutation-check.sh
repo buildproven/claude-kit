@@ -122,14 +122,26 @@ esac
 if [ "$PYTEST_COMMAND" = true ]; then
   PYTEST_MUTATION_ARGS=()
   PYTEST_FAIL_FAST_INSERTED=false
+  PYTEST_XDIST_ACTIVE=false
+  for ARGUMENT in "${MUTATION_TEST_ARGS[@]}"; do
+    case "$ARGUMENT" in
+      -n|--numprocesses|-n?*|--numprocesses=*) PYTEST_XDIST_ACTIVE=true ;;
+    esac
+  done
   for ARGUMENT in "${MUTATION_TEST_ARGS[@]}"; do
     if [ "$PYTEST_FAIL_FAST_INSERTED" = false ] && [ "$ARGUMENT" = -- ]; then
+      if [ "$PYTEST_XDIST_ACTIVE" = true ]; then
+        PYTEST_MUTATION_ARGS+=(-n 0)
+      fi
       PYTEST_MUTATION_ARGS+=(-x)
       PYTEST_FAIL_FAST_INSERTED=true
     fi
     PYTEST_MUTATION_ARGS+=("$ARGUMENT")
   done
   if [ "$PYTEST_FAIL_FAST_INSERTED" = false ]; then
+    if [ "$PYTEST_XDIST_ACTIVE" = true ]; then
+      PYTEST_MUTATION_ARGS+=(-n 0)
+    fi
     PYTEST_MUTATION_ARGS+=(-x)
   fi
   MUTATION_TEST_ARGS=("${PYTEST_MUTATION_ARGS[@]}")
