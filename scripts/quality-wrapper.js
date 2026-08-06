@@ -102,10 +102,44 @@ const APPROVAL_SCOPE_FLAGS = {
   "--override-ci-billing": "operator-ci-billing-override",
 };
 
+function readManifestArgument(value, nextValue, currentManifest) {
+  const matched = value === "--manifest" || value.startsWith("--manifest=");
+  if (!matched) return { matched: false };
+  if (currentManifest !== null) {
+    throw new Error("quality approve accepts only one --manifest");
+  }
+  return {
+    matched: true,
+    manifest:
+      value === "--manifest" ? nextValue : value.slice("--manifest=".length),
+    consumed: value === "--manifest" ? 1 : 0,
+  };
+}
+
+function bootstrapArgsForManifest(forwarded, exactManifest) {
+  if (exactManifest === null) return forwarded;
+  if (!exactManifest) {
+    throw new Error("quality approve --manifest requires a path");
+  }
+  const nonIdentityArgs = forwarded.filter((value, index) => {
+    if (value.startsWith("--pr=")) return false;
+    if (value === "--pr") return false;
+    if (index > 0 && forwarded[index - 1] === "--pr") return false;
+    return true;
+  });
+  if (nonIdentityArgs.length > 0) {
+    throw new Error(
+      "quality approve with --manifest accepts only exact PR and HEAD identity arguments",
+    );
+  }
+  return ["--manifest", exactManifest];
+}
+
 function scanApprovalArgv(argv, initialScope) {
   const forwarded = [];
   let expectedHead = null;
   let expectedPr = null;
+  let exactManifest = null;
   let scope = initialScope;
   let reason = null;
   let acceptRaw = null;
@@ -113,7 +147,15 @@ function scanApprovalArgv(argv, initialScope) {
   const ackFlagNames = new Set(HIGH_RISK_ACK_FLAGS.map((entry) => entry.flag));
   for (let index = 1; index < argv.length; index += 1) {
     const value = argv[index];
-    if (value === "--head") {
+    const manifestArgument = readManifestArgument(
+      value,
+      argv[index + 1],
+      exactManifest,
+    );
+    if (manifestArgument.matched) {
+      exactManifest = manifestArgument.manifest;
+      index += manifestArgument.consumed;
+    } else if (value === "--head") {
       expectedHead = argv[++index];
     } else if (value.startsWith("--head=")) {
       expectedHead = value.slice("--head=".length);
@@ -134,15 +176,19 @@ function scanApprovalArgv(argv, initialScope) {
       acceptRaw = value.slice("--accept=".length);
     } else if (ackFlagNames.has(value)) {
       acknowledgedFlags.push(value);
+    } else if (value === "--pr") {
+      expectedPr = argv[++index];
+      forwarded.push(value, expectedPr);
+    } else if (value.startsWith("--pr=")) {
+      expectedPr = value.slice("--pr=".length);
+      forwarded.push(value);
     } else {
       forwarded.push(value);
-      if (value === "--pr") expectedPr = argv[index + 1];
-      else if (value.startsWith("--pr="))
-        expectedPr = value.slice("--pr=".length);
     }
   }
   return {
-    forwarded,
+    forwarded: bootstrapArgsForManifest(forwarded, exactManifest),
+    exactManifest,
     expectedHead,
     expectedPr,
     scope,
@@ -196,6 +242,7 @@ function parseApprovalCommand(argv) {
       reason: null,
       acceptedConditions: [],
       acknowledgedFlags: [],
+      exactManifest: null,
     };
   }
   const scanned = scanApprovalArgv(
@@ -226,6 +273,7 @@ function parseApprovalCommand(argv) {
     reason: scanned.reason,
     acceptedConditions,
     acknowledgedFlags: scanned.acknowledgedFlags,
+    exactManifest: scanned.exactManifest,
   };
 }
 
@@ -237,7 +285,32 @@ function childEnvironment() {
   delete environment.BS_QUALITY_OVERRIDE_APPROVAL_TTL_SECONDS;
   delete environment.BS_QUALITY_APPROVAL_PUBLIC_KEY;
   delete environment.BS_QUALITY_APPROVAL_CHALLENGE_SHA256;
+  delete environment.BS_QUALITY_APPROVAL_EXPECTED_HEAD;
+  delete environment.BS_QUALITY_APPROVAL_EXPECTED_PR;
+  delete environment.BS_QUALITY_APPROVAL_ONLY;
   return environment;
+}
+
+function withRepositoryLease(manifestPath, operation) {
+  const manifest = parseJson(
+    fs.readFileSync(manifestPath, "utf8"),
+    "quality manifest",
+  );
+  if (manifest.options?.merge !== true) return operation();
+  const lease = require("./quality-repo-lease.js").acquire(manifestPath, {
+    waitMs: 0,
+  });
+  const previousToken = process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+  process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = lease.token;
+  try {
+    return operation();
+  } finally {
+    if (previousToken === undefined) {
+      delete process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+    } else {
+      process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = previousToken;
+    }
+  }
 }
 
 // Print the exact diagnosed conditions and evidence snapshot the operator is
@@ -444,31 +517,39 @@ function main() {
   if (environmentApproval) assertOuterApprovalContext();
   const wantsApproval = request.explicit || environmentApproval;
   const { challenge, keyPair, publicKey } = approvalMaterial(wantsApproval);
+  const environment = childEnvironment();
+  if (request.exactManifest) {
+    environment.BS_QUALITY_APPROVAL_EXPECTED_HEAD = request.expectedHead;
+    environment.BS_QUALITY_APPROVAL_EXPECTED_PR = String(request.expectedPr);
+    environment.BS_QUALITY_APPROVAL_ONLY = "1";
+  }
   const result = spawnSync("bash", [bootstrap, ...argv], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    env: childEnvironment(),
+    env: environment,
   });
   if (result.status === 0 && wantsApproval) {
     const manifestPath = manifestPathFromBootstrap(result.stdout);
-    const approval = issueApprovalCapability(manifestPath, {
-      invocationScript: path.join(
-        path.dirname(bootstrap),
-        "quality-invocation.js",
-      ),
-      challenge,
-      publicKey,
-      privateKey: keyPair.privateKey,
-      expectedIdentity: request.explicit
-        ? {
-            pr: request.expectedPr,
-            head: request.expectedHead,
-            scope: request.scope,
-            reason: request.reason,
-            acceptedConditions: request.acceptedConditions,
-          }
-        : null,
-    });
+    const approval = withRepositoryLease(manifestPath, () =>
+      issueApprovalCapability(manifestPath, {
+        invocationScript: path.join(
+          path.dirname(bootstrap),
+          "quality-invocation.js",
+        ),
+        challenge,
+        publicKey,
+        privateKey: keyPair.privateKey,
+        expectedIdentity: request.explicit
+          ? {
+              pr: request.expectedPr,
+              head: request.expectedHead,
+              scope: request.scope,
+              reason: request.reason,
+              acceptedConditions: request.acceptedConditions,
+            }
+          : null,
+      }),
+    );
     if (request.explicit) printExplicitApproval(approval);
   }
   process.stdout.write(result.stdout || "");

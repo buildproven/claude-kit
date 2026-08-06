@@ -75,18 +75,18 @@ function repo(label) {
 // remote (BUI-391); this shim intercepts only `remote get-url origin` to
 // report one matching the mock `gh`, forwarding every other git subcommand
 // through to the real binary.
-function githubShimBin(headRefOid, baseRefOid, pr) {
+function githubShimBin(headRefOid, baseRefOid, pr, repository = "owner/repo") {
   const bin = mkdtempSync(path.join(tmpdir(), "quality-override-gh-"));
   const gh = path.join(bin, "gh");
   writeFileSync(
     gh,
     `#!/usr/bin/env bash
 if [ "$1 $2" = "pr view" ]; then
-  printf '%s\\n' '{"number":${pr},"headRefName":"feature","headRefOid":"${headRefOid}","headRepository":{"nameWithOwner":"owner/repo"},"isCrossRepository":false,"baseRefName":"main","baseRefOid":"${baseRefOid}","url":"https://github.com/owner/repo/pull/${pr}"}'
+  printf '%s\\n' '{"number":${pr},"headRefName":"feature","headRefOid":"${headRefOid}","headRepository":{"nameWithOwner":"${repository}"},"isCrossRepository":false,"baseRefName":"main","baseRefOid":"${baseRefOid}","url":"https://github.com/${repository}/pull/${pr}"}'
   exit 0
 fi
 if [ "$1 $2" = "repo view" ]; then
-  printf '%s\\n' 'owner/repo'
+  printf '%s\\n' '${repository}'
   exit 0
 fi
 exit 1
@@ -334,6 +334,171 @@ describe("quality-wrapper override command surface", () => {
 });
 
 describe("operator override end-to-end", () => {
+  it("attaches an override to the explicitly selected existing manifest", () => {
+    const root = repo("existing-manifest");
+    const head = git(root, ["rev-parse", "HEAD"]);
+    const base = git(root, ["rev-parse", "origin/main"]);
+    const repository = `vitest/${"a".repeat(16)}`;
+    const bin = githubShimBin(head, base, 20, repository);
+    const manifest = execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "create",
+        "--repo",
+        root,
+        "--base-ref",
+        "origin/main",
+        "--pr",
+        "20",
+        "--github-repo",
+        repository,
+        "--head-ref",
+        "feature",
+        "--head-repository",
+        repository,
+        "--cross-repository",
+        "false",
+        "--merge",
+      ],
+      { cwd: root, encoding: "utf8" },
+    ).trim();
+    const initialManifest = JSON.parse(readFileSync(manifest, "utf8"));
+    writeFileSync(
+      path.resolve(
+        root,
+        git(root, ["rev-parse", "--git-common-dir"]),
+        ".quality-vitest-fixture",
+      ),
+      `${initialManifest.repo.key}\n`,
+    );
+    const lease = require(
+      path.join(ROOT, "scripts", "quality-repo-lease.js"),
+    ).acquire(manifest, { waitMs: 0 });
+    const previousLeaseToken = process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+    process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = lease.token;
+    try {
+      execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
+      for (const gate of ["lint", "test", "security"]) {
+        recordGateFixtureLocal(manifest, gate);
+      }
+      invocation.withManifestLock(manifest, (state) => {
+        state.risk.tier = "high";
+      });
+      invocation.recordTerminalState(
+        manifest,
+        "provider-incomplete",
+        "bounded provider failure",
+      );
+    } finally {
+      if (previousLeaseToken === undefined) {
+        delete process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+      } else {
+        process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = previousLeaseToken;
+      }
+    }
+    const original = JSON.parse(readFileSync(manifest, "utf8"));
+
+    const result = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+      cwd: root,
+      input: JSON.stringify({
+        argv: [
+          "override",
+          "--manifest",
+          manifest,
+          "--pr",
+          "20",
+          "--head",
+          head,
+          "--reason",
+          "the exact campaign exhausted mutation capacity",
+          "--accept",
+          "mutation:missing",
+          "--i-understand-security-risk",
+        ],
+      }),
+      encoding: "utf8",
+      env: withoutAmbientGitHubIdentity({
+        BREAK_GLASS_APPROVER: "brett",
+        CLAUDE_SETUP_ROOT: ROOT,
+        PATH: `${bin}:${process.env.PATH}`,
+      }),
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(manifestPathFromStdout(result.stdout)).toBe(manifest);
+    const updated = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(updated.invocationId).toBe(original.invocationId);
+    expect(updated.stateRoot).toBe(original.stateRoot);
+    expect(updated.approval.invocationId).toBe(original.invocationId);
+    expect(updated.approval.acceptedConditions).toEqual(["mutation:missing"]);
+    expect(updated.terminalState.state).toBe("provider-incomplete");
+  }, 120_000);
+
+  it("rejects stale exact-head identity without mutating the selected manifest", () => {
+    const root = repo("existing-manifest-stale-head");
+    const recordedHead = git(root, ["rev-parse", "HEAD"]);
+    const base = git(root, ["rev-parse", "origin/main"]);
+    const manifest = execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "create",
+        "--repo",
+        root,
+        "--base-ref",
+        "origin/main",
+        "--pr",
+        "19",
+        "--github-repo",
+        "owner/repo",
+        "--head-ref",
+        "feature",
+        "--head-repository",
+        "owner/repo",
+        "--cross-repository",
+        "false",
+      ],
+      { cwd: root, encoding: "utf8" },
+    ).trim();
+    writeFileSync(path.join(root, "file.js"), "export const value = 3;\n");
+    git(root, ["commit", "-qam", "descendant"]);
+    const liveHead = git(root, ["rev-parse", "HEAD"]);
+    const bin = githubShimBin(liveHead, base, 19);
+    const before = readFileSync(manifest, "utf8");
+
+    const result = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+      cwd: root,
+      input: JSON.stringify({
+        argv: [
+          "override",
+          "--manifest",
+          manifest,
+          "--pr",
+          "19",
+          "--head",
+          recordedHead,
+          "--reason",
+          "stale approval must not advance the campaign",
+          "--accept",
+          "gate:lint,gate:test,gate:security",
+          "--i-understand-security-risk",
+          "--i-understand-test-risk",
+        ],
+      }),
+      encoding: "utf8",
+      env: withoutAmbientGitHubIdentity({
+        BREAK_GLASS_APPROVER: "brett",
+        CLAUDE_SETUP_ROOT: ROOT,
+        PATH: `${bin}:${process.env.PATH}`,
+      }),
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/identity mismatch before manifest resume/);
+    expect(readFileSync(manifest, "utf8")).toBe(before);
+  }, 120_000);
+
   it("mints a signed capability bound to reason, accepted conditions, and a short TTL, and produces distinct merge trailers", () => {
     const root = repo("e2e");
     const head = git(root, ["rev-parse", "HEAD"]);

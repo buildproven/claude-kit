@@ -150,6 +150,31 @@ if [ -n "$MANIFEST_ARG" ]; then
   RESUME_ROOT="$(node -e 'const q=require(process.argv[1]); process.stdout.write(q.loadManifest(process.argv[2]).manifest.repo.realpath)' \
     "$SCRIPT_DIR/quality-invocation.js" "$MANIFEST_ARG")" || exit 1
   cd "$RESUME_ROOT" || exit 1
+  APPROVAL_ONLY="${BS_QUALITY_APPROVAL_ONLY:-0}"
+  { [ "$APPROVAL_ONLY" = 0 ] || [ "$APPROVAL_ONLY" = 1 ]; } || {
+    echo "❌ invalid quality approval-only mode" >&2
+    exit 1
+  }
+  if [ "$APPROVAL_ONLY" = 1 ] || [ -n "${BS_QUALITY_APPROVAL_EXPECTED_HEAD:-}" ] || [ -n "${BS_QUALITY_APPROVAL_EXPECTED_PR:-}" ]; then
+    [ -n "${BS_QUALITY_APPROVAL_EXPECTED_HEAD:-}" ] && [ -n "${BS_QUALITY_APPROVAL_EXPECTED_PR:-}" ] || {
+      echo "❌ quality approval resume requires both expected PR and HEAD" >&2
+      exit 1
+    }
+    RESUME_RECORDED_IDENTITY="$(node -e '
+      const q = require(process.argv[1]);
+      const manifest = q.loadManifest(process.argv[2]).manifest;
+      process.stdout.write(`${manifest.repo.pr}\n${manifest.revisions.currentHead}\n`);
+    ' "$SCRIPT_DIR/quality-invocation.js" "$MANIFEST_ARG")" || exit 1
+    RESUME_RECORDED_PR="$(printf '%s\n' "$RESUME_RECORDED_IDENTITY" | sed -n '1p')"
+    RESUME_RECORDED_HEAD="$(printf '%s\n' "$RESUME_RECORDED_IDENTITY" | sed -n '2p')"
+    RESUME_CHECKOUT_HEAD="$(git rev-parse HEAD)" || exit 1
+    if [ "$RESUME_RECORDED_PR" != "$BS_QUALITY_APPROVAL_EXPECTED_PR" ] || \
+      [ "$RESUME_RECORDED_HEAD" != "$BS_QUALITY_APPROVAL_EXPECTED_HEAD" ] || \
+      [ "$RESUME_CHECKOUT_HEAD" != "$BS_QUALITY_APPROVAL_EXPECTED_HEAD" ]; then
+      echo "❌ quality approval identity mismatch before manifest resume" >&2
+      exit 1
+    fi
+  fi
   RESUME_MERGE="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" options.merge)"
   BS_QUALITY_REPOSITORY_LEASE_TOKEN=""
   if [ "$RESUME_MERGE" = true ]; then
@@ -159,22 +184,24 @@ if [ -n "$MANIFEST_ARG" ]; then
       "$MANIFEST_ARG" merge.repositoryLease.token)" || exit 1
     export BS_QUALITY_REPOSITORY_LEASE_TOKEN
   fi
-  RESUME_PR="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" repo.pr)"
-  ADVANCE_ARGS=(advance "$MANIFEST_ARG")
-  if [ -n "$RESUME_PR" ] && [ "$RESUME_PR" != null ]; then
-    RESUME_GITHUB_REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
-    RESUME_PR_JSON="$(gh pr view "$RESUME_PR" --repo "$RESUME_GITHUB_REPOSITORY" \
-      --json headRefName,headRepository,isCrossRepository 2>/dev/null)" || exit 1
-    RESUME_HEAD_REF="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.headRefName')" || exit 1
-    RESUME_HEAD_REPOSITORY="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.headRepository.nameWithOwner')" || exit 1
-    RESUME_CROSS_REPOSITORY="$(printf '%s' "$RESUME_PR_JSON" | jq -r '.isCrossRepository')" || exit 1
-    { [ "$RESUME_CROSS_REPOSITORY" = true ] || [ "$RESUME_CROSS_REPOSITORY" = false ]; } || exit 1
-    ADVANCE_ARGS+=(--github-repo "$RESUME_GITHUB_REPOSITORY" \
-      --head-ref "$RESUME_HEAD_REF" \
-      --head-repository "$RESUME_HEAD_REPOSITORY" \
-      --cross-repository "$RESUME_CROSS_REPOSITORY")
+  if [ "$APPROVAL_ONLY" != 1 ]; then
+    RESUME_PR="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" repo.pr)"
+    ADVANCE_ARGS=(advance "$MANIFEST_ARG")
+    if [ -n "$RESUME_PR" ] && [ "$RESUME_PR" != null ]; then
+      RESUME_GITHUB_REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
+      RESUME_PR_JSON="$(gh pr view "$RESUME_PR" --repo "$RESUME_GITHUB_REPOSITORY" \
+        --json headRefName,headRepository,isCrossRepository 2>/dev/null)" || exit 1
+      RESUME_HEAD_REF="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.headRefName')" || exit 1
+      RESUME_HEAD_REPOSITORY="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.headRepository.nameWithOwner')" || exit 1
+      RESUME_CROSS_REPOSITORY="$(printf '%s' "$RESUME_PR_JSON" | jq -r '.isCrossRepository')" || exit 1
+      { [ "$RESUME_CROSS_REPOSITORY" = true ] || [ "$RESUME_CROSS_REPOSITORY" = false ]; } || exit 1
+      ADVANCE_ARGS+=(--github-repo "$RESUME_GITHUB_REPOSITORY" \
+        --head-ref "$RESUME_HEAD_REF" \
+        --head-repository "$RESUME_HEAD_REPOSITORY" \
+        --cross-repository "$RESUME_CROSS_REPOSITORY")
+    fi
+    node "$SCRIPT_DIR/quality-invocation.js" "${ADVANCE_ARGS[@]}" >/dev/null || exit 1
   fi
-  node "$SCRIPT_DIR/quality-invocation.js" "${ADVANCE_ARGS[@]}" >/dev/null || exit 1
   if [ "$RESUME_MERGE" = true ]; then
     node "$SCRIPT_DIR/quality-repo-lease.js" assert-base \
       --manifest "$MANIFEST_ARG" >/dev/null || exit 1
@@ -183,7 +210,11 @@ if [ -n "$MANIFEST_ARG" ]; then
   HEAD_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST_ARG" revisions.currentHead)"
   echo "BS_QUALITY_MANIFEST=$MANIFEST_ARG"
   echo "GIT_ROOT=$RESUME_ROOT"
-  echo "[quality] resumed invocation $INVOCATION_ID at $HEAD_SHA"
+  if [ "$APPROVAL_ONLY" = 1 ]; then
+    echo "[quality] validated approval-only invocation $INVOCATION_ID at $HEAD_SHA"
+  else
+    echo "[quality] resumed invocation $INVOCATION_ID at $HEAD_SHA"
+  fi
   exit 0
 fi
 
