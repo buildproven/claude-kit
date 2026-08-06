@@ -569,12 +569,39 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
       --failed-provider "$REVIEW_PROVIDER" \
       --failure-category "$INCOMPLETE_CATEGORY" \
       --artifact-dir "$REVIEW_OUT" --diff-sha "$DIFF_SHA" || exit 1
-    echo "⚠️  [quality] AI discovery incomplete ($INCOMPLETE_CATEGORY); deterministic gates remain authoritative." >&2
+    RETRY_STATUS="$(node "$SCRIPT_DIR/quality-invocation.js" \
+      review-retry-status "$MANIFEST")" || exit 1
+    RETRY_STATE="$(printf '%s' "$RETRY_STATUS" | jq -r '.state')"
+    if [ "$RETRY_STATE" = pending ]; then
+      echo "⚠️  [quality] AI discovery incomplete ($INCOMPLETE_CATEGORY); authorizing the one bounded same-range retry." >&2
+      node "$SCRIPT_DIR/quality-invocation.js" reserve-incomplete-retry \
+        "$MANIFEST" || {
+        echo "❌ MERGE BLOCKED: the persisted campaign cannot safely reserve incomplete-review retry capacity." >&2
+        node "$SCRIPT_DIR/quality-invocation.js" terminal-state "$MANIFEST" \
+          --state provider-incomplete \
+          --detail "retry-capacity:$INCOMPLETE_CATEGORY" >/dev/null || true
+        exit 1
+      }
+      bash "$SCRIPT_DIR/quality-authorize-review-round.sh" "$MANIFEST" || {
+        echo "❌ MERGE BLOCKED: the incomplete review retry could not be authorized." >&2
+        node "$SCRIPT_DIR/quality-invocation.js" terminal-state "$MANIFEST" \
+          --state provider-incomplete \
+          --detail "retry-authorization:$INCOMPLETE_CATEGORY" >/dev/null || true
+        exit 1
+      }
+      exec bash "$SCRIPT_DIR/quality-run-review.sh" --manifest "$MANIFEST"
+    fi
+    echo "❌ MERGE BLOCKED: AI discovery remained incomplete after its one bounded same-range retry ($INCOMPLETE_CATEGORY)." >&2
+    node "$SCRIPT_DIR/quality-terminal-status.js" --manifest "$MANIFEST" \
+      --category "$INCOMPLETE_CATEGORY" --provider "$REVIEW_PROVIDER" || true
+    node "$SCRIPT_DIR/quality-invocation.js" terminal-state "$MANIFEST" \
+      --state provider-incomplete \
+      --detail "retry-exhausted:$INCOMPLETE_CATEGORY" >/dev/null || true
     echo "REVIEW_OUT=$REVIEW_OUT"
     echo "REVIEW_BASE=$RESOLVED_BASE"
     echo "REVIEW_DIFF_BASE=$REVIEW_DIFF_BASE"
     echo "REVIEW_PROVIDER=review-incomplete"
-    exit 0
+    exit 1
   fi
   # Only claim the fallback is missing when it actually is. When a fallback ran
   # and also failed, saying "no usable fallback is configured" sends the reader

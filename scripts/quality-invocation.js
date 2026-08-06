@@ -5,6 +5,13 @@ const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const {
+  authorizationReviews,
+  completedReviews,
+  coveredReviews,
+  exhaustedIncompleteReviews,
+  incompleteRetryStatus,
+} = require("./quality-review-history");
 const { execFileSync, spawnSync } = require("child_process");
 const riskScore = require("./risk-score.js");
 const agentSelection = require("./quality-agent-selection.js");
@@ -1084,6 +1091,8 @@ function buildGovernor(head) {
     ),
     gateSecondsUsed: 0,
     providerSecondsLimit,
+    providerSecondsLimitExplicit:
+      process.env.BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS !== undefined,
     providerSecondsUsed: 0,
     activeExecution: null,
     maxFixCommits: Math.min(
@@ -1608,6 +1617,12 @@ function advanceHead(manifest, root) {
   // Returning before this assertion would grandfather that stale contract.
   assertCurrentReviewStrength(manifest, root);
   if (nextHead === priorHead) return false;
+  const retry = incompleteRetryStatus(manifest);
+  if (retry.state !== "none") {
+    throw new Error(
+      `quality resume refused: incomplete review retry for ${retry.from}..${retry.to} is ${retry.state}`,
+    );
+  }
   const stampHead = manifest.merge?.stampHead;
   if (stampHead) {
     if (!isEmptyStampCommit(root, priorHead, stampHead)) {
@@ -1802,16 +1817,40 @@ function applyRuntimeGovernor(manifest, options, runtime) {
     governor.providerWindowSeconds = runtime.reviewSeconds;
   }
   // Each round receives its own bounded provider-start allowance. Discovery
-  // may use the selected primary and one fallback for every planned pass;
-  // verification gets the same bounded primary/fallback path for its single
-  // targeted pass. A global cap cannot reserve the mandatory second round.
+  // may use the selected primary and one fallback for every planned pass, plus
+  // one same-range failure retry with the same primary/fallback allowance.
+  // Verification independently gets the bounded primary/fallback path for its
+  // single targeted pass and the same one-retry allowance. A global cap cannot
+  // reserve either later phase.
   const startsPerPass = governor.maxProviderAttempts;
   const discoveryStarts = Math.max(1, runtime.reviewPasses) * startsPerPass;
+  const verificationStarts = startsPerPass;
+  const failureRetryStarts = discoveryStarts + verificationStarts;
+  const failureRetrySeconds =
+    startsPerPass *
+    (runtime.reviewPasses * runtime.reviewSeconds +
+      runtime.reviewReserveSeconds);
   governor.providerAttemptPlan = {
-    schemaVersion: 1,
-    rounds: { 1: discoveryStarts, 2: startsPerPass },
+    schemaVersion: 2,
+    rounds: {
+      1: discoveryStarts * 2,
+      2: verificationStarts * 2,
+    },
+    failureRetryStarts,
+    failureRetrySeconds,
   };
-  governor.maxProviderAttempts = discoveryStarts + startsPerPass;
+  governor.maxProviderAttempts = (discoveryStarts + verificationStarts) * 2;
+  if (governor.providerSecondsLimitExplicit !== true) {
+    // Provider execution is metered across the whole campaign. Fund the
+    // primary/fallback discovery and verification paths plus one same-range
+    // retry for either phase up front; otherwise attempt slots can exist while
+    // the cumulative clock makes them impossible to use. Explicit operator
+    // caps remain authoritative and are never expanded here.
+    governor.providerSecondsLimit =
+      startsPerPass *
+      (runtime.reviewPasses * runtime.reviewSeconds * 2 +
+        runtime.reviewReserveSeconds * 2);
+  }
   governor.campaignSeconds = runtime.campaignSeconds;
 }
 
@@ -2563,17 +2602,89 @@ function completeMutationAttempt(manifest) {
   completeActiveExecution(manifest, "gate");
 }
 
+function reserveIncompleteRetry(manifest) {
+  const retry = incompleteRetryStatus(manifest);
+  if (retry.state !== "pending") {
+    throw new Error(
+      "provider retry capacity requires one pending incomplete review",
+    );
+  }
+  const plan = manifest.governor.providerAttemptPlan;
+  if (plan?.schemaVersion === 2) return false;
+  if (
+    plan?.schemaVersion !== 1 ||
+    !Number.isInteger(plan.rounds?.[1]) ||
+    plan.rounds[1] < 1 ||
+    !Number.isInteger(plan.rounds?.[2]) ||
+    plan.rounds[2] < 1
+  ) {
+    throw new Error(
+      "legacy provider attempt plan cannot reserve retry capacity",
+    );
+  }
+  const failureRetryStarts = plan.rounds[1] + plan.rounds[2];
+  const reviewSeconds = manifest.risk?.runtime?.reviewSeconds;
+  const verificationSeconds = manifest.risk?.runtime?.reviewReserveSeconds;
+  if (!Number.isInteger(reviewSeconds) || reviewSeconds < 1) {
+    throw new Error(
+      "legacy provider attempt plan lacks retry runtime evidence",
+    );
+  }
+  if (!Number.isInteger(verificationSeconds) || verificationSeconds < 1) {
+    throw new Error(
+      "legacy provider attempt plan lacks verification retry runtime evidence",
+    );
+  }
+  const failureRetrySeconds =
+    plan.rounds[1] * reviewSeconds + plan.rounds[2] * verificationSeconds;
+  manifest.governor.providerAttemptPlan = {
+    schemaVersion: 2,
+    rounds: {
+      1: plan.rounds[1] * 2,
+      2: plan.rounds[2] * 2,
+    },
+    failureRetryStarts,
+    failureRetrySeconds,
+  };
+  manifest.governor.maxProviderAttempts += failureRetryStarts;
+  // Only a persisted false proves that the runtime, rather than the operator,
+  // owned this cap. Legacy manifests have no provenance bit; keep their limit
+  // unchanged instead of guessing that an explicit historical cap was a
+  // default and silently expanding it during resume.
+  if (manifest.governor.providerSecondsLimitExplicit === false) {
+    manifest.governor.providerSecondsLimit += failureRetrySeconds;
+  }
+  return true;
+}
+
 function reviewInfo(manifest) {
-  const covered = coveredReviews(manifest);
-  const previous = covered.at(-1);
+  if (exhaustedIncompleteReviews(manifest).length > 0) {
+    throw new Error(
+      "provider review remained incomplete after its authorized same-range retry",
+    );
+  }
+  const completed = completedReviews(manifest);
+  const previous = completed.at(-1);
+  const activeAuthorizationIndex =
+    manifest.governor.authorizedAttempts.findLastIndex(
+      (attempt) =>
+        attempt.head === manifest.revisions.currentHead &&
+        attempt.consumedAt === null &&
+        !attempt.invalidatedAt,
+    );
+  const artifactAttempt =
+    activeAuthorizationIndex >= 0
+      ? activeAuthorizationIndex + 1
+      : manifest.reviews.length + 1;
   if (previous?.to === manifest.revisions.currentHead) {
     throw new Error(
       "review retry requires a descendant HEAD; the current HEAD is already reviewed",
     );
   }
   return {
-    round: covered.length + 1,
+    round: completed.length + 1,
     attempt: manifest.governor.roundsUsed,
+    artifactAttempt,
     from: previous?.to || manifest.revisions.baseSha,
     to: manifest.revisions.currentHead,
     previousReviewedHead: previous?.to || null,
@@ -2581,15 +2692,9 @@ function reviewInfo(manifest) {
       manifest.stateRoot,
       "reviews",
       manifest.revisions.currentHead,
-      `round-${covered.length + 1}-attempt-${manifest.governor.roundsUsed}`,
+      `round-${completed.length + 1}-attempt-${artifactAttempt}`,
     ),
   };
-}
-
-function coveredReviews(manifest) {
-  return manifest.reviews.filter((review) =>
-    ["success", "advisory", "exempt", "incomplete"].includes(review.status),
-  );
 }
 
 function agentsSha256(manifest) {
@@ -3127,6 +3232,7 @@ function recordReview(manifest, options) {
   manifest.reviews.push({
     round: expected.round,
     attempt: expected.attempt,
+    artifactAttempt: expected.artifactAttempt,
     from: options.from,
     to: options.to,
     provider: options.provider,
@@ -3218,6 +3324,7 @@ function recordAdvisoryReview(manifest, options) {
   manifest.reviews.push({
     round: expected.round,
     attempt: expected.attempt,
+    artifactAttempt: expected.artifactAttempt,
     from: options.from,
     to: options.to,
     provider: "ci-only",
@@ -3281,6 +3388,7 @@ function recordPolicyExemptReview(manifest, options) {
   manifest.reviews.push({
     round: expected.round,
     attempt: expected.attempt,
+    artifactAttempt: expected.artifactAttempt,
     from: options.from,
     to: options.to,
     provider: "policy-exempt",
@@ -3348,6 +3456,7 @@ function recordIncompleteReview(manifest, options) {
   manifest.reviews.push({
     round: expected.round,
     attempt: expected.attempt,
+    artifactAttempt: expected.artifactAttempt,
     from: options.from,
     to: options.to,
     provider: "review-incomplete",
@@ -3544,7 +3653,7 @@ function artifactPaths(manifest, review) {
     manifest.stateRoot,
     "reviews",
     review.to,
-    `round-${review.round}-attempt-${review.attempt}`,
+    `round-${review.round}-attempt-${review.artifactAttempt ?? review.attempt}`,
   );
   if (
     artifactDir !== expectedDir ||
@@ -3787,7 +3896,7 @@ function verifyReviewAuthorization(manifest, review) {
 }
 
 function reviewCoverage(manifest) {
-  const covered = coveredReviews(manifest);
+  const covered = authorizationReviews(manifest);
   if (covered.length === 0) throw new Error("no review coverage");
   let expectedFrom = manifest.revisions.baseSha;
   for (const review of covered) {
@@ -4412,8 +4521,16 @@ function reviewAuthorization(manifest) {
   if (isOperatorOverrideActive(manifest)) {
     return operatorOverrideAuthorization(manifest);
   }
+  const retry = incompleteRetryStatus(manifest);
+  if (retry.state !== "none") {
+    throw new Error(
+      retry.state === "exhausted"
+        ? "provider review remained incomplete after its authorized same-range retry"
+        : "provider review requires its authorized same-range retry before merge authorization",
+    );
+  }
   const authorization = reviewCoverage(manifest);
-  const covered = coveredReviews(manifest);
+  const covered = authorizationReviews(manifest);
   const evidenceSha256 = crypto
     .createHash("sha256")
     .update(reviewedEvidence(manifest))
@@ -4781,6 +4898,12 @@ const COMMANDS = {
     ),
   "review-info": ({ manifest }) =>
     process.stdout.write(`${JSON.stringify(reviewInfo(manifest))}\n`),
+  "review-retry-status": ({ manifest }) =>
+    process.stdout.write(
+      `${JSON.stringify(incompleteRetryStatus(manifest))}\n`,
+    ),
+  "reserve-incomplete-retry": ({ manifestArg }) =>
+    mutate(manifestArg, reserveIncompleteRetry),
   "review-identity": ({ manifest }) =>
     process.stdout.write(`${JSON.stringify(reviewIdentity(manifest))}\n`),
   "record-review": ({ manifestArg, rawArgs }) =>
@@ -4947,15 +5070,21 @@ function runCommand(command, rawArgs) {
       options.state,
       options.detail,
     );
-    if (
-      [
-        "verified-unmerged",
-        "superseded",
-        "policy-superseded",
-        "provider-incomplete",
-        "provider-contract-failed",
-      ].includes(inForce)
-    ) {
+    const releaseStates = [
+      "verified-unmerged",
+      "superseded",
+      "policy-superseded",
+      "provider-incomplete",
+      "provider-contract-failed",
+    ];
+    // terminalState is immutable diagnostic history, while the repository
+    // lease follows the lifecycle outcome requested by this command. A late
+    // provider failure must still release its lease even when an earlier
+    // terminal cause remains the state in force.
+    const releaseReason = releaseStates.includes(options.state)
+      ? options.state
+      : inForce;
+    if (releaseStates.includes(releaseReason)) {
       const refreshed = loadManifest(manifestArg).manifest;
       if (
         refreshed.options?.merge === true &&
@@ -4964,7 +5093,7 @@ function runCommand(command, rawArgs) {
         require("./quality-repo-lease").release(
           manifestArg,
           process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN,
-          inForce,
+          releaseReason,
         );
       }
     }
@@ -5084,6 +5213,7 @@ module.exports = {
   judgeContext,
   repoKey,
   reviewInfo,
+  reserveIncompleteRetry,
   reviewIdentity,
   reviewTrailers,
   saveManifest,

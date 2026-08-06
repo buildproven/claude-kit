@@ -89,9 +89,10 @@ Add a repository-scoped merge lease to the public quality runtime.
    an exact active lease even if an earlier diagnostic terminal state remains
    `blocked`; that historical outcome is never relabelled. Explicitly
    non-reenterable outcomes and `verified-unmerged` also release. Parsed
-   provider output that is incomplete or violates the review contract is
-   explicitly non-reenterable: the bounded attempt has been consumed and a new
-   invocation is required, so those terminal states release immediately. A
+   provider output that is incomplete or violates the review contract remains
+   resumable while the governor has an authorized same-range retry. Only a
+   `provider-incomplete` terminal state recorded after that bounded retry is
+   exhausted is non-reenterable and releases immediately. A
    blocked, interrupted, or timed-out campaign retains the lease for exact
    manifest resumption and eventually requires the explicit stale-owner
    recovery path if abandoned. Release decisions never infer merge success
@@ -134,6 +135,20 @@ Add a repository-scoped merge lease to the public quality runtime.
    reconciliation path may use recorded repository identity after that
    worktree is gone. A missing shared Git directory, mismatched owner tuple, or
    ambiguous GitHub result remains quarantined.
+10. An incomplete provider-failure attestation is durable audit evidence, not
+    a successful review checkpoint. A bounded, governor-authorized retry may
+    review the same exact `from..to` range without advancing HEAD. Its artifacts
+    use a distinct attempt directory; the incomplete artifact remains in the
+    manifest and signed evidence chain. A later complete attestation for that
+    same range supersedes the incomplete attestation only for contiguous merge
+    coverage and final review status. It does not erase partial findings,
+    provider usage, or failure metadata, and a second incomplete result remains
+    blocking. This retry contract is distinct from a completed critical review
+    that truthfully records incomplete model-family diversity. Default-governed
+    campaigns reserve both provider starts and cumulative provider execution
+    time for the retry; an explicit operator provider-time cap remains
+    authoritative and may stop it fail-closed. A legacy manifest without cap
+    provenance is treated as operator-owned and is never expanded on resume.
 
 ## Lease record
 
@@ -220,6 +235,9 @@ critical section, not to the campaign lease or its six-hour policy.
 - Removing a campaign worktree cannot make an otherwise authoritative merged or
   closed-unmerged GitHub outcome unreconcilable while its shared repository and
   exact lease identity remain available.
+- Parser, timeout, and provider failures cannot consume the documented retry by
+  making an incomplete attestation look like successful HEAD coverage; only a
+  complete attestation advances the review checkpoint.
 - Direct or break-glass merges outside quality remain visible policy violations;
   the lease does not pretend it can serialize actors that bypass the workflow.
 
@@ -277,6 +295,11 @@ critical section, not to the campaign lease or its six-hour policy.
   available. A second regression test removes the exact linked worktree before
   reconciliation and proves the same exact-owner/remote-outcome checks release
   the lease without recreating that path.
+- A provider-retry regression records an incomplete attestation, reuses the
+  governor-authorized same-HEAD range in a distinct artifact directory, records
+  a complete retry, and proves the incomplete evidence remains auditable while
+  final coverage becomes complete. A double-incomplete retry remains
+  incomplete and merge-blocking.
 - Full repository verification, mutation evidence, protected CI, and
   exact-head review pass before release.
 

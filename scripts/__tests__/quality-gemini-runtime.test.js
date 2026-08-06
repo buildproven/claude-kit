@@ -120,4 +120,160 @@ printf '%s\\n' '{"response":"{\\"verdict\\":\\"approve\\",\\"summary\\":\\"No ac
     expect(body.governor.providerSecondsUsed).toBeGreaterThanOrEqual(1);
     expect(body.governor.activeExecution).toBeNull();
   }, 60_000);
+
+  it("runs one same-range retry and terminalizes repeated incomplete output", () => {
+    const root = makeTempDir("quality-gemini-incomplete-");
+    const repo = fixtureRepo(root);
+    const bin = path.join(root, "bin");
+    const state = path.join(root, "state");
+    const callCount = path.join(root, "gemini-call-count");
+    mkdirSync(bin);
+    const gemini = path.join(bin, "gemini");
+    writeFileSync(
+      gemini,
+      `#!/usr/bin/env bash
+cat >/dev/null
+count=0
+[ ! -f "$GEMINI_CALL_COUNT" ] || count=$(cat "$GEMINI_CALL_COUNT")
+count=$((count + 1))
+printf '%s\n' "$count" > "$GEMINI_CALL_COUNT"
+printf '%s\n' '{"response":"not structured review JSON"}'
+`,
+    );
+    chmodSync(gemini, 0o755);
+    const env = {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      XDG_STATE_HOME: state,
+      BS_QUALITY_PRIMARY: "gemini",
+      BS_QUALITY_FALLBACK: "none",
+      BS_QUALITY_MAX_PROVIDER_ATTEMPTS: "1",
+      GEMINI_CALL_COUNT: callCount,
+    };
+    const manifest = execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "create",
+        "--repo",
+        repo,
+        "--base-ref",
+        "origin/main",
+        "--level",
+        "95",
+      ],
+      { cwd: repo, env, encoding: "utf8" },
+    ).trim();
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: repo, env });
+    execFileSync("bash", [SELECT, "--manifest", manifest], {
+      cwd: repo,
+      env,
+    });
+    execFileSync("node", [GOVERNOR, "bump-round", manifest], {
+      cwd: repo,
+      env,
+    });
+
+    const result = spawnSync("bash", [RUN_REVIEW, "--manifest", manifest], {
+      cwd: repo,
+      env,
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/one bounded same-range retry/);
+    expect(result.stderr).toMatch(/remained incomplete/);
+    const body = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(body.reviews.map((review) => review.status)).toEqual([
+      "incomplete",
+      "incomplete",
+    ]);
+    expect(body.reviews[1].artifactDir).not.toBe(body.reviews[0].artifactDir);
+    expect(body.reviews[1]).toMatchObject({
+      from: body.reviews[0].from,
+      to: body.reviews[0].to,
+    });
+    expect(body.governor.providerAttempts).toHaveLength(2);
+    expect(readFileSync(callCount, "utf8").trim()).toBe("2");
+    expect(body.terminalState).toMatchObject({
+      state: "provider-incomplete",
+      detail: "retry-exhausted:parser-inconclusive",
+    });
+  }, 60_000);
+
+  it("terminalizes an incomplete legacy campaign that cannot reserve retry capacity", () => {
+    const root = makeTempDir("quality-gemini-legacy-incomplete-");
+    const repo = fixtureRepo(root);
+    const bin = path.join(root, "bin");
+    const state = path.join(root, "state");
+    const callCount = path.join(root, "gemini-call-count");
+    mkdirSync(bin);
+    const gemini = path.join(bin, "gemini");
+    writeFileSync(
+      gemini,
+      `#!/usr/bin/env bash
+cat >/dev/null
+count=0
+[ ! -f "$GEMINI_CALL_COUNT" ] || count=$(cat "$GEMINI_CALL_COUNT")
+count=$((count + 1))
+printf '%s\n' "$count" > "$GEMINI_CALL_COUNT"
+printf '%s\n' '{"response":"not structured review JSON"}'
+`,
+    );
+    chmodSync(gemini, 0o755);
+    const env = {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      XDG_STATE_HOME: state,
+      BS_QUALITY_PRIMARY: "gemini",
+      BS_QUALITY_FALLBACK: "none",
+      BS_QUALITY_MAX_PROVIDER_ATTEMPTS: "1",
+      GEMINI_CALL_COUNT: callCount,
+    };
+    const manifest = execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "create",
+        "--repo",
+        repo,
+        "--base-ref",
+        "origin/main",
+        "--level",
+        "95",
+      ],
+      { cwd: repo, env, encoding: "utf8" },
+    ).trim();
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: repo, env });
+    execFileSync("bash", [SELECT, "--manifest", manifest], {
+      cwd: repo,
+      env,
+    });
+    const legacy = JSON.parse(readFileSync(manifest, "utf8"));
+    delete legacy.governor.providerAttemptPlan;
+    delete legacy.governor.providerSecondsLimitExplicit;
+    writeFileSync(manifest, `${JSON.stringify(legacy, null, 2)}\n`);
+    execFileSync("node", [GOVERNOR, "bump-round", manifest], {
+      cwd: repo,
+      env,
+    });
+
+    const result = spawnSync("bash", [RUN_REVIEW, "--manifest", manifest], {
+      cwd: repo,
+      env,
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/cannot safely reserve/);
+    expect(readFileSync(callCount, "utf8").trim()).toBe("1");
+    const body = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(body.reviews.map((review) => review.status)).toEqual(["incomplete"]);
+    expect(body.terminalState).toMatchObject({
+      state: "provider-incomplete",
+      detail: "retry-capacity:parser-inconclusive",
+    });
+  }, 60_000);
 });
