@@ -54,6 +54,38 @@ function run(root, args, fixture) {
 }
 
 describe("quality-required-checks", () => {
+  it("paginates effective rules before deriving required checks", () => {
+    const originalPath = process.env.PATH;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-rules-"));
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      type: "non_required_rule",
+      id: index + 1,
+    }));
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *protection/required_status_checks*) printf '%s\\n' '{"contexts":[],"checks":[]}' ;;
+  *rules/branches/main*"page=2"*) printf '%s\\n' '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"security","integration_id":15368}]}}]' ;;
+  *rules/branches/main*"page=1"*) printf '%s\\n' '${JSON.stringify(firstPage)}' ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath}`;
+    try {
+      expect(requiredChecks("owner/repo", "main")).toEqual([
+        { context: "security", appId: 15368 },
+      ]);
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
   it("paginates exact-head check runs through GitHub total_count", () => {
     const originalPath = process.env.PATH;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));

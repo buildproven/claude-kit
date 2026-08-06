@@ -179,13 +179,28 @@ function rulesetRequirements(effectiveRules) {
   return requirements;
 }
 
+function paginatedArray(path, label) {
+  const values = [];
+  const separator = path.includes("?") ? "&" : "?";
+  for (let page = 1; page <= 100; page += 1) {
+    const response = apiJson(`${path}${separator}per_page=100&page=${page}`);
+    if (!Array.isArray(response)) {
+      throw new Error(`GitHub ${label} response is invalid`);
+    }
+    values.push(...response);
+    if (response.length < 100) return values;
+  }
+  throw new Error(`GitHub ${label} pagination exceeded 100 pages`);
+}
+
 function requiredChecks(repository, base) {
   const encodedBase = encodeURIComponent(base);
   const protection = optionalApiJson(
     `repos/${repository}/branches/${encodedBase}/protection/required_status_checks`,
   );
-  const effectiveRules = apiJson(
+  const effectiveRules = paginatedArray(
     `repos/${repository}/rules/branches/${encodedBase}`,
+    "effective-rules",
   );
   const requirements = classicRequirements(protection);
   for (const requirement of rulesetRequirements(effectiveRules)) {
