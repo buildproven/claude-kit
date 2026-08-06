@@ -5,6 +5,9 @@
 Accepted for BUI-572 after an independent high-reasoning architecture review
 found no unresolved correctness defect.
 
+The BUI-709 recovery amendment below is accepted after an independent
+high-reasoning architecture review found no unresolved correctness defect.
+
 ## Context
 
 BuildProven protects `main` with strict required status checks. That is the
@@ -120,6 +123,17 @@ Add a repository-scoped merge lease to the public quality runtime.
    under the metadata guard, which fences any suspended old process that has
    not entered the merge critical section. An unsafe, malformed,
    symlinked, cross-repository, or recent owner fails closed.
+9. Authoritative merge reconciliation is repository-scoped and survives removal
+   of the campaign's linked worktree. The immutable manifest records the
+   canonical Git common directory at campaign creation; recovery compares that
+   existing directory, manifest path, invocation, pull request, head ref, and
+   repository identity with the active lease record. GitHub read-back uses the
+   explicit protected repository and pull request from the manifest and does
+   not use the vanished checkout as ambient identity. Ordinary active phases
+   still validate the live worktree exactly; only the explicit terminal
+   reconciliation path may use recorded repository identity after that
+   worktree is gone. A missing shared Git directory, mismatched owner tuple, or
+   ambiguous GitHub result remains quarantined.
 
 ## Lease record
 
@@ -203,6 +217,9 @@ critical section, not to the campaign lease or its six-hour policy.
   rebase-and-resume requirement, never an implicit merge or silent retry.
 - A failed or crashed owner cannot be guessed dead while its manifest is recent,
   and an explicitly reclaimed owner cannot pass the next fencing check.
+- Removing a campaign worktree cannot make an otherwise authoritative merged or
+  closed-unmerged GitHub outcome unreconcilable while its shared repository and
+  exact lease identity remain available.
 - Direct or break-glass merges outside quality remain visible policy violations;
   the lease does not pretend it can serialize actors that bypass the workflow.
 
@@ -257,7 +274,9 @@ critical section, not to the campaign lease or its six-hour policy.
   the PR without merge. Time and negative observations alone never admit
   another campaign. The reconciliation regression test removes the process
   credential and proves the explicit invocation/PR confirmation path remains
-  available.
+  available. A second regression test removes the exact linked worktree before
+  reconciliation and proves the same exact-owner/remote-outcome checks release
+  the lease without recreating that path.
 - Full repository verification, mutation evidence, protected CI, and
   exact-head review pass before release.
 

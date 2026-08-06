@@ -2452,6 +2452,68 @@ exec "${realGit}" "$@"
     expect(authorization.remainingSeconds).toBeLessThan(120);
   });
 
+  it("resumes a leased merge campaign after descendant remediation through bootstrap", () => {
+    const root = repo("merge-bootstrap-descendant-resume");
+    const originalToken = process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+    const manifestPath = create(root, ["--merge", "--pr", "7"]);
+    const initial = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const bin = makeTempDir("quality-merge-resume-gh-");
+    writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env bash
+if [ "$1 $2" = "repo view" ]; then
+  printf '%s\n' '${initial.repo.githubRepository}'
+  exit 0
+fi
+if [ "$1 $2" = "pr view" ]; then
+  printf '%s\n' '{"headRefName":"${initial.repo.headRefName}","headRepository":{"nameWithOwner":"${initial.repo.headRepository}"},"isCrossRepository":false}'
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(path.join(bin, "gh"), 0o755);
+    writeFileSync(
+      path.join(root, "merge-remediation.js"),
+      "export const remediated = true;\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "fix: remediate merge review"]);
+    const descendantHead = git(root, ["rev-parse", "HEAD"]);
+    delete process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+
+    try {
+      const result = spawnSync(
+        "bash",
+        [BOOTSTRAP, "--manifest", manifestPath],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const resumed = JSON.parse(readFileSync(manifestPath, "utf8"));
+      expect(resumed.revisions.currentHead).toBe(descendantHead);
+      expect(resumed.merge.repositoryLease.token).toBeTruthy();
+      expect(lease.status(manifestPath)).toMatchObject({
+        state: "active",
+        repository: initial.repo.githubRepository.toLowerCase(),
+      });
+      lease.release(
+        manifestPath,
+        resumed.merge.repositoryLease.token,
+        "test-complete",
+      );
+    } finally {
+      if (originalToken === undefined) {
+        delete process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+      } else {
+        process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = originalToken;
+      }
+    }
+  });
+
   it("shares cumulative execution time across fallback providers", () => {
     const root = repo("provider-fallback-window");
     const manifest = create(root, [], {
