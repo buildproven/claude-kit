@@ -12,6 +12,33 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.4.0](https://github.com/buildproven/claude-kit/compare/v4.3.0...v4.4.0) (2026-08-06)
+
+
+### Features
+
+* **codex:** add cross-review skill for Codex→Claude delegation ([#280](https://github.com/buildproven/claude-kit/issues/280)) ([2543938](https://github.com/buildproven/claude-kit/commit/2543938cf5e9e9c974b483f9562144360e445dda))
+
+
+### Bug Fixes
+
+* attribute quality telemetry outcomes ([#277](https://github.com/buildproven/claude-kit/issues/277)) ([4b55555](https://github.com/buildproven/claude-kit/commit/4b5555547b73852eedc492e915b1319ad485a28d))
+* harden credential and review evidence gates ([#267](https://github.com/buildproven/claude-kit/issues/267)) ([d17fc05](https://github.com/buildproven/claude-kit/commit/d17fc052d7281b4660df0971849601be157572ee))
+* make AI review advisory and evidence-bound ([#274](https://github.com/buildproven/claude-kit/issues/274)) ([a7fc81c](https://github.com/buildproven/claude-kit/commit/a7fc81c3d9e106d4be34a7b9d6d97ba88b3d89c4))
+* preserve review campaign evidence ([#276](https://github.com/buildproven/claude-kit/issues/276)) ([b8b5462](https://github.com/buildproven/claude-kit/commit/b8b546242074ec1d1ae76b5c141d3cf1d4d964a0))
+* **quality:** accept signed v2 fallback evidence ([#279](https://github.com/buildproven/claude-kit/issues/279)) ([f8d8e7b](https://github.com/buildproven/claude-kit/commit/f8d8e7ba9f53e73b3b46fe7cb792280968826283))
+* **quality:** content promotion must not depend on the filename ([#271](https://github.com/buildproven/claude-kit/issues/271)) ([61cde3c](https://github.com/buildproven/claude-kit/commit/61cde3c6a7f5a00d855afb6dbbae171e40983058))
+* **quality:** fail fast on pytest mutations ([#273](https://github.com/buildproven/claude-kit/issues/273)) ([7efcb05](https://github.com/buildproven/claude-kit/commit/7efcb057b30cc976fa3be5765a6d1016c45413a6))
+* **quality:** floor micro gate execution budget ([#284](https://github.com/buildproven/claude-kit/issues/284)) ([520f756](https://github.com/buildproven/claude-kit/commit/520f756330837d1331d0b3fdb140451e30a96db5))
+* **quality:** fund exact-head remediation gates ([#285](https://github.com/buildproven/claude-kit/issues/285)) ([835af4d](https://github.com/buildproven/claude-kit/commit/835af4df653029327ae01ca33788a290a27ce6aa))
+* **quality:** judge prose by content, not filename (BUI-641 root cause) + quorum diagnostics ([#270](https://github.com/buildproven/claude-kit/issues/270)) ([6e7df7b](https://github.com/buildproven/claude-kit/commit/6e7df7becdf57a68966a1bdd1cdb23e6fdf982ae))
+* **quality:** normalize verified Codex approvals ([#282](https://github.com/buildproven/claude-kit/issues/282)) ([82b51c6](https://github.com/buildproven/claude-kit/commit/82b51c635224669e3d930460f084f4ce888aca4b))
+* **quality:** persist terminal telemetry automatically ([#278](https://github.com/buildproven/claude-kit/issues/278)) ([be58c15](https://github.com/buildproven/claude-kit/commit/be58c1530a6b2b8778251b93ad1100ca42bba98b))
+* **quality:** record the terminal state on a successful merge ([#272](https://github.com/buildproven/claude-kit/issues/272)) ([f98f69d](https://github.com/buildproven/claude-kit/commit/f98f69d1553941e3ecfd168f8726936673c89232))
+* **quality:** reject compound pytest scripts ([#275](https://github.com/buildproven/claude-kit/issues/275)) ([6225633](https://github.com/buildproven/claude-kit/commit/62256330c111a6dd69d88600778f3041daff3a63))
+* **quality:** stop ordinary changes reaching critical tier ([#268](https://github.com/buildproven/claude-kit/issues/268)) ([d7fa276](https://github.com/buildproven/claude-kit/commit/d7fa276ecd4f157f368f0f638b9926d8388c38d8))
+* serialize repository merge campaigns ([#281](https://github.com/buildproven/claude-kit/issues/281)) ([b44627d](https://github.com/buildproven/claude-kit/commit/b44627dea44c909cae21f41f3d9407399b33ce6b))
+
 ## [4.3.0](https://github.com/buildproven/claude-kit/compare/v4.2.0...v4.3.0) (2026-08-03)
 
 
