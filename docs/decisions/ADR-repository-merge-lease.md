@@ -159,7 +159,10 @@ Add a repository-scoped merge lease to the public quality runtime.
     request check rollup, which can omit a workflow-dispatch run even though its
     commit check-run is authoritative. Missing mappings, unavailable required
     contexts, wrong-app checks, unsuccessful conclusions, and timeouts all fail
-    closed; no status is synthesized and no protection is bypassed.
+    closed; no status is synthesized and no protection is bypassed. A classic
+    protection read may be empty only for GitHub's explicit `404 Branch not
+protected` response. Ruleset reads and every other API failure remain hard
+    errors, so a partial observation cannot silently shrink the required set.
 
 ## Lease record
 

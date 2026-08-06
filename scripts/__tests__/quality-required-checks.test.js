@@ -46,6 +46,34 @@ function run(root, args, fixture) {
 }
 
 describe("quality-required-checks", () => {
+  it("fails closed when one protection source cannot be read", () => {
+    const originalPath = process.env.PATH;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    const gh = path.join(bin, "gh");
+    fs.writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *protection/required_status_checks*) printf '%s\\n' '{"contexts":["quality"],"checks":[]}' ;;
+  *rules/branches/main*) echo 'gh: API rate limit exceeded (HTTP 403)' >&2; exit 1 ;;
+  *) exit 1 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath}`;
+    try {
+      expect(() => requiredChecks("owner/repo", "main")).toThrow(
+        /API rate limit exceeded/,
+      );
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
   it("combines classic protection and effective ruleset requirements", () => {
     const calls = [];
     const originalPath = process.env.PATH;

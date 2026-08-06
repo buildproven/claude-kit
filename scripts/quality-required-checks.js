@@ -5,7 +5,14 @@ const { spawnSync } = require("node:child_process");
 
 const ACCEPTED_CONCLUSIONS = new Set(["success"]);
 
-class GhCommandError extends Error {}
+class GhCommandError extends Error {
+  constructor(message, result) {
+    super(message);
+    this.exitStatus = result.status;
+    this.stdout = result.stdout || "";
+    this.stderr = result.stderr || "";
+  }
+}
 
 function parseOptions(args) {
   const options = {};
@@ -63,6 +70,7 @@ function runGh(args) {
   if (result.status !== 0) {
     throw new GhCommandError(
       `gh ${args[0]} failed (${result.status}): ${(result.stderr || result.stdout || "").trim()}`,
+      result,
     );
   }
   return result.stdout;
@@ -79,11 +87,27 @@ function apiJson(path) {
   }
 }
 
+function parseJsonOrNull(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
 function optionalApiJson(path) {
   try {
     return apiJson(path);
   } catch (error) {
-    if (error instanceof GhCommandError) return null;
+    if (error instanceof GhCommandError) {
+      const body = parseJsonOrNull(error.stdout);
+      if (
+        error.stderr.includes("(HTTP 404)") &&
+        body?.message === "Branch not protected"
+      ) {
+        return null;
+      }
+    }
     throw error;
   }
 }
@@ -146,7 +170,7 @@ function requiredChecks(repository, base) {
   const protection = optionalApiJson(
     `repos/${repository}/branches/${encodedBase}/protection/required_status_checks`,
   );
-  const effectiveRules = optionalApiJson(
+  const effectiveRules = apiJson(
     `repos/${repository}/rules/branches/${encodedBase}`,
   );
   const requirements = classicRequirements(protection);
