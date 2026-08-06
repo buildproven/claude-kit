@@ -181,6 +181,24 @@ describe("provider review runtime", () => {
     expect(companion).not.toContain('category: "marker-only-findings"');
   });
 
+  it("routes every caller-built provider prompt through the review-input artifact", () => {
+    const runner = readFileSync(RUN_REVIEW, "utf8");
+    const companion = readFileSync(
+      path.resolve(ROOT, "scripts", "claude-review-companion.sh"),
+      "utf8",
+    );
+
+    expect(runner).toContain('--prompt-file "$REVIEW_OUT/review-prompt.txt"');
+    expect(
+      runner.match(/cat "\$REVIEW_OUT\/review-prompt\.txt"/g),
+    ).toHaveLength(2);
+    expect(companion).toContain(
+      'CTX_FILE="${PROMPT_FILE:-$OUT_DIR/review-context.txt}"',
+    );
+    expect(companion).toContain('node "$SCRIPT_DIR/quality-review-input.js"');
+    expect(companion).not.toContain('cat "$DIFF_FILE"');
+  });
+
   it("fails over when Codex cannot refresh an MCP OAuth token", () => {
     const runner = readFileSync(RUN_REVIEW, "utf8");
     expect(runner).toContain("OAuth token refresh failed:.*invalid_grant");
