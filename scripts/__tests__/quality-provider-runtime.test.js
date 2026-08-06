@@ -1,8 +1,12 @@
 import { spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import reviewEvidence from "../quality-review-evidence.js";
 import { makeTempDir } from "./helpers/tmp.js";
+
+const { signEvidence } = reviewEvidence;
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const PLAN = path.join(ROOT, "scripts", "quality-review-plan.sh");
@@ -87,7 +91,10 @@ describe("provider review runtime", () => {
       [
         BOUNDED,
         "--timeout",
-        "1",
+        // One second made Python startup itself the assertion under parallel
+        // full-suite load. Three seconds still exercises the hard wall clock
+        // while giving the session-escaped helper time to publish its PID.
+        "3",
         "--",
         "/bin/bash",
         "-c",
@@ -95,10 +102,10 @@ describe("provider review runtime", () => {
         "provider",
         pidFile,
       ],
-      { encoding: "utf8", timeout: 5000 },
+      { encoding: "utf8", timeout: 8000 },
     );
     expect(result.status).toBe(124);
-    expect(Date.now() - started).toBeLessThan(4000);
+    expect(Date.now() - started).toBeLessThan(7000);
     const helperPid = Number(readFileSync(pidFile, "utf8").trim());
     expect(Number.isSafeInteger(helperPid)).toBe(true);
     expect(() => process.kill(helperPid, 0)).toThrow();
@@ -309,6 +316,102 @@ Quality-Base: ${base}`;
     ).not.toBe(0);
   }, 15000);
 
+  it("accepts signed v2 fallback evidence at high tier", () => {
+    const repo = makeTempDir("review-evidence-v2-fallback-");
+    spawnSync(
+      "bash",
+      [
+        "-c",
+        `
+git init -q -b main "$1"
+cd "$1"
+git config user.name test
+git config user.email test@example.com
+echo base > file; git add file; git commit -q -m base
+git switch -q -c feature
+echo change >> file; git commit -qam change
+`,
+        "setup",
+        repo,
+      ],
+      { encoding: "utf8" },
+    );
+    const base = spawnSync("git", ["rev-parse", "main"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).stdout.trim();
+    const reviewed = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).stdout.trim();
+    const keyPair = crypto.generateKeyPairSync("ed25519");
+    const privateKey = keyPair.privateKey
+      .export({ type: "pkcs8", format: "der" })
+      .toString("base64");
+    const publicKey = keyPair.publicKey
+      .export({ type: "spki", format: "der" })
+      .toString("base64");
+    const fields = {
+      head: reviewed,
+      base,
+      tier: "high",
+      findings: 0,
+      reviewer: "claude",
+      primary: "codex",
+      fallback: "claude",
+      contractVersion: 2,
+      leads: 0,
+      reviewStatus: "complete",
+      policyDigest: "1".repeat(64),
+      agentsSha256: "2".repeat(64),
+      domain: "reliability",
+      selectionRule: "reliability-domain",
+      repositoryKey: "test-repo",
+      diffSha256: "3".repeat(64),
+      evidenceSha256: "4".repeat(64),
+    };
+    const signature = signEvidence(fields, privateKey);
+    const message = `chore: stamp
+
+Reviewed-By: quality
+Reviewed-By: claude
+Quality-Tier: high
+Quality-Reviewer: claude
+Quality-Primary: codex
+Quality-Fallback: claude
+Quality-Findings: 0
+Quality-Head: ${reviewed}
+Quality-Base: ${base}
+Quality-Contract: 2
+Quality-Leads: 0
+Quality-Review-Status: complete
+Quality-Policy: ${fields.policyDigest}
+Quality-Agents: ${fields.agentsSha256}
+Quality-Domain: ${fields.domain}
+Quality-Selection: ${fields.selectionRule}
+Quality-Repository: ${fields.repositoryKey}
+Quality-Diff: ${fields.diffSha256}
+Quality-Review-Evidence: ${fields.evidenceSha256}
+Quality-Evidence-Signature: ${signature}`;
+    spawnSync("git", ["commit", "--allow-empty", "-q", "-m", message], {
+      cwd: repo,
+    });
+
+    const result = spawnSync(
+      "bash",
+      [VALIDATOR, "--required-tier", "high", "--require-signature", "main"],
+      {
+        cwd: repo,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY: publicKey,
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("passes scorer effort and exact round count to Codex mechanically", () => {
     const source = spawnSync("cat", [RUN_REVIEW], { encoding: "utf8" }).stdout;
     const preservation = spawnSync("cat", [PRESERVE_PRIMARY], {
@@ -320,6 +423,13 @@ Quality-Base: ${base}`;
     expect(source).toMatch(/model_reasoning_effort=.*QUALITY_REVIEW_DEPTH/);
     expect(source).toMatch(
       /codex exec --ephemeral --ignore-user-config -s read-only --json/,
+    );
+    const boundedCodexCalls = source.match(
+      /bash "\$bounded" --timeout "\$pass_timeout" -- \\\n\s+codex exec/g,
+    );
+    expect(boundedCodexCalls).toHaveLength(2);
+    expect(source).not.toMatch(
+      /bash "\$bounded" --timeout "\$pass_timeout" -- \\\n\s*#/,
     );
     expect(source).toMatch(
       /optional[\s\S]*MCP configuration[\s\S]*unrelated, stale OAuth grants/i,

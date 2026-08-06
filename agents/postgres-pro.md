@@ -1,6 +1,7 @@
 ---
 name: postgres-pro
 description: PostgreSQL database expert. Query optimization, index design, schema design, performance tuning, Prisma optimization, connection pooling. Use for database performance issues.
+model: inherit
 tools: Read, Write, Edit, Glob, Grep, Bash
 ---
 

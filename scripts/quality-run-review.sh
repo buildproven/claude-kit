@@ -12,6 +12,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ -n "$MANIFEST" ] || { echo "quality-run-review: --manifest is required" >&2; exit 1; }
+source "$SCRIPT_DIR/quality-repo-lease-pin.sh" || exit 1
+quality_pin_repository_lease "$MANIFEST" || exit 1
 
 bash "$SCRIPT_DIR/quality-load-root.sh" --manifest "$MANIFEST" >/dev/null || exit 1
 field() { node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" "$1"; }
@@ -20,6 +22,7 @@ BS_QUALITY_INVOCATION_ID="$(field invocationId)"
 BASE_SHA="$(field revisions.baseSha)"
 RESOLVED_BASE="$(field revisions.baseRef)"
 TIER="$(field risk.tier)"
+REVIEW_CONTRACT_VERSION="$(field reviewContractVersion)"
 CODEX_DEPTH="$(field risk.codexDepth)"
 CODEX_ROUNDS="$(field risk.codexRounds)"
 BS_QUALITY_PRIMARY="$(field provider.primaryOverride)"
@@ -50,6 +53,7 @@ if [ "$REVIEW_ROUND" -gt 1 ]; then
 else
   QUALITY_REVIEW_TIMEOUT="$(field risk.runtime.reviewSeconds)"
 fi
+
 REVIEW_DIFF_BASE="$(printf '%s' "$REVIEW_INFO" | jq -r '.from')"
 REVIEWED_HEAD="$(printf '%s' "$REVIEW_INFO" | jq -r '.to')"
 REVIEW_OUT="$(printf '%s' "$REVIEW_INFO" | jq -r '.artifactDir')"
@@ -64,12 +68,47 @@ git diff --name-only "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" > "$REVIEW_OUT/file
 git log "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" --oneline > "$REVIEW_OUT/log.txt"
 node "$SCRIPT_DIR/quality-invocation.js" review-identity "$MANIFEST" \
   > "$REVIEW_OUT/identity.json" || exit 1
+printf '%s\n' "$QUALITY_REVIEW_FOCUS" > "$REVIEW_OUT/review-focus.txt"
 PRIOR_FINDINGS_FILE=""
 PROVIDER_HEALTH="$SCRIPT_DIR/quality-provider-health.js"
 if [ "$REVIEW_ROUND" -gt 1 ]; then
   PRIOR_FINDINGS_FILE="$REVIEW_OUT/prior-findings.json"
   node "$SCRIPT_DIR/quality-invocation.js" prior-findings "$MANIFEST" \
     > "$PRIOR_FINDINGS_FILE" || exit 1
+fi
+
+if [ "$TIER" = low ]; then
+  printf '%s\n' \
+    "AI REVIEW NOT REQUIRED. This exact diff is covered by the low-risk zero-reviewer policy." \
+    > "$REVIEW_OUT/policy-exempt.findings.txt"
+  DIFF_SHA="$(shasum -a 256 "$REVIEW_OUT/diff.txt" | awk '{print $1}')"
+  jq --arg diffSha256 "$DIFF_SHA" '{
+    schemaVersion: 1,
+    aiReviewRequired: false,
+    head: .headSha,
+    tier,
+    reviewContractVersion,
+    reviewPolicyDigest,
+    agentsSha256,
+    domain: .panelDomain,
+    selectionRule: .panelRule,
+    diffSha256: $diffSha256
+  }' "$REVIEW_OUT/identity.json" > "$REVIEW_OUT/policy-exempt.result.json" || exit 1
+  node "$SCRIPT_DIR/quality-invocation.js" inventory "$MANIFEST" \
+    --artifact-dir "$REVIEW_OUT" --provider policy-exempt --exempt || exit 1
+  node "$SCRIPT_DIR/quality-invocation.js" record-policy-exempt-review "$MANIFEST" \
+    --from "$REVIEW_DIFF_BASE" \
+    --to "$REVIEWED_HEAD" \
+    --primary "$QUALITY_PRIMARY" \
+    --fallback "$QUALITY_FALLBACK" \
+    --artifact-dir "$REVIEW_OUT" \
+    --diff-sha "$DIFF_SHA" || exit 1
+  echo "ℹ️  [quality] low-risk policy requires deterministic gates and no AI reviewer." >&2
+  echo "REVIEW_OUT=$REVIEW_OUT"
+  echo "REVIEW_BASE=$RESOLVED_BASE"
+  echo "REVIEW_DIFF_BASE=$REVIEW_DIFF_BASE"
+  echo "REVIEW_PROVIDER=policy-exempt"
+  exit 0
 fi
 
 record_provider_exhaustion() {
@@ -95,6 +134,8 @@ terminal_diagnosis() {
   # at the difference. Write-once: the first cause recorded wins.
   local state
   case "$category" in
+    parser-inconclusive) state=provider-incomplete ;;
+    provider-contract-failed) state=provider-contract-failed ;;
     provider-timeout | provider-governor) state=timeout ;;
     *) state=blocked ;;
   esac
@@ -140,6 +181,8 @@ run_claude_review() {
     --identity-file "$REVIEW_OUT/identity.json" \
     --out-dir "$REVIEW_OUT" \
     --agents "$agents_csv" \
+    --tier "$TIER" \
+    --focus "$QUALITY_REVIEW_FOCUS" \
     --timeout "$attempt_timeout"
   )
   if [ "$REVIEW_ROUND" -gt 1 ]; then
@@ -224,10 +267,10 @@ run_codex_review() {
       || return 77
     attempt_started=$SECONDS
     if [ "$REVIEW_ROUND" -eq 1 ]; then
+      # A review needs Codex authentication, but not a developer's optional
+      # MCP configuration. Loading it makes unrelated, stale OAuth grants
+      # capable of blocking every quality campaign before review begins.
       bash "$bounded" --timeout "$pass_timeout" -- \
-        # A review needs Codex authentication, but not a developer's optional
-        # MCP configuration. Loading it makes unrelated, stale OAuth grants
-        # capable of blocking every quality campaign before review begins.
         codex exec --ephemeral --ignore-user-config -s read-only --json \
         -C "$GIT_ROOT" \
         -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
@@ -485,42 +528,50 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
 fi
 
 if [ "$PROVIDER_RC" -ne 0 ]; then
-  # Deterministic, revision-bound gates remain the merge authority for a
-  # genuinely low-risk diff. Provider availability is advisory only after the
-  # normal primary/fallback path above is exhausted; malformed output and
-  # generic runner errors remain fail-closed because they are not availability
-  # evidence. Higher tiers are deliberately unchanged.
-  if [ "$TIER" = low ]; then
+  if [ "${REVIEW_CONTRACT_VERSION:-1}" -ge 2 ]; then
     case "$PROVIDER_RC" in
-      2) ADVISORY_FAILURE_CATEGORY=provider-unavailable ;;
-      75) ADVISORY_FAILURE_CATEGORY=provider-exhaustion ;;
-      79) ADVISORY_FAILURE_CATEGORY=provider-billing ;;
-      76) ADVISORY_FAILURE_CATEGORY=provider-timeout ;;
-      *) ADVISORY_FAILURE_CATEGORY="" ;;
+      2) INCOMPLETE_CATEGORY=provider-unavailable ;;
+      4)
+        if [ -f "$REVIEW_OUT/provider-contract-failed" ]; then
+          INCOMPLETE_CATEGORY=provider-contract-failed
+        else
+          INCOMPLETE_CATEGORY=parser-inconclusive
+        fi
+        ;;
+      75) INCOMPLETE_CATEGORY=provider-exhaustion ;;
+      76) INCOMPLETE_CATEGORY=provider-timeout ;;
+      77) INCOMPLETE_CATEGORY=provider-governor ;;
+      79) INCOMPLETE_CATEGORY=provider-billing ;;
+      *) INCOMPLETE_CATEGORY=provider-error ;;
     esac
-    if [ -n "$ADVISORY_FAILURE_CATEGORY" ]; then
-      printf '%s\n' \
-        "NO FINDINGS. Verdict: pass. AI review unavailable; deterministic gates provide low-risk merge evidence." \
-        > "$REVIEW_OUT/ci-only.findings.txt"
-      DIFF_SHA="$(shasum -a 256 "$REVIEW_OUT/diff.txt" | awk '{print $1}')"
-      node "$SCRIPT_DIR/quality-invocation.js" inventory "$MANIFEST" \
-        --artifact-dir "$REVIEW_OUT" --provider "$REVIEW_PROVIDER" --advisory || exit 1
-      node "$SCRIPT_DIR/quality-invocation.js" record-advisory-review "$MANIFEST" \
-        --from "$REVIEW_DIFF_BASE" \
-        --to "$REVIEWED_HEAD" \
-        --primary "$QUALITY_PRIMARY" \
-        --fallback "$QUALITY_FALLBACK" \
-        --failed-provider "$REVIEW_PROVIDER" \
-        --failure-category "$ADVISORY_FAILURE_CATEGORY" \
-        --artifact-dir "$REVIEW_OUT" \
-        --diff-sha "$DIFF_SHA" || exit 1
-      echo "⚠️  [quality] low-risk AI review unavailable; proceeding with required deterministic gate evidence." >&2
-      echo "REVIEW_OUT=$REVIEW_OUT"
-      echo "REVIEW_BASE=$RESOLVED_BASE"
-      echo "REVIEW_DIFF_BASE=$REVIEW_DIFF_BASE"
-      echo "REVIEW_PROVIDER=ci-only"
-      exit 0
-    fi
+    printf 'AI REVIEW INCOMPLETE: %s failed with %s (rc=%s).\n' \
+      "$REVIEW_PROVIDER" "$INCOMPLETE_CATEGORY" "$PROVIDER_RC" \
+      > "$REVIEW_OUT/review-incomplete.findings.txt"
+    jq --arg provider "$REVIEW_PROVIDER" \
+      --arg category "$INCOMPLETE_CATEGORY" \
+      --argjson rc "$PROVIDER_RC" \
+      '{schemaVersion: 1, status: "incomplete", provider: $provider,
+        failureCategory: $category, providerRc: $rc, head: .headSha,
+        tier, reviewContractVersion, reviewPolicyDigest, agentsSha256,
+        domain: .panelDomain, selectionRule: .panelRule}' \
+      "$REVIEW_OUT/identity.json" \
+      > "$REVIEW_OUT/review-incomplete.result.json" || exit 1
+    DIFF_SHA="$(shasum -a 256 "$REVIEW_OUT/diff.txt" | awk '{print $1}')"
+    node "$SCRIPT_DIR/quality-invocation.js" inventory "$MANIFEST" \
+      --artifact-dir "$REVIEW_OUT" --provider review-incomplete \
+      --incomplete || exit 1
+    node "$SCRIPT_DIR/quality-invocation.js" record-incomplete-review "$MANIFEST" \
+      --from "$REVIEW_DIFF_BASE" --to "$REVIEWED_HEAD" \
+      --primary "$QUALITY_PRIMARY" --fallback "$QUALITY_FALLBACK" \
+      --failed-provider "$REVIEW_PROVIDER" \
+      --failure-category "$INCOMPLETE_CATEGORY" \
+      --artifact-dir "$REVIEW_OUT" --diff-sha "$DIFF_SHA" || exit 1
+    echo "⚠️  [quality] AI discovery incomplete ($INCOMPLETE_CATEGORY); deterministic gates remain authoritative." >&2
+    echo "REVIEW_OUT=$REVIEW_OUT"
+    echo "REVIEW_BASE=$RESOLVED_BASE"
+    echo "REVIEW_DIFF_BASE=$REVIEW_DIFF_BASE"
+    echo "REVIEW_PROVIDER=review-incomplete"
+    exit 0
   fi
   # Only claim the fallback is missing when it actually is. When a fallback ran
   # and also failed, saying "no usable fallback is configured" sends the reader
@@ -556,7 +607,11 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
       ;;
     4)
       echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER review was inconclusive $FALLBACK_NOTE." >&2
-      terminal_diagnosis parser-inconclusive "$REVIEW_PROVIDER"
+      if [ -f "$REVIEW_OUT/provider-contract-failed" ]; then
+        terminal_diagnosis provider-contract-failed "$REVIEW_PROVIDER"
+      else
+        terminal_diagnosis parser-inconclusive "$REVIEW_PROVIDER"
+      fi
       ;;
     *)
       echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER review runner failed (rc=$PROVIDER_RC)." >&2
@@ -567,9 +622,15 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
 fi
 
 DIFF_SHA="$(shasum -a 256 "$REVIEW_OUT/diff.txt" | awk '{print $1}')"
+INCOMPLETE_DISCOVERY_ARGS=()
+if [ "$TIER" = critical ] && [ "$REVIEW_PROVIDER" != claude ]; then
+  INCOMPLETE_DISCOVERY_ARGS+=(--incomplete)
+  echo "⚠️  [quality] Critical discovery used one native provider slot; recording incomplete diversity." >&2
+fi
 node "$SCRIPT_DIR/quality-invocation.js" inventory "$MANIFEST" \
   --artifact-dir "$REVIEW_OUT" \
-  --provider "$REVIEW_PROVIDER" || exit 1
+  --provider "$REVIEW_PROVIDER" \
+  ${INCOMPLETE_DISCOVERY_ARGS[@]+"${INCOMPLETE_DISCOVERY_ARGS[@]}"} || exit 1
 node "$SCRIPT_DIR/quality-invocation.js" record-review "$MANIFEST" \
   --from "$REVIEW_DIFF_BASE" \
   --to "$REVIEWED_HEAD" \
@@ -578,7 +639,8 @@ node "$SCRIPT_DIR/quality-invocation.js" record-review "$MANIFEST" \
   --fallback "$QUALITY_FALLBACK" \
   --effort "$QUALITY_REVIEW_DEPTH" \
   --artifact-dir "$REVIEW_OUT" \
-  --diff-sha "$DIFF_SHA" || exit 1
+  --diff-sha "$DIFF_SHA" \
+  ${INCOMPLETE_DISCOVERY_ARGS[@]+"${INCOMPLETE_DISCOVERY_ARGS[@]}"} || exit 1
 
 echo "REVIEW_OUT=$REVIEW_OUT"
 echo "REVIEW_BASE=$RESOLVED_BASE"

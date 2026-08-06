@@ -19,6 +19,8 @@ done
   echo "quality-run-gate: --manifest and --name are required" >&2
   exit 1
 }
+source "$SCRIPT_DIR/quality-repo-lease-pin.sh" || exit 1
+quality_pin_repository_lease "$MANIFEST" || exit 1
 if [ "$SKIP" = true ]; then
   [ "$NAME" = test ] && [ -n "$REASON" ] && [ "$#" -eq 0 ] || {
     echo "quality-run-gate: --skip requires --name test, --reason, and no command" >&2

@@ -4,7 +4,7 @@
 // happy-path (agents actually reviewing a diff) is validated manually /
 // live, since it needs the claude CLI + network and costs tokens.
 
-const { execFileSync } = require("node:child_process");
+const { execFileSync, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -29,6 +29,9 @@ function run(args, { env } = {}) {
       }),
     );
     args = [...args, "--identity-file", identity];
+  }
+  if (args.includes("--diff-file") && !args.includes("--tier")) {
+    args = [...args, "--tier", "high", "--focus", "Review correctness"];
   }
   // Capture stderr on BOTH success and failure. execFileSync throws only on
   // non-zero exit; on success it returns stdout but stderr is still written to
@@ -110,6 +113,56 @@ describe("claude-review-companion.sh", () => {
     expect(
       fs.readFileSync(path.join(d, "ok", "review-context.txt"), "utf8"),
     ).toContain("missing guard");
+  });
+
+  it("requires and injects risk tier and review focus", () => {
+    const d = tmpdir();
+    const diff = path.join(d, "diff.txt");
+    const identity = path.join(d, "identity.json");
+    fs.writeFileSync(diff, "+change\n");
+    fs.writeFileSync(identity, "{}\n");
+    const missing = spawnSync(
+      "bash",
+      [
+        SCRIPT,
+        "--dry-run",
+        "--diff-file",
+        diff,
+        "--identity-file",
+        identity,
+        "--out-dir",
+        path.join(d, "missing"),
+        "--agents",
+        "code-reviewer",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toMatch(/--tier, --focus required/);
+
+    const out = path.join(d, "complete");
+    const complete = run([
+      "--dry-run",
+      "--diff-file",
+      diff,
+      "--identity-file",
+      identity,
+      "--out-dir",
+      out,
+      "--agents",
+      "code-reviewer",
+      "--tier",
+      "critical",
+      "--focus",
+      "Verify the remediation delta",
+    ]);
+    expect(complete.code).toBe(0);
+    const context = fs.readFileSync(
+      path.join(out, "review-context.txt"),
+      "utf8",
+    );
+    expect(context).toContain("Risk tier: critical");
+    expect(context).toContain("Review focus: Verify the remediation delta");
   });
 
   it("exits 2 (fail LOUD) when the claude CLI is unavailable", () => {
@@ -355,6 +408,50 @@ describe("claude-review-companion.sh", () => {
     expect(args).not.toContain("--allowedTools");
   });
 
+  it("binds Critical Claude slots to two model families", () => {
+    const d = tmpdir();
+    const bin = path.join(d, "bin");
+    const argsFile = path.join(d, "claude-args.txt");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
+    fs.writeFileSync(path.join(d, "identity.json"), "{}\n");
+    fs.writeFileSync(
+      path.join(bin, "claude"),
+      `#!/usr/bin/env bash\nprintf '%s ' "$@" >> "${argsFile}"\nprintf '\\n' >> "${argsFile}"\nprintf '%s\\n' '{"structured_output":{"verdict":"approve","summary":"Clean","findings":[]},"is_error":false,"stop_reason":"end_turn"}'\n`,
+      { mode: 0o755 },
+    );
+
+    const r = run(
+      [
+        "--diff-file",
+        path.join(d, "diff.txt"),
+        "--out-dir",
+        path.join(d, "out"),
+        "--agents",
+        "code-reviewer,security-auditor",
+        "--identity-file",
+        path.join(d, "identity.json"),
+        "--tier",
+        "critical",
+        "--focus",
+        "release-veto review",
+      ],
+      { env: { PATH: `${bin}:${process.env.PATH}` } },
+    );
+
+    expect(r.code, r.stderr).toBe(0);
+    const args = fs.readFileSync(argsFile, "utf8");
+    expect(args).toContain("--model claude-sonnet-5");
+    expect(args).toContain("--model claude-opus-5");
+    const slots = ["code-reviewer", "security-auditor"].map(
+      (agent) =>
+        JSON.parse(
+          fs.readFileSync(path.join(d, "out", `${agent}.normalized.json`)),
+        )._qualitySlot,
+    );
+    expect(new Set(slots.map((slot) => slot.model)).size).toBe(2);
+  });
+
   it("preserves a complete review emitted just before watchdog termination", () => {
     const d = tmpdir();
     const bin = path.join(d, "bin");
@@ -438,7 +535,7 @@ exit 143
     fs.writeFileSync(
       path.join(bin, "claude"),
       `#!/usr/bin/env bash
-printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{"verdict":"needs-attention","summary":"One issue","findings":[{"severity":"high","title":"Unsafe merge","body":"The result can merge stale evidence.","file":"scripts/review.sh","line_start":42,"recommendation":"Bind the evidence to HEAD."}]}}'
+printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{"verdict":"needs-attention","summary":"One issue","findings":[{"severity":"high","title":"Unsafe merge","body":"The result can merge stale evidence.","failure_scenario":"Advance HEAD after review, then merge.","file":"scripts/review.sh","line_start":42,"proof":{"kind":"static-analysis","evidence":"scripts/review.sh:42 reads stale evidence."},"recommendation":"Bind the evidence to HEAD."}]}}'
 `,
       { mode: 0o755 },
     );
@@ -462,7 +559,7 @@ printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{
     expect(
       fs.readFileSync(path.join(out, "code-reviewer.findings.txt"), "utf8"),
     ).toContain(
-      "high: scripts/review.sh:42 — Unsafe merge\nThe result can merge stale evidence.\nFix: Bind the evidence to HEAD.",
+      "high: scripts/review.sh:42 — Unsafe merge\nThe result can merge stale evidence.\nScenario: Advance HEAD after review, then merge.\nProof (static-analysis): scripts/review.sh:42 reads stale evidence.\nFix: Bind the evidence to HEAD.",
     );
   });
 
@@ -510,7 +607,7 @@ printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{
     fs.writeFileSync(
       path.join(bin, "claude"),
       `#!/usr/bin/env bash
-printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{"verdict":"approve","summary":"Contradictory","findings":[{"severity":"high","title":"Unsafe merge","body":"The result can merge stale evidence.","file":"scripts/review.sh","line_start":42,"recommendation":"Bind the evidence to HEAD."}]}}'
+printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{"verdict":"approve","summary":"Contradictory","findings":[{"severity":"high","title":"Unsafe merge","body":"The result can merge stale evidence.","failure_scenario":"Advance HEAD after review, then merge.","file":"scripts/review.sh","line_start":42,"proof":{"kind":"static-analysis","evidence":"scripts/review.sh:42 reads stale evidence."},"recommendation":"Bind the evidence to HEAD."}]}}'
 `,
       { mode: 0o755 },
     );
@@ -536,7 +633,7 @@ printf '%s\\n' '{"is_error":false,"stop_reason":"end_turn","structured_output":{
     ).toContain("structured output was missing or contradictory");
   });
 
-  it("keeps usable peer evidence when one panel agent is malformed", () => {
+  it("blocks a panel when one selected agent is malformed", () => {
     const d = tmpdir();
     const bin = path.join(d, "bin");
     fs.mkdirSync(bin);
@@ -569,7 +666,7 @@ fi
       { env: { PATH: `${bin}:${process.env.PATH}` } },
     );
 
-    expect(r.code, r.stderr).toBe(0);
+    expect(r.code, r.stderr).toBe(4);
     expect(
       fs.readFileSync(
         path.join(out, "silent-failure-hunter.findings.txt"),
@@ -622,23 +719,6 @@ fi
         "empty for an approve verdict",
       );
     });
-
-    it("selects only read-only review roles for the six-agent high-tier panel", () => {
-      const selector = fs.readFileSync(
-        path.join(KIT_ROOT, "scripts", "quality-select-agents.sh"),
-        "utf8",
-      );
-      const panelStart = selector.indexOf("PANEL=(");
-      const panelEnd = selector.indexOf(")", panelStart);
-      const panel = selector.slice(panelStart, panelEnd);
-      const normalizedPanel = panel.replace(/\\\s*/g, " ").replace(/\s+/g, " ");
-      expect(normalizedPanel).toContain(
-        "PANEL=(code-reviewer silent-failure-hunter security-auditor type-design-analyzer pr-test-analyzer architect-reviewer",
-      );
-      expect(panel.indexOf("architect-reviewer")).toBeLessThan(
-        panel.indexOf("code-simplifier"),
-      );
-    });
   });
 
   describe("recursion guard contract", () => {
@@ -678,6 +758,10 @@ fi
             "code-reviewer",
             "--identity-file",
             path.join(d, "identity.json"),
+            "--tier",
+            "high",
+            "--focus",
+            "Review correctness",
           ],
           { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
         );
@@ -725,7 +809,7 @@ fi
       expect(r.code).toBe(4);
     });
 
-    it("preserves a usable majority when one of four agents is inconclusive (--dry-run)", () => {
+    it("blocks when any selected reviewer is inconclusive (--dry-run)", () => {
       const d = tmpdir();
       fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
       const r = run([
@@ -737,7 +821,7 @@ fi
         "--agents",
         "code-reviewer,security-auditor,type-design-analyzer,bogus",
       ]);
-      expect(r.code).toBe(0);
+      expect(r.code).toBe(4);
     });
   });
 
@@ -838,7 +922,7 @@ exit 0
       fs.writeFileSync(
         fakeClaude,
         `#!/bin/bash
-printf '%s\\n' '{"is_error":false,"structured_output":{"verdict":"needs-attention","summary":"Quota handling issue","findings":[{"severity":"medium","title":"Quota headers are discarded","body":"status === 429 should preserve quota headers.","file":"src/http.js","line_start":10,"recommendation":"Forward the quota reset headers."}]}}'
+printf '%s\\n' '{"is_error":false,"structured_output":{"verdict":"needs-attention","summary":"Quota handling issue","findings":[{"severity":"medium","title":"Quota headers are discarded","body":"status === 429 should preserve quota headers.","failure_scenario":"Receive a 429 and inspect forwarded headers.","file":"src/http.js","line_start":10,"proof":{"kind":"static-analysis","evidence":"src/http.js:10 discards response headers."},"recommendation":"Forward the quota reset headers."}]}}'
 `,
       );
       fs.chmodSync(fakeClaude, 0o755);

@@ -9,6 +9,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ -n "$MANIFEST" ] || { echo "quality-stamp-and-merge: --manifest is required" >&2; exit 1; }
+source "$SCRIPT_DIR/quality-repo-lease-pin.sh" || exit 1
+quality_pin_repository_lease "$MANIFEST" || exit 1
 ROOT="$(node "$SCRIPT_DIR/quality-invocation.js" locate "$MANIFEST")"
 cd "$ROOT"
 bash "$SCRIPT_DIR/quality-assert-clean.sh" \
@@ -66,6 +68,8 @@ PREFLIGHT_OUTPUT="$(bash "$SCRIPT_DIR/quality-authorize-merge.sh" \
 printf '%s\n' "$PREFLIGHT_OUTPUT"
 if printf '%s\n' "$PREFLIGHT_OUTPUT" |
   grep -Fxq 'BS_QUALITY_ALREADY_MERGED=true'; then
+  node "$SCRIPT_DIR/quality-invocation.js" terminal-state "$MANIFEST" \
+    --state merged --detail "pr:$PR" >/dev/null || true
   bash "$SCRIPT_DIR/quality-merge-cleanup.sh" --manifest "$MANIFEST"
   exit 0
 fi
@@ -96,18 +100,42 @@ else
     REVIEW_PRIMARY="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.primary')"
     REVIEW_FALLBACK="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.fallback')"
     REVIEW_FINDINGS="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.blockingCount')"
-    if { [ "$REVIEW_TIER" = high ] || [ "$REVIEW_TIER" = critical ]; } && \
+    REVIEW_CONTRACT="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.contractVersion')"
+    SIGNATURE_ARGS=(
+      --head "$REVIEWED_HEAD" --base "$REVIEW_BASE" --tier "$REVIEW_TIER"
+      --findings "$REVIEW_FINDINGS" --reviewer "$REVIEW_PROVIDER"
+      --primary "$REVIEW_PRIMARY" --fallback "$REVIEW_FALLBACK"
+    )
+    if [ "$REVIEW_CONTRACT" -ge 2 ]; then
+      REVIEW_LEADS="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.leads')"
+      REVIEW_STATUS="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.reviewStatus')"
+      REVIEW_POLICY="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.policyDigest')"
+      REVIEW_AGENTS="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.agentsSha256')"
+      REVIEW_DOMAIN="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.domain')"
+      REVIEW_SELECTION="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.selectionRule')"
+      REVIEW_REPOSITORY="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.repositoryKey')"
+      REVIEW_DIFF="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.diffSha256')"
+      REVIEW_EVIDENCE="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.evidenceSha256')"
+      SIGNATURE_ARGS+=(
+        --contractVersion "$REVIEW_CONTRACT" --leads "$REVIEW_LEADS"
+        --reviewStatus "$REVIEW_STATUS" --policyDigest "$REVIEW_POLICY"
+        --agentsSha256 "$REVIEW_AGENTS" --domain "$REVIEW_DOMAIN"
+        --selectionRule "$REVIEW_SELECTION"
+        --repositoryKey "$REVIEW_REPOSITORY" --diffSha256 "$REVIEW_DIFF"
+        --evidenceSha256 "$REVIEW_EVIDENCE"
+      )
+    fi
+    if { [ "$REVIEW_CONTRACT" -ge 2 ] || [ "$REVIEW_TIER" = high ] || \
+      [ "$REVIEW_TIER" = critical ]; } && \
       [ -z "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY:-}" ] && \
       [ -z "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY_FILE:-}" ]; then
-      echo "❌ MERGE BLOCKED: high/critical review evidence requires a signing key before creating a stamp." >&2
+      echo "❌ MERGE BLOCKED: this review contract requires a signing key before creating a stamp." >&2
       exit 1
     fi
     if [ -n "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY:-}" ] || \
        [ -n "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY_FILE:-}" ]; then
       REVIEW_SIGNATURE="$(node "$SCRIPT_DIR/quality-review-evidence.js" sign \
-        --head "$REVIEWED_HEAD" --base "$REVIEW_BASE" --tier "$REVIEW_TIER" \
-        --findings "$REVIEW_FINDINGS" --reviewer "$REVIEW_PROVIDER" \
-        --primary "$REVIEW_PRIMARY" --fallback "$REVIEW_FALLBACK")"
+        "${SIGNATURE_ARGS[@]}")"
       TRAILERS="$TRAILERS
 Quality-Evidence-Signature: $REVIEW_SIGNATURE"
     fi

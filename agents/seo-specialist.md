@@ -1,6 +1,7 @@
 ---
 name: seo-specialist
 description: SEO optimization expert for launch-ready sites. Use for meta tags, structured data, sitemap, robots.txt, Core Web Vitals, keyword optimization.
+model: inherit
 tools: Read, Write, Edit, Glob, Grep, WebFetch, WebSearch, Bash
 ---
 

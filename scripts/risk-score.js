@@ -240,15 +240,15 @@ const DEFAULTS = {
   },
   // Score → review depth. Moderate curve (user-chosen).
   curve: [
-    { maxScore: 20, agents: 2, codex: "skip", codexRounds: 0 },
-    { maxScore: 50, agents: 4, codex: "high", codexRounds: 1 },
+    { maxScore: 20, agents: 0, codex: "skip", codexRounds: 0 },
+    { maxScore: 50, agents: 1, codex: "high", codexRounds: 1 },
     {
       maxScore: CRITICAL_RISK_SCORE - 1,
-      agents: 6,
+      agents: 1,
       codex: "high",
       codexRounds: 1,
     },
-    { maxScore: 100, agents: 6, codex: "xhigh", codexRounds: 1 },
+    { maxScore: 100, agents: 2, codex: "xhigh", codexRounds: 1 },
   ],
   // Score ≥ this always runs Codex even if the band says skip.
   codexForceFloor: 75,
@@ -1521,7 +1521,10 @@ function computeScore(descriptors, diffStats, cfg) {
   let topReason = "";
   for (const d of descriptors) {
     const risk = descriptorBaseRisk(d, cfg);
-    if (risk.score > base) {
+    if (
+      risk.score > base ||
+      (risk.score === base && isTestPath(topFile) && !isTestPath(d.file))
+    ) {
       base = risk.score;
       topFile = d.file;
       topReason = risk.reason;
@@ -1634,7 +1637,11 @@ function scoreToKnobs(score, cfg) {
     DEFAULTS.curve.find((candidate) => effectiveScore <= candidate.maxScore) ||
     DEFAULTS.curve[DEFAULTS.curve.length - 1];
   const codexRank = { skip: 0, high: 1, xhigh: 2 };
-  knobs.agents = Math.max(knobs.agents, baseline.agents);
+  // Reviewer count is a contract, not a repository tuning knob. Domain
+  // selection supplies the useful diversity; allowing an override to restore
+  // 4-6 agents would recreate the correlated panel this policy removes and
+  // would disagree with the exact selector at stamp time.
+  knobs.agents = baseline.agents;
   if ((codexRank[knobs.codex] ?? -1) < codexRank[baseline.codex]) {
     knobs.codex = baseline.codex;
   }
@@ -1698,7 +1705,7 @@ function validateCurve(curve) {
     requireFiniteNumber(band.maxScore, `curve[${index}].maxScore`, {
       minimum: 0,
     });
-    requireFiniteNumber(band.agents, `curve[${index}].agents`, { minimum: 2 });
+    requireFiniteNumber(band.agents, `curve[${index}].agents`, { minimum: 0 });
     requireFiniteNumber(band.codexRounds, `curve[${index}].codexRounds`, {
       minimum: 0,
     });
@@ -1714,6 +1721,18 @@ function validateCurve(curve) {
   }
   if (previousMaximum < 100) {
     throw new Error("invalid risk policy: curve must cover score 100");
+  }
+}
+
+function assertBuiltInAgentCurve(curve) {
+  for (let score = 0; score <= 100; score += 1) {
+    const configured = configuredKnobs(score, { curve }).agents;
+    const builtIn = configuredKnobs(score, DEFAULTS).agents;
+    if (configured !== builtIn) {
+      throw new Error(
+        `invalid risk policy: curve may not change the built-in reviewer target at score ${score} (${configured} != ${builtIn})`,
+      );
+    }
   }
 }
 
@@ -1777,7 +1796,9 @@ function loadConfig(repoRoot) {
     ...cfg.base,
     securityFloor: securityFloorScore(cfg),
   };
-  return validateScoreConfig(cfg);
+  validateScoreConfig(cfg);
+  assertBuiltInAgentCurve(cfg.curve);
+  return cfg;
 }
 
 // ---------------------------------------------------------------------------

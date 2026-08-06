@@ -139,6 +139,22 @@ else
 fi
 rm -f /tmp/codex-mcp-check.$$
 
+# Codex -> Claude delegation. Everything above verifies the Claude -> Codex
+# direction; without this the check reports a fully healthy surface while Codex
+# has no way to reach Claude, so a Codex session's "second opinion" is the same
+# model that wrote the change (the BUI-468 failure, from the other side).
+if command -v claude >/dev/null 2>&1; then
+    if [[ -f "$CODEX_SKILL_MANIFEST" ]] && grep -q '^cross-review|' "$CODEX_SKILL_MANIFEST"; then
+        ok "Codex->Claude delegation: cross-review linked"
+    else
+        warn "Codex->Claude delegation: cross-review skill not linked"
+        HEALTH_OK=false
+    fi
+else
+    warn "Codex->Claude delegation: claude CLI not on PATH"
+    HEALTH_OK=false
+fi
+
 # 5. Session activity — past 30 days
 SESSIONS_BASE="${HOME}/.codex/sessions"
 if [[ -d "${SESSIONS_BASE}" ]]; then

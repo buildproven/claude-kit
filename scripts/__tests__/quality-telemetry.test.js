@@ -7,6 +7,7 @@ const {
   successfulReviewCount,
   deriveVerdict,
   buildRecord,
+  deterministicBlockingCount,
   validateRecord,
   alreadyRecorded,
   recordCampaign,
@@ -36,7 +37,7 @@ function baseManifest(overrides = {}) {
     agents: [{ name: "code-reviewer" }, { name: "security-auditor" }],
     provider: { reviewer: "codex", effort: "high" },
     reviews: [
-      { status: "success", round: 1 },
+      { status: "success", round: 1, to: "bbb", leadCount: 0 },
       { status: "failed", round: 1 },
     ],
     governor: { startedAtEpoch: 1000 },
@@ -116,6 +117,17 @@ describe("deriveVerdict", () => {
     });
     expect(deriveVerdict(m)).toBe("incomplete");
   });
+
+  it("does not report a v2 deterministic block as authorized", () => {
+    const manifest = baseManifest({
+      reviewContractVersion: 2,
+      options: { merge: true },
+      judge: undefined,
+      terminalState: { state: "blocked", detail: "ci:required" },
+    });
+    expect(deriveVerdict(manifest)).toBe("blocked");
+    expect(deterministicBlockingCount(manifest)).toBe(1);
+  });
 });
 
 describe("buildRecord", () => {
@@ -125,7 +137,7 @@ describe("buildRecord", () => {
       nowIso: NOW,
     });
     expect(rec).toMatchObject({
-      telemetrySchemaVersion: 2,
+      telemetrySchemaVersion: 4,
       invocationId: "11111111-1111-4111-8111-111111111111",
       repoKey: "target-repo",
       taskType: "feature",
@@ -135,13 +147,111 @@ describe("buildRecord", () => {
       reviewProvider: "codex",
       reviewEffort: "high",
       reviewTokens: null,
+      reviewStatus: "complete",
+      leadCount: 0,
       durationSeconds: 0, // start 1000 > now 600 → clamps to 0
+      providerDurationSeconds: null,
+      terminalState: null,
       reviewRounds: 1,
       agentsRun: 2,
       blockingCount: 0,
       mergeRequested: false,
       verdict: "passed",
     });
+  });
+
+  it("records v2 lead/status attribution without a judge", () => {
+    const manifest = baseManifest({
+      reviewContractVersion: 2,
+      judge: undefined,
+      reviews: [
+        {
+          status: "incomplete",
+          round: 1,
+          to: "bbb",
+          leadCount: 0,
+        },
+      ],
+      provider: { reviewer: "review-incomplete", effort: "high" },
+    });
+    const record = buildRecord(manifest, {
+      execFileSync: NO_FILES,
+      nowIso: NOW,
+    });
+    expect(record).toMatchObject({
+      verdict: "passed",
+      blockingCount: 0,
+      reviewStatus: "incomplete",
+      leadCount: 0,
+    });
+  });
+
+  it("separates provider execution time and exact terminal outcome", () => {
+    const manifest = baseManifest({
+      reviewContractVersion: 2,
+      terminalState: { state: "superseded", detail: "head moved" },
+      governor: { startedAtEpoch: 1000, providerSecondsUsed: 137 },
+    });
+    const record = buildRecord(manifest, {
+      execFileSync: NO_FILES,
+      nowIso: NOW,
+    });
+    expect(record).toMatchObject({
+      durationSeconds: 0,
+      providerDurationSeconds: 137,
+      terminalState: "superseded",
+      verdict: "incomplete",
+    });
+  });
+
+  it("retains leads and incomplete status across all covered review rounds", () => {
+    const manifest = baseManifest({
+      reviewContractVersion: 2,
+      judge: undefined,
+      reviews: [
+        {
+          status: "incomplete",
+          round: 1,
+          from: "aaa",
+          to: "ccc",
+          leadCount: 2,
+        },
+        {
+          status: "success",
+          round: 2,
+          from: "ccc",
+          to: "bbb",
+          leadCount: 1,
+        },
+      ],
+    });
+    const record = buildRecord(manifest, {
+      execFileSync: NO_FILES,
+      nowIso: NOW,
+    });
+    expect(record).toMatchObject({
+      reviewStatus: "incomplete",
+      leadCount: 3,
+      blockingCount: 0,
+    });
+  });
+
+  it("counts current-head deterministic gate failures for v2", () => {
+    const manifest = baseManifest({
+      reviewContractVersion: 2,
+      judge: undefined,
+      terminalState: { state: "blocked", detail: "gate:test" },
+      gates: [
+        { name: "test", head: "bbb", status: "failed" },
+        { name: "lint", head: "bbb", status: "timeout" },
+        { name: "security", head: "old", status: "failed" },
+      ],
+    });
+    const record = buildRecord(manifest, {
+      execFileSync: NO_FILES,
+      nowIso: NOW,
+    });
+    expect(record).toMatchObject({ verdict: "blocked", blockingCount: 2 });
   });
 
   it("never records the absolute repo path (no host-path leak — BUI-351)", () => {

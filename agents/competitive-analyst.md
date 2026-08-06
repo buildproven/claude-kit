@@ -1,6 +1,7 @@
 ---
 name: competitive-analyst
 description: Competitive intelligence specialist. Market positioning, competitor analysis, feature comparison, pricing analysis, differentiation strategy. Use for market research and positioning decisions.
+model: inherit
 tools: Read, Write, WebFetch, WebSearch, Glob, Grep
 ---
 

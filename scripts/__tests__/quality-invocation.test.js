@@ -41,6 +41,34 @@ const REVIEW_EVIDENCE = path.join(
 );
 const require = createRequire(import.meta.url);
 const invocation = require(INVOCATION);
+const lease = require("../quality-repo-lease");
+
+function fixtureRepository(root) {
+  const identity = `${realpathSync(root)}\0${git(root, ["rev-parse", "HEAD"])}`;
+  return `vitest/${createHash("sha256").update(identity).digest("hex").slice(0, 24)}`;
+}
+
+function fixtureGitCommonDir(root) {
+  return realpathSync(
+    path.resolve(root, git(root, ["rev-parse", "--git-common-dir"])),
+  );
+}
+
+function prepareFixtureNamespace(root, githubRepository) {
+  const gitCommonDir = fixtureGitCommonDir(root);
+  const repoKey = createHash("sha256")
+    .update(gitCommonDir)
+    .digest("hex")
+    .slice(0, 16);
+  writeFileSync(
+    path.join(gitCommonDir, ".quality-vitest-fixture"),
+    `${repoKey}\n`,
+  );
+  writeFileSync(
+    path.join(gitCommonDir, ".quality-vitest-repository"),
+    `${githubRepository}\n`,
+  );
+}
 
 function recordGateFixture(manifestPath, name, overrides = {}) {
   invocation.withManifestLock(manifestPath, (manifest) => {
@@ -120,19 +148,25 @@ function repo(label) {
 }
 
 function create(root, extra = [], env = {}) {
-  const prIdentity = extra.includes("--pr")
-    ? [
-        "--github-repo",
-        "owner/repo",
-        "--head-ref",
-        "feature",
-        "--head-repository",
-        "owner/repo",
-        "--cross-repository",
-        "false",
-      ]
-    : [];
-  return execFileSync(
+  const mergeFixture = extra.includes("--merge");
+  const githubRepository = mergeFixture
+    ? fixtureRepository(root)
+    : "owner/repo";
+  const prIdentity =
+    extra.includes("--pr") || mergeFixture
+      ? [
+          "--github-repo",
+          githubRepository,
+          "--head-ref",
+          "feature",
+          "--head-repository",
+          githubRepository,
+          "--cross-repository",
+          "false",
+        ]
+      : [];
+  if (mergeFixture) prepareFixtureNamespace(root, githubRepository);
+  const manifestPath = execFileSync(
     "node",
     [
       INVOCATION,
@@ -150,6 +184,11 @@ function create(root, extra = [], env = {}) {
       encoding: "utf8",
     },
   ).trim();
+  if (mergeFixture) {
+    const owner = lease.acquire(manifestPath);
+    process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = owner.token;
+  }
+  return manifestPath;
 }
 
 function createAsync(root) {
@@ -181,6 +220,15 @@ function prepareCodexReview(
   providerFindings = [],
   findingsText = null,
 ) {
+  // Most fixtures in this file exercise the historical v1 parser/judge path
+  // and deliberately use the legacy panel identity. Production v2 campaigns
+  // must enter through quality-select-agents.sh and are covered by the explicit
+  // v2 fixtures below.
+  invocation.withManifestLock(manifestPath, (manifest) => {
+    if (!manifest.panel?.rule || manifest.panel.rule.startsWith("legacy")) {
+      manifest.reviewContractVersion = 1;
+    }
+  });
   execFileSync("node", [GOVERNOR, "bump-round", manifestPath], { cwd: root });
   const info = JSON.parse(
     execFileSync("node", [INVOCATION, "review-info", manifestPath], {
@@ -205,6 +253,10 @@ function prepareCodexReview(
       (providerFindings.length === 0
         ? "NO FINDINGS.\n"
         : "BLOCKING findings.\n"),
+  );
+  writeFileSync(
+    path.join(info.artifactDir, "review-focus.txt"),
+    "fixture review focus\n",
   );
   writeFileSync(
     path.join(info.artifactDir, "codex-1.json"),
@@ -268,7 +320,7 @@ function prepareCodexReview(
   return info;
 }
 
-function prepareAdvisoryReview(root, manifestPath, failureCategory) {
+function preparePolicyExemptReview(root, manifestPath) {
   execFileSync("node", [GOVERNOR, "bump-round", manifestPath], { cwd: root });
   const info = JSON.parse(
     execFileSync("node", [INVOCATION, "review-info", manifestPath], {
@@ -288,8 +340,33 @@ function prepareAdvisoryReview(root, manifestPath, failureCategory) {
     }),
   );
   writeFileSync(
-    path.join(info.artifactDir, "ci-only.findings.txt"),
-    "NO FINDINGS. Verdict: pass. AI review unavailable; deterministic gates provide low-risk merge evidence.\n",
+    path.join(info.artifactDir, "policy-exempt.findings.txt"),
+    "AI REVIEW NOT REQUIRED. This exact diff is covered by the low-risk zero-reviewer policy.\n",
+  );
+  writeFileSync(
+    path.join(info.artifactDir, "review-focus.txt"),
+    "low-risk policy exemption\n",
+  );
+  const diffSha = createHash("sha256")
+    .update(readFileSync(path.join(info.artifactDir, "diff.txt")))
+    .digest("hex");
+  const identity = JSON.parse(
+    readFileSync(path.join(info.artifactDir, "identity.json"), "utf8"),
+  );
+  writeFileSync(
+    path.join(info.artifactDir, "policy-exempt.result.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      aiReviewRequired: false,
+      head: identity.headSha,
+      tier: identity.tier,
+      reviewContractVersion: identity.reviewContractVersion,
+      reviewPolicyDigest: identity.reviewPolicyDigest,
+      agentsSha256: identity.agentsSha256,
+      domain: identity.panelDomain,
+      selectionRule: identity.panelRule,
+      diffSha256: diffSha,
+    }),
   );
   execFileSync(
     "node",
@@ -300,8 +377,89 @@ function prepareAdvisoryReview(root, manifestPath, failureCategory) {
       "--artifact-dir",
       info.artifactDir,
       "--provider",
+      "policy-exempt",
+      "--exempt",
+    ],
+    { cwd: root },
+  );
+  execFileSync(
+    "node",
+    [
+      INVOCATION,
+      "record-policy-exempt-review",
+      manifestPath,
+      "--from",
+      info.from,
+      "--to",
+      info.to,
+      "--primary",
+      "codex",
+      "--fallback",
       "claude",
-      "--advisory",
+      "--artifact-dir",
+      info.artifactDir,
+      "--diff-sha",
+      diffSha,
+    ],
+    { cwd: root },
+  );
+}
+
+function prepareIncompleteReview(root, manifestPath, partialFindings = []) {
+  execFileSync("node", [GOVERNOR, "bump-round", manifestPath], { cwd: root });
+  const info = JSON.parse(
+    execFileSync("node", [INVOCATION, "review-info", manifestPath], {
+      cwd: root,
+      encoding: "utf8",
+    }),
+  );
+  mkdirSync(info.artifactDir, { recursive: true });
+  writeFileSync(
+    path.join(info.artifactDir, "diff.txt"),
+    execFileSync("git", ["diff", `${info.from}..${info.to}`], { cwd: root }),
+  );
+  writeFileSync(
+    path.join(info.artifactDir, "identity.json"),
+    execFileSync("node", [INVOCATION, "review-identity", manifestPath], {
+      cwd: root,
+    }),
+  );
+  writeFileSync(
+    path.join(info.artifactDir, "review-focus.txt"),
+    "fixture review focus\n",
+  );
+  writeFileSync(
+    path.join(info.artifactDir, "review-incomplete.findings.txt"),
+    "AI REVIEW INCOMPLETE: provider unavailable.\n",
+  );
+  writeFileSync(
+    path.join(info.artifactDir, "review-incomplete.result.json"),
+    JSON.stringify({
+      status: "incomplete",
+      failureCategory: "provider-unavailable",
+    }),
+  );
+  if (partialFindings.length > 0) {
+    writeFileSync(
+      path.join(info.artifactDir, "codex-1.normalized.json"),
+      JSON.stringify({
+        verdict: "needs-attention",
+        summary: "partial provider result before transport failure",
+        findings: partialFindings,
+      }),
+    );
+  }
+  execFileSync(
+    "node",
+    [
+      INVOCATION,
+      "inventory",
+      manifestPath,
+      "--artifact-dir",
+      info.artifactDir,
+      "--provider",
+      "review-incomplete",
+      "--incomplete",
     ],
     { cwd: root },
   );
@@ -312,7 +470,7 @@ function prepareAdvisoryReview(root, manifestPath, failureCategory) {
     "node",
     [
       INVOCATION,
-      "record-advisory-review",
+      "record-incomplete-review",
       manifestPath,
       "--from",
       info.from,
@@ -325,7 +483,7 @@ function prepareAdvisoryReview(root, manifestPath, failureCategory) {
       "--failed-provider",
       "claude",
       "--failure-category",
-      failureCategory,
+      "provider-unavailable",
       "--artifact-dir",
       info.artifactDir,
       "--diff-sha",
@@ -366,6 +524,10 @@ function fakeGh(root, head) {
   const gh = path.join(bin, "gh");
   const merged = path.join(bin, "merged");
   const base = git(root, ["rev-parse", "origin/main"]);
+  const repository = readFileSync(
+    path.join(fixtureGitCommonDir(root), ".quality-vitest-repository"),
+    "utf8",
+  ).trim();
   writeFileSync(
     gh,
     `#!/usr/bin/env bash
@@ -388,7 +550,7 @@ if [ "$1 $2" = "pr merge" ]; then
   exit $?
 fi
 if [ "$1 $2" = "repo view" ]; then
-  if [[ "$*" == *"nameWithOwner"* ]]; then printf '%s\\n' "\${QUALITY_TEST_REPOSITORY:-owner/repo}"; else printf '%s\\n' 'main'; fi
+  if [[ "$*" == *"nameWithOwner"* ]]; then printf '%s\\n' "\${QUALITY_TEST_REPOSITORY:-${repository}}"; else printf '%s\\n' 'main'; fi
   exit 0
 fi
 if [ "$1" = "api" ]; then
@@ -451,6 +613,29 @@ describe("mutationEvidenceValid — BUI-603 #1 fail-closed on unresolved risk", 
 });
 
 describe("quality invocation manifest", () => {
+  it("requires a bound domain selector for v2 agent selection", () => {
+    const root = repo("v2-agent-selection-identity");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "medium",
+        taskType: "bugfix",
+        score: 35,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+    });
+
+    const result = spawnSync(
+      "node",
+      [INVOCATION, "agents", manifest, "code-reviewer"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status, `${result.stderr}\n${result.stdout}`).not.toBe(0);
+    expect(result.stderr).toMatch(/requires --domain and --rule/);
+  });
+
   it("reuses one durable campaign for the same exact repo, PR, base, HEAD, and options", () => {
     const root = repo("durable-campaign");
     const args = ["--level", "98", "--pr", "7", "--merge"];
@@ -1122,13 +1307,15 @@ exit 1
       linked,
       "main",
     ]);
+    const fixtureIdentity = fixtureRepository(linked);
+    prepareFixtureNamespace(linked, fixtureIdentity);
     const bin = makeTempDir("quality-bootstrap-gh-");
     const gh = path.join(bin, "gh");
     writeFileSync(
       gh,
       `#!/usr/bin/env bash
 if [ "$1 $2" = "repo view" ]; then
-  printf '%s\\n' 'owner/repo'
+  printf '%s\\n' '${fixtureIdentity}'
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
@@ -1152,7 +1339,7 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   done
   [ "$saw_repo" = true ] || { echo "gh pr view called without --repo" >&2; exit 1; }
   [ "$saw_selector" = true ] || { echo "argument required when using the --repo flag" >&2; exit 1; }
-  printf '%s\\n' '{"number":23,"headRefName":"quality-merge-noarg-branch","headRefOid":"${git(linked, ["rev-parse", "HEAD"])}","headRepository":{"nameWithOwner":"owner/repo"},"isCrossRepository":false,"baseRefName":"main","baseRefOid":"${git(primary, ["rev-parse", "origin/main"])}"}'
+  printf '%s\\n' '{"number":23,"headRefName":"quality-merge-noarg-branch","headRefOid":"${git(linked, ["rev-parse", "HEAD"])}","headRepository":{"nameWithOwner":"${fixtureIdentity}"},"isCrossRepository":false,"baseRefName":"main","baseRefOid":"${git(primary, ["rev-parse", "origin/main"])}"}'
   exit 0
 fi
 exit 1
@@ -1367,8 +1554,14 @@ printf '%s\\n' "$manifest"
     expect(manifest.risk.mergeAuthority).toBe("autonomous");
     expect(manifest.risk.taskType).toBe("bugfix");
     expect(manifest.risk.score).toBe(35);
-    expect(manifest.risk.agentTarget).toBe(4);
-    expect(manifest.agents).toHaveLength(4);
+    expect(manifest.risk.agentTarget).toBe(1);
+    expect(manifest.agents).toEqual(["code-reviewer"]);
+    expect(manifest.panel).toMatchObject({
+      requiredAgents: 1,
+      selectedAgents: 1,
+      domain: "general",
+      rule: "general-review",
+    });
   }, 120_000);
 
   it("persists an explicit human-required policy in the immutable risk contract", () => {
@@ -2421,11 +2614,15 @@ exec "${realGit}" "$@"
     git(root, ["add", "."]);
     git(root, ["commit", "-q", "-m", "fix: final review finding"]);
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
-    const thirdReview = prepareCodexReview(root, manifest);
+    const thirdAttempt = spawnSync("node", [GOVERNOR, "bump-round", manifest], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(thirdAttempt.status).not.toBe(0);
+    expect(thirdAttempt.stderr).toMatch(/ROUND BUDGET EXHAUSTED/);
     state = JSON.parse(readFileSync(manifest, "utf8"));
-    expect(state.governor.roundsUsed).toBe(3);
-    expect(state.reviews).toHaveLength(3);
-    expect(thirdReview.from).toBe(secondReview.to);
+    expect(state.governor.roundsUsed).toBe(2);
+    expect(state.reviews).toHaveLength(2);
   });
 
   it("does not authorize a changed HEAD with an unconsumed stale token", () => {
@@ -2916,7 +3113,9 @@ exit 99
     const validationState = JSON.parse(readFileSync(manifest, "utf8"));
     expect(validationState.governor.gateSecondsUsed).toBe(0);
     expect(validationState.governor.providerSecondsUsed).toBe(0);
-    expect(validationState.governor.gateSecondsLimit).toBe(600);
+    // The budget is allocated before review for both the initial exact head and
+    // the one permitted remediation head; advancing does not mint more time.
+    expect(validationState.governor.gateSecondsLimit).toBe(1200);
     expect(validationState.governor.providerSecondsLimit).toBe(900);
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
     expect(
@@ -2981,6 +3180,26 @@ exit 99
         authorization.primary,
         "--fallback",
         authorization.fallback,
+        "--contractVersion",
+        String(authorization.contractVersion),
+        "--leads",
+        String(authorization.leads),
+        "--reviewStatus",
+        authorization.reviewStatus,
+        "--policyDigest",
+        authorization.policyDigest,
+        "--agentsSha256",
+        authorization.agentsSha256,
+        "--domain",
+        authorization.domain,
+        "--selectionRule",
+        authorization.selectionRule,
+        "--repositoryKey",
+        authorization.repositoryKey,
+        "--diffSha256",
+        authorization.diffSha256,
+        "--evidenceSha256",
+        authorization.evidenceSha256,
       ],
       {
         cwd: root,
@@ -3069,21 +3288,7 @@ exit 99
     expect(queueOnly.stderr).toMatch(/queue-aware monitored merge path/);
 
     expect(
-      spawnSync("bash", [AUTHORIZE, "--manifest", manifest], {
-        cwd: caller,
-        env: {
-          ...process.env,
-          PATH: `${bin}:${process.env.PATH}`,
-          QUALITY_TEST_EFFECTIVE_RULES: "strict",
-          QUALITY_TEST_MERGE_RC: "1",
-          QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY: verificationKey,
-        },
-        encoding: "utf8",
-      }).status,
-    ).toBe(0);
-
-    expect(
-      spawnSync("bash", [AUTHORIZE, "--manifest", manifest], {
+      spawnSync("bash", [AUTHORIZE, "--manifest", manifest, "--preflight"], {
         cwd: caller,
         env: {
           ...process.env,
@@ -3094,6 +3299,26 @@ exit 99
         },
         encoding: "utf8",
       }).status,
+    ).toBe(0);
+
+    const acceptedDespiteClientFailure = spawnSync(
+      "bash",
+      [AUTHORIZE, "--manifest", manifest],
+      {
+        cwd: caller,
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          QUALITY_TEST_EFFECTIVE_RULES: "strict",
+          QUALITY_TEST_MERGE_RC: "1",
+          QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY: verificationKey,
+        },
+        encoding: "utf8",
+      },
+    );
+    expect(
+      acceptedDespiteClientFailure.status,
+      acceptedDespiteClientFailure.stderr,
     ).toBe(0);
     lifecycle.push("merge");
     expect(lifecycle).toEqual(["push", "ci:success", "merge"]);
@@ -3141,6 +3366,7 @@ exit 99
     git(root, ["push", "-q", "-u", "origin", "feature"]);
 
     const manifest = create(root, ["--level", "95", "--pr", "1", "--merge"]);
+    const fixtureIdentity = fixtureRepository(root);
     execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
     execFileSync("bash", [SELECT, "--manifest", manifest], { cwd: root });
     prepareCodexReview(root, manifest);
@@ -3186,7 +3412,7 @@ fi
 if [ "$1 $2" = "pr checks" ]; then [ ! -f ${JSON.stringify(fail)} ]; exit $?; fi
 if [ "$1 $2" = "pr merge" ]; then touch ${JSON.stringify(merged)}; exit 0; fi
 if [ "$1 $2" = "repo view" ]; then
-  if [[ "$*" == *"nameWithOwner"* ]]; then printf '%s\\n' 'owner/repo'; else printf '%s\\n' 'main'; fi
+  if [[ "$*" == *"nameWithOwner"* ]]; then printf '%s\\n' '${fixtureIdentity}'; else printf '%s\\n' 'main'; fi
   exit 0
 fi
 if [ "$1" = "api" ]; then
@@ -3313,25 +3539,191 @@ exit 1
     ).not.toBe(0);
   });
 
-  it("blocks authorization when the persisted judge reports findings", () => {
+  it("records v2 AI leads without granting a model judge merge authority", () => {
     const root = repo("judge-block");
     const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "medium",
+        taskType: "bugfix",
+        score: 35,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["code-reviewer"], {
+        domain: "general",
+        rule: "general-review",
+      });
+    });
     prepareCodexReview(root, manifest, [
-      { severity: "high", title: "one" },
-      { severity: "high", title: "two" },
+      {
+        severity: "high",
+        title: "one",
+        body: "first lead",
+        failure_scenario: "input one reaches the changed export",
+        file: "file.js",
+        line_start: 1,
+        proof: { kind: "static-analysis", evidence: "changed line one" },
+        recommendation: "verify first lead",
+      },
+      {
+        severity: "high",
+        title: "two",
+        body: "second lead",
+        failure_scenario: "input two reaches related unchanged code",
+        file: "file.js",
+        line_start: 99,
+        proof: { kind: "static-analysis", evidence: "related source lead" },
+        recommendation: "verify second lead",
+      },
     ]);
     recordJudgeArtifact(root, manifest, ["BLOCKING", "BLOCKING"]);
-    const result = spawnSync(
-      "node",
-      [INVOCATION, "review-authorization", manifest],
-      { cwd: root, encoding: "utf8" },
+    recordMutationFixture(manifest);
+    const authorization = JSON.parse(
+      execFileSync("node", [INVOCATION, "review-authorization", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
     );
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toMatch(/2 unresolved BLOCKING/);
+    expect(authorization).toMatchObject({
+      blockingCount: 0,
+      leads: 2,
+      reviewStatus: "complete",
+    });
   });
 
-  it("authorizes typed unavailable AI review as CI-only coverage at low risk", () => {
-    const root = repo("low-risk-advisory-review");
+  it("keeps campaign-bound domain selection valid across a different-domain delta", () => {
+    const root = repo("v2-cross-domain-delta");
+    mkdirSync(path.join(root, "src", "auth"), { recursive: true });
+    writeFileSync(path.join(root, "src", "auth", "session.js"), "secure\n");
+    git(root, ["add", "src/auth/session.js"]);
+    git(root, ["commit", "-q", "-m", "fix: secure session"]);
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "critical",
+        taskType: "bugfix",
+        score: 90,
+        agents: 2,
+        "codex-depth": "xhigh",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["code-reviewer", "security-auditor"], {
+        domain: "security",
+        rule: "security-domain",
+      });
+    });
+    prepareCodexReview(root, manifest);
+
+    unlinkSync(path.join(root, "src", "auth", "session.js"));
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(path.join(root, "scripts", "repair.sh"), "exit 0\n");
+    git(root, ["add", "src/auth/session.js", "scripts/repair.sh"]);
+    git(root, ["commit", "-q", "-m", "fix: harden repair"]);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.advanceHead(loaded, root);
+    });
+
+    expect(() => prepareCodexReview(root, manifest)).not.toThrow();
+    expect(invocation.loadManifest(manifest).manifest.reviews).toHaveLength(2);
+  });
+
+  it("binds the immutable selection head into review evidence", () => {
+    const root = repo("v2-selection-head-binding");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "medium",
+        taskType: "bugfix",
+        score: 35,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["code-reviewer"], {
+        domain: "general",
+        rule: "general-review",
+      });
+    });
+    prepareCodexReview(root, manifest);
+    invocation.withManifestLock(manifest, (loaded) => {
+      loaded.panel.selectionHead = loaded.revisions.baseSha;
+    });
+
+    expect(() =>
+      invocation.reviewAuthorization(
+        invocation.loadManifest(manifest).manifest,
+      ),
+    ).toThrow(
+      /panelSelectionHead identity mismatch|inventory identity\/status mismatch/,
+    );
+  });
+
+  it("retains structured leads produced before an incomplete provider run", () => {
+    const root = repo("incomplete-partial-leads");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "medium",
+        taskType: "bugfix",
+        score: 35,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["code-reviewer"], {
+        domain: "general",
+        rule: "general-review",
+      });
+    });
+    prepareIncompleteReview(root, manifest, [
+      {
+        severity: "high",
+        title: "partial lead",
+        body: "The provider found this before its transport failed.",
+        failure_scenario: "A caller reaches the changed export with bad input.",
+        file: "file.js",
+        line_start: 1,
+        proof: { kind: "static-analysis", evidence: "changed export path" },
+        recommendation: "Verify the partial lead.",
+      },
+    ]);
+    recordMutationFixture(manifest);
+
+    const authorization = JSON.parse(
+      execFileSync("node", [INVOCATION, "review-authorization", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(authorization).toMatchObject({
+      reviewStatus: "incomplete",
+      leads: 1,
+      blockingCount: 0,
+    });
+    const inventory = JSON.parse(
+      readFileSync(
+        path.join(
+          invocation.loadManifest(manifest).manifest.reviews[0].artifactDir,
+          "artifact-inventory.json",
+        ),
+        "utf8",
+      ),
+    );
+    expect(inventory.files).toContainEqual(
+      expect.objectContaining({
+        name: "codex-1.normalized.json",
+        provider: "codex",
+      }),
+    );
+    expect(
+      invocation.loadManifest(manifest).manifest.reviews[0].leadCount,
+    ).toBe(1);
+  });
+
+  it("authorizes an explicit zero-reviewer policy exemption at low risk", () => {
+    const root = repo("low-risk-policy-exempt-review");
     git(root, ["reset", "--hard", "-q", "origin/main"]);
     writeFileSync(path.join(root, "README.md"), "# Documentation\n");
     git(root, ["add", "README.md"]);
@@ -3342,13 +3734,19 @@ exit 1
         tier: "low",
         taskType: "docs",
         score: 5,
-        agents: 2,
+        agents: 0,
         "codex-depth": "low",
         "codex-rounds": 1,
       });
-      invocation.setAgents(loaded, ["reviewer-a", "reviewer-b"]);
+      invocation.setAgents(loaded, [], {
+        domain: "policy-exempt",
+        rule: "low-no-ai",
+      });
     });
-    prepareAdvisoryReview(root, manifest, "provider-unavailable");
+    for (const name of ["lint", "test", "security"]) {
+      recordGateFixture(manifest, name);
+    }
+    preparePolicyExemptReview(root, manifest);
     recordJudgeArtifact(root, manifest);
 
     expect(() =>
@@ -3359,18 +3757,84 @@ exit 1
     const saved = invocation.loadManifest(manifest).manifest;
     expect(saved.reviews).toEqual([
       expect.objectContaining({
-        status: "advisory",
-        provider: "ci-only",
-        failureCategory: "provider-unavailable",
+        status: "exempt",
+        provider: "policy-exempt",
       }),
     ]);
   });
 
-  it("BUI-454: CI-only advisory authorization stamps a distinct Quality-Reviewer trailer value", () => {
+  it("authorizes deterministic gates while signing incomplete AI discovery", () => {
+    const root = repo("incomplete-advisory-review");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "medium",
+        taskType: "bugfix",
+        score: 35,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["code-reviewer"], {
+        domain: "general",
+        rule: "general-review",
+      });
+    });
+    prepareIncompleteReview(root, manifest);
+    recordMutationFixture(manifest);
+
+    const authorization = JSON.parse(
+      execFileSync("node", [INVOCATION, "review-authorization", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    );
+    expect(authorization).toMatchObject({
+      provider: "review-incomplete",
+      reviewStatus: "incomplete",
+      leads: 0,
+      blockingCount: 0,
+    });
+    const trailers = execFileSync("node", [INVOCATION, "trailers", manifest], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(trailers).toMatch(/^Quality-Review-Status: incomplete$/m);
+    expect(trailers).toMatch(/^Quality-Leads: 0$/m);
+  });
+
+  it("derives incomplete status for a single-provider critical review", () => {
+    const root = repo("critical-native-incomplete");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "critical",
+        taskType: "bugfix",
+        score: 90,
+        agents: 2,
+        "codex-depth": "xhigh",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["code-reviewer", "silent-failure-hunter"], {
+        domain: "general",
+        rule: "critical-reliability-backstop",
+      });
+    });
+    prepareCodexReview(root, manifest);
+
+    const saved = invocation.loadManifest(manifest).manifest;
+    expect(saved.reviews[0].status).toBe("incomplete");
+    expect(invocation.reviewAuthorization(saved)).toMatchObject({
+      reviewStatus: "incomplete",
+      blockingCount: 0,
+    });
+  });
+
+  it("stamps a distinct Quality-Reviewer trailer for a policy exemption", () => {
     // Merge evidence must record which authorization path produced a merge
     // (full AI review vs CI-only advisory) so it's queryable via a plain
     // `git log --grep` over trailers without a new telemetry subsystem.
-    const root = repo("advisory-trailer-value");
+    const root = repo("policy-exempt-trailer-value");
     git(root, ["reset", "--hard", "-q", "origin/main"]);
     writeFileSync(path.join(root, "README.md"), "# Documentation\n");
     git(root, ["add", "README.md"]);
@@ -3381,24 +3845,74 @@ exit 1
         tier: "low",
         taskType: "docs",
         score: 5,
-        agents: 2,
+        agents: 0,
         "codex-depth": "low",
         "codex-rounds": 1,
       });
-      invocation.setAgents(loaded, ["reviewer-a", "reviewer-b"]);
+      invocation.setAgents(loaded, [], {
+        domain: "policy-exempt",
+        rule: "low-no-ai",
+      });
     });
     for (const name of ["lint", "test", "security"]) {
       recordGateFixture(manifest, name);
     }
-    prepareAdvisoryReview(root, manifest, "provider-unavailable");
+    preparePolicyExemptReview(root, manifest);
     recordJudgeArtifact(root, manifest);
 
     const trailers = execFileSync("node", [INVOCATION, "trailers", manifest], {
       cwd: root,
       encoding: "utf8",
     });
-    expect(trailers).toMatch(/^Quality-Reviewer: ci-only$/m);
+    expect(trailers).toMatch(/^Quality-Reviewer: policy-exempt$/m);
+    expect(trailers).toMatch(/^Quality-Leads: 0$/m);
+    expect(trailers).toMatch(/^Quality-Review-Status: policy-exempt$/m);
     expect(trailers).not.toMatch(/^Quality-Reviewer: (claude|codex|gemini)$/m);
+  });
+
+  it("rejects policy-exempt evidence when the bound review policy is altered", () => {
+    const root = repo("policy-exempt-policy-tamper");
+    git(root, ["reset", "--hard", "-q", "origin/main"]);
+    writeFileSync(path.join(root, "README.md"), "# Documentation\n");
+    git(root, ["add", "README.md"]);
+    git(root, ["commit", "-q", "-m", "docs: update readme"]);
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "low",
+        taskType: "docs",
+        score: 5,
+        agents: 0,
+        "codex-depth": "low",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, [], {
+        domain: "policy-exempt",
+        rule: "low-no-ai",
+      });
+    });
+    for (const name of ["lint", "test", "security"]) {
+      recordGateFixture(manifest, name);
+    }
+    preparePolicyExemptReview(root, manifest);
+    recordJudgeArtifact(root, manifest);
+    invocation.withManifestLock(manifest, (loaded) => {
+      loaded.risk.reviewPolicyDigest = "e".repeat(64);
+    });
+
+    const result = spawnSync(
+      "node",
+      [INVOCATION, "review-authorization", manifest],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/review policy changed/);
+    expect(
+      invocation.loadManifest(manifest).manifest.terminalState,
+    ).toMatchObject({
+      state: "policy-superseded",
+      detail: "review-policy-drift",
+    });
   });
 
   it("rejects advisory review coverage above the low risk tier", () => {
@@ -3427,7 +3941,7 @@ exit 1
       { cwd: root, encoding: "utf8" },
     );
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toMatch(/only at the low risk tier/);
+    expect(result.stderr).toMatch(/explicit policy exemption/);
   });
 
   it("rejects a caller-supplied diff and matching hash that omit the Git delta", () => {
@@ -3592,6 +4106,8 @@ exit 1
       requiredAgents: 4,
       selectedAgents: 2,
       incomplete: true,
+      domain: "legacy",
+      rule: "legacy-panel",
     });
     expect(manifest.reviews[0].incompletePanel).toBe(true);
     expect(inventory.panel).toEqual(manifest.panel);
@@ -3637,6 +4153,8 @@ exit 1
       requiredAgents: 4,
       selectedAgents: 4,
       incomplete: false,
+      domain: "legacy",
+      rule: "legacy-panel",
     });
   });
 
@@ -3713,7 +4231,7 @@ exit 1
     });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(
-      /stronger review.*now critical\/6\/xhigh.*fresh invocation/i,
+      /stronger review.*now critical\/2\/xhigh.*fresh invocation/i,
     );
   });
 
@@ -3746,13 +4264,13 @@ exit 1
     });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(
-      /stronger review.*now critical\/6\/xhigh.*fresh invocation/i,
+      /stronger review.*now critical\/2\/xhigh.*fresh invocation/i,
     );
     expect(() =>
       invocation.reviewAuthorization(
         JSON.parse(readFileSync(manifest, "utf8")),
       ),
-    ).toThrow(/stronger review.*now critical\/6\/xhigh.*fresh invocation/i);
+    ).toThrow(/stronger review.*now critical\/2\/xhigh.*fresh invocation/i);
   });
 
   it("reapplies an explicit level-98 minimum when validating a stale same-HEAD contract", () => {
@@ -3777,7 +4295,7 @@ exit 1
     });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(
-      /stronger review.*now critical\/6\/xhigh.*fresh invocation/i,
+      /stronger review.*now critical\/2\/xhigh.*fresh invocation/i,
     );
   });
 
@@ -4040,6 +4558,104 @@ exit 1
     ).not.toThrow();
   });
 
+  it("uses Claude structured findings once instead of reparsing their text summary", () => {
+    const root = repo("claude-structured-finding-dedup");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "high",
+        taskType: "bugfix",
+        score: 60,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(manifest, ["code-reviewer"], {
+        domain: "general",
+        rule: "general-review",
+      });
+    });
+    execFileSync("node", [GOVERNOR, "bump-round", manifestPath], {
+      cwd: root,
+    });
+    const loaded = invocation.loadManifest(manifestPath).manifest;
+    const info = invocation.reviewInfo(loaded);
+    mkdirSync(info.artifactDir, { recursive: true });
+    writeFileSync(
+      path.join(info.artifactDir, "diff.txt"),
+      execFileSync("git", ["diff", `${info.from}..${info.to}`], { cwd: root }),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "identity.json"),
+      execFileSync("node", [INVOCATION, "review-identity", manifestPath], {
+        cwd: root,
+      }),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "review-focus.txt"),
+      "fixture review focus\n",
+    );
+    const finding = {
+      severity: "high",
+      title: "Changed behavior",
+      body: "The changed value causes the wrong result.",
+      failure_scenario: "Read file.js after the feature commit.",
+      file: "file.js",
+      line_start: 1,
+      proof: {
+        kind: "static-analysis",
+        evidence: "file.js:1 changes the exported value from 1 to 2.",
+      },
+      recommendation: "Restore the expected value.",
+    };
+    const normalized = {
+      verdict: "needs-attention",
+      summary: "One issue",
+      findings: [finding],
+    };
+    writeFileSync(
+      path.join(info.artifactDir, "code-reviewer.normalized.json"),
+      JSON.stringify(normalized),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "code-reviewer.result.json"),
+      JSON.stringify({ structured_output: normalized }),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "code-reviewer.findings.txt"),
+      "high: file.js:1 — Changed behavior\nThe changed value causes the wrong result.\n<<<FINDINGS REPORTED>>>\n",
+    );
+    invocation.writeArtifactInventory(loaded, info.artifactDir, "claude");
+    const diffSha = createHash("sha256")
+      .update(readFileSync(path.join(info.artifactDir, "diff.txt")))
+      .digest("hex");
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.recordReview(manifest, {
+        from: info.from,
+        to: info.to,
+        provider: "claude",
+        primary: "claude",
+        fallback: "codex",
+        "artifact-dir": info.artifactDir,
+        "diff-sha": diffSha,
+      });
+    });
+    for (const name of ["lint", "test", "security"]) {
+      recordGateFixture(manifestPath, name);
+    }
+    recordMutationFixture(manifestPath);
+
+    const context = invocation.judgeContext(
+      invocation.loadManifest(manifestPath).manifest,
+    );
+    expect(context.findings).toHaveLength(1);
+    expect(context.findings[0]).toMatchObject({
+      title: "Changed behavior",
+      source: "claude:code-reviewer.normalized.json#0",
+      proof: finding.proof,
+    });
+  });
+
   it("inventories preserved Codex findings with a complete Claude fallback panel", () => {
     const root = repo("fallback-inventory");
     const manifestPath = create(root);
@@ -4163,7 +4779,7 @@ exit 1
 
   // The reviewer quorum must be satisfied by EACH covered review, not by the
   // campaign total. `usableReviewerReports` accumulated across rounds while
-  // `requiredUsableReports` was only Math.max'd to a single panel's majority,
+  // `requiredUsableReports` was only Math.max'd to one panel's requirement,
   // so a clean round 2 satisfied an empty round 1 — authorizing a merge over a
   // diff slice no quorum ever reviewed. reviewCoverage() checks slice
   // contiguity and artifact integrity, but never per-slice panel usability.
@@ -4181,9 +4797,7 @@ exit 1
           required = 0;
           inconclusive = 0;
         }
-        required = perReview
-          ? Math.floor(agentCount / 2) + 1
-          : Math.max(required, Math.floor(agentCount / 2) + 1);
+        required = perReview ? agentCount : Math.max(required, agentCount);
         for (const ok of round) {
           if (ok) usable += 1;
           else inconclusive += 1;
@@ -4461,6 +5075,7 @@ exit 1
         "codex-rounds": 1,
       });
       invocation.setAgents(loaded, ["reviewer-a", "reviewer-b"]);
+      loaded.reviewContractVersion = 1;
     });
     execFileSync("node", [GOVERNOR, "bump-round", manifest], { cwd: root });
     const loaded = invocation.loadManifest(manifest).manifest;
@@ -4677,17 +5292,12 @@ exit 1
     // but with a diagnosis that names the real problem and has a retry route.
     const root = repo("bare-findings-reported-delimiter-only");
     const manifest = create(root);
-    prepareCodexReview(root, manifest, [], "<<<FINDINGS REPORTED>>>");
     let stderr = "";
     expect(() => {
       try {
-        execFileSync("node", [INVOCATION, "judge-context", manifest], {
-          cwd: root,
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"],
-        });
+        prepareCodexReview(root, manifest, [], "<<<FINDINGS REPORTED>>>");
       } catch (err) {
-        stderr = err.stderr || "";
+        stderr = String(err.stderr || "");
         throw err;
       }
     }).toThrow();
@@ -5669,11 +6279,14 @@ exit 1
     const result = spawnSync(
       "bash",
       [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
-      { cwd: linked, encoding: "utf8" },
+      { cwd: linked, encoding: "utf8", env: process.env },
     );
-    expect(result.status).not.toBe(0);
+    expect(result.status, `${result.stderr}\n${result.stdout}`).not.toBe(0);
     const updated = JSON.parse(readFileSync(manifestPath, "utf8"));
-    expect(updated.gates.find((gate) => gate.name === "build")).toMatchObject({
+    expect(
+      updated.gates.find((gate) => gate.name === "build"),
+      `${result.stderr}\n${result.stdout}`,
+    ).toMatchObject({
       status: "failed",
       reason: "gate 'build' failed with exit status 1",
     });

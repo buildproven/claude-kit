@@ -7,9 +7,11 @@ const os = require("os");
 const path = require("path");
 const { execFileSync, spawnSync } = require("child_process");
 const riskScore = require("./risk-score.js");
+const agentSelection = require("./quality-agent-selection.js");
 const conditionTaxonomy = require("./quality-condition-taxonomy.js");
 
 const SCHEMA_VERSION = 1;
+const REVIEW_CONTRACT_VERSION = 2;
 const EXECUTION_BUDGET_VERSION = 1;
 const REQUIRED_GATES_POLICY_VERSION = 3;
 const MAX_AGENT_TARGET = 9;
@@ -46,6 +48,23 @@ function canonicalJson(value) {
     );
   }
   return value;
+}
+
+function buildReviewPolicy(manifest) {
+  const config = riskScore.loadConfig(manifest.repo.realpath);
+  return {
+    reviewContractVersion: REVIEW_CONTRACT_VERSION,
+    selectorVersion: 1,
+    proofSchemaVersion: 1,
+    curve: config.curve,
+  };
+}
+
+function reviewPolicyDigest(policy) {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(canonicalJson(policy)))
+    .digest("hex");
 }
 
 function git(cwd, args) {
@@ -1067,16 +1086,18 @@ function buildGovernor(head) {
     providerSecondsLimit,
     providerSecondsUsed: 0,
     activeExecution: null,
-    maxFixCommits: governorInteger(
-      "BS_QUALITY_MAX_FIX_COMMITS",
-      "4",
-      "max fix commits",
-    ),
-    maxReviewRounds: governorInteger(
-      "BS_QUALITY_MAX_REVIEW_ROUNDS",
-      "2",
-      "max review rounds",
+    maxFixCommits: Math.min(
       1,
+      governorInteger("BS_QUALITY_MAX_FIX_COMMITS", "1", "max fix commits"),
+    ),
+    maxReviewRounds: Math.min(
+      2,
+      governorInteger(
+        "BS_QUALITY_MAX_REVIEW_ROUNDS",
+        "2",
+        "max review rounds",
+        1,
+      ),
     ),
     maxReviewRoundsExplicit:
       process.env.BS_QUALITY_MAX_REVIEW_ROUNDS !== undefined,
@@ -1094,11 +1115,14 @@ function buildGovernor(head) {
     ),
     roundsUsed: 0,
     authorizedAttempts: [],
-    maxProviderAttempts: governorInteger(
-      "BS_QUALITY_MAX_PROVIDER_ATTEMPTS",
-      "6",
-      "max provider attempts",
-      1,
+    maxProviderAttempts: Math.min(
+      2,
+      governorInteger(
+        "BS_QUALITY_MAX_PROVIDER_ATTEMPTS",
+        "2",
+        "max provider attempts",
+        1,
+      ),
     ),
     providerWindowSeconds: providerDeadlineSeconds,
     providerAttempts: [],
@@ -1127,6 +1151,8 @@ function parseOptions(args) {
         "--skip-tests",
         "--skip",
         "--advisory",
+        "--exempt",
+        "--incomplete",
         "--verify-app",
         "--read",
       ].includes(name)
@@ -1375,6 +1401,7 @@ function createManifest(options) {
   const key = repoKey(root);
   const manifest = {
     schemaVersion: SCHEMA_VERSION,
+    reviewContractVersion: REVIEW_CONTRACT_VERSION,
     manifestRevision: 0,
     invocationId,
     createdAt: now,
@@ -1460,6 +1487,16 @@ function strongerReviewForCurrentHead(manifest, root) {
 }
 
 function assertCurrentReviewStrength(manifest, root) {
+  if (
+    (manifest.reviewContractVersion || 1) >= 2 &&
+    manifest.risk.reviewPolicy &&
+    manifest.risk.reviewPolicyDigest !==
+      reviewPolicyDigest(buildReviewPolicy(manifest))
+  ) {
+    throw new Error(
+      "review policy changed after risk resolution; start a fresh invocation",
+    );
+  }
   const stronger = strongerReviewForCurrentHead(manifest, root);
   if (!stronger) return;
   throw new Error(
@@ -1737,6 +1774,14 @@ function applyRuntimeGovernor(manifest, options, runtime) {
       "max fix commits",
     );
   }
+  if (process.env.BS_QUALITY_MAX_GATE_SECONDS === undefined) {
+    // A campaign may validate the initial head and one permitted remediation
+    // head. Fund both exact-head passes up front so advancing cannot mint time,
+    // while the per-gate watchdog and the one-fix cap keep execution bounded.
+    governor.gateSecondsLimit =
+      (governor.maxFixCommits + 1) *
+      (runtime.checkSeconds + runtime.checkReserveSeconds);
+  }
   if (process.env.BS_QUALITY_MAX_REMEDIATION_SECONDS === undefined) {
     governor.remediationSeconds = Math.max(
       60,
@@ -1793,13 +1838,14 @@ function setRisk(manifest, options) {
     throw new Error(`invalid resolved task type '${taskType}'`);
   }
   const agentTarget = parseInteger(options.agents, "agent target", {
-    minimum: 2,
+    minimum: 0,
   });
   if (agentTarget > MAX_AGENT_TARGET) {
     throw new Error(
       `agent target ${agentTarget} exceeds supported ${MAX_AGENT_TARGET}-agent panel`,
     );
   }
+  const reviewPolicy = buildReviewPolicy(manifest);
   const resolved = {
     requestedLevel: manifest.risk.requestedLevel,
     resolved: true,
@@ -1815,6 +1861,8 @@ function setRisk(manifest, options) {
     codexRounds: parseInteger(options["codex-rounds"] || "1", "codex rounds"),
     level: options.level || manifest.options.level,
     runtime: buildRuntimePlan(manifest, options),
+    reviewPolicy,
+    reviewPolicyDigest: reviewPolicyDigest(reviewPolicy),
   };
   if (manifest.risk?.resolved) {
     if (JSON.stringify(manifest.risk) === JSON.stringify(resolved)) return;
@@ -1837,12 +1885,13 @@ function panelSelectionError({ selectedAgents, target, incomplete }) {
   return null;
 }
 
-function setAgents(manifest, names, { incomplete = false } = {}) {
+function setAgents(
+  manifest,
+  names,
+  { incomplete = false, domain = "legacy", rule = "legacy-panel" } = {},
+) {
   if (!manifest.risk?.resolved) {
     throw new Error("cannot select agents before risk resolution");
-  }
-  if (names.length < 2) {
-    throw new Error("quality agent floor requires at least two agents");
   }
   const target = manifest.risk.agentTarget;
   const selectionError = panelSelectionError({
@@ -1854,7 +1903,9 @@ function setAgents(manifest, names, { incomplete = false } = {}) {
   if (
     manifest.agents.length > 0 &&
     JSON.stringify(manifest.agents) === JSON.stringify(names) &&
-    Boolean(manifest.panel?.incomplete) === incomplete
+    Boolean(manifest.panel?.incomplete) === incomplete &&
+    manifest.panel?.domain === domain &&
+    manifest.panel?.rule === rule
   ) {
     return;
   }
@@ -1866,6 +1917,13 @@ function setAgents(manifest, names, { incomplete = false } = {}) {
     requiredAgents: target,
     selectedAgents: names.length,
     incomplete,
+    domain,
+    rule,
+    ...((manifest.reviewContractVersion || 1) >= 2 &&
+    domain !== "legacy" &&
+    !rule.startsWith("legacy")
+      ? { selectionHead: manifest.revisions.currentHead }
+      : {}),
   };
 }
 
@@ -2477,7 +2535,7 @@ function reviewInfo(manifest) {
 
 function coveredReviews(manifest) {
   return manifest.reviews.filter((review) =>
-    ["success", "advisory"].includes(review.status),
+    ["success", "advisory", "exempt", "incomplete"].includes(review.status),
   );
 }
 
@@ -2492,6 +2550,7 @@ function reviewIdentity(manifest) {
   const info = reviewInfo(manifest);
   return {
     schemaVersion: SCHEMA_VERSION,
+    reviewContractVersion: manifest.reviewContractVersion || 1,
     invocationId: manifest.invocationId,
     repositoryRealpath: manifest.repo.realpath,
     repositoryKey: manifest.repo.key,
@@ -2503,6 +2562,10 @@ function reviewIdentity(manifest) {
     attempt: info.attempt,
     tier: manifest.risk.tier,
     agentsSha256: agentsSha256(manifest),
+    reviewPolicyDigest: manifest.risk.reviewPolicyDigest || null,
+    panelDomain: manifest.panel?.domain || "legacy",
+    panelRule: manifest.panel?.rule || "legacy-panel",
+    panelSelectionHead: manifest.panel?.selectionHead || null,
   };
 }
 
@@ -2619,8 +2682,9 @@ function providerFindings(manifest) {
   // round's shortfall — round 1 producing zero usable reports passed as soon as
   // round 2 returned three. reviewCoverage() checks that the reviewed slices are
   // contiguous and artifact-intact, but never that each slice individually had a
-  // usable panel, so the merge was authorized over a diff range that no quorum
-  // ever reviewed. Every covered review must carry its own majority.
+  // usable panel, so the merge was authorized over a diff range that no full
+  // selected panel ever reviewed. Every covered review must carry every
+  // selected reviewer's usable evidence.
   let usableReviewerReports = 0;
   let requiredUsableReports = 0;
   // The panel this review's quorum is actually measured against. For a Claude
@@ -2638,12 +2702,17 @@ function providerFindings(manifest) {
     );
   };
   for (const review of coveredReviews(manifest)) {
+    if (review.status === "exempt") continue;
+    const incompleteSpecial =
+      review.status === "incomplete" && review.provider === "review-incomplete";
     const reviewFindingsStart = findings.length;
     usableReviewerReports = 0;
     requiredUsableReports = 0;
     quorumPanelSize = 0;
     let structuredProviderReports = 0;
     const structuredProviderNames = new Set();
+    const claudeSlotModels = new Set();
+    const claudeSlotRoles = new Set();
     // Reset too: a malformed agent in round 1 must not be reported against
     // round 2's panel now that the quorum is evaluated inside the loop.
     inconclusiveAgents = [];
@@ -2655,28 +2724,42 @@ function providerFindings(manifest) {
       file.name.endsWith(".json"),
     );
     const reviewerResultFiles = resultFiles.filter((file) => {
+      if (
+        incompleteSpecial &&
+        ["review-incomplete.result.json", "policy-exempt.result.json"].includes(
+          file.name,
+        )
+      ) {
+        return false;
+      }
       const rawPass = file.name.match(/^(codex|gemini)-(\d+)\.json$/);
-      if (!rawPass) return true;
-      const [, providerName, pass] = rawPass;
+      if (rawPass) {
+        const [, providerName, pass] = rawPass;
+        return !resultFiles.some(
+          (candidate) =>
+            candidate.name === `${providerName}-${pass}.normalized.json` ||
+            candidate.name === `primary-${providerName}-${pass}.result.json`,
+        );
+      }
+      const rawClaude = file.name.match(/^(.+)\.result\.json$/);
+      if (!rawClaude) return true;
       return !resultFiles.some(
-        (candidate) =>
-          candidate.name === `${providerName}-${pass}.normalized.json` ||
-          candidate.name === `primary-${providerName}-${pass}.result.json`,
+        (candidate) => candidate.name === `${rawClaude[1]}.normalized.json`,
       );
     });
     const quorumResultFiles = reviewerResultFiles.filter(
       (file) => file.provider === inventory.provider,
     );
-    // Every non-advisory provider panel needs a usable majority at read time,
-    // not only Claude. Artifact inventory already applies the same floor when
+    // Every non-advisory provider panel needs every selected reviewer's usable
+    // evidence at read time. Artifact inventory already applies the same floor when
     // it is written; keeping the denominator aligned prevents an unparseable
     // JSON result from disappearing after inventory succeeds.
     quorumPanelSize =
       inventory.provider === "claude"
         ? manifest.agents.length
         : quorumResultFiles.length;
-    if (review.status !== "advisory") {
-      requiredUsableReports = Math.floor(quorumPanelSize / 2) + 1;
+    if (review.status !== "advisory" && !incompleteSpecial) {
+      requiredUsableReports = quorumPanelSize;
     }
     for (const item of reviewerResultFiles) {
       let parsed;
@@ -2702,6 +2785,10 @@ function providerFindings(manifest) {
       }
       const resultProvider = item.provider || inventory.provider;
       structuredProviderNames.add(resultProvider);
+      if (resultProvider === "claude" && parsed._qualitySlot) {
+        claudeSlotModels.add(parsed._qualitySlot.model);
+        claudeSlotRoles.add(parsed._qualitySlot.role);
+      }
       // Preserved primary evidence stays authoritative for its findings, but
       // only the selected panel can contribute a verdict toward that panel's
       // quorum. This matters when Claude falls back after a partial Codex run.
@@ -2728,12 +2815,23 @@ function providerFindings(manifest) {
     for (const item of inventory.files.filter((file) =>
       file.name.endsWith(".findings.txt"),
     )) {
+      if (incompleteSpecial && item.name === "review-incomplete.findings.txt") {
+        continue;
+      }
       const isPanelReport = item.provider === inventory.provider;
       const aggregateProvider = item.name.match(
         /^(codex|gemini)\.findings\.txt$/,
       )?.[1];
+      const claudeAgent = item.name.match(/^(.+)\.findings\.txt$/)?.[1];
+      const pairedClaudeResult =
+        inventory.provider === "claude" &&
+        !!claudeAgent &&
+        resultFiles.some(
+          (candidate) => candidate.name === `${claudeAgent}.normalized.json`,
+        );
       const aggregateHasStructuredResult =
-        !!aggregateProvider && structuredProviderNames.has(aggregateProvider);
+        pairedClaudeResult ||
+        (!!aggregateProvider && structuredProviderNames.has(aggregateProvider));
       const revokeAggregateVerdict = () => {
         if (
           isPanelReport &&
@@ -2747,6 +2845,9 @@ function providerFindings(manifest) {
       // A structured result with actual findings is canonical for its paired
       // aggregate. An empty structured result cannot silence conflicting
       // aggregate text, which remains fail-closed evidence.
+      if (pairedClaudeResult) {
+        continue;
+      }
       if (
         findings.length > reviewFindingsStart &&
         /^(?:codex|gemini)\.findings\.txt$/.test(item.name)
@@ -2858,6 +2959,17 @@ function providerFindings(manifest) {
         body,
         source: item.name,
       });
+    }
+    if (
+      (manifest.reviewContractVersion || 1) >= 2 &&
+      manifest.risk.tier === "critical" &&
+      inventory.provider === "claude" &&
+      (claudeSlotModels.size < 2 ||
+        manifest.agents.some((agent) => !claudeSlotRoles.has(agent)))
+    ) {
+      throw new Error(
+        "critical Claude discovery lacks two role-bound model families",
+      );
     }
     // Fail closed per review, and distinctly from "actionable code findings
     // remain" — the operator needs to know THIS panel produced no usable
@@ -2973,13 +3085,24 @@ function recordReview(manifest, options) {
       ),
     ),
     artifactDir: path.resolve(options["artifact-dir"]),
-    status: "success",
+    status:
+      options.incomplete === true ||
+      ((manifest.reviewContractVersion || 1) >= 2 &&
+        manifest.risk.tier === "critical" &&
+        options.provider !== "claude")
+        ? "incomplete"
+        : "success",
     tier: boundExpected.tier,
     agentsSha256: boundExpected.agentsSha256,
     incompletePanel: Boolean(manifest.panel?.incomplete),
     governorAttemptToken: authorizedAttempt.token,
     completedAt: new Date().toISOString(),
   });
+  const priorLeadCount = manifest.reviews
+    .slice(0, -1)
+    .reduce((sum, review) => sum + (review.leadCount || 0), 0);
+  manifest.reviews.at(-1).leadCount =
+    providerFindings(manifest).length - priorLeadCount;
   manifest.provider = {
     ...manifest.provider,
     primary: options.primary,
@@ -2998,6 +3121,11 @@ const ADVISORY_FAILURE_CATEGORIES = new Set([
 ]);
 
 function recordAdvisoryReview(manifest, options) {
+  if ((manifest.reviewContractVersion || 1) >= 2) {
+    throw new Error(
+      "v2 campaigns use an explicit policy exemption, not provider-failure advisory coverage",
+    );
+  }
   if (manifest.risk.tier !== "low") {
     throw new Error("AI review may be advisory only at the low risk tier");
   }
@@ -3064,6 +3192,143 @@ function recordAdvisoryReview(manifest, options) {
   };
 }
 
+function recordPolicyExemptReview(manifest, options) {
+  if ((manifest.reviewContractVersion || 1) < 2) {
+    throw new Error("policy exemption requires review contract v2");
+  }
+  if (
+    manifest.risk.tier !== "low" ||
+    manifest.risk.agentTarget !== 0 ||
+    manifest.agents.length !== 0 ||
+    manifest.panel?.rule !== "low-no-ai"
+  ) {
+    throw new Error(
+      "policy exemption requires the resolved low-risk zero-reviewer policy",
+    );
+  }
+  const expected = reviewInfo(manifest);
+  if (
+    options.from !== expected.from ||
+    options.to !== expected.to ||
+    path.resolve(options["artifact-dir"]) !== path.resolve(expected.artifactDir)
+  ) {
+    throw new Error("review artifact identity does not match manifest");
+  }
+  const boundExpected = {
+    ...expected,
+    tier: manifest.risk.tier,
+    agentsSha256: agentsSha256(manifest),
+    artifactDir: options["artifact-dir"],
+    diffSha256: options["diff-sha"],
+    provider: "policy-exempt",
+    status: "exempt",
+    leadCount: 0,
+  };
+  verifyReviewArtifact(manifest, boundExpected);
+  manifest.reviews.push({
+    round: expected.round,
+    attempt: expected.attempt,
+    from: options.from,
+    to: options.to,
+    provider: "policy-exempt",
+    diffSha256: options["diff-sha"],
+    inventorySha256: sha256File(
+      path.join(
+        path.resolve(options["artifact-dir"]),
+        "artifact-inventory.json",
+      ),
+    ),
+    artifactDir: path.resolve(options["artifact-dir"]),
+    status: "exempt",
+    tier: boundExpected.tier,
+    agentsSha256: boundExpected.agentsSha256,
+    incompletePanel: false,
+    completedAt: new Date().toISOString(),
+  });
+  manifest.provider = {
+    ...manifest.provider,
+    primary: options.primary,
+    fallback: options.fallback,
+    reviewer: "policy-exempt",
+  };
+}
+
+function recordIncompleteReview(manifest, options) {
+  if ((manifest.reviewContractVersion || 1) < 2) {
+    throw new Error("incomplete discovery attestation requires contract v2");
+  }
+  if (manifest.risk.tier === "low") {
+    throw new Error("low risk uses policy exemption, not incomplete discovery");
+  }
+  if (manifest.governor.activeExecution?.kind === "provider") {
+    completeActiveExecution(manifest, "provider");
+  }
+  const expected = reviewInfo(manifest);
+  const authorizedAttempt = manifest.governor.authorizedAttempts.find(
+    (attempt) =>
+      attempt.number === expected.attempt &&
+      attempt.head === manifest.revisions.currentHead &&
+      attempt.consumedAt === null &&
+      !attempt.invalidatedAt,
+  );
+  if (!authorizedAttempt) {
+    throw new Error("incomplete review lacks an authorized governor attempt");
+  }
+  if (
+    options.from !== expected.from ||
+    options.to !== expected.to ||
+    path.resolve(options["artifact-dir"]) !== path.resolve(expected.artifactDir)
+  ) {
+    throw new Error("review artifact identity does not match manifest");
+  }
+  const boundExpected = {
+    ...expected,
+    tier: manifest.risk.tier,
+    agentsSha256: agentsSha256(manifest),
+    artifactDir: options["artifact-dir"],
+    diffSha256: options["diff-sha"],
+    provider: "review-incomplete",
+    status: "incomplete",
+    leadCount: 0,
+  };
+  verifyReviewArtifact(manifest, boundExpected);
+  manifest.reviews.push({
+    round: expected.round,
+    attempt: expected.attempt,
+    from: options.from,
+    to: options.to,
+    provider: "review-incomplete",
+    diffSha256: options["diff-sha"],
+    inventorySha256: sha256File(
+      path.join(
+        path.resolve(options["artifact-dir"]),
+        "artifact-inventory.json",
+      ),
+    ),
+    artifactDir: path.resolve(options["artifact-dir"]),
+    status: "incomplete",
+    failureCategory: options["failure-category"] || "provider-error",
+    failedProvider: options["failed-provider"] || "unknown",
+    tier: boundExpected.tier,
+    agentsSha256: boundExpected.agentsSha256,
+    incompletePanel: false,
+    governorAttemptToken: authorizedAttempt.token,
+    completedAt: new Date().toISOString(),
+  });
+  const priorLeadCount = manifest.reviews
+    .slice(0, -1)
+    .reduce((sum, review) => sum + (review.leadCount || 0), 0);
+  manifest.reviews.at(-1).leadCount =
+    providerFindings(manifest).length - priorLeadCount;
+  manifest.provider = {
+    ...manifest.provider,
+    primary: options.primary,
+    fallback: options.fallback,
+    reviewer: "review-incomplete",
+  };
+  authorizedAttempt.consumedAt = new Date().toISOString();
+}
+
 function sha256File(file) {
   return crypto
     .createHash("sha256")
@@ -3072,6 +3337,23 @@ function sha256File(file) {
 }
 
 function providerEvidenceName(name, provider) {
+  if (provider === "policy-exempt") {
+    return ["policy-exempt.findings.txt", "policy-exempt.result.json"].includes(
+      name,
+    );
+  }
+  if (provider === "review-incomplete") {
+    return (
+      [
+        "review-incomplete.findings.txt",
+        "review-incomplete.result.json",
+      ].includes(name) ||
+      /^primary-(?:codex|gemini|claude)-.+\.result\.json$/.test(name) ||
+      /^(?:codex|gemini)-\d+\.normalized\.json$/.test(name) ||
+      (!/^(?:codex|gemini|primary)-/.test(name) &&
+        name.endsWith(".normalized.json"))
+    );
+  }
   if (/^primary-(?:codex|gemini|claude)-/.test(name)) return true;
   if (provider === "codex") {
     return (
@@ -3087,7 +3369,9 @@ function providerEvidenceName(name, provider) {
   }
   if (provider === "claude") {
     return (
-      (name.endsWith(".findings.txt") || name.endsWith(".result.json")) &&
+      (name.endsWith(".findings.txt") ||
+        name.endsWith(".result.json") ||
+        name.endsWith(".normalized.json")) &&
       !/^(?:codex|gemini)(?:-|\.)/.test(name)
     );
   }
@@ -3098,7 +3382,7 @@ function writeArtifactInventory(
   manifest,
   artifactDir,
   provider,
-  { advisory = false } = {},
+  { advisory = false, exempt = false, incomplete = false } = {},
 ) {
   const resolved = path.resolve(artifactDir);
   const info = reviewInfo(manifest);
@@ -3111,6 +3395,7 @@ function writeArtifactInventory(
       (name) =>
         name.endsWith(".findings.txt") ||
         name.endsWith(".result.json") ||
+        name.endsWith(".normalized.json") ||
         /^(?:codex|gemini)-\d+(?:\.normalized)?\.json$/.test(name),
     )
     .filter((name) => providerEvidenceName(name, provider))
@@ -3139,10 +3424,12 @@ function writeArtifactInventory(
     return text.split(/\r?\n/).some((line) => line.startsWith("INCONCLUSIVE:"));
   });
   const panelSize =
-    provider === "claude" && !advisory
-      ? manifest.agents.length
-      : findings.length;
-  const requiredUsableFindings = Math.floor(panelSize / 2) + 1;
+    exempt || incomplete
+      ? 0
+      : provider === "claude" && !advisory
+        ? manifest.agents.length
+        : findings.length;
+  const requiredUsableFindings = panelSize;
   const usableFindings = findings.length - inconclusiveFindings.length;
   if (usableFindings < requiredUsableFindings) {
     throw new Error(
@@ -3156,7 +3443,14 @@ function writeArtifactInventory(
     invocationId: manifest.invocationId,
     headSha: manifest.revisions.currentHead,
     provider,
-    status: "success",
+    status: exempt ? "exempt" : incomplete ? "incomplete" : "success",
+    tier: manifest.risk.tier,
+    focusSha256:
+      (manifest.reviewContractVersion || 1) >= 2 &&
+      manifest.panel?.rule &&
+      !manifest.panel.rule.startsWith("legacy")
+        ? sha256File(path.join(resolved, "review-focus.txt"))
+        : null,
     panel: manifest.panel || {
       requiredAgents: manifest.agents.length,
       selectedAgents: manifest.agents.length,
@@ -3169,9 +3463,21 @@ function writeArtifactInventory(
       // sets it after this inventory is written — so it cannot be trusted
       // here; the filename is always correct regardless of round ordering.
       const preservedMatch = name.match(/^primary-(codex|gemini|claude)-/);
+      const nativeMatch = name.match(/^(codex|gemini)-\d+\.normalized\.json$/);
+      const partialClaude =
+        provider === "review-incomplete" &&
+        !preservedMatch &&
+        !nativeMatch &&
+        name.endsWith(".normalized.json");
       return {
         name,
-        provider: preservedMatch ? preservedMatch[1] : provider,
+        provider: preservedMatch
+          ? preservedMatch[1]
+          : nativeMatch
+            ? nativeMatch[1]
+            : partialClaude
+              ? "claude"
+              : provider,
         sha256: sha256File(path.join(resolved, name)),
       };
     }),
@@ -3221,6 +3527,11 @@ function verifyIdentityFile(manifest, review, identityFile) {
     attempt: review.attempt,
     tier: review.tier,
     agentsSha256: review.agentsSha256,
+    reviewContractVersion: manifest.reviewContractVersion || 1,
+    reviewPolicyDigest: manifest.risk.reviewPolicyDigest || null,
+    panelDomain: manifest.panel?.domain || "legacy",
+    panelRule: manifest.panel?.rule || "legacy-panel",
+    panelSelectionHead: manifest.panel?.selectionHead || null,
   };
   for (const [key, value] of Object.entries(expected)) {
     if (identity[key] !== value) {
@@ -3244,12 +3555,26 @@ function verifyInventory(manifest, review, inventoryFile, artifactDir) {
     inventory.invocationId === manifest.invocationId &&
     inventory.headSha === review.to &&
     inventory.provider ===
-      (review.status === "advisory" ? review.failedProvider : review.provider);
+      (review.status === "advisory"
+        ? review.failedProvider
+        : review.provider) &&
+    ((manifest.reviewContractVersion || 1) < 2 ||
+      JSON.stringify(canonicalJson(inventory.panel)) ===
+        JSON.stringify(canonicalJson(manifest.panel)));
   const usable =
-    inventory.status === "success" &&
+    ["success", "exempt", "incomplete"].includes(inventory.status) &&
     Array.isArray(inventory.files) &&
     inventory.files.length > 0;
-  if (!identityMatches || !usable) {
+  const focusFile = path.join(artifactDir, "review-focus.txt");
+  const focusMatches =
+    (manifest.reviewContractVersion || 1) < 2 ||
+    !manifest.panel?.rule ||
+    manifest.panel.rule.startsWith("legacy") ||
+    (inventory.tier === manifest.risk.tier &&
+      fs.existsSync(focusFile) &&
+      !fs.lstatSync(focusFile).isSymbolicLink() &&
+      inventory.focusSha256 === sha256File(focusFile));
+  if (!identityMatches || !usable || !focusMatches) {
     throw new Error("provider artifact inventory identity/status mismatch");
   }
   for (const item of inventory.files) {
@@ -3295,10 +3620,85 @@ function verifyReviewArtifact(manifest, review) {
   ) {
     throw new Error("review risk/agent identity mismatch");
   }
+  if (
+    (manifest.reviewContractVersion || 1) >= 2 &&
+    (!manifest.panel?.domain ||
+      !manifest.panel?.rule ||
+      manifest.panel.rule.startsWith("legacy") ||
+      !/^[0-9a-f]{40}$/.test(manifest.panel?.selectionHead || ""))
+  ) {
+    throw new Error("contract v2 review lacks bound domain selection");
+  }
+  if (
+    (manifest.reviewContractVersion || 1) >= 2 &&
+    manifest.risk.reviewPolicyDigest
+  ) {
+    const selectionIsAncestor =
+      spawnSync(
+        "git",
+        [
+          "merge-base",
+          "--is-ancestor",
+          manifest.panel.selectionHead,
+          review.to,
+        ],
+        { cwd: manifest.repo.realpath, stdio: "ignore" },
+      ).status === 0;
+    const expectedSelection = agentSelection.selectReviewersForRange({
+      tier: manifest.risk.tier,
+      repo: manifest.repo.realpath,
+      // The panel is campaign-bound from the complete base..HEAD change. A
+      // remediation review may cover only priorHead..HEAD, but recomputing the
+      // selector over that delta can switch domains and falsely invalidate the
+      // immutable campaign identity.
+      base: manifest.revisions.baseSha,
+      head: manifest.panel.selectionHead,
+    });
+    if (
+      !selectionIsAncestor ||
+      manifest.risk.reviewPolicyDigest !==
+        reviewPolicyDigest(buildReviewPolicy(manifest)) ||
+      JSON.stringify(expectedSelection.agents) !==
+        JSON.stringify(manifest.agents) ||
+      expectedSelection.domain !== manifest.panel?.domain ||
+      expectedSelection.rule !== manifest.panel?.rule
+    ) {
+      throw new Error("review policy or selected reviewer identity mismatch");
+    }
+  }
   verifyInventory(manifest, review, inventoryFile, artifactDir);
 }
 
 function verifyReviewAuthorization(manifest, review) {
+  if (review.status === "exempt") {
+    const exemption = parseJson(
+      fs.readFileSync(
+        path.join(review.artifactDir, "policy-exempt.result.json"),
+        "utf8",
+      ),
+      "policy exemption artifact",
+    );
+    if (
+      (manifest.reviewContractVersion || 1) < 2 ||
+      manifest.risk.tier !== "low" ||
+      manifest.risk.agentTarget !== 0 ||
+      manifest.agents.length !== 0 ||
+      manifest.panel?.rule !== "low-no-ai" ||
+      review.provider !== "policy-exempt" ||
+      exemption.aiReviewRequired !== false ||
+      exemption.head !== review.to ||
+      exemption.tier !== "low" ||
+      exemption.reviewContractVersion !== REVIEW_CONTRACT_VERSION ||
+      exemption.reviewPolicyDigest !== manifest.risk.reviewPolicyDigest ||
+      exemption.agentsSha256 !== agentsSha256(manifest) ||
+      exemption.domain !== manifest.panel?.domain ||
+      exemption.selectionRule !== manifest.panel?.rule ||
+      exemption.diffSha256 !== review.diffSha256
+    ) {
+      throw new Error("invalid low-risk policy exemption coverage");
+    }
+    return;
+  }
   if (review.status === "advisory") {
     if (
       manifest.risk.tier !== "low" ||
@@ -3308,6 +3708,18 @@ function verifyReviewAuthorization(manifest, review) {
       throw new Error("invalid advisory review coverage");
     }
     return;
+  }
+  if (review.status === "incomplete") {
+    const invalidSpecial =
+      review.provider === "review-incomplete" &&
+      (typeof review.failureCategory !== "string" || !review.failureCategory);
+    if (
+      (manifest.reviewContractVersion || 1) < 2 ||
+      manifest.risk.tier === "low" ||
+      invalidSpecial
+    ) {
+      throw new Error("invalid incomplete discovery coverage");
+    }
   }
   const authorizedAttempt = manifest.governor.authorizedAttempts.find(
     (attempt) =>
@@ -3379,16 +3791,34 @@ function reviewCoverage(manifest) {
     throw new Error("review provider evidence is incomplete");
   }
   verifyGateEvidence(manifest);
+  const authorizationBase = effectiveBaseSha(manifest);
+  const completeDiffSha256 = crypto
+    .createHash("sha256")
+    .update(
+      execFileSync(
+        "git",
+        ["diff", `${authorizationBase}..${manifest.revisions.currentHead}`],
+        { cwd: manifest.repo.realpath },
+      ),
+    )
+    .digest("hex");
   return {
     // A carried review is proven against the rebased live base. The immutable
     // creation base still namespaces the campaign, but it is not the base the
     // stamped tree now merges from (and must not be signed into Quality-Base).
-    base: effectiveBaseSha(manifest),
+    base: authorizationBase,
     head: manifest.revisions.currentHead,
     provider: manifest.provider.reviewer,
     primary: manifest.provider.primary,
     fallback: manifest.provider.fallback,
     tier: manifest.risk.tier,
+    contractVersion: manifest.reviewContractVersion || 1,
+    policyDigest: manifest.risk.reviewPolicyDigest || null,
+    agentsSha256: agentsSha256(manifest),
+    domain: manifest.panel?.domain || "legacy",
+    selectionRule: manifest.panel?.rule || "legacy-panel",
+    repositoryKey: manifest.repo.key,
+    diffSha256: completeDiffSha256,
   };
 }
 
@@ -3798,6 +4228,20 @@ function reviewTrailers(manifest) {
     `Quality-Findings: ${authorization.blockingCount}`,
     `Quality-Head: ${authorization.head}`,
     `Quality-Base: ${authorization.base}`,
+    ...(authorization.contractVersion >= 2
+      ? [
+          `Quality-Contract: ${authorization.contractVersion}`,
+          `Quality-Leads: ${authorization.leads}`,
+          `Quality-Review-Status: ${authorization.reviewStatus}`,
+          `Quality-Policy: ${authorization.policyDigest}`,
+          `Quality-Agents: ${authorization.agentsSha256}`,
+          `Quality-Domain: ${authorization.domain}`,
+          `Quality-Selection: ${authorization.selectionRule}`,
+          `Quality-Repository: ${authorization.repositoryKey}`,
+          `Quality-Diff: ${authorization.diffSha256}`,
+          `Quality-Review-Evidence: ${authorization.evidenceSha256}`,
+        ]
+      : []),
     // Operator-override merges must never look like a clean auto-merge:
     // these trailers are additive to (never a replacement for) the evidence
     // trailers above, so the original gate/review/CI status the operator
@@ -3827,14 +4271,39 @@ function operatorOverrideAuthorization(manifest) {
   if (["high", "critical"].includes(manifest.risk?.tier)) {
     assertMutationEvidence(manifest, acceptedConditions);
   }
+  const base = manifest.revisions.baseSha;
+  const diffSha256 = crypto
+    .createHash("sha256")
+    .update(
+      execFileSync(
+        "git",
+        ["diff", `${base}..${manifest.revisions.currentHead}`],
+        { cwd: manifest.repo.realpath },
+      ),
+    )
+    .digest("hex");
+  const evidenceSha256 = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(canonicalJson(manifest.approval)))
+    .digest("hex");
   return {
-    base: manifest.revisions.baseSha,
+    base,
     head: manifest.revisions.currentHead,
     provider: "operator-quality-override",
     primary: "unavailable",
     fallback: "unavailable",
     tier: manifest.risk.tier,
     blockingCount: 0,
+    leads: 0,
+    reviewStatus: "incomplete",
+    contractVersion: manifest.reviewContractVersion || 1,
+    policyDigest: manifest.risk.reviewPolicyDigest || null,
+    agentsSha256: agentsSha256(manifest),
+    domain: manifest.panel?.domain || "operator-override",
+    selectionRule: manifest.panel?.rule || "operator-override",
+    repositoryKey: manifest.repo.key,
+    diffSha256,
+    evidenceSha256,
     operatorOverride: true,
     overrideReason: manifest.approval.reason,
     overrideAcceptedConditions: acceptedConditions,
@@ -3896,6 +4365,22 @@ function reviewAuthorization(manifest) {
     .createHash("sha256")
     .update(reviewedEvidence(manifest))
     .digest("hex");
+  if ((manifest.reviewContractVersion || 1) >= 2) {
+    const leads = providerFindings(manifest).length;
+    const reviewStatus = covered.every((review) => review.status === "exempt")
+      ? "policy-exempt"
+      : covered.some((review) => review.status === "incomplete")
+        ? "incomplete"
+        : "complete";
+    assertMutationEvidence(manifest);
+    return {
+      ...authorization,
+      blockingCount: 0,
+      leads,
+      reviewStatus,
+      evidenceSha256,
+    };
+  }
   assertJudgeResultFresh(manifest, covered, evidenceSha256);
   const judgeArtifact = parseJson(
     fs.readFileSync(manifest.judge.artifactPath, "utf8"),
@@ -3917,7 +4402,11 @@ function reviewAuthorization(manifest) {
     );
   }
   assertMutationEvidence(manifest);
-  return { ...authorization, blockingCount: manifest.judge.blockingCount };
+  return {
+    ...authorization,
+    blockingCount: manifest.judge.blockingCount,
+    evidenceSha256,
+  };
 }
 
 function openManifestLock(lock) {
@@ -3934,7 +4423,7 @@ function openManifestLock(lock) {
   }
 }
 
-function withManifestLock(file, mutation) {
+function withManifestLockRaw(file, mutation) {
   const lock = `${path.resolve(file)}.lock`;
   const descriptor = openManifestLock(lock);
   try {
@@ -3961,6 +4450,21 @@ function withManifestLock(file, mutation) {
   }
 }
 
+function withManifestLock(file, mutation) {
+  const loaded = loadManifest(file);
+  if (
+    loaded.manifest.options?.merge === true &&
+    loaded.manifest.merge?.repositoryLease
+  ) {
+    return require("./quality-repo-lease").withManifestMutation(
+      loaded.manifestPath,
+      process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN,
+      mutation,
+    );
+  }
+  return withManifestLockRaw(loaded.manifestPath, mutation);
+}
+
 // The complete set of ways a campaign can end. Anything not in this set is a
 // programming error, not a runtime condition — an unknown terminal cause must
 // fail loudly rather than be persisted as an unrecognized string that later
@@ -3972,6 +4476,15 @@ const TERMINAL_STATES = new Set([
   "timeout", // exceeded a bounded budget (campaign, provider, or gate)
   "interrupted", // signal or host death before any other terminal state
   "superseded", // head moved; this campaign no longer describes the revision
+  "policy-superseded", // review policy changed; evidence cannot be reused
+  "provider-incomplete", // bounded retry ended without every required report
+  "provider-contract-failed", // parsed provider output violated the contract
+]);
+
+const NON_REENTERABLE_REVIEW_STATES = new Set([
+  "policy-superseded",
+  "provider-incomplete",
+  "provider-contract-failed",
 ]);
 
 /**
@@ -3999,6 +4512,26 @@ function recordTerminalState(manifestPath, state, detail = null) {
   // quality-invocation.test.js pins exactly this for the abandoned-execution
   // reconciliation path. withManifestLock() cannot be used here because it
   // unconditionally calls saveManifest() (which does bump) on return.
+  const initial = loadManifest(manifestPath);
+  if (
+    initial.manifest.options?.merge === true &&
+    initial.manifest.merge?.repositoryLease
+  ) {
+    return require("./quality-repo-lease").withManifestMutation(
+      initial.manifestPath,
+      process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN,
+      (manifest) => {
+        if (manifest.terminalState) return manifest.terminalState.state;
+        manifest.terminalState = {
+          state,
+          detail: detail ? String(detail).slice(0, 500) : null,
+          head: manifest.revisions?.currentHead ?? null,
+          recordedAt: new Date().toISOString(),
+        };
+        return state;
+      },
+    ).terminalState.state;
+  }
   const lock = `${path.resolve(manifestPath)}.lock`;
   const descriptor = openManifestLock(lock);
   try {
@@ -4126,10 +4659,29 @@ const COMMANDS = {
     process.stdout.write(`${manifest.invocationId}\n`),
   risk: ({ manifestArg, rawArgs }) =>
     mutate(manifestArg, (locked) => setRisk(locked, parseOptions(rawArgs))),
-  agents: ({ manifestArg, rawArgs }) => {
+  agents: ({ manifestArg, manifest, rawArgs }) => {
     const incomplete = rawArgs.includes("--incomplete");
-    const names = rawArgs.filter((argument) => argument !== "--incomplete");
-    mutate(manifestArg, (locked) => setAgents(locked, names, { incomplete }));
+    const separator = rawArgs.indexOf("--");
+    const optionArgs = separator === -1 ? [] : rawArgs.slice(0, separator);
+    const names = separator === -1 ? rawArgs : rawArgs.slice(separator + 1);
+    const options = parseOptions(
+      optionArgs.filter((argument) => argument !== "--incomplete"),
+    );
+    if (
+      (manifest.reviewContractVersion || 1) >= 2 &&
+      (!options.domain || !options.rule)
+    ) {
+      throw new Error(
+        "contract v2 agent selection requires --domain and --rule",
+      );
+    }
+    mutate(manifestArg, (locked) =>
+      setAgents(locked, names, {
+        incomplete,
+        domain: options.domain || "legacy",
+        rule: options.rule || "legacy-panel",
+      }),
+    );
   },
   "approval-valid": ({ manifest }) => {
     process.exitCode = approvalValid(manifest, manifest.repo.realpath) ? 0 : 1;
@@ -4185,6 +4737,14 @@ const COMMANDS = {
   "record-advisory-review": ({ manifestArg, rawArgs }) =>
     mutate(manifestArg, (locked) =>
       recordAdvisoryReview(locked, parseOptions(rawArgs)),
+    ),
+  "record-policy-exempt-review": ({ manifestArg, rawArgs }) =>
+    mutate(manifestArg, (locked) =>
+      recordPolicyExemptReview(locked, parseOptions(rawArgs)),
+    ),
+  "record-incomplete-review": ({ manifestArg, rawArgs }) =>
+    mutate(manifestArg, (locked) =>
+      recordIncompleteReview(locked, parseOptions(rawArgs)),
     ),
   judge: ({ manifestArg, rawArgs }) =>
     mutate(manifestArg, (locked) => recordJudge(locked, parseOptions(rawArgs))),
@@ -4243,6 +4803,8 @@ const COMMANDS = {
       options.provider,
       {
         advisory: options.advisory === true,
+        exempt: options.exempt === true,
+        incomplete: options.incomplete === true,
       },
     );
   },
@@ -4332,8 +4894,70 @@ function runCommand(command, rawArgs) {
       options.state,
       options.detail,
     );
+    if (
+      [
+        "verified-unmerged",
+        "superseded",
+        "policy-superseded",
+        "provider-incomplete",
+        "provider-contract-failed",
+      ].includes(inForce)
+    ) {
+      const refreshed = loadManifest(manifestArg).manifest;
+      if (
+        refreshed.options?.merge === true &&
+        refreshed.merge?.repositoryLease
+      ) {
+        require("./quality-repo-lease").release(
+          manifestArg,
+          process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN,
+          inForce,
+        );
+      }
+    }
+    try {
+      require("./quality-telemetry").recordCampaign(manifestArg, {
+        quiet: true,
+      });
+    } catch (error) {
+      process.stderr.write(
+        `[quality] telemetry: terminal state recorded but telemetry failed — ${error.message}\n`,
+      );
+    }
     process.stdout.write(`${inForce}\n`);
     return;
+  }
+  if (
+    NON_REENTERABLE_REVIEW_STATES.has(manifest.terminalState?.state) &&
+    [
+      "advance",
+      "provider-attempt",
+      "review-info",
+      "record-review",
+      "record-policy-exempt-review",
+      "record-incomplete-review",
+      "inventory",
+    ].includes(command)
+  ) {
+    throw new Error(
+      `quality campaign is terminal (${manifest.terminalState.state}); start a fresh invocation`,
+    );
+  }
+  if (
+    (!STALE_READ_COMMANDS.has(command) || command === "review-info") &&
+    (manifest.reviewContractVersion || 1) >= 2 &&
+    manifest.risk?.reviewPolicyDigest &&
+    manifest.risk.reviewPolicyDigest !==
+      reviewPolicyDigest(buildReviewPolicy(manifest))
+  ) {
+    recordTerminalState(
+      manifestArg,
+      "policy-superseded",
+      "review-policy-drift",
+    );
+    throw new Error(
+      "review policy changed after risk resolution; start a fresh invocation",
+    );
   }
   if (command === "advance") return runAdvance(manifestArg, manifest, rawArgs);
   if (
@@ -4392,6 +5016,7 @@ module.exports = {
   qualityLockOwner,
   recordReview,
   recordAdvisoryReview,
+  recordPolicyExemptReview,
   recordJudge,
   recordGate,
   recordMutation,
@@ -4417,6 +5042,7 @@ module.exports = {
   writeArtifactInventory,
   validateIdentity,
   withManifestLock,
+  withManifestLockRaw,
 };
 
 if (require.main === module) main();

@@ -1,6 +1,7 @@
 ---
 name: prompt-engineer
 description: Prompt optimization specialist for AI-powered features. Use for designing prompts, reducing token usage, improving output quality, structured outputs, and AI feature development.
+model: inherit
 tools: Read, Write, Edit, Glob, Grep, WebSearch
 ---
 

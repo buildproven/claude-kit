@@ -7,7 +7,9 @@
  * open-loop: it ran, but nothing measured whether it was worth its tokens.
  * This module closes the loop by appending ONE JSON line per finished campaign
  * to a telemetry log, from which a weekly report derives escaped-defect rate,
- * finding precision, and cost per caught bug.
+ * AI lead/status attribution, a heuristic capture-rate proxy, and deterministic
+ * failure outcomes. The proxy is not statistical precision because the ledger
+ * does not contain a false-positive denominator.
  *
  * Every field recorded already exists in the invocation manifest — the single
  * source of campaign truth (see quality-invocation.js createManifest). We do
@@ -41,7 +43,18 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const TELEMETRY_SCHEMA_VERSION = 2;
+const TELEMETRY_SCHEMA_VERSION = 4;
+const TELEMETRY_TERMINAL_STATES = new Set([
+  "merged",
+  "verified-unmerged",
+  "blocked",
+  "timeout",
+  "interrupted",
+  "superseded",
+  "policy-superseded",
+  "provider-incomplete",
+  "provider-contract-failed",
+]);
 
 /**
  * Read a finished invocation manifest for summarization.
@@ -143,7 +156,10 @@ function coveredFiles(manifest, execFileSync) {
 /**
  * Derive the campaign verdict from persisted state alone — no model judgment.
  *
- *  - "authorized"   : merge requested and the judge cleared it (0 blocking).
+ * Version 2 derives completion from exact-head discovery attestation; legacy
+ * version 1 retains judge-based interpretation for historical records.
+ *
+ *  - "authorized"   : merge requested and deterministic authorization passed.
  *                     This is "authorized to merge", NOT "merged" — the actual
  *                     GitHub merge is async/CI-owned and can still abort after
  *                     the judge clears (red CI, stale trailers, push failure).
@@ -162,6 +178,31 @@ function coveredFiles(manifest, execFileSync) {
  *                     quality-invocation.js review-authorization.
  */
 function deriveVerdict(manifest) {
+  if ((manifest.reviewContractVersion || 1) >= 2) {
+    const terminal = manifest.terminalState?.state;
+    if (terminal === "blocked") return "blocked";
+    if (
+      [
+        "timeout",
+        "interrupted",
+        "superseded",
+        "policy-superseded",
+        "provider-incomplete",
+        "provider-contract-failed",
+      ].includes(terminal)
+    ) {
+      return "incomplete";
+    }
+    if (terminal === "merged") return "authorized";
+    if (terminal === "verified-unmerged") return "passed";
+    const hasCurrentAttestation = (manifest.reviews || []).some(
+      (review) =>
+        ["success", "exempt", "incomplete"].includes(review.status) &&
+        review.to === manifest.revisions?.currentHead,
+    );
+    if (!hasCurrentAttestation) return "incomplete";
+    return manifest.options?.merge === true ? "authorized" : "passed";
+  }
   const judge = manifest.judge;
   if (!judge || !Number.isFinite(judge.blockingCount)) return "incomplete";
   if (judge.head !== manifest.revisions?.currentHead) return "incomplete";
@@ -227,6 +268,15 @@ function reviewFields(manifest) {
       : ["codex", "gemini"].includes(provider.reviewer)
         ? "native"
         : null;
+  const coveredReviews = (manifest.reviews || []).filter((review) =>
+    ["success", "advisory", "exempt", "incomplete"].includes(review.status),
+  );
+  const incomplete = coveredReviews.some(
+    (review) => review.status === "incomplete",
+  );
+  const exempt =
+    coveredReviews.length > 0 &&
+    coveredReviews.every((review) => review.status === "exempt");
   return {
     // Older manifests predate the experiment and remain reportable as null.
     // All newly-created manifests persist one of these arms at creation time.
@@ -236,7 +286,29 @@ function reviewFields(manifest) {
     // Provider CLIs do not expose a stable cross-provider token counter yet.
     // Preserve the absence explicitly rather than estimating from wall time.
     reviewTokens: null,
+    reviewStatus: incomplete
+      ? "incomplete"
+      : exempt
+        ? "policy-exempt"
+        : coveredReviews.length > 0
+          ? "complete"
+          : null,
+    leadCount: coveredReviews.reduce(
+      (sum, review) =>
+        sum + (Number.isInteger(review.leadCount) ? review.leadCount : 0),
+      0,
+    ),
   };
+}
+
+function deterministicBlockingCount(manifest) {
+  if ((manifest.reviewContractVersion || 1) < 2) return null;
+  const head = manifest.revisions?.currentHead;
+  const failedGates = (manifest.gates || []).filter(
+    (gate) => gate.head === head && ["failed", "timeout"].includes(gate.status),
+  ).length;
+  if (failedGates > 0) return failedGates;
+  return manifest.terminalState?.state === "blocked" ? 1 : 0;
 }
 
 function validateRecord(record) {
@@ -246,6 +318,13 @@ function validateRecord(record) {
   const validTokens =
     record.reviewTokens === null ||
     (Number.isInteger(record.reviewTokens) && record.reviewTokens >= 0);
+  const validProviderDuration =
+    record.providerDurationSeconds === null ||
+    (Number.isInteger(record.providerDurationSeconds) &&
+      record.providerDurationSeconds >= 0);
+  const validTerminalState =
+    record.terminalState === null ||
+    TELEMETRY_TERMINAL_STATES.has(record.terminalState);
   return Boolean(
     record.telemetrySchemaVersion === TELEMETRY_SCHEMA_VERSION &&
     typeof record.invocationId === "string" &&
@@ -254,7 +333,14 @@ function validateRecord(record) {
     (record.reviewProvider === null ||
       typeof record.reviewProvider === "string") &&
     (record.reviewEffort === null || typeof record.reviewEffort === "string") &&
-    validTokens,
+    validTokens &&
+    validProviderDuration &&
+    validTerminalState &&
+    [null, "complete", "incomplete", "policy-exempt"].includes(
+      record.reviewStatus,
+    ) &&
+    Number.isInteger(record.leadCount) &&
+    record.leadCount >= 0,
   );
 }
 
@@ -271,11 +357,20 @@ function buildRecord(manifest, { execFileSync, nowIso }) {
     ...identityFields(manifest),
     ...reviewFields(manifest),
     durationSeconds: campaignDuration(manifest, nowIso),
+    providerDurationSeconds: Number.isInteger(
+      manifest.governor?.providerSecondsUsed,
+    )
+      ? manifest.governor.providerSecondsUsed
+      : null,
+    terminalState: manifest.terminalState?.state ?? null,
     reviewRounds: successfulReviewCount(manifest),
     agentsRun: Array.isArray(manifest.agents) ? manifest.agents.length : 0,
-    blockingCount: Number.isFinite(judge.blockingCount)
-      ? judge.blockingCount
-      : null,
+    blockingCount:
+      (manifest.reviewContractVersion || 1) >= 2
+        ? deterministicBlockingCount(manifest)
+        : Number.isFinite(judge.blockingCount)
+          ? judge.blockingCount
+          : null,
     mergeRequested: manifest.options?.merge === true,
     verdict: deriveVerdict(manifest),
     coveredFiles: coveredFiles(manifest, execFileSync),
@@ -324,6 +419,7 @@ function recordCampaign(manifestPath, deps = {}) {
   const execFileSync =
     deps.execFileSync || require("child_process").execFileSync;
   const nowIso = deps.nowIso || new Date().toISOString();
+  const quiet = deps.quiet === true;
   let manifest;
   try {
     manifest = readManifest(manifestPath);
@@ -335,9 +431,11 @@ function recordCampaign(manifestPath, deps = {}) {
   }
   const logPath = resolveTelemetryFile(manifest);
   if (alreadyRecorded(logPath, manifest.invocationId)) {
-    process.stdout.write(
-      `[quality] telemetry: campaign ${manifest.invocationId} already recorded — skipping.\n`,
-    );
+    if (!quiet) {
+      process.stdout.write(
+        `[quality] telemetry: campaign ${manifest.invocationId} already recorded — skipping.\n`,
+      );
+    }
     return 0;
   }
   const record = buildRecord(manifest, { execFileSync, nowIso });
@@ -349,9 +447,11 @@ function recordCampaign(manifestPath, deps = {}) {
     );
     return 0;
   }
-  process.stdout.write(
-    `[quality] telemetry: recorded campaign ${manifest.invocationId} (${record.verdict}, ${record.durationSeconds}s) -> ${logPath}\n`,
-  );
+  if (!quiet) {
+    process.stdout.write(
+      `[quality] telemetry: recorded campaign ${manifest.invocationId} (${record.verdict}, ${record.durationSeconds}s) -> ${logPath}\n`,
+    );
+  }
   return 0;
 }
 
@@ -373,6 +473,7 @@ module.exports = {
   coveredFiles,
   deriveVerdict,
   buildRecord,
+  deterministicBlockingCount,
   validateRecord,
   alreadyRecorded,
   recordCampaign,

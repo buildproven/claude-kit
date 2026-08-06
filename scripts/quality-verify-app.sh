@@ -53,7 +53,6 @@ fail() {
 }
 
 # Portable timeout: macOS ships no coreutils `timeout` by default. Mirrors
-# scripts/quality-adversarial-verify.sh's run_with_timeout.
 run_with_timeout() {
   local secs="$1"; shift
   if command -v timeout >/dev/null 2>&1; then

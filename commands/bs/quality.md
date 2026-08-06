@@ -68,10 +68,12 @@ not interpolate the raw argument string into shell. JSON escaping preserves
 spaces, quotes, and metacharacters as inert argument data.
 
 Quality merges are autonomous by default, including critical-tier changes. Risk
-changes the depth of review; it never creates a routine human approval step.
-The run stops instead when its revision-bound evidence is unresolved: blocking
-findings, malformed or inconclusive review output, stale identity, or failed
-CI all remain hard merge blocks.
+changes the depth of bounded AI discovery; it never creates a routine human
+approval step. Under review contract v2, AI leads and completion status are
+advisory: unavailable or malformed provider output is signed as `incomplete`,
+never presented as a clean review. Deterministic gate or mutation failures,
+stale revision identity, invalid evidence or signatures, required CI failures,
+and explicit human-required policy remain hard merge blocks.
 
 `--review-arm native|bespoke` is the bounded Wave 3 experiment control.
 `native` assigns Codex's provider-native structured review with Claude fallback;
@@ -116,8 +118,8 @@ and expiry before the quality skill continues with the returned manifest.
 
 When the operator explicitly accepts one or more diagnosed terminal
 conditions — a failing deterministic gate, missing mutation evidence,
-unresolved provider review, or a specific accepted code finding — use the
-standalone override command:
+legacy-v1 unresolved provider review, or a specific accepted code finding —
+use the standalone override command:
 
 ```text
 /bs:quality override --pr <number> --head <exact-40-character-sha> --reason "<text>" --accept <condition-id>[,<condition-id>...]
@@ -130,8 +132,8 @@ signed `operator-quality-override` capability through the one path in
 and never a substitute for the normal quality path — it exists for the
 narrow case where the evidence is already adequate for the repository
 owner's risk tolerance but automation cannot proceed on its own (unavailable
-or malformed review output, a flaky gate, exhausted CI billing, or a code
-finding the operator consciously accepts for a time-bound release).
+or malformed legacy-v1 review output, a flaky gate, exhausted CI billing, or a
+code finding the operator consciously accepts for a time-bound release).
 
 Before minting the capability, the wrapper prints the full terminal
 diagnosis and the exact evidence snapshot, then lists every currently

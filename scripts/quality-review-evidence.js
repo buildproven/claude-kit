@@ -16,8 +16,27 @@ const FIELDS = [
   "primary",
   "fallback",
 ];
+const V2_FIELDS = [
+  "contractVersion",
+  "leads",
+  "reviewStatus",
+  "policyDigest",
+  "agentsSha256",
+  "domain",
+  "selectionRule",
+  "repositoryKey",
+  "diffSha256",
+  "evidenceSha256",
+];
 const TIERS = new Set(["low", "medium", "high", "critical"]);
-const REVIEWERS = new Set(["claude", "codex", "gemini", "ci-only"]);
+const REVIEWERS = new Set([
+  "claude",
+  "codex",
+  "gemini",
+  "ci-only",
+  "policy-exempt",
+  "review-incomplete",
+]);
 const OPERATOR_OVERRIDE_REVIEWER = "operator-quality-override";
 const UNAVAILABLE_REVIEWER = "unavailable";
 
@@ -61,24 +80,32 @@ function evidencePayload(fields) {
     if (!REVIEWERS.has(fields.reviewer)) {
       throw new Error("evidence reviewer is invalid");
     }
-    if (!REVIEWERS.has(fields.primary) || fields.primary === "ci-only") {
+    if (
+      !REVIEWERS.has(fields.primary) ||
+      ["ci-only", "policy-exempt", "review-incomplete"].includes(fields.primary)
+    ) {
       throw new Error("evidence primary reviewer is invalid");
     }
     const hasFallback = fields.fallback !== "none";
     if (
       hasFallback &&
-      (!REVIEWERS.has(fields.fallback) || fields.fallback === "ci-only")
+      (!REVIEWERS.has(fields.fallback) ||
+        ["ci-only", "policy-exempt", "review-incomplete"].includes(
+          fields.fallback,
+        ))
     ) {
       throw new Error("evidence fallback reviewer is invalid");
     }
     if (hasFallback && fields.primary === fields.fallback) {
       throw new Error("evidence fallback reviewer must differ from primary");
     }
-    // ci-only is the explicitly recorded low-risk advisory path: no model
-    // produced review evidence, but primary/fallback still bind the two real
-    // configured model routes that failed to provide it.
+    // ci-only is retained for legacy low-risk campaigns whose providers became
+    // unavailable. policy-exempt is the v2 contract's explicit low-risk path:
+    // no provider was called and no AI verdict is represented.
     if (
-      fields.reviewer !== "ci-only" &&
+      !["ci-only", "policy-exempt", "review-incomplete"].includes(
+        fields.reviewer,
+      ) &&
       fields.reviewer !== fields.primary &&
       (!hasFallback || fields.reviewer !== fields.fallback)
     ) {
@@ -90,8 +117,54 @@ function evidencePayload(fields) {
   if (!Number.isInteger(fields.findings) || fields.findings < 0) {
     throw new Error("evidence findings must be a non-negative integer");
   }
+  if (fields.reviewer === "policy-exempt" && fields.tier !== "low") {
+    throw new Error("policy exemption evidence is valid only at low tier");
+  }
+  if (
+    fields.reviewer === "review-incomplete" &&
+    (Number(fields.contractVersion) !== 2 ||
+      fields.reviewStatus !== "incomplete")
+  ) {
+    throw new Error(
+      "review-incomplete evidence requires contract v2 incomplete status",
+    );
+  }
+  const v2 =
+    fields.reviewer === "policy-exempt" ||
+    V2_FIELDS.some((field) => fields[field] !== undefined);
+  if (v2) {
+    for (const field of V2_FIELDS) {
+      if (!(field in fields)) throw new Error(`missing evidence ${field}`);
+    }
+    if (Number(fields.contractVersion) !== 2) {
+      throw new Error("evidence contractVersion must be 2");
+    }
+    if (!Number.isInteger(fields.leads) || fields.leads < 0) {
+      throw new Error("evidence leads must be a non-negative integer");
+    }
+    if (
+      !["complete", "incomplete", "policy-exempt"].includes(fields.reviewStatus)
+    ) {
+      throw new Error("evidence reviewStatus is invalid");
+    }
+    for (const field of [
+      "policyDigest",
+      "agentsSha256",
+      "diffSha256",
+      "evidenceSha256",
+    ]) {
+      if (!/^[0-9a-f]{64}$/i.test(String(fields[field] || ""))) {
+        throw new Error(`evidence ${field} must be a SHA-256 digest`);
+      }
+    }
+    for (const field of ["domain", "selectionRule", "repositoryKey"]) {
+      if (typeof fields[field] !== "string" || fields[field].trim() === "") {
+        throw new Error(`evidence ${field} must be non-empty`);
+      }
+    }
+  }
   return {
-    schemaVersion: 1,
+    schemaVersion: v2 ? 2 : 1,
     head: fields.head.toLowerCase(),
     base: fields.base.toLowerCase(),
     tier: fields.tier,
@@ -99,6 +172,20 @@ function evidencePayload(fields) {
     reviewer: fields.reviewer,
     primary: fields.primary,
     fallback: fields.fallback,
+    ...(v2
+      ? {
+          contractVersion: 2,
+          leads: fields.leads,
+          reviewStatus: fields.reviewStatus,
+          policyDigest: fields.policyDigest.toLowerCase(),
+          agentsSha256: fields.agentsSha256.toLowerCase(),
+          domain: fields.domain,
+          selectionRule: fields.selectionRule,
+          repositoryKey: fields.repositoryKey,
+          diffSha256: fields.diffSha256.toLowerCase(),
+          evidenceSha256: fields.evidenceSha256.toLowerCase(),
+        }
+      : {}),
   };
 }
 
@@ -210,7 +297,9 @@ function cliFields(argv) {
     if (!key?.startsWith("--") || value === undefined) {
       throw new Error("review-evidence arguments must be --name value pairs");
     }
-    fields[key.slice(2)] = key === "--findings" ? Number(value) : value;
+    fields[key.slice(2)] = ["--findings", "--leads"].includes(key)
+      ? Number(value)
+      : value;
   }
   return fields;
 }
@@ -239,7 +328,7 @@ if (require.main === module) {
       );
     } else {
       throw new Error(
-        "usage: quality-review-evidence.js public-key | sign|verify --head <sha> --base <sha> --tier <tier> --findings <count> --reviewer <name> --primary <name> --fallback <name> [--signature <value>]",
+        "usage: quality-review-evidence.js public-key | sign|verify --head <sha> --base <sha> --tier <tier> --findings <count> --reviewer <name> --primary <name> --fallback <name> [v2 policy-binding fields] [--signature <value>]",
       );
     }
   } catch (error) {

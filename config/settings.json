@@ -90,6 +90,7 @@
     "backlog": "on",
     "codebase-design": "name-only",
     "codex": "on",
+    "cross-review": "name-only",
     "deps": "on",
     "dev": "on",
     "diagnosing-bugs": "on",

@@ -4,17 +4,16 @@
 
 Review depth scales with the resolved risk tier (see `reference.md` §Quality Levels). The configured primary can be Claude or Codex; fallback is availability-only. Other gates apply at every tier.
 
-| Gate                                    | low | medium | high | critical |
-| --------------------------------------- | --- | ------ | ---- | -------- |
-| Behavioral test evidence + suite passes | ✓   | ✓      | ✓    | ✓        |
-| ESLint / TypeScript / build clean       | ✓   | ✓      | ✓    | ✓        |
-| Defensive pattern analysis              | ✓   | ✓      | ✓    | ✓        |
-| code-reviewer + silent-failure-hunter   | ✓   | ✓      | ✓    | ✓        |
-| type-design-analyzer + security-auditor |     | ✓      | ✓    | ✓        |
-| pr-test-analyzer                        |     |        | ✓    | ✓        |
-| critical-depth provider review          |     |        |      | ✓        |
-| provider review completed               | ✓   | ✓      | ✓    | ✓        |
-| `Reviewed-By: quality` trailer          | ✓   | ✓      | ✓    | ✓        |
+| Gate                                        | low | medium | high | critical |
+| ------------------------------------------- | --- | ------ | ---- | -------- |
+| Behavioral test evidence + suite passes     | ✓   | ✓      | ✓    | ✓        |
+| ESLint / TypeScript / build clean           | ✓   | ✓      | ✓    | ✓        |
+| Defensive pattern analysis                  | ✓   | ✓      | ✓    | ✓        |
+| Signed exact-head policy exemption          | ✓   |        |      |          |
+| Domain-selected AI reviewers                | 0   | 1      | 1    | 2        |
+| Every selected reviewer is accounted for    |     | ✓      | ✓    | ✓        |
+| AI lead/status evidence is signed           |     | ✓      | ✓    | ✓        |
+| `Reviewed-By: quality` signed authorization | ✓   | ✓      | ✓    | ✓        |
 
 ## Level 95 Exit Criteria (legacy, full panel)
 
@@ -28,7 +27,7 @@ Review depth scales with the resolved risk tier (see `reference.md` §Quality Le
 - [ ] No type safety issues (proper types, no assertions)
 - [ ] Security: No secrets exposed, no critical OWASP issues, dependency audit
 - [ ] Test quality: Tests validated for meaningful coverage (not trivial)
-- [ ] Judge agent: All findings severity-classified, SUPPRESSED nits filtered out
+- [ ] AI leads: verified against source and deterministic repository evidence
 - [ ] Documentation: Help/README updated if commands/API changed
 
 ## Level 98 Exit Criteria (beyond 95%)
@@ -81,23 +80,15 @@ Review depth scales with the resolved risk tier (see `reference.md` §Quality Le
 5. Validate JSON is well-formed
 6. Retry failed agents once; if still failing, mark as failed
 
-## Judge Agent Validation (Step 2.5)
+## AI Lead Validation
 
-### Severity Classification Rules
-
-Every finding MUST be classified into exactly one category:
-
-| Category       | Criteria                                                                     | Action                |
-| -------------- | ---------------------------------------------------------------------------- | --------------------- |
-| **BLOCKING**   | Bugs, security vulns, data loss, breaking changes, race conditions           | Must fix before merge |
-| **WARNING**    | Missing edge cases, perf concerns, weak error handling, missing tests        | Should fix            |
-| **SUPPRESSED** | Style nits, import order, naming preferences, suggestions for unchanged code | Never shown           |
-
-### Confidence Boosting
-
-- Finding flagged by 1 agent: standard severity
-- Finding flagged by 2+ agents independently: promote one level (WARNING → BLOCKING)
-- Finding flagged by both Claude AND Codex: highest confidence — always BLOCKING
+- Reviewer agreement does not promote severity. Roles that share a model,
+  context, or provider are complementary coverage, not independent votes.
+- Detector severity is advisory. Every lead must include a changed file and
+  line, an expected-versus-actual failure scenario, and a proposed deterministic
+  verification path.
+- A lead blocks only after conversion into a failing allowlisted gate,
+  regression test, or executable static rule.
 
 ### Suppression Rules (NEVER report these)
 
@@ -110,11 +101,11 @@ Every finding MUST be classified into exactly one category:
 
 ### Output Requirements
 
-- Consolidated report must include: finding count, agent attribution, files reviewed
-- BLOCKING section: file:line, why it matters, specific fix
-- WARNING section: file:line, impact estimate, fix suggestion
-- SUPPRESSED count shown as a number only (e.g., "12 nits suppressed")
-- Empty report is valid — clean code is a real outcome
+- Signed evidence includes lead count, source attribution, review status, and
+  files reviewed.
+- Every lead remains auditable even when refuted or unproved.
+- Empty discovery means only that the bounded run emitted no leads; it is not a
+  correctness claim.
 
 ## Audit Scoring (--audit mode)
 

@@ -22,8 +22,24 @@ const AUTHORIZE = readFileSync(
   path.join(ROOT, "scripts/quality-authorize-merge.sh"),
   "utf8",
 );
+const REPOSITORY_LEASE = readFileSync(
+  path.join(ROOT, "scripts/quality-repo-lease.js"),
+  "utf8",
+);
 const STAMP_AND_MERGE = readFileSync(
   path.join(ROOT, "scripts/quality-stamp-and-merge.sh"),
+  "utf8",
+);
+const MERGE_CLEANUP = readFileSync(
+  path.join(ROOT, "scripts/quality-merge-cleanup.sh"),
+  "utf8",
+);
+const QUALITY_COMMAND = readFileSync(
+  path.join(ROOT, "commands/bs/quality.md"),
+  "utf8",
+);
+const WORKFLOW_COMMAND = readFileSync(
+  path.join(ROOT, "commands/bs/workflow.md"),
   "utf8",
 );
 
@@ -37,13 +53,22 @@ const STAMP_AND_MERGE = readFileSync(
  * PASSED. These tests pin the gate that closes that hole.
  */
 describe("quality merge gates", () => {
-  it("blocks the merge when BLOCKING_COUNT is non-zero", () => {
-    expect(SKILL).toMatch(/Any BLOCKING finding must be fixed/);
-    expect(SKILL).toMatch(/BLOCKING findings remain/);
+  it("keeps deterministic failures blocking while AI leads stay advisory", () => {
+    expect(SKILL).toMatch(/zero deterministic findings/);
+    expect(SKILL).toMatch(/AI leads and completion status are advisory/);
+    expect(QUALITY_COMMAND).toMatch(
+      /AI leads and completion status are\s+advisory/,
+    );
+    expect(WORKFLOW_COMMAND).toMatch(
+      /AI leads and completion status are\s+advisory/,
+    );
+    expect(QUALITY_COMMAND).not.toMatch(
+      /malformed or inconclusive review output.*hard merge blocks/s,
+    );
   });
 
-  it("the blocking-findings gate runs BEFORE the trailer gate", () => {
-    const findingsGate = SKILL.indexOf("Any BLOCKING finding must be fixed");
+  it("states the deterministic-findings gate before the trailer contract", () => {
+    const findingsGate = SKILL.indexOf("zero deterministic findings");
     const trailerGate = SKILL.indexOf("Reviewed-By: quality");
     expect(findingsGate).toBeGreaterThan(-1);
     expect(trailerGate).toBeGreaterThan(-1);
@@ -83,6 +108,9 @@ describe("quality merge gates", () => {
     expect(VALIDATOR).toContain(
       "high/critical evidence requires the configured primary reviewer",
     );
+    expect(VALIDATOR).toMatch(
+      /\[ -z "\$STAMP_CONTRACT" \].*configured primary reviewer/s,
+    );
   });
 
   it("requires signed evidence at the merge authorization boundary", () => {
@@ -96,12 +124,55 @@ describe("quality merge gates", () => {
   });
 
   it("head-binds the merge and verifies terminal merged state", () => {
-    expect(AUTHORIZE).toMatch(/--match-head-commit "\$ACTUAL_HEAD"/);
-    expect(AUTHORIZE).toMatch(/MERGE_RC=0/);
-    expect(AUTHORIZE).toMatch(/gh pr merge[\s\S]*MERGE_RC=\$\?/);
-    expect(AUTHORIZE).toMatch(/gh pr view[\s\S]*state,mergedAt,mergeCommit/);
-    expect(AUTHORIZE).toMatch(/\.state.*MERGED/s);
-    expect(AUTHORIZE).toMatch(/\.mergeCommit\.oid/);
+    expect(REPOSITORY_LEASE).toMatch(/"--match-head-commit",\s*head/);
+    expect(REPOSITORY_LEASE).toMatch(/spawnSync\("gh", args/);
+    expect(REPOSITORY_LEASE).toMatch(
+      /"pr",\s*"view"[\s\S]*state,mergedAt,mergeCommit/,
+    );
+    expect(REPOSITORY_LEASE).toMatch(/remote\.state === "MERGED"/);
+    expect(REPOSITORY_LEASE).toMatch(/remote\.mergeCommit\?\.oid/);
+    expect(AUTHORIZE).toMatch(/quality-repo-lease\.js" merge/);
+    expect(AUTHORIZE).toMatch(/--expected-head "\$ACTUAL_HEAD"/);
+    expect(REPOSITORY_LEASE).toMatch(/options\.expectedHead !== head/);
+  });
+
+  it("keeps post-merge cleanup on the phase-pinned lease credential", () => {
+    expect(MERGE_CLEANUP).toMatch(
+      /source "\$SCRIPT_DIR\/quality-repo-lease-pin\.sh"/,
+    );
+    expect(MERGE_CLEANUP).toMatch(/quality_pin_repository_lease "\$MANIFEST"/);
+    expect(MERGE_CLEANUP).not.toMatch(/merge\.repositoryLease\.token/);
+    expect(MERGE_CLEANUP).toMatch(/LEASE_RESULT="\$\(node/);
+    expect(MERGE_CLEANUP).toMatch(/\.reconciled \/\/ false/);
+    expect(MERGE_CLEANUP).toMatch(/repository merge remains quarantined/);
+    expect(MERGE_CLEANUP).toMatch(/PRESERVE_BRANCH=true/);
+    expect(REPOSITORY_LEASE).toMatch(
+      /function releaseMergeGuard[\s\S]*withMetadataGuard/,
+    );
+    expect(REPOSITORY_LEASE).toMatch(
+      /function releaseVerifiedOutcome[\s\S]*record\.disposition = "released"[\s\S]*recordMergedTerminalRaw/,
+    );
+    expect(STAMP_AND_MERGE).not.toMatch(/quality-repo-lease\.js" release/);
+  });
+
+  it("persists success terminal states before cleanup or telemetry", () => {
+    const alreadyMerged = STAMP_AND_MERGE.indexOf(
+      "BS_QUALITY_ALREADY_MERGED=true",
+    );
+    const earlyTerminal = STAMP_AND_MERGE.indexOf(
+      "--state merged",
+      alreadyMerged,
+    );
+    const earlyCleanup = STAMP_AND_MERGE.indexOf(
+      "quality-merge-cleanup.sh",
+      alreadyMerged,
+    );
+    expect(earlyTerminal).toBeGreaterThan(alreadyMerged);
+    expect(earlyTerminal).toBeLessThan(earlyCleanup);
+    expect(SKILL).toMatch(/--state verified-unmerged/);
+    expect(SKILL.indexOf("--state verified-unmerged")).toBeLessThan(
+      SKILL.indexOf('quality-telemetry.js" record'),
+    );
   });
 
   it("preflights without mutation and pushes one exact persisted remote ref", () => {
@@ -165,7 +236,7 @@ describe("quality merge gates", () => {
       /quality-wait-required-checks\.sh" --pr "\$PR" \|\| RC=\$\?/,
     );
     expect(AUTHORIZE).toMatch(
-      /quality-ci-billing-waiver\.js[\s\S]*MERGE_ARGS\+=\(--admin\)/,
+      /quality-ci-billing-waiver\.js[\s\S]*LEASE_ADMIN=true/,
     );
   });
 
@@ -179,7 +250,7 @@ describe("quality merge gates", () => {
     const finalWaiverValidation = AUTHORIZE.lastIndexOf(
       'node "$SCRIPT_DIR/quality-ci-billing-waiver.js"',
     );
-    const adminMerge = AUTHORIZE.indexOf("MERGE_ARGS+=(--admin)");
+    const adminMerge = AUTHORIZE.indexOf("LEASE_ADMIN=true");
     expect(firstWaiverValidation).toBeGreaterThan(-1);
     expect(requiredChecks).toBeGreaterThan(firstWaiverValidation);
     expect(finalWaiverValidation).toBeGreaterThan(requiredChecks);
@@ -188,10 +259,10 @@ describe("quality merge gates", () => {
       /if \[ "\$PREFLIGHT" = false \] && \[ "\$\{CI_BILLING_WAIVED:-false\}" = false \]; then[\s\S]*gh pr checks/,
     );
     expect(AUTHORIZE).toMatch(
-      /if \[ "\$\{CI_BILLING_WAIVED:-false\}" = true \]; then[\s\S]*MERGE_ARGS\+=\(--admin\)/,
+      /if \[ "\$\{CI_BILLING_WAIVED:-false\}" = true \]; then[\s\S]*LEASE_ADMIN=true/,
     );
     expect(AUTHORIZE).toMatch(
-      /\[ "\$ATOMIC_BASE_FRESHNESS" = unprotectable \][\s\S]*quality-ci-billing-waiver\.js[\s\S]*MERGE_ARGS\+=\(--admin\)/,
+      /\[ "\$ATOMIC_BASE_FRESHNESS" = unprotectable \][\s\S]*quality-ci-billing-waiver\.js[\s\S]*LEASE_ADMIN=true/,
     );
   });
 
@@ -199,7 +270,7 @@ describe("quality merge gates", () => {
     const restriction = AUTHORIZE.indexOf(
       '[ "$ATOMIC_BASE_FRESHNESS" != unprotectable ]',
     );
-    const adminMerge = AUTHORIZE.indexOf("MERGE_ARGS+=(--admin)");
+    const adminMerge = AUTHORIZE.indexOf("LEASE_ADMIN=true");
     expect(restriction).toBeGreaterThan(-1);
     expect(adminMerge).toBeGreaterThan(restriction);
     expect(AUTHORIZE).toMatch(
@@ -587,26 +658,12 @@ describe("quality merge gates", () => {
     );
   });
 
-  it("permits CI-only coverage only for typed low-risk provider unavailability", () => {
+  it("removes synthetic CI-only clean coverage", () => {
     expect(RUN_REVIEW).toMatch(/if \[ "\$TIER" = low \]; then/);
-    expect(RUN_REVIEW).toMatch(
-      /2\) ADVISORY_FAILURE_CATEGORY=provider-unavailable/,
-    );
-    expect(RUN_REVIEW).toMatch(
-      /75\) ADVISORY_FAILURE_CATEGORY=provider-exhaustion/,
-    );
-    expect(RUN_REVIEW).toMatch(
-      /79\) ADVISORY_FAILURE_CATEGORY=provider-billing/,
-    );
-    expect(RUN_REVIEW).toMatch(
-      /76\) ADVISORY_FAILURE_CATEGORY=provider-timeout/,
-    );
-    expect(RUN_REVIEW).toMatch(/record-advisory-review/);
-    expect(RUN_REVIEW).not.toMatch(/4\) ADVISORY_FAILURE_CATEGORY=/);
-    expect(RUN_REVIEW).not.toMatch(/77\) ADVISORY_FAILURE_CATEGORY=/);
-    expect(RUN_REVIEW.indexOf('if [ "$TIER" = low ]; then')).toBeLessThan(
-      RUN_REVIEW.indexOf("❌ MERGE BLOCKED"),
-    );
+    expect(RUN_REVIEW).toMatch(/record-policy-exempt-review/);
+    expect(RUN_REVIEW).toMatch(/record-incomplete-review/);
+    expect(RUN_REVIEW).not.toMatch(/ci-only\.findings\.txt/);
+    expect(RUN_REVIEW).not.toMatch(/record-advisory-review/);
   });
 
   it("preserves conclusive findings when a later primary pass is inconclusive", () => {
@@ -757,13 +814,9 @@ describe("quality merge gates", () => {
     expect(SKILL).toMatch(/contiguous review checkpoints/);
   });
 
-  it("BLOCKING_COUNT is not merely decorative in the trailer", () => {
-    // It must be COMPARED, not just interpolated. Guard against a regression
-    // that drops the check but keeps `findings=${BLOCKING_COUNT}` in the stamp.
-    const compared =
-      /Any BLOCKING finding must be fixed/.test(SKILL) &&
-      /BLOCKING findings remain/.test(SKILL);
-    expect(compared).toBe(true);
+  it("Quality-Findings is explicitly deterministic, not a model vote", () => {
+    expect(SKILL).toMatch(/zero deterministic findings/);
+    expect(SKILL).toMatch(/lead becomes merge-blocking only when converted/);
   });
 
   /** The gate is worthless if the model never sees it — see check-skill-size.sh. */

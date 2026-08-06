@@ -20,8 +20,10 @@
           "severity",
           "title",
           "body",
+          "failure_scenario",
           "file",
           "line_start",
+          "proof",
           "recommendation"
         ],
         "properties": {
@@ -31,8 +33,25 @@
           },
           "title": { "type": "string", "minLength": 1, "pattern": "\\S" },
           "body": { "type": "string", "minLength": 1, "pattern": "\\S" },
+          "failure_scenario": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
           "file": { "type": "string", "minLength": 1, "pattern": "\\S" },
           "line_start": { "type": "integer", "minimum": 1 },
+          "proof": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "evidence"],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["reproduction", "regression-test", "static-analysis"]
+              },
+              "evidence": { "type": "string", "minLength": 1, "pattern": "\\S" }
+            }
+          },
           "recommendation": {
             "type": "string",
             "minLength": 1,

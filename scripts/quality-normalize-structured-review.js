@@ -3,8 +3,10 @@
 
 const FINDING_KEYS = [
   "body",
+  "failure_scenario",
   "file",
   "line_start",
+  "proof",
   "recommendation",
   "severity",
   "title",
@@ -12,6 +14,11 @@ const FINDING_KEYS = [
 const REVIEW_KEYS = ["findings", "summary", "verdict"];
 const SEVERITIES = new Set(["critical", "high", "medium", "low"]);
 const VERDICTS = new Set(["approve", "needs-attention"]);
+const PROOF_KINDS = new Set([
+  "reproduction",
+  "regression-test",
+  "static-analysis",
+]);
 
 function exactKeys(value, expected) {
   const actual = Object.keys(value).sort();
@@ -61,10 +68,18 @@ function validateFinding(finding) {
     !SEVERITIES.has(finding.severity) ||
     typeof finding.title !== "string" ||
     typeof finding.body !== "string" ||
+    typeof finding.failure_scenario !== "string" ||
     typeof finding.file !== "string" ||
     !Number.isInteger(finding.line_start) ||
     finding.line_start < 1 ||
-    typeof finding.recommendation !== "string"
+    typeof finding.recommendation !== "string" ||
+    !finding.proof ||
+    typeof finding.proof !== "object" ||
+    Array.isArray(finding.proof) ||
+    !exactKeys(finding.proof, ["evidence", "kind"]) ||
+    !PROOF_KINDS.has(finding.proof.kind) ||
+    typeof finding.proof.evidence !== "string" ||
+    finding.proof.evidence.trim() === ""
   ) {
     throw new Error("structured review contains an invalid finding");
   }
