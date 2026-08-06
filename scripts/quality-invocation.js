@@ -1289,8 +1289,14 @@ function canFailOverProvider(existing, existingIdentity, campaignIdentity) {
 }
 
 function sameWorkIgnoringReviewArm(existingIdentity, campaignIdentity) {
-  const left = identityWithoutProvider(existingIdentity);
-  const right = identityWithoutProvider(campaignIdentity);
+  const left = {
+    ...identityWithoutProvider(existingIdentity),
+    options: { ...existingIdentity.options },
+  };
+  const right = {
+    ...identityWithoutProvider(campaignIdentity),
+    options: { ...campaignIdentity.options },
+  };
   delete left.options.reviewArm;
   delete right.options.reviewArm;
   return (
