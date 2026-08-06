@@ -437,10 +437,13 @@ Quality-Evidence-Signature: ${signature}`;
     expect(source).toMatch(/-C "\$GIT_ROOT"/);
     expect(source).toMatch(/review_selector=--base/);
     expect(source).not.toMatch(/review_selector=--commit/);
-    expect(source).toMatch(/Prior reviewed findings requiring verification/);
+    expect(source).toMatch(/quality-review-input\.js/);
+    expect(source).toMatch(
+      /fixed envelope below is the sole repository-controlled review data/,
+    );
     expect(source).toMatch(/Automated gates already passed/);
     expect(source).toMatch(/do not run commands or tests/);
-    expect(source).toMatch(/cat "\$REVIEW_OUT\/diff\.txt"/);
+    expect(source).toMatch(/cat "\$REVIEW_OUT\/review-prompt\.txt"/);
     expect(source).not.toMatch(/\$review_selector_value" -/);
     expect(source).toMatch(/Codex review passes must be 1 or 2/);
     expect(source).toMatch(/record_provider_exhaustion Codex/);

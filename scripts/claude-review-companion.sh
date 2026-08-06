@@ -58,6 +58,7 @@ REVIEW_MODE=discovery
 PRIOR_FINDINGS_FILE=""
 RISK_TIER=""
 REVIEW_FOCUS=""
+PROMPT_FILE=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -73,6 +74,7 @@ while [ $# -gt 0 ]; do
     --prior-findings-file) PRIOR_FINDINGS_FILE="$2"; shift 2 ;;
     --tier) RISK_TIER="$2"; shift 2 ;;
     --focus) REVIEW_FOCUS="$2"; shift 2 ;;
+    --prompt-file) PROMPT_FILE="$2"; shift 2 ;;
     # --dry-run: validate args, apply guards, resolve agent files, and write a
     # DRY-RUN marker per agent — but DO NOT call `claude`. For fast, no-token
     # unit tests of the guard/degradation paths.
@@ -157,37 +159,30 @@ resolve_agent_file() {
 }
 
 # --- build the shared review context prompt ----------------------------------
-CTX_FILE="$OUT_DIR/review-context.txt"
-{
-  echo "Review ONLY the following diff. Do NOT scan unchanged code."
-  echo "Review mode: $REVIEW_MODE"
-  echo "Risk tier: $RISK_TIER"
-  echo "Review focus: $REVIEW_FOCUS"
+CTX_FILE="${PROMPT_FILE:-$OUT_DIR/review-context.txt}"
+if [ -z "$PROMPT_FILE" ]; then
+  FOCUS_FILE="$OUT_DIR/review-focus.txt"
+  printf '%s\n' "$REVIEW_FOCUS" > "$FOCUS_FILE"
+  INPUT_ARGS=(
+    build
+    --output "$CTX_FILE"
+    --input-output "$OUT_DIR/review-input.json"
+    --mode "$REVIEW_MODE"
+    --focus "$FOCUS_FILE"
+    --identity "$IDENTITY_FILE"
+    --files "$FILES_FILE"
+    --log "$LOG_FILE"
+    --diff "$DIFF_FILE"
+  )
   if [ "$REVIEW_MODE" = verification ]; then
-    echo
-    echo "## Prior findings to verify"
-    cat "$PRIOR_FINDINGS_FILE"
-    echo
-    echo "Verify every prior finding is fixed and check the fix for regressions."
+    INPUT_ARGS+=(--prior-findings "$PRIOR_FINDINGS_FILE")
   fi
-  echo
-  echo "## Repository and revision identity"
-  cat "$IDENTITY_FILE"
-  echo
-  echo "## Changed files"
-  [ -f "$FILES_FILE" ] && cat "$FILES_FILE"
-  echo
-  echo "## Commit log"
-  [ -f "$LOG_FILE" ] && cat "$LOG_FILE"
-  echo
-  echo "## Diff"
-  cat "$DIFF_FILE"
-  echo
-  echo "Return only material findings. The quality runner supplies and validates"
-  echo "the structured review schema; do not add a prose report outside it."
-  echo "The verdict MUST be approve when findings is empty and MUST be"
-  echo "needs-attention when findings contains one or more items."
-} > "$CTX_FILE"
+  node "$SCRIPT_DIR/quality-review-input.js" "${INPUT_ARGS[@]}" || exit 1
+fi
+[ -s "$CTX_FILE" ] || {
+  echo "claude-review-companion: review prompt is missing or empty: $CTX_FILE" >&2
+  exit 1
+}
 
 # --- hard timeout that actually kills ----------------------------------------
 # Replaces `perl -e 'alarm shift; exec @ARGV'` (2026-07-10). `alarm` schedules
