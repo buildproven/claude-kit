@@ -1831,10 +1831,14 @@ function applyRuntimeGovernor(manifest, options, runtime) {
     (runtime.reviewPasses * runtime.reviewSeconds +
       runtime.reviewReserveSeconds);
   governor.providerAttemptPlan = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     rounds: {
       1: discoveryStarts * 2,
       2: verificationStarts * 2,
+    },
+    perReview: {
+      1: discoveryStarts,
+      2: verificationStarts,
     },
     failureRetryStarts,
     failureRetrySeconds,
@@ -2401,10 +2405,17 @@ function authorizeProviderRound(manifest) {
   );
   if (!authorization)
     throw new Error("provider start was not authorized by the governor");
+  const reviewCount = manifest.reviews.length;
+  const generationLimit = plan.perReview?.[round] ?? phaseLimit;
+  if (!Number.isInteger(generationLimit) || generationLimit < 1) {
+    throw new Error("provider per-review attempt plan is invalid");
+  }
   const used = governor.providerAttempts.filter(
-    (attempt) => attempt.round === round,
+    (attempt) =>
+      attempt.round === round &&
+      (plan.schemaVersion < 3 || attempt.reviewCount === reviewCount),
   ).length;
-  if (used >= phaseLimit) {
+  if (used >= generationLimit) {
     throw new Error(
       `provider attempt capacity exhausted for review round ${round}`,
     );
@@ -2610,7 +2621,26 @@ function reserveIncompleteRetry(manifest) {
     );
   }
   const plan = manifest.governor.providerAttemptPlan;
-  if (plan?.schemaVersion === 2) return false;
+  if (plan?.schemaVersion === 3) return false;
+  if (plan?.schemaVersion === 2) {
+    for (const round of [1, 2]) {
+      if (
+        !Number.isInteger(plan.rounds?.[round]) ||
+        plan.rounds[round] < 2 ||
+        plan.rounds[round] % 2 !== 0
+      ) {
+        throw new Error(
+          "provider retry plan cannot isolate review generations",
+        );
+      }
+    }
+    plan.schemaVersion = 3;
+    plan.perReview = {
+      1: plan.rounds[1] / 2,
+      2: plan.rounds[2] / 2,
+    };
+    return true;
+  }
   if (
     plan?.schemaVersion !== 1 ||
     !Number.isInteger(plan.rounds?.[1]) ||
@@ -2638,10 +2668,14 @@ function reserveIncompleteRetry(manifest) {
   const failureRetrySeconds =
     plan.rounds[1] * reviewSeconds + plan.rounds[2] * verificationSeconds;
   manifest.governor.providerAttemptPlan = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     rounds: {
       1: plan.rounds[1] * 2,
       2: plan.rounds[2] * 2,
+    },
+    perReview: {
+      1: plan.rounds[1],
+      2: plan.rounds[2],
     },
     failureRetryStarts,
     failureRetrySeconds,

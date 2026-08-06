@@ -149,6 +149,11 @@ Add a repository-scoped merge lease to the public quality runtime.
     time for the retry; an explicit operator provider-time cap remains
     authoritative and may stop it fail-closed. A legacy manifest without cap
     provenance is treated as operator-owned and is never expanded on resume.
+    Provider-start capacity is keyed by review-attempt generation as well as
+    round. An initial primary/fallback path therefore cannot consume the
+    separately funded same-range retry before an incomplete attestation exists;
+    schema-v2 plans migrate by splitting their already-reserved round allowance
+    evenly without increasing the absolute start or time caps.
 11. The empty signed stamp remains the protected pull-request head, so required
     CI is re-run for that exact commit before merge. Stamp publication resolves
     the required contexts and GitHub App IDs from classic branch protection and

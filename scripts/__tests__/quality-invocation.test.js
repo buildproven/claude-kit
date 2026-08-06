@@ -2810,8 +2810,9 @@ exit 1
     const state = JSON.parse(readFileSync(manifest, "utf8"));
     const passes = Math.max(1, state.risk.runtime.reviewPasses);
     expect(state.governor.providerAttemptPlan).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       rounds: { 1: passes * 2, 2: 2 },
+      perReview: { 1: passes, 2: 1 },
       failureRetryStarts: passes + 1,
       failureRetrySeconds:
         state.risk.runtime.reviewSeconds +
@@ -2857,8 +2858,9 @@ exit 1
     });
     const state = invocation.loadManifest(manifest).manifest;
     expect(state.governor.providerAttemptPlan).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       rounds: { 1: 4, 2: 2 },
+      perReview: { 1: 2, 2: 1 },
       failureRetryStarts: 3,
       failureRetrySeconds: 480,
     });
@@ -2902,8 +2904,9 @@ exit 1
     });
     const state = invocation.loadManifest(manifest).manifest;
     expect(state.governor.providerAttemptPlan).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       rounds: { 1: 4, 2: 2 },
+      perReview: { 1: 2, 2: 1 },
       failureRetryStarts: 3,
       failureRetrySeconds: retrySeconds,
     });
@@ -2945,8 +2948,62 @@ exit 1
       cwd: root,
     });
     const state = invocation.loadManifest(manifest).manifest;
-    expect(state.governor.providerAttemptPlan.schemaVersion).toBe(2);
+    expect(state.governor.providerAttemptPlan.schemaVersion).toBe(3);
     expect(state.governor.providerSecondsLimit).toBe(137);
+  });
+
+  it("isolates same-round retry capacity from the initial provider generation", () => {
+    const root = repo("provider-retry-generation-capacity");
+    const env = { ...process.env, BS_QUALITY_MAX_PROVIDER_ATTEMPTS: "1" };
+    const manifest = create(root, [], env);
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root, env });
+    const state = invocation.loadManifest(manifest).manifest;
+    invocation.withManifestLock(manifest, (loaded) => {
+      loaded.governor.roundsUsed = 1;
+      loaded.governor.authorizedAttempts = [
+        {
+          number: 1,
+          token: "discovery",
+          head: loaded.revisions.currentHead,
+          consumedAt: null,
+        },
+      ];
+    });
+
+    execFileSync(
+      "node",
+      [INVOCATION, "provider-attempt", manifest, "--provider", "codex"],
+      { cwd: root },
+    );
+    execFileSync(
+      "node",
+      [INVOCATION, "provider-complete", manifest, "--provider", "codex"],
+      { cwd: root },
+    );
+    const borrowed = spawnSync(
+      "node",
+      [INVOCATION, "provider-attempt", manifest, "--provider", "claude"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(borrowed.status).not.toBe(0);
+    expect(borrowed.stderr).toMatch(/capacity exhausted/);
+
+    invocation.withManifestLock(manifest, (loaded) => {
+      loaded.reviews.push({
+        status: "incomplete",
+        provider: "review-incomplete",
+        from: state.revisions.baseSha,
+        to: state.revisions.currentHead,
+      });
+      invocation.reserveIncompleteRetry(loaded);
+    });
+    expect(
+      spawnSync(
+        "node",
+        [INVOCATION, "provider-attempt", manifest, "--provider", "claude"],
+        { cwd: root, encoding: "utf8" },
+      ).status,
+    ).toBe(0);
   });
 
   it("does not accept break-glass approval through wrapper argv", () => {
