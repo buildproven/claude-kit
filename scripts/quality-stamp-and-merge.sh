@@ -79,6 +79,15 @@ PREFLIGHT_PR_HEAD="$(printf '%s\n' "$PREFLIGHT_OUTPUT" |
   echo "❌ MERGE BLOCKED: authorization preflight omitted PR HEAD identity." >&2
   exit 1
 }
+PREFLIGHT_BASE_PROTECTION="$(printf '%s\n' "$PREFLIGHT_OUTPUT" |
+  sed -n 's/^BS_QUALITY_BASE_PROTECTION=//p')"
+case "$PREFLIGHT_BASE_PROTECTION" in
+  true | unprotectable) ;;
+  *)
+    echo "❌ MERGE BLOCKED: authorization preflight omitted base-protection classification." >&2
+    exit 1
+    ;;
+esac
 PERSISTED_REMOTE="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" merge.stampPublication.remote)"
 [ -z "$PERSISTED_REMOTE" ] || [ "$PERSISTED_REMOTE" = "$HEAD_REMOTE" ] || {
   echo "❌ MERGE BLOCKED: persisted stamp remote no longer matches PR head repository." >&2
@@ -259,15 +268,20 @@ BASE_BRANCH="${BASE_BRANCH#origin/}"
   echo "❌ MERGE BLOCKED: manifest base branch is missing." >&2
   exit 1
 }
-node "$SCRIPT_DIR/quality-required-checks.js" ensure \
-  --repo "$EXPECTED_REPOSITORY" --base "$BASE_BRANCH" \
-  --source-head "$REVIEWED_HEAD" --head "$STAMP_HEAD" \
-  --head-ref "$EXPECTED_HEAD_REF" >/dev/null || exit 1
 RC=0
-bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CI_TIMEOUT" -- \
-  node "$SCRIPT_DIR/quality-required-checks.js" wait \
+if [ "$PREFLIGHT_BASE_PROTECTION" = unprotectable ]; then
+  bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CI_TIMEOUT" -- \
+    bash "$SCRIPT_DIR/quality-wait-required-checks.sh" --pr "$PR" || RC=$?
+else
+  node "$SCRIPT_DIR/quality-required-checks.js" ensure \
     --repo "$EXPECTED_REPOSITORY" --base "$BASE_BRANCH" \
-    --head "$STAMP_HEAD" --timeout "$CI_TIMEOUT" --interval 10 || RC=$?
+    --source-head "$REVIEWED_HEAD" --head "$STAMP_HEAD" \
+    --head-ref "$EXPECTED_HEAD_REF" >/dev/null || exit 1
+  bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CI_TIMEOUT" -- \
+    node "$SCRIPT_DIR/quality-required-checks.js" wait \
+      --repo "$EXPECTED_REPOSITORY" --base "$BASE_BRANCH" \
+      --head "$STAMP_HEAD" --timeout "$CI_TIMEOUT" --interval 10 || RC=$?
+fi
 CI_BILLING_WAIVED=false
 if [ "$RC" -ne 0 ]; then
   CI_WAIVER_ARTIFACT="$(dirname "$MANIFEST")/ci-billing-waiver.json"

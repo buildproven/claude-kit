@@ -163,6 +163,12 @@ Add a repository-scoped merge lease to the public quality runtime.
     protection read may be empty only for GitHub's explicit `404 Branch not
 protected` response. Ruleset reads and every other API failure remain hard
     errors, so a partial observation cannot silently shrink the required set.
+    Before dispatch, the runner gives the ordinary pull-request event a bounded
+    registration window and accepts a dispatch failure only if exact-head
+    read-back proves the required check registered concurrently. Check-run
+    discovery follows every page declared by GitHub's `total_count`. A
+    plan-proven unprotectable repository has no required-context source, so it
+    retains the separate all-registered-PR-check waiter and final guard.
 
 ## Lease record
 

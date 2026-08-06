@@ -226,6 +226,9 @@ describe("quality merge gates", () => {
     expect(STAMP_AND_MERGE).toMatch(/record-stamp/);
     expect(STAMP_AND_MERGE).toMatch(/quality-run-bounded\.sh/);
     expect(STAMP_AND_MERGE).toMatch(/quality-required-checks\.js" wait/);
+    expect(STAMP_AND_MERGE).toMatch(
+      /PREFLIGHT_BASE_PROTECTION" = unprotectable[\s\S]*quality-wait-required-checks\.sh/,
+    );
     expect(
       STAMP_AND_MERGE.indexOf('quality-required-checks.js" wait'),
     ).toBeLessThan(STAMP_AND_MERGE.lastIndexOf("quality-authorize-merge.sh"));

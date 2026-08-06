@@ -371,6 +371,7 @@ elif [ "$MERGE_AUTHORITY" = human-required ] && [ "$TIER" = critical ]; then
   echo "          gates in lieu of human break-glass (Phase 0 policy)." >&2
 fi
 [ "$PREFLIGHT" = false ] || {
+  echo "BS_QUALITY_BASE_PROTECTION=$ATOMIC_BASE_FRESHNESS"
   echo "[quality] non-mutating merge authorization preflight passed"
   exit 0
 }

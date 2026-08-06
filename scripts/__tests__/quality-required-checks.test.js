@@ -11,7 +11,9 @@ const SCRIPT = path.resolve(
   "../quality-required-checks.js",
 );
 const {
+  checkRuns,
   checkState,
+  ensureChecks,
   matchingRuns,
   requiredChecks,
 } = require("../quality-required-checks.js");
@@ -46,6 +48,82 @@ function run(root, args, fixture) {
 }
 
 describe("quality-required-checks", () => {
+  it("paginates exact-head check runs through GitHub total_count", () => {
+    const originalPath = process.env.PATH;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *"&page=2"*) printf '%s\\n' '{"total_count":2,"check_runs":[{"id":2,"name":"quality"}]}' ;;
+  *"&page=1"*) printf '%s\\n' '{"total_count":2,"check_runs":[{"id":1,"name":"first"}]}' ;;
+  *) exit 1 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath}`;
+    try {
+      expect(
+        checkRuns("owner/repo", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").map(
+          (run) => run.id,
+        ),
+      ).toEqual([1, 2]);
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it("allows ordinary check registration before attempting dispatch", () => {
+    const originalPath = process.env.PATH;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
+    const bin = path.join(root, "bin");
+    const count = path.join(root, "target-count");
+    const dispatch = path.join(root, "dispatch");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *protection/required_status_checks*) printf '%s\\n' '{"checks":[{"context":"quality","app_id":15368}]}' ;;
+  *rules/branches/main*) printf '%s\\n' '[]' ;;
+  *commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/check-runs*) printf '%s\\n' '{"check_runs":[{"id":1,"name":"quality","status":"completed","conclusion":"success","app":{"id":15368},"details_url":"https://github.com/o/r/actions/runs/123"}]}' ;;
+  *commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs*)
+    if [ -f '${count}' ]; then
+      printf '%s\\n' '{"check_runs":[{"id":2,"name":"quality","status":"queued","conclusion":null,"app":{"id":15368}}]}'
+    else
+      : > '${count}'
+      printf '%s\\n' '{"check_runs":[]}'
+    fi
+    ;;
+  *dispatches*) : > '${dispatch}' ;;
+  *) exit 1 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath}`;
+    try {
+      const result = ensureChecks({
+        repository: "owner/repo",
+        base: "main",
+        sourceHead: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        targetHead: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        headRef: "feature/fix",
+        registrationSeconds: 1,
+        registrationIntervalSeconds: 0,
+      });
+      expect(result.dispatched).toEqual([]);
+      expect(fs.existsSync(dispatch)).toBe(false);
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
   it("fails closed when one protection source cannot be read", () => {
     const originalPath = process.env.PATH;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
@@ -163,6 +241,8 @@ esac
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "--head-ref",
         "feature/fix",
+        "--registration-timeout",
+        "0",
       ],
       fixture,
     );

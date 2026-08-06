@@ -184,13 +184,29 @@ function requiredChecks(repository, base) {
 }
 
 function checkRuns(repository, head) {
-  const response = apiJson(
-    `repos/${repository}/commits/${head}/check-runs?per_page=100`,
-  );
-  if (!Array.isArray(response.check_runs)) {
-    throw new Error("GitHub check-runs response is invalid");
+  const runs = [];
+  let totalCount = null;
+  for (let page = 1; page <= 100; page += 1) {
+    const response = apiJson(
+      `repos/${repository}/commits/${head}/check-runs?per_page=100&page=${page}`,
+    );
+    if (!Array.isArray(response.check_runs)) {
+      throw new Error("GitHub check-runs response is invalid");
+    }
+    if (page === 1) {
+      if (response.total_count === undefined) return response.check_runs;
+      if (!Number.isInteger(response.total_count) || response.total_count < 0) {
+        throw new Error("GitHub check-runs total_count is invalid");
+      }
+      totalCount = response.total_count;
+    }
+    runs.push(...response.check_runs);
+    if (runs.length >= totalCount) return runs;
+    if (response.check_runs.length === 0) {
+      throw new Error("GitHub check-runs pagination ended before total_count");
+    }
   }
-  return response.check_runs;
+  throw new Error("GitHub check-runs pagination exceeded 100 pages");
 }
 
 function matchingRuns(runs, requirement) {
@@ -246,10 +262,48 @@ function dispatchWorkflow(repository, workflowId, ref) {
   throw failure;
 }
 
-function ensureChecks({ repository, base, sourceHead, targetHead, headRef }) {
+function waitForRegistration({
+  repository,
+  targetHead,
+  requirements,
+  targetRuns,
+  timeoutSeconds,
+  intervalSeconds,
+}) {
+  const deadline = Date.now() + timeoutSeconds * 1000;
+  let runs = targetRuns;
+  while (
+    requirements.some(
+      (requirement) => checkState(runs, requirement).state === "missing",
+    ) &&
+    Date.now() < deadline
+  ) {
+    sleep(intervalSeconds * 1000);
+    runs = checkRuns(repository, targetHead);
+  }
+  return runs;
+}
+
+function ensureChecks({
+  repository,
+  base,
+  sourceHead,
+  targetHead,
+  headRef,
+  registrationSeconds = 30,
+  registrationIntervalSeconds = 2,
+}) {
   const requirements = requiredChecks(repository, base);
   const sourceRuns = checkRuns(repository, sourceHead);
-  const targetRuns = checkRuns(repository, targetHead);
+  let targetRuns = checkRuns(repository, targetHead);
+  targetRuns = waitForRegistration({
+    repository,
+    targetHead,
+    requirements,
+    targetRuns,
+    timeoutSeconds: registrationSeconds,
+    intervalSeconds: registrationIntervalSeconds,
+  });
   const dispatched = [];
   const dispatchedWorkflowIds = new Set();
   for (const requirement of requirements) {
@@ -263,7 +317,13 @@ function ensureChecks({ repository, base, sourceHead, targetHead, headRef }) {
     }
     const workflowId = workflowIdForRun(repository, source);
     if (!dispatchedWorkflowIds.has(workflowId)) {
-      dispatchWorkflow(repository, workflowId, headRef);
+      try {
+        dispatchWorkflow(repository, workflowId, headRef);
+      } catch (error) {
+        targetRuns = checkRuns(repository, targetHead);
+        const refreshed = checkState(targetRuns, requirement);
+        if (!["pending", "success"].includes(refreshed.state)) throw error;
+      }
       dispatchedWorkflowIds.add(workflowId);
     }
     dispatched.push({ context: requirement.context, workflowId });
@@ -351,6 +411,13 @@ function main() {
   const options = parseOptions(args);
   if (command === "ensure") {
     const context = commandContext(options);
+    const registrationSeconds = Number.parseInt(
+      options["registration-timeout"] || "30",
+      10,
+    );
+    if (!Number.isInteger(registrationSeconds) || registrationSeconds < 0) {
+      throw new Error("--registration-timeout must be non-negative seconds");
+    }
     const result = ensureChecks({
       ...context,
       sourceHead: validateSha(
@@ -359,6 +426,7 @@ function main() {
       ),
       targetHead: context.head,
       headRef: validateRef(requiredOption(options, "head-ref"), "head-ref"),
+      registrationSeconds,
     });
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
@@ -412,6 +480,7 @@ if (require.main === module) {
 
 module.exports = {
   assertChecks,
+  checkRuns,
   checkState,
   ensureChecks,
   matchingRuns,
