@@ -125,6 +125,18 @@ use the standalone override command:
 /bs:quality override --pr <number> --head <exact-40-character-sha> --reason "<text>" --accept <condition-id>[,<condition-id>...]
 ```
 
+When the diagnosis belongs to an existing campaign, bind the override to that
+exact invocation instead of starting or resolving another campaign:
+
+```text
+/bs:quality override --manifest <exact-manifest-path> --pr <number> --head <exact-40-character-sha> --reason "<text>" --accept <condition-id>[,<condition-id>...]
+```
+
+In this form, `--manifest` is the only selector forwarded to bootstrap;
+`--pr` and `--head` remain mandatory signed identity assertions and must match
+the selected manifest. Campaign-creation options cannot be combined with an
+exact-manifest approval. Never guess or discover a manifest from the PR number.
+
 `override` is a strict alias for
 `approve --override-quality --reason ... --accept ...`; both mint the same
 signed `operator-quality-override` capability through the one path in

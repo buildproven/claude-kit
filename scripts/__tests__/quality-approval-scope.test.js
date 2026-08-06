@@ -115,4 +115,29 @@ describe("quality approve command scope parsing", () => {
     ]);
     expect(parsed.argv).toEqual(["--pr", "676", "--merge"]);
   });
+
+  it("uses an exact manifest as bootstrap selector without forwarding approval identity", () => {
+    const manifest = "/tmp/existing-quality-campaign/invocation.json";
+    const parsed = parseApprovalCommand([
+      "override",
+      "--manifest",
+      manifest,
+      "--pr",
+      "676",
+      "--head",
+      head,
+      "--reason",
+      "the exact campaign exhausted mutation capacity",
+      "--accept",
+      "mutation:missing",
+      "--i-understand-security-risk",
+    ]);
+
+    expect(parsed).toMatchObject({
+      expectedPr: 676,
+      expectedHead: head,
+      scope: "operator-quality-override",
+    });
+    expect(parsed.argv).toEqual(["--manifest", manifest]);
+  });
 });
