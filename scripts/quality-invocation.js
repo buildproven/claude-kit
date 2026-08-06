@@ -1756,6 +1756,11 @@ function buildRuntimePlan(manifest, options) {
       "check reserve seconds",
       { minimum: 1 },
     ),
+    reviewPasses: parseInteger(
+      options["codex-rounds"] || "1",
+      "review passes",
+      { minimum: 1 },
+    ),
   };
 }
 
@@ -1796,6 +1801,17 @@ function applyRuntimeGovernor(manifest, options, runtime) {
   if (process.env.BS_QUALITY_MAX_PROVIDER_SECONDS === undefined) {
     governor.providerWindowSeconds = runtime.reviewSeconds;
   }
+  // Each round receives its own bounded provider-start allowance. Discovery
+  // may use the selected primary and one fallback for every planned pass;
+  // verification gets the same bounded primary/fallback path for its single
+  // targeted pass. A global cap cannot reserve the mandatory second round.
+  const startsPerPass = governor.maxProviderAttempts;
+  const discoveryStarts = Math.max(1, runtime.reviewPasses) * startsPerPass;
+  governor.providerAttemptPlan = {
+    schemaVersion: 1,
+    rounds: { 1: discoveryStarts, 2: startsPerPass },
+  };
+  governor.maxProviderAttempts = discoveryStarts + startsPerPass;
   governor.campaignSeconds = runtime.campaignSeconds;
 }
 
@@ -2322,6 +2338,41 @@ function providerPhaseSeconds(manifest) {
     : (manifest.risk?.runtime?.reviewReserveSeconds ?? 300);
 }
 
+function authorizeProviderRound(manifest) {
+  const governor = manifest.governor;
+  const round = governor.roundsUsed || 1;
+  const plan = governor.providerAttemptPlan;
+  if (plan === undefined) return round;
+  const phaseLimit = plan.rounds?.[round];
+  if (phaseLimit === undefined) {
+    throw new Error(
+      `provider attempt phase plan has no allowance for round ${round}`,
+    );
+  }
+  if (!Number.isInteger(phaseLimit) || phaseLimit < 1) {
+    throw new Error("provider attempt phase plan is invalid");
+  }
+  const head = manifest.revisions.currentHead;
+  const authorization = governor.authorizedAttempts.find(
+    (attempt) =>
+      attempt.number === round &&
+      attempt.head === head &&
+      attempt.consumedAt === null &&
+      !attempt.invalidatedAt,
+  );
+  if (!authorization)
+    throw new Error("provider start was not authorized by the governor");
+  const used = governor.providerAttempts.filter(
+    (attempt) => attempt.round === round,
+  ).length;
+  if (used >= phaseLimit) {
+    throw new Error(
+      `provider attempt capacity exhausted for review round ${round}`,
+    );
+  }
+  return round;
+}
+
 function authorizeProviderAttempt(manifest, options, manifestPath) {
   const provider = options.provider;
   if (!["claude", "codex", "gemini"].includes(provider)) {
@@ -2382,6 +2433,7 @@ function authorizeProviderAttempt(manifest, options, manifestPath) {
     saveManifestMidTransaction(manifestPath, manifest);
   }
   const currentHead = manifest.revisions.currentHead;
+  const round = authorizeProviderRound(manifest);
   if (governor.providerAttempts.length >= governor.maxProviderAttempts) {
     throw new Error("absolute provider attempt cap exhausted");
   }
@@ -2398,6 +2450,7 @@ function authorizeProviderAttempt(manifest, options, manifestPath) {
   const attempt = {
     number: governor.providerAttempts.length + 1,
     provider,
+    round,
     head: currentHead,
     reviewCount: manifest.reviews.length,
     startedAt: new Date().toISOString(),

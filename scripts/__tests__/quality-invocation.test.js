@@ -24,6 +24,11 @@ const RISK = path.join(ROOT, "scripts", "quality-risk-resolve.sh");
 const SELECT = path.join(ROOT, "scripts", "quality-select-agents.sh");
 const FORMAT = path.join(ROOT, "scripts", "quality-format.js");
 const GOVERNOR = path.join(ROOT, "scripts", "quality-run-governor.js");
+const AUTHORIZE_REVIEW_ROUND = path.join(
+  ROOT,
+  "scripts",
+  "quality-authorize-review-round.sh",
+);
 const WRAPPER = path.join(ROOT, "scripts", "quality-wrapper.js");
 const AUTHORIZE = path.join(ROOT, "scripts", "quality-authorize-merge.sh");
 const RUN_GATE = path.join(ROOT, "scripts", "quality-run-gate.sh");
@@ -2524,6 +2529,139 @@ exec "${realGit}" "$@"
     );
     expect(authorization.remainingSeconds).toBeGreaterThanOrEqual(119);
     expect(authorization.remainingSeconds).toBeLessThanOrEqual(120);
+  });
+
+  it("pins a merge lease in a fresh shell before authorizing a review round", () => {
+    const root = repo("merge-round-lease-pin");
+    const manifest = create(root, ["--merge"]);
+    const inherited = process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+    delete process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+    try {
+      const result = spawnSync("bash", [AUTHORIZE_REVIEW_ROUND, manifest], {
+        cwd: root,
+        encoding: "utf8",
+        env: { ...process.env },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const state = JSON.parse(readFileSync(manifest, "utf8"));
+      expect(state.governor.roundsUsed).toBe(1);
+      expect(state.governor.authorizedAttempts).toHaveLength(1);
+    } finally {
+      if (inherited === undefined) {
+        delete process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+      } else {
+        process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = inherited;
+      }
+    }
+  });
+
+  it("stops the documented sequence when merge lease authorization fails", () => {
+    const root = repo("merge-round-lease-failure");
+    const manifest = create(root, ["--merge"]);
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    state.merge.repositoryLease.token = "";
+    writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
+    const marker = path.join(root, "provider-started");
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        '"$1" "$2" || exit 1; : > "$3"',
+        "quality-sequence",
+        AUTHORIZE_REVIEW_ROUND,
+        manifest,
+        marker,
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: (() => {
+          const env = { ...process.env };
+          delete env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+          return env;
+        })(),
+      },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/has no repository lease credential/);
+    expect(existsSync(marker)).toBe(false);
+    expect(JSON.parse(readFileSync(manifest, "utf8")).governor.roundsUsed).toBe(
+      0,
+    );
+  });
+
+  it("reserves provider starts for an authorized verification round", () => {
+    const root = repo("phase-provider-capacity");
+    const manifest = create(root);
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    const head = state.revisions.currentHead;
+    state.governor.providerAttemptPlan = {
+      schemaVersion: 1,
+      rounds: { 1: 2, 2: 2 },
+    };
+    state.governor.maxProviderAttempts = 4;
+    state.governor.roundsUsed = 1;
+    state.governor.authorizedAttempts = [
+      { number: 1, token: "discovery", head, consumedAt: null },
+    ];
+    writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
+
+    for (const provider of ["codex", "claude"]) {
+      expect(
+        spawnSync(
+          "node",
+          [INVOCATION, "provider-attempt", manifest, "--provider", provider],
+          {
+            cwd: root,
+            encoding: "utf8",
+          },
+        ).status,
+      ).toBe(0);
+      execFileSync(
+        "node",
+        [INVOCATION, "provider-complete", manifest, "--provider", provider],
+        { cwd: root },
+      );
+    }
+    const exhausted = spawnSync(
+      "node",
+      [INVOCATION, "provider-attempt", manifest, "--provider", "gemini"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(exhausted.status).not.toBe(0);
+    expect(exhausted.stderr).toMatch(/capacity exhausted for review round 1/);
+
+    state.governor.roundsUsed = 2;
+    state.governor.authorizedAttempts.push({
+      number: 2,
+      token: "verification",
+      head,
+      consumedAt: null,
+    });
+    writeFileSync(manifest, `${JSON.stringify(state, null, 2)}\n`);
+    expect(
+      spawnSync(
+        "node",
+        [INVOCATION, "provider-attempt", manifest, "--provider", "codex"],
+        { cwd: root },
+      ).status,
+    ).toBe(0);
+  });
+
+  it("derives non-borrowable provider capacity from the resolved runtime plan", () => {
+    const root = repo("resolved-provider-phase-capacity");
+    const env = { ...process.env, BS_QUALITY_MAX_PROVIDER_ATTEMPTS: "1" };
+    const manifest = create(root, [], {
+      BS_QUALITY_MAX_PROVIDER_ATTEMPTS: "1",
+    });
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root, env });
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    const passes = Math.max(1, state.risk.runtime.reviewPasses);
+    expect(state.governor.providerAttemptPlan).toEqual({
+      schemaVersion: 1,
+      rounds: { 1: passes, 2: 1 },
+    });
+    expect(state.governor.maxProviderAttempts).toBe(passes + 1);
   });
 
   it("does not accept break-glass approval through wrapper argv", () => {

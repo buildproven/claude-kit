@@ -136,7 +136,7 @@ HEAD, invocation, diff hash, and round.
 ```bash
 QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
 [ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
-node "$QUALITY_SCRIPTS_DIR/quality-run-governor.js" bump-round "<exact-manifest-path>"
+"$QUALITY_SCRIPTS_DIR/quality-authorize-review-round.sh" "<exact-manifest-path>" || exit 1
 bash "$QUALITY_SCRIPTS_DIR/quality-run-review.sh" --manifest "<exact-manifest-path>"
 ```
 
