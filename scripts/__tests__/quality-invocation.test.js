@@ -559,17 +559,21 @@ if [ "$1 $2" = "repo view" ]; then
   exit 0
 fi
 if [ "$1" = "api" ]; then
-  if [[ "$2" == *"protection/required_status_checks"* ]]; then
+  if [[ "$*" == *"protection/required_status_checks"* ]]; then
     if [ "\${QUALITY_TEST_STRICT_PROTECTION:-}" = true ]; then
-      printf '%s\\n' 'true'
+      if [[ "$*" == *"--jq .strict"* ]]; then
+        printf '%s\\n' 'true'
+      else
+        printf '%s\\n' '{"strict":true,"contexts":["quality"],"checks":[{"context":"quality","app_id":15368}]}'
+      fi
       exit 0
     fi
     exit 1
   fi
-  if [[ "$2" == *"/rules/branches/"* ]]; then
+  if [[ "$*" == *"/rules/branches/"* ]]; then
     case "\${QUALITY_TEST_EFFECTIVE_RULES:-none}" in
       strict)
-        printf '%s\\n' '[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true}}]'
+        printf '%s\\n' '[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"quality","integration_id":15368}]}}]'
         exit 0
         ;;
       queue)
@@ -579,6 +583,10 @@ if [ "$1" = "api" ]; then
       unavailable) exit 1 ;;
       *) printf '%s\\n' '[]'; exit 0 ;;
     esac
+  fi
+  if [[ "$*" == *"/check-runs"* ]]; then
+    printf '%s\\n' '{"check_runs":[{"id":1,"name":"quality","status":"completed","conclusion":"success","app":{"id":15368}}]}'
+    exit 0
   fi
   printf '%s\\n' '[]'
   exit 0
@@ -3830,9 +3838,15 @@ if [ "$1 $2" = "repo view" ]; then
   exit 0
 fi
 if [ "$1" = "api" ]; then
-  if [[ "$2" == *"protection/required_status_checks"* ]]; then
+  if [[ "$*" == *"protection/required_status_checks"* ]]; then
     [ ! -f ${JSON.stringify(denyPreflight)} ] || exit 1
-    printf '%s\\n' 'true'
+    if [[ "$*" == *"--jq .strict"* ]]; then
+      printf '%s\\n' 'true'
+    else
+      printf '%s\\n' '{"strict":true,"contexts":["quality"],"checks":[{"context":"quality","app_id":15368}]}'
+    fi
+  elif [[ "$*" == *"/check-runs"* ]]; then
+    printf '%s\\n' '{"check_runs":[{"id":1,"name":"quality","status":"completed","conclusion":"success","app":{"id":15368}}]}'
   elif [ -f ${JSON.stringify(denyPreflight)} ]; then
     printf '%s\\n' '[{"type":"merge_queue","parameters":{"grouping_strategy":"ALLGREEN"}}]'
   else
@@ -3918,7 +3932,7 @@ exit 1
       `--force-with-lease=refs/heads/feature:${reviewedHead} origin ${stampHead}:refs/heads/feature`,
     );
     const calls = readFileSync(log, "utf8");
-    expect(calls.indexOf("pr checks 1 --required --watch")).toBeLessThan(
+    expect(calls.indexOf(`/commits/${stampHead}/check-runs`)).toBeLessThan(
       calls.indexOf("pr merge 1"),
     );
   }, 90_000);
