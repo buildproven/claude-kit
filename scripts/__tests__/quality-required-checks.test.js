@@ -18,7 +18,7 @@ const {
   requiredChecks,
 } = require("../quality-required-checks.js");
 
-function fakeGh(root, sourceRuns, targetRuns) {
+function fakeGh(root, sourceRuns, targetRuns, registeredRuns = targetRuns) {
   const bin = path.join(root, "bin");
   fs.mkdirSync(bin);
   const log = path.join(root, "dispatch.log");
@@ -28,7 +28,13 @@ case "$*" in
   *protection/required_status_checks*) printf '%s\\n' '{"strict":true,"contexts":["quality"],"checks":[{"context":"quality","app_id":15368}]}' ;;
   *rules/branches/main*) printf '%s\\n' '[]' ;;
   *commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/check-runs*) printf '%s\\n' '${JSON.stringify({ check_runs: sourceRuns })}' ;;
-  *commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs*) printf '%s\\n' '${JSON.stringify({ check_runs: targetRuns })}' ;;
+  *commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs*)
+    if [ -f '${log}' ]; then
+      printf '%s\\n' '${JSON.stringify({ check_runs: registeredRuns })}'
+    else
+      printf '%s\\n' '${JSON.stringify({ check_runs: targetRuns })}'
+    fi
+    ;;
   *actions/runs/123*) printf '%s\\n' '{"workflow_id":77}' ;;
   *actions/workflows/77/dispatches*) printf '%s\\n' "$*" >> '${log}' ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
@@ -226,7 +232,20 @@ esac
         details_url: "https://github.com/o/r/actions/runs/123/job/456",
       },
     ];
-    const fixture = fakeGh(root, sourceRuns, []);
+    const fixture = fakeGh(
+      root,
+      sourceRuns,
+      [],
+      [
+        {
+          id: 2,
+          name: "quality",
+          status: "queued",
+          conclusion: null,
+          app: { id: 15368 },
+        },
+      ],
+    );
     const result = run(
       root,
       [
@@ -252,6 +271,45 @@ esac
     ]);
     expect(fs.readFileSync(fixture.log, "utf8")).toContain(
       "actions/workflows/77/dispatches -f ref=feature/fix",
+    );
+  });
+
+  it("fails quickly when a dispatched required context never registers", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
+    const sourceRuns = [
+      {
+        id: 1,
+        name: "quality",
+        status: "completed",
+        conclusion: "success",
+        app: { id: 15368 },
+        details_url: "https://github.com/o/r/actions/runs/123/job/456",
+      },
+    ];
+    const fixture = fakeGh(root, sourceRuns, [], []);
+    const result = run(
+      root,
+      [
+        "ensure",
+        "--repo",
+        "owner/repo",
+        "--base",
+        "main",
+        "--source-head",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--head",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "--head-ref",
+        "feature/fix",
+        "--registration-timeout",
+        "0",
+      ],
+      fixture,
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("quality (workflow 77)");
+    expect(result.stderr).toContain(
+      "did not register on stamp bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     );
   });
 

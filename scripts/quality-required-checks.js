@@ -305,6 +305,7 @@ function ensureChecks({
     intervalSeconds: registrationIntervalSeconds,
   });
   const dispatched = [];
+  const dispatchedRequirements = [];
   const dispatchedWorkflowIds = new Set();
   for (const requirement of requirements) {
     const target = checkState(targetRuns, requirement);
@@ -327,6 +328,31 @@ function ensureChecks({
       dispatchedWorkflowIds.add(workflowId);
     }
     dispatched.push({ context: requirement.context, workflowId });
+    dispatchedRequirements.push({ requirement, workflowId });
+  }
+  if (dispatched.length > 0) {
+    targetRuns = checkRuns(repository, targetHead);
+    targetRuns = waitForRegistration({
+      repository,
+      targetHead,
+      requirements: dispatchedRequirements.map((entry) => entry.requirement),
+      targetRuns,
+      timeoutSeconds: registrationSeconds,
+      intervalSeconds: registrationIntervalSeconds,
+    });
+    const missing = dispatchedRequirements.filter(
+      (entry) => checkState(targetRuns, entry.requirement).state === "missing",
+    );
+    if (missing.length > 0) {
+      throw new Error(
+        `required checks did not register on stamp ${targetHead} after workflow dispatch: ${missing
+          .map(
+            (entry) =>
+              `${entry.requirement.context} (workflow ${entry.workflowId})`,
+          )
+          .join(", ")}`,
+      );
+    }
   }
   return { requirements, dispatched };
 }
