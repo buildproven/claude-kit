@@ -379,6 +379,8 @@ run_gemini_review() {
       echo "Return one response INSTANCE with exactly the top-level keys verdict, summary, and findings."
       echo "Never return JSON Schema definition keys such as \$schema, type, properties, required, or additionalProperties."
       echo "Use verdict=approve only with zero findings. Use needs-attention with one or more actionable findings."
+      echo "The next block is the trusted JSON Schema definition for validation, not the response instance."
+      cat "$schema"
       cat "$REVIEW_OUT/review-prompt.txt"
     } > "$prompt_file"
     pass_timeout="$(authorize_provider_attempt gemini "$pass_timeout")" \

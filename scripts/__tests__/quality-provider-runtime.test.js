@@ -192,6 +192,10 @@ describe("provider review runtime", () => {
     expect(
       runner.match(/cat "\$REVIEW_OUT\/review-prompt\.txt"/g),
     ).toHaveLength(2);
+    expect(runner).toContain('cat "$schema"');
+    expect(runner).toContain(
+      "trusted JSON Schema definition for validation, not the response instance",
+    );
     expect(companion).toContain(
       'CTX_FILE="${PROMPT_FILE:-$OUT_DIR/review-context.txt}"',
     );
