@@ -42,6 +42,10 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const {
+  authorizationReviews,
+  coveredReviews,
+} = require("./quality-review-history");
 
 const TELEMETRY_SCHEMA_VERSION = 4;
 const TELEMETRY_TERMINAL_STATES = new Set([
@@ -268,15 +272,14 @@ function reviewFields(manifest) {
       : ["codex", "gemini"].includes(provider.reviewer)
         ? "native"
         : null;
-  const coveredReviews = (manifest.reviews || []).filter((review) =>
-    ["success", "advisory", "exempt", "incomplete"].includes(review.status),
-  );
-  const incomplete = coveredReviews.some(
+  const covered = coveredReviews(manifest);
+  const authorized = authorizationReviews(manifest);
+  const incomplete = authorized.some(
     (review) => review.status === "incomplete",
   );
   const exempt =
-    coveredReviews.length > 0 &&
-    coveredReviews.every((review) => review.status === "exempt");
+    authorized.length > 0 &&
+    authorized.every((review) => review.status === "exempt");
   return {
     // Older manifests predate the experiment and remain reportable as null.
     // All newly-created manifests persist one of these arms at creation time.
@@ -290,10 +293,10 @@ function reviewFields(manifest) {
       ? "incomplete"
       : exempt
         ? "policy-exempt"
-        : coveredReviews.length > 0
+        : authorized.length > 0
           ? "complete"
           : null,
-    leadCount: coveredReviews.reduce(
+    leadCount: covered.reduce(
       (sum, review) =>
         sum + (Number.isInteger(review.leadCount) ? review.leadCount : 0),
       0,
