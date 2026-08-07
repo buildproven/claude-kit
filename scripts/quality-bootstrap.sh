@@ -147,16 +147,25 @@ if [ -n "$MANIFEST_ARG" ]; then
     echo "❌ quality invocation manifest not found: $MANIFEST_ARG" >&2
     exit 1
   }
-  # Read the resume identity through the loader, not `field`: field validates
-  # the manifest's recorded HEAD, which is deliberately stale immediately
-  # after a normal descendant repair.  `advance` is the operation that proves
-  # and persists that transition; validated field access resumes only after it.
-  RESUME_METADATA="$(node -e '
-    const q=require(process.argv[1]); const m=q.loadManifest(process.argv[2]).manifest;
-    process.stdout.write(JSON.stringify({root:m.repo.realpath, merge:m.options.merge === true, pr:m.repo.pr, lease:m.merge?.repositoryLease?.token || ""}));
-  ' "$SCRIPT_DIR/quality-invocation.js" "$MANIFEST_ARG")" || exit 1
-  RESUME_ROOT="$(printf '%s' "$RESUME_METADATA" | jq -er '.root')" || exit 1
+  RESUME_ROOT="$(node -e 'const q=require(process.argv[1]); process.stdout.write(q.loadManifest(process.argv[2]).manifest.repo.realpath)' \
+    "$SCRIPT_DIR/quality-invocation.js" "$MANIFEST_ARG")" || exit 1
   cd "$RESUME_ROOT" || exit 1
+  RESUME_CONTEXT="$(node -e '
+    const q = require(process.argv[1]);
+    const manifest = q.loadManifest(process.argv[2]).manifest;
+    process.stdout.write(JSON.stringify({
+      merge: manifest.options?.merge === true,
+      pr: manifest.repo.pr,
+      githubRepository: manifest.repo.githubRepository,
+    }));
+  ' "$SCRIPT_DIR/quality-invocation.js" "$MANIFEST_ARG")" || exit 1
+  RESUME_MERGE="$(printf '%s' "$RESUME_CONTEXT" | jq -r '.merge')" || exit 1
+  { [ "$RESUME_MERGE" = true ] || [ "$RESUME_MERGE" = false ]; } || {
+    echo "❌ resumed campaign has an invalid merge policy" >&2
+    exit 1
+  }
+  RESUME_PR="$(printf '%s' "$RESUME_CONTEXT" | jq -r '.pr // empty')" || exit 1
+  RESUME_GITHUB_REPOSITORY="$(printf '%s' "$RESUME_CONTEXT" | jq -r '.githubRepository // empty')" || exit 1
   APPROVAL_ONLY="${BS_QUALITY_APPROVAL_ONLY:-0}"
   { [ "$APPROVAL_ONLY" = 0 ] || [ "$APPROVAL_ONLY" = 1 ]; } || {
     echo "❌ invalid quality approval-only mode" >&2
@@ -182,19 +191,28 @@ if [ -n "$MANIFEST_ARG" ]; then
       exit 1
     fi
   fi
-  RESUME_MERGE="$(printf '%s' "$RESUME_METADATA" | jq -r '.merge')" || exit 1
   BS_QUALITY_REPOSITORY_LEASE_TOKEN=""
   if [ "$RESUME_MERGE" = true ]; then
     node "$SCRIPT_DIR/quality-repo-lease.js" acquire \
       --manifest "$MANIFEST_ARG" >/dev/null || exit 1
-    BS_QUALITY_REPOSITORY_LEASE_TOKEN="$(printf '%s' "$RESUME_METADATA" | jq -er '.lease')" || exit 1
+    BS_QUALITY_REPOSITORY_LEASE_TOKEN="$(node -e '
+      const q = require(process.argv[1]);
+      const token = q.loadManifest(process.argv[2]).manifest.merge?.repositoryLease?.token;
+      if (typeof token !== "string" || token.length === 0) process.exit(1);
+      process.stdout.write(token);
+    ' "$SCRIPT_DIR/quality-invocation.js" "$MANIFEST_ARG")" || {
+      echo "❌ resumed merge campaign has no repository lease credential" >&2
+      exit 1
+    }
     export BS_QUALITY_REPOSITORY_LEASE_TOKEN
   fi
   if [ "$APPROVAL_ONLY" != 1 ]; then
-    RESUME_PR="$(printf '%s' "$RESUME_METADATA" | jq -r '.pr')" || exit 1
     ADVANCE_ARGS=(advance "$MANIFEST_ARG")
     if [ -n "$RESUME_PR" ] && [ "$RESUME_PR" != null ]; then
-      RESUME_GITHUB_REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
+      [ -n "$RESUME_GITHUB_REPOSITORY" ] || {
+        echo "❌ resumed pull request has no protected repository identity" >&2
+        exit 1
+      }
       RESUME_PR_JSON="$(gh pr view "$RESUME_PR" --repo "$RESUME_GITHUB_REPOSITORY" \
         --json headRefName,headRepository,isCrossRepository 2>/dev/null)" || exit 1
       RESUME_HEAD_REF="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.headRefName')" || exit 1
