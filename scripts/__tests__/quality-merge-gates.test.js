@@ -225,15 +225,16 @@ describe("quality merge gates", () => {
     expect(STAMP_AND_MERGE).toMatch(/merge\.stampHead/);
     expect(STAMP_AND_MERGE).toMatch(/record-stamp/);
     expect(STAMP_AND_MERGE).toMatch(/quality-run-bounded\.sh/);
+    expect(STAMP_AND_MERGE).toMatch(/quality-required-checks\.js" wait/);
     expect(STAMP_AND_MERGE).toMatch(
-      /quality-wait-required-checks\.sh" --pr "\$PR"/,
+      /PREFLIGHT_BASE_PROTECTION" = unprotectable[\s\S]*quality-wait-required-checks\.sh/,
     );
     expect(
-      STAMP_AND_MERGE.indexOf("quality-wait-required-checks.sh"),
+      STAMP_AND_MERGE.indexOf('quality-required-checks.js" wait'),
     ).toBeLessThan(STAMP_AND_MERGE.lastIndexOf("quality-authorize-merge.sh"));
     expect(AUTHORIZE).toMatch(/persisted empty stamp/);
     expect(STAMP_AND_MERGE).toMatch(
-      /quality-wait-required-checks\.sh" --pr "\$PR" \|\| RC=\$\?/,
+      /--head "\$STAMP_HEAD" --timeout "\$CI_TIMEOUT" --interval 10 \|\| RC=\$\?/,
     );
     expect(AUTHORIZE).toMatch(
       /quality-ci-billing-waiver\.js[\s\S]*LEASE_ADMIN=true/,
@@ -245,7 +246,7 @@ describe("quality merge gates", () => {
       'node "$SCRIPT_DIR/quality-ci-billing-waiver.js"',
     );
     const requiredChecks = AUTHORIZE.indexOf(
-      'gh pr checks "$PR" --repo "$EXPECTED_REPOSITORY" --required',
+      'node "$SCRIPT_DIR/quality-required-checks.js" assert',
     );
     const finalWaiverValidation = AUTHORIZE.lastIndexOf(
       'node "$SCRIPT_DIR/quality-ci-billing-waiver.js"',
@@ -295,7 +296,7 @@ describe("quality merge gates", () => {
       /\[ "\$ATOMIC_BASE_FRESHNESS" = unprotectable \]; then[\s\S]*gh pr checks "\$PR" --repo "\$EXPECTED_REPOSITORY" >\/dev\/null/,
     );
     expect(AUTHORIZE).toMatch(
-      /else\s*\n\s*gh pr checks "\$PR" --repo "\$EXPECTED_REPOSITORY" --required/,
+      /else\s*\n\s*node "\$SCRIPT_DIR\/quality-required-checks\.js" assert/,
     );
     expect(
       AUTHORIZE.indexOf(

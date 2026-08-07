@@ -83,6 +83,10 @@ without relabeling the experiment treatment. Without this flag, ordinary
 provider policy remains unchanged and telemetry infers the received arm from
 the actual reviewer.
 
+The review runner owns one bounded same-range retry for an incomplete v2
+provider-failure attestation. If that retry is also incomplete, it records
+`provider-incomplete` and stops before merge authorization.
+
 `--verify-app` (BUI-306) is opt-in only — never enabled by default. Every
 other gate (lint/type/build/test/security) proves the code compiles and its
 unit tests pass; none of them boot the app. This flag adds a `verify-app`
