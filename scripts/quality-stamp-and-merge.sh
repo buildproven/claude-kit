@@ -273,10 +273,14 @@ if [ "$PREFLIGHT_BASE_PROTECTION" = unprotectable ]; then
   bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CI_TIMEOUT" -- \
     bash "$SCRIPT_DIR/quality-wait-required-checks.sh" --pr "$PR" || RC=$?
 else
-  node "$SCRIPT_DIR/quality-required-checks.js" ensure \
+  ENSURE_JSON="$(node "$SCRIPT_DIR/quality-required-checks.js" ensure \
     --repo "$EXPECTED_REPOSITORY" --base "$BASE_BRANCH" \
     --source-head "$REVIEWED_HEAD" --head "$STAMP_HEAD" \
-    --head-ref "$EXPECTED_HEAD_REF" >/dev/null || exit 1
+    --head-ref "$EXPECTED_HEAD_REF")" || exit 1
+  if [ "$(printf '%s' "$ENSURE_JSON" | jq '.deferred | length')" -gt 0 ]; then
+    printf '%s' "$ENSURE_JSON" | jq -r \
+      '.deferred[] | "[quality] exact-head workflow registered; required check remains deferred: \(.context) workflow=\(.workflowId) run=\(.runId) status=\(.status)"' >&2
+  fi
   bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CI_TIMEOUT" -- \
     node "$SCRIPT_DIR/quality-required-checks.js" wait \
       --repo "$EXPECTED_REPOSITORY" --base "$BASE_BRANCH" \
