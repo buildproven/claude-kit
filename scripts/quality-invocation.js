@@ -1345,15 +1345,16 @@ function diversityUpgradeEligibility(
   return "critical exact-head discovery lacked required provider diversity";
 }
 
-function diversityUpgradeManifest(
+function supersedingManifest(
   existingPath,
   existing,
   campaignIdentity,
   reason,
+  transition,
 ) {
   const upgradeKey = {
     campaign: campaignIdentity,
-    diversityUpgradeOf: existing.invocationId,
+    [transition]: existing.invocationId,
   };
   const invocationId = deterministicInvocationId(upgradeKey);
   const stateRoot = path.join(
@@ -1433,7 +1434,7 @@ function diversityUpgradeManifest(
     });
   } finally {
     if (credential)
-      lease.release(existingPath, credential.token, "diversity-upgraded");
+      lease.release(existingPath, credential.token, "superseded");
     if (previousToken === undefined)
       delete process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
     else process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = previousToken;
@@ -1441,9 +1442,50 @@ function diversityUpgradeManifest(
   return manifestPath;
 }
 
+// This is deliberately restricted to failures before any quality evidence was
+// produced.  A missing executable (normally an uninstalled lockfile
+// dependency) is an operator-environment prerequisite, not a code verdict;
+// once repaired, the exact same revision needs a new immutable packet.  It
+// must not reopen a real gate failure, a timeout, a provider run, or a
+// campaign with findings.
+function environmentRecoveryEligibility(
+  existing,
+  existingIdentity,
+  campaignIdentity,
+) {
+  if (
+    JSON.stringify(canonicalJson(existingIdentity)) !==
+    JSON.stringify(canonicalJson(campaignIdentity))
+  )
+    return null;
+  if (existing.terminalState?.state !== "blocked") return null;
+  if (!/^gate:[A-Za-z0-9_-]+$/.test(existing.terminalState?.detail || ""))
+    return null;
+  if ((existing.reviews || []).length !== 0) return null;
+  if ((existing.governor?.providerAttempts || []).length !== 0) return null;
+  const failed = (existing.gates || []).filter((gate) => gate.status === "failed");
+  if (failed.length !== 1) return null;
+  if (!/exit status 127$/.test(failed[0].reason || "")) return null;
+  return "bootstrap environment lacked the required gate executable";
+}
+
 function existingCampaign(manifestPath, campaignIdentity) {
   const existing = loadManifest(manifestPath).manifest;
   const existingIdentity = manifestIdentity(existing);
+  const environmentReason = environmentRecoveryEligibility(
+    existing,
+    existingIdentity,
+    campaignIdentity,
+  );
+  if (environmentReason) {
+    return supersedingManifest(
+      manifestPath,
+      existing,
+      campaignIdentity,
+      environmentReason,
+      "environmentRecoveryOf",
+    );
+  }
   if (
     JSON.stringify(canonicalJson(existingIdentity)) !==
     JSON.stringify(canonicalJson(campaignIdentity))
@@ -1454,11 +1496,12 @@ function existingCampaign(manifestPath, campaignIdentity) {
       campaignIdentity,
     );
     if (diversityReason) {
-      return diversityUpgradeManifest(
+      return supersedingManifest(
         manifestPath,
         existing,
         campaignIdentity,
         diversityReason,
+        "diversityUpgradeOf",
       );
     }
     if (!canFailOverProvider(existing, existingIdentity, campaignIdentity)) {

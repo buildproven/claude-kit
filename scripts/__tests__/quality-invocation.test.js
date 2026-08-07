@@ -926,6 +926,34 @@ describe("quality invocation manifest", () => {
     ).toThrow(/deterministic quality campaign identity collision/);
   });
 
+  it("supersedes a pre-review missing-executable gate failure", () => {
+    const root = repo("environment-recovery");
+    const predecessor = create(root);
+    invocation.withManifestLock(predecessor, (manifest) => {
+      manifest.gates.push({
+        name: "lint",
+        status: "failed",
+        reason: "gate 'lint' failed with exit status 127",
+        head: manifest.revisions.currentHead,
+      });
+    });
+    invocation.recordTerminalState(predecessor, "blocked", "gate:lint");
+
+    const recovered = create(root);
+    expect(recovered).not.toBe(predecessor);
+    expect(JSON.parse(readFileSync(recovered, "utf8"))).toMatchObject({
+      supersedes: {
+        invocationId: JSON.parse(readFileSync(predecessor, "utf8")).invocationId,
+        reason: "bootstrap environment lacked the required gate executable",
+      },
+      gates: [],
+      reviews: [],
+    });
+    expect(JSON.parse(readFileSync(predecessor, "utf8")).supersededBy).toMatchObject({
+      invocationId: JSON.parse(readFileSync(recovered, "utf8")).invocationId,
+    });
+  });
+
   it("resumes after review without treating provider evidence as configuration drift", () => {
     const root = repo("reviewed-provider-identity");
     const env = {
