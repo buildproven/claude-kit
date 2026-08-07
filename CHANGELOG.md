@@ -12,6 +12,20 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.4.1](https://github.com/buildproven/claude-kit/compare/v4.4.0...v4.4.1) (2026-08-07)
+
+
+### Bug Fixes
+
+* fund remediation mutation evidence ([#296](https://github.com/buildproven/claude-kit/issues/296)) ([4ca658b](https://github.com/buildproven/claude-kit/commit/4ca658b326a12dc7e48d030fcaa5e9475e480ec4))
+* harden untrusted review inputs ([#289](https://github.com/buildproven/claude-kit/issues/289)) ([fe2fb48](https://github.com/buildproven/claude-kit/commit/fe2fb48ae74c5ea1b3fdd7f7366dbb0aad98391f))
+* **quality:** allow critical diversity recovery ([#291](https://github.com/buildproven/claude-kit/issues/291)) ([3ebc4e6](https://github.com/buildproven/claude-kit/commit/3ebc4e6b86208682a1d2899dae00cee66dd05b94))
+* **quality:** bind overrides to exact manifests ([#290](https://github.com/buildproven/claude-kit/issues/290)) ([af09c05](https://github.com/buildproven/claude-kit/commit/af09c0555c1cacd2a97773f3117677a6047eb89d))
+* **quality:** recover campaigns across lifecycle changes ([#292](https://github.com/buildproven/claude-kit/issues/292)) ([ec0cce0](https://github.com/buildproven/claude-kit/commit/ec0cce0af1cb5f5918cdf5e38a5eb41705806cc4))
+* **quality:** reserve lease-aware review capacity ([b4731f7](https://github.com/buildproven/claude-kit/commit/b4731f72aa6364618e7ce9bd8439533f378ce748))
+* **quality:** serialize xdist mutation probes ([#293](https://github.com/buildproven/claude-kit/issues/293)) ([01ca1e8](https://github.com/buildproven/claude-kit/commit/01ca1e81200703d9f923a0de792d590cc7c3285c))
+* **quality:** track delayed required check workflows ([#295](https://github.com/buildproven/claude-kit/issues/295)) ([58e7161](https://github.com/buildproven/claude-kit/commit/58e7161ce81a35655092639ebee2966b71ff00dd))
+
 ## [4.4.0](https://github.com/buildproven/claude-kit/compare/v4.3.0...v4.4.0) (2026-08-06)
 
 
