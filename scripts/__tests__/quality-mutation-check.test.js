@@ -38,9 +38,17 @@ node logic.test.js
 printf "%s\\n" "$*"
 node logic.test.js
 status=$?
-case " $* " in
+${
+  options.pytestXdistSlowShutdown
+    ? `case " $* " in
+  *" -n 0 "*) exit "$status" ;;
+esac
+`
+    : `case " $* " in
   *" -x "*) exit "$status" ;;
 esac
+`
+}
 sleep 10
 exit "$status"
 `,
@@ -346,14 +354,18 @@ describe("quality-mutation-check", () => {
       path.join(stateRoot, "mutation", `${head}.logic.js.log`),
       "utf8",
     );
-    expect(log).toContain("-q -n 3 --dist worksteal -x");
+    expect(log).toContain("-q -n 3 --dist worksteal -n 0 -x");
   });
 
-  it("places pytest fail-fast before the option terminator", () => {
+  it("disables xdist for a fail-fast controlled-revert run", () => {
     const { root, manifest } = fixture(
-      "pytest-option-terminator",
+      "pytest-xdist-shutdown",
       "const { isAllowed } = require('./logic');\nif (!isAllowed('admin')) process.exit(1);\n",
-      { pytestRunner: true, pytestArgs: ["-q", "--", "tests"] },
+      {
+        pytestRunner: true,
+        pytestXdistSlowShutdown: true,
+        checkSeconds: 3,
+      },
     );
 
     expect(runMutation(root, manifest)).toMatch(
@@ -373,7 +385,38 @@ describe("quality-mutation-check", () => {
       path.join(stateRoot, "mutation", `${head}.logic.js.log`),
       "utf8",
     );
-    expect(log).toContain("-q -x -- tests");
+    expect(log).toContain("-q -n 3 --dist worksteal -n 0 -x");
+  });
+
+  it("stops xdist detection and places pytest fail-fast before the option terminator", () => {
+    const { root, manifest } = fixture(
+      "pytest-option-terminator",
+      "const { isAllowed } = require('./logic');\nif (!isAllowed('admin')) process.exit(1);\n",
+      {
+        pytestRunner: true,
+        pytestArgs: ["-q", "--", "-n"],
+      },
+    );
+
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+    const stateRoot = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "stateRoot"],
+      { encoding: "utf8" },
+    ).trim();
+    const head = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "revisions.currentHead"],
+      { encoding: "utf8" },
+    ).trim();
+    const log = readFileSync(
+      path.join(stateRoot, "mutation", `${head}.logic.js.log`),
+      "utf8",
+    );
+    expect(log).toContain("-q -x -- -n");
+    expect(log).not.toContain("-n 0");
   });
 
   it("uses pytest fail-fast for an npm test script backed by pytest", () => {
@@ -1183,7 +1226,7 @@ describe("quality-mutation-check", () => {
       { checkSeconds: 5 },
     );
     expect(() => runMutation(root, manifest)).toThrow(
-      /a hang is not red-capable evidence/,
+      /serialized baseline test timed out; no red-capable evidence/,
     );
     const state = JSON.parse(readFileSync(manifest, "utf8"));
     expect(state.mutation).toBeNull();
