@@ -5,6 +5,9 @@
 Accepted for BUI-572 after an independent high-reasoning architecture review
 found no unresolved correctness defect.
 
+The BUI-709 recovery amendment below is accepted after an independent
+high-reasoning architecture review found no unresolved correctness defect.
+
 ## Context
 
 BuildProven protects `main` with strict required status checks. That is the
@@ -86,9 +89,10 @@ Add a repository-scoped merge lease to the public quality runtime.
    an exact active lease even if an earlier diagnostic terminal state remains
    `blocked`; that historical outcome is never relabelled. Explicitly
    non-reenterable outcomes and `verified-unmerged` also release. Parsed
-   provider output that is incomplete or violates the review contract is
-   explicitly non-reenterable: the bounded attempt has been consumed and a new
-   invocation is required, so those terminal states release immediately. A
+   provider output that is incomplete or violates the review contract remains
+   resumable while the governor has an authorized same-range retry. Only a
+   `provider-incomplete` terminal state recorded after that bounded retry is
+   exhausted is non-reenterable and releases immediately. A
    blocked, interrupted, or timed-out campaign retains the lease for exact
    manifest resumption and eventually requires the explicit stale-owner
    recovery path if abandoned. Release decisions never infer merge success
@@ -120,6 +124,56 @@ Add a repository-scoped merge lease to the public quality runtime.
    under the metadata guard, which fences any suspended old process that has
    not entered the merge critical section. An unsafe, malformed,
    symlinked, cross-repository, or recent owner fails closed.
+9. Authoritative merge reconciliation is repository-scoped and survives removal
+   of the campaign's linked worktree. The immutable manifest records the
+   canonical Git common directory at campaign creation; recovery compares that
+   existing directory, manifest path, invocation, pull request, head ref, and
+   repository identity with the active lease record. GitHub read-back uses the
+   explicit protected repository and pull request from the manifest and does
+   not use the vanished checkout as ambient identity. Ordinary active phases
+   still validate the live worktree exactly; only the explicit terminal
+   reconciliation path may use recorded repository identity after that
+   worktree is gone. A missing shared Git directory, mismatched owner tuple, or
+   ambiguous GitHub result remains quarantined.
+10. An incomplete provider-failure attestation is durable audit evidence, not
+    a successful review checkpoint. A bounded, governor-authorized retry may
+    review the same exact `from..to` range without advancing HEAD. Its artifacts
+    use a distinct attempt directory; the incomplete artifact remains in the
+    manifest and signed evidence chain. A later complete attestation for that
+    same range supersedes the incomplete attestation only for contiguous merge
+    coverage and final review status. It does not erase partial findings,
+    provider usage, or failure metadata, and a second incomplete result remains
+    blocking. This retry contract is distinct from a completed critical review
+    that truthfully records incomplete model-family diversity. Default-governed
+    campaigns reserve both provider starts and cumulative provider execution
+    time for the retry; an explicit operator provider-time cap remains
+    authoritative and may stop it fail-closed. A legacy manifest without cap
+    provenance is treated as operator-owned and is never expanded on resume.
+    Provider-start capacity is keyed by review-attempt generation as well as
+    round. An initial primary/fallback path therefore cannot consume the
+    separately funded same-range retry before an incomplete attestation exists;
+    schema-v2 plans migrate by splitting their already-reserved round allowance
+    evenly without increasing the absolute start or time caps.
+11. The empty signed stamp remains the protected pull-request head, so required
+    CI is re-run for that exact commit before merge. Stamp publication resolves
+    the required contexts and GitHub App IDs from classic branch protection and
+    effective rulesets, maps each missing context to its reviewed-head Actions
+    workflow, and dispatches that workflow on the stamped branch. Registration,
+    completion, and final authorization read check-runs from the exact stamp SHA
+    and match both context and required App ID. They do not rely on the pull
+    request check rollup, which can omit a workflow-dispatch run even though its
+    commit check-run is authoritative. Missing mappings, unavailable required
+    contexts, wrong-app checks, unsuccessful conclusions, and timeouts all fail
+    closed; no status is synthesized and no protection is bypassed. A classic
+    protection read may be empty only for GitHub's explicit `404 Branch not
+protected` response. Ruleset reads and every other API failure remain hard
+    errors, so a partial observation cannot silently shrink the required set.
+    Before dispatch, the runner gives the ordinary pull-request event a bounded
+    registration window and accepts a dispatch failure only if exact-head
+    read-back proves the required check registered concurrently. Check-run
+    discovery follows every page declared by GitHub's `total_count`. A
+    plan-proven unprotectable repository has no required-context source, so it
+    retains the separate all-registered-PR-check waiter and final guard.
 
 ## Lease record
 
@@ -203,8 +257,17 @@ critical section, not to the campaign lease or its six-hour policy.
   rebase-and-resume requirement, never an implicit merge or silent retry.
 - A failed or crashed owner cannot be guessed dead while its manifest is recent,
   and an explicitly reclaimed owner cannot pass the next fencing check.
+- Removing a campaign worktree cannot make an otherwise authoritative merged or
+  closed-unmerged GitHub outcome unreconcilable while its shared repository and
+  exact lease identity remain available.
+- Parser, timeout, and provider failures cannot consume the documented retry by
+  making an incomplete attestation look like successful HEAD coverage; only a
+  complete attestation advances the review checkpoint.
 - Direct or break-glass merges outside quality remain visible policy violations;
   the lease does not pretend it can serialize actors that bypass the workflow.
+- A stamp is never merge-authorized from reviewed-head CI or a PR-level rollup;
+  every required context must be successful from its required GitHub App on the
+  exact persisted stamp SHA.
 
 ## Verification
 
@@ -257,9 +320,20 @@ critical section, not to the campaign lease or its six-hour policy.
   the PR without merge. Time and negative observations alone never admit
   another campaign. The reconciliation regression test removes the process
   credential and proves the explicit invocation/PR confirmation path remains
-  available.
+  available. A second regression test removes the exact linked worktree before
+  reconciliation and proves the same exact-owner/remote-outcome checks release
+  the lease without recreating that path.
+- A provider-retry regression records an incomplete attestation, reuses the
+  governor-authorized same-HEAD range in a distinct artifact directory, records
+  a complete retry, and proves the incomplete evidence remains auditable while
+  final coverage becomes complete. A double-incomplete retry remains
+  incomplete and merge-blocking.
 - Full repository verification, mutation evidence, protected CI, and
   exact-head review pass before release.
+- Stamp-CI regressions prove missing exact-head checks dispatch the corresponding
+  reviewed-head workflow once, wrong-app and stale failed runs do not authorize,
+  and final authorization reads the exact stamp check-runs rather than PR-level
+  check aggregation.
 
 ## Consequences
 

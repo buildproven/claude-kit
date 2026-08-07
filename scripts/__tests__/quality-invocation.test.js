@@ -559,17 +559,23 @@ if [ "$1 $2" = "repo view" ]; then
   exit 0
 fi
 if [ "$1" = "api" ]; then
-  if [[ "$2" == *"protection/required_status_checks"* ]]; then
+  if [[ "$*" == *"protection/required_status_checks"* ]]; then
     if [ "\${QUALITY_TEST_STRICT_PROTECTION:-}" = true ]; then
-      printf '%s\\n' 'true'
+      if [[ "$*" == *"--jq .strict"* ]]; then
+        printf '%s\\n' 'true'
+      else
+        printf '%s\\n' '{"strict":true,"contexts":["quality"],"checks":[{"context":"quality","app_id":15368}]}'
+      fi
       exit 0
     fi
+    printf '%s\\n' '{"message":"Branch not protected"}'
+    echo 'gh: Branch not protected (HTTP 404)' >&2
     exit 1
   fi
-  if [[ "$2" == *"/rules/branches/"* ]]; then
+  if [[ "$*" == *"/rules/branches/"* ]]; then
     case "\${QUALITY_TEST_EFFECTIVE_RULES:-none}" in
       strict)
-        printf '%s\\n' '[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true}}]'
+        printf '%s\\n' '[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"quality","integration_id":15368}]}}]'
         exit 0
         ;;
       queue)
@@ -579,6 +585,10 @@ if [ "$1" = "api" ]; then
       unavailable) exit 1 ;;
       *) printf '%s\\n' '[]'; exit 0 ;;
     esac
+  fi
+  if [[ "$*" == *"/check-runs"* ]]; then
+    printf '%s\\n' '{"check_runs":[{"id":1,"name":"quality","status":"completed","conclusion":"success","app":{"id":15368}}]}'
+    exit 0
   fi
   printf '%s\\n' '[]'
   exit 0
@@ -2452,6 +2462,68 @@ exec "${realGit}" "$@"
     expect(authorization.remainingSeconds).toBeLessThan(120);
   });
 
+  it("resumes a leased merge campaign after descendant remediation through bootstrap", () => {
+    const root = repo("merge-bootstrap-descendant-resume");
+    const originalToken = process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+    const manifestPath = create(root, ["--merge", "--pr", "7"]);
+    const initial = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const bin = makeTempDir("quality-merge-resume-gh-");
+    writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env bash
+if [ "$1 $2" = "repo view" ]; then
+  printf '%s\n' '${initial.repo.githubRepository}'
+  exit 0
+fi
+if [ "$1 $2" = "pr view" ]; then
+  printf '%s\n' '{"headRefName":"${initial.repo.headRefName}","headRepository":{"nameWithOwner":"${initial.repo.headRepository}"},"isCrossRepository":false}'
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(path.join(bin, "gh"), 0o755);
+    writeFileSync(
+      path.join(root, "merge-remediation.js"),
+      "export const remediated = true;\n",
+    );
+    git(root, ["add", "."]);
+    git(root, ["commit", "-q", "-m", "fix: remediate merge review"]);
+    const descendantHead = git(root, ["rev-parse", "HEAD"]);
+    delete process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+
+    try {
+      const result = spawnSync(
+        "bash",
+        [BOOTSTRAP, "--manifest", manifestPath],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const resumed = JSON.parse(readFileSync(manifestPath, "utf8"));
+      expect(resumed.revisions.currentHead).toBe(descendantHead);
+      expect(resumed.merge.repositoryLease.token).toBeTruthy();
+      expect(lease.status(manifestPath)).toMatchObject({
+        state: "active",
+        repository: initial.repo.githubRepository.toLowerCase(),
+      });
+      lease.release(
+        manifestPath,
+        resumed.merge.repositoryLease.token,
+        "test-complete",
+      );
+    } finally {
+      if (originalToken === undefined) {
+        delete process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+      } else {
+        process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = originalToken;
+      }
+    }
+  });
+
   it("shares cumulative execution time across fallback providers", () => {
     const root = repo("provider-fallback-window");
     const manifest = create(root, [], {
@@ -2555,6 +2627,58 @@ exec "${realGit}" "$@"
     }
   });
 
+  it("releases a merge lease for a later lifecycle outcome without rewriting terminal history", () => {
+    const root = repo("terminal-history-lease-release");
+    const manifest = create(root, ["--merge"]);
+
+    expect(
+      execFileSync(
+        "node",
+        [
+          INVOCATION,
+          "terminal-state",
+          manifest,
+          "--state",
+          "blocked",
+          "--detail",
+          "prior-failure",
+        ],
+        { cwd: root, encoding: "utf8" },
+      ).trim(),
+    ).toBe("blocked");
+    expect(lease.status(manifest)).toMatchObject({
+      required: true,
+      state: "active",
+      owned: true,
+    });
+
+    expect(
+      execFileSync(
+        "node",
+        [
+          INVOCATION,
+          "terminal-state",
+          manifest,
+          "--state",
+          "provider-incomplete",
+          "--detail",
+          "retry-exhausted",
+        ],
+        { cwd: root, encoding: "utf8" },
+      ).trim(),
+    ).toBe("blocked");
+    expect(
+      invocation.loadManifest(manifest).manifest.terminalState,
+    ).toMatchObject({
+      state: "blocked",
+      detail: "prior-failure",
+    });
+    expect(lease.status(manifest)).toEqual({
+      required: true,
+      state: "missing",
+    });
+  });
+
   it("stops the documented sequence when merge lease authorization fails", () => {
     const root = repo("merge-round-lease-failure");
     const manifest = create(root, ["--merge"]);
@@ -2596,8 +2720,10 @@ exec "${realGit}" "$@"
     const state = JSON.parse(readFileSync(manifest, "utf8"));
     const head = state.revisions.currentHead;
     state.governor.providerAttemptPlan = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       rounds: { 1: 2, 2: 2 },
+      failureRetryStarts: 2,
+      failureRetrySeconds: 600,
     };
     state.governor.maxProviderAttempts = 4;
     state.governor.roundsUsed = 1;
@@ -2646,6 +2772,32 @@ exec "${realGit}" "$@"
         { cwd: root },
       ).status,
     ).toBe(0);
+    execFileSync(
+      "node",
+      [INVOCATION, "provider-complete", manifest, "--provider", "codex"],
+      { cwd: root },
+    );
+    expect(
+      spawnSync(
+        "node",
+        [INVOCATION, "provider-attempt", manifest, "--provider", "claude"],
+        { cwd: root },
+      ).status,
+    ).toBe(0);
+    execFileSync(
+      "node",
+      [INVOCATION, "provider-complete", manifest, "--provider", "claude"],
+      { cwd: root },
+    );
+    const verificationExhausted = spawnSync(
+      "node",
+      [INVOCATION, "provider-attempt", manifest, "--provider", "gemini"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(verificationExhausted.status).not.toBe(0);
+    expect(verificationExhausted.stderr).toMatch(
+      /capacity exhausted for review round 2/,
+    );
   });
 
   it("derives non-borrowable provider capacity from the resolved runtime plan", () => {
@@ -2658,10 +2810,200 @@ exec "${realGit}" "$@"
     const state = JSON.parse(readFileSync(manifest, "utf8"));
     const passes = Math.max(1, state.risk.runtime.reviewPasses);
     expect(state.governor.providerAttemptPlan).toEqual({
-      schemaVersion: 1,
-      rounds: { 1: passes, 2: 1 },
+      schemaVersion: 3,
+      rounds: { 1: passes * 2, 2: 2 },
+      perReview: { 1: passes, 2: 1 },
+      failureRetryStarts: passes + 1,
+      failureRetrySeconds:
+        state.risk.runtime.reviewSeconds +
+        state.risk.runtime.reviewReserveSeconds,
     });
-    expect(state.governor.maxProviderAttempts).toBe(passes + 1);
+    expect(state.governor.maxProviderAttempts).toBe((passes + 1) * 2);
+    expect(state.governor.providerSecondsLimit).toBe(
+      state.risk.runtime.reviewSeconds * 2 +
+        state.risk.runtime.reviewReserveSeconds * 2,
+    );
+  });
+
+  it("preserves an explicit cumulative provider-time cap", () => {
+    const root = repo("explicit-provider-time-cap");
+    const env = {
+      ...process.env,
+      BS_QUALITY_MAX_PROVIDER_ATTEMPTS: "1",
+      BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS: "120",
+    };
+    const manifest = create(root, [], env);
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root, env });
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.governor.providerSecondsLimitExplicit).toBe(true);
+    expect(state.governor.providerSecondsLimit).toBe(120);
+  });
+
+  it("funds every configured discovery pass and its bounded retry", () => {
+    const root = repo("multi-pass-provider-time-capacity");
+    const manifest = create(root, [], {
+      BS_QUALITY_MAX_PROVIDER_ATTEMPTS: "1",
+    });
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "medium",
+        taskType: "bugfix",
+        score: 35,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 2,
+        "review-seconds": 180,
+        "review-reserve-seconds": 120,
+      });
+    });
+    const state = invocation.loadManifest(manifest).manifest;
+    expect(state.governor.providerAttemptPlan).toEqual({
+      schemaVersion: 3,
+      rounds: { 1: 4, 2: 2 },
+      perReview: { 1: 2, 2: 1 },
+      failureRetryStarts: 3,
+      failureRetrySeconds: 480,
+    });
+    expect(state.governor.maxProviderAttempts).toBe(6);
+    expect(state.governor.providerSecondsLimit).toBe(960);
+  });
+
+  it("migrates a persisted provider plan before reserving an incomplete retry", () => {
+    const root = repo("legacy-incomplete-retry-capacity");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "medium",
+        taskType: "bugfix",
+        score: 35,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["code-reviewer"], {
+        domain: "general",
+        rule: "general-review",
+      });
+    });
+    prepareIncompleteReview(root, manifest);
+    const legacy = invocation.loadManifest(manifest).manifest;
+    const legacyProviderSeconds = legacy.governor.providerSecondsLimit;
+    const retrySeconds =
+      2 * legacy.risk.runtime.reviewSeconds +
+      legacy.risk.runtime.reviewReserveSeconds;
+    invocation.withManifestLock(manifest, (loaded) => {
+      loaded.governor.providerAttemptPlan = {
+        schemaVersion: 1,
+        rounds: { 1: 2, 2: 1 },
+      };
+      loaded.governor.maxProviderAttempts = 3;
+    });
+
+    execFileSync("node", [INVOCATION, "reserve-incomplete-retry", manifest], {
+      cwd: root,
+    });
+    const state = invocation.loadManifest(manifest).manifest;
+    expect(state.governor.providerAttemptPlan).toEqual({
+      schemaVersion: 3,
+      rounds: { 1: 4, 2: 2 },
+      perReview: { 1: 2, 2: 1 },
+      failureRetryStarts: 3,
+      failureRetrySeconds: retrySeconds,
+    });
+    expect(state.governor.maxProviderAttempts).toBe(6);
+    expect(state.governor.providerSecondsLimit).toBe(
+      legacyProviderSeconds + retrySeconds,
+    );
+  });
+
+  it("does not expand an ambiguous legacy provider-time cap", () => {
+    const root = repo("legacy-provider-time-cap");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "medium",
+        taskType: "bugfix",
+        score: 35,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["code-reviewer"], {
+        domain: "general",
+        rule: "general-review",
+      });
+    });
+    prepareIncompleteReview(root, manifest);
+    invocation.withManifestLock(manifest, (loaded) => {
+      delete loaded.governor.providerSecondsLimitExplicit;
+      loaded.governor.providerAttemptPlan = {
+        schemaVersion: 1,
+        rounds: { 1: 2, 2: 1 },
+      };
+      loaded.governor.maxProviderAttempts = 3;
+      loaded.governor.providerSecondsLimit = 137;
+    });
+
+    execFileSync("node", [INVOCATION, "reserve-incomplete-retry", manifest], {
+      cwd: root,
+    });
+    const state = invocation.loadManifest(manifest).manifest;
+    expect(state.governor.providerAttemptPlan.schemaVersion).toBe(3);
+    expect(state.governor.providerSecondsLimit).toBe(137);
+  });
+
+  it("isolates same-round retry capacity from the initial provider generation", () => {
+    const root = repo("provider-retry-generation-capacity");
+    const env = { ...process.env, BS_QUALITY_MAX_PROVIDER_ATTEMPTS: "1" };
+    const manifest = create(root, [], env);
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root, env });
+    const state = invocation.loadManifest(manifest).manifest;
+    invocation.withManifestLock(manifest, (loaded) => {
+      loaded.governor.roundsUsed = 1;
+      loaded.governor.authorizedAttempts = [
+        {
+          number: 1,
+          token: "discovery",
+          head: loaded.revisions.currentHead,
+          consumedAt: null,
+        },
+      ];
+    });
+
+    execFileSync(
+      "node",
+      [INVOCATION, "provider-attempt", manifest, "--provider", "codex"],
+      { cwd: root },
+    );
+    execFileSync(
+      "node",
+      [INVOCATION, "provider-complete", manifest, "--provider", "codex"],
+      { cwd: root },
+    );
+    const borrowed = spawnSync(
+      "node",
+      [INVOCATION, "provider-attempt", manifest, "--provider", "claude"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(borrowed.status).not.toBe(0);
+    expect(borrowed.stderr).toMatch(/capacity exhausted/);
+
+    invocation.withManifestLock(manifest, (loaded) => {
+      loaded.reviews.push({
+        status: "incomplete",
+        provider: "review-incomplete",
+        from: state.revisions.baseSha,
+        to: state.revisions.currentHead,
+      });
+      invocation.reserveIncompleteRetry(loaded);
+    });
+    expect(
+      spawnSync(
+        "node",
+        [INVOCATION, "provider-attempt", manifest, "--provider", "claude"],
+        { cwd: root, encoding: "utf8" },
+      ).status,
+    ).toBe(0);
   });
 
   it("does not accept break-glass approval through wrapper argv", () => {
@@ -3252,9 +3594,10 @@ exit 99
     expect(validationState.governor.gateSecondsUsed).toBe(0);
     expect(validationState.governor.providerSecondsUsed).toBe(0);
     // The budget is allocated before review for both the initial exact head and
-    // the one permitted remediation head; advancing does not mint more time.
+    // the one permitted remediation head, including each phase's single
+    // provider-failure retry; advancing does not mint more time.
     expect(validationState.governor.gateSecondsLimit).toBe(1200);
-    expect(validationState.governor.providerSecondsLimit).toBe(900);
+    expect(validationState.governor.providerSecondsLimit).toBe(1080);
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
     expect(
       JSON.parse(readFileSync(manifest, "utf8")).governor.providerSecondsUsed,
@@ -3554,9 +3897,15 @@ if [ "$1 $2" = "repo view" ]; then
   exit 0
 fi
 if [ "$1" = "api" ]; then
-  if [[ "$2" == *"protection/required_status_checks"* ]]; then
+  if [[ "$*" == *"protection/required_status_checks"* ]]; then
     [ ! -f ${JSON.stringify(denyPreflight)} ] || exit 1
-    printf '%s\\n' 'true'
+    if [[ "$*" == *"--jq .strict"* ]]; then
+      printf '%s\\n' 'true'
+    else
+      printf '%s\\n' '{"strict":true,"contexts":["quality"],"checks":[{"context":"quality","app_id":15368}]}'
+    fi
+  elif [[ "$*" == *"/check-runs"* ]]; then
+    printf '%s\\n' '{"check_runs":[{"id":1,"name":"quality","status":"completed","conclusion":"success","app":{"id":15368}}]}'
   elif [ -f ${JSON.stringify(denyPreflight)} ]; then
     printf '%s\\n' '[{"type":"merge_queue","parameters":{"grouping_strategy":"ALLGREEN"}}]'
   else
@@ -3642,7 +3991,7 @@ exit 1
       `--force-with-lease=refs/heads/feature:${reviewedHead} origin ${stampHead}:refs/heads/feature`,
     );
     const calls = readFileSync(log, "utf8");
-    expect(calls.indexOf("pr checks 1 --required --watch")).toBeLessThan(
+    expect(calls.indexOf(`/commits/${stampHead}/check-runs`)).toBeLessThan(
       calls.indexOf("pr merge 1"),
     );
   }, 90_000);
@@ -3829,17 +4178,14 @@ exit 1
     ]);
     recordMutationFixture(manifest);
 
-    const authorization = JSON.parse(
+    expect(() =>
       execFileSync("node", [INVOCATION, "review-authorization", manifest], {
         cwd: root,
         encoding: "utf8",
       }),
+    ).toThrow(
+      "provider review requires its authorized same-range retry before merge authorization",
     );
-    expect(authorization).toMatchObject({
-      reviewStatus: "incomplete",
-      leads: 1,
-      blockingCount: 0,
-    });
     const inventory = JSON.parse(
       readFileSync(
         path.join(
@@ -3901,7 +4247,7 @@ exit 1
     ]);
   });
 
-  it("authorizes deterministic gates while signing incomplete AI discovery", () => {
+  it("blocks merge authorization while incomplete AI discovery awaits retry", () => {
     const root = repo("incomplete-advisory-review");
     const manifest = create(root);
     invocation.withManifestLock(manifest, (loaded) => {
@@ -3921,6 +4267,49 @@ exit 1
     prepareIncompleteReview(root, manifest);
     recordMutationFixture(manifest);
 
+    expect(() =>
+      execFileSync("node", [INVOCATION, "review-authorization", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    ).toThrow(
+      "provider review requires its authorized same-range retry before merge authorization",
+    );
+  });
+
+  it("retries an incomplete provider attestation on the same exact HEAD", () => {
+    const root = repo("incomplete-provider-retry");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "medium",
+        taskType: "bugfix",
+        score: 35,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["code-reviewer"], {
+        domain: "general",
+        rule: "general-review",
+      });
+    });
+
+    const incomplete = prepareIncompleteReview(root, manifest);
+    const completed = prepareCodexReview(root, manifest);
+    expect(completed).toMatchObject({
+      round: incomplete.round,
+      from: incomplete.from,
+      to: incomplete.to,
+    });
+    expect(completed.artifactDir).not.toBe(incomplete.artifactDir);
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.reviews.map((review) => review.status)).toEqual([
+      "incomplete",
+      "success",
+    ]);
+    expect(state.reviews[0].artifactDir).toBe(incomplete.artifactDir);
+
     const authorization = JSON.parse(
       execFileSync("node", [INVOCATION, "review-authorization", manifest], {
         cwd: root,
@@ -3928,17 +4317,84 @@ exit 1
       }),
     );
     expect(authorization).toMatchObject({
-      provider: "review-incomplete",
-      reviewStatus: "incomplete",
-      leads: 0,
-      blockingCount: 0,
+      provider: "codex",
+      reviewStatus: "complete",
+      head: incomplete.to,
     });
-    const trailers = execFileSync("node", [INVOCATION, "trailers", manifest], {
-      cwd: root,
-      encoding: "utf8",
+  });
+
+  it("keeps a repeated incomplete provider retry merge-blocking", () => {
+    const root = repo("double-incomplete-provider-retry");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "medium",
+        taskType: "bugfix",
+        score: 35,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["code-reviewer"], {
+        domain: "general",
+        rule: "general-review",
+      });
     });
-    expect(trailers).toMatch(/^Quality-Review-Status: incomplete$/m);
-    expect(trailers).toMatch(/^Quality-Leads: 0$/m);
+
+    const first = prepareIncompleteReview(root, manifest);
+    const second = prepareIncompleteReview(root, manifest);
+    expect(second).toMatchObject({
+      round: first.round,
+      from: first.from,
+      to: first.to,
+    });
+    expect(second.artifactDir).not.toBe(first.artifactDir);
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.reviews.map((review) => review.status)).toEqual([
+      "incomplete",
+      "incomplete",
+    ]);
+    expect(() => invocation.reviewInfo(state)).toThrow(
+      "provider review remained incomplete after its authorized same-range retry",
+    );
+    expect(() =>
+      execFileSync("node", [INVOCATION, "review-authorization", manifest], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    ).toThrow(
+      "provider review remained incomplete after its authorized same-range retry",
+    );
+  });
+
+  it("refuses HEAD advancement while an incomplete same-range retry is pending", () => {
+    const root = repo("pending-incomplete-provider-retry");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "medium",
+        taskType: "bugfix",
+        score: 35,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["code-reviewer"], {
+        domain: "general",
+        rule: "general-review",
+      });
+    });
+    prepareIncompleteReview(root, manifest);
+    writeFileSync(path.join(root, "file.js"), "export const value = 3;\n");
+    git(root, ["commit", "-qam", "fix: attempted early remediation"]);
+
+    const state = invocation.loadManifest(manifest).manifest;
+    expect(() => invocation.advanceHead(state, root)).toThrow(
+      /incomplete review retry .* is pending/,
+    );
+    expect(state.revisions.currentHead).not.toBe(
+      git(root, ["rev-parse", "HEAD"]),
+    );
   });
 
   it("derives incomplete status for a single-provider critical review", () => {
@@ -3962,6 +4418,9 @@ exit 1
 
     const saved = invocation.loadManifest(manifest).manifest;
     expect(saved.reviews[0].status).toBe("incomplete");
+    expect(() => invocation.reviewInfo(saved)).toThrow(
+      /current HEAD is already reviewed/,
+    );
     expect(invocation.reviewAuthorization(saved)).toMatchObject({
       reviewStatus: "incomplete",
       blockingCount: 0,

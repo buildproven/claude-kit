@@ -58,6 +58,9 @@ function fixture(name, overrides = {}) {
     ]);
   }
   const head = git(root, ["rev-parse", "HEAD"]);
+  const gitCommonDir = fs.realpathSync(
+    path.resolve(root, git(root, ["rev-parse", "--git-common-dir"])),
+  );
   const repoKey = overrides.repoKey || crypto.randomBytes(8).toString("hex");
   const invocationId = overrides.invocationId || crypto.randomUUID();
   const githubRepository = overrides.githubRepository || FIXTURE_REPOSITORY;
@@ -83,6 +86,7 @@ function fixture(name, overrides = {}) {
         options: { merge: true },
         repo: {
           realpath: root,
+          gitCommonDir,
           key: repoKey,
           pr: 7,
           origin: "git@github.com:buildproven/fixture.git",
@@ -110,12 +114,7 @@ function fixture(name, overrides = {}) {
     )}\n`,
   );
   fs.writeFileSync(
-    path.join(
-      fs.realpathSync(
-        path.resolve(root, git(root, ["rev-parse", "--git-common-dir"])),
-      ),
-      ".quality-vitest-fixture",
-    ),
+    path.join(gitCommonDir, ".quality-vitest-fixture"),
     `${repoKey}\n`,
     { mode: 0o600 },
   );
@@ -622,6 +621,73 @@ printf '%s\\n' '${JSON.stringify({
     } finally {
       process.env.PATH = previousPath;
     }
+  });
+
+  it("reconciles an exact merged outcome after the campaign worktree was removed", () => {
+    const primary = fixture("removed-worktree-primary");
+    const campaign = fixture("removed-worktree-campaign", {
+      linkedFrom: primary,
+      repoKey: primary.repoKey,
+      advanceHead: true,
+    });
+    const owner = lease.acquire(campaign.manifestPath);
+    lease.acquireMergeGuard(campaign.manifestPath, owner.token);
+    const { manifest } = invocation.loadManifest(campaign.manifestPath);
+    git(primary.root, ["worktree", "remove", campaign.root]);
+    expect(fs.existsSync(campaign.root)).toBe(false);
+    expect(() => lease.verify(campaign.manifestPath, owner.token)).toThrow(
+      /ENOENT/,
+    );
+
+    const bin = path.join(sandbox, "removed-worktree-bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/bin/sh
+printf '%s\n' '${JSON.stringify({
+        state: "MERGED",
+        mergedAt: "2026-08-06T12:00:00Z",
+        mergeCommit: { oid: "b".repeat(40) },
+        headRefName: manifest.repo.headRefName,
+        headRefOid: manifest.revisions.currentHead,
+      })}'
+`,
+      { mode: 0o700 },
+    );
+    const reconcileEnv = {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+    };
+    delete reconcileEnv.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+
+    expect(
+      JSON.parse(
+        execFileSync(
+          "node",
+          [
+            LEASE_CLI,
+            "reconcile-merge",
+            "--manifest",
+            campaign.manifestPath,
+            "--confirm-owner-invocation-id",
+            manifest.invocationId,
+            "--confirm-owner-pr",
+            String(manifest.repo.pr),
+          ],
+          { encoding: "utf8", env: reconcileEnv },
+        ),
+      ),
+    ).toMatchObject({ reconciled: true, outcome: "merged" });
+    expect(lease.status(campaign.manifestPath)).toEqual({
+      required: true,
+      state: "missing",
+    });
+    expect(
+      invocation.loadManifest(campaign.manifestPath).manifest.terminalState,
+    ).toMatchObject({
+      state: "merged",
+      head: manifest.revisions.currentHead,
+    });
   });
 
   it("reclaims a durably released lease after a cleanup crash", () => {

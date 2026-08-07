@@ -60,6 +60,23 @@ function repositoryIdentity(manifest) {
   return identity.toLowerCase();
 }
 
+function recordedGitCommonDir(manifest) {
+  const recorded = manifest.repo?.gitCommonDir;
+  if (typeof recorded !== "string" || !path.isAbsolute(recorded)) {
+    throw new Error(
+      "repository lease requires the recorded canonical Git common directory",
+    );
+  }
+  const canonical = fs.realpathSync(recorded);
+  const stat = fs.lstatSync(canonical);
+  if (canonical !== recorded || stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(
+      "repository lease Git common directory must be a real canonical directory",
+    );
+  }
+  return canonical;
+}
+
 function isVitestFixture(manifest) {
   if (
     process.env.NODE_ENV !== "test" ||
@@ -69,18 +86,9 @@ function isVitestFixture(manifest) {
   ) {
     return false;
   }
-  const repositoryRoot = fs.realpathSync(manifest.repo.realpath);
+  const gitCommonDir = recordedGitCommonDir(manifest);
   const temporaryRoot = `${fs.realpathSync(os.tmpdir())}${path.sep}`;
-  if (!repositoryRoot.startsWith(temporaryRoot)) return false;
-  const gitCommonDir = fs.realpathSync(
-    path.resolve(
-      repositoryRoot,
-      execFileSync("git", ["rev-parse", "--git-common-dir"], {
-        cwd: repositoryRoot,
-        encoding: "utf8",
-      }).trim(),
-    ),
-  );
+  if (!gitCommonDir.startsWith(temporaryRoot)) return false;
   const sentinel = path.join(gitCommonDir, ".quality-vitest-fixture");
   try {
     return (
@@ -101,15 +109,7 @@ function pathsFor(identity, manifest = null) {
   const root =
     manifest && isVitestFixture(manifest)
       ? path.join(
-          fs.realpathSync(
-            path.resolve(
-              manifest.repo.realpath,
-              execFileSync("git", ["rev-parse", "--git-common-dir"], {
-                cwd: manifest.repo.realpath,
-                encoding: "utf8",
-              }).trim(),
-            ),
-          ),
+          recordedGitCommonDir(manifest),
           "quality-test-repository-leases",
         )
       : stateRoot();
@@ -387,22 +387,28 @@ function loadManifest(manifestPath) {
   return require("./quality-invocation").loadManifest(manifestPath);
 }
 
-function ownerTuple(manifest, manifestPath) {
+function ownerTuple(manifest, manifestPath, options = {}) {
+  const gitCommonDir = recordedGitCommonDir(manifest);
+  if (options.requireWorktree) {
+    const repositoryRoot = fs.realpathSync(manifest.repo.realpath);
+    const liveGitCommonDir = fs.realpathSync(
+      path.resolve(
+        repositoryRoot,
+        execFileSync("git", ["rev-parse", "--git-common-dir"], {
+          cwd: repositoryRoot,
+          encoding: "utf8",
+        }).trim(),
+      ),
+    );
+    if (liveGitCommonDir !== gitCommonDir) {
+      throw new Error("repository lease Git common directory changed");
+    }
+  }
   return {
     repository: repositoryIdentity(manifest),
     invocationId: manifest.invocationId,
     manifestPath: fs.realpathSync(manifestPath),
-    gitCommonDir: fs.realpathSync(
-      path.resolve(
-        manifest.repo.realpath,
-        require("child_process")
-          .execFileSync("git", ["rev-parse", "--git-common-dir"], {
-            cwd: manifest.repo.realpath,
-            encoding: "utf8",
-          })
-          .trim(),
-      ),
-    ),
+    gitCommonDir,
     pr: manifest.repo.pr,
     headRef: manifest.repo.headRefName,
   };
@@ -479,7 +485,9 @@ function completePending(paths, identity, loaded, current) {
 function acquireOnce(manifestPath, options = {}) {
   const loaded = loadManifest(manifestPath);
   if (loaded.manifest.options?.merge !== true) return null;
-  const tuple = ownerTuple(loaded.manifest, loaded.manifestPath);
+  const tuple = ownerTuple(loaded.manifest, loaded.manifestPath, {
+    requireWorktree: true,
+  });
   return withMetadataGuard(
     loaded.manifest,
     (paths, identity) => {
@@ -585,7 +593,9 @@ function verifyUnderMetadata(manifestPath, presentedToken, options = {}) {
     throw new Error("repository lease credential is required");
   const loaded = loadManifest(manifestPath);
   if (loaded.manifest.options?.merge !== true) return null;
-  const tuple = ownerTuple(loaded.manifest, loaded.manifestPath);
+  const tuple = ownerTuple(loaded.manifest, loaded.manifestPath, {
+    requireWorktree: true,
+  });
   return withMetadataGuard(
     loaded.manifest,
     (paths) => {
@@ -621,7 +631,9 @@ function recover(manifestPath, ownerToken) {
   if (loaded.manifest.options?.merge !== true) {
     throw new Error("repository lease recovery requires a merge campaign");
   }
-  const nextTuple = ownerTuple(loaded.manifest, loaded.manifestPath);
+  const nextTuple = ownerTuple(loaded.manifest, loaded.manifestPath, {
+    requireWorktree: true,
+  });
   return withMetadataGuard(loaded.manifest, (paths, identity) => {
     if (fs.existsSync(paths.mergeGuard)) {
       throw new Error(
@@ -677,7 +689,9 @@ function withManifestMutation(manifestPath, presentedToken, mutation) {
     throw new Error(
       "repository lease credential is required for manifest mutation",
     );
-  const tuple = ownerTuple(loaded.manifest, loaded.manifestPath);
+  const tuple = ownerTuple(loaded.manifest, loaded.manifestPath, {
+    requireWorktree: true,
+  });
   return withMetadataGuard(loaded.manifest, (paths) => {
     const record = leaseRecord(paths.lease);
     if (
@@ -711,7 +725,9 @@ function withManifestMutation(manifestPath, presentedToken, mutation) {
 function release(manifestPath, presentedToken, reason = "completed") {
   const loaded = loadManifest(manifestPath);
   if (loaded.manifest.options?.merge !== true) return false;
-  const tuple = ownerTuple(loaded.manifest, loaded.manifestPath);
+  const tuple = ownerTuple(loaded.manifest, loaded.manifestPath, {
+    requireWorktree: true,
+  });
   return withMetadataGuard(loaded.manifest, (paths) => {
     if (fs.existsSync(paths.mergeGuard)) {
       throw new Error(
@@ -829,7 +845,9 @@ function mergeHead(manifest) {
 
 function acquireMergeGuard(manifestPath, presentedToken, options = {}) {
   const loaded = loadManifest(manifestPath);
-  const tuple = ownerTuple(loaded.manifest, loaded.manifestPath);
+  const tuple = ownerTuple(loaded.manifest, loaded.manifestPath, {
+    requireWorktree: true,
+  });
   return withMetadataGuard(loaded.manifest, (paths) => {
     const record = leaseRecord(paths.lease);
     const credential = loaded.manifest.merge?.repositoryLease;
@@ -867,6 +885,9 @@ function acquireMergeGuard(manifestPath, presentedToken, options = {}) {
 
 function releaseMergeGuard(manifestPath, presentedToken, outcome) {
   const loaded = loadManifest(manifestPath);
+  ownerTuple(loaded.manifest, loaded.manifestPath, {
+    requireWorktree: true,
+  });
   return withMetadataGuard(loaded.manifest, (paths) => {
     const owner = guardOwner(paths.mergeGuard);
     if (
@@ -885,7 +906,7 @@ function releaseMergeGuard(manifestPath, presentedToken, outcome) {
   });
 }
 
-function remotePullRequest(manifest) {
+function remotePullRequest(manifest, options = {}) {
   const view = spawnSync(
     "gh",
     [
@@ -897,7 +918,13 @@ function remotePullRequest(manifest) {
       "--json",
       "state,mergedAt,mergeCommit,headRefName,headRefOid",
     ],
-    { cwd: manifest.repo.realpath, encoding: "utf8", timeout: 30_000 },
+    {
+      cwd: options.repositoryScoped
+        ? manifest.stateRoot
+        : manifest.repo.realpath,
+      encoding: "utf8",
+      timeout: 30_000,
+    },
   );
   if (view.status !== 0) {
     throw new Error(
@@ -964,7 +991,7 @@ function reconcileMergeOutcome(manifestPath, presentedToken, options = {}) {
     options,
   );
   const { manifest } = loadManifest(manifestPath);
-  const remote = remotePullRequest(manifest);
+  const remote = remotePullRequest(manifest, { repositoryScoped: true });
   const outcome = exactRemoteOutcome(manifest, remote);
   if (!outcome || (options.mergedOnly && outcome !== "merged")) {
     return { reconciled: false, outcome: null, remote };

@@ -167,6 +167,7 @@ describe("buildRecord", () => {
       reviews: [
         {
           status: "incomplete",
+          provider: "review-incomplete",
           round: 1,
           to: "bbb",
           leadCount: 0,
@@ -231,6 +232,39 @@ describe("buildRecord", () => {
     });
     expect(record).toMatchObject({
       reviewStatus: "incomplete",
+      leadCount: 3,
+      blockingCount: 0,
+    });
+  });
+
+  it("reports a successful same-range retry complete while retaining all leads", () => {
+    const manifest = baseManifest({
+      reviewContractVersion: 2,
+      judge: undefined,
+      reviews: [
+        {
+          status: "incomplete",
+          provider: "review-incomplete",
+          round: 1,
+          from: "aaa",
+          to: "bbb",
+          leadCount: 2,
+        },
+        {
+          status: "success",
+          round: 1,
+          from: "aaa",
+          to: "bbb",
+          leadCount: 1,
+        },
+      ],
+    });
+    const record = buildRecord(manifest, {
+      execFileSync: NO_FILES,
+      nowIso: NOW,
+    });
+    expect(record).toMatchObject({
+      reviewStatus: "complete",
       leadCount: 3,
       blockingCount: 0,
     });
