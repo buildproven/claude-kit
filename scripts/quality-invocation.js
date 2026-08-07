@@ -1469,6 +1469,84 @@ function environmentRecoveryEligibility(
   return "bootstrap environment lacked the required gate executable";
 }
 
+function providerRecoveryProviders(manifest) {
+  const inherited = manifest.providerRecovery?.attemptedProviders || [];
+  const started = manifest.governor?.providerAttempts || [];
+  const failed = manifest.reviews || [];
+  return new Set([
+    ...inherited,
+    ...started.map((attempt) => attempt.provider),
+    ...failed.map((review) => review.failedProvider),
+  ].filter(Boolean));
+}
+
+// A provider outage is not a code verdict.  After the ordinary primary plus
+// fallback and their one bounded retry have all produced only unavailable,
+// quota, or billing evidence, permit one *different* installed provider to
+// review the same exact head.  This is not a general rerun: every old provider
+// is carried forward as spent, all deterministic gates run again, and a
+// successor cannot introduce a fourth provider chain.
+function providerRecoveryEligibility(
+  existing,
+  existingIdentity,
+  campaignIdentity,
+) {
+  if (!sameWorkIgnoringReviewArm(existingIdentity, campaignIdentity))
+    return null;
+  if (existing.terminalState?.state !== "provider-incomplete") return null;
+  if (existing.terminalState?.detail !== "retry-exhausted:provider-exhaustion")
+    return null;
+  if (!Array.isArray(existing.reviews) || existing.reviews.length === 0)
+    return null;
+  if (
+    existing.reviews.some(
+      (review) =>
+        review.status !== "incomplete" ||
+        review.failureCategory !== "provider-exhaustion" ||
+        (review.leadCount || 0) !== 0,
+    )
+  )
+    return null;
+  try {
+    verifyGateEvidence(existing);
+  } catch {
+    return null;
+  }
+  const attempted = providerRecoveryProviders(existing);
+  const candidates = [
+    campaignIdentity.provider.primaryOverride,
+    campaignIdentity.provider.fallbackOverride,
+  ].filter((provider) => provider && provider !== "none");
+  if (candidates.length === 0 || candidates.every((provider) => attempted.has(provider)))
+    return null;
+  if (existing.providerRecovery) return null;
+  return {
+    reason: "exact-head discovery exhausted its configured provider set",
+    attemptedProviders: [...attempted].sort(),
+  };
+}
+
+function providerRecoveryManifest(
+  existingPath,
+  existing,
+  campaignIdentity,
+  recovery,
+) {
+  const manifestPath = supersedingManifest(
+    existingPath,
+    existing,
+    campaignIdentity,
+    recovery.reason,
+    "providerRecoveryOf",
+  );
+  withManifestLock(manifestPath, (locked) => {
+    locked.providerRecovery ??= {
+      attemptedProviders: recovery.attemptedProviders,
+    };
+  });
+  return manifestPath;
+}
+
 function existingCampaign(manifestPath, campaignIdentity) {
   const existing = loadManifest(manifestPath).manifest;
   const existingIdentity = manifestIdentity(existing);
@@ -1484,6 +1562,19 @@ function existingCampaign(manifestPath, campaignIdentity) {
       campaignIdentity,
       environmentReason,
       "environmentRecoveryOf",
+    );
+  }
+  const providerRecovery = providerRecoveryEligibility(
+    existing,
+    existingIdentity,
+    campaignIdentity,
+  );
+  if (providerRecovery) {
+    return providerRecoveryManifest(
+      manifestPath,
+      existing,
+      campaignIdentity,
+      providerRecovery,
     );
   }
   if (

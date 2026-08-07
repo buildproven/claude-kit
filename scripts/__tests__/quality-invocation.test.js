@@ -954,6 +954,53 @@ describe("quality invocation manifest", () => {
     });
   });
 
+  it("uses one untried provider after exact-head quota exhaustion", () => {
+    const root = repo("provider-exhaustion-recovery");
+    const predecessor = create(root, [
+      "--primary",
+      "codex",
+      "--fallback",
+      "claude",
+    ]);
+    for (const gate of JSON.parse(readFileSync(predecessor, "utf8"))
+      .requiredGates) {
+      recordGateFixture(predecessor, gate.name);
+    }
+    invocation.withManifestLock(predecessor, (manifest) => {
+      manifest.governor.providerAttempts.push({ provider: "codex" });
+      manifest.reviews.push({
+        status: "incomplete",
+        failedProvider: "claude",
+        failureCategory: "provider-exhaustion",
+        leadCount: 0,
+      });
+    });
+    invocation.recordTerminalState(
+      predecessor,
+      "provider-incomplete",
+      "retry-exhausted:provider-exhaustion",
+    );
+
+    const recovered = create(root, [
+      "--primary",
+      "gemini",
+      "--fallback",
+      "codex",
+    ]);
+    expect(recovered).not.toBe(predecessor);
+    expect(JSON.parse(readFileSync(recovered, "utf8"))).toMatchObject({
+      supersedes: {
+        reason: "exact-head discovery exhausted its configured provider set",
+      },
+      providerRecovery: { attemptedProviders: ["claude", "codex"] },
+      gates: [],
+      reviews: [],
+    });
+    expect(() =>
+      create(root, ["--primary", "claude", "--fallback", "codex"]),
+    ).toThrow(/deterministic quality campaign identity collision/);
+  });
+
   it("resumes after review without treating provider evidence as configuration drift", () => {
     const root = repo("reviewed-provider-identity");
     const env = {
