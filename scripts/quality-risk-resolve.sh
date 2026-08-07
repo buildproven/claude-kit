@@ -69,6 +69,8 @@ node "$SCRIPT_DIR/quality-invocation.js" risk "$MANIFEST" \
   --review-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.reviewSeconds')" \
   --verification-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.verificationSeconds')" \
   --check-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.checkSeconds')" \
+  --gate-count "$(printf '%s' "$PLAN_JSON" | jq -r '.gateCount')" \
+  --gate-reserve-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.gateReserveSeconds')" \
   --review-reserve-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.reviewReserveSeconds')" \
   --check-reserve-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.checkReserveSeconds')" \
   --level "$LEVEL" || exit 1

@@ -1927,6 +1927,11 @@ function buildRuntimePlan(manifest, options) {
         minimum: 1,
       },
     ),
+    gateCount: parseInteger(options["gate-count"] || "0", "gate count"),
+    gateReserveSeconds: parseInteger(
+      options["gate-reserve-seconds"] || "0",
+      "gate reserve seconds",
+    ),
     reviewReserveSeconds: parseInteger(
       options["review-reserve-seconds"] || "300",
       "review reserve seconds",
@@ -1962,11 +1967,16 @@ function applyRuntimeGovernor(manifest, options, runtime) {
   }
   if (process.env.BS_QUALITY_MAX_GATE_SECONDS === undefined) {
     // A campaign may validate the initial head and one permitted remediation
-    // head. Fund both exact-head passes up front so advancing cannot mint time,
-    // while the per-gate watchdog and the one-fix cap keep execution bounded.
+    // head. Each pass runs the complete required-gate suite and, at high or
+    // critical risk, one mutation watchdog. Fund every pass up front so
+    // advancing cannot mint time, while the per-gate watchdog and one-fix cap
+    // keep execution bounded.
+    const mutationSeconds = ["high", "critical"].includes(options.tier)
+      ? runtime.checkSeconds + runtime.checkReserveSeconds
+      : 0;
     governor.gateSecondsLimit =
       (governor.maxFixCommits + 1) *
-      (runtime.checkSeconds + runtime.checkReserveSeconds);
+      (runtime.gateReserveSeconds + mutationSeconds);
   }
   if (process.env.BS_QUALITY_MAX_REMEDIATION_SECONDS === undefined) {
     governor.remediationSeconds = Math.max(

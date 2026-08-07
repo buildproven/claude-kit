@@ -3686,10 +3686,14 @@ exit 99
     const validationState = JSON.parse(readFileSync(manifest, "utf8"));
     expect(validationState.governor.gateSecondsUsed).toBe(0);
     expect(validationState.governor.providerSecondsUsed).toBe(0);
-    // The budget is allocated before review for both the initial exact head and
-    // the one permitted remediation head, including each phase's single
-    // provider-failure retry; advancing does not mint more time.
-    expect(validationState.governor.gateSecondsLimit).toBe(1200);
+    expect(validationState.risk.runtime).toMatchObject({
+      gateCount: 3,
+      gateReserveSeconds: 360,
+    });
+    // Both the initial and remediation heads are funded for their complete
+    // required-gate suite (360s) and mutation watchdog (600s) before review;
+    // advancing does not mint more time.
+    expect(validationState.governor.gateSecondsLimit).toBe(1920);
     expect(validationState.governor.providerSecondsLimit).toBe(1080);
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
     expect(
