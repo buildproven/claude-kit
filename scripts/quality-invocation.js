@@ -1893,7 +1893,31 @@ function requestedRiskMinimum(requestedLevel) {
     : "low";
 }
 
+function gateRuntimePlan(manifest, options, checkSeconds) {
+  const gateCount = parseInteger(
+    options["gate-count"] || String(manifest.requiredGates.length),
+    "gate count",
+  );
+  const gateReserveSeconds = parseInteger(
+    options["gate-reserve-seconds"] || String(gateCount * checkSeconds),
+    "gate reserve seconds",
+  );
+  if (gateCount !== manifest.requiredGates.length) {
+    throw new Error("runtime plan gate count does not match required gates");
+  }
+  if (gateReserveSeconds !== gateCount * checkSeconds) {
+    throw new Error("runtime plan gate reserve does not match gate count");
+  }
+  return { gateCount, gateReserveSeconds };
+}
+
 function buildRuntimePlan(manifest, options) {
+  const checkSeconds = parseInteger(
+    options["check-seconds"] || "300",
+    "check seconds",
+    { minimum: 1 },
+  );
+  const gatePlan = gateRuntimePlan(manifest, options, checkSeconds);
   return {
     workload: options.workload || "unknown",
     workloadUnits: parseInteger(
@@ -1920,18 +1944,8 @@ function buildRuntimePlan(manifest, options) {
       "verification seconds",
       { minimum: 1 },
     ),
-    checkSeconds: parseInteger(
-      options["check-seconds"] || "300",
-      "check seconds",
-      {
-        minimum: 1,
-      },
-    ),
-    gateCount: parseInteger(options["gate-count"] || "0", "gate count"),
-    gateReserveSeconds: parseInteger(
-      options["gate-reserve-seconds"] || "0",
-      "gate reserve seconds",
-    ),
+    checkSeconds,
+    ...gatePlan,
     reviewReserveSeconds: parseInteger(
       options["review-reserve-seconds"] || "300",
       "review reserve seconds",

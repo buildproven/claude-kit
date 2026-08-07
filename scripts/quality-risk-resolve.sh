@@ -45,6 +45,14 @@ esac
 PLAN_JSON="$(node "$SCRIPT_DIR/quality-runtime-plan.js" \
   --base "$RESOLVED_BASE" --minimum-risk "$MINIMUM_RISK" \
   --gate-count "$GATE_COUNT")" || exit 1
+PLAN_GATE_COUNT="$(printf '%s' "$PLAN_JSON" | jq -er '.gateCount | numbers')" || {
+  echo "quality-risk-resolve: runtime plan is missing numeric gateCount" >&2
+  exit 1
+}
+PLAN_GATE_RESERVE_SECONDS="$(printf '%s' "$PLAN_JSON" | jq -er '.gateReserveSeconds | numbers')" || {
+  echo "quality-risk-resolve: runtime plan is missing numeric gateReserveSeconds" >&2
+  exit 1
+}
 RISK_SCORE="$(printf '%s' "$PLAN_JSON" | jq -r '.riskScore')"
 TIER="$(printf '%s' "$PLAN_JSON" | jq -r '.tier')"
 AGENT_TARGET="$(printf '%s' "$PLAN_JSON" | jq -r '.agents')"
@@ -69,8 +77,8 @@ node "$SCRIPT_DIR/quality-invocation.js" risk "$MANIFEST" \
   --review-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.reviewSeconds')" \
   --verification-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.verificationSeconds')" \
   --check-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.checkSeconds')" \
-  --gate-count "$(printf '%s' "$PLAN_JSON" | jq -r '.gateCount')" \
-  --gate-reserve-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.gateReserveSeconds')" \
+  --gate-count "$PLAN_GATE_COUNT" \
+  --gate-reserve-seconds "$PLAN_GATE_RESERVE_SECONDS" \
   --review-reserve-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.reviewReserveSeconds')" \
   --check-reserve-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.checkReserveSeconds')" \
   --level "$LEVEL" || exit 1
