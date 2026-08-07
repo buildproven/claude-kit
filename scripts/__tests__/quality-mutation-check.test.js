@@ -1226,7 +1226,7 @@ describe("quality-mutation-check", () => {
       { checkSeconds: 5 },
     );
     expect(() => runMutation(root, manifest)).toThrow(
-      /a hang is not red-capable evidence/,
+      /serialized baseline test timed out; no red-capable evidence/,
     );
     const state = JSON.parse(readFileSync(manifest, "utf8"));
     expect(state.mutation).toBeNull();
