@@ -1893,7 +1893,31 @@ function requestedRiskMinimum(requestedLevel) {
     : "low";
 }
 
+function gateRuntimePlan(manifest, options, checkSeconds) {
+  const gateCount = parseInteger(
+    options["gate-count"] || String(manifest.requiredGates.length),
+    "gate count",
+  );
+  const gateReserveSeconds = parseInteger(
+    options["gate-reserve-seconds"] || String(gateCount * checkSeconds),
+    "gate reserve seconds",
+  );
+  if (gateCount !== manifest.requiredGates.length) {
+    throw new Error("runtime plan gate count does not match required gates");
+  }
+  if (gateReserveSeconds !== gateCount * checkSeconds) {
+    throw new Error("runtime plan gate reserve does not match gate count");
+  }
+  return { gateCount, gateReserveSeconds };
+}
+
 function buildRuntimePlan(manifest, options) {
+  const checkSeconds = parseInteger(
+    options["check-seconds"] || "300",
+    "check seconds",
+    { minimum: 1 },
+  );
+  const gatePlan = gateRuntimePlan(manifest, options, checkSeconds);
   return {
     workload: options.workload || "unknown",
     workloadUnits: parseInteger(
@@ -1920,13 +1944,8 @@ function buildRuntimePlan(manifest, options) {
       "verification seconds",
       { minimum: 1 },
     ),
-    checkSeconds: parseInteger(
-      options["check-seconds"] || "300",
-      "check seconds",
-      {
-        minimum: 1,
-      },
-    ),
+    checkSeconds,
+    ...gatePlan,
     reviewReserveSeconds: parseInteger(
       options["review-reserve-seconds"] || "300",
       "review reserve seconds",
@@ -1962,11 +1981,16 @@ function applyRuntimeGovernor(manifest, options, runtime) {
   }
   if (process.env.BS_QUALITY_MAX_GATE_SECONDS === undefined) {
     // A campaign may validate the initial head and one permitted remediation
-    // head. Fund both exact-head passes up front so advancing cannot mint time,
-    // while the per-gate watchdog and the one-fix cap keep execution bounded.
+    // head. Each pass runs the complete required-gate suite and, at high or
+    // critical risk, one mutation watchdog. Fund every pass up front so
+    // advancing cannot mint time, while the per-gate watchdog and one-fix cap
+    // keep execution bounded.
+    const mutationSeconds = ["high", "critical"].includes(options.tier)
+      ? runtime.checkSeconds + runtime.checkReserveSeconds
+      : 0;
     governor.gateSecondsLimit =
       (governor.maxFixCommits + 1) *
-      (runtime.checkSeconds + runtime.checkReserveSeconds);
+      (runtime.gateReserveSeconds + mutationSeconds);
   }
   if (process.env.BS_QUALITY_MAX_REMEDIATION_SECONDS === undefined) {
     governor.remediationSeconds = Math.max(

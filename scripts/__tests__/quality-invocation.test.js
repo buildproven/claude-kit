@@ -3686,10 +3686,14 @@ exit 99
     const validationState = JSON.parse(readFileSync(manifest, "utf8"));
     expect(validationState.governor.gateSecondsUsed).toBe(0);
     expect(validationState.governor.providerSecondsUsed).toBe(0);
-    // The budget is allocated before review for both the initial exact head and
-    // the one permitted remediation head, including each phase's single
-    // provider-failure retry; advancing does not mint more time.
-    expect(validationState.governor.gateSecondsLimit).toBe(1200);
+    expect(validationState.risk.runtime).toMatchObject({
+      gateCount: 3,
+      gateReserveSeconds: 360,
+    });
+    // Both the initial and remediation heads are funded for their complete
+    // required-gate suite (360s) and mutation watchdog (600s) before review;
+    // advancing does not mint more time.
+    expect(validationState.governor.gateSecondsLimit).toBe(1920);
     expect(validationState.governor.providerSecondsLimit).toBe(1080);
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
     expect(
@@ -3929,6 +3933,51 @@ exit 99
       expect(result.status).not.toBe(0);
       expect(result.stderr).toMatch(/dirty working tree/);
     }
+  });
+
+  it("funds required gates without a mutation allowance below high risk", () => {
+    const root = repo("medium-gate-budget");
+    const manifest = create(root, ["--level", "medium"]);
+    execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root });
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+
+    expect(state.risk.tier).toBe("medium");
+    expect(state.risk.runtime).toMatchObject({
+      gateCount: 3,
+      gateReserveSeconds: 360,
+    });
+    expect(state.governor.gateSecondsLimit).toBe(720);
+  });
+
+  it("rejects a runtime reserve that disagrees with the required gates", () => {
+    const root = repo("mismatched-gate-reserve");
+    const manifest = create(root);
+    const result = spawnSync(
+      "node",
+      [
+        INVOCATION,
+        "risk",
+        manifest,
+        "--tier",
+        "medium",
+        "--agents",
+        "1",
+        "--codex-depth",
+        "high",
+        "--codex-rounds",
+        "1",
+        "--check-seconds",
+        "120",
+        "--gate-count",
+        "3",
+        "--gate-reserve-seconds",
+        "1",
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/gate reserve does not match gate count/);
   });
 
   it("persists one empty stamp and waits for its CI before authorization", () => {
