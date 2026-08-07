@@ -37,6 +37,7 @@ case "$*" in
     ;;
   *actions/runs/123*) printf '%s\\n' '{"workflow_id":77}' ;;
   *actions/workflows/77/dispatches*) printf '%s\\n' "$*" >> '${log}' ;;
+  *actions/workflows/77/runs*) printf '%s\\n' '{"total_count":0,"workflow_runs":[]}' ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
 `;
@@ -415,6 +416,53 @@ esac
     expect(result.stderr).toContain(
       "did not register on stamp bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     );
+  });
+
+  it("accepts an exact-head workflow run while a dependency-gated check is not created yet", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    const gh = path.join(bin, "gh");
+    fs.writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *protection/required_status_checks*) printf '%s\\n' '{"checks":[{"context":"harness-summary","app_id":15368}]}' ;;
+  *rules/branches/main*) printf '%s\\n' '[]' ;;
+  *commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/check-runs*) printf '%s\\n' '{"check_runs":[{"id":1,"name":"harness-summary","status":"completed","conclusion":"success","app":{"id":15368},"details_url":"https://github.com/o/r/actions/runs/123/job/456"}]}' ;;
+  *commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs*) printf '%s\\n' '{"check_runs":[]}' ;;
+  *actions/runs/123*) printf '%s\\n' '{"workflow_id":77}' ;;
+  *actions/workflows/77/dispatches*) : ;;
+  *actions/workflows/77/runs*) printf '%s\\n' '{"total_count":1,"workflow_runs":[{"id":124,"event":"workflow_dispatch","head_branch":"feature/fix","head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","status":"in_progress"}]}' ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    const result = run(
+      root,
+      [
+        "ensure",
+        "--repo",
+        "owner/repo",
+        "--base",
+        "main",
+        "--source-head",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--head",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "--head-ref",
+        "feature/fix",
+        "--registration-timeout",
+        "0",
+      ],
+      { bin },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).dispatched).toEqual([
+      { context: "harness-summary", workflowId: 77 },
+    ]);
   });
 
   it("asserts exact-head success without relying on PR check rollups", () => {

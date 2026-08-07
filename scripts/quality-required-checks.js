@@ -319,6 +319,45 @@ function dispatchWorkflow(repository, workflowId, ref) {
   throw failure;
 }
 
+function dispatchedWorkflowRuns(repository, workflowId, headRef) {
+  const runs = [];
+  let totalCount = null;
+  const encodedRef = encodeURIComponent(headRef);
+  for (let page = 1; page <= 100; page += 1) {
+    const response = apiJson(
+      `repos/${repository}/actions/workflows/${workflowId}/runs?branch=${encodedRef}&event=workflow_dispatch&per_page=100&page=${page}`,
+    );
+    if (!Array.isArray(response.workflow_runs)) {
+      throw new Error("GitHub workflow-runs response is invalid");
+    }
+    if (page === 1) {
+      if (!Number.isInteger(response.total_count) || response.total_count < 0) {
+        throw new Error("GitHub workflow-runs total_count is invalid");
+      }
+      totalCount = response.total_count;
+    }
+    runs.push(...response.workflow_runs);
+    if (runs.length >= totalCount) return runs;
+    if (response.workflow_runs.length === 0) {
+      throw new Error(
+        "GitHub workflow-runs pagination ended before total_count",
+      );
+    }
+  }
+  throw new Error("GitHub workflow-runs pagination exceeded 100 pages");
+}
+
+function dispatchedRunForHead(repository, workflowId, headRef, targetHead) {
+  return (
+    dispatchedWorkflowRuns(repository, workflowId, headRef).find(
+      (run) =>
+        run.head_sha === targetHead &&
+        run.head_branch === headRef &&
+        run.event === "workflow_dispatch",
+    ) || null
+  );
+}
+
 function waitForRegistration({
   repository,
   targetHead,
@@ -393,21 +432,28 @@ function ensureChecks({
     dispatchedRequirements.push({ requirement, workflowId });
   }
   if (dispatched.length > 0) {
-    targetRuns = checkRuns(repository, targetHead);
-    targetRuns = waitForRegistration({
-      repository,
-      targetHead,
-      requirements: dispatchedRequirements.map((entry) => entry.requirement),
-      targetRuns,
-      timeoutSeconds: registrationSeconds,
-      intervalSeconds: registrationIntervalSeconds,
-    });
-    const missing = dispatchedRequirements.filter(
-      (entry) => checkState(targetRuns, entry.requirement).state === "missing",
-    );
-    if (missing.length > 0) {
+    const deadline = Date.now() + registrationSeconds * 1000;
+    let unresolved;
+    let registrationPending = true;
+    while (registrationPending) {
+      targetRuns = checkRuns(repository, targetHead);
+      unresolved = dispatchedRequirements.filter((entry) => {
+        if (checkState(targetRuns, entry.requirement).state !== "missing") {
+          return false;
+        }
+        return !dispatchedRunForHead(
+          repository,
+          entry.workflowId,
+          headRef,
+          targetHead,
+        );
+      });
+      registrationPending = unresolved.length > 0 && Date.now() < deadline;
+      if (registrationPending) sleep(registrationIntervalSeconds * 1000);
+    }
+    if (unresolved.length > 0) {
       throw new Error(
-        `required checks did not register on stamp ${targetHead} after workflow dispatch: ${missing
+        `required checks or their exact-head workflows did not register on stamp ${targetHead} after workflow dispatch: ${unresolved
           .map(
             (entry) =>
               `${entry.requirement.context} (workflow ${entry.workflowId})`,
@@ -570,6 +616,8 @@ module.exports = {
   assertChecks,
   checkRuns,
   checkState,
+  dispatchedRunForHead,
+  dispatchedWorkflowRuns,
   ensureChecks,
   matchingRuns,
   requiredChecks,
