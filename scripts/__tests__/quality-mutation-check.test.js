@@ -388,13 +388,13 @@ describe("quality-mutation-check", () => {
     expect(log).toContain("-q -n 3 --dist worksteal -n 0 -x");
   });
 
-  it("places pytest fail-fast before the option terminator", () => {
+  it("stops xdist detection and places pytest fail-fast before the option terminator", () => {
     const { root, manifest } = fixture(
       "pytest-option-terminator",
       "const { isAllowed } = require('./logic');\nif (!isAllowed('admin')) process.exit(1);\n",
       {
         pytestRunner: true,
-        pytestArgs: ["-q", "-n", "3", "--", "tests"],
+        pytestArgs: ["-q", "--", "-n"],
       },
     );
 
@@ -415,7 +415,8 @@ describe("quality-mutation-check", () => {
       path.join(stateRoot, "mutation", `${head}.logic.js.log`),
       "utf8",
     );
-    expect(log).toContain("-q -n 3 -n 0 -x -- tests");
+    expect(log).toContain("-q -x -- -n");
+    expect(log).not.toContain("-n 0");
   });
 
   it("uses pytest fail-fast for an npm test script backed by pytest", () => {

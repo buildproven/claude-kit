@@ -124,6 +124,7 @@ if [ "$PYTEST_COMMAND" = true ]; then
   PYTEST_FAIL_FAST_INSERTED=false
   PYTEST_XDIST_ACTIVE=false
   for ARGUMENT in "${MUTATION_TEST_ARGS[@]}"; do
+    [ "$ARGUMENT" = -- ] && break
     case "$ARGUMENT" in
       -n|--numprocesses|-n?*|--numprocesses=*) PYTEST_XDIST_ACTIVE=true ;;
     esac
@@ -343,6 +344,23 @@ for CANDIDATE in "${CANDIDATES[@]}"; do
   git -C "$ROOT" worktree add --detach --quiet "$SANDBOX" "$HEAD"
   if [ -d "$ROOT/node_modules" ] && [ ! -e "$SANDBOX/node_modules" ]; then
     ln -s "$ROOT/node_modules" "$SANDBOX/node_modules"
+  fi
+  BASELINE_LOG="$STATE_ROOT/mutation/${HEAD}.$(basename "$CANDIDATE").baseline.log"
+  set +e
+  cd "$SANDBOX"
+  bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$REMAINING" -- \
+    "$TEST_EXECUTABLE" "${MUTATION_TEST_ARGS[@]}" > "$BASELINE_LOG" 2>&1
+  BASELINE_RESULT=$?
+  set -e
+  cd "$ROOT"
+  if [ "$BASELINE_RESULT" -ne 0 ]; then
+    git -C "$ROOT" worktree remove --force "$SANDBOX" >/dev/null
+    if [ "$BASELINE_RESULT" -eq 124 ]; then
+      echo "quality-mutation-check: serialized baseline test timed out; no red-capable evidence" >&2
+    else
+      echo "quality-mutation-check: serialized baseline test failed; no red-capable evidence" >&2
+    fi
+    exit 1
   fi
   if git -C "$ROOT" cat-file -e "$BASE:$CANDIDATE" 2>/dev/null; then
     git -C "$SANDBOX" restore --source "$BASE" -- "$CANDIDATE"
