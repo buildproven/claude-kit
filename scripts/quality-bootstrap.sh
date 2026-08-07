@@ -206,6 +206,7 @@ if [ -n "$MANIFEST_ARG" ]; then
         --head-repository "$RESUME_HEAD_REPOSITORY" \
         --cross-repository "$RESUME_CROSS_REPOSITORY")
     fi
+    node "$SCRIPT_DIR/quality-invocation.js" "${ADVANCE_ARGS[@]}" >/dev/null || exit 1
   fi
   if [ "$RESUME_MERGE" = true ]; then
     node "$SCRIPT_DIR/quality-repo-lease.js" assert-base \
