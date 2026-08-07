@@ -833,6 +833,99 @@ describe("quality invocation manifest", () => {
     expect(manifest.provider.primaryOverride).toBe("codex");
   });
 
+  it("creates one linked bespoke campaign only for a terminal critical diversity gap", () => {
+    const root = repo("critical-diversity-upgrade");
+    const predecessor = create(root, [
+      "--level",
+      "98",
+      "--primary",
+      "codex",
+      "--fallback",
+      "claude",
+      "--review-arm",
+      "native",
+    ]);
+    invocation.withManifestLock(predecessor, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "critical",
+        taskType: "bugfix",
+        score: 98,
+        agents: 2,
+        "codex-depth": "xhigh",
+        "codex-rounds": 1,
+      });
+    });
+    for (const gate of JSON.parse(readFileSync(predecessor, "utf8"))
+      .requiredGates) {
+      recordGateFixture(predecessor, gate.name);
+    }
+    recordMutationFixture(predecessor);
+    invocation.withManifestLock(predecessor, (manifest) => {
+      manifest.reviews.push({
+        status: "incomplete",
+        provider: "codex",
+        leadCount: 0,
+        to: manifest.revisions.currentHead,
+      });
+    });
+    invocation.recordTerminalState(
+      predecessor,
+      "provider-incomplete",
+      "critical-provider-diversity",
+    );
+
+    const upgrade = create(root, [
+      "--level",
+      "98",
+      "--primary",
+      "claude",
+      "--fallback",
+      "codex",
+      "--review-arm",
+      "bespoke",
+    ]);
+    expect(upgrade).not.toBe(predecessor);
+    const next = JSON.parse(readFileSync(upgrade, "utf8"));
+    const prior = JSON.parse(readFileSync(predecessor, "utf8"));
+    expect(next.supersedes).toMatchObject({
+      invocationId: prior.invocationId,
+      manifestPath: predecessor,
+      reason:
+        "critical exact-head discovery lacked required provider diversity",
+    });
+    expect(prior.supersededBy).toMatchObject({
+      invocationId: next.invocationId,
+    });
+    expect(next.governor.providerAttempts).toEqual([]);
+    expect(next.gates).toEqual([]);
+    expect(next.reviews).toEqual([]);
+  });
+
+  it("keeps a non-diversity terminal collision fail closed", () => {
+    const root = repo("non-diversity-upgrade");
+    const predecessor = create(root, [
+      "--primary",
+      "codex",
+      "--fallback",
+      "claude",
+    ]);
+    invocation.recordTerminalState(
+      predecessor,
+      "provider-incomplete",
+      "provider-timeout",
+    );
+    expect(() =>
+      create(root, [
+        "--primary",
+        "claude",
+        "--fallback",
+        "codex",
+        "--review-arm",
+        "bespoke",
+      ]),
+    ).toThrow(/deterministic quality campaign identity collision/);
+  });
+
   it("resumes after review without treating provider evidence as configuration drift", () => {
     const root = repo("reviewed-provider-identity");
     const env = {
