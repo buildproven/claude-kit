@@ -84,6 +84,15 @@ describe("block-push-main.sh", () => {
     expect(runHook(PUSH_HOOK, `git -C ${repo} push origin main`).code).toBe(2);
   });
 
+  it.each([
+    "git push origin HEAD:main",
+    "git push origin HEAD:refs/heads/main",
+    "git push origin origin/main",
+    "git push origin +HEAD:master",
+  ])("denies protected branch refspec %s", (command) => {
+    expect(runHook(PUSH_HOOK, command).code).toBe(2);
+  });
+
   it("allows pushing a feature branch", () => {
     expect(runHook(PUSH_HOOK, "git push origin feat/x").code).toBe(0);
   });

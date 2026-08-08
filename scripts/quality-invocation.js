@@ -1460,6 +1460,12 @@ function environmentRecoveryEligibility(
     return null;
   if (existing.terminalState?.state !== "blocked") return null;
   if (existing.environmentRecovery) return null;
+  // One predecessor may receive one immutable replacement. Once the
+  // predecessor is linked to that replacement, refuse to mint another
+  // environment campaign for the same deterministic identity. A permanently
+  // missing executable must remain a visible blocked condition, not become an
+  // unbounded chain that discards the failure evidence on every retry.
+  if (existing.supersededBy?.invocationId) return null;
   if (!/^gate:[A-Za-z0-9_-]+$/.test(existing.terminalState?.detail || ""))
     return null;
   if ((existing.reviews || []).length !== 0) return null;

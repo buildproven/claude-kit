@@ -35,7 +35,7 @@ fi
 # let a `git -C <dir> push origin main` command through in CI.
 pushes_protected_branch() {
   local -a tokens
-  local index token
+  local index token target
   read -r -a tokens <<< "$COMMAND"
   [ "${tokens[0]:-}" = "git" ] || return 1
   index=1
@@ -46,8 +46,16 @@ pushes_protected_branch() {
   index=$((index + 1))
   for ((; index < ${#tokens[@]}; index += 1)); do
     token="${tokens[$index]}"
-    [ "$token" = "main" ] || [ "$token" = "master" ] || continue
-    return 0
+    # A push refspec's destination is after the colon.  Normalize the
+    # optional force marker and fully-qualified remote ref so the guard also
+    # covers `HEAD:main`, `HEAD:refs/heads/main`, and `origin/main`.
+    target="${token##*:}"
+    while [[ "$target" == +* ]]; do
+      target="${target:1}"
+    done
+    case "$target" in
+      main|master|*/main|*/master) return 0 ;;
+    esac
   done
   return 1
 }

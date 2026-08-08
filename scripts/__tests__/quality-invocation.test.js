@@ -1038,6 +1038,32 @@ describe("quality invocation manifest", () => {
     expect(create(root)).toBe(predecessor);
   });
 
+  it("does not repeatedly supersede a permanently missing executable", () => {
+    const root = repo("environment-recovery-cap");
+    const predecessor = create(root);
+    invocation.withManifestLock(predecessor, (manifest) => {
+      manifest.gates.push({
+        name: "lint",
+        status: "failed",
+        reason: "gate 'lint' cannot start because 'missing-tool' is unavailable",
+        failureCode: "missing-executable",
+        head: manifest.revisions.currentHead,
+      });
+    });
+    invocation.recordTerminalState(predecessor, "blocked", "gate:lint");
+
+    const recovered = create(root);
+    expect(recovered).not.toBe(predecessor);
+    expect(() => create(root)).toThrow(
+      /deterministic quality campaign identity collision/,
+    );
+    expect(JSON.parse(readFileSync(predecessor, "utf8"))).toMatchObject({
+      supersededBy: {
+        invocationId: JSON.parse(readFileSync(recovered, "utf8")).invocationId,
+      },
+    });
+  });
+
   it("uses one untried provider after exact-head quota exhaustion", () => {
     const root = repo("provider-exhaustion-recovery");
     const predecessor = create(root, [
