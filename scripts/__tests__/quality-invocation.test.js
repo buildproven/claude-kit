@@ -1005,6 +1005,16 @@ describe("quality invocation manifest", () => {
     expect(create(ordinaryTimeoutRoot)).toBe(correctlyBudgeted);
   });
 
+  it("marks an environment recovery only when the gate executable is absent", () => {
+    expect(invocation.executableAvailable("node", process.env)).toBe(true);
+    expect(
+      invocation.executableAvailable(
+        "bs-quality-definitely-missing",
+        process.env,
+      ),
+    ).toBe(false);
+  });
+
   it("uses one untried provider after exact-head quota exhaustion", () => {
     const root = repo("provider-exhaustion-recovery");
     const predecessor = create(root, [

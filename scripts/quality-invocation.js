@@ -4444,6 +4444,15 @@ function recordSkippedGate(manifest, required, name, log, options) {
   });
 }
 
+function executableAvailable(executable, environment) {
+  const result = spawnSync(
+    "bash",
+    ["-lc", 'command -v -- "$1" >/dev/null', "bash", executable],
+    { env: environment, stdio: "ignore" },
+  );
+  return result.status === 0;
+}
+
 function executeGate(manifest, required, name, log, manifestPath) {
   const runtime = manifest.risk?.runtime;
   const gateSeconds = runtime?.checkSeconds ?? 300;
@@ -4473,6 +4482,18 @@ function executeGate(manifest, required, name, log, manifestPath) {
     gateSeconds + gateReserveSeconds,
     gateRemaining,
   );
+  if (!executableAvailable(required.executable, process.env)) {
+    fs.writeFileSync(
+      log,
+      `required gate executable '${required.executable}' is unavailable on PATH\n`,
+      { mode: 0o600 },
+    );
+    throw new GateExecutionError(
+      "failed",
+      `gate '${name}' cannot start because '${required.executable}' is unavailable`,
+      "missing-executable",
+    );
+  }
   manifest.governor.activeExecution = {
     kind: "gate",
     name,
@@ -4539,7 +4560,7 @@ function executeGate(manifest, required, name, log, manifestPath) {
     throw new GateExecutionError(
       "failed",
       `gate '${name}' failed with exit status ${result.status}`,
-      result.status === 127 ? "missing-executable" : "gate-failed",
+      "gate-failed",
     );
   }
   return output;
@@ -5597,6 +5618,7 @@ module.exports = {
   hasAbandonedExecution,
   reconcileAbandonedExecution,
   executionRemaining,
+  executableAvailable,
   runGate,
   recordStamp,
   judgeContext,
