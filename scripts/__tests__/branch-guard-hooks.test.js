@@ -81,7 +81,9 @@ describe("block-push-main.sh", () => {
   });
 
   it("still denies a push to main routed through -C", () => {
-    expect(runHook(PUSH_HOOK, `git -C ${repo} push origin main`).code).toBe(2);
+    expect(runHook(PUSH_HOOK, `git -C "${repo}" push origin main`).code).toBe(
+      2,
+    );
   });
 
   it("still denies a push through a quoted -C path containing spaces", () => {
@@ -98,6 +100,21 @@ describe("block-push-main.sh", () => {
     "git push origin +HEAD:master",
   ])("denies protected branch refspec %s", (command) => {
     expect(runHook(PUSH_HOOK, command).code).toBe(2);
+  });
+
+  it("does not treat path or option substrings as force/delete flags", () => {
+    expect(
+      runHook(PUSH_HOOK, `git -C "/tmp/-final" push origin main`).code,
+    ).toBe(2);
+    expect(runHook(PUSH_HOOK, "git push origin main --foo").code).toBe(2);
+  });
+
+  it.each([
+    "git push --force origin main",
+    "git push --force-with-lease origin main",
+    "git push --delete origin main",
+  ])("preserves the explicit protected-push override %s", (command) => {
+    expect(runHook(PUSH_HOOK, command).code).toBe(0);
   });
 
   it("allows pushing a feature branch", () => {

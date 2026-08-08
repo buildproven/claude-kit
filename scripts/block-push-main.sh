@@ -115,8 +115,24 @@ pushes_protected_branch() {
 }
 
 if pushes_protected_branch; then
-  # Allow force push (already gated by permissions.ask) and push --delete
-  if echo "$COMMAND" | grep -qE '\-\-force|\-f|\-\-delete'; then
+  # Allow exact force/delete flags (already gated by permissions.ask). Check
+  # tokens, not raw substrings: a path such as `/tmp/-final` or an unrelated
+  # option containing `-f` must not turn a protected push into an allow.
+  protected_push_override() {
+    local index=1 token
+    if [ "${COMMAND_TOKENS[$index]:-}" = "-C" ]; then
+      index=$((index + 2))
+    fi
+    [ "${COMMAND_TOKENS[$index]:-}" = "push" ] || return 1
+    for ((index += 1; index < ${#COMMAND_TOKENS[@]}; index += 1)); do
+      token="${COMMAND_TOKENS[$index]}"
+      case "$token" in
+        -f|--force|--force-with-lease|--delete) return 0 ;;
+      esac
+    done
+    return 1
+  }
+  if protected_push_override; then
     exit 0
   fi
   echo "Blocked: direct push to main/master. Create a feature branch and PR instead."
@@ -127,8 +143,18 @@ if pushes_protected_branch; then
   exit 2
 fi
 
-# Block bare "git push" when on main/master (no explicit branch arg)
-if echo "$COMMAND" | grep -qE 'git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?push[[:space:]]*$'; then
+# Block bare "git push" when on main/master (no explicit branch arg). Use the
+# same parsed tokens as protected-ref detection so quoted paths and trailing
+# whitespace cannot make this branch diverge from the actual command.
+bare_push() {
+  local index=1
+  if [ "${COMMAND_TOKENS[$index]:-}" = "-C" ]; then
+    index=$((index + 2))
+  fi
+  [ "${COMMAND_TOKENS[$index]:-}" = "push" ] || return 1
+  [ $((index + 1)) -eq "${#COMMAND_TOKENS[@]}" ]
+}
+if bare_push; then
   CURRENT_BRANCH=$("${GIT_ARGS[@]}" branch --show-current 2>/dev/null || echo "")
   if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ]; then
     echo "Blocked: bare 'git push' while on $CURRENT_BRANCH. Create a feature branch and PR instead."
