@@ -1045,7 +1045,8 @@ describe("quality invocation manifest", () => {
       manifest.gates.push({
         name: "lint",
         status: "failed",
-        reason: "gate 'lint' cannot start because 'missing-tool' is unavailable",
+        reason:
+          "gate 'lint' cannot start because 'missing-tool' is unavailable",
         failureCode: "missing-executable",
         head: manifest.revisions.currentHead,
       });
@@ -1071,7 +1072,8 @@ describe("quality invocation manifest", () => {
       manifest.gates.push({
         name: "lint",
         status: "failed",
-        reason: "gate 'lint' cannot start because 'missing-tool' is unavailable",
+        reason:
+          "gate 'lint' cannot start because 'missing-tool' is unavailable",
         failureCode: "missing-executable",
         head: "stale-head",
       });
