@@ -1487,6 +1487,7 @@ function environmentRecoveryEligibility(
   // a later missing executable from discarding an earlier passing gate if gate
   // execution ever becomes parallel or reordered.
   if ((existing.gates || []).length !== 1) return null;
+  if (existing.gates[0].head !== existing.revisions?.currentHead) return null;
   const failed = (existing.gates || []).filter(
     (gate) => gate.status === "failed",
   );

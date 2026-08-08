@@ -1064,6 +1064,22 @@ describe("quality invocation manifest", () => {
     });
   });
 
+  it("does not recover a missing-executable gate from a stale head", () => {
+    const root = repo("environment-recovery-stale-head");
+    const predecessor = create(root);
+    invocation.withManifestLock(predecessor, (manifest) => {
+      manifest.gates.push({
+        name: "lint",
+        status: "failed",
+        reason: "gate 'lint' cannot start because 'missing-tool' is unavailable",
+        failureCode: "missing-executable",
+        head: "stale-head",
+      });
+    });
+    invocation.recordTerminalState(predecessor, "blocked", "gate:lint");
+    expect(create(root)).toBe(predecessor);
+  });
+
   it("uses one untried provider after exact-head quota exhaustion", () => {
     const root = repo("provider-exhaustion-recovery");
     const predecessor = create(root, [
