@@ -1432,6 +1432,16 @@ function supersedingManifest(
     withManifestLock(existingPath, (locked) => {
       if (locked.supersededBy) return;
       locked.supersededBy = { invocationId, manifestPath, reason, at: now };
+      if (transition === "environmentRecoveryOf") {
+        // Mark the predecessor as recovered too. The successor carries its
+        // own evidence, while this write-once marker prevents a repeated
+        // create of the original deterministic identity from minting another
+        // environment replacement when the dependency is still absent.
+        locked.environmentRecovery ??= {
+          reason,
+          supersededBy: invocationId,
+        };
+      }
     });
   } finally {
     if (credential) lease.release(existingPath, credential.token, "superseded");
