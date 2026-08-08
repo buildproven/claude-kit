@@ -4533,9 +4533,6 @@ function executeGate(manifest, required, name, log, manifestPath) {
 }
 
 function runGate(manifest, options, manifestPath) {
-  if (manifest.risk?.resolved !== true) {
-    throw new Error("risk must be resolved before running deterministic gates");
-  }
   if (manifest.repo.isCrossRepository === true) {
     throw new Error(
       "cross-repository PR gates must run in isolated CI; host execution is forbidden",

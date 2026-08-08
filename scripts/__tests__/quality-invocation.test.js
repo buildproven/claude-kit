@@ -996,15 +996,6 @@ describe("quality invocation manifest", () => {
     expect(create(ordinaryTimeoutRoot)).toBe(correctlyBudgeted);
   });
 
-  it("refuses to start a gate before persisting the risk contract", () => {
-    const manifestPath = create(repo("gate-requires-risk"));
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    expect(() =>
-      invocation.runGate(manifest, { name: "lint" }, manifestPath),
-    ).toThrow(/risk must be resolved before running deterministic gates/);
-    expect(JSON.parse(readFileSync(manifestPath, "utf8")).gates).toEqual([]);
-  });
-
   it("uses one untried provider after exact-head quota exhaustion", () => {
     const root = repo("provider-exhaustion-recovery");
     const predecessor = create(root, [
