@@ -30,9 +30,29 @@ else
   GIT_CMD="git"
 fi
 
-# Check for git push to main or master (with any remote name)
-# Matches: git push origin main, git push upstream master, git push -u origin main, etc.
-if echo "$COMMAND" | grep -qE 'git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?push[[:space:]]+.*[[:space:]](main|master)[[:space:]]*$'; then
+# Check for git push to main or master (with any remote name).  Tokenizing the
+# command avoids the platform-dependent extended-regexp edge that previously
+# let a `git -C <dir> push origin main` command through in CI.
+pushes_protected_branch() {
+  local -a tokens
+  local index token
+  read -r -a tokens <<< "$COMMAND"
+  [ "${tokens[0]:-}" = "git" ] || return 1
+  index=1
+  if [ "${tokens[$index]:-}" = "-C" ]; then
+    index=$((index + 2))
+  fi
+  [ "${tokens[$index]:-}" = "push" ] || return 1
+  index=$((index + 1))
+  for ((; index < ${#tokens[@]}; index += 1)); do
+    token="${tokens[$index]}"
+    [ "$token" = "main" ] || [ "$token" = "master" ] || continue
+    return 0
+  done
+  return 1
+}
+
+if pushes_protected_branch; then
   # Allow force push (already gated by permissions.ask) and push --delete
   if echo "$COMMAND" | grep -qE '\-\-force|\-f|\-\-delete'; then
     exit 0

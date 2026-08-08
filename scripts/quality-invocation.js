@@ -4447,7 +4447,7 @@ function recordSkippedGate(manifest, required, name, log, options) {
 function executableAvailable(executable, environment) {
   const result = spawnSync(
     "bash",
-    ["-lc", 'command -v -- "$1" >/dev/null', "bash", executable],
+    ["-c", 'command -v -- "$1" >/dev/null', "bash", executable],
     { env: environment, stdio: "ignore" },
   );
   return result.status === 0;
