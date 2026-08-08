@@ -1442,11 +1442,11 @@ function supersedingManifest(
 }
 
 // This is deliberately restricted to failures before any quality evidence was
-// produced.  A missing executable (normally an uninstalled lockfile
-// dependency) is an operator-environment prerequisite, not a code verdict;
-// once repaired, the exact same revision needs a new immutable packet.  It
-// must not reopen a real gate failure, a timeout, a provider run, or a
-// campaign with findings.
+// produced. A missing executable (normally an uninstalled lockfile dependency)
+// or a gate started before the risk contract existed is an orchestration
+// prerequisite, not a code verdict; once repaired, the exact same revision
+// needs a new immutable packet. It must not reopen a real gate failure, a
+// correctly budgeted timeout, a provider run, or a campaign with findings.
 function environmentRecoveryEligibility(
   existing,
   existingIdentity,
@@ -1465,9 +1465,20 @@ function environmentRecoveryEligibility(
   const failed = (existing.gates || []).filter(
     (gate) => gate.status === "failed",
   );
-  if (failed.length !== 1) return null;
-  if (!/exit status 127$/.test(failed[0].reason || "")) return null;
-  return "bootstrap environment lacked the required gate executable";
+  if (failed.length === 1 && /exit status 127$/.test(failed[0].reason || "")) {
+    return "bootstrap environment lacked the required gate executable";
+  }
+  const timedOut = (existing.gates || []).filter(
+    (gate) => gate.status === "timeout",
+  );
+  if (
+    existing.risk?.resolved !== true &&
+    timedOut.length === 1 &&
+    /proportional 300s budget$/.test(timedOut[0].reason || "")
+  ) {
+    return "gate execution began before its risk contract was resolved";
+  }
+  return null;
 }
 
 function providerRecoveryProviders(manifest) {
@@ -4522,6 +4533,9 @@ function executeGate(manifest, required, name, log, manifestPath) {
 }
 
 function runGate(manifest, options, manifestPath) {
+  if (manifest.risk?.resolved !== true) {
+    throw new Error("risk must be resolved before running deterministic gates");
+  }
   if (manifest.repo.isCrossRepository === true) {
     throw new Error(
       "cross-repository PR gates must run in isolated CI; host execution is forbidden",

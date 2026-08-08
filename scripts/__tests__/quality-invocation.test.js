@@ -957,6 +957,54 @@ describe("quality invocation manifest", () => {
     });
   });
 
+  it("supersedes a pre-risk gate timeout without reopening a real timeout", () => {
+    const root = repo("pre-risk-gate-recovery");
+    const predecessor = create(root);
+    invocation.withManifestLock(predecessor, (manifest) => {
+      manifest.gates.push({
+        name: "test",
+        status: "timeout",
+        reason: "gate 'test' exceeded its proportional 300s budget",
+        head: manifest.revisions.currentHead,
+      });
+    });
+    invocation.recordTerminalState(predecessor, "blocked", "gate:test");
+
+    const recovered = create(root);
+    expect(recovered).not.toBe(predecessor);
+    expect(JSON.parse(readFileSync(recovered, "utf8"))).toMatchObject({
+      supersedes: {
+        reason: "gate execution began before its risk contract was resolved",
+      },
+      gates: [],
+      reviews: [],
+    });
+
+    const ordinaryTimeoutRoot = repo("ordinary-timeout");
+    const correctlyBudgeted = create(ordinaryTimeoutRoot);
+    invocation.withManifestLock(correctlyBudgeted, (manifest) => {
+      manifest.risk = { ...manifest.risk, resolved: true, tier: "medium" };
+      manifest.gates.push({
+        name: "test",
+        status: "timeout",
+        reason: "gate 'test' exceeded its proportional 300s budget",
+        head: manifest.revisions.currentHead,
+      });
+    });
+    invocation.recordTerminalState(correctlyBudgeted, "blocked", "gate:test");
+    expect(() => create(root)).not.toThrow();
+    expect(create(ordinaryTimeoutRoot)).toBe(correctlyBudgeted);
+  });
+
+  it("refuses to start a gate before persisting the risk contract", () => {
+    const manifestPath = create(repo("gate-requires-risk"));
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(() =>
+      invocation.runGate(manifest, { name: "lint" }, manifestPath),
+    ).toThrow(/risk must be resolved before running deterministic gates/);
+    expect(JSON.parse(readFileSync(manifestPath, "utf8")).gates).toEqual([]);
+  });
+
   it("uses one untried provider after exact-head quota exhaustion", () => {
     const root = repo("provider-exhaustion-recovery");
     const predecessor = create(root, [
