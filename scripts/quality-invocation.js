@@ -1432,7 +1432,10 @@ function supersedingManifest(
     withManifestLock(existingPath, (locked) => {
       if (locked.supersededBy) return;
       locked.supersededBy = { invocationId, manifestPath, reason, at: now };
-      if (transition === "environmentRecoveryOf") {
+      if (
+        transition === "environmentRecoveryOf" &&
+        reason === "bootstrap environment lacked the required gate executable"
+      ) {
         // Mark the predecessor as recovered too. The successor carries its
         // own evidence, while this write-once marker prevents a repeated
         // create of the original deterministic identity from minting another
