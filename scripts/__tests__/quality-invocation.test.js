@@ -1015,6 +1015,29 @@ describe("quality invocation manifest", () => {
     ).toBe(false);
   });
 
+  it("does not discard earlier gate evidence during environment recovery", () => {
+    const root = repo("environment-recovery-after-gate");
+    const predecessor = create(root);
+    recordGateFixture(predecessor, "lint");
+    invocation.withManifestLock(predecessor, (manifest) => {
+      const log = path.join(path.dirname(predecessor), "missing.log");
+      writeFileSync(log, "missing executable\n");
+      invocation.recordGate(manifest, {
+        name: "test",
+        source: manifest.requiredGates.find((gate) => gate.name === "test")
+          .source,
+        command: manifest.requiredGates.find((gate) => gate.name === "test")
+          .command,
+        log,
+        status: "failed",
+        reason: "gate 'test' failed with exit status 127",
+        failureCode: "missing-executable",
+      });
+    });
+    invocation.recordTerminalState(predecessor, "blocked", "gate:test");
+    expect(create(root)).toBe(predecessor);
+  });
+
   it("uses one untried provider after exact-head quota exhaustion", () => {
     const root = repo("provider-exhaustion-recovery");
     const predecessor = create(root, [

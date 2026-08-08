@@ -1464,6 +1464,10 @@ function environmentRecoveryEligibility(
     return null;
   if ((existing.reviews || []).length !== 0) return null;
   if ((existing.governor?.providerAttempts || []).length !== 0) return null;
+  // Recovery is valid only before any other gate evidence exists. This keeps
+  // a later missing executable from discarding an earlier passing gate if gate
+  // execution ever becomes parallel or reordered.
+  if ((existing.gates || []).length !== 1) return null;
   const failed = (existing.gates || []).filter(
     (gate) => gate.status === "failed",
   );
