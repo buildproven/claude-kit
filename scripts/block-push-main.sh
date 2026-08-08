@@ -18,25 +18,79 @@ if [ -z "$COMMAND" ]; then
   exit 0
 fi
 
-# Extract -C <dir> from command if present (handles cross-repo pushes)
-# `|| true` is required: under `set -euo pipefail` a no-match `grep` exits 1 and
-# kills the hook before it can deny anything. Commands without `-C` are the
-# common case, so omitting it silently disabled this guard entirely.
-GIT_DIR=$(echo "$COMMAND" | grep -oE 'git[[:space:]]+-C[[:space:]]+[^[:space:]]+' | head -1 | awk '{print $3}' || true)
-if [ -n "$GIT_DIR" ]; then
+# Tokenize the raw command without evaluating it.  Bash's `read -a` is not
+# quote-aware, so a quoted `-C` path containing spaces would move the `push`
+# token out of position and let a protected refspec through.  This parser only
+# removes shell quoting and backslash escapes; it never performs expansion or
+# executes command substitutions.
+COMMAND_TOKENS=()
+tokenize_command() {
+  local state="unquoted" token="" started=false char next index
+  for ((index = 0; index < ${#COMMAND}; index += 1)); do
+    char="${COMMAND:index:1}"
+    case "$state" in
+      single)
+        if [ "$char" = "'" ]; then
+          state="unquoted"
+        else
+          token+="$char"
+        fi
+        started=true
+        ;;
+      double)
+        if [ "$char" = '"' ]; then
+          state="unquoted"
+        elif [ "$char" = "\\" ]; then
+          index=$((index + 1))
+          [ "$index" -lt "${#COMMAND}" ] || return 1
+          token+="${COMMAND:index:1}"
+        else
+          token+="$char"
+        fi
+        started=true
+        ;;
+      unquoted)
+        case "$char" in
+          "'") state="single"; started=true ;;
+          '"') state="double"; started=true ;;
+          "\\")
+            index=$((index + 1))
+            [ "$index" -lt "${#COMMAND}" ] || return 1
+            token+="${COMMAND:index:1}"
+            started=true
+            ;;
+          [[:space:]])
+            if [ "$started" = true ]; then
+              COMMAND_TOKENS+=("$token")
+              token=""
+              started=false
+            fi
+            ;;
+          *) token+="$char"; started=true ;;
+        esac
+        ;;
+    esac
+  done
+  [ "$state" = "unquoted" ] || return 1
+  if [ "$started" = true ]; then
+    COMMAND_TOKENS+=("$token")
+  fi
+}
+
+GIT_ARGS=(git)
+if tokenize_command && [ "${COMMAND_TOKENS[0]:-}" = "git" ] &&
+  [ "${COMMAND_TOKENS[1]:-}" = "-C" ] && [ -n "${COMMAND_TOKENS[2]:-}" ]; then
+  GIT_DIR="${COMMAND_TOKENS[2]}"
   GIT_DIR="${GIT_DIR/#\~/$HOME}"  # expand ~ safely (no eval)
-  GIT_CMD="git -C $GIT_DIR"
-else
-  GIT_CMD="git"
+  GIT_ARGS+=( -C "$GIT_DIR" )
 fi
 
 # Check for git push to main or master (with any remote name).  Tokenizing the
 # command avoids the platform-dependent extended-regexp edge that previously
 # let a `git -C <dir> push origin main` command through in CI.
 pushes_protected_branch() {
-  local -a tokens
+  local -a tokens=("${COMMAND_TOKENS[@]}")
   local index token target
-  read -r -a tokens <<< "$COMMAND"
   [ "${tokens[0]:-}" = "git" ] || return 1
   index=1
   if [ "${tokens[$index]:-}" = "-C" ]; then
@@ -75,7 +129,7 @@ fi
 
 # Block bare "git push" when on main/master (no explicit branch arg)
 if echo "$COMMAND" | grep -qE 'git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?push[[:space:]]*$'; then
-  CURRENT_BRANCH=$($GIT_CMD branch --show-current 2>/dev/null || echo "")
+  CURRENT_BRANCH=$("${GIT_ARGS[@]}" branch --show-current 2>/dev/null || echo "")
   if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ]; then
     echo "Blocked: bare 'git push' while on $CURRENT_BRANCH. Create a feature branch and PR instead."
     echo ""

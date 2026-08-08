@@ -84,6 +84,13 @@ describe("block-push-main.sh", () => {
     expect(runHook(PUSH_HOOK, `git -C ${repo} push origin main`).code).toBe(2);
   });
 
+  it("still denies a push through a quoted -C path containing spaces", () => {
+    expect(
+      runHook(PUSH_HOOK, 'git -C "/tmp/repo with spaces" push origin main')
+        .code,
+    ).toBe(2);
+  });
+
   it.each([
     "git push origin HEAD:main",
     "git push origin HEAD:refs/heads/main",
