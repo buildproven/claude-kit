@@ -1589,6 +1589,9 @@ function providerRecoveryManifest(
 function existingCampaign(manifestPath, campaignIdentity) {
   const existing = loadManifest(manifestPath).manifest;
   const existingIdentity = manifestIdentity(existing);
+  if (existing.environmentRecovery?.supersededBy) {
+    throw new Error("deterministic quality campaign identity collision");
+  }
   const environmentReason = environmentRecoveryEligibility(
     existing,
     existingIdentity,
