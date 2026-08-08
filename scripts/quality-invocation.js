@@ -1433,8 +1433,7 @@ function supersedingManifest(
       locked.supersededBy = { invocationId, manifestPath, reason, at: now };
     });
   } finally {
-    if (credential)
-      lease.release(existingPath, credential.token, "superseded");
+    if (credential) lease.release(existingPath, credential.token, "superseded");
     if (previousToken === undefined)
       delete process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
     else process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = previousToken;
@@ -1463,7 +1462,9 @@ function environmentRecoveryEligibility(
     return null;
   if ((existing.reviews || []).length !== 0) return null;
   if ((existing.governor?.providerAttempts || []).length !== 0) return null;
-  const failed = (existing.gates || []).filter((gate) => gate.status === "failed");
+  const failed = (existing.gates || []).filter(
+    (gate) => gate.status === "failed",
+  );
   if (failed.length !== 1) return null;
   if (!/exit status 127$/.test(failed[0].reason || "")) return null;
   return "bootstrap environment lacked the required gate executable";
@@ -1473,11 +1474,13 @@ function providerRecoveryProviders(manifest) {
   const inherited = manifest.providerRecovery?.attemptedProviders || [];
   const started = manifest.governor?.providerAttempts || [];
   const failed = manifest.reviews || [];
-  return new Set([
-    ...inherited,
-    ...started.map((attempt) => attempt.provider),
-    ...failed.map((review) => review.failedProvider),
-  ].filter(Boolean));
+  return new Set(
+    [
+      ...inherited,
+      ...started.map((attempt) => attempt.provider),
+      ...failed.map((review) => review.failedProvider),
+    ].filter(Boolean),
+  );
 }
 
 // A provider outage is not a code verdict.  After the ordinary primary plus
@@ -1517,7 +1520,10 @@ function providerRecoveryEligibility(
     campaignIdentity.provider.primaryOverride,
     campaignIdentity.provider.fallbackOverride,
   ].filter((provider) => provider && provider !== "none");
-  if (candidates.length === 0 || candidates.every((provider) => attempted.has(provider)))
+  if (
+    candidates.length === 0 ||
+    candidates.every((provider) => attempted.has(provider))
+  )
     return null;
   if (existing.providerRecovery) return null;
   return {

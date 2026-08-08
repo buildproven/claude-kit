@@ -943,13 +943,16 @@ describe("quality invocation manifest", () => {
     expect(recovered).not.toBe(predecessor);
     expect(JSON.parse(readFileSync(recovered, "utf8"))).toMatchObject({
       supersedes: {
-        invocationId: JSON.parse(readFileSync(predecessor, "utf8")).invocationId,
+        invocationId: JSON.parse(readFileSync(predecessor, "utf8"))
+          .invocationId,
         reason: "bootstrap environment lacked the required gate executable",
       },
       gates: [],
       reviews: [],
     });
-    expect(JSON.parse(readFileSync(predecessor, "utf8")).supersededBy).toMatchObject({
+    expect(
+      JSON.parse(readFileSync(predecessor, "utf8")).supersededBy,
+    ).toMatchObject({
       invocationId: JSON.parse(readFileSync(recovered, "utf8")).invocationId,
     });
   });
