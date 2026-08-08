@@ -934,6 +934,7 @@ describe("quality invocation manifest", () => {
         name: "lint",
         status: "failed",
         reason: "gate 'lint' failed with exit status 127",
+        failureCode: "missing-executable",
         head: manifest.revisions.currentHead,
       });
     });
@@ -949,6 +950,9 @@ describe("quality invocation manifest", () => {
       },
       gates: [],
       reviews: [],
+      environmentRecovery: {
+        reason: "bootstrap environment lacked the required gate executable",
+      },
     });
     expect(
       JSON.parse(readFileSync(predecessor, "utf8")).supersededBy,
@@ -965,6 +969,7 @@ describe("quality invocation manifest", () => {
         name: "test",
         status: "timeout",
         reason: "gate 'test' exceeded its proportional 300s budget",
+        failureCode: "unresolved-risk-timeout",
         head: manifest.revisions.currentHead,
       });
     });
@@ -978,6 +983,9 @@ describe("quality invocation manifest", () => {
       },
       gates: [],
       reviews: [],
+      environmentRecovery: {
+        reason: "gate execution began before its risk contract was resolved",
+      },
     });
 
     const ordinaryTimeoutRoot = repo("ordinary-timeout");
@@ -988,6 +996,7 @@ describe("quality invocation manifest", () => {
         name: "test",
         status: "timeout",
         reason: "gate 'test' exceeded its proportional 300s budget",
+        failureCode: "gate-timeout",
         head: manifest.revisions.currentHead,
       });
     });

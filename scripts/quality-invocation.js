@@ -28,9 +28,10 @@ const NEEDS_EXECUTION_BUDGET_MIGRATION = Symbol(
 const NEEDS_REQUIRED_GATES_MIGRATION = Symbol("needs-required-gates-migration");
 
 class GateExecutionError extends Error {
-  constructor(status, message) {
+  constructor(status, message, failureCode = null) {
     super(message);
     this.name = "GateExecutionError";
+    this.failureCode = failureCode;
     this.status = status;
   }
 }
@@ -1458,6 +1459,7 @@ function environmentRecoveryEligibility(
   )
     return null;
   if (existing.terminalState?.state !== "blocked") return null;
+  if (existing.environmentRecovery) return null;
   if (!/^gate:[A-Za-z0-9_-]+$/.test(existing.terminalState?.detail || ""))
     return null;
   if ((existing.reviews || []).length !== 0) return null;
@@ -1465,7 +1467,7 @@ function environmentRecoveryEligibility(
   const failed = (existing.gates || []).filter(
     (gate) => gate.status === "failed",
   );
-  if (failed.length === 1 && /exit status 127$/.test(failed[0].reason || "")) {
+  if (failed.length === 1 && failed[0].failureCode === "missing-executable") {
     return "bootstrap environment lacked the required gate executable";
   }
   const timedOut = (existing.gates || []).filter(
@@ -1474,7 +1476,7 @@ function environmentRecoveryEligibility(
   if (
     existing.risk?.resolved !== true &&
     timedOut.length === 1 &&
-    /proportional 300s budget$/.test(timedOut[0].reason || "")
+    timedOut[0].failureCode === "unresolved-risk-timeout"
   ) {
     return "gate execution began before its risk contract was resolved";
   }
@@ -1573,13 +1575,17 @@ function existingCampaign(manifestPath, campaignIdentity) {
     campaignIdentity,
   );
   if (environmentReason) {
-    return supersedingManifest(
+    const recovered = supersedingManifest(
       manifestPath,
       existing,
       campaignIdentity,
       environmentReason,
       "environmentRecoveryOf",
     );
+    withManifestLock(recovered, (locked) => {
+      locked.environmentRecovery ??= { reason: environmentReason };
+    });
+    return recovered;
   }
   const providerRecovery = providerRecoveryEligibility(
     existing,
@@ -4397,14 +4403,16 @@ function gateEvidenceInput(manifest, options) {
   if (["failed", "timeout"].includes(status) && !reason) {
     throw new Error(`gate ${status} evidence requires an explicit reason`);
   }
-  return { ...identity, status, reason };
+  const failureCode = options.failureCode || null;
+  if (failureCode !== null && !/^[a-z][a-z0-9-]*$/.test(failureCode)) {
+    throw new Error("gate failure code must be a lowercase identifier");
+  }
+  return { ...identity, status, reason, failureCode };
 }
 
 function recordGate(manifest, options) {
-  const { name, command, source, log, status, reason } = gateEvidenceInput(
-    manifest,
-    options,
-  );
+  const { name, command, source, log, status, reason, failureCode } =
+    gateEvidenceInput(manifest, options);
   manifest.gates = manifest.gates.filter(
     (gate) =>
       gate.head !== manifest.revisions.currentHead || gate.name !== name,
@@ -4416,6 +4424,7 @@ function recordGate(manifest, options) {
     head: manifest.revisions.currentHead,
     status,
     reason,
+    failureCode,
     log,
     logSha256: sha256File(log),
     completedAt: new Date().toISOString(),
@@ -4519,6 +4528,9 @@ function executeGate(manifest, required, name, log, manifestPath) {
     throw new GateExecutionError(
       "timeout",
       `gate '${name}' exceeded its proportional ${timeoutSeconds}s budget`,
+      manifest.risk?.resolved === true
+        ? "gate-timeout"
+        : "unresolved-risk-timeout",
     );
   }
   if (result.error) throw result.error;
@@ -4527,6 +4539,7 @@ function executeGate(manifest, required, name, log, manifestPath) {
     throw new GateExecutionError(
       "failed",
       `gate '${name}' failed with exit status ${result.status}`,
+      result.status === 127 ? "missing-executable" : "gate-failed",
     );
   }
   return output;
@@ -4573,6 +4586,7 @@ function runGate(manifest, options, manifestPath) {
       log,
       status: error.status,
       reason: error.message,
+      failureCode: error.failureCode,
     });
     process.stderr.write(`${error.message}\n`);
     throw error;
