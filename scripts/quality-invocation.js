@@ -1997,7 +1997,21 @@ function advanceHead(manifest, root, { acceptedConditions = [] } = {}) {
         `quality resume refused: incomplete review retry for ${retry.from}..${retry.to} is ${retry.state}`,
       );
     }
-    if (manifest.reviews.some((review) => (review.leadCount || 0) !== 0)) {
+    const persistedLeadCount = manifest.reviews.reduce((sum, review) => {
+      if (!Number.isInteger(review.leadCount) || review.leadCount < 0) {
+        throw new Error(
+          "quality resume refused: persisted review lead count is invalid",
+        );
+      }
+      return sum + review.leadCount;
+    }, 0);
+    const derivedLeadCount = providerFindings(manifest).length;
+    if (persistedLeadCount !== derivedLeadCount) {
+      throw new Error(
+        "quality resume refused: persisted review lead count does not match provider evidence",
+      );
+    }
+    if (derivedLeadCount !== 0) {
       throw new Error(
         "quality resume refused: exhausted provider review still has unresolved code findings",
       );
@@ -2683,10 +2697,12 @@ function validateDescendantAdvanceAuthorization(
       "exhausted review advance authorization signature is invalid",
     );
   }
-  // Consume the pre-authorization before mutating the manifest.  Keeping a
-  // renamed evidence file preserves the audit trail, while the absence of the
-  // original path makes a partial downstream failure non-replayable.
-  fs.renameSync(safeArtifactPath, `${safeArtifactPath}.used`);
+  // Do not consume the artifact here.  withManifestLock() persists the
+  // manifest only after this callback returns; consuming first would strand a
+  // legitimate retry if a later validation fails.  The signed fromHead/head
+  // identity is the replay barrier: after a successful advance the old
+  // artifact can no longer match the manifest's current head, while a failed
+  // mutation can safely retry the same authorization.
   return payload;
 }
 

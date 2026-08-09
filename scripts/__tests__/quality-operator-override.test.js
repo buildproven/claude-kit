@@ -1,6 +1,13 @@
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -553,6 +560,10 @@ describe("operator override end-to-end", () => {
           from: state.revisions.baseSha,
           to: state.revisions.currentHead,
           leadCount: 0,
+          artifactDir: path.join(
+            path.dirname(manifest),
+            `incomplete-review-${attempt}`,
+          ),
         });
       }
       state.terminalState = {
@@ -569,6 +580,21 @@ describe("operator override end-to-end", () => {
     git(root, ["add", "privacy-fix.js"]);
     git(root, ["commit", "-qam", "fix: remediate privacy review"]);
     const descendantHead = git(root, ["rev-parse", "HEAD"]);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const directory = path.join(
+        path.dirname(manifest),
+        `incomplete-review-${attempt}`,
+      );
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(
+        path.join(directory, "artifact-inventory.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          provider: "review-incomplete",
+          files: [],
+        }),
+      );
+    }
     const bin = mkdtempSync(path.join(tmpdir(), "quality-descendant-gh-"));
     const gh = path.join(bin, "gh");
     writeFileSync(
@@ -652,6 +678,17 @@ exit 1
         head: descendantHead,
       });
       expect(advanced.terminalState.state).toBe("provider-incomplete");
+      expect(existsSync(advanceAuthorization)).toBe(true);
+      expect(() =>
+        invocation.validateDescendantAdvanceAuthorization(
+          advanced,
+          advanceAuthorization,
+          {
+            head: descendantHead,
+            acceptedConditions: ["review:provider-exhaustion"],
+          },
+        ),
+      ).toThrow(/identity or conditions do not match/);
 
       for (const gate of ["lint", "test", "security"]) {
         recordGateFixtureLocal(manifest, gate);

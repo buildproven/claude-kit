@@ -4869,6 +4869,45 @@ exit 1
     ).toThrow(/capacity remains exhausted after remediation/);
   });
 
+  it("refuses exhausted-review advancement when persisted lead counts disagree with evidence", () => {
+    const root = repo("exhausted-provider-lead-count-mismatch");
+    const manifest = create(root);
+    invocation.withManifestLock(manifest, (loaded) => {
+      invocation.setRisk(loaded, {
+        tier: "medium",
+        taskType: "bugfix",
+        score: 35,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(loaded, ["code-reviewer"], {
+        domain: "general",
+        rule: "general-review",
+      });
+    });
+    prepareIncompleteReview(root, manifest, [
+      { severity: "high", title: "partial provider lead" },
+    ]);
+    prepareIncompleteReview(root, manifest);
+    invocation.withManifestLock(manifest, (loaded) => {
+      loaded.reviews[0].leadCount = 0;
+    });
+    writeFileSync(path.join(root, "fixed.js"), "export const fixed = true;\n");
+    git(root, ["add", "fixed.js"]);
+    git(root, ["commit", "-qam", "fix: remediate provider-incomplete review"]);
+
+    const state = invocation.loadManifest(manifest).manifest;
+    expect(() =>
+      invocation.advanceHead(state, root, {
+        acceptedConditions: ["review:provider-exhaustion"],
+      }),
+    ).toThrow(/lead count does not match provider evidence/);
+    expect(state.revisions.currentHead).not.toBe(
+      git(root, ["rev-parse", "HEAD"]),
+    );
+  });
+
   it("derives incomplete status for a single-provider critical review", () => {
     const root = repo("critical-native-incomplete");
     const manifest = create(root);
