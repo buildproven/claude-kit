@@ -2634,19 +2634,26 @@ function validateDescendantAdvanceAuthorization(
   if (safeArtifactPath !== resolvedPath) {
     throw new Error("exhausted review advance authorization path is invalid");
   }
-  let stat;
+  let artifactRaw;
+  let descriptor;
   try {
-    stat = fs.lstatSync(safeArtifactPath);
+    descriptor = fs.openSync(
+      safeArtifactPath,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+    );
+    if (!fs.fstatSync(descriptor).isFile()) {
+      throw new Error(
+        "exhausted review advance authorization must be a regular file",
+      );
+    }
+    artifactRaw = fs.readFileSync(descriptor, "utf8");
   } catch {
     throw new Error("exhausted review advance authorization is missing");
-  }
-  if (!stat.isFile() || stat.isSymbolicLink()) {
-    throw new Error(
-      "exhausted review advance authorization must be a regular file",
-    );
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
   }
   const artifact = parseJson(
-    fs.readFileSync(safeArtifactPath, "utf8"),
+    artifactRaw,
     "exhausted review advance authorization",
   );
   const payload = artifact.payload;
