@@ -25,7 +25,7 @@ fi
 # executes command substitutions.
 COMMAND_TOKENS=()
 tokenize_command() {
-  local state="unquoted" token="" started=false char next index
+  local state="unquoted" token="" started=false char escaped index
   for ((index = 0; index < ${#COMMAND}; index += 1)); do
     char="${COMMAND:index:1}"
     case "$state" in
@@ -43,7 +43,8 @@ tokenize_command() {
         elif [ "$char" = "\\" ]; then
           index=$((index + 1))
           [ "$index" -lt "${#COMMAND}" ] || return 1
-          token+="${COMMAND:index:1}"
+          escaped="${COMMAND:index:1}"
+          [ "$escaped" = $'\n' ] || token+="$escaped"
         else
           token+="$char"
         fi
@@ -56,8 +57,11 @@ tokenize_command() {
           "\\")
             index=$((index + 1))
             [ "$index" -lt "${#COMMAND}" ] || return 1
-            token+="${COMMAND:index:1}"
-            started=true
+            escaped="${COMMAND:index:1}"
+            if [ "$escaped" != $'\n' ]; then
+              token+="$escaped"
+              started=true
+            fi
             ;;
           [[:space:]])
             if [ "$started" = true ]; then

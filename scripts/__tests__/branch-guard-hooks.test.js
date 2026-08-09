@@ -103,6 +103,10 @@ describe("block-push-main.sh", () => {
     expect(runHook(PUSH_HOOK, command).code).toBe(2);
   });
 
+  it("denies a protected refspec split by an escaped newline", () => {
+    expect(runHook(PUSH_HOOK, "git push origin main\\" + "\n").code).toBe(2);
+  });
+
   it("does not treat path or option substrings as force/delete flags", () => {
     expect(
       runHook(PUSH_HOOK, `git -C "/tmp/-final" push origin main`).code,
