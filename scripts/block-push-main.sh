@@ -57,6 +57,7 @@ tokenize_command() {
         ;;
       unquoted)
         case "$char" in
+          '$'|'`') return 1 ;;
           "'") state="single"; started=true ;;
           '"') state="double"; started=true ;;
           "\\")
@@ -101,21 +102,28 @@ if [ "${COMMAND_TOKENS[0]:-}" = "git" ] &&
   GIT_ARGS+=( -C "$GIT_DIR" )
 fi
 
+# Resolve the first push argument once. Unsupported or incomplete global git
+# options fail closed instead of letting each guard re-derive a different
+# offset for the subcommand.
+push_argument_start() {
+  local index=1
+  [ "${COMMAND_TOKENS[0]:-}" = "git" ] || return 1
+  if [ "${COMMAND_TOKENS[$index]:-}" = "-C" ]; then
+    [ -n "${COMMAND_TOKENS[$((index + 1))]:-}" ] || return 1
+    index=$((index + 2))
+  fi
+  [ "${COMMAND_TOKENS[$index]:-}" = "push" ] || return 1
+  printf '%s\n' "$((index + 1))"
+}
+
 # Check for git push to main or master (with any remote name).  Tokenizing the
 # command avoids the platform-dependent extended-regexp edge that previously
 # let a `git -C <dir> push origin main` command through in CI.
 pushes_protected_branch() {
-  local -a tokens=("${COMMAND_TOKENS[@]}")
   local index token target
-  [ "${tokens[0]:-}" = "git" ] || return 1
-  index=1
-  if [ "${tokens[$index]:-}" = "-C" ]; then
-    index=$((index + 2))
-  fi
-  [ "${tokens[$index]:-}" = "push" ] || return 1
-  index=$((index + 1))
-  for ((; index < ${#tokens[@]}; index += 1)); do
-    token="${tokens[$index]}"
+  index="$(push_argument_start)" || return 1
+  for ((; index < ${#COMMAND_TOKENS[@]}; index += 1)); do
+    token="${COMMAND_TOKENS[$index]}"
     # A push refspec's destination is after the colon.  Normalize the
     # optional force marker and fully-qualified remote ref so the guard also
     # covers `HEAD:main`, `HEAD:refs/heads/main`, and `origin/main`.
@@ -140,12 +148,9 @@ if pushes_protected_branch; then
   # tokens, not raw substrings: a path such as `/tmp/-final` or an unrelated
   # option containing `-f` must not turn a protected push into an allow.
   protected_push_override() {
-    local index=1 token
-    if [ "${COMMAND_TOKENS[$index]:-}" = "-C" ]; then
-      index=$((index + 2))
-    fi
-    [ "${COMMAND_TOKENS[$index]:-}" = "push" ] || return 1
-    for ((index += 1; index < ${#COMMAND_TOKENS[@]}; index += 1)); do
+    local index token
+    index="$(push_argument_start)" || return 1
+    for ((; index < ${#COMMAND_TOKENS[@]}; index += 1)); do
       token="${COMMAND_TOKENS[$index]}"
       case "$token" in
         -f|--force|--force-with-lease|--delete) return 0 ;;
@@ -168,12 +173,9 @@ fi
 # same parsed tokens as protected-ref detection so quoted paths and trailing
 # whitespace cannot make this branch diverge from the actual command.
 bare_push() {
-  local index=1
-  if [ "${COMMAND_TOKENS[$index]:-}" = "-C" ]; then
-    index=$((index + 2))
-  fi
-  [ "${COMMAND_TOKENS[$index]:-}" = "push" ] || return 1
-  [ $((index + 1)) -eq "${#COMMAND_TOKENS[@]}" ]
+  local index
+  index="$(push_argument_start)" || return 1
+  [ "$index" -eq "${#COMMAND_TOKENS[@]}" ]
 }
 if bare_push; then
   CURRENT_BRANCH=$("${GIT_ARGS[@]}" branch --show-current 2>/dev/null || echo "")

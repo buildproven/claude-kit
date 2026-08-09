@@ -111,6 +111,17 @@ describe("block-push-main.sh", () => {
     expect(runHook(PUSH_HOOK, 'git push origin "ma\\in"').code).toBe(0);
   });
 
+  it.each([
+    "git push origin $'main'",
+    'git push origin ma"i"n',
+  ])("fails closed for shell quoting that resolves to main: %s", (command) => {
+    expect(runHook(PUSH_HOOK, command).code).toBe(2);
+  });
+
+  it("allows a multibyte non-protected branch name", () => {
+    expect(runHook(PUSH_HOOK, 'git push origin "mañana"').code).toBe(0);
+  });
+
   it("does not treat path or option substrings as force/delete flags", () => {
     expect(
       runHook(PUSH_HOOK, `git -C "/tmp/-final" push origin main`).code,
