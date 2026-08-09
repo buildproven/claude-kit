@@ -76,6 +76,9 @@ only through an exact-new-HEAD operator override accepting
 preserves the prior incomplete evidence, never mints another provider budget,
 and requires deterministic gates and mutation evidence for the descendant
 before attaching the signed override.
+Once that transition is recorded, the campaign cannot authorize another
+provider attempt; any later code change starts a fresh campaign so the audit
+trail never reuses the exhausted review state.
 
 ## 2. Deterministic gates and formatting
 

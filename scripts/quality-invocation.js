@@ -2658,6 +2658,10 @@ function validateDescendantAdvanceAuthorization(
       "exhausted review advance authorization signature is invalid",
     );
   }
+  // Consume the pre-authorization before mutating the manifest.  Keeping a
+  // renamed evidence file preserves the audit trail, while the absence of the
+  // original path makes a partial downstream failure non-replayable.
+  fs.renameSync(resolvedPath, `${resolvedPath}.used`);
   return payload;
 }
 

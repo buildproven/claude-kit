@@ -148,7 +148,9 @@ with `review:provider-exhaustion` plus `--i-understand-missing-review`; it keeps
 the prior review incomplete, does not create another provider budget, and
 requires deterministic gates and mutation evidence to be rerun at the new
 HEAD before the signed override is attached. A changed HEAD never inherits a
-clean review verdict.
+clean review verdict. Once that transition is recorded, the exhausted campaign
+cannot authorize another provider attempt; a later code change requires a
+fresh campaign rather than reusing its provider history.
 
 `override` is a strict alias for
 `approve --override-quality --reason ... --accept ...`; both mint the same
