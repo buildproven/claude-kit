@@ -2598,6 +2598,69 @@ function validateApprovalPayload(payload) {
   }
 }
 
+// A descendant resume has to cross the terminal review-exhaustion boundary
+// before the final override can be minted at the new HEAD.  The wrapper signs
+// this short-lived, one-use authorization first; the advance command verifies
+// it against the manifest's pinned key instead of trusting a caller-provided
+// condition environment variable.  The artifact is deliberately distinct
+// from the final approval capability and is invalidated by the fromHead check
+// as soon as the manifest advances.
+function validateDescendantAdvanceAuthorization(
+  manifest,
+  artifactPath,
+  { head, acceptedConditions },
+) {
+  if (!artifactPath) {
+    throw new Error(
+      "exhausted review advance requires a signed operator pre-authorization",
+    );
+  }
+  const resolvedPath = path.resolve(artifactPath);
+  let stat;
+  try {
+    stat = fs.lstatSync(resolvedPath);
+  } catch {
+    throw new Error("exhausted review advance authorization is missing");
+  }
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error(
+      "exhausted review advance authorization must be a regular file",
+    );
+  }
+  const artifact = parseJson(
+    fs.readFileSync(resolvedPath, "utf8"),
+    "exhausted review advance authorization",
+  );
+  const payload = artifact.payload;
+  const expectedConditions = [...acceptedConditions];
+  const payloadConditions = Array.isArray(payload?.acceptedConditions)
+    ? payload.acceptedConditions
+    : [];
+  if (
+    payload?.kind !== "quality-descendant-advance/v1" ||
+    payload?.repoKey !== manifest.repo.key ||
+    payload?.pr !== manifest.repo.pr ||
+    payload?.invocationId !== manifest.invocationId ||
+    payload?.baseSha !== manifest.revisions.baseSha ||
+    payload?.fromHead !== manifest.revisions.currentHead ||
+    payload?.head !== head ||
+    payload?.scope !== "operator-quality-override" ||
+    JSON.stringify(payloadConditions) !== JSON.stringify(expectedConditions)
+  ) {
+    throw new Error(
+      "exhausted review advance authorization identity or conditions do not match",
+    );
+  }
+  assertApprovalChallengeMatches(manifest, payload);
+  validateApprovalPayload(payload);
+  if (!capabilitySignatureValid(manifest, artifact)) {
+    throw new Error(
+      "exhausted review advance authorization signature is invalid",
+    );
+  }
+  return payload;
+}
+
 function assertApprovalChallengeMatches(manifest, payload) {
   const digestMatches =
     typeof payload?.challenge === "string" &&
@@ -5553,6 +5616,14 @@ function runAdvance(manifestArg, manifest, rawArgs) {
     reconcileAbandonedExecution(locked);
     validateIdentity(locked, manifest.repo.realpath, { requireHead: false });
     bindPrRepositoryIdentity(locked, options);
+    const nextHead = git(locked.repo.realpath, ["rev-parse", "HEAD"]);
+    if (options["allow-exhausted-review"]) {
+      validateDescendantAdvanceAuthorization(
+        locked,
+        process.env.BS_QUALITY_ADVANCE_AUTHORIZATION_ARTIFACT,
+        { head: nextHead, acceptedConditions },
+      );
+    }
     advanceHead(locked, manifest.repo.realpath, { acceptedConditions });
     validateIdentity(locked, manifest.repo.realpath);
     const discovered = discoverRequiredGates(
@@ -5761,6 +5832,7 @@ module.exports = {
   verifyReviewArtifact,
   writeArtifactInventory,
   validateIdentity,
+  validateDescendantAdvanceAuthorization,
   withManifestLock,
   withManifestLockRaw,
 };

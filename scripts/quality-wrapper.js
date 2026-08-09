@@ -457,6 +457,78 @@ function issueApprovalCapability(
   return payload;
 }
 
+// Descendant resume is a two-phase decision: the manifest must move from the
+// exhausted old HEAD so its new deterministic gates can be recorded, then the
+// final operator override is signed against that new HEAD.  Sign a short-lived
+// one-use pre-authorization for the first phase so bootstrap never treats a
+// plain environment variable as operator authority.
+function prepareDescendantAdvanceAuthorization(
+  manifestPath,
+  { expectedHead, expectedPr, scope, reason, acceptedConditions },
+  { challenge, keyPair, publicKey },
+) {
+  const manifest = parseJson(
+    fs.readFileSync(manifestPath, "utf8"),
+    "quality manifest",
+  );
+  if (
+    scope !== "operator-quality-override" ||
+    manifest.repo.pr !== expectedPr ||
+    manifest.revisions.currentHead === expectedHead
+  ) {
+    return null;
+  }
+  const issuedAt = new Date();
+  const payload = {
+    schemaVersion: 1,
+    kind: "quality-descendant-advance/v1",
+    repoKey: manifest.repo.key,
+    pr: manifest.repo.pr,
+    invocationId: manifest.invocationId,
+    baseSha: manifest.revisions.baseSha,
+    fromHead: manifest.revisions.currentHead,
+    head: expectedHead,
+    scope,
+    reason,
+    acceptedConditions,
+    approver: process.env.BREAK_GLASS_APPROVER || process.env.USER || "unknown",
+    issuedAt: issuedAt.toISOString(),
+    expiresAt: new Date(issuedAt.getTime() + 300_000).toISOString(),
+    nonce: crypto.randomUUID(),
+    challenge,
+  };
+  const artifact = {
+    schemaVersion: 1,
+    payload,
+    signature: crypto
+      .sign(
+        null,
+        Buffer.from(JSON.stringify(canonicalJson(payload))),
+        keyPair.privateKey,
+      )
+      .toString("base64"),
+  };
+  const directory = path.join(manifest.stateRoot, "advance-authorizations");
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const artifactPath = path.join(
+    directory,
+    `${expectedHead}-${payload.nonce}.json`,
+  );
+  fs.writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, {
+    mode: 0o600,
+    flag: "wx",
+  });
+  withRepositoryLease(manifestPath, () =>
+    invocation.withManifestLock(manifestPath, (locked) => {
+      invocation.armApprovalChallenge(locked, {
+        challenge: crypto.createHash("sha256").update(challenge).digest("hex"),
+        publicKey,
+      });
+    }),
+  );
+  return artifactPath;
+}
+
 function approvalMaterial(wantsApproval) {
   if (!wantsApproval) {
     return { challenge: null, keyPair: null, publicKey: null };
@@ -518,6 +590,28 @@ function main() {
   const wantsApproval = request.explicit || environmentApproval;
   const { challenge, keyPair, publicKey } = approvalMaterial(wantsApproval);
   const environment = childEnvironment();
+  let advanceAuthorizationArtifact = null;
+  if (
+    request.explicit &&
+    request.exactManifest &&
+    request.scope === "operator-quality-override"
+  ) {
+    advanceAuthorizationArtifact = prepareDescendantAdvanceAuthorization(
+      request.exactManifest,
+      {
+        expectedHead: request.expectedHead,
+        expectedPr: request.expectedPr,
+        scope: request.scope,
+        reason: request.reason,
+        acceptedConditions: request.acceptedConditions,
+      },
+      { challenge, keyPair, publicKey },
+    );
+  }
+  if (advanceAuthorizationArtifact) {
+    environment.BS_QUALITY_ADVANCE_AUTHORIZATION_ARTIFACT =
+      advanceAuthorizationArtifact;
+  }
   if (request.exactManifest) {
     environment.BS_QUALITY_APPROVAL_EXPECTED_HEAD = request.expectedHead;
     environment.BS_QUALITY_APPROVAL_EXPECTED_PR = String(request.expectedPr);
@@ -562,7 +656,11 @@ function main() {
   process.exit(result.status ?? 1);
 }
 
-module.exports = { parseApprovalCommand, parseRequest };
+module.exports = {
+  parseApprovalCommand,
+  parseRequest,
+  prepareDescendantAdvanceAuthorization,
+};
 
 if (require.main === module) {
   try {

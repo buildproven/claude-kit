@@ -219,6 +219,10 @@ if [ -n "$MANIFEST_ARG" ]; then
     ADVANCE_ARGS=(advance "$MANIFEST_ARG")
     if [ "$ALLOW_EXHAUSTED_REVIEW_ADVANCE" = true ]; then
       ADVANCE_ARGS+=(--allow-exhausted-review)
+      [ -n "${BS_QUALITY_ADVANCE_AUTHORIZATION_ARTIFACT:-}" ] || {
+        echo "❌ descendant approval requires a signed advance pre-authorization" >&2
+        exit 1
+      }
       export BS_QUALITY_ADVANCE_DECISION="${BS_QUALITY_APPROVAL_ACCEPTED_CONDITIONS:-}"
     fi
     if [ -n "$RESUME_PR" ] && [ "$RESUME_PR" != null ]; then

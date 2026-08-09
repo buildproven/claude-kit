@@ -1,3 +1,4 @@
+import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,6 +25,7 @@ const lease = require(LEASE);
 const taxonomy = require(
   path.join(ROOT, "scripts", "quality-condition-taxonomy.js"),
 );
+const { prepareDescendantAdvanceAuthorization } = require(WRAPPER);
 
 function recordGateFixtureLocal(manifestPath, name) {
   invocation.withManifestLock(manifestPath, (manifest) => {
@@ -586,6 +588,47 @@ exit 1
     chmodSync(gh, 0o755);
 
     try {
+      const unsignedAdvance = spawnSync(
+        "bash",
+        [BOOTSTRAP, "--manifest", manifest],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: withoutAmbientGitHubIdentity({
+            BS_QUALITY_APPROVAL_ONLY: "1",
+            BS_QUALITY_APPROVAL_EXPECTED_PR: "23",
+            BS_QUALITY_APPROVAL_EXPECTED_HEAD: descendantHead,
+            BS_QUALITY_APPROVAL_SCOPE: "operator-quality-override",
+            BS_QUALITY_APPROVAL_ACCEPTED_CONDITIONS:
+              "review:provider-exhaustion",
+            CLAUDE_SETUP_ROOT: ROOT,
+            PATH: `${bin}:${process.env.PATH}`,
+          }),
+        },
+      );
+      expect(unsignedAdvance.status).not.toBe(0);
+      expect(unsignedAdvance.stderr).toMatch(
+        /signed advance pre-authorization/,
+      );
+      expect(
+        JSON.parse(readFileSync(manifest, "utf8")).revisions.currentHead,
+      ).toBe(initial.revisions.currentHead);
+      const keyPair = generateKeyPairSync("ed25519");
+      const challenge = randomBytes(32).toString("hex");
+      const publicKey = keyPair.publicKey
+        .export({ type: "spki", format: "der" })
+        .toString("base64");
+      const advanceAuthorization = prepareDescendantAdvanceAuthorization(
+        manifest,
+        {
+          expectedHead: descendantHead,
+          expectedPr: 23,
+          scope: "operator-quality-override",
+          reason: "provider review exhausted before the privacy fix",
+          acceptedConditions: ["review:provider-exhaustion"],
+        },
+        { challenge, keyPair, publicKey },
+      );
       const advance = spawnSync("bash", [BOOTSTRAP, "--manifest", manifest], {
         cwd: root,
         encoding: "utf8",
@@ -595,6 +638,7 @@ exit 1
           BS_QUALITY_APPROVAL_EXPECTED_HEAD: descendantHead,
           BS_QUALITY_APPROVAL_SCOPE: "operator-quality-override",
           BS_QUALITY_APPROVAL_ACCEPTED_CONDITIONS: "review:provider-exhaustion",
+          BS_QUALITY_ADVANCE_AUTHORIZATION_ARTIFACT: advanceAuthorization,
           CLAUDE_SETUP_ROOT: ROOT,
           PATH: `${bin}:${process.env.PATH}`,
         }),
