@@ -108,6 +108,18 @@ function reviewCondition(manifest, reviewFailureReason) {
 
 function inferredReviewFailureReason(manifest, suppliedReason) {
   if (suppliedReason) return suppliedReason;
+  if ((manifest.reviewContractVersion || 1) >= 2) {
+    if (
+      manifest.revisions?.exhaustedReviewAdvance?.head ===
+      manifest.revisions.currentHead
+    ) {
+      return "provider-exhaustion";
+    }
+    const { incompleteRetryStatus } = require("./quality-review-history");
+    if (incompleteRetryStatus(manifest).state === "exhausted") {
+      return "provider-exhaustion";
+    }
+  }
   const governor = manifest.governor;
   const hasCurrentCoverage = (manifest.reviews || []).some(
     (review) => review.to === manifest.revisions.currentHead,
@@ -175,16 +187,13 @@ function ciCondition(manifest, ciFailureReason) {
 // evidence, and duplicating that classification here would risk drifting out
 // of sync with the authoritative classifier).
 function diagnoseConditions(manifest, failure = {}) {
-  const modelConditions =
-    (manifest.reviewContractVersion || 1) >= 2
-      ? []
-      : [
-          ...reviewCondition(
-            manifest,
-            inferredReviewFailureReason(manifest, failure.reviewFailureReason),
-          ),
-          ...findingConditions(manifest),
-        ];
+  const modelConditions = [
+    ...reviewCondition(
+      manifest,
+      inferredReviewFailureReason(manifest, failure.reviewFailureReason),
+    ),
+    ...findingConditions(manifest),
+  ];
   return [
     ...gateConditions(manifest),
     ...mutationCondition(manifest),

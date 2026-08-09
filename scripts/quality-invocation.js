@@ -1165,6 +1165,7 @@ function parseOptions(args) {
         "--incomplete",
         "--verify-app",
         "--read",
+        "--allow-exhausted-review",
       ].includes(name)
     ) {
       if (inlineValue !== null && !["true", "false"].includes(inlineValue)) {
@@ -1969,7 +1970,7 @@ function invalidateApproval(manifest, nextHead) {
   };
 }
 
-function advanceHead(manifest, root) {
+function advanceHead(manifest, root, { acceptedConditions = [] } = {}) {
   const nextHead = git(root, ["rev-parse", "HEAD"]);
   const priorHead = manifest.revisions.currentHead;
   // Revalidate even when HEAD has not moved. A manifest created by an older
@@ -1979,10 +1980,49 @@ function advanceHead(manifest, root) {
   assertCurrentReviewStrength(manifest, root);
   if (nextHead === priorHead) return false;
   const retry = incompleteRetryStatus(manifest);
-  if (retry.state !== "none") {
+  if (
+    acceptedConditions.includes("review:provider-exhaustion") &&
+    retry.state !== "exhausted"
+  ) {
     throw new Error(
-      `quality resume refused: incomplete review retry for ${retry.from}..${retry.to} is ${retry.state}`,
+      "quality resume refused: review:provider-exhaustion is not diagnosed for the current exact head",
     );
+  }
+  if (retry.state !== "none") {
+    const acceptedExhaustion = acceptedConditions.includes(
+      "review:provider-exhaustion",
+    );
+    if (retry.state !== "exhausted" || !acceptedExhaustion) {
+      throw new Error(
+        `quality resume refused: incomplete review retry for ${retry.from}..${retry.to} is ${retry.state}`,
+      );
+    }
+    const persistedLeadCount = manifest.reviews.reduce((sum, review) => {
+      if (!Number.isInteger(review.leadCount) || review.leadCount < 0) {
+        throw new Error(
+          "quality resume refused: persisted review lead count is invalid",
+        );
+      }
+      return sum + review.leadCount;
+    }, 0);
+    const derivedLeadCount = providerFindings(manifest).length;
+    if (persistedLeadCount !== derivedLeadCount) {
+      throw new Error(
+        "quality resume refused: persisted review lead count does not match provider evidence",
+      );
+    }
+    if (derivedLeadCount !== 0) {
+      throw new Error(
+        "quality resume refused: exhausted provider review still has unresolved code findings",
+      );
+    }
+    manifest.revisions.exhaustedReviewAdvance = {
+      acceptedCondition: "review:provider-exhaustion",
+      priorFrom: retry.from,
+      priorTo: retry.to,
+      head: nextHead,
+      recordedAt: new Date().toISOString(),
+    };
   }
   const stampHead = manifest.merge?.stampHead;
   if (stampHead) {
@@ -2572,6 +2612,100 @@ function validateApprovalPayload(payload) {
   }
 }
 
+// A descendant resume has to cross the terminal review-exhaustion boundary
+// before the final override can be minted at the new HEAD.  The wrapper signs
+// this short-lived, one-use authorization first; the advance command verifies
+// it against the manifest's pinned key instead of trusting a caller-provided
+// condition environment variable.  The artifact is deliberately distinct
+// from the final approval capability and is invalidated by the fromHead check
+// as soon as the manifest advances.
+function validateDescendantAdvanceAuthorization(
+  manifest,
+  artifactPath,
+  { head, acceptedConditions },
+) {
+  if (!artifactPath) {
+    throw new Error(
+      "exhausted review advance requires a signed operator pre-authorization",
+    );
+  }
+  const resolvedPath = path.resolve(artifactPath);
+  const expectedDirectory = path.resolve(
+    path.join(manifest.stateRoot, "advance-authorizations"),
+  );
+  const relativePath = path.relative(expectedDirectory, resolvedPath);
+  if (
+    relativePath === "" ||
+    relativePath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativePath)
+  ) {
+    throw new Error(
+      "exhausted review advance authorization must be inside its manifest state directory",
+    );
+  }
+  const artifactName = path.basename(resolvedPath);
+  const safeArtifactPath = path.join(expectedDirectory, artifactName);
+  if (safeArtifactPath !== resolvedPath) {
+    throw new Error("exhausted review advance authorization path is invalid");
+  }
+  let artifactRaw;
+  let descriptor;
+  try {
+    descriptor = fs.openSync(
+      safeArtifactPath,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+    );
+    if (!fs.fstatSync(descriptor).isFile()) {
+      throw new Error(
+        "exhausted review advance authorization must be a regular file",
+      );
+    }
+    artifactRaw = fs.readFileSync(descriptor, "utf8");
+  } catch {
+    throw new Error("exhausted review advance authorization is missing");
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
+  const artifact = parseJson(
+    artifactRaw,
+    "exhausted review advance authorization",
+  );
+  const payload = artifact.payload;
+  const expectedConditions = [...acceptedConditions];
+  const payloadConditions = Array.isArray(payload?.acceptedConditions)
+    ? payload.acceptedConditions
+    : [];
+  if (
+    payload?.kind !== "quality-descendant-advance/v1" ||
+    payload?.repoKey !== manifest.repo.key ||
+    payload?.pr !== manifest.repo.pr ||
+    payload?.invocationId !== manifest.invocationId ||
+    payload?.baseSha !== manifest.revisions.baseSha ||
+    payload?.fromHead !== manifest.revisions.currentHead ||
+    payload?.head !== head ||
+    payload?.scope !== "operator-quality-override" ||
+    JSON.stringify(payloadConditions) !== JSON.stringify(expectedConditions)
+  ) {
+    throw new Error(
+      "exhausted review advance authorization identity or conditions do not match",
+    );
+  }
+  assertApprovalChallengeMatches(manifest, payload);
+  validateApprovalPayload(payload);
+  if (!capabilitySignatureValid(manifest, artifact)) {
+    throw new Error(
+      "exhausted review advance authorization signature is invalid",
+    );
+  }
+  // Do not consume the artifact here.  withManifestLock() persists the
+  // manifest only after this callback returns; consuming first would strand a
+  // legitimate retry if a later validation fails.  The signed fromHead/head
+  // identity is the replay barrier: after a successful advance the old
+  // artifact can no longer match the manifest's current head, while a failed
+  // mutation can safely retry the same authorization.
+  return payload;
+}
+
 function assertApprovalChallengeMatches(manifest, payload) {
   const digestMatches =
     typeof payload?.challenge === "string" &&
@@ -2847,6 +2981,11 @@ function authorizeProviderAttempt(manifest, options, manifestPath) {
     throw new Error(`invalid review provider '${provider}'`);
   }
   const governor = manifest.governor;
+  if (manifest.revisions?.exhaustedReviewAdvance) {
+    throw new Error(
+      "provider review capacity remains exhausted after remediation; use an exact-head operator override or start a fresh campaign",
+    );
+  }
   if (
     !Number.isInteger(governor.maxProviderAttempts) ||
     !Array.isArray(governor.providerAttempts)
@@ -5499,6 +5638,20 @@ const COMMANDS = {
 
 function runAdvance(manifestArg, manifest, rawArgs) {
   const options = parseOptions(rawArgs);
+  const acceptedConditions = options["allow-exhausted-review"]
+    ? String(process.env.BS_QUALITY_ADVANCE_DECISION || "")
+        .split(",")
+        .map((condition) => condition.trim())
+        .filter(Boolean)
+    : [];
+  if (
+    options["allow-exhausted-review"] &&
+    !acceptedConditions.includes("review:provider-exhaustion")
+  ) {
+    throw new Error(
+      "allow-exhausted-review requires the explicit review:provider-exhaustion operator decision",
+    );
+  }
   const updated = withManifestLock(manifestArg, (locked) => {
     if (locked[NEEDS_EXECUTION_BUDGET_MIGRATION]) {
       throw new Error(
@@ -5508,7 +5661,15 @@ function runAdvance(manifestArg, manifest, rawArgs) {
     reconcileAbandonedExecution(locked);
     validateIdentity(locked, manifest.repo.realpath, { requireHead: false });
     bindPrRepositoryIdentity(locked, options);
-    advanceHead(locked, manifest.repo.realpath);
+    const nextHead = git(locked.repo.realpath, ["rev-parse", "HEAD"]);
+    if (options["allow-exhausted-review"]) {
+      validateDescendantAdvanceAuthorization(
+        locked,
+        process.env.BS_QUALITY_ADVANCE_AUTHORIZATION_ARTIFACT,
+        { head: nextHead, acceptedConditions },
+      );
+    }
+    advanceHead(locked, manifest.repo.realpath, { acceptedConditions });
     validateIdentity(locked, manifest.repo.realpath);
     const discovered = discoverRequiredGates(
       locked.repo.realpath,
@@ -5606,9 +5767,15 @@ function runCommand(command, rawArgs) {
       "inventory",
     ].includes(command)
   ) {
-    throw new Error(
-      `quality campaign is terminal (${manifest.terminalState.state}); start a fresh invocation`,
-    );
+    const exhaustedReviewAdvance =
+      command === "advance" &&
+      rawArgs.includes("--allow-exhausted-review") &&
+      process.env.BS_QUALITY_ADVANCE_DECISION === "review:provider-exhaustion";
+    if (!exhaustedReviewAdvance) {
+      throw new Error(
+        `quality campaign is terminal (${manifest.terminalState.state}); start a fresh invocation`,
+      );
+    }
   }
   if (
     (!STALE_READ_COMMANDS.has(command) || command === "review-info") &&
@@ -5710,6 +5877,7 @@ module.exports = {
   verifyReviewArtifact,
   writeArtifactInventory,
   validateIdentity,
+  validateDescendantAdvanceAuthorization,
   withManifestLock,
   withManifestLockRaw,
 };

@@ -21,6 +21,10 @@ Only an auth/payments, durable-data, public-contract, distributed-consistency,
 cross-repository, or similarly irreversible decision creates an ADR and earns a
 bounded high-effort review.
 
+An exhausted quality provider retry can cross a legitimate descendant fix only
+through an exact-new-HEAD operator override that names
+`review:provider-exhaustion` and acknowledges the missing review.
+
 **Arguments received:** $ARGUMENTS
 
 ## Instructions

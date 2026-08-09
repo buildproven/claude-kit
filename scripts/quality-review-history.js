@@ -46,6 +46,7 @@ function exhaustedIncompleteReviews(manifest) {
   return authorized.filter(
     (review) =>
       isRetryableIncomplete(review) &&
+      review.to === manifest.revisions.currentHead &&
       covered.filter(
         (candidate) =>
           isRetryableIncomplete(candidate) && sameRange(candidate, review),
@@ -55,7 +56,11 @@ function exhaustedIncompleteReviews(manifest) {
 
 function incompleteRetryStatus(manifest) {
   const authorized = authorizationReviews(manifest);
-  const unresolved = authorized.filter(isRetryableIncomplete);
+  const unresolved = authorized.filter(
+    (review) =>
+      isRetryableIncomplete(review) &&
+      review.to === manifest.revisions.currentHead,
+  );
   if (unresolved.length === 0) return { state: "none" };
   const exhausted = exhaustedIncompleteReviews(manifest);
   const review = exhausted.at(-1) || unresolved.at(-1);
