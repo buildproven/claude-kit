@@ -107,6 +107,10 @@ describe("block-push-main.sh", () => {
     expect(runHook(PUSH_HOOK, "git push origin main\\" + "\n").code).toBe(2);
   });
 
+  it("preserves non-special backslashes inside double quotes", () => {
+    expect(runHook(PUSH_HOOK, 'git push origin "ma\\in"').code).toBe(0);
+  });
+
   it("does not treat path or option substrings as force/delete flags", () => {
     expect(
       runHook(PUSH_HOOK, `git -C "/tmp/-final" push origin main`).code,

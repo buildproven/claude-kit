@@ -44,7 +44,12 @@ tokenize_command() {
           index=$((index + 1))
           [ "$index" -lt "${#COMMAND}" ] || return 1
           escaped="${COMMAND:index:1}"
-          [ "$escaped" = $'\n' ] || token+="$escaped"
+          if [ "$escaped" = '$' ] || [ "$escaped" = '`' ] ||
+            [ "$escaped" = '"' ] || [ "$escaped" = "\\" ]; then
+            token+="$escaped"
+          elif [ "$escaped" != $'\n' ]; then
+            token+="\\$escaped"
+          fi
         else
           token+="$char"
         fi
