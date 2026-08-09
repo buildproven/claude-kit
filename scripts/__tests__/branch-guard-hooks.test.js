@@ -107,6 +107,12 @@ describe("block-push-main.sh", () => {
     expect(runHook(PUSH_HOOK, "git push origin main\\" + "\n").code).toBe(2);
   });
 
+  it("denies a protected refspec split inside double quotes", () => {
+    expect(runHook(PUSH_HOOK, 'git push origin "main\\' + "\n" + '"').code).toBe(
+      2,
+    );
+  });
+
   it("preserves non-special backslashes inside double quotes", () => {
     expect(runHook(PUSH_HOOK, 'git push origin "ma\\in"').code).toBe(0);
   });

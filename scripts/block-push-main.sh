@@ -41,6 +41,8 @@ tokenize_command() {
         if [ "$char" = '"' ]; then
           state="unquoted"
         elif [ "$char" = "\\" ]; then
+          # Hook input is the raw Bash command string. Treat an escaped
+          # newline as a line continuation here as in the unquoted state.
           index=$((index + 1))
           [ "$index" -lt "${#COMMAND}" ] || return 1
           escaped="${COMMAND:index:1}"
