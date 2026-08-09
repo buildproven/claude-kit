@@ -12,6 +12,13 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.4.2](https://github.com/buildproven/claude-kit/compare/v4.4.1...v4.4.2) (2026-08-09)
+
+
+### Bug Fixes
+
+* **quality:** recover missing gate executables ([#297](https://github.com/buildproven/claude-kit/issues/297)) ([946f965](https://github.com/buildproven/claude-kit/commit/946f965d33854883ad6b6d0765b89736af449bbc))
+
 ## [4.4.1](https://github.com/buildproven/claude-kit/compare/v4.4.0...v4.4.1) (2026-08-07)
 
 
