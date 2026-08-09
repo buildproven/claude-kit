@@ -86,6 +86,21 @@ describe("block-push-main.sh", () => {
     );
   });
 
+  it.each([
+    "git -c protocol.version=2 push origin main",
+    "git --git-dir=/tmp/repo.git push origin main",
+    "git --work-tree /tmp/repo push origin main",
+    "git --no-pager push origin main",
+  ])("denies a protected push after a git global option: %s", (command) => {
+    expect(runHook(PUSH_HOOK, command).code).toBe(2);
+  });
+
+  it("fails closed for an unrecognized git global option", () => {
+    expect(
+      runHook(PUSH_HOOK, "git --unknown-global push origin main").code,
+    ).toBe(2);
+  });
+
   it("still denies a push through a quoted -C path containing spaces", () => {
     expect(
       runHook(PUSH_HOOK, 'git -C "/tmp/repo with spaces" push origin main')

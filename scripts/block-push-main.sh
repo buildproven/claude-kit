@@ -96,34 +96,66 @@ if ! tokenize_command; then
   exit 2
 fi
 
-GIT_ARGS=(git)
-if [ "${COMMAND_TOKENS[0]:-}" = "git" ] &&
-  [ "${COMMAND_TOKENS[1]:-}" = "-C" ] && [ -n "${COMMAND_TOKENS[2]:-}" ]; then
-  GIT_DIR="${COMMAND_TOKENS[2]}"
-  GIT_DIR="${GIT_DIR/#\~/$HOME}"  # expand ~ safely (no eval)
-  GIT_ARGS+=( -C "$GIT_DIR" )
-fi
-
-# Resolve the first push argument once. Unsupported or incomplete global git
-# options fail closed instead of letting each guard re-derive a different
-# offset for the subcommand.
+# Resolve the first push argument once. Git accepts several global options before
+# the subcommand; recognizing them here keeps the guard aligned with real git
+# invocations instead of silently treating those commands as non-pushes.
 push_argument_start() {
   local index=1
+  local token
   [ "${COMMAND_TOKENS[0]:-}" = "git" ] || return 1
-  if [ "${COMMAND_TOKENS[$index]:-}" = "-C" ]; then
-    [ -n "${COMMAND_TOKENS[$((index + 1))]:-}" ] || return 1
-    index=$((index + 2))
-  fi
-  [ "${COMMAND_TOKENS[$index]:-}" = "push" ] || return 1
-  printf '%s\n' "$((index + 1))"
+  while [ "$index" -lt "${#COMMAND_TOKENS[@]}" ]; do
+    token="${COMMAND_TOKENS[$index]}"
+    if [ "$token" = "push" ]; then
+      printf '%s\n' "$((index + 1))"
+      return 0
+    fi
+    case "$token" in
+      # Global options that take a separate value.
+      -C|-c|--config-env|--exec-path|--git-dir|--work-tree|--namespace|--super-prefix)
+        [ -n "${COMMAND_TOKENS[$((index + 1))]:-}" ] || return 2
+        index=$((index + 2))
+        ;;
+      # The same value-bearing options in --name=value form.
+      --config-env=*|--exec-path=*|--git-dir=*|--work-tree=*|--namespace=*|--super-prefix=*)
+        index=$((index + 1))
+        ;;
+      # Boolean global options.
+      -p|-P|--no-pager|--paginate|--no-replace-objects|--no-lazy-fetch|--no-optional-locks|--no-advice|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs)
+        index=$((index + 1))
+        ;;
+      *)
+        # A non-option is another git subcommand, so this is safely not a push.
+        # An unknown option cannot be classified without risking a bypass.
+        [[ "$token" == -* ]] && return 2
+        return 1
+        ;;
+    esac
+  done
+  return 1
 }
+
+PUSH_ARGUMENT_START=""
+if PUSH_ARGUMENT_START="$(push_argument_start)"; then
+  PUSH_COMMAND_INDEX=$((PUSH_ARGUMENT_START - 1))
+  # Preserve every parsed global option when checking the current branch for a
+  # bare push (for example, `git --git-dir=/repo/.git push`).
+  GIT_ARGS=("${COMMAND_TOKENS[@]:0:$PUSH_COMMAND_INDEX}")
+else
+  PUSH_PARSE_STATUS=$?
+  if [ "$PUSH_PARSE_STATUS" -eq 2 ]; then
+    echo "Blocked: could not classify the git command safely." >&2
+    exit 2
+  fi
+  GIT_ARGS=(git)
+fi
 
 # Check for git push to main or master (with any remote name).  Tokenizing the
 # command avoids the platform-dependent extended-regexp edge that previously
 # let a `git -C <dir> push origin main` command through in CI.
 pushes_protected_branch() {
   local index token target
-  index="$(push_argument_start)" || return 1
+  [ -n "$PUSH_ARGUMENT_START" ] || return 1
+  index="$PUSH_ARGUMENT_START"
   for ((; index < ${#COMMAND_TOKENS[@]}; index += 1)); do
     token="${COMMAND_TOKENS[$index]}"
     # A push refspec's destination is after the colon.  Normalize the
@@ -151,7 +183,8 @@ if pushes_protected_branch; then
   # option containing `-f` must not turn a protected push into an allow.
   protected_push_override() {
     local index token
-    index="$(push_argument_start)" || return 1
+    [ -n "$PUSH_ARGUMENT_START" ] || return 1
+    index="$PUSH_ARGUMENT_START"
     for ((; index < ${#COMMAND_TOKENS[@]}; index += 1)); do
       token="${COMMAND_TOKENS[$index]}"
       case "$token" in
@@ -176,7 +209,8 @@ fi
 # whitespace cannot make this branch diverge from the actual command.
 bare_push() {
   local index
-  index="$(push_argument_start)" || return 1
+  [ -n "$PUSH_ARGUMENT_START" ] || return 1
+  index="$PUSH_ARGUMENT_START"
   [ "$index" -eq "${#COMMAND_TOKENS[@]}" ]
 }
 if bare_push; then
