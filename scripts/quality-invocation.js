@@ -28,9 +28,10 @@ const NEEDS_EXECUTION_BUDGET_MIGRATION = Symbol(
 const NEEDS_REQUIRED_GATES_MIGRATION = Symbol("needs-required-gates-migration");
 
 class GateExecutionError extends Error {
-  constructor(status, message) {
+  constructor(status, message, failureCode = null) {
     super(message);
     this.name = "GateExecutionError";
+    this.failureCode = failureCode;
     this.status = status;
   }
 }
@@ -1345,15 +1346,16 @@ function diversityUpgradeEligibility(
   return "critical exact-head discovery lacked required provider diversity";
 }
 
-function diversityUpgradeManifest(
+function supersedingManifest(
   existingPath,
   existing,
   campaignIdentity,
   reason,
+  transition,
 ) {
   const upgradeKey = {
     campaign: campaignIdentity,
-    diversityUpgradeOf: existing.invocationId,
+    [transition]: existing.invocationId,
   };
   const invocationId = deterministicInvocationId(upgradeKey);
   const stateRoot = path.join(
@@ -1416,6 +1418,17 @@ function diversityUpgradeManifest(
       reason,
       at: now,
     },
+    ...(transition === "environmentRecoveryOf"
+      ? {
+          environmentRecovery: {
+            reason,
+            rootInvocationId:
+              existing.environmentRecovery?.rootInvocationId ??
+              existing.invocationId,
+            generation: (existing.environmentRecovery?.generation ?? 0) + 1,
+          },
+        }
+      : {}),
   };
   if (!atomicCreate(manifestPath, manifest)) return manifestPath;
   const lease = require("./quality-repo-lease");
@@ -1430,10 +1443,22 @@ function diversityUpgradeManifest(
     withManifestLock(existingPath, (locked) => {
       if (locked.supersededBy) return;
       locked.supersededBy = { invocationId, manifestPath, reason, at: now };
+      if (
+        transition === "environmentRecoveryOf" &&
+        reason === "bootstrap environment lacked the required gate executable"
+      ) {
+        // Mark the predecessor as recovered too. The successor carries its
+        // own evidence, while this write-once marker prevents a repeated
+        // create of the original deterministic identity from minting another
+        // environment replacement when the dependency is still absent.
+        locked.environmentRecovery ??= {
+          reason,
+          supersededBy: invocationId,
+        };
+      }
     });
   } finally {
-    if (credential)
-      lease.release(existingPath, credential.token, "diversity-upgraded");
+    if (credential) lease.release(existingPath, credential.token, "superseded");
     if (previousToken === undefined)
       delete process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
     else process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = previousToken;
@@ -1441,9 +1466,178 @@ function diversityUpgradeManifest(
   return manifestPath;
 }
 
+// This is deliberately restricted to failures before any quality evidence was
+// produced. A missing executable (normally an uninstalled lockfile dependency)
+// or a gate started before the risk contract existed is an orchestration
+// prerequisite, not a code verdict; once repaired, the exact same revision
+// needs a new immutable packet. It must not reopen a real gate failure, a
+// correctly budgeted timeout, a provider run, or a campaign with findings.
+function environmentRecoveryEligibility(
+  existing,
+  existingIdentity,
+  campaignIdentity,
+) {
+  if (
+    JSON.stringify(canonicalJson(existingIdentity)) !==
+    JSON.stringify(canonicalJson(campaignIdentity))
+  )
+    return null;
+  if (existing.terminalState?.state !== "blocked") return null;
+  if (existing.environmentRecovery) return null;
+  // One predecessor may receive one immutable replacement. Once the
+  // predecessor is linked to that replacement, refuse to mint another
+  // environment campaign for the same deterministic identity. A permanently
+  // missing executable must remain a visible blocked condition, not become an
+  // unbounded chain that discards the failure evidence on every retry.
+  if (existing.supersededBy?.invocationId) return null;
+  if (!/^gate:[A-Za-z0-9_-]+$/.test(existing.terminalState?.detail || ""))
+    return null;
+  if ((existing.reviews || []).length !== 0) return null;
+  if ((existing.governor?.providerAttempts || []).length !== 0) return null;
+  // Recovery is valid only before any other gate evidence exists. This keeps
+  // a later missing executable from discarding an earlier passing gate if gate
+  // execution ever becomes parallel or reordered.
+  if ((existing.gates || []).length !== 1) return null;
+  if (existing.gates[0].head !== existing.revisions?.currentHead) return null;
+  const failed = (existing.gates || []).filter(
+    (gate) => gate.status === "failed",
+  );
+  if (failed.length === 1 && failed[0].failureCode === "missing-executable") {
+    return "bootstrap environment lacked the required gate executable";
+  }
+  const timedOut = (existing.gates || []).filter(
+    (gate) => gate.status === "timeout",
+  );
+  if (
+    existing.risk?.resolved !== true &&
+    timedOut.length === 1 &&
+    timedOut[0].failureCode === "unresolved-risk-timeout"
+  ) {
+    return "gate execution began before its risk contract was resolved";
+  }
+  return null;
+}
+
+function providerRecoveryProviders(manifest) {
+  const inherited = manifest.providerRecovery?.attemptedProviders || [];
+  const started = manifest.governor?.providerAttempts || [];
+  const failed = manifest.reviews || [];
+  return new Set(
+    [
+      ...inherited,
+      ...started.map((attempt) => attempt.provider),
+      ...failed.map((review) => review.failedProvider),
+    ].filter(Boolean),
+  );
+}
+
+// A provider outage is not a code verdict.  After the ordinary primary plus
+// fallback and their one bounded retry have all produced only unavailable,
+// quota, or billing evidence, permit one *different* installed provider to
+// review the same exact head.  This is not a general rerun: every old provider
+// is carried forward as spent, all deterministic gates run again, and a
+// successor cannot introduce a fourth provider chain.
+function providerRecoveryEligibility(
+  existing,
+  existingIdentity,
+  campaignIdentity,
+) {
+  if (!sameWorkIgnoringReviewArm(existingIdentity, campaignIdentity))
+    return null;
+  if (existing.terminalState?.state !== "provider-incomplete") return null;
+  if (existing.terminalState?.detail !== "retry-exhausted:provider-exhaustion")
+    return null;
+  if (!Array.isArray(existing.reviews) || existing.reviews.length === 0)
+    return null;
+  if (
+    existing.reviews.some(
+      (review) =>
+        review.status !== "incomplete" ||
+        review.failureCategory !== "provider-exhaustion" ||
+        (review.leadCount || 0) !== 0,
+    )
+  )
+    return null;
+  try {
+    verifyGateEvidence(existing);
+  } catch {
+    return null;
+  }
+  const attempted = providerRecoveryProviders(existing);
+  const candidates = [
+    campaignIdentity.provider.primaryOverride,
+    campaignIdentity.provider.fallbackOverride,
+  ].filter((provider) => provider && provider !== "none");
+  if (
+    candidates.length === 0 ||
+    candidates.every((provider) => attempted.has(provider))
+  )
+    return null;
+  if (existing.providerRecovery) return null;
+  return {
+    reason: "exact-head discovery exhausted its configured provider set",
+    attemptedProviders: [...attempted].sort(),
+  };
+}
+
+function providerRecoveryManifest(
+  existingPath,
+  existing,
+  campaignIdentity,
+  recovery,
+) {
+  const manifestPath = supersedingManifest(
+    existingPath,
+    existing,
+    campaignIdentity,
+    recovery.reason,
+    "providerRecoveryOf",
+  );
+  withManifestLock(manifestPath, (locked) => {
+    locked.providerRecovery ??= {
+      attemptedProviders: recovery.attemptedProviders,
+    };
+  });
+  return manifestPath;
+}
+
 function existingCampaign(manifestPath, campaignIdentity) {
   const existing = loadManifest(manifestPath).manifest;
   const existingIdentity = manifestIdentity(existing);
+  if (existing.environmentRecovery?.supersededBy) {
+    throw new Error("deterministic quality campaign identity collision");
+  }
+  const environmentReason = environmentRecoveryEligibility(
+    existing,
+    existingIdentity,
+    campaignIdentity,
+  );
+  if (environmentReason) {
+    const recovered = supersedingManifest(
+      manifestPath,
+      existing,
+      campaignIdentity,
+      environmentReason,
+      "environmentRecoveryOf",
+    );
+    withManifestLock(recovered, (locked) => {
+      locked.environmentRecovery ??= { reason: environmentReason };
+    });
+    return recovered;
+  }
+  const providerRecovery = providerRecoveryEligibility(
+    existing,
+    existingIdentity,
+    campaignIdentity,
+  );
+  if (providerRecovery) {
+    return providerRecoveryManifest(
+      manifestPath,
+      existing,
+      campaignIdentity,
+      providerRecovery,
+    );
+  }
   if (
     JSON.stringify(canonicalJson(existingIdentity)) !==
     JSON.stringify(canonicalJson(campaignIdentity))
@@ -1454,11 +1648,12 @@ function existingCampaign(manifestPath, campaignIdentity) {
       campaignIdentity,
     );
     if (diversityReason) {
-      return diversityUpgradeManifest(
+      return supersedingManifest(
         manifestPath,
         existing,
         campaignIdentity,
         diversityReason,
+        "diversityUpgradeOf",
       );
     }
     if (!canFailOverProvider(existing, existingIdentity, campaignIdentity)) {
@@ -4246,14 +4441,16 @@ function gateEvidenceInput(manifest, options) {
   if (["failed", "timeout"].includes(status) && !reason) {
     throw new Error(`gate ${status} evidence requires an explicit reason`);
   }
-  return { ...identity, status, reason };
+  const failureCode = options.failureCode || null;
+  if (failureCode !== null && !/^[a-z][a-z0-9-]*$/.test(failureCode)) {
+    throw new Error("gate failure code must be a lowercase identifier");
+  }
+  return { ...identity, status, reason, failureCode };
 }
 
 function recordGate(manifest, options) {
-  const { name, command, source, log, status, reason } = gateEvidenceInput(
-    manifest,
-    options,
-  );
+  const { name, command, source, log, status, reason, failureCode } =
+    gateEvidenceInput(manifest, options);
   manifest.gates = manifest.gates.filter(
     (gate) =>
       gate.head !== manifest.revisions.currentHead || gate.name !== name,
@@ -4265,6 +4462,7 @@ function recordGate(manifest, options) {
     head: manifest.revisions.currentHead,
     status,
     reason,
+    failureCode,
     log,
     logSha256: sha256File(log),
     completedAt: new Date().toISOString(),
@@ -4282,6 +4480,15 @@ function recordSkippedGate(manifest, required, name, log, options) {
     status: "skipped",
     reason,
   });
+}
+
+function executableAvailable(executable, environment) {
+  const result = spawnSync(
+    "bash",
+    ["-c", 'command -v -- "$1" >/dev/null', "bash", executable],
+    { env: environment, stdio: "ignore" },
+  );
+  return result.status === 0;
 }
 
 function executeGate(manifest, required, name, log, manifestPath) {
@@ -4313,6 +4520,18 @@ function executeGate(manifest, required, name, log, manifestPath) {
     gateSeconds + gateReserveSeconds,
     gateRemaining,
   );
+  if (!executableAvailable(required.executable, process.env)) {
+    fs.writeFileSync(
+      log,
+      `required gate executable '${required.executable}' is unavailable on PATH\n`,
+      { mode: 0o600 },
+    );
+    throw new GateExecutionError(
+      "failed",
+      `gate '${name}' cannot start because '${required.executable}' is unavailable`,
+      "missing-executable",
+    );
+  }
   manifest.governor.activeExecution = {
     kind: "gate",
     name,
@@ -4368,6 +4587,9 @@ function executeGate(manifest, required, name, log, manifestPath) {
     throw new GateExecutionError(
       "timeout",
       `gate '${name}' exceeded its proportional ${timeoutSeconds}s budget`,
+      manifest.risk?.resolved === true
+        ? "gate-timeout"
+        : "unresolved-risk-timeout",
     );
   }
   if (result.error) throw result.error;
@@ -4376,6 +4598,7 @@ function executeGate(manifest, required, name, log, manifestPath) {
     throw new GateExecutionError(
       "failed",
       `gate '${name}' failed with exit status ${result.status}`,
+      "gate-failed",
     );
   }
   return output;
@@ -4422,6 +4645,7 @@ function runGate(manifest, options, manifestPath) {
       log,
       status: error.status,
       reason: error.message,
+      failureCode: error.failureCode,
     });
     process.stderr.write(`${error.message}\n`);
     throw error;
@@ -5432,6 +5656,7 @@ module.exports = {
   hasAbandonedExecution,
   reconcileAbandonedExecution,
   executionRemaining,
+  executableAvailable,
   runGate,
   recordStamp,
   judgeContext,

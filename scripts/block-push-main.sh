@@ -18,23 +18,182 @@ if [ -z "$COMMAND" ]; then
   exit 0
 fi
 
-# Extract -C <dir> from command if present (handles cross-repo pushes)
-# `|| true` is required: under `set -euo pipefail` a no-match `grep` exits 1 and
-# kills the hook before it can deny anything. Commands without `-C` are the
-# common case, so omitting it silently disabled this guard entirely.
-GIT_DIR=$(echo "$COMMAND" | grep -oE 'git[[:space:]]+-C[[:space:]]+[^[:space:]]+' | head -1 | awk '{print $3}' || true)
-if [ -n "$GIT_DIR" ]; then
-  GIT_DIR="${GIT_DIR/#\~/$HOME}"  # expand ~ safely (no eval)
-  GIT_CMD="git -C $GIT_DIR"
-else
-  GIT_CMD="git"
+# Tokenize the raw command without evaluating it.  Bash's `read -a` is not
+# quote-aware, so a quoted `-C` path containing spaces would move the `push`
+# token out of position and let a protected refspec through.  This parser only
+# removes shell quoting and backslash escapes; it never performs expansion or
+# executes command substitutions.
+COMMAND_TOKENS=()
+tokenize_command() {
+  local state="unquoted" token="" started=false char escaped index
+  for ((index = 0; index < ${#COMMAND}; index += 1)); do
+    char="${COMMAND:index:1}"
+    case "$state" in
+      single)
+        if [ "$char" = "'" ]; then
+          state="unquoted"
+        else
+          token+="$char"
+        fi
+        started=true
+        ;;
+      double)
+        if [ "$char" = '"' ]; then
+          state="unquoted"
+        elif [ "$char" = "\\" ]; then
+          # Hook input is the raw Bash command string. Treat an escaped
+          # newline as a line continuation here as in the unquoted state.
+          index=$((index + 1))
+          [ "$index" -lt "${#COMMAND}" ] || return 1
+          escaped="${COMMAND:index:1}"
+          if [ "$escaped" = '$' ] || [ "$escaped" = '`' ] ||
+            [ "$escaped" = '"' ] || [ "$escaped" = "\\" ]; then
+            token+="$escaped"
+          elif [ "$escaped" != $'\n' ]; then
+            token+="\\$escaped"
+          fi
+        else
+          token+="$char"
+        fi
+        started=true
+        ;;
+      unquoted)
+        case "$char" in
+          '$'|'`') return 1 ;;
+          "'") state="single"; started=true ;;
+          '"') state="double"; started=true ;;
+          "\\")
+            index=$((index + 1))
+            [ "$index" -lt "${#COMMAND}" ] || return 1
+            escaped="${COMMAND:index:1}"
+            if [ "$escaped" != $'\n' ]; then
+              token+="$escaped"
+              started=true
+            fi
+            ;;
+          [[:space:]])
+            if [ "$started" = true ]; then
+              COMMAND_TOKENS+=("$token")
+              token=""
+              started=false
+            fi
+            ;;
+          *) token+="$char"; started=true ;;
+        esac
+        ;;
+    esac
+  done
+  [ "$state" = "unquoted" ] || return 1
+  if [ "$started" = true ]; then
+    COMMAND_TOKENS+=("$token")
+  fi
+}
+
+# A malformed shell command cannot be classified safely. Fail closed before
+# any partially parsed tokens can reach the branch/refspec checks.
+if ! tokenize_command; then
+  echo "Blocked: could not parse the push command safely." >&2
+  exit 2
 fi
 
-# Check for git push to main or master (with any remote name)
-# Matches: git push origin main, git push upstream master, git push -u origin main, etc.
-if echo "$COMMAND" | grep -qE 'git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?push[[:space:]]+.*[[:space:]](main|master)[[:space:]]*$'; then
-  # Allow force push (already gated by permissions.ask) and push --delete
-  if echo "$COMMAND" | grep -qE '\-\-force|\-f|\-\-delete'; then
+# Resolve the first push argument once. Git accepts several global options before
+# the subcommand; recognizing them here keeps the guard aligned with real git
+# invocations instead of silently treating those commands as non-pushes.
+push_argument_start() {
+  local index=1
+  local token
+  [ "${COMMAND_TOKENS[0]:-}" = "git" ] || return 1
+  while [ "$index" -lt "${#COMMAND_TOKENS[@]}" ]; do
+    token="${COMMAND_TOKENS[$index]}"
+    if [ "$token" = "push" ]; then
+      printf '%s\n' "$((index + 1))"
+      return 0
+    fi
+    case "$token" in
+      # Global options that take a separate value.
+      -C|-c|--config-env|--exec-path|--git-dir|--work-tree|--namespace|--super-prefix)
+        [ -n "${COMMAND_TOKENS[$((index + 1))]:-}" ] || return 2
+        index=$((index + 2))
+        ;;
+      # The same value-bearing options in --name=value form.
+      --config-env=*|--exec-path=*|--git-dir=*|--work-tree=*|--namespace=*|--super-prefix=*)
+        index=$((index + 1))
+        ;;
+      # Boolean global options.
+      -p|-P|--no-pager|--paginate|--no-replace-objects|--no-lazy-fetch|--no-optional-locks|--no-advice|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs)
+        index=$((index + 1))
+        ;;
+      *)
+        # A non-option is another git subcommand, so this is safely not a push.
+        # An unknown option cannot be classified without risking a bypass.
+        [[ "$token" == -* ]] && return 2
+        return 1
+        ;;
+    esac
+  done
+  return 1
+}
+
+PUSH_ARGUMENT_START=""
+if PUSH_ARGUMENT_START="$(push_argument_start)"; then
+  PUSH_COMMAND_INDEX=$((PUSH_ARGUMENT_START - 1))
+  # Preserve every parsed global option when checking the current branch for a
+  # bare push (for example, `git --git-dir=/repo/.git push`).
+  GIT_ARGS=("${COMMAND_TOKENS[@]:0:$PUSH_COMMAND_INDEX}")
+else
+  PUSH_PARSE_STATUS=$?
+  if [ "$PUSH_PARSE_STATUS" -eq 2 ]; then
+    echo "Blocked: could not classify the git command safely." >&2
+    exit 2
+  fi
+  GIT_ARGS=(git)
+fi
+
+# Check for git push to main or master (with any remote name).  Tokenizing the
+# command avoids the platform-dependent extended-regexp edge that previously
+# let a `git -C <dir> push origin main` command through in CI.
+pushes_protected_branch() {
+  local index token target
+  [ -n "$PUSH_ARGUMENT_START" ] || return 1
+  index="$PUSH_ARGUMENT_START"
+  for ((; index < ${#COMMAND_TOKENS[@]}; index += 1)); do
+    token="${COMMAND_TOKENS[$index]}"
+    # A push refspec's destination is after the colon.  Normalize the
+    # optional force marker and fully-qualified remote ref so the guard also
+    # covers `HEAD:main`, `HEAD:refs/heads/main`, and `origin/main`.
+    target="${token##*:}"
+    # Git permits an empty destination (`main:`), which means "use the
+    # source name". Use that source for protected-branch classification.
+    if [[ "$token" == *:* && -z "$target" ]]; then
+      target="${token%%:*}"
+    fi
+    while [[ "$target" == +* ]]; do
+      target="${target:1}"
+    done
+    case "$target" in
+      main|master|*/main|*/master) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+if pushes_protected_branch; then
+  # Allow exact force/delete flags (already gated by permissions.ask). Check
+  # tokens, not raw substrings: a path such as `/tmp/-final` or an unrelated
+  # option containing `-f` must not turn a protected push into an allow.
+  protected_push_override() {
+    local index token
+    [ -n "$PUSH_ARGUMENT_START" ] || return 1
+    index="$PUSH_ARGUMENT_START"
+    for ((; index < ${#COMMAND_TOKENS[@]}; index += 1)); do
+      token="${COMMAND_TOKENS[$index]}"
+      case "$token" in
+        -f|--force|--force-with-lease|--delete) return 0 ;;
+      esac
+    done
+    return 1
+  }
+  if protected_push_override; then
     exit 0
   fi
   echo "Blocked: direct push to main/master. Create a feature branch and PR instead."
@@ -45,9 +204,17 @@ if echo "$COMMAND" | grep -qE 'git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:spa
   exit 2
 fi
 
-# Block bare "git push" when on main/master (no explicit branch arg)
-if echo "$COMMAND" | grep -qE 'git[[:space:]]+(-C[[:space:]]+[^[:space:]]+[[:space:]]+)?push[[:space:]]*$'; then
-  CURRENT_BRANCH=$($GIT_CMD branch --show-current 2>/dev/null || echo "")
+# Block bare "git push" when on main/master (no explicit branch arg). Use the
+# same parsed tokens as protected-ref detection so quoted paths and trailing
+# whitespace cannot make this branch diverge from the actual command.
+bare_push() {
+  local index
+  [ -n "$PUSH_ARGUMENT_START" ] || return 1
+  index="$PUSH_ARGUMENT_START"
+  [ "$index" -eq "${#COMMAND_TOKENS[@]}" ]
+}
+if bare_push; then
+  CURRENT_BRANCH=$("${GIT_ARGS[@]}" branch --show-current 2>/dev/null || echo "")
   if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ]; then
     echo "Blocked: bare 'git push' while on $CURRENT_BRANCH. Create a feature branch and PR instead."
     echo ""

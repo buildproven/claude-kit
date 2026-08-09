@@ -81,7 +81,88 @@ describe("block-push-main.sh", () => {
   });
 
   it("still denies a push to main routed through -C", () => {
-    expect(runHook(PUSH_HOOK, `git -C ${repo} push origin main`).code).toBe(2);
+    expect(runHook(PUSH_HOOK, `git -C "${repo}" push origin main`).code).toBe(
+      2,
+    );
+  });
+
+  it.each([
+    "git -c protocol.version=2 push origin main",
+    "git --git-dir=/tmp/repo.git push origin main",
+    "git --work-tree /tmp/repo push origin main",
+    "git --no-pager push origin main",
+  ])("denies a protected push after a git global option: %s", (command) => {
+    expect(runHook(PUSH_HOOK, command).code).toBe(2);
+  });
+
+  it("fails closed for an unrecognized git global option", () => {
+    expect(
+      runHook(PUSH_HOOK, "git --unknown-global push origin main").code,
+    ).toBe(2);
+  });
+
+  it("still denies a push through a quoted -C path containing spaces", () => {
+    expect(
+      runHook(PUSH_HOOK, 'git -C "/tmp/repo with spaces" push origin main')
+        .code,
+    ).toBe(2);
+  });
+
+  it.each([
+    "git push origin HEAD:main",
+    "git push origin HEAD:refs/heads/main",
+    "git push origin origin/main",
+    "git push origin +HEAD:master",
+    "git push origin main:",
+  ])("denies protected branch refspec %s", (command) => {
+    expect(runHook(PUSH_HOOK, command).code).toBe(2);
+  });
+
+  it("denies a protected refspec split by an escaped newline", () => {
+    expect(runHook(PUSH_HOOK, "git push origin main\\" + "\n").code).toBe(2);
+  });
+
+  it("denies a protected refspec split inside double quotes", () => {
+    expect(
+      runHook(PUSH_HOOK, 'git push origin "main\\' + "\n" + '"').code,
+    ).toBe(2);
+  });
+
+  it("preserves non-special backslashes inside double quotes", () => {
+    expect(runHook(PUSH_HOOK, 'git push origin "ma\\in"').code).toBe(0);
+  });
+
+  it.each(["git push origin $'main'", 'git push origin ma"i"n'])(
+    "fails closed for shell quoting that resolves to main: %s",
+    (command) => {
+      expect(runHook(PUSH_HOOK, command).code).toBe(2);
+    },
+  );
+
+  it("allows a multibyte non-protected branch name", () => {
+    expect(runHook(PUSH_HOOK, 'git push origin "mañana"').code).toBe(0);
+  });
+
+  it("does not treat path or option substrings as force/delete flags", () => {
+    expect(
+      runHook(PUSH_HOOK, `git -C "/tmp/-final" push origin main`).code,
+    ).toBe(2);
+    expect(runHook(PUSH_HOOK, "git push origin main --foo").code).toBe(2);
+  });
+
+  it.each(["git -C '/tmp/repo push origin main", "git push origin main\\"])(
+    "denies an unparseable protected push command %s",
+    (command) => {
+      expect(runHook(PUSH_HOOK, command).code).toBe(2);
+    },
+  );
+
+  it.each([
+    "git push --force origin main",
+    "git push --force-with-lease origin main",
+    "git push --delete origin main",
+  ])("preserves the explicit protected-push override %s", (command) => {
+    expect(runHook(PUSH_HOOK, command).code).toBe(0);
   });
 
   it("allows pushing a feature branch", () => {

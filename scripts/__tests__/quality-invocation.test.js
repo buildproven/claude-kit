@@ -926,6 +926,247 @@ describe("quality invocation manifest", () => {
     ).toThrow(/deterministic quality campaign identity collision/);
   });
 
+  it("supersedes a pre-review missing-executable gate failure", () => {
+    const root = repo("environment-recovery");
+    const predecessor = create(root);
+    invocation.withManifestLock(predecessor, (manifest) => {
+      manifest.gates.push({
+        name: "lint",
+        status: "failed",
+        reason: "gate 'lint' failed with exit status 127",
+        failureCode: "missing-executable",
+        head: manifest.revisions.currentHead,
+      });
+    });
+    invocation.recordTerminalState(predecessor, "blocked", "gate:lint");
+
+    const recovered = create(root);
+    expect(recovered).not.toBe(predecessor);
+    expect(JSON.parse(readFileSync(recovered, "utf8"))).toMatchObject({
+      supersedes: {
+        invocationId: JSON.parse(readFileSync(predecessor, "utf8"))
+          .invocationId,
+        reason: "bootstrap environment lacked the required gate executable",
+      },
+      gates: [],
+      reviews: [],
+      environmentRecovery: {
+        reason: "bootstrap environment lacked the required gate executable",
+      },
+    });
+    expect(
+      JSON.parse(readFileSync(predecessor, "utf8")).supersededBy,
+    ).toMatchObject({
+      invocationId: JSON.parse(readFileSync(recovered, "utf8")).invocationId,
+    });
+  });
+
+  it("supersedes a pre-risk gate timeout without reopening a real timeout", () => {
+    const root = repo("pre-risk-gate-recovery");
+    const predecessor = create(root);
+    invocation.withManifestLock(predecessor, (manifest) => {
+      manifest.gates.push({
+        name: "test",
+        status: "timeout",
+        reason: "gate 'test' exceeded its proportional 300s budget",
+        failureCode: "unresolved-risk-timeout",
+        head: manifest.revisions.currentHead,
+      });
+    });
+    invocation.recordTerminalState(predecessor, "blocked", "gate:test");
+
+    const recovered = create(root);
+    expect(recovered).not.toBe(predecessor);
+    expect(JSON.parse(readFileSync(recovered, "utf8"))).toMatchObject({
+      supersedes: {
+        reason: "gate execution began before its risk contract was resolved",
+      },
+      gates: [],
+      reviews: [],
+      environmentRecovery: {
+        reason: "gate execution began before its risk contract was resolved",
+      },
+    });
+
+    const ordinaryTimeoutRoot = repo("ordinary-timeout");
+    const correctlyBudgeted = create(ordinaryTimeoutRoot);
+    invocation.withManifestLock(correctlyBudgeted, (manifest) => {
+      manifest.risk = { ...manifest.risk, resolved: true, tier: "medium" };
+      manifest.gates.push({
+        name: "test",
+        status: "timeout",
+        reason: "gate 'test' exceeded its proportional 300s budget",
+        failureCode: "gate-timeout",
+        head: manifest.revisions.currentHead,
+      });
+    });
+    invocation.recordTerminalState(correctlyBudgeted, "blocked", "gate:test");
+    expect(() => create(root)).not.toThrow();
+    expect(create(ordinaryTimeoutRoot)).toBe(correctlyBudgeted);
+  });
+
+  it("marks an environment recovery only when the gate executable is absent", () => {
+    expect(invocation.executableAvailable("node", process.env)).toBe(true);
+    expect(
+      invocation.executableAvailable(
+        "bs-quality-definitely-missing",
+        process.env,
+      ),
+    ).toBe(false);
+  });
+
+  it("does not discard earlier gate evidence during environment recovery", () => {
+    const root = repo("environment-recovery-after-gate");
+    const predecessor = create(root);
+    recordGateFixture(predecessor, "lint");
+    invocation.withManifestLock(predecessor, (manifest) => {
+      const log = path.join(path.dirname(predecessor), "missing.log");
+      writeFileSync(log, "missing executable\n");
+      invocation.recordGate(manifest, {
+        name: "test",
+        source: manifest.requiredGates.find((gate) => gate.name === "test")
+          .source,
+        command: manifest.requiredGates.find((gate) => gate.name === "test")
+          .command,
+        log,
+        status: "failed",
+        reason: "gate 'test' failed with exit status 127",
+        failureCode: "missing-executable",
+      });
+    });
+    invocation.recordTerminalState(predecessor, "blocked", "gate:test");
+    expect(create(root)).toBe(predecessor);
+  });
+
+  it("does not repeatedly supersede a permanently missing executable", () => {
+    const root = repo("environment-recovery-cap");
+    const predecessor = create(root);
+    invocation.withManifestLock(predecessor, (manifest) => {
+      manifest.gates.push({
+        name: "lint",
+        status: "failed",
+        reason:
+          "gate 'lint' cannot start because 'missing-tool' is unavailable",
+        failureCode: "missing-executable",
+        head: manifest.revisions.currentHead,
+      });
+    });
+    invocation.recordTerminalState(predecessor, "blocked", "gate:lint");
+
+    const recovered = create(root);
+    expect(recovered).not.toBe(predecessor);
+    expect(() => create(root)).toThrow(
+      /deterministic quality campaign identity collision/,
+    );
+    expect(JSON.parse(readFileSync(predecessor, "utf8"))).toMatchObject({
+      supersededBy: {
+        invocationId: JSON.parse(readFileSync(recovered, "utf8")).invocationId,
+      },
+    });
+  });
+
+  it("caps recovery after the replacement also lacks the executable", () => {
+    const root = repo("environment-recovery-chain-cap");
+    const predecessor = create(root);
+    invocation.withManifestLock(predecessor, (manifest) => {
+      manifest.gates.push({
+        name: "lint",
+        status: "failed",
+        reason: "gate 'lint' failed with exit status 127",
+        failureCode: "missing-executable",
+        head: manifest.revisions.currentHead,
+      });
+    });
+    invocation.recordTerminalState(predecessor, "blocked", "gate:lint");
+
+    const recovered = create(root);
+    expect(JSON.parse(readFileSync(recovered, "utf8"))).toMatchObject({
+      environmentRecovery: {
+        reason: "bootstrap environment lacked the required gate executable",
+        rootInvocationId: JSON.parse(readFileSync(predecessor, "utf8"))
+          .invocationId,
+        generation: 1,
+      },
+    });
+    invocation.withManifestLock(recovered, (manifest) => {
+      manifest.gates.push({
+        name: "lint",
+        status: "failed",
+        reason: "gate 'lint' failed with exit status 127",
+        failureCode: "missing-executable",
+        head: manifest.revisions.currentHead,
+      });
+    });
+    invocation.recordTerminalState(recovered, "blocked", "gate:lint");
+    expect(() => create(root)).toThrow(
+      /deterministic quality campaign identity collision/,
+    );
+  });
+
+  it("does not recover a missing-executable gate from a stale head", () => {
+    const root = repo("environment-recovery-stale-head");
+    const predecessor = create(root);
+    invocation.withManifestLock(predecessor, (manifest) => {
+      manifest.gates.push({
+        name: "lint",
+        status: "failed",
+        reason:
+          "gate 'lint' cannot start because 'missing-tool' is unavailable",
+        failureCode: "missing-executable",
+        head: "stale-head",
+      });
+    });
+    invocation.recordTerminalState(predecessor, "blocked", "gate:lint");
+    expect(create(root)).toBe(predecessor);
+  });
+
+  it("uses one untried provider after exact-head quota exhaustion", () => {
+    const root = repo("provider-exhaustion-recovery");
+    const predecessor = create(root, [
+      "--primary",
+      "codex",
+      "--fallback",
+      "claude",
+    ]);
+    for (const gate of JSON.parse(readFileSync(predecessor, "utf8"))
+      .requiredGates) {
+      recordGateFixture(predecessor, gate.name);
+    }
+    invocation.withManifestLock(predecessor, (manifest) => {
+      manifest.governor.providerAttempts.push({ provider: "codex" });
+      manifest.reviews.push({
+        status: "incomplete",
+        failedProvider: "claude",
+        failureCategory: "provider-exhaustion",
+        leadCount: 0,
+      });
+    });
+    invocation.recordTerminalState(
+      predecessor,
+      "provider-incomplete",
+      "retry-exhausted:provider-exhaustion",
+    );
+
+    const recovered = create(root, [
+      "--primary",
+      "gemini",
+      "--fallback",
+      "codex",
+    ]);
+    expect(recovered).not.toBe(predecessor);
+    expect(JSON.parse(readFileSync(recovered, "utf8"))).toMatchObject({
+      supersedes: {
+        reason: "exact-head discovery exhausted its configured provider set",
+      },
+      providerRecovery: { attemptedProviders: ["claude", "codex"] },
+      gates: [],
+      reviews: [],
+    });
+    expect(() =>
+      create(root, ["--primary", "claude", "--fallback", "codex"]),
+    ).toThrow(/deterministic quality campaign identity collision/);
+  });
+
   it("resumes after review without treating provider evidence as configuration drift", () => {
     const root = repo("reviewed-provider-identity");
     const env = {
