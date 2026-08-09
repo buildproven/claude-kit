@@ -98,6 +98,7 @@ describe("block-push-main.sh", () => {
     "git push origin HEAD:refs/heads/main",
     "git push origin origin/main",
     "git push origin +HEAD:master",
+    "git push origin main:",
   ])("denies protected branch refspec %s", (command) => {
     expect(runHook(PUSH_HOOK, command).code).toBe(2);
   });

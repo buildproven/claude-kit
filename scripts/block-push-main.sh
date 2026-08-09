@@ -111,6 +111,11 @@ pushes_protected_branch() {
     # optional force marker and fully-qualified remote ref so the guard also
     # covers `HEAD:main`, `HEAD:refs/heads/main`, and `origin/main`.
     target="${token##*:}"
+    # Git permits an empty destination (`main:`), which means "use the
+    # source name". Use that source for protected-branch classification.
+    if [[ "$token" == *:* && -z "$target" ]]; then
+      target="${token%%:*}"
+    fi
     while [[ "$target" == +* ]]; do
       target="${target:1}"
     done
