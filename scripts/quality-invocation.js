@@ -2616,9 +2616,27 @@ function validateDescendantAdvanceAuthorization(
     );
   }
   const resolvedPath = path.resolve(artifactPath);
+  const expectedDirectory = path.resolve(
+    path.join(manifest.stateRoot, "advance-authorizations"),
+  );
+  const relativePath = path.relative(expectedDirectory, resolvedPath);
+  if (
+    relativePath === "" ||
+    relativePath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativePath)
+  ) {
+    throw new Error(
+      "exhausted review advance authorization must be inside its manifest state directory",
+    );
+  }
+  const artifactName = path.basename(resolvedPath);
+  const safeArtifactPath = path.join(expectedDirectory, artifactName);
+  if (safeArtifactPath !== resolvedPath) {
+    throw new Error("exhausted review advance authorization path is invalid");
+  }
   let stat;
   try {
-    stat = fs.lstatSync(resolvedPath);
+    stat = fs.lstatSync(safeArtifactPath);
   } catch {
     throw new Error("exhausted review advance authorization is missing");
   }
@@ -2628,7 +2646,7 @@ function validateDescendantAdvanceAuthorization(
     );
   }
   const artifact = parseJson(
-    fs.readFileSync(resolvedPath, "utf8"),
+    fs.readFileSync(safeArtifactPath, "utf8"),
     "exhausted review advance authorization",
   );
   const payload = artifact.payload;
@@ -2661,7 +2679,7 @@ function validateDescendantAdvanceAuthorization(
   // Consume the pre-authorization before mutating the manifest.  Keeping a
   // renamed evidence file preserves the audit trail, while the absence of the
   // original path makes a partial downstream failure non-replayable.
-  fs.renameSync(resolvedPath, `${resolvedPath}.used`);
+  fs.renameSync(safeArtifactPath, `${safeArtifactPath}.used`);
   return payload;
 }
 
