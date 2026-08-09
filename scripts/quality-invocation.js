@@ -1418,6 +1418,17 @@ function supersedingManifest(
       reason,
       at: now,
     },
+    ...(transition === "environmentRecoveryOf"
+      ? {
+          environmentRecovery: {
+            reason,
+            rootInvocationId:
+              existing.environmentRecovery?.rootInvocationId ??
+              existing.invocationId,
+            generation: (existing.environmentRecovery?.generation ?? 0) + 1,
+          },
+        }
+      : {}),
   };
   if (!atomicCreate(manifestPath, manifest)) return manifestPath;
   const lease = require("./quality-repo-lease");

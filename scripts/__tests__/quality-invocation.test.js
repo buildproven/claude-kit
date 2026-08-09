@@ -1065,6 +1065,44 @@ describe("quality invocation manifest", () => {
     });
   });
 
+  it("caps recovery after the replacement also lacks the executable", () => {
+    const root = repo("environment-recovery-chain-cap");
+    const predecessor = create(root);
+    invocation.withManifestLock(predecessor, (manifest) => {
+      manifest.gates.push({
+        name: "lint",
+        status: "failed",
+        reason: "gate 'lint' failed with exit status 127",
+        failureCode: "missing-executable",
+        head: manifest.revisions.currentHead,
+      });
+    });
+    invocation.recordTerminalState(predecessor, "blocked", "gate:lint");
+
+    const recovered = create(root);
+    expect(JSON.parse(readFileSync(recovered, "utf8"))).toMatchObject({
+      environmentRecovery: {
+        reason: "bootstrap environment lacked the required gate executable",
+        rootInvocationId: JSON.parse(readFileSync(predecessor, "utf8"))
+          .invocationId,
+        generation: 1,
+      },
+    });
+    invocation.withManifestLock(recovered, (manifest) => {
+      manifest.gates.push({
+        name: "lint",
+        status: "failed",
+        reason: "gate 'lint' failed with exit status 127",
+        failureCode: "missing-executable",
+        head: manifest.revisions.currentHead,
+      });
+    });
+    invocation.recordTerminalState(recovered, "blocked", "gate:lint");
+    expect(() => create(root)).toThrow(
+      /deterministic quality campaign identity collision/,
+    );
+  });
+
   it("does not recover a missing-executable gate from a stale head", () => {
     const root = repo("environment-recovery-stale-head");
     const predecessor = create(root);
