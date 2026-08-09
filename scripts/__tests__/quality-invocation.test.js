@@ -662,7 +662,7 @@ describe("quality invocation manifest", () => {
   it("reuses one durable campaign for the same exact repo, PR, base, HEAD, and options", () => {
     const root = repo("durable-campaign");
     const args = ["--level", "98", "--pr", "7", "--merge"];
-    const first = create(root, args);
+    const first = createLegacyProviderFixture(root, args);
     execFileSync(
       "node",
       [INVOCATION, "provider-attempt", first, "--provider", "codex"],
@@ -2751,7 +2751,7 @@ exec "${realGit}" "$@"
 
   it("rejects overlapping execution and reconciles an abandoned timeout", () => {
     const root = repo("provider-active-state");
-    const manifestPath = create(root, [], {
+    const manifestPath = createLegacyProviderFixture(root, [], {
       BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS: "120",
     });
     execFileSync(
@@ -2798,7 +2798,7 @@ exec "${realGit}" "$@"
 
   it("does not reset provider execution usage when the review head advances", () => {
     const root = repo("provider-window");
-    const manifestPath = create(root, [], {
+    const manifestPath = createLegacyProviderFixture(root, [], {
       BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS: "120",
     });
     execFileSync(
@@ -2898,7 +2898,7 @@ exit 1
 
   it("shares cumulative execution time across fallback providers", () => {
     const root = repo("provider-fallback-window");
-    const manifest = create(root, [], {
+    const manifest = createLegacyProviderFixture(root, [], {
       BS_QUALITY_MAX_PROVIDER_SECONDS: "120",
       BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS: "120",
     });
@@ -3088,7 +3088,7 @@ exit 1
 
   it("reserves provider starts for an authorized verification round", () => {
     const root = repo("phase-provider-capacity");
-    const manifest = create(root);
+    const manifest = createLegacyProviderFixture(root);
     const state = JSON.parse(readFileSync(manifest, "utf8"));
     const head = state.revisions.currentHead;
     state.governor.providerAttemptPlan = {
@@ -3175,7 +3175,7 @@ exit 1
   it("derives non-borrowable provider capacity from the resolved runtime plan", () => {
     const root = repo("resolved-provider-phase-capacity");
     const env = { ...process.env, BS_QUALITY_MAX_PROVIDER_ATTEMPTS: "1" };
-    const manifest = create(root, [], {
+    const manifest = createLegacyProviderFixture(root, [], {
       BS_QUALITY_MAX_PROVIDER_ATTEMPTS: "1",
     });
     execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root, env });
@@ -3393,7 +3393,7 @@ exit 1
 
   it("stops review when cumulative provider execution is exhausted", () => {
     const root = repo("provider-budget");
-    const manifest = create(root);
+    const manifest = createLegacyProviderFixture(root);
     const state = JSON.parse(readFileSync(manifest, "utf8"));
     state.governor.providerSecondsLimit = 2;
     state.governor.providerSecondsUsed = 2;
@@ -7546,7 +7546,7 @@ exit 1
     // forced to supply a path it has no use for. The guard must only fire
     // at the point persistence is actually needed.
     const root = repo("provider-attempt-requires-manifest-path");
-    const manifestPath = create(root);
+    const manifestPath = createLegacyProviderFixture(root);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 
     // No activeExecution at all: nothing to reconcile, so no persistence
@@ -7579,7 +7579,7 @@ exit 1
     // active" conflict -- masking the real, more useful error for a
     // scenario that has nothing to do with persistence at all.
     const root = repo("provider-attempt-still-valid-execution-conflict");
-    const manifestPath = create(root);
+    const manifestPath = createLegacyProviderFixture(root);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     manifest.governor.activeExecution = {
       kind: "provider",
@@ -7663,7 +7663,7 @@ exit 1
     // never disagree, so the manifestPath guard reliably fires whenever
     // reconciliation is about to happen.
     const root = repo("provider-attempt-clock-boundary-race");
-    const manifestPath = create(root);
+    const manifestPath = createLegacyProviderFixture(root);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     const startedAt = new Date(Date.now() - 60_000).toISOString();
     manifest.governor.activeExecution = {
@@ -7712,7 +7712,7 @@ exit 1
     // silently losing the reconciliation forever. The guard must validate
     // BEFORE any mutation, so a retry with the same object still works.
     const root = repo("provider-attempt-retry-preserves-reconciliation");
-    const manifestPath = create(root);
+    const manifestPath = createLegacyProviderFixture(root);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     const abandonedExecution = {
       kind: "provider",
