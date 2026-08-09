@@ -109,6 +109,13 @@ describe("block-push-main.sh", () => {
     expect(runHook(PUSH_HOOK, "git push origin main --foo").code).toBe(2);
   });
 
+  it.each(["git -C '/tmp/repo push origin main", "git push origin main\\"])(
+    "denies an unparseable protected push command %s",
+    (command) => {
+      expect(runHook(PUSH_HOOK, command).code).toBe(2);
+    },
+  );
+
   it.each([
     "git push --force origin main",
     "git push --force-with-lease origin main",

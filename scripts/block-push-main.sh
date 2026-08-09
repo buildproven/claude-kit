@@ -77,8 +77,15 @@ tokenize_command() {
   fi
 }
 
+# A malformed shell command cannot be classified safely. Fail closed before
+# any partially parsed tokens can reach the branch/refspec checks.
+if ! tokenize_command; then
+  echo "Blocked: could not parse the push command safely." >&2
+  exit 2
+fi
+
 GIT_ARGS=(git)
-if tokenize_command && [ "${COMMAND_TOKENS[0]:-}" = "git" ] &&
+if [ "${COMMAND_TOKENS[0]:-}" = "git" ] &&
   [ "${COMMAND_TOKENS[1]:-}" = "-C" ] && [ -n "${COMMAND_TOKENS[2]:-}" ]; then
   GIT_DIR="${COMMAND_TOKENS[2]}"
   GIT_DIR="${GIT_DIR/#\~/$HOME}"  # expand ~ safely (no eval)
