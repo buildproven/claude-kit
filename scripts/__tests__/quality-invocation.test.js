@@ -196,6 +196,14 @@ function create(root, extra = [], env = {}) {
   return manifestPath;
 }
 
+function createLegacyProviderFixture(root, extra = [], env = {}) {
+  const manifestPath = create(root, extra, env);
+  invocation.withManifestLock(manifestPath, (manifest) => {
+    manifest.reviewContractVersion = 1;
+  });
+  return manifestPath;
+}
+
 function createAsync(root) {
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -691,7 +699,7 @@ describe("quality invocation manifest", () => {
 
   it("authorizes Gemini inside the existing provider attempt budget", () => {
     const root = repo("gemini-provider-attempt");
-    const manifest = create(root, []);
+    const manifest = createLegacyProviderFixture(root, []);
     const result = JSON.parse(
       execFileSync(
         "node",
@@ -2668,7 +2676,7 @@ exec "${realGit}" "$@"
 
   it("persists provider attempt and cumulative execution caps", () => {
     const root = repo("provider-attempt-cap");
-    const manifest = create(root, [], {
+    const manifest = createLegacyProviderFixture(root, [], {
       BS_QUALITY_MAX_PROVIDER_ATTEMPTS: "2",
       BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS: "120",
     });
@@ -2708,6 +2716,36 @@ exec "${realGit}" "$@"
     expect(pastDeadline.status).not.toBe(0);
     expect(pastDeadline.stderr).toMatch(
       /provider execution budget is exhausted/,
+    );
+  });
+
+  it("fails closed before consuming capacity for an unbound v2 review contract", () => {
+    const root = repo("unbound-v2-provider-attempt");
+    const manifestPath = create(root, ["--level", "high"]);
+    execFileSync("bash", [RISK, "--manifest", manifestPath], { cwd: root });
+    execFileSync("node", [GOVERNOR, "bump-round", manifestPath], {
+      cwd: root,
+    });
+    const before = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const result = spawnSync(
+      "node",
+      [INVOCATION, "provider-attempt", manifestPath, "--provider", "codex"],
+      { cwd: root, encoding: "utf8" },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(
+      /contract v2 review lacks bound domain selection/,
+    );
+    const after = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(after.governor.providerAttempts).toEqual(
+      before.governor.providerAttempts,
+    );
+    expect(after.governor.activeExecution).toBe(
+      before.governor.activeExecution,
+    );
+    expect(after.governor.providerSecondsUsed).toBe(
+      before.governor.providerSecondsUsed,
     );
   });
 
@@ -2919,7 +2957,7 @@ exit 1
 
   it("does not charge idle time before the first provider attempt", () => {
     const root = repo("provider-phase-start");
-    const manifest = create(root, [], {
+    const manifest = createLegacyProviderFixture(root, [], {
       BS_QUALITY_MAX_PROVIDER_SECONDS: "120",
     });
     const state = JSON.parse(readFileSync(manifest, "utf8"));
@@ -3289,7 +3327,7 @@ exit 1
   it("isolates same-round retry capacity from the initial provider generation", () => {
     const root = repo("provider-retry-generation-capacity");
     const env = { ...process.env, BS_QUALITY_MAX_PROVIDER_ATTEMPTS: "1" };
-    const manifest = create(root, [], env);
+    const manifest = createLegacyProviderFixture(root, [], env);
     execFileSync("bash", [RISK, "--manifest", manifest], { cwd: root, env });
     const state = invocation.loadManifest(manifest).manifest;
     invocation.withManifestLock(manifest, (loaded) => {

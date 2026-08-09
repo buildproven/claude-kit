@@ -2808,6 +2808,39 @@ function authorizeProviderRound(manifest) {
   return round;
 }
 
+function assertProviderReviewContractReady(manifest) {
+  if ((manifest.reviewContractVersion || 1) < 2) return;
+  const panel = manifest.panel;
+  const selectionHead = panel?.selectionHead;
+  const hasBoundSelection =
+    manifest.risk?.resolved === true &&
+    Array.isArray(manifest.agents) &&
+    panel &&
+    typeof panel.domain === "string" &&
+    panel.domain !== "legacy" &&
+    typeof panel.rule === "string" &&
+    !panel.rule.startsWith("legacy") &&
+    /^[0-9a-f]{40}$/.test(selectionHead || "") &&
+    panel.selectedAgents === manifest.agents.length &&
+    panel.requiredAgents === manifest.risk.agentTarget;
+  if (!hasBoundSelection) {
+    throw new Error(
+      "contract v2 review lacks bound domain selection; run quality-risk-resolve and quality-select-agents before review",
+    );
+  }
+  if (
+    !isAncestorOf(
+      manifest.repo.realpath,
+      selectionHead,
+      manifest.revisions.currentHead,
+    )
+  ) {
+    throw new Error(
+      "contract v2 review selection is not bound to the current reviewed head",
+    );
+  }
+}
+
 function authorizeProviderAttempt(manifest, options, manifestPath) {
   const provider = options.provider;
   if (!["claude", "codex", "gemini"].includes(provider)) {
@@ -2820,6 +2853,10 @@ function authorizeProviderAttempt(manifest, options, manifestPath) {
   ) {
     throw new Error("provider attempt governor is missing or invalid");
   }
+  // Contract validation must happen before abandoned-execution reconciliation
+  // or any provider-attempt append. A malformed v2 campaign must not consume
+  // capacity (or mutate execution budgets) before record-review rejects it.
+  assertProviderReviewContractReady(manifest);
   const hadActiveExecution = governor.activeExecution != null;
   // A single captured timestamp shared by the preflight check and the
   // reconciliation call below -- NOT two independent Date.now() calls.
