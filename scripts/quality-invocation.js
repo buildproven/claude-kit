@@ -1165,6 +1165,7 @@ function parseOptions(args) {
         "--incomplete",
         "--verify-app",
         "--read",
+        "--allow-exhausted-review",
       ].includes(name)
     ) {
       if (inlineValue !== null && !["true", "false"].includes(inlineValue)) {
@@ -1969,7 +1970,7 @@ function invalidateApproval(manifest, nextHead) {
   };
 }
 
-function advanceHead(manifest, root) {
+function advanceHead(manifest, root, { acceptedConditions = [] } = {}) {
   const nextHead = git(root, ["rev-parse", "HEAD"]);
   const priorHead = manifest.revisions.currentHead;
   // Revalidate even when HEAD has not moved. A manifest created by an older
@@ -1979,10 +1980,35 @@ function advanceHead(manifest, root) {
   assertCurrentReviewStrength(manifest, root);
   if (nextHead === priorHead) return false;
   const retry = incompleteRetryStatus(manifest);
-  if (retry.state !== "none") {
+  if (
+    acceptedConditions.includes("review:provider-exhaustion") &&
+    retry.state !== "exhausted"
+  ) {
     throw new Error(
-      `quality resume refused: incomplete review retry for ${retry.from}..${retry.to} is ${retry.state}`,
+      "quality resume refused: review:provider-exhaustion is not diagnosed for the current exact head",
     );
+  }
+  if (retry.state !== "none") {
+    const acceptedExhaustion = acceptedConditions.includes(
+      "review:provider-exhaustion",
+    );
+    if (retry.state !== "exhausted" || !acceptedExhaustion) {
+      throw new Error(
+        `quality resume refused: incomplete review retry for ${retry.from}..${retry.to} is ${retry.state}`,
+      );
+    }
+    if (manifest.reviews.some((review) => (review.leadCount || 0) !== 0)) {
+      throw new Error(
+        "quality resume refused: exhausted provider review still has unresolved code findings",
+      );
+    }
+    manifest.revisions.exhaustedReviewAdvance = {
+      acceptedCondition: "review:provider-exhaustion",
+      priorFrom: retry.from,
+      priorTo: retry.to,
+      head: nextHead,
+      recordedAt: new Date().toISOString(),
+    };
   }
   const stampHead = manifest.merge?.stampHead;
   if (stampHead) {
@@ -2814,6 +2840,11 @@ function authorizeProviderAttempt(manifest, options, manifestPath) {
     throw new Error(`invalid review provider '${provider}'`);
   }
   const governor = manifest.governor;
+  if (manifest.revisions?.exhaustedReviewAdvance) {
+    throw new Error(
+      "provider review capacity remains exhausted after remediation; use an exact-head operator override or start a fresh campaign",
+    );
+  }
   if (
     !Number.isInteger(governor.maxProviderAttempts) ||
     !Array.isArray(governor.providerAttempts)
@@ -5462,6 +5493,20 @@ const COMMANDS = {
 
 function runAdvance(manifestArg, manifest, rawArgs) {
   const options = parseOptions(rawArgs);
+  const acceptedConditions = options["allow-exhausted-review"]
+    ? String(process.env.BS_QUALITY_ADVANCE_DECISION || "")
+        .split(",")
+        .map((condition) => condition.trim())
+        .filter(Boolean)
+    : [];
+  if (
+    options["allow-exhausted-review"] &&
+    !acceptedConditions.includes("review:provider-exhaustion")
+  ) {
+    throw new Error(
+      "allow-exhausted-review requires the explicit review:provider-exhaustion operator decision",
+    );
+  }
   const updated = withManifestLock(manifestArg, (locked) => {
     if (locked[NEEDS_EXECUTION_BUDGET_MIGRATION]) {
       throw new Error(
@@ -5471,7 +5516,7 @@ function runAdvance(manifestArg, manifest, rawArgs) {
     reconcileAbandonedExecution(locked);
     validateIdentity(locked, manifest.repo.realpath, { requireHead: false });
     bindPrRepositoryIdentity(locked, options);
-    advanceHead(locked, manifest.repo.realpath);
+    advanceHead(locked, manifest.repo.realpath, { acceptedConditions });
     validateIdentity(locked, manifest.repo.realpath);
     const discovered = discoverRequiredGates(
       locked.repo.realpath,
@@ -5569,9 +5614,15 @@ function runCommand(command, rawArgs) {
       "inventory",
     ].includes(command)
   ) {
-    throw new Error(
-      `quality campaign is terminal (${manifest.terminalState.state}); start a fresh invocation`,
-    );
+    const exhaustedReviewAdvance =
+      command === "advance" &&
+      rawArgs.includes("--allow-exhausted-review") &&
+      process.env.BS_QUALITY_ADVANCE_DECISION === "review:provider-exhaustion";
+    if (!exhaustedReviewAdvance) {
+      throw new Error(
+        `quality campaign is terminal (${manifest.terminalState.state}); start a fresh invocation`,
+      );
+    }
   }
   if (
     (!STALE_READ_COMMANDS.has(command) || command === "review-info") &&

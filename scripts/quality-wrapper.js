@@ -522,6 +522,11 @@ function main() {
     environment.BS_QUALITY_APPROVAL_EXPECTED_HEAD = request.expectedHead;
     environment.BS_QUALITY_APPROVAL_EXPECTED_PR = String(request.expectedPr);
     environment.BS_QUALITY_APPROVAL_ONLY = "1";
+    environment.BS_QUALITY_APPROVAL_SCOPE = request.scope;
+    if (request.scope === "operator-quality-override") {
+      environment.BS_QUALITY_APPROVAL_ACCEPTED_CONDITIONS =
+        request.acceptedConditions.join(",");
+    }
   }
   const result = spawnSync("bash", [bootstrap, ...argv], {
     encoding: "utf8",

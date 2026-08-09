@@ -63,6 +63,11 @@ never presented as a clean review. A run stops for human direction when
 deterministic evidence is unresolved, revision identity is stale, required CI
 fails, or repository policy explicitly requires a human.
 
+If a bounded provider retry is exhausted and a real descendant fix lands, resume
+the same campaign only with an exact-new-HEAD override accepting
+`review:provider-exhaustion` plus `--i-understand-missing-review`; rerun
+deterministic gates and mutation evidence at that HEAD before attaching it.
+
 Repositories that explicitly set `scorePolicy.mergeAuthority` to
 `"human-required"` retain the legacy signed, expiring approval command; it is
 invalidated by any genuine HEAD change.

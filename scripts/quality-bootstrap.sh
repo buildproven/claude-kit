@@ -171,24 +171,33 @@ if [ -n "$MANIFEST_ARG" ]; then
     echo "❌ invalid quality approval-only mode" >&2
     exit 1
   }
+  RESUME_RECORDED_IDENTITY="$(node -e '
+    const q = require(process.argv[1]);
+    const manifest = q.loadManifest(process.argv[2]).manifest;
+    process.stdout.write(`${manifest.repo.pr}\n${manifest.revisions.currentHead}\n`);
+  ' "$SCRIPT_DIR/quality-invocation.js" "$MANIFEST_ARG")" || exit 1
+  RESUME_RECORDED_PR="$(printf '%s\n' "$RESUME_RECORDED_IDENTITY" | sed -n '1p')"
+  RESUME_RECORDED_HEAD="$(printf '%s\n' "$RESUME_RECORDED_IDENTITY" | sed -n '2p')"
+  RESUME_CHECKOUT_HEAD="$(git rev-parse HEAD)" || exit 1
+  ALLOW_EXHAUSTED_REVIEW_ADVANCE=false
   if [ "$APPROVAL_ONLY" = 1 ] || [ -n "${BS_QUALITY_APPROVAL_EXPECTED_HEAD:-}" ] || [ -n "${BS_QUALITY_APPROVAL_EXPECTED_PR:-}" ]; then
     [ -n "${BS_QUALITY_APPROVAL_EXPECTED_HEAD:-}" ] && [ -n "${BS_QUALITY_APPROVAL_EXPECTED_PR:-}" ] || {
       echo "❌ quality approval resume requires both expected PR and HEAD" >&2
       exit 1
     }
-    RESUME_RECORDED_IDENTITY="$(node -e '
-      const q = require(process.argv[1]);
-      const manifest = q.loadManifest(process.argv[2]).manifest;
-      process.stdout.write(`${manifest.repo.pr}\n${manifest.revisions.currentHead}\n`);
-    ' "$SCRIPT_DIR/quality-invocation.js" "$MANIFEST_ARG")" || exit 1
-    RESUME_RECORDED_PR="$(printf '%s\n' "$RESUME_RECORDED_IDENTITY" | sed -n '1p')"
-    RESUME_RECORDED_HEAD="$(printf '%s\n' "$RESUME_RECORDED_IDENTITY" | sed -n '2p')"
-    RESUME_CHECKOUT_HEAD="$(git rev-parse HEAD)" || exit 1
     if [ "$RESUME_RECORDED_PR" != "$BS_QUALITY_APPROVAL_EXPECTED_PR" ] || \
-      [ "$RESUME_RECORDED_HEAD" != "$BS_QUALITY_APPROVAL_EXPECTED_HEAD" ] || \
       [ "$RESUME_CHECKOUT_HEAD" != "$BS_QUALITY_APPROVAL_EXPECTED_HEAD" ]; then
       echo "❌ quality approval identity mismatch before manifest resume" >&2
       exit 1
+    fi
+    if [ "$RESUME_RECORDED_HEAD" != "$BS_QUALITY_APPROVAL_EXPECTED_HEAD" ]; then
+      if [ "${BS_QUALITY_APPROVAL_SCOPE:-standard}" != "operator-quality-override" ] || \
+        ! printf '%s' "${BS_QUALITY_APPROVAL_ACCEPTED_CONDITIONS:-}" | \
+          tr ',' '\n' | grep -Fxq 'review:provider-exhaustion'; then
+        echo "❌ descendant approval requires the explicit review:provider-exhaustion operator decision" >&2
+        exit 1
+      fi
+      ALLOW_EXHAUSTED_REVIEW_ADVANCE=true
     fi
   fi
   BS_QUALITY_REPOSITORY_LEASE_TOKEN=""
@@ -206,19 +215,35 @@ if [ -n "$MANIFEST_ARG" ]; then
     }
     export BS_QUALITY_REPOSITORY_LEASE_TOKEN
   fi
-  if [ "$APPROVAL_ONLY" != 1 ]; then
+  if [ "$APPROVAL_ONLY" != 1 ] || [ "$ALLOW_EXHAUSTED_REVIEW_ADVANCE" = true ]; then
     ADVANCE_ARGS=(advance "$MANIFEST_ARG")
+    if [ "$ALLOW_EXHAUSTED_REVIEW_ADVANCE" = true ]; then
+      ADVANCE_ARGS+=(--allow-exhausted-review)
+      export BS_QUALITY_ADVANCE_DECISION="${BS_QUALITY_APPROVAL_ACCEPTED_CONDITIONS:-}"
+    fi
     if [ -n "$RESUME_PR" ] && [ "$RESUME_PR" != null ]; then
       [ -n "$RESUME_GITHUB_REPOSITORY" ] || {
         echo "❌ resumed pull request has no protected repository identity" >&2
         exit 1
       }
       RESUME_PR_JSON="$(gh pr view "$RESUME_PR" --repo "$RESUME_GITHUB_REPOSITORY" \
-        --json headRefName,headRepository,isCrossRepository 2>/dev/null)" || exit 1
+        --json headRefName,headRepository,isCrossRepository,headRefOid 2>/dev/null)" || exit 1
       RESUME_HEAD_REF="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.headRefName')" || exit 1
       RESUME_HEAD_REPOSITORY="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.headRepository.nameWithOwner')" || exit 1
       RESUME_CROSS_REPOSITORY="$(printf '%s' "$RESUME_PR_JSON" | jq -r '.isCrossRepository')" || exit 1
       { [ "$RESUME_CROSS_REPOSITORY" = true ] || [ "$RESUME_CROSS_REPOSITORY" = false ]; } || exit 1
+      if [ "$ALLOW_EXHAUSTED_REVIEW_ADVANCE" = true ]; then
+        RESUME_REMOTE_HEAD="$(printf '%s' "$RESUME_PR_JSON" | jq -er '.headRefOid')" || {
+          echo "❌ resumed pull request did not provide an authoritative head SHA" >&2
+          exit 1
+        }
+        [ "$RESUME_REMOTE_HEAD" = "$BS_QUALITY_APPROVAL_EXPECTED_HEAD" ] || {
+          echo "❌ descendant approval PR head does not match the exact requested HEAD" >&2
+          exit 1
+        }
+        node "$SCRIPT_DIR/quality-repo-lease.js" assert-base \
+          --manifest "$MANIFEST_ARG" >/dev/null || exit 1
+      fi
       ADVANCE_ARGS+=(--github-repo "$RESUME_GITHUB_REPOSITORY" \
         --head-ref "$RESUME_HEAD_REF" \
         --head-repository "$RESUME_HEAD_REPOSITORY" \

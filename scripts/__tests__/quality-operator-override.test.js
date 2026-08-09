@@ -17,8 +17,10 @@ const INVOCATION = path.join(ROOT, "scripts", "quality-invocation.js");
 const BOOTSTRAP = path.join(ROOT, "scripts", "quality-bootstrap.sh");
 const RISK = path.join(ROOT, "scripts", "quality-risk-resolve.sh");
 const WRAPPER = path.join(ROOT, "scripts", "quality-wrapper.js");
+const LEASE = path.join(ROOT, "scripts", "quality-repo-lease.js");
 const require = createRequire(import.meta.url);
 const invocation = require(INVOCATION);
+const lease = require(LEASE);
 const taxonomy = require(
   path.join(ROOT, "scripts", "quality-condition-taxonomy.js"),
 );
@@ -497,6 +499,156 @@ describe("operator override end-to-end", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/identity mismatch before manifest resume/);
     expect(readFileSync(manifest, "utf8")).toBe(before);
+  }, 120_000);
+
+  it("advances an exhausted merge campaign before exact-new-head override approval", () => {
+    const root = repo("exhausted-descendant-merge");
+    const repository = "owner/repo-bui709-descendant";
+    const manifest = execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "create",
+        "--repo",
+        root,
+        "--base-ref",
+        "origin/main",
+        "--pr",
+        "23",
+        "--github-repo",
+        repository,
+        "--head-ref",
+        "feature",
+        "--head-repository",
+        repository,
+        "--cross-repository",
+        "false",
+        "--merge",
+      ],
+      { cwd: root, encoding: "utf8" },
+    ).trim();
+    const credential = lease.acquire(manifest, { waitMs: 0 });
+    const priorToken = process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+    process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = credential.token;
+    const initial = JSON.parse(readFileSync(manifest, "utf8"));
+    invocation.withManifestLock(manifest, (state) => {
+      invocation.setRisk(state, {
+        tier: "medium",
+        taskType: "bugfix",
+        score: 35,
+        agents: 1,
+        "codex-depth": "high",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(state, ["code-reviewer"], {
+        domain: "general",
+        rule: "general-review",
+      });
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        state.reviews.push({
+          status: "incomplete",
+          provider: "review-incomplete",
+          from: state.revisions.baseSha,
+          to: state.revisions.currentHead,
+          leadCount: 0,
+        });
+      }
+      state.terminalState = {
+        state: "provider-incomplete",
+        detail: "retry-exhausted:provider-exhaustion",
+        head: state.revisions.currentHead,
+        recordedAt: new Date().toISOString(),
+      };
+    });
+    writeFileSync(
+      path.join(root, "privacy-fix.js"),
+      "export const fixed = true;\n",
+    );
+    git(root, ["add", "privacy-fix.js"]);
+    git(root, ["commit", "-qam", "fix: remediate privacy review"]);
+    const descendantHead = git(root, ["rev-parse", "HEAD"]);
+    const bin = mkdtempSync(path.join(tmpdir(), "quality-descendant-gh-"));
+    const gh = path.join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+if [ "$1 $2" = "pr view" ]; then
+  printf '%s\\n' '{"headRefName":"feature","headRefOid":"${descendantHead}","headRepository":{"nameWithOwner":"${repository}"},"isCrossRepository":false}'
+  exit 0
+fi
+if [ "$1 $2" = "repo view" ]; then
+  printf '%s\\n' '${repository}'
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(gh, 0o755);
+
+    try {
+      const advance = spawnSync("bash", [BOOTSTRAP, "--manifest", manifest], {
+        cwd: root,
+        encoding: "utf8",
+        env: withoutAmbientGitHubIdentity({
+          BS_QUALITY_APPROVAL_ONLY: "1",
+          BS_QUALITY_APPROVAL_EXPECTED_PR: "23",
+          BS_QUALITY_APPROVAL_EXPECTED_HEAD: descendantHead,
+          BS_QUALITY_APPROVAL_SCOPE: "operator-quality-override",
+          BS_QUALITY_APPROVAL_ACCEPTED_CONDITIONS: "review:provider-exhaustion",
+          CLAUDE_SETUP_ROOT: ROOT,
+          PATH: `${bin}:${process.env.PATH}`,
+        }),
+      });
+      expect(advance.status, advance.stderr).toBe(0);
+      const advanced = JSON.parse(readFileSync(manifest, "utf8"));
+      expect(advanced.revisions.currentHead).toBe(descendantHead);
+      expect(advanced.revisions.exhaustedReviewAdvance).toMatchObject({
+        acceptedCondition: "review:provider-exhaustion",
+        priorTo: initial.revisions.currentHead,
+        head: descendantHead,
+      });
+      expect(advanced.terminalState.state).toBe("provider-incomplete");
+
+      for (const gate of ["lint", "test", "security"]) {
+        recordGateFixtureLocal(manifest, gate);
+      }
+      const override = spawnSync("node", [WRAPPER, BOOTSTRAP], {
+        cwd: root,
+        input: JSON.stringify({
+          argv: [
+            "override",
+            "--manifest",
+            manifest,
+            "--pr",
+            "23",
+            "--head",
+            descendantHead,
+            "--reason",
+            "provider review exhausted before the privacy fix; deterministic gates passed at the exact new head",
+            "--accept",
+            "review:provider-exhaustion",
+            "--i-understand-missing-review",
+          ],
+        }),
+        encoding: "utf8",
+        env: withoutAmbientGitHubIdentity({
+          BREAK_GLASS_APPROVER: "brett",
+          CLAUDE_SETUP_ROOT: ROOT,
+          PATH: `${bin}:${process.env.PATH}`,
+        }),
+      });
+      expect(override.status, override.stderr).toBe(0);
+      const approved = JSON.parse(readFileSync(manifest, "utf8"));
+      expect(approved.approval.acceptedConditions).toEqual([
+        "review:provider-exhaustion",
+      ]);
+      expect(approved.approval.head).toBe(descendantHead);
+    } finally {
+      lease.release(manifest, credential.token, "test-complete");
+      if (priorToken === undefined)
+        delete process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+      else process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = priorToken;
+    }
   }, 120_000);
 
   it("mints a signed capability bound to reason, accepted conditions, and a short TTL, and produces distinct merge trailers", () => {

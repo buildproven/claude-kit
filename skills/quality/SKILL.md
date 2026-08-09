@@ -70,6 +70,13 @@ preserves gates, CI, freshness, and audit evidence. Explicit
 still needs the wrapper-created, identity-bound, unexpired capability; nested
 processes cannot create one.
 
+An exhausted provider retry may be resumed across a legitimate descendant fix
+only through an exact-new-HEAD operator override accepting
+`review:provider-exhaustion` with `--i-understand-missing-review`. The runtime
+preserves the prior incomplete evidence, never mints another provider budget,
+and requires deterministic gates and mutation evidence for the descendant
+before attaching the signed override.
+
 ## 2. Deterministic gates and formatting
 
 Run every immutable `requiredGates` entry through the recording runner. It
