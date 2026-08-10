@@ -141,8 +141,8 @@ trap 'cleanup_provider 129' HUP
 trap 'cleanup_provider $?' EXIT
 wait "$CHILD_PID"; RC=$?
 stop_tracker
-terminate_provider
 stop_watchdog
+terminate_provider
 trap - INT TERM HUP EXIT
 rm -f "$TRACKED_PIDS_FILE"
 if [ -f "$MARKER" ]; then rm -f "$MARKER"; exit 124; fi
