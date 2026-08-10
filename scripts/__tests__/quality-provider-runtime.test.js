@@ -111,6 +111,41 @@ describe("provider review runtime", () => {
     expect(() => process.kill(helperPid, 0)).toThrow();
   });
 
+  it("reaps a detached helper when the provider leader exits early", () => {
+    const directory = makeTempDir("bounded-orphan-");
+    const pidFile = path.join(directory, "detached-helper.pid");
+    let helperPid = null;
+    try {
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          BOUNDED,
+          "--timeout",
+          "20",
+          "--",
+          "/bin/bash",
+          "-c",
+          'python3 -c \'import os,signal,sys,time; os.setsid(); signal.signal(signal.SIGTERM, signal.SIG_IGN); open(sys.argv[1], "w").write(str(os.getpid())); time.sleep(20)\' "$1" & sleep 0.2; exit 0',
+          "provider",
+          pidFile,
+        ],
+        { encoding: "utf8", timeout: 5000 },
+      );
+      expect(result.status).toBe(0);
+      helperPid = Number(readFileSync(pidFile, "utf8").trim());
+      expect(Number.isSafeInteger(helperPid)).toBe(true);
+      expect(() => process.kill(helperPid, 0)).toThrow();
+    } finally {
+      if (Number.isSafeInteger(helperPid)) {
+        try {
+          process.kill(helperPid, "SIGKILL");
+        } catch {
+          // The assertion above is the contract; cleanup is best effort.
+        }
+      }
+    }
+  });
+
   it("reaps the watchdog promptly after a successful command", () => {
     const started = Date.now();
     const result = spawnSync(
