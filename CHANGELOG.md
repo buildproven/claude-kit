@@ -12,6 +12,20 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.4.3](https://github.com/buildproven/claude-kit/compare/v4.4.2...v4.4.3) (2026-08-10)
+
+
+### Bug Fixes
+
+* **quality:** fail closed before provider dispatch ([#299](https://github.com/buildproven/claude-kit/issues/299)) ([3c49837](https://github.com/buildproven/claude-kit/commit/3c498376308e3909447a4041979bc7e88d13e490))
+* **quality:** recover exhausted reviews after descendant fixes ([#300](https://github.com/buildproven/claude-kit/issues/300)) ([7373791](https://github.com/buildproven/claude-kit/commit/737379108559e92413277c2f4567bd1beddbdaa2))
+
+
+### Performance Improvements
+
+* collapse Bash PreToolUse hook launches ([#302](https://github.com/buildproven/claude-kit/issues/302)) ([5695275](https://github.com/buildproven/claude-kit/commit/5695275a0990d933c3e43d437f69a972a324e2b1))
+* split Ralph skill for progressive disclosure ([#303](https://github.com/buildproven/claude-kit/issues/303)) ([0f1f8e9](https://github.com/buildproven/claude-kit/commit/0f1f8e9c13d037b150bf2cbb8967a56bf51e9495))
+
 ## [4.4.2](https://github.com/buildproven/claude-kit/compare/v4.4.1...v4.4.2) (2026-08-09)
 
 
