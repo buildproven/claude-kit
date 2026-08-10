@@ -321,7 +321,7 @@ if [ -n "$STRYKER_CONFIG" ] && \
   MUTATED_PATHS=("$STRYKER_CONFIG")
   SANDBOX="$TEMP_ROOT/worktree"
   git -C "$ROOT" worktree add --detach --quiet "$SANDBOX" "$HEAD"
-  initialize_mutation_worktree
+  initialize_mutation_worktree || exit 1
   ln -s "$ROOT/node_modules" "$SANDBOX/node_modules"
   LOG="$STATE_ROOT/mutation/${HEAD}.stryker.log"
   set +e
@@ -356,7 +356,7 @@ for CANDIDATE in "${CANDIDATES[@]}"; do
 
   SANDBOX="$TEMP_ROOT/worktree"
   git -C "$ROOT" worktree add --detach --quiet "$SANDBOX" "$HEAD"
-  initialize_mutation_worktree
+  initialize_mutation_worktree || exit 1
   if [ -d "$ROOT/node_modules" ] && [ ! -e "$SANDBOX/node_modules" ]; then
     ln -s "$ROOT/node_modules" "$SANDBOX/node_modules"
   fi
