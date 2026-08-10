@@ -30,23 +30,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/block-destructive-paths.sh",
-            "timeout": 3000
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/block-push-main.sh",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/bash-pretooluse-dispatcher.js\"",
             "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/block-commit-main.sh",
-            "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/branch-drift-guard.sh",
-            "timeout": 3000
           }
         ]
       },

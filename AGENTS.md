@@ -85,7 +85,7 @@ templates/        Starter files copied by /bs:new and related commands
 
 The distributed `settings.json` wires bash scripts in `scripts/` to Claude Code lifecycle events. Key ones:
 
-- **PreToolUse (Bash)** → `block-destructive-paths.sh`, `block-push-main.sh`, `block-commit-main.sh`, `branch-drift-guard.sh`
+- **PreToolUse (Bash)** → `bash-pretooluse-dispatcher.js` (fast common path plus the four compatibility guards: `block-destructive-paths.sh`, `block-push-main.sh`, `block-commit-main.sh`, `branch-drift-guard.sh`)
 - **PreToolUse (Edit/Write/MultiEdit)** → `auto-branch-on-main.sh` (forces branching off main before edits)
 - **PostToolUse (Edit/Write/MultiEdit)** → `post-edit-lint.sh`
 - **Stop** → `stop-validation.sh`, `multi-session-cleanup.sh`
