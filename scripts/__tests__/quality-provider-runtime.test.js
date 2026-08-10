@@ -125,11 +125,11 @@ describe("provider review runtime", () => {
           "--",
           "/bin/bash",
           "-c",
-          'python3 -c \'import os,signal,sys,time; os.setsid(); signal.signal(signal.SIGTERM, signal.SIG_IGN); open(sys.argv[1], "w").write(str(os.getpid())); time.sleep(20)\' "$1" & sleep 0.2; exit 0',
+          'python3 -c \'import os,signal,sys,time; os.setsid(); signal.signal(signal.SIGTERM, signal.SIG_IGN); open(sys.argv[1], "w").write(str(os.getpid())); time.sleep(20)\' "$1" & sleep 1; exit 0',
           "provider",
           pidFile,
         ],
-        { encoding: "utf8", timeout: 5000 },
+        { encoding: "utf8", timeout: 10000 },
       );
       expect(result.status).toBe(0);
       helperPid = Number(readFileSync(pidFile, "utf8").trim());
