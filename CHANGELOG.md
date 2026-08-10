@@ -12,6 +12,19 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.5.0](https://github.com/buildproven/claude-kit/compare/v4.4.3...v4.5.0) (2026-08-10)
+
+
+### Features
+
+* share gate result protocol ([#306](https://github.com/buildproven/claude-kit/issues/306)) ([fbcb7a4](https://github.com/buildproven/claude-kit/commit/fbcb7a4eaf125894cbee87fc1d2b110fa68ab11c))
+
+
+### Bug Fixes
+
+* allow bespoke diversity recovery ([#307](https://github.com/buildproven/claude-kit/issues/307)) ([b360596](https://github.com/buildproven/claude-kit/commit/b3605964fcae51cc45a316b1b3ca1d7c7c27068c))
+* initialize mutation worktree submodules ([#304](https://github.com/buildproven/claude-kit/issues/304)) ([59af0aa](https://github.com/buildproven/claude-kit/commit/59af0aa22d98f8f058476ba8e65a8a495b0901f0))
+
 ## [4.4.3](https://github.com/buildproven/claude-kit/compare/v4.4.2...v4.4.3) (2026-08-10)
 
 
