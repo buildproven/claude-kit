@@ -909,6 +909,89 @@ describe("quality invocation manifest", () => {
     expect(next.reviews).toEqual([]);
   });
 
+  it("recovers a terminal bespoke campaign once without resetting its identity", () => {
+    const root = repo("critical-diversity-upgrade-bespoke-predecessor");
+    const predecessor = create(root, [
+      "--level",
+      "98",
+      "--primary",
+      "claude",
+      "--fallback",
+      "codex",
+      "--review-arm",
+      "bespoke",
+    ]);
+    invocation.withManifestLock(predecessor, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "critical",
+        taskType: "bugfix",
+        score: 98,
+        agents: 2,
+        "codex-depth": "xhigh",
+        "codex-rounds": 1,
+      });
+    });
+    for (const gate of JSON.parse(readFileSync(predecessor, "utf8"))
+      .requiredGates) {
+      recordGateFixture(predecessor, gate.name);
+    }
+    recordMutationFixture(predecessor);
+    invocation.withManifestLock(predecessor, (manifest) => {
+      manifest.reviews.push({
+        status: "incomplete",
+        provider: "codex",
+        leadCount: 0,
+        to: manifest.revisions.currentHead,
+      });
+    });
+    invocation.recordTerminalState(
+      predecessor,
+      "provider-incomplete",
+      "critical-provider-diversity",
+    );
+
+    const upgrade = create(root, [
+      "--level",
+      "98",
+      "--primary",
+      "claude",
+      "--fallback",
+      "codex",
+      "--review-arm",
+      "bespoke",
+    ]);
+    const prior = JSON.parse(readFileSync(predecessor, "utf8"));
+    const next = JSON.parse(readFileSync(upgrade, "utf8"));
+    expect(upgrade).not.toBe(predecessor);
+    expect(next.invocationId).not.toBe(prior.invocationId);
+    expect(next.supersedes).toMatchObject({
+      invocationId: prior.invocationId,
+      manifestPath: predecessor,
+      reason:
+        "critical exact-head discovery lacked required provider diversity",
+    });
+    expect(prior.supersededBy).toMatchObject({
+      invocationId: next.invocationId,
+    });
+    expect(next.options.reviewArm).toBe("bespoke");
+    expect(next.governor.providerAttempts).toEqual([]);
+    expect(next.gates).toEqual([]);
+    expect(next.reviews).toEqual([]);
+
+    expect(() =>
+      create(root, [
+        "--level",
+        "98",
+        "--primary",
+        "claude",
+        "--fallback",
+        "codex",
+        "--review-arm",
+        "bespoke",
+      ]),
+    ).toThrow(/deterministic quality campaign identity collision/);
+  });
+
   it("keeps a non-diversity terminal collision fail closed", () => {
     const root = repo("non-diversity-upgrade");
     const predecessor = create(root, [
