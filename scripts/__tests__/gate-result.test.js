@@ -93,4 +93,40 @@ describe("gate result protocol", () => {
       '"reason":"PASS requires at least one completed check"',
     );
   });
+
+  it("propagates an explicitly declared failure through the process exit code", () => {
+    const directory = tempDirectory("gate-envelope-");
+    const script = path.join(directory, "native-fixture.sh");
+    fs.writeFileSync(
+      script,
+      `#!/usr/bin/env bash\nset -u\nsource ${JSON.stringify(RESULT_HELPER)}\ngate_result_init\ngate_result_fail "fixture failed"\nexit 0\n`,
+    );
+    fs.chmodSync(script, 0o755);
+    const result = spawnSync("bash", [script], {
+      cwd: ROOT,
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(
+      '"status":"FAIL","checks":0,"reason":"fixture failed"',
+    );
+  });
+
+  it("converts a nonzero exit after a declared pass into a failed envelope", () => {
+    const directory = tempDirectory("gate-envelope-");
+    const script = path.join(directory, "native-fixture.sh");
+    fs.writeFileSync(
+      script,
+      `#!/usr/bin/env bash\nset -u\nsource ${JSON.stringify(RESULT_HELPER)}\ngate_result_init\ngate_result_check\ngate_result_pass "fixture passed"\nexit 7\n`,
+    );
+    fs.chmodSync(script, 0o755);
+    const result = spawnSync("bash", [script], {
+      cwd: ROOT,
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(7);
+    expect(result.stdout).toContain(
+      '"status":"FAIL","checks":1,"reason":"gate exited with status 7 after declaring PASS"',
+    );
+  });
 });

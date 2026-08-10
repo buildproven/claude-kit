@@ -69,6 +69,14 @@ _gate_result_on_exit() {
     rc=1
   fi
 
+  if [ "$status" = "FAIL" ] && [ "$rc" -eq 0 ]; then
+    rc=1
+  elif [ "$status" != "FAIL" ] && [ "$rc" -ne 0 ]; then
+    local declared_status="$status"
+    status="FAIL"
+    reason="gate exited with status $rc after declaring $declared_status"
+  fi
+
   _gate_result_emit "$status" "$checks" "$reason"
   exit "$rc"
 }
