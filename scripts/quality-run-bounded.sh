@@ -63,16 +63,17 @@ track_provider_tree() {
   # exact PIDs for the bounded cleanup path.
   while kill -0 "$CHILD_PID" 2>/dev/null; do
     process_tree_postorder "$CHILD_PID" >> "$TRACKED_PIDS_FILE"
-    sleep 0.05
+    # Keep the fork/leader-exit observation window small. Platforms without a
+    # subreaper still have an irreducible race here; tracked PIDs are the
+    # fail-closed cleanup record once the leader has exited.
+    sleep 0.01
   done
   process_tree_postorder "$CHILD_PID" >> "$TRACKED_PIDS_FILE"
 }
 track_provider_tree &
 TRACKER_PID=$!
 stop_tracker() {
-  if kill -0 "$CHILD_PID" 2>/dev/null; then
-    kill -TERM "$TRACKER_PID" 2>/dev/null || true
-  fi
+  kill -TERM "$TRACKER_PID" 2>/dev/null || true
   wait "$TRACKER_PID" 2>/dev/null || true
 }
 terminate_provider() {
