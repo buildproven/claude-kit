@@ -278,6 +278,19 @@ complete_mutation_execution() {
   MUTATION_ACTIVE=false
 }
 
+initialize_mutation_worktree() {
+  if ! git -C "$SANDBOX" submodule update --init --recursive; then
+    echo "quality-mutation-check: failed to initialize committed submodules in mutation worktree" >&2
+    return 1
+  fi
+  SUBMODULE_STATUS="$(git -C "$SANDBOX" submodule status --recursive || true)"
+  if printf '%s\n' "$SUBMODULE_STATUS" | grep -Eq '^[+-U]'; then
+    echo "quality-mutation-check: mutation worktree has an unready committed submodule:" >&2
+    printf '%s\n' "$SUBMODULE_STATUS" >&2
+    return 1
+  fi
+}
+
 record_evidence() {
   METHOD="$1"
   jq -n \
@@ -308,6 +321,7 @@ if [ -n "$STRYKER_CONFIG" ] && \
   MUTATED_PATHS=("$STRYKER_CONFIG")
   SANDBOX="$TEMP_ROOT/worktree"
   git -C "$ROOT" worktree add --detach --quiet "$SANDBOX" "$HEAD"
+  initialize_mutation_worktree || exit 1
   ln -s "$ROOT/node_modules" "$SANDBOX/node_modules"
   LOG="$STATE_ROOT/mutation/${HEAD}.stryker.log"
   set +e
@@ -342,6 +356,7 @@ for CANDIDATE in "${CANDIDATES[@]}"; do
 
   SANDBOX="$TEMP_ROOT/worktree"
   git -C "$ROOT" worktree add --detach --quiet "$SANDBOX" "$HEAD"
+  initialize_mutation_worktree || exit 1
   if [ -d "$ROOT/node_modules" ] && [ ! -e "$SANDBOX/node_modules" ]; then
     ln -s "$ROOT/node_modules" "$SANDBOX/node_modules"
   fi

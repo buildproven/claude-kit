@@ -118,6 +118,31 @@ function fixture(label, testBody, options = {}) {
         : "exports.isAllowed = () => false;\n",
     );
   }
+  if (options.submodule) {
+    const submodule = makeTempDir(`quality-mutation-${label}-submodule-`);
+    git(submodule, ["init", "-q", "-b", "main"]);
+    git(submodule, ["config", "user.name", "Quality Test"]);
+    git(submodule, ["config", "user.email", "quality@example.com"]);
+    writeFileSync(
+      path.join(submodule, "helper.js"),
+      "exports.value = 'ready';\n",
+    );
+    git(submodule, ["add", "helper.js"]);
+    git(submodule, ["commit", "-q", "-m", "helper"]);
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "-q",
+        submodule,
+        "core",
+      ],
+      { cwd: root, env: { ...process.env, GIT_ALLOW_PROTOCOL: "file" } },
+    );
+  }
   writeFileSync(path.join(root, "logic.test.js"), testBody);
   git(root, ["add", "."]);
   git(root, ["commit", "-q", "-m", "base"]);
@@ -191,6 +216,7 @@ function runMutation(root, manifest) {
       encoding: "utf8",
       env: {
         ...process.env,
+        GIT_ALLOW_PROTOCOL: "file",
         PATH: `${path.join(root, "test-bin")}:${process.env.PATH}`,
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -302,6 +328,31 @@ describe("quality-mutation-check", () => {
     const state = JSON.parse(readFileSync(manifest, "utf8"));
     expect(state.governor.activeExecution).toBeNull();
     expect(state.governor.gateSecondsUsed).toBeGreaterThanOrEqual(1);
+  });
+
+  it("initializes committed submodules before running the mutation baseline", () => {
+    const { root, manifest } = fixture(
+      "submodule-baseline",
+      "const { isAllowed } = require('./logic');\nconst { value } = require('./core/helper');\nif (!isAllowed('admin') || value !== 'ready') process.exit(1);\n",
+      { submodule: true },
+    );
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+    const stateRoot = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "stateRoot"],
+      { encoding: "utf8" },
+    ).trim();
+    const head = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "revisions.currentHead"],
+      { encoding: "utf8" },
+    ).trim();
+    const artifact = JSON.parse(
+      readFileSync(path.join(stateRoot, "mutation", `${head}.json`), "utf8"),
+    );
+    expect(artifact.mutatedPaths).toEqual(["logic.js"]);
   });
 
   it("uses the native Vitest bail option after the first mutation failure", () => {
