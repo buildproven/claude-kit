@@ -1306,11 +1306,13 @@ function sameWorkIgnoringReviewArm(existingIdentity, campaignIdentity) {
   );
 }
 
-// A diversity upgrade is deliberately narrower than provider failover.  It is
-// the one recovery path for a completed critical native review whose evidence
-// says it cannot satisfy the independent-provider requirement.  It is not a
-// way to mint another provider budget for a timeout, malformed response,
-// finding, changed revision, or ordinary provider preference change.
+// A diversity upgrade is deliberately narrower than provider failover. It is
+// the one recovery path for a completed critical review whose evidence says it
+// cannot satisfy the independent-provider requirement. It is not a way to
+// mint another provider budget for a timeout, malformed response, finding,
+// changed revision, or ordinary provider preference change. Both native and
+// bespoke predecessors are eligible: a bespoke campaign can terminalize after
+// its Claude leg is unavailable and only the Codex fallback completes.
 function diversityUpgradeEligibility(
   existing,
   existingIdentity,
@@ -1319,7 +1321,12 @@ function diversityUpgradeEligibility(
   if (!sameWorkIgnoringReviewArm(existingIdentity, campaignIdentity))
     return null;
   if (campaignIdentity.options?.reviewArm !== "bespoke") return null;
-  if (existing.options?.reviewArm === "bespoke") return null;
+  // A predecessor may already be bespoke when its primary Claude leg was
+  // unavailable and the fallback panel completed without the required
+  // independent-provider diversity. The linked successor must still use the
+  // bespoke arm so Claude is the required provider on the fresh packet.
+  if (!["native", "bespoke"].includes(existing.options?.reviewArm)) return null;
+  if (existing.supersededBy?.invocationId) return null;
   if (existing.terminalState?.state !== "provider-incomplete") return null;
   if (existing.terminalState?.detail !== "critical-provider-diversity")
     return null;
@@ -1605,9 +1612,6 @@ function providerRecoveryManifest(
 function existingCampaign(manifestPath, campaignIdentity) {
   const existing = loadManifest(manifestPath).manifest;
   const existingIdentity = manifestIdentity(existing);
-  if (existing.environmentRecovery?.supersededBy) {
-    throw new Error("deterministic quality campaign identity collision");
-  }
   const environmentReason = environmentRecoveryEligibility(
     existing,
     existingIdentity,
@@ -1639,24 +1643,32 @@ function existingCampaign(manifestPath, campaignIdentity) {
       providerRecovery,
     );
   }
+  const diversityReason = diversityUpgradeEligibility(
+    existing,
+    existingIdentity,
+    campaignIdentity,
+  );
+  if (diversityReason) {
+    return supersedingManifest(
+      manifestPath,
+      existing,
+      campaignIdentity,
+      diversityReason,
+      "diversityUpgradeOf",
+    );
+  }
+  if (
+    existing.environmentRecovery?.supersededBy ||
+    (existing.supersededBy?.invocationId &&
+      existing.supersededBy?.reason ===
+        "critical exact-head discovery lacked required provider diversity")
+  ) {
+    throw new Error("deterministic quality campaign identity collision");
+  }
   if (
     JSON.stringify(canonicalJson(existingIdentity)) !==
     JSON.stringify(canonicalJson(campaignIdentity))
   ) {
-    const diversityReason = diversityUpgradeEligibility(
-      existing,
-      existingIdentity,
-      campaignIdentity,
-    );
-    if (diversityReason) {
-      return supersedingManifest(
-        manifestPath,
-        existing,
-        campaignIdentity,
-        diversityReason,
-        "diversityUpgradeOf",
-      );
-    }
     if (!canFailOverProvider(existing, existingIdentity, campaignIdentity)) {
       throw new Error("deterministic quality campaign identity collision");
     }
