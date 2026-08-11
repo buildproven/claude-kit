@@ -157,6 +157,14 @@ describe("provider review runtime", () => {
     expect(Date.now() - started).toBeLessThan(4000);
   });
 
+  it("throttles detached-provider tree snapshots and avoids duplicate writes", () => {
+    const source = readFileSync(BOUNDED, "utf8");
+    expect(source).toContain('local last_snapshot="" snapshot');
+    expect(source).toContain('if [ "$snapshot" != "$last_snapshot" ]');
+    expect(source).toContain("sleep 0.25");
+    expect(source).not.toContain("sleep 0.01");
+  });
+
   it("honors scorer-selected independent Codex rounds", () => {
     const result = spawnSync(
       "bash",
