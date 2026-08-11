@@ -15,6 +15,14 @@ const SAFE_CHANGE_SENTENCES = new Set([
 const AFFIRMATIVE_VERIFICATION_SENTENCES = new Set([
   "the changed files also pass `./scripts/verify-fast`",
 ]);
+const SAFE_CHANGE_PATTERNS = [
+  /\b(?:has|have)\s+no\s+(?:remaining|live)\s+(?:callers?|references?)\b/i,
+];
+const AFFIRMATIVE_VERIFICATION_PATTERNS = [
+  /\bconsistent(?:ly)?\s+with\b/i,
+  /\balign(?:s|ed)?\s+with\b/i,
+  /\bresolve(?:s|d)?\s+cleanly\b/i,
+];
 
 function parseHeader(line) {
   const prefix = line.match(/^- \[P([0-3])\] /);
@@ -73,21 +81,32 @@ function normalizedSentence(sentence) {
 
 function isSuccessfulVerificationSentence(
   sentence,
-  { negativePrefix, contrast, incomplete },
+  { negativePrefix, contrast, incomplete, qualifier },
 ) {
+  const normalized = normalizedSentence(sentence);
   return (
-    AFFIRMATIVE_VERIFICATION_SENTENCES.has(normalizedSentence(sentence)) &&
+    (AFFIRMATIVE_VERIFICATION_SENTENCES.has(normalized) ||
+      AFFIRMATIVE_VERIFICATION_PATTERNS.some((pattern) =>
+        pattern.test(normalized),
+      )) &&
     !negativePrefix.test(sentence) &&
     !contrast.test(sentence) &&
-    !incomplete.test(sentence)
+    !incomplete.test(sentence) &&
+    !qualifier.test(sentence)
   );
 }
 
-function isSafeChangeSentence(sentence, { negativePrefix, contrast }) {
+function isSafeChangeSentence(
+  sentence,
+  { negativePrefix, contrast, qualifier },
+) {
+  const normalized = normalizedSentence(sentence);
   return (
-    SAFE_CHANGE_SENTENCES.has(normalizedSentence(sentence)) &&
+    (SAFE_CHANGE_SENTENCES.has(normalized) ||
+      SAFE_CHANGE_PATTERNS.some((pattern) => pattern.test(normalized))) &&
     !negativePrefix.test(sentence) &&
-    !contrast.test(sentence)
+    !contrast.test(sentence) &&
+    !qualifier.test(sentence)
   );
 }
 
@@ -98,8 +117,14 @@ function hasVerifiedDescriptiveVerdict({
   negativePrefix,
   contrast,
   incompletePhrase,
+  qualifier,
 }) {
-  const predicates = { negativePrefix, contrast, incomplete: incompletePhrase };
+  const predicates = {
+    negativePrefix,
+    contrast,
+    incomplete: incompletePhrase,
+    qualifier,
+  };
   if (
     incomplete ||
     adverse ||
@@ -175,6 +200,8 @@ function parseNativeReview(raw, root = process.cwd()) {
   const NEGATIVE_PREFIX =
     /\b(?:not|never|cannot|can't|fails? to|does not|doesn't|no longer)\b/i;
   const CONTRAST = /\b(?:but|however)\b|;/i;
+  const QUALIFIER =
+    /\b(?:except|unless|apart from|other than|aside from|only|superficially|partially|partly|appears? to|seems? to|may|might|could|possibly|likely|unclear|uncertain)\b/i;
   const INCOMPLETE =
     /\b(?:could ?n[o']?t be reviewed|ended unexpectedly|was (?:truncated|interrupted|incomplete)|(?:review|analysis) was (?:not )?completed|another (?:path|file))\b/i;
   const rawText = String(raw);
@@ -213,6 +240,7 @@ function parseNativeReview(raw, root = process.cwd()) {
     negativePrefix: NEGATIVE_PREFIX,
     contrast: CONTRAST,
     incompletePhrase: INCOMPLETE,
+    qualifier: QUALIFIER,
   });
   if (findings.length === 0 && !cleanVerdict && !verifiedDescriptiveVerdict) {
     throw new Error("native Codex review has no recognizable verdict");
