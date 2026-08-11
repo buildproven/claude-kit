@@ -17,22 +17,6 @@ const path = require("node:path");
 
 const SCRIPT = path.resolve(__dirname, "..", "quality-verify-app.sh");
 
-// The complete suite launches nested quality/install fixtures that may run a
-// second Vitest process concurrently. Fixed test ports then collide across
-// otherwise-isolated processes before the app-verification gate even starts.
-// Reserve a small port block per test-process PID; each fixture only needs one
-// port and this file uses fewer than the 32 slots in its block.
-const FIXTURE_PORT_BLOCK_SIZE = 32;
-const FIXTURE_PORT_BLOCKS = 1200;
-let nextFixturePort =
-  20_000 + (process.pid % FIXTURE_PORT_BLOCKS) * FIXTURE_PORT_BLOCK_SIZE;
-
-function fixturePort() {
-  const port = nextFixturePort;
-  nextFixturePort += 1;
-  return port;
-}
-
 function hasBinary(name) {
   const result = spawnSync("bash", ["-c", `command -v ${name}`]);
   return result.status === 0;
@@ -51,6 +35,37 @@ function run(cwd, env = {}, bashBin = "bash") {
     stdout: result.stdout || "",
     stderr: result.stderr || "",
   };
+}
+
+// These fixtures boot real servers and may run at the same time as another
+// quality campaign in a different process or worktree. Allocate each test
+// port through the OS instead of sharing a hard-coded range between runs.
+// The short-lived allocator closes its listener before the fixture starts;
+// the gate still owns the authoritative pre-launch check.
+function allocatePort() {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "-e",
+      [
+        "const net = require('node:net');",
+        "const server = net.createServer();",
+        "server.listen(0, '127.0.0.1', () => {",
+        "  process.stdout.write(String(server.address().port));",
+        "  server.close();",
+        "});",
+      ].join("\n"),
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0) {
+    throw new Error(`could not allocate a test port: ${result.stderr}`);
+  }
+  const port = Number(result.stdout.trim());
+  if (!Number.isInteger(port) || port < 1024) {
+    throw new Error(`OS returned an invalid test port: ${result.stdout}`);
+  }
+  return port;
 }
 
 // The system /bin/bash on macOS is genuinely bash 3.2 (Apple froze it there
@@ -197,7 +212,7 @@ describe("quality-verify-app.sh", () => {
     // script and starts polling — otherwise wait_for_port succeeds against
     // the wrong, unrelated process and a dead dev script goes unnoticed.
     const dir = fixtureDir("port-squatted");
-    const port = fixturePort();
+    const port = allocatePort();
     const squatter = require("node:http").createServer((_req, res) => {
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end("<html><body>unrelated pre-existing service</body></html>");
@@ -237,16 +252,17 @@ describe("quality-verify-app.sh", () => {
     // to the zero-config port-detection path (which a downstream "0 flows
     // declared" parse would otherwise report as a clean pass).
     const dir = fixtureDir("malformed-flows");
+    const port = allocatePort();
     writePackageJson(dir, {
       name: "malformed-flows",
       version: "1.0.0",
       scripts: {
-        dev: "node -e \"require('http').createServer((q,r)=>r.end('ok')).listen(4622)\"",
+        dev: `node -e "require('http').createServer((q,r)=>r.end('ok')).listen(${port})"`,
       },
     });
     fs.writeFileSync(
       path.join(dir, ".quality-app-flows.json"),
-      '{ "port": 4622, "flows": [ ' /* deliberately truncated / invalid JSON */,
+      `{ "port": ${port}, "flows": [ ` /* deliberately truncated / invalid JSON */,
     );
     const { status, stderr } = run(dir, {
       QUALITY_VERIFY_APP_BOOT_TIMEOUT: "5",
@@ -260,7 +276,7 @@ describe("quality-verify-app.sh", () => {
     // remain a non-failure, zero-config fallback — only a present-but-broken
     // file is the bug being fixed.
     const dir = fixtureDir("absent-flows");
-    const port = fixturePort();
+    const port = allocatePort();
     writePackageJson(dir, {
       name: "absent-flows",
       version: "1.0.0",
@@ -283,7 +299,7 @@ describe("quality-verify-app.sh", () => {
     // literal-port scan of the command string would find it directly and
     // this test would not actually exercise the discovery fallback.
     const dir = fixtureDir("nonstandard-port");
-    const port = fixturePort();
+    const port = allocatePort();
     fs.mkdirSync(path.join(dir, "srv"));
     fs.writeFileSync(
       path.join(dir, "srv", "server.js"),
@@ -337,7 +353,7 @@ describe("quality-verify-app.sh", () => {
 
   it("boots a non-HTML server and passes without invoking a browser", () => {
     const dir = fixtureDir("json-server");
-    const port = fixturePort();
+    const port = allocatePort();
     fs.mkdirSync(path.join(dir, "srv"));
     fs.writeFileSync(
       path.join(dir, "srv", "server.js"),
@@ -352,7 +368,7 @@ describe("quality-verify-app.sh", () => {
     writePackageJson(dir, {
       name: "json-server",
       version: "1.0.0",
-      // The port is repeated in the script command itself (not just
+      // The allocated port is repeated in the script command itself (not just
       // inside server.js) so quality-verify-app.sh's literal port-scan of
       // the dev/start command string can discover it, matching how a real
       // repo's `dev: "PORT=<port> node srv/server.js"` convention would read.
@@ -396,7 +412,7 @@ describe("quality-verify-app.sh", () => {
         const dir = htmlFixture(
           "good-web",
           'console.log("boot ok")',
-          fixturePort(),
+          allocatePort(),
         );
         const { status, stdout } = run(dir);
         expect(status).toBe(0);
@@ -409,7 +425,7 @@ describe("quality-verify-app.sh", () => {
         const dir = htmlFixture(
           "broken-web",
           'throw new Error("boom on mount")',
-          fixturePort(),
+          allocatePort(),
         );
         const { status, stderr } = run(dir);
         expect(status).not.toBe(0);
@@ -425,7 +441,7 @@ describe("quality-verify-app.sh", () => {
         // response, which here is real HTML with a script that throws, so
         // the browser check must actually run and catch it.
         const dir = fixtureDir("redirect-web");
-        const port = fixturePort();
+        const port = allocatePort();
         fs.mkdirSync(path.join(dir, "srv"));
         fs.writeFileSync(
           path.join(dir, "srv", "server.js"),
@@ -468,7 +484,7 @@ describe("quality-verify-app.sh", () => {
         // for `errors --json`, and asserts the gate fails loudly rather
         // than reporting a clean pass.
         const dir = fixtureDir("fake-ab-errors-fail");
-        const port = fixturePort();
+        const port = allocatePort();
         fs.mkdirSync(path.join(dir, "srv"));
         fs.writeFileSync(
           path.join(dir, "srv", "server.js"),
@@ -525,7 +541,7 @@ describe("quality-verify-app.sh", () => {
         // check ran, which this scenario never trips. The fix must query
         // the console buffer after each step too.
         const dir = fixtureDir("flow-console-error");
-        const port = fixturePort();
+        const port = allocatePort();
         const html =
           "<!doctype html><html><body>" +
           '<button id="go" onclick="console.error(\'mid-flow console error\')">go</button>' +
@@ -569,7 +585,7 @@ describe("quality-verify-app.sh", () => {
           // one declared flow step — under the real system bash exercises
           // the STEP_ARGS-building line directly: pre-fix, this aborts with
           // "readarray: command not found" before the step ever runs.
-          const port = fixturePort();
+          const port = allocatePort();
           const dir = htmlFixture(
             "bash32-flow",
             'console.log("boot ok")',

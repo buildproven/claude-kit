@@ -200,11 +200,14 @@ node "$QUALITY_SCRIPTS_DIR/quality-terminal-status.js" --manifest "<exact-manife
 ## 5. Evidence, CI, and optional merge
 
 If `options.merge` is false, report the verified result after telemetry. If true,
-only `quality-stamp-and-merge.sh` may authorize the merge. It requires contiguous
-review checkpoints covering the final change, valid canonical `Quality-*` evidence,
-zero deterministic findings, current manifest identity, required green CI, fresh base, and the
-required merge authority. Never use `gh pr merge`, `--no-verify`, a forged
-trailer, a skipped review, or a weaker tier to bypass these checks.
+only `quality-stamp-and-merge.sh` may authorize the merge. New campaigns keep the
+reviewed HEAD immutable and publish signed evidence through the
+`quality-review-evidence` check run; legacy campaigns may resume an existing empty
+stamp. Either path requires contiguous review checkpoints covering the final change,
+valid exact-head evidence, zero deterministic findings, current manifest identity,
+required green CI, fresh base, and the required merge authority. Never use
+`gh pr merge`, `--no-verify`, a forged trailer, a skipped review, or a weaker tier
+to bypass these checks.
 
 contiguous review checkpoints are mandatory.
 
@@ -238,9 +241,9 @@ QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}"
 bash "$QUALITY_SCRIPTS_DIR/quality-stamp-and-merge.sh" --manifest "<exact-manifest-path>"
 ```
 
-The script must prove that the merge landed at the reviewed SHA and then run
+The script must prove that the merge landed at the exact reviewed SHA and then run
 worktree-aware cleanup. A billing preallocation waiver is allowed only under the
-narrow conditions in `checklist.md`.
+narrow conditions in `checklist.md`; it never waives signed review evidence.
 
 CI remains required except on a plan-proven unprotectable private repository.
 

@@ -155,38 +155,36 @@ describe("quality merge gates", () => {
     expect(STAMP_AND_MERGE).not.toMatch(/quality-repo-lease\.js" release/);
   });
 
-  it("persists success terminal states before cleanup or telemetry", () => {
-    const alreadyMerged = STAMP_AND_MERGE.indexOf(
-      "BS_QUALITY_ALREADY_MERGED=true",
+  it("fails closed on already-merged PRs without pre-merge authorization", () => {
+    expect(STAMP_AND_MERGE).not.toContain("BS_QUALITY_ALREADY_MERGED=true");
+    expect(AUTHORIZE).toMatch(
+      /already merged at \$MERGED_EXPECTED_HEAD without this invocation's persisted pre-merge authorization/,
     );
-    const earlyTerminal = STAMP_AND_MERGE.indexOf(
-      "--state merged",
-      alreadyMerged,
-    );
-    const earlyCleanup = STAMP_AND_MERGE.indexOf(
-      "quality-merge-cleanup.sh",
-      alreadyMerged,
-    );
-    expect(earlyTerminal).toBeGreaterThan(alreadyMerged);
-    expect(earlyTerminal).toBeLessThan(earlyCleanup);
     expect(SKILL).toMatch(/--state verified-unmerged/);
     expect(SKILL.indexOf("--state verified-unmerged")).toBeLessThan(
       SKILL.indexOf('quality-telemetry.js" record'),
     );
   });
 
-  it("preflights without mutation and pushes one exact persisted remote ref", () => {
+  it("preflights without mutation and preserves legacy stamp resumability", () => {
     expect(STAMP_AND_MERGE).toMatch(/--manifest "\$MANIFEST" --preflight/);
-    expect(STAMP_AND_MERGE.indexOf("--preflight")).toBeLessThan(
-      STAMP_AND_MERGE.indexOf("git commit"),
-    );
+    expect(STAMP_AND_MERGE).toMatch(/if \[ -n "\$STAMP_HEAD" \]; then/);
     expect(STAMP_AND_MERGE).toMatch(
       /--force-with-lease="refs\/heads\/\$EXPECTED_HEAD_REF:\$PREFLIGHT_PR_HEAD"/,
     );
     expect(STAMP_AND_MERGE).toMatch(
       /"\$HEAD_REMOTE" "\$STAMP_HEAD:refs\/heads\/\$EXPECTED_HEAD_REF"/,
     );
-    expect(STAMP_AND_MERGE).not.toMatch(/^git push\s*$/m);
+    expect(STAMP_AND_MERGE).toMatch(
+      /quality-review-check\.js" publish --manifest "\$MANIFEST"/,
+    );
+    expect(STAMP_AND_MERGE).toMatch(
+      /if \[ -z "\$STAMP_HEAD" \] && \[ "\$PREFLIGHT_PR_HEAD" != "\$MERGE_HEAD" \]; then/,
+    );
+    expect(AUTHORIZE).toMatch(
+      /already merged at \$MERGED_EXPECTED_HEAD without this invocation's persisted pre-merge authorization/,
+    );
+    expect(STAMP_AND_MERGE).not.toMatch(/HUSKY=0 git commit --allow-empty/);
     expect(AUTHORIZE).toMatch(/repo\.githubRepository/);
     expect(AUTHORIZE).toMatch(/repo\.headRefName/);
     expect(AUTHORIZE).toMatch(/--repo "\$EXPECTED_REPOSITORY"/);
@@ -221,9 +219,10 @@ describe("quality merge gates", () => {
     expect(SKILL).not.toMatch(/--name (?:lint|test|security) -- </);
   });
 
-  it("persists one exact empty stamp and waits boundedly for its CI", () => {
+  it("publishes exact-head evidence and waits boundedly for candidate CI", () => {
     expect(STAMP_AND_MERGE).toMatch(/merge\.stampHead/);
     expect(STAMP_AND_MERGE).toMatch(/record-stamp/);
+    expect(STAMP_AND_MERGE).toMatch(/MERGE_HEAD="\$REVIEWED_HEAD"/);
     expect(STAMP_AND_MERGE).toMatch(/quality-run-bounded\.sh/);
     expect(STAMP_AND_MERGE).toMatch(/quality-required-checks\.js" wait/);
     expect(STAMP_AND_MERGE).toMatch(
@@ -234,7 +233,7 @@ describe("quality merge gates", () => {
     ).toBeLessThan(STAMP_AND_MERGE.lastIndexOf("quality-authorize-merge.sh"));
     expect(AUTHORIZE).toMatch(/persisted empty stamp/);
     expect(STAMP_AND_MERGE).toMatch(
-      /--head "\$STAMP_HEAD" --timeout "\$CI_TIMEOUT" --interval 10 \|\| RC=\$\?/,
+      /--head "\$MERGE_HEAD" --timeout "\$CI_TIMEOUT" --interval 10 \|\| RC=\$\?/,
     );
     expect(AUTHORIZE).toMatch(
       /quality-ci-billing-waiver\.js[\s\S]*LEASE_ADMIN=true/,

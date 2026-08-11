@@ -154,26 +154,26 @@ Add a repository-scoped merge lease to the public quality runtime.
     separately funded same-range retry before an incomplete attestation exists;
     schema-v2 plans migrate by splitting their already-reserved round allowance
     evenly without increasing the absolute start or time caps.
-11. The empty signed stamp remains the protected pull-request head, so required
-    CI is re-run for that exact commit before merge. Stamp publication resolves
-    the required contexts and GitHub App IDs from classic branch protection and
-    effective rulesets, maps each missing context to its reviewed-head Actions
-    workflow, and dispatches that workflow on the stamped branch. Registration,
-    completion, and final authorization read check-runs from the exact stamp SHA
-    and match both context and required App ID. They do not rely on the pull
-    request check rollup, which can omit a workflow-dispatch run even though its
-    commit check-run is authoritative. Missing mappings, unavailable required
-    contexts, wrong-app checks, unsuccessful conclusions, and timeouts all fail
-    closed; no status is synthesized and no protection is bypassed. A classic
-    protection read may be empty only for GitHub's explicit `404 Branch not
-protected` response. Ruleset reads and every other API failure remain hard
-    errors, so a partial observation cannot silently shrink the required set.
-    Before dispatch, the runner gives the ordinary pull-request event a bounded
-    registration window and accepts a dispatch failure only if exact-head
-    read-back proves the required check registered concurrently. Check-run
-    discovery follows every page declared by GitHub's `total_count`. A
-    plan-proven unprotectable repository has no required-context source, so it
-    retains the separate all-registered-PR-check waiter and final guard.
+11. New campaigns keep the reviewed pull-request head immutable and publish
+    signed `quality-review-evidence` on that exact commit. The check-run payload
+    binds the review, base, risk tier, deterministic findings, selected
+    reviewers, and v2 policy/diff evidence. Publication is idempotent, so an
+    interrupted run can resume without an empty commit or force-push. Required
+    CI remains tied to that same candidate SHA: publication resolves required
+    contexts and GitHub App IDs from classic branch protection and effective
+    rulesets, maps missing contexts to the candidate's Actions workflow, and
+    waits on exact-head check-runs. Final authorization verifies the signed
+    evidence and required checks from the exact candidate, never the PR rollup.
+    Missing mappings, unavailable required contexts, wrong-app checks,
+    unsuccessful conclusions, and timeouts fail closed; no status is
+    synthesized and no protection is bypassed. Existing campaigns with a
+    persisted empty stamp remain supported through the legacy path so they can
+    finish without creating another stamp. A classic protection read may be
+    empty only for GitHub's explicit `404 Branch not protected` response.
+    Ruleset reads and every other API failure remain hard errors, so a partial
+    observation cannot silently shrink the required set. A plan-proven
+    unprotectable repository has no required-context source, so it retains the
+    separate all-registered-PR-check waiter and final guard.
 
 ## Lease record
 
@@ -265,9 +265,11 @@ critical section, not to the campaign lease or its six-hour policy.
   complete attestation advances the review checkpoint.
 - Direct or break-glass merges outside quality remain visible policy violations;
   the lease does not pretend it can serialize actors that bypass the workflow.
-- A stamp is never merge-authorized from reviewed-head CI or a PR-level rollup;
-  every required context must be successful from its required GitHub App on the
-  exact persisted stamp SHA.
+- New evidence is never merge-authorized from reviewed-head CI or a PR-level
+  rollup; every required context must be successful from its required GitHub App
+  on the exact reviewed candidate SHA, and the signed evidence must verify for
+  that same SHA. Legacy stamped campaigns apply the same rule to their persisted
+  stamp SHA.
 
 ## Verification
 
@@ -330,10 +332,11 @@ critical section, not to the campaign lease or its six-hour policy.
   incomplete and merge-blocking.
 - Full repository verification, mutation evidence, protected CI, and
   exact-head review pass before release.
-- Stamp-CI regressions prove missing exact-head checks dispatch the corresponding
-  reviewed-head workflow once, wrong-app and stale failed runs do not authorize,
-  and final authorization reads the exact stamp check-runs rather than PR-level
-  check aggregation.
+- Exact-candidate CI regressions prove missing exact-head checks dispatch the
+  corresponding workflow once, wrong-app and stale failed runs do not authorize,
+  and final authorization reads exact candidate check-runs rather than PR-level
+  check aggregation. A compatibility regression covers interrupted legacy
+  stamped campaigns.
 
 ## Consequences
 
