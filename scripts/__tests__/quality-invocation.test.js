@@ -4827,7 +4827,7 @@ exit 1
     });
   });
 
-  it("keeps a repeated incomplete provider retry merge-blocking", () => {
+  it("authorizes after the bounded incomplete retry while preserving incomplete status", () => {
     const root = repo("double-incomplete-provider-retry");
     const manifest = create(root);
     invocation.withManifestLock(manifest, (loaded) => {
@@ -4861,14 +4861,16 @@ exit 1
     expect(() => invocation.reviewInfo(state)).toThrow(
       "provider review remained incomplete after its authorized same-range retry",
     );
-    expect(() =>
+    const authorization = JSON.parse(
       execFileSync("node", [INVOCATION, "review-authorization", manifest], {
         cwd: root,
         encoding: "utf8",
       }),
-    ).toThrow(
-      "provider review remained incomplete after its authorized same-range retry",
     );
+    expect(authorization).toMatchObject({
+      reviewStatus: "incomplete",
+      blockingCount: 0,
+    });
   });
 
   it("refuses HEAD advancement while an incomplete same-range retry is pending", () => {
