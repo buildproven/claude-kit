@@ -814,6 +814,16 @@ describe("quality merge gates", () => {
     expect(SKILL).toMatch(/contiguous review checkpoints/);
   });
 
+  it("does not downgrade a successful primary critical review to incomplete", () => {
+    // Fallback is availability-only. A clean Codex primary result must become
+    // ordinary complete evidence; otherwise the no-fallback path records a
+    // successful review that the merge authority can never consume.
+    expect(RUN_REVIEW).not.toMatch(/INCOMPLETE_DISCOVERY_ARGS/);
+    expect(RUN_REVIEW).not.toMatch(
+      /Critical discovery used one configured provider/,
+    );
+  });
+
   it("Quality-Findings is explicitly deterministic, not a model vote", () => {
     expect(SKILL).toMatch(/zero deterministic findings/);
     expect(SKILL).toMatch(/lead becomes merge-blocking only when converted/);

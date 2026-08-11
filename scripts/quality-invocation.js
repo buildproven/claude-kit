@@ -1306,54 +1306,6 @@ function sameWorkIgnoringReviewArm(existingIdentity, campaignIdentity) {
   );
 }
 
-// A diversity upgrade is deliberately narrower than provider failover. It is
-// the one recovery path for a completed critical review whose evidence says it
-// cannot satisfy the independent-provider requirement. It is not a way to
-// mint another provider budget for a timeout, malformed response, finding,
-// changed revision, or ordinary provider preference change. Both native and
-// bespoke predecessors are eligible: a bespoke campaign can terminalize after
-// its Claude leg is unavailable and only the Codex fallback completes.
-function diversityUpgradeEligibility(
-  existing,
-  existingIdentity,
-  campaignIdentity,
-) {
-  if (!sameWorkIgnoringReviewArm(existingIdentity, campaignIdentity))
-    return null;
-  if (campaignIdentity.options?.reviewArm !== "bespoke") return null;
-  // A predecessor may already be bespoke when its primary Claude leg was
-  // unavailable and the fallback panel completed without the required
-  // independent-provider diversity. The linked successor must still use the
-  // bespoke arm so Claude is the required provider on the fresh packet.
-  if (!["native", "bespoke"].includes(existing.options?.reviewArm)) return null;
-  if (existing.supersededBy?.invocationId) return null;
-  if (existing.terminalState?.state !== "provider-incomplete") return null;
-  if (existing.terminalState?.detail !== "critical-provider-diversity")
-    return null;
-  if (existing.risk?.tier !== "critical") return null;
-  if (!Array.isArray(existing.reviews) || existing.reviews.length === 0)
-    return null;
-  if (
-    !existing.reviews.some(
-      (review) =>
-        review.status === "incomplete" && review.provider !== "claude",
-    )
-  )
-    return null;
-  try {
-    verifyGateEvidence(existing);
-    if (!mutationEvidenceValid(existing)) return null;
-    // `leadCount` is persisted when the native evidence is recorded.  Any
-    // non-zero count means the prior run has an unresolved code lead; do not
-    // reopen it under a different provider policy.
-    if (existing.reviews.some((review) => (review.leadCount || 0) !== 0))
-      return null;
-  } catch {
-    return null;
-  }
-  return "critical exact-head discovery lacked required provider diversity";
-}
-
 function supersedingManifest(
   existingPath,
   existing,
@@ -1588,6 +1540,32 @@ function providerRecoveryEligibility(
   };
 }
 
+// A deliberate pre-review supersession is an orchestration interruption, not
+// a quality verdict. It needs a new immutable packet: the
+// old packet is terminal and cannot be resumed, while the deterministic
+// identity otherwise resolves every fresh bootstrap back to that terminal
+// packet. This is intentionally narrower than a generic rerun. Once a review,
+// provider attempt, or failed gate exists, replacing the packet would let an
+// operator discard adverse evidence by labelling the campaign "superseded".
+function supersededCampaignRecoveryEligibility(
+  existing,
+  existingIdentity,
+  campaignIdentity,
+) {
+  if (
+    JSON.stringify(canonicalJson(existingIdentity)) !==
+    JSON.stringify(canonicalJson(campaignIdentity))
+  )
+    return null;
+  if (existing.terminalState?.state !== "superseded") return null;
+  if (existing.supersededBy?.invocationId) return null;
+  if ((existing.reviews || []).length !== 0) return null;
+  if ((existing.governor?.providerAttempts || []).length !== 0) return null;
+  if ((existing.gates || []).some((gate) => gate.status !== "success"))
+    return null;
+  return "explicit resume after superseded campaign";
+}
+
 function providerRecoveryManifest(
   existingPath,
   existing,
@@ -1609,9 +1587,56 @@ function providerRecoveryManifest(
   return manifestPath;
 }
 
-function existingCampaign(manifestPath, campaignIdentity) {
+function supersededCampaignSuccessor(
+  manifestPath,
+  existing,
+  supersessionChain,
+) {
+  if (
+    existing.terminalState?.state !== "superseded" ||
+    !existing.supersededBy?.manifestPath
+  )
+    return null;
+  const successorPath = existing.supersededBy.manifestPath;
+  if (supersessionChain.has(successorPath)) {
+    throw new Error("deterministic quality campaign identity collision");
+  }
+  const successor = loadManifest(successorPath);
+  if (
+    successor.manifest.supersedes?.invocationId !== existing.invocationId ||
+    successor.manifest.supersedes?.manifestPath !== manifestPath
+  ) {
+    throw new Error("deterministic quality campaign identity collision");
+  }
+  const nextChain = new Set(supersessionChain);
+  nextChain.add(manifestPath);
+  return { manifestPath: successor.manifestPath, supersessionChain: nextChain };
+}
+
+function existingCampaign(
+  manifestPath,
+  campaignIdentity,
+  supersessionChain = new Set(),
+) {
   const existing = loadManifest(manifestPath).manifest;
   const existingIdentity = manifestIdentity(existing);
+  // Fresh bootstraps always resolve the original deterministic path. When an
+  // eligible pre-review campaign has already been superseded, follow its
+  // immutable successor link instead of returning the terminal predecessor.
+  // Validate the reciprocal link and reject a cycle so a local manifest edit
+  // cannot turn a resume into an unbounded traversal or an unrelated packet.
+  const successor = supersededCampaignSuccessor(
+    manifestPath,
+    existing,
+    supersessionChain,
+  );
+  if (successor) {
+    return existingCampaign(
+      successor.manifestPath,
+      campaignIdentity,
+      successor.supersessionChain,
+    );
+  }
   const environmentReason = environmentRecoveryEligibility(
     existing,
     existingIdentity,
@@ -1643,26 +1668,21 @@ function existingCampaign(manifestPath, campaignIdentity) {
       providerRecovery,
     );
   }
-  const diversityReason = diversityUpgradeEligibility(
+  const supersededRecovery = supersededCampaignRecoveryEligibility(
     existing,
     existingIdentity,
     campaignIdentity,
   );
-  if (diversityReason) {
+  if (supersededRecovery) {
     return supersedingManifest(
       manifestPath,
       existing,
       campaignIdentity,
-      diversityReason,
-      "diversityUpgradeOf",
+      supersededRecovery,
+      "supersededCampaign",
     );
   }
-  if (
-    existing.environmentRecovery?.supersededBy ||
-    (existing.supersededBy?.invocationId &&
-      existing.supersededBy?.reason ===
-        "critical exact-head discovery lacked required provider diversity")
-  ) {
+  if (existing.environmentRecovery?.supersededBy) {
     throw new Error("deterministic quality campaign identity collision");
   }
   if (
@@ -3836,13 +3856,11 @@ function recordReview(manifest, options) {
     diffSha256: options["diff-sha"],
     provider: options.provider,
   });
-  const primaryProvider = options.primary || manifest.provider?.primary || null;
-  const fallbackProvider =
-    options.fallback || manifest.provider?.fallback || "none";
-  const criticalSingleProvider =
-    (manifest.reviewContractVersion || 1) >= 2 &&
-    manifest.risk.tier === "critical" &&
-    (fallbackProvider === "none" || options.provider === primaryProvider);
+  if (options.incomplete === true) {
+    throw new Error(
+      "completed provider review cannot be marked incomplete; use record-incomplete-review",
+    );
+  }
   manifest.reviews.push({
     round: expected.round,
     attempt: expected.attempt,
@@ -3858,10 +3876,7 @@ function recordReview(manifest, options) {
       ),
     ),
     artifactDir: path.resolve(options["artifact-dir"]),
-    status:
-      options.incomplete === true || criticalSingleProvider
-        ? "incomplete"
-        : "success",
+    status: "success",
     tier: boundExpected.tier,
     agentsSha256: boundExpected.agentsSha256,
     incompletePanel: Boolean(manifest.panel?.incomplete),
