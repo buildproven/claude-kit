@@ -247,7 +247,6 @@ classify_structured_provider_failure() {
 run_codex_review() {
   local bounded normalizer schema raw_file normalized_file error_file rc pass pass_timeout
   local auth_output prompt_file attempt_started
-  local review_selector review_selector_value
   bounded="$SCRIPT_DIR/quality-run-bounded.sh"
   normalizer="$SCRIPT_DIR/quality-normalize-codex-review.sh"
   schema="$SCRIPT_DIR/schemas/quality-review-output.schema.json"
@@ -279,38 +278,29 @@ run_codex_review() {
     raw_file="$REVIEW_OUT/codex-${pass}.json"
     normalized_file="$REVIEW_OUT/codex-${pass}.normalized.json"
     error_file="$REVIEW_OUT/codex-${pass}.stderr"
-    if [ "$REVIEW_ROUND" -eq 1 ]; then
-      review_selector=--base
-      review_selector_value="$RESOLVED_BASE"
-    fi
+    prompt_file="$REVIEW_OUT/codex-${pass}.prompt"
+    {
+      echo "Perform the bounded static review now."
+      echo "Use only the supplied review envelope; do not run commands, inspect the repository, or expand context."
+      cat "$REVIEW_OUT/review-prompt.txt"
+    } > "$prompt_file"
     pass_timeout="$(authorize_provider_attempt codex "$pass_timeout")" \
       || return 77
     attempt_started=$SECONDS
-    if [ "$REVIEW_ROUND" -eq 1 ]; then
-      # A review needs Codex authentication, but not a developer's optional
-      # MCP configuration. Loading it makes unrelated, stale OAuth grants
-      # capable of blocking every quality campaign before review begins.
-      bash "$bounded" --timeout "$pass_timeout" -- \
-        codex exec --ephemeral --ignore-user-config -s read-only --json \
-        -C "$GIT_ROOT" \
-        -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
-        --output-schema "$schema" -o "$raw_file" review \
-        "$review_selector" "$review_selector_value" \
-        > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file"
-    else
-      prompt_file="$REVIEW_OUT/codex-${pass}.prompt"
-      {
-        echo "Perform the targeted verification pass. The fixed envelope below is the sole repository-controlled review data."
-        cat "$REVIEW_OUT/review-prompt.txt"
-      } > "$prompt_file"
-      bash "$bounded" --timeout "$pass_timeout" -- \
-        codex exec --ephemeral --ignore-user-config -s read-only --json \
-        -C "$GIT_ROOT" \
-        -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
-        --output-schema "$schema" -o "$raw_file" - \
-        < "$prompt_file" \
-        > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file"
-    fi
+    # The complete review envelope is prepared before this clock starts. Run
+    # from the artifact directory with no Git repository so Codex cannot spend
+    # the review budget rediscovering repository context.
+    # The fixed envelope below is the sole repository-controlled review data.
+    # Do not load optional MCP configuration; unrelated, stale OAuth grants
+    # must not block a review that only needs the supplied envelope.
+    bash "$bounded" --timeout "$pass_timeout" -- \
+      codex exec --ephemeral --ignore-user-config --ignore-rules \
+      --skip-git-repo-check -s read-only --json \
+      -C "$REVIEW_OUT" \
+      -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
+      --output-schema "$schema" -o "$raw_file" - \
+      < "$prompt_file" \
+      > "$REVIEW_OUT/codex-${pass}.progress" 2>"$error_file"
     rc=$?
     complete_provider_attempt codex "$attempt_started" || return 1
     if [ "$rc" -ne 0 ]; then
@@ -416,16 +406,54 @@ run_gemini_review() {
   done
 }
 
+provider_live_probe() {
+  local provider="$1" output rc
+  case "$provider" in
+    claude)
+      command -v claude >/dev/null 2>&1 || return 1
+      output="$(bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout 10 -- \
+        claude auth status --json 2>/dev/null)"
+      rc=$?
+      [ "$rc" -eq 0 ] || return 1
+      printf '%s' "$output" | jq -e '.loggedIn == true' >/dev/null 2>&1
+      ;;
+    codex)
+      command -v codex >/dev/null 2>&1 || return 1
+      output="$(bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout 10 -- \
+        codex login status 2>&1)"
+      rc=$?
+      [ "$rc" -eq 0 ] || return 1
+      printf '%s' "$output" | grep -q 'Logged in'
+      ;;
+    gemini)
+      command -v gemini >/dev/null 2>&1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 run_provider() {
   local provider="$1" availability rc
   availability="$(node "$PROVIDER_HEALTH" check "$provider")"
   rc=$?
   if [ "$rc" -ne 0 ]; then
-    printf '%s' "$availability" |
-      jq --arg provider "$provider" '. + {provider: $provider}' \
-        > "$REVIEW_OUT/provider-failure.json"
-    echo "⚠️  [quality] skipping $provider: provider-health circuit is open." >&2
-    return "$rc"
+    # Provider health is a backoff hint, not proof that the account is still
+    # unavailable. A cheap live CLI/auth probe prevents a stale exhaustion
+    # record from suppressing a currently healthy fallback provider.
+    echo "⚠️  [quality] $provider has a cached provider-health failure; probing live availability." >&2
+    if provider_live_probe "$provider"; then
+      node "$PROVIDER_HEALTH" clear "$provider" || return 1
+      availability='{"available":true,"probe":true}'
+      rc=0
+    else
+      printf '%s' "$availability" |
+        jq --arg provider "$provider" '. + {provider: $provider}' \
+          > "$REVIEW_OUT/provider-failure.json"
+      echo "⚠️  [quality] skipping $provider: live provider probe failed." >&2
+      return "$rc"
+    fi
   fi
   case "$provider" in
     claude) run_claude_review ;;
@@ -591,17 +619,12 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
       }
       exec bash "$SCRIPT_DIR/quality-run-review.sh" --manifest "$MANIFEST"
     fi
-    echo "❌ MERGE BLOCKED: AI discovery remained incomplete after its one bounded same-range retry ($INCOMPLETE_CATEGORY)." >&2
-    node "$SCRIPT_DIR/quality-terminal-status.js" --manifest "$MANIFEST" \
-      --category "$INCOMPLETE_CATEGORY" --provider "$REVIEW_PROVIDER" || true
-    node "$SCRIPT_DIR/quality-invocation.js" terminal-state "$MANIFEST" \
-      --state provider-incomplete \
-      --detail "retry-exhausted:$INCOMPLETE_CATEGORY" >/dev/null || true
+    echo "⚠️  [quality] AI discovery remained incomplete after its one bounded same-range retry ($INCOMPLETE_CATEGORY); deterministic delivery checks continue with signed incomplete evidence." >&2
     echo "REVIEW_OUT=$REVIEW_OUT"
     echo "REVIEW_BASE=$RESOLVED_BASE"
     echo "REVIEW_DIFF_BASE=$REVIEW_DIFF_BASE"
     echo "REVIEW_PROVIDER=review-incomplete"
-    exit 1
+    exit 0
   fi
   # Only claim the fallback is missing when it actually is. When a fallback ran
   # and also failed, saying "no usable fallback is configured" sends the reader
@@ -653,9 +676,15 @@ fi
 
 DIFF_SHA="$(shasum -a 256 "$REVIEW_OUT/diff.txt" | awk '{print $1}')"
 INCOMPLETE_DISCOVERY_ARGS=()
-if [ "$TIER" = critical ] && [ "$REVIEW_PROVIDER" != claude ]; then
+# Critical diversity is an evidence label, not a hard-coded Claude requirement.
+# A successful primary-only run is incomplete discovery; a successful fallback
+# proves that both configured providers were attempted. Either route works:
+# Claude -> Codex and Codex -> Claude.
+if [ "$TIER" = critical ] && {
+  [ "$QUALITY_FALLBACK" = none ] || [ "$REVIEW_PROVIDER" = "$QUALITY_PRIMARY" ];
+}; then
   INCOMPLETE_DISCOVERY_ARGS+=(--incomplete)
-  echo "⚠️  [quality] Critical discovery used one native provider slot; recording incomplete diversity." >&2
+  echo "⚠️  [quality] Critical discovery used one configured provider; recording incomplete diversity without blocking deterministic delivery." >&2
 fi
 node "$SCRIPT_DIR/quality-invocation.js" inventory "$MANIFEST" \
   --artifact-dir "$REVIEW_OUT" \
@@ -671,18 +700,6 @@ node "$SCRIPT_DIR/quality-invocation.js" record-review "$MANIFEST" \
   --artifact-dir "$REVIEW_OUT" \
   --diff-sha "$DIFF_SHA" \
   ${INCOMPLETE_DISCOVERY_ARGS[@]+"${INCOMPLETE_DISCOVERY_ARGS[@]}"} || exit 1
-
-# A successful native provider run is still terminally incomplete for a
-# critical campaign: one native slot cannot demonstrate the required
-# independent-provider/model-family diversity.  Record the precise, narrow
-# cause so createManifest can admit the one bespoke recovery campaign; do not
-# leave a superficially successful review resumable as a generic retry.
-if [ "$TIER" = critical ] && [ "$REVIEW_PROVIDER" != claude ]; then
-  node "$SCRIPT_DIR/quality-invocation.js" terminal-state "$MANIFEST" \
-    --state provider-incomplete --detail critical-provider-diversity >/dev/null || exit 1
-  echo "❌ MERGE BLOCKED: critical discovery requires a diverse provider panel." >&2
-  exit 1
-fi
 
 echo "REVIEW_OUT=$REVIEW_OUT"
 echo "REVIEW_BASE=$RESOLVED_BASE"

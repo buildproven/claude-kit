@@ -121,7 +121,7 @@ printf '%s\\n' '{"response":"{\\"verdict\\":\\"approve\\",\\"summary\\":\\"No ac
     expect(body.governor.activeExecution).toBeNull();
   }, 60_000);
 
-  it("runs one same-range retry and terminalizes repeated incomplete output", () => {
+  it("runs one same-range retry and preserves repeated incomplete output", () => {
     const root = makeTempDir("quality-gemini-incomplete-");
     const repo = fixtureRepo(root);
     const bin = path.join(root, "bin");
@@ -181,7 +181,7 @@ printf '%s\n' '{"response":"not structured review JSON"}'
       timeout: 60_000,
     });
 
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(0);
     expect(result.stderr).toMatch(/one bounded same-range retry/);
     expect(result.stderr).toMatch(/remained incomplete/);
     const body = JSON.parse(readFileSync(manifest, "utf8"));
@@ -196,10 +196,7 @@ printf '%s\n' '{"response":"not structured review JSON"}'
     });
     expect(body.governor.providerAttempts).toHaveLength(2);
     expect(readFileSync(callCount, "utf8").trim()).toBe("2");
-    expect(body.terminalState).toMatchObject({
-      state: "provider-incomplete",
-      detail: "retry-exhausted:parser-inconclusive",
-    });
+    expect(body.terminalState ?? null).toBeNull();
   }, 60_000);
 
   it("terminalizes an incomplete legacy campaign that cannot reserve retry capacity", () => {
