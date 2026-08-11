@@ -187,12 +187,12 @@ function validateStandaloneEvidence(record, currentBase, repository) {
   if (record.evidence.findings !== 0) {
     fail("quality evidence contains blocking findings");
   }
-  if (
-    !["complete", "incomplete", "policy-exempt"].includes(
-      record.evidence.reviewStatus,
-    )
-  ) {
-    fail("quality evidence review status is invalid");
+  // This is the standalone required-check boundary. A manifest-bound merge
+  // authorization may preserve incomplete AI discovery as advisory under the
+  // ADR, but external branch protection must never treat that state as a
+  // successful review check. Low-tier policy exemption remains explicit.
+  if (!["complete", "policy-exempt"].includes(record.evidence.reviewStatus)) {
+    fail("standalone verification requires complete review evidence");
   }
 }
 
