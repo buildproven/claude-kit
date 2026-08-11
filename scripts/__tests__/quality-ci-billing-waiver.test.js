@@ -51,6 +51,7 @@ describe("quality CI billing waiver", () => {
       head,
       failedJobs: [{ check: "test", jobId: "34" }],
     });
+    expect(classify().evidenceSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(jobIsPreallocationBillingFailure(job)).toBe(true);
     expect(parseJobId(check.link, repository)).toBe("34");
   });

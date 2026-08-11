@@ -2264,7 +2264,7 @@ exec "${realGit}" "$@"
     });
   });
 
-  it("issues a distinct operator-ci-billing-override scope, never satisfying an operator-quality-override check or vice versa", () => {
+  it("rejects a billing override that tries to waive ordinary gates", () => {
     const root = repo("approval-command-ci-billing");
     const head = git(root, ["rev-parse", "HEAD"]);
     const base = git(root, ["rev-parse", "origin/main"]);
@@ -2314,9 +2314,7 @@ exec "${realGit}" "$@"
           "--ci-failure",
           "failed",
           "--accept",
-          "gate:lint,gate:test,gate:security,ci:failed",
-          "--i-understand-test-risk",
-          "--i-understand-security-risk",
+          "ci:failed",
           "--i-understand-missing-ci",
           "--target-dir",
           root,
@@ -2331,56 +2329,8 @@ exec "${realGit}" "$@"
       encoding: "utf8",
       env: approveEnv,
     });
-    expect(result.status, result.stderr).toBe(0);
-    const manifest = result.stdout
-      .split("\n")
-      .find((line) => line.startsWith("BS_QUALITY_MANIFEST="))
-      ?.slice("BS_QUALITY_MANIFEST=".length);
-    expect(JSON.parse(readFileSync(manifest, "utf8")).approval.scope).toBe(
-      "operator-ci-billing-override",
-    );
-    // The capability is valid overall...
-    expect(
-      spawnSync("node", [INVOCATION, "approval-valid", manifest], {
-        cwd: root,
-      }).status,
-    ).toBe(0);
-    // ...and satisfies a check for its own scope...
-    expect(
-      spawnSync(
-        "node",
-        [
-          INVOCATION,
-          "approval-scope",
-          manifest,
-          "--scope",
-          "operator-ci-billing-override",
-        ],
-        { cwd: root },
-      ).status,
-    ).toBe(0);
-    // ...but must never satisfy a check gated on the OTHER scope. A
-    // capability signed to accept a billing-related CI gap must not also
-    // be usable to accept unavailable/malformed review evidence.
-    expect(
-      spawnSync(
-        "node",
-        [
-          INVOCATION,
-          "approval-scope",
-          manifest,
-          "--scope",
-          "operator-quality-override",
-        ],
-        { cwd: root },
-      ).status,
-    ).not.toBe(0);
-    // A missing --scope must fail closed, not silently pass.
-    expect(
-      spawnSync("node", [INVOCATION, "approval-scope", manifest], {
-        cwd: root,
-      }).status,
-    ).not.toBe(0);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/cannot accept non-CI conditions/);
   });
 
   it("rejects an approve command combining --override-quality and --override-ci-billing", () => {

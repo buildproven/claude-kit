@@ -2565,8 +2565,9 @@ function bindPrRepositoryIdentity(manifest, options) {
 // fresh, explicit override decision rather than silently carrying forward.
 function approvalBaseMatches(manifest, approval) {
   return (
-    approval?.scope !== "operator-quality-override" ||
-    approval?.baseSha === manifest.revisions.baseSha
+    !["operator-quality-override", "operator-ci-billing-override"].includes(
+      approval?.scope,
+    ) || approval?.baseSha === manifest.revisions.baseSha
   );
 }
 
@@ -2665,6 +2666,7 @@ function approvalValid(manifest) {
       "approval capability",
     );
     const payload = artifact.payload;
+    assertApprovalPayloadShape(manifest, payload);
     return (
       approvalPayloadIdentityMatches(manifest, approval, payload) &&
       capabilitySignatureValid(manifest, artifact)
@@ -2806,8 +2808,13 @@ function assertApprovalRequiredIdentityMatches(payload, requiredIdentity) {
 // reason and a non-empty list of accepted condition ids — this is what makes
 // the attached approval an accountable, named decision rather than a blanket
 // bypass (BUI-575). A standard (non-override) payload is unaffected.
-function assertOverridePayloadShape(payload) {
-  if (payload?.scope !== "operator-quality-override") return;
+function assertApprovalPayloadShape(manifest, payload) {
+  if (
+    payload?.scope !== "operator-quality-override" &&
+    payload?.scope !== "operator-ci-billing-override"
+  ) {
+    return;
+  }
   if (typeof payload.reason !== "string" || payload.reason.trim() === "") {
     throw new Error("operator override capability is missing --reason");
   }
@@ -2819,6 +2826,46 @@ function assertOverridePayloadShape(payload) {
     throw new Error(
       "operator override capability is missing accepted condition ids",
     );
+  }
+  if (payload.scope === "operator-ci-billing-override") {
+    if (
+      !/^ci:failed$/.test(payload.acceptedConditions[0]) ||
+      payload.acceptedConditions.length !== 1
+    ) {
+      throw new Error(
+        "CI billing override capability must accept exactly ci:failed",
+      );
+    }
+    if (!/^[a-f0-9]{64}$/.test(payload.ciBillingEvidenceSha256 || "")) {
+      throw new Error(
+        "CI billing override capability is missing evidence binding",
+      );
+    }
+    const artifactPath = path.join(
+      manifest.stateRoot,
+      "ci-billing-waiver.json",
+    );
+    let evidence;
+    try {
+      evidence = parseJson(
+        fs.readFileSync(artifactPath, "utf8"),
+        "CI billing waiver evidence",
+      );
+    } catch (error) {
+      throw new Error("CI billing waiver evidence is missing", {
+        cause: error,
+      });
+    }
+    if (
+      evidence.repository !== manifest.repo.githubRepository ||
+      evidence.head !== manifest.revisions.currentHead ||
+      evidence.category !== "github-actions-billing-preallocation" ||
+      !Array.isArray(evidence.failedJobs) ||
+      evidence.failedJobs.length === 0 ||
+      evidence.evidenceSha256 !== payload.ciBillingEvidenceSha256
+    ) {
+      throw new Error("CI billing waiver evidence binding is invalid");
+    }
   }
 }
 
@@ -2845,7 +2892,7 @@ function attachApproval(manifest, options) {
   };
   assertApprovalChallengeMatches(manifest, payload);
   assertApprovalRequiredIdentityMatches(payload, requiredIdentity);
-  assertOverridePayloadShape(payload);
+  assertApprovalPayloadShape(manifest, payload);
   validateApprovalPayload(payload);
   if (!capabilitySignatureValid(manifest, artifact)) {
     throw new Error("approval capability signature is invalid");
@@ -2862,6 +2909,7 @@ function attachApproval(manifest, options) {
     acceptedConditions: Array.isArray(payload.acceptedConditions)
       ? payload.acceptedConditions
       : [],
+    ciBillingEvidenceSha256: payload.ciBillingEvidenceSha256 || null,
     artifactPath,
     artifactSha256: sha256File(artifactPath),
     // Patch-id of the reviewed diff at approval time, cached so a later

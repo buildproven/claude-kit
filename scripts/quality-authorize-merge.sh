@@ -158,6 +158,15 @@ else
       echo "❌ MERGE BLOCKED: CI billing waiver no longer matches live exact-HEAD evidence." >&2
       exit 1
     }
+    if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
+      --scope operator-ci-billing-override >/dev/null 2>&1; then
+      SIGNED_WAIVER_DIGEST="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" approval.ciBillingEvidenceSha256)"
+      LIVE_WAIVER_DIGEST="$(jq -r '.evidenceSha256 // empty' "$CI_BILLING_WAIVER_ARTIFACT")"
+      [ -n "$SIGNED_WAIVER_DIGEST" ] && [ "$SIGNED_WAIVER_DIGEST" = "$LIVE_WAIVER_DIGEST" ] || {
+        echo "❌ MERGE BLOCKED: live CI billing evidence differs from the signed operator diagnosis." >&2
+        exit 1
+      }
+    fi
     CI_BILLING_WAIVED=true
   fi
 fi
@@ -442,6 +451,14 @@ if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
     echo "❌ MERGE BLOCKED: CI billing waiver changed before merge." >&2
     exit 1
   }
+  if [ "$OPERATOR_CI_BILLING_APPROVED" = true ]; then
+    SIGNED_WAIVER_DIGEST="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" approval.ciBillingEvidenceSha256)"
+    LIVE_WAIVER_DIGEST="$(jq -r '.evidenceSha256 // empty' "$CI_BILLING_WAIVER_ARTIFACT")"
+    [ -n "$SIGNED_WAIVER_DIGEST" ] && [ "$SIGNED_WAIVER_DIGEST" = "$LIVE_WAIVER_DIGEST" ] || {
+      echo "❌ MERGE BLOCKED: live CI billing evidence differs from the signed operator diagnosis." >&2
+      exit 1
+    }
+  fi
   LEASE_ADMIN=true
   echo "⚠️  [quality] using admin merge only for verified GitHub Actions billing preallocation failures." >&2
 fi

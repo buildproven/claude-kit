@@ -246,6 +246,30 @@ function assertOverrideRequestComplete(
   }
 }
 
+function assertCiBillingConditions(
+  scope,
+  ciFailureReason,
+  diagnosed,
+  accepted,
+) {
+  if (scope !== "operator-ci-billing-override") return;
+  const expected = `ci:${ciFailureReason}`;
+  const nonCiDiagnosed = diagnosed.filter(
+    (condition) => !condition.id.startsWith("ci:"),
+  );
+  const nonCiAccepted = accepted.filter(
+    (condition) => !condition.startsWith("ci:"),
+  );
+  if (nonCiDiagnosed.length > 0 || nonCiAccepted.length > 0) {
+    throw new Error(
+      "CI billing override cannot accept non-CI conditions; resolve local gates, mutation, and review first",
+    );
+  }
+  if (accepted.length !== 1 || accepted[0] !== expected) {
+    throw new Error(`CI billing override must accept exactly ${expected}`);
+  }
+}
+
 function parseApprovalCommand(argv) {
   const isOverrideVerb = argv[0] === "override";
   if (argv[0] !== "approve" && !isOverrideVerb) {
@@ -275,11 +299,9 @@ function parseApprovalCommand(argv) {
   const acceptedConditions = taxonomy.parseAcceptList(scanned.acceptRaw);
   if (
     scanned.scope === "operator-ci-billing-override" &&
-    !["missing", "failed", "pending", "stale"].includes(scanned.ciFailureReason)
+    scanned.ciFailureReason !== "failed"
   ) {
-    throw new Error(
-      "CI billing override requires --ci-failure <missing|failed|pending|stale>",
-    );
+    throw new Error("CI billing override requires --ci-failure failed");
   }
   assertOverrideRequestComplete(
     isOverride,
@@ -401,8 +423,57 @@ function resolveOverrideAcceptedConditions(
     ciFailureReason: expectedIdentity.ciFailureReason,
   });
   printOverrideDiagnosis(manifestPath, manifest, diagnosed);
+  assertCiBillingConditions(
+    expectedIdentity.scope,
+    expectedIdentity.ciFailureReason,
+    diagnosed,
+    requestedAccept,
+  );
   taxonomy.assertAcceptListComplete(diagnosed, requestedAccept);
   return requestedAccept;
+}
+
+function ensureCiBillingEvidence(manifest) {
+  const artifactPath = path.join(manifest.stateRoot, "ci-billing-waiver.json");
+  const result = spawnSync(
+    process.execPath,
+    [
+      path.join(__dirname, "quality-ci-billing-waiver.js"),
+      "--repo",
+      manifest.repo.githubRepository,
+      "--pr",
+      String(manifest.repo.pr),
+      "--head",
+      manifest.revisions.currentHead,
+      "--artifact",
+      artifactPath,
+    ],
+    { encoding: "utf8", timeout: 30_000, env: process.env },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      `CI billing override requires independently classified exact-head Actions evidence: ${
+        result.stderr.trim() || "classification failed"
+      }`,
+    );
+  }
+  const evidence = parseJson(
+    fs.readFileSync(artifactPath, "utf8"),
+    "CI billing waiver evidence",
+  );
+  if (
+    evidence.repository !== manifest.repo.githubRepository ||
+    evidence.head !== manifest.revisions.currentHead ||
+    evidence.category !== "github-actions-billing-preallocation" ||
+    !Array.isArray(evidence.failedJobs) ||
+    evidence.failedJobs.length === 0 ||
+    !/^[a-f0-9]{64}$/.test(evidence.evidenceSha256 || "")
+  ) {
+    throw new Error(
+      "CI billing waiver evidence is not bound to the exact PR head",
+    );
+  }
+  return evidence.evidenceSha256;
 }
 
 function issueApprovalCapability(
@@ -431,6 +502,10 @@ function issueApprovalCapability(
         expectedIdentity,
       )
     : [];
+  const ciBillingEvidenceSha256 =
+    scope === "operator-ci-billing-override"
+      ? ensureCiBillingEvidence(manifest)
+      : null;
   const payload = {
     schemaVersion: 1,
     repoKey: manifest.repo.key,
@@ -442,6 +517,7 @@ function issueApprovalCapability(
     scope,
     reason: isOverride ? expectedIdentity.reason : null,
     acceptedConditions,
+    ciBillingEvidenceSha256,
     issuedAt: issuedAt.toISOString(),
     expiresAt: new Date(issuedAt.getTime() + ttl * 1000).toISOString(),
     nonce: crypto.randomUUID(),

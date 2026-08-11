@@ -23,6 +23,25 @@ function parseJson(raw, label) {
   }
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicalJson(value[key])]),
+    );
+  }
+  return value;
+}
+
+function evidenceSha256(evidence) {
+  return require("node:crypto")
+    .createHash("sha256")
+    .update(JSON.stringify(canonicalJson(evidence)))
+    .digest("hex");
+}
+
 function parseJobId(link, repository) {
   const escaped = repository.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = String(link || "").match(
@@ -127,7 +146,7 @@ function classifyBillingWaiver({
       completedAt: job.completed_at,
     };
   });
-  return {
+  const evidence = {
     schemaVersion: 1,
     category: "github-actions-billing-preallocation",
     repository,
@@ -138,6 +157,10 @@ function classifyBillingWaiver({
     successfulOrSkippedChecks: checks
       .filter((check) => check.state !== WAIVABLE_STATE)
       .map((check) => ({ name: check.name, state: check.state })),
+  };
+  return {
+    ...evidence,
+    evidenceSha256: evidenceSha256(evidence),
   };
 }
 
