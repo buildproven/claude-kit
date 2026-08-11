@@ -244,6 +244,18 @@ describe("provider review runtime", () => {
     expect(runner).toContain("return 2");
   });
 
+  it("rechecks cached provider failures and keeps provider order neutral", () => {
+    const runner = readFileSync(RUN_REVIEW, "utf8");
+    expect(runner).toContain("provider_live_probe()");
+    expect(runner).toContain(
+      "cached provider-health failure; probing live availability",
+    );
+    expect(runner).toContain("claude auth status --json");
+    expect(runner).toContain("codex login status 2>&1");
+    expect(runner).toContain("Claude -> Codex and Codex -> Claude");
+    expect(runner).not.toMatch(/REVIEW_PROVIDER[^\n]*!= claude/);
+  });
+
   it("kills the provider tree when the wrapper itself is cancelled", () => {
     const dir = makeTempDir("bounded-cancel-");
     const pidFile = path.join(dir, "child.pid");
@@ -479,20 +491,20 @@ Quality-Evidence-Signature: ${signature}`;
     );
     expect(source).toMatch(/model_reasoning_effort=.*QUALITY_REVIEW_DEPTH/);
     expect(source).toMatch(
-      /codex exec --ephemeral --ignore-user-config -s read-only --json/,
+      /codex exec --ephemeral --ignore-user-config --ignore-rules \\\n\s+--skip-git-repo-check -s read-only --json/,
     );
     const boundedCodexCalls = source.match(
       /bash "\$bounded" --timeout "\$pass_timeout" -- \\\n\s+codex exec/g,
     );
-    expect(boundedCodexCalls).toHaveLength(2);
+    expect(boundedCodexCalls).toHaveLength(1);
     expect(source).not.toMatch(
       /bash "\$bounded" --timeout "\$pass_timeout" -- \\\n\s*#/,
     );
     expect(source).toMatch(
       /optional[\s\S]*MCP configuration[\s\S]*unrelated, stale OAuth grants/i,
     );
-    expect(source).toMatch(/-C "\$GIT_ROOT"/);
-    expect(source).toMatch(/review_selector=--base/);
+    expect(source).toMatch(/-C "\$REVIEW_OUT"/);
+    expect(source).not.toMatch(/review_selector=--base/);
     expect(source).not.toMatch(/review_selector=--commit/);
     expect(source).toMatch(/quality-review-input\.js/);
     expect(source).toMatch(

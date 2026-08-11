@@ -85,7 +85,9 @@ the actual reviewer.
 
 The review runner owns one bounded same-range retry for an incomplete v2
 provider-failure attestation. If that retry is also incomplete, it records
-`provider-incomplete` and stops before merge authorization.
+`reviewStatus: incomplete`, which remains visible in the signed trailers while
+deterministic gates continue to merge authorization. Provider availability is
+not itself a human-intervention gate.
 
 `--verify-app` (BUI-306) is opt-in only — never enabled by default. Every
 other gate (lint/type/build/test/security) proves the code compiles and its

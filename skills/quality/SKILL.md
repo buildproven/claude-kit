@@ -156,14 +156,15 @@ and fallback share one provider ledger. A successful initial review covers
 `base..HEAD`; after one batched fix, resume the same manifest for the incremental
 review. A verification finding is terminal: do not start a third review.
 
-An incomplete v2 provider-failure attestation does not advance the review
-checkpoint. The review runner itself authorizes and executes one bounded
-same-range retry before it returns. A second incomplete failure attestation
-records `provider-incomplete` and stops; do not advance HEAD or start another
-provider run between those attempts. Default runtime planning reserves its
-provider starts and cumulative execution time; an explicit operator provider
-time cap remains authoritative. This is separate from a completed critical
-review that truthfully records incomplete model-family diversity.
+An incomplete v2 provider-failure attestation records the exact failed attempt.
+The review runner itself authorizes and executes one bounded same-range retry
+before it returns. A second incomplete failure attestation remains explicitly
+`review-incomplete` and lets deterministic gates continue; it never becomes a
+synthetic clean verdict. Do not advance HEAD or start another provider run
+between those attempts. Default runtime planning reserves its provider starts
+and cumulative execution time; an explicit operator provider time cap remains
+authoritative. This is separate from a completed critical review that truthfully
+records incomplete model-family diversity.
 
 Critical discovery records effective slot identities and is complete only when
 the two Claude slots use distinct model families. A one-provider native run or

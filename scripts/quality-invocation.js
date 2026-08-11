@@ -3836,6 +3836,13 @@ function recordReview(manifest, options) {
     diffSha256: options["diff-sha"],
     provider: options.provider,
   });
+  const primaryProvider = options.primary || manifest.provider?.primary || null;
+  const fallbackProvider =
+    options.fallback || manifest.provider?.fallback || "none";
+  const criticalSingleProvider =
+    (manifest.reviewContractVersion || 1) >= 2 &&
+    manifest.risk.tier === "critical" &&
+    (fallbackProvider === "none" || options.provider === primaryProvider);
   manifest.reviews.push({
     round: expected.round,
     attempt: expected.attempt,
@@ -3852,10 +3859,7 @@ function recordReview(manifest, options) {
     ),
     artifactDir: path.resolve(options["artifact-dir"]),
     status:
-      options.incomplete === true ||
-      ((manifest.reviewContractVersion || 1) >= 2 &&
-        manifest.risk.tier === "critical" &&
-        options.provider !== "claude")
+      options.incomplete === true || criticalSingleProvider
         ? "incomplete"
         : "success",
     tier: boundExpected.tier,
@@ -5158,13 +5162,16 @@ function reviewAuthorization(manifest) {
     return operatorOverrideAuthorization(manifest);
   }
   const retry = incompleteRetryStatus(manifest);
-  if (retry.state !== "none") {
+  if (retry.state === "pending") {
     throw new Error(
-      retry.state === "exhausted"
-        ? "provider review remained incomplete after its authorized same-range retry"
-        : "provider review requires its authorized same-range retry before merge authorization",
+      "provider review requires its authorized same-range retry before merge authorization",
     );
   }
+  // An exhausted retry is durable evidence that the configured provider set
+  // was given its bounded chance. The review remains explicitly incomplete;
+  // deterministic gates, CI, exact-head freshness, and branch protection are
+  // still authoritative. Do not turn provider availability into a hidden
+  // human-intervention gate.
   const authorization = reviewCoverage(manifest);
   const covered = authorizationReviews(manifest);
   const evidenceSha256 = crypto
