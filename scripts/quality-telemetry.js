@@ -237,12 +237,17 @@ function reviewTokenProxy(manifest) {
 }
 
 function readableArtifactChars(file) {
+  let descriptor;
   try {
-    const stat = fs.lstatSync(file);
-    if (!stat.isFile() || stat.isSymbolicLink()) return 0;
-    return fs.readFileSync(file, "utf8").length;
+    const noFollow = fs.constants.O_NOFOLLOW || 0;
+    descriptor = fs.openSync(file, fs.constants.O_RDONLY | noFollow);
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile()) return 0;
+    return fs.readFileSync(descriptor, "utf8").length;
   } catch {
     return 0;
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
   }
 }
 

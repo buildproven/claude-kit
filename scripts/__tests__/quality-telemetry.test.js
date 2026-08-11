@@ -206,6 +206,27 @@ describe("buildRecord", () => {
     }
   });
 
+  it("does not follow a symlinked review artifact", () => {
+    const artifactDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "qtel-symlink-artifacts-"),
+    );
+    const target = path.join(artifactDir, "target.txt");
+    const link = path.join(artifactDir, "codex-1.prompt");
+    fs.writeFileSync(target, "secret-context");
+    fs.symlinkSync(target, link);
+    try {
+      expect(
+        reviewTokenProxy(
+          baseManifest({
+            reviews: [{ provider: "codex", artifactDir }],
+          }),
+        ).reviewInputChars,
+      ).toBeNull();
+    } finally {
+      fs.rmSync(artifactDir, { recursive: true, force: true });
+    }
+  });
+
   it("records v2 lead/status attribution without a judge", () => {
     const manifest = baseManifest({
       reviewContractVersion: 2,
