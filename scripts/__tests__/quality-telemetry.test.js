@@ -7,6 +7,7 @@ const {
   successfulReviewCount,
   deriveVerdict,
   buildRecord,
+  reviewTokenProxy,
   deterministicBlockingCount,
   validateRecord,
   alreadyRecorded,
@@ -137,7 +138,7 @@ describe("buildRecord", () => {
       nowIso: NOW,
     });
     expect(rec).toMatchObject({
-      telemetrySchemaVersion: 4,
+      telemetrySchemaVersion: 5,
       invocationId: "11111111-1111-4111-8111-111111111111",
       repoKey: "target-repo",
       taskType: "feature",
@@ -147,6 +148,11 @@ describe("buildRecord", () => {
       reviewProvider: "codex",
       reviewEffort: "high",
       reviewTokens: null,
+      reviewInputChars: null,
+      reviewInputTokensEstimated: null,
+      reviewOutputChars: null,
+      reviewOutputTokensEstimated: null,
+      reviewTokenEstimateSource: null,
       reviewStatus: "complete",
       leadCount: 0,
       durationSeconds: 0, // start 1000 > now 600 → clamps to 0
@@ -158,6 +164,67 @@ describe("buildRecord", () => {
       mergeRequested: false,
       verdict: "passed",
     });
+  });
+
+  it("measures provider prompt/output artifacts with an explicit estimate label", () => {
+    const artifactDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "qtel-artifacts-"),
+    );
+    fs.writeFileSync(path.join(artifactDir, "codex-1.prompt"), "12345678");
+    fs.writeFileSync(path.join(artifactDir, "codex-1.normalized.json"), "1234");
+    try {
+      const record = buildRecord(
+        baseManifest({
+          reviews: [
+            {
+              status: "success",
+              round: 1,
+              to: "bbb",
+              leadCount: 0,
+              provider: "codex",
+              artifactDir,
+            },
+          ],
+        }),
+        { execFileSync: NO_FILES, nowIso: NOW },
+      );
+      expect(record).toMatchObject({
+        reviewInputChars: 8,
+        reviewInputTokensEstimated: 2,
+        reviewOutputChars: 4,
+        reviewOutputTokensEstimated: 1,
+        reviewTokenEstimateSource: "artifact-chars/4",
+        reviewTokens: null,
+      });
+      expect(
+        reviewTokenProxy(
+          baseManifest({ reviews: [{ provider: "codex", artifactDir }] }),
+        ),
+      ).toMatchObject({ reviewInputTokensEstimated: 2 });
+    } finally {
+      fs.rmSync(artifactDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not follow a symlinked review artifact", () => {
+    const artifactDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "qtel-symlink-artifacts-"),
+    );
+    const target = path.join(artifactDir, "target.txt");
+    const link = path.join(artifactDir, "codex-1.prompt");
+    fs.writeFileSync(target, "secret-context");
+    fs.symlinkSync(target, link);
+    try {
+      expect(
+        reviewTokenProxy(
+          baseManifest({
+            reviews: [{ provider: "codex", artifactDir }],
+          }),
+        ).reviewInputChars,
+      ).toBeNull();
+    } finally {
+      fs.rmSync(artifactDir, { recursive: true, force: true });
+    }
   });
 
   it("records v2 lead/status attribution without a judge", () => {
