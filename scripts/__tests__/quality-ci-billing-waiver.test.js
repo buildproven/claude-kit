@@ -68,6 +68,28 @@ describe("quality CI billing waiver", () => {
     ).toBe(false);
   });
 
+  it("keeps equivalent evidence digests stable when GitHub reorders results", () => {
+    const secondCheck = {
+      name: "security",
+      state: "FAILURE",
+      link: "https://github.com/owner/repo/actions/runs/12/job/35",
+    };
+    const secondJob = {
+      ...job,
+      started_at: "2026-07-20T01:00:04Z",
+      completed_at: "2026-07-20T01:00:07Z",
+    };
+    const ordered = classify({
+      checks: [check, secondCheck],
+      jobsById: { 34: job, 35: secondJob },
+    });
+    const reversed = classify({
+      checks: [secondCheck, check],
+      jobsById: { 34: job, 35: secondJob },
+    });
+    expect(reversed.evidenceSha256).toBe(ordered.evidenceSha256);
+  });
+
   it.each([
     ["ran a step", { ...job, steps: [{ name: "checkout" }] }],
     ["acquired a runner", { ...job, runner_name: "GitHub Actions 1" }],

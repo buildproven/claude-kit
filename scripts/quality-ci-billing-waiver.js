@@ -35,12 +35,26 @@ function canonicalJson(value) {
   return value;
 }
 
+function canonicalEvidence(value) {
+  const normalized = { ...value };
+  for (const field of ["failedJobs", "successfulOrSkippedChecks"]) {
+    if (Array.isArray(normalized[field])) {
+      normalized[field] = [...normalized[field]].sort((left, right) =>
+        JSON.stringify(canonicalJson(left)).localeCompare(
+          JSON.stringify(canonicalJson(right)),
+        ),
+      );
+    }
+  }
+  return canonicalJson(normalized);
+}
+
 function evidenceSha256(evidence) {
   const unsignedEvidence = { ...evidence };
   delete unsignedEvidence.evidenceSha256;
   return require("node:crypto")
     .createHash("sha256")
-    .update(JSON.stringify(canonicalJson(unsignedEvidence)))
+    .update(JSON.stringify(canonicalEvidence(unsignedEvidence)))
     .digest("hex");
 }
 
