@@ -196,6 +196,18 @@ function validateStandaloneEvidence(record, currentBase, repository) {
   }
 }
 
+function validateStandaloneHead(actualHead, expectedHead) {
+  const actual = String(actualHead || "")
+    .trim()
+    .toLowerCase();
+  const expected = String(expectedHead || "")
+    .trim()
+    .toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(actual) || actual !== expected) {
+    fail("quality evidence head does not match checked-out HEAD");
+  }
+}
+
 function newestSuccessfulEvidence(checkRuns) {
   return checkRuns
     .filter(
@@ -303,7 +315,14 @@ function verify({ repository, head, requiredTier, manifestPath, baseRef }) {
     fail("quality evidence tier is below the required tier");
   }
   if (!manifestPath) {
-    const mergeBase = spawnSync("git", ["merge-base", "HEAD", baseRef], {
+    const localHead = spawnSync("git", ["rev-parse", "HEAD"], {
+      encoding: "utf8",
+    });
+    if (localHead.status !== 0 || !localHead.stdout.trim()) {
+      fail("unable to resolve checked-out HEAD");
+    }
+    validateStandaloneHead(localHead.stdout.trim(), head);
+    const mergeBase = spawnSync("git", ["merge-base", head, baseRef], {
       encoding: "utf8",
     });
     if (mergeBase.status !== 0 || !mergeBase.stdout.trim()) {
@@ -378,4 +397,5 @@ module.exports = {
   verifyOptions,
   newestSuccessfulEvidence,
   validateStandaloneEvidence,
+  validateStandaloneHead,
 };

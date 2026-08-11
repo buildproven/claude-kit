@@ -7,6 +7,7 @@ const {
   recordForFields,
   recordFromCheckRun,
   validateStandaloneEvidence,
+  validateStandaloneHead,
   verifyOptions,
 } = require("../quality-review-check");
 const { signEvidence, verifyEvidence } = require("../quality-review-evidence");
@@ -226,6 +227,16 @@ describe("quality-review-check", () => {
         "buildproven/claude-kit",
       ),
     ).toThrow(/repository-bound v2 evidence/);
+  });
+
+  it("requires standalone evidence to match the checked-out HEAD", () => {
+    const head = "a".repeat(40);
+    expect(() =>
+      validateStandaloneHead(head, head.toUpperCase()),
+    ).not.toThrow();
+    expect(() => validateStandaloneHead("b".repeat(40), head)).toThrow(
+      /does not match checked-out HEAD/,
+    );
   });
 
   it("omits create-only head_sha when updating an existing check run", () => {
