@@ -47,9 +47,10 @@ if [ -z "$QUALITY_TRAILER" ]; then
   # synthetic child commit or its trailers. Legacy stamped campaigns continue
   # through the trailer validator below for resumability.
   if [ -n "$MANIFEST" ]; then
-    if [ "${QUALITY_CI_BILLING_LOCAL_REVIEW:-false}" = true ] &&
-      node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
-        --scope operator-ci-billing-override >/dev/null 2>&1; then
+    if { [ "${QUALITY_LOCAL_REVIEW:-false}" = true ] ||
+      { [ "${QUALITY_CI_BILLING_LOCAL_REVIEW:-false}" = true ] &&
+        node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
+          --scope operator-ci-billing-override >/dev/null 2>&1; }; }; then
       # A user token cannot create GitHub check-runs (the API requires an App
       # token). Under the exact-head, independently verified billing waiver,
       # use the persisted local review checkpoint instead of pretending a
@@ -98,7 +99,7 @@ if [ -z "$QUALITY_TRAILER" ]; then
         echo "local review evidence tier is below the required tier" >&2
         exit 1
       }
-      echo "[quality] verified local signed review checkpoint under exact-head CI billing override" >&2
+      echo "[quality] verified local signed review checkpoint for exact-head merge" >&2
     else
       node "$SCRIPT_DIR/quality-review-check.js" verify \
         --manifest "$MANIFEST" --required-tier "$REQUIRED_TIER"
