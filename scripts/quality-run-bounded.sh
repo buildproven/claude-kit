@@ -61,14 +61,21 @@ track_provider_tree() {
   # the leader exits that helper is reparented, so a one-shot pgrep at cleanup
   # cannot find it. Snapshot the tree while the leader is alive and retain the
   # exact PIDs for the bounded cleanup path.
+  local last_snapshot="" snapshot
   while kill -0 "$CHILD_PID" 2>/dev/null; do
-    process_tree_postorder "$CHILD_PID" >> "$TRACKED_PIDS_FILE"
-    # Keep the fork/leader-exit observation window small. Platforms without a
-    # subreaper still have an irreducible race here; tracked PIDs are the
-    # fail-closed cleanup record once the leader has exited.
-    sleep 0.01
+    snapshot="$(process_tree_postorder "$CHILD_PID")"
+    # Provider trees are stable between forks; avoid writing the same snapshot
+    # repeatedly while still retaining each observed PID before the leader can
+    # exit and reparent a native helper. A quarter-second cadence bounds the
+    # race without spawning thousands of pgrep/sleep processes per review.
+    if [ "$snapshot" != "$last_snapshot" ]; then
+      printf '%s\n' "$snapshot" >> "$TRACKED_PIDS_FILE"
+      last_snapshot="$snapshot"
+    fi
+    sleep 0.25
   done
-  process_tree_postorder "$CHILD_PID" >> "$TRACKED_PIDS_FILE"
+  snapshot="$(process_tree_postorder "$CHILD_PID")"
+  [ "$snapshot" = "$last_snapshot" ] || printf '%s\n' "$snapshot" >> "$TRACKED_PIDS_FILE"
 }
 track_provider_tree &
 TRACKER_PID=$!
