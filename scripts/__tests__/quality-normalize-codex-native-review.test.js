@@ -116,6 +116,8 @@ Full review comments:
     "The removed archiver has no remaining callers.",
     "The removed archiver has no live references. The ratchet updates are consistent with the cleanup, but another path could not be reviewed.",
     "The removed archiver has no live references. The ratchet updates are consistent with the cleanup, but a regression remains.",
+    "The deleted archiver has no live references except a runtime plugin. The ratchet is consistent with that cleanup.",
+    "The deleted archiver has no live references. The ratchet only superficially aligns with that cleanup.",
   ])("rejects qualified no-finding prose: %s", (prose) => {
     expect(() => parseNativeReview(prose)).toThrow(/no recognizable verdict/);
   });
