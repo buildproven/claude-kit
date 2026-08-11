@@ -1,6 +1,6 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import reviewEvidence from "../quality-review-evidence.js";
@@ -155,6 +155,35 @@ describe("provider review runtime", () => {
     );
     expect(result.status).toBe(0);
     expect(Date.now() - started).toBeLessThan(4000);
+  });
+
+  it("reports an external signal after bounded cleanup", async () => {
+    const directory = makeTempDir("bounded-signal-");
+    const readyFile = path.join(directory, "ready");
+    const runner = spawn(
+      "bash",
+      [
+        BOUNDED,
+        "--timeout",
+        "20",
+        "--",
+        "bash",
+        "-c",
+        'printf ready > "$1"; sleep 20',
+        "provider",
+        readyFile,
+      ],
+      { stdio: "ignore" },
+    );
+    for (let attempt = 0; attempt < 20 && !existsSync(readyFile); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(existsSync(readyFile)).toBe(true);
+    runner.kill("SIGTERM");
+    const result = await new Promise((resolve) => {
+      runner.once("close", (code, signal) => resolve({ code, signal }));
+    });
+    expect(result).toEqual({ code: 143, signal: null });
   });
 
   it("throttles detached-provider tree snapshots and avoids duplicate writes", () => {

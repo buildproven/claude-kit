@@ -98,10 +98,19 @@ if [ "$GATE_RC" -ne 0 ]; then
   release_terminal_quality_lock
   node "$SCRIPT_DIR/quality-terminal-status.js" \
     --manifest "$MANIFEST" --category repository-gate --gate "$NAME" || true
+  GATE_FAILURE_CODE="$(jq -r --arg name "$NAME" --arg head "$HEAD" \
+    '[.gates[] | select(.name == $name and .head == $head)] | last | .failureCode // ""' \
+    "$MANIFEST")"
+  TERMINAL_STATE=blocked
+  TERMINAL_DETAIL="gate:$NAME"
+  if [ "$GATE_FAILURE_CODE" = signal-interrupted ]; then
+    TERMINAL_STATE=interrupted
+    TERMINAL_DETAIL="gate:$NAME:signal-interrupted"
+  fi
   # See quality-run-review.sh: record the machine-readable terminal state next
   # to the human diagnosis so an ended campaign is identifiable from disk.
   node "$SCRIPT_DIR/quality-invocation.js" terminal-state "$MANIFEST" \
-    --state blocked --detail "gate:$NAME" >/dev/null || true
+    --state "$TERMINAL_STATE" --detail "$TERMINAL_DETAIL" >/dev/null || true
   exit "$GATE_RC"
 fi
 bash "$SCRIPT_DIR/quality-assert-clean.sh" \

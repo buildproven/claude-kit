@@ -1566,6 +1566,38 @@ function supersededCampaignRecoveryEligibility(
   return "explicit resume after superseded campaign";
 }
 
+// A host signal is neither a passing result nor a code verdict. The bounded
+// runner reports its conventional 128+signal status, which the gate executor
+// records distinctly from ordinary gate failure. A replacement packet is safe
+// only before a provider or reviewer has produced evidence, and only when
+// every other recorded gate passed at the same head.
+function interruptedGateRecoveryEligibility(
+  existing,
+  existingIdentity,
+  campaignIdentity,
+) {
+  if (
+    JSON.stringify(canonicalJson(existingIdentity)) !==
+    JSON.stringify(canonicalJson(campaignIdentity))
+  )
+    return null;
+  if (existing.terminalState?.state !== "interrupted") return null;
+  if (existing.supersededBy?.invocationId) return null;
+  if ((existing.reviews || []).length !== 0) return null;
+  if ((existing.governor?.providerAttempts || []).length !== 0) return null;
+  const gates = existing.gates || [];
+  const interrupted = gates.filter(
+    (gate) =>
+      gate.status === "failed" && gate.failureCode === "signal-interrupted",
+  );
+  if (interrupted.length !== 1) return null;
+  if (
+    gates.some((gate) => gate.status !== "success" && gate !== interrupted[0])
+  )
+    return null;
+  return "gate execution was interrupted by a host signal";
+}
+
 function providerRecoveryManifest(
   existingPath,
   existing,
@@ -1666,6 +1698,20 @@ function existingCampaign(
       existing,
       campaignIdentity,
       providerRecovery,
+    );
+  }
+  const interruptedGateRecovery = interruptedGateRecoveryEligibility(
+    existing,
+    existingIdentity,
+    campaignIdentity,
+  );
+  if (interruptedGateRecovery) {
+    return supersedingManifest(
+      manifestPath,
+      existing,
+      campaignIdentity,
+      interruptedGateRecovery,
+      "interruptedGateRecoveryOf",
     );
   }
   const supersededRecovery = supersededCampaignRecoveryEligibility(
@@ -4702,6 +4748,44 @@ function executableAvailable(executable, environment) {
   return result.status === 0;
 }
 
+function assertGateProcessResult(
+  result,
+  output,
+  name,
+  timeoutSeconds,
+  riskResolved,
+) {
+  const interruptionStatus = {
+    SIGHUP: 129,
+    SIGINT: 130,
+    SIGTERM: 143,
+  }[result.signal];
+  const interrupted = interruptionStatus || result.status;
+  if ([129, 130, 143].includes(interrupted)) {
+    throw new GateExecutionError(
+      "failed",
+      `gate '${name}' was interrupted by host signal ${interrupted - 128}`,
+      "signal-interrupted",
+    );
+  }
+  if (result.status === 124) {
+    throw new GateExecutionError(
+      "timeout",
+      `gate '${name}' exceeded its proportional ${timeoutSeconds}s budget`,
+      riskResolved ? "gate-timeout" : "unresolved-risk-timeout",
+    );
+  }
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    process.stderr.write(output);
+    throw new GateExecutionError(
+      "failed",
+      `gate '${name}' failed with exit status ${result.status}`,
+      "gate-failed",
+    );
+  }
+}
+
 function executeGate(manifest, required, name, log, manifestPath) {
   const runtime = manifest.risk?.runtime;
   const gateSeconds = runtime?.checkSeconds ?? 300;
@@ -4794,24 +4878,13 @@ function executeGate(manifest, required, name, log, manifestPath) {
   }
   const output = `${result.stdout || ""}${result.stderr || ""}`;
   fs.writeFileSync(log, output, { mode: 0o600 });
-  if (result.status === 124) {
-    throw new GateExecutionError(
-      "timeout",
-      `gate '${name}' exceeded its proportional ${timeoutSeconds}s budget`,
-      manifest.risk?.resolved === true
-        ? "gate-timeout"
-        : "unresolved-risk-timeout",
-    );
-  }
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    process.stderr.write(output);
-    throw new GateExecutionError(
-      "failed",
-      `gate '${name}' failed with exit status ${result.status}`,
-      "gate-failed",
-    );
-  }
+  assertGateProcessResult(
+    result,
+    output,
+    name,
+    timeoutSeconds,
+    manifest.risk?.resolved === true,
+  );
   return output;
 }
 
@@ -5766,6 +5839,7 @@ function runCommand(command, rawArgs) {
     const releaseStates = [
       "verified-unmerged",
       "superseded",
+      "interrupted",
       "policy-superseded",
       "provider-incomplete",
       "provider-contract-failed",
