@@ -4342,7 +4342,7 @@ exit 99
     expect(result.stderr).toMatch(/gate reserve does not match gate count/);
   });
 
-  it("persists one empty stamp and waits for its CI before authorization", () => {
+  it("keeps the reviewed HEAD immutable and waits for exact-candidate CI", () => {
     const root = repo("stamp-retry");
     const remote = makeTempDir("quality-remote-");
     git(remote, ["init", "--bare", "-q"]);
@@ -4365,6 +4365,7 @@ exit 99
     const fail = path.join(harness, "fail-ci");
     const failPush = path.join(harness, "fail-push");
     const denyPreflight = path.join(harness, "deny-preflight");
+    const evidence = path.join(harness, "quality-review-evidence.json");
     const merged = path.join(harness, "merged");
     writeFileSync(fail, "fail\n");
     writeFileSync(denyPreflight, "deny\n");
@@ -4408,8 +4409,17 @@ if [ "$1" = "api" ]; then
     else
       printf '%s\\n' '{"strict":true,"contexts":["quality"],"checks":[{"context":"quality","app_id":15368}]}'
     fi
+  elif [[ "$*" == *"--method POST"* || "$*" == *"--method PATCH"* ]]; then
+    cat > ${JSON.stringify(evidence)}
+    head_sha="$(jq -r .head_sha ${JSON.stringify(evidence)})"
+    printf '{"id":2,"name":"quality-review-evidence","head_sha":"%s"}\\n' "$head_sha"
   elif [[ "$*" == *"/check-runs"* ]]; then
-    printf '%s\\n' '{"check_runs":[{"id":1,"name":"quality","status":"completed","conclusion":"success","app":{"id":15368}}]}'
+    if [ -f ${JSON.stringify(evidence)} ]; then
+      text="$(jq -c .output.text ${JSON.stringify(evidence)})"
+      printf '{"check_runs":[{"id":2,"name":"quality-review-evidence","status":"completed","conclusion":"success","completed_at":"2026-08-11T12:00:00Z","output":{"text":%s}},{"id":1,"name":"quality","status":"completed","conclusion":"success","app":{"id":15368}}]}\\n' "$text"
+    else
+      printf '%s\\n' '{"check_runs":[{"id":1,"name":"quality","status":"completed","conclusion":"success","app":{"id":15368}}]}'
+    fi
   elif [ -f ${JSON.stringify(denyPreflight)} ]; then
     printf '%s\\n' '[{"type":"merge_queue","parameters":{"grouping_strategy":"ALLGREEN"}}]'
   else
@@ -4452,50 +4462,26 @@ exit 1
       undefined,
     );
     unlinkSync(denyPreflight);
-    writeFileSync(failPush, "fail\n");
-
-    const first = spawnSync("bash", [STAMP_AND_MERGE, "--manifest", manifest], {
-      cwd: root,
-      env,
-      encoding: "utf8",
-    });
-    expect(first.status).not.toBe(0);
-    const afterFirst = JSON.parse(readFileSync(manifest, "utf8"));
-    const stampHead = afterFirst.merge.stampHead;
-    expect(stampHead).toBe(git(root, ["rev-parse", "HEAD"]));
-    expect(afterFirst.merge.stampPublication).toMatchObject({
-      status: "local",
-      remote: "origin",
-      expectedOldHead: reviewedHead,
-    });
+    const result = spawnSync(
+      "bash",
+      [STAMP_AND_MERGE, "--manifest", manifest],
+      {
+        cwd: root,
+        env,
+        encoding: "utf8",
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(git(root, ["rev-parse", "HEAD"])).toBe(reviewedHead);
+    expect(
+      JSON.parse(readFileSync(manifest, "utf8")).merge.stampHead,
+    ).toBeUndefined();
     expect(git(root, ["ls-remote", "origin", "refs/heads/feature"])).toContain(
       reviewedHead,
     );
-    expect(
-      git(root, [
-        "rev-list",
-        "--count",
-        `${afterFirst.revisions.currentHead}..HEAD`,
-      ]),
-    ).toBe("1");
-
-    unlinkSync(failPush);
-    unlinkSync(fail);
-    const second = spawnSync(
-      "bash",
-      [STAMP_AND_MERGE, "--manifest", manifest],
-      { cwd: root, env, encoding: "utf8" },
-    );
-    expect(second.status, second.stderr).toBe(0);
-    expect(git(root, ["rev-parse", "HEAD"])).toBe(stampHead);
-    expect(
-      JSON.parse(readFileSync(manifest, "utf8")).merge.stampPublication,
-    ).toMatchObject({ status: "published", publishedHead: stampHead });
-    expect(readFileSync(pushLog, "utf8")).toContain(
-      `--force-with-lease=refs/heads/feature:${reviewedHead} origin ${stampHead}:refs/heads/feature`,
-    );
+    expect(existsSync(pushLog)).toBe(false);
     const calls = readFileSync(log, "utf8");
-    expect(calls.indexOf(`/commits/${stampHead}/check-runs`)).toBeLessThan(
+    expect(calls.indexOf(`/commits/${reviewedHead}/check-runs`)).toBeLessThan(
       calls.indexOf("pr merge 1"),
     );
   }, 90_000);

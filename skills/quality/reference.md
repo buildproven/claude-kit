@@ -454,17 +454,23 @@ proxy, cost per deterministic failure) — see the overlay's
 `weekly-improve.sh`. The proxy is not statistical precision: its numerator and
 denominator do not record false positives.
 
-### Auto-stamped review trailer
+### Exact-head review evidence
 
 When `--merge` is used and the quality pipeline ran in the same invocation
-(Step 1.8 completed), the merge gate (Step 4) auto-stamps a
-provider-neutral `Reviewed-By: quality` plus provider-specific trailers via
-an empty commit when HEAD is unstamped. The neutral trailer binds the reviewed
-HEAD and merge-base SHAs; later commits invalidate it.
+(Step 1.8 completed), the merge gate (Step 4) publishes a signed
+`quality-review-evidence` check run on the reviewed HEAD. The payload binds the
+reviewed HEAD, merge-base, risk tier, deterministic findings, selected reviewers,
+and v2 policy/diff evidence when present. Publication is idempotent and never
+creates an empty commit or force-pushes the PR branch. Final authorization
+verifies the check run on that exact HEAD before the protected merge.
+
+Existing campaigns that already persisted an empty stamp continue through the
+legacy trailer path so an interrupted merge can resume without creating a second
+stamp. New campaigns must not create or require one.
 
 If the pipeline did NOT run in this invocation (e.g. operator passed
 `--merge` alone with no prior quality work), the gate hard-blocks instead
-of auto-stamping — auto-stamping then would be forging review evidence.
+of publishing evidence — publishing then would be forging review evidence.
 
 ## Scope
 
@@ -558,12 +564,14 @@ Quality-Review-Evidence: <artifact-chain-hash>
   once. `Quality-Findings` is the integer `0`, and `Quality-Tier` must meet the
   recomputed risk tier. Version 2 binds the effective policy, selected agents,
   domain rule, repository, complete diff, and retained review artifacts.
-- `Quality-Head` must equal HEAD or HEAD~1 (a dedicated stamp commit), and
-  `Quality-Base` must equal the current merge-base. Any later code commit
-  invalidates the stamp.
+- Legacy `Quality-Head` must equal HEAD or HEAD~1 (a dedicated stamp commit),
+  and `Quality-Base` must equal the current merge-base. Any later code commit
+  invalidates that legacy stamp. New campaigns use the signed exact-head
+  `quality-review-evidence` check run instead and do not emit these trailers.
 - Parenthetical `Reviewed-By` metadata is legacy reader compatibility only and
   must not be emitted by new quality campaigns.
-- **Authorization path is queryable from the trailer, no telemetry inference
+- **Legacy authorization path is queryable from the trailer; new authorization
+  is queryable from the exact-head check run, with no telemetry inference
   needed.** A version-2 Low campaign uses a signed `policy-exempt` artifact
   with `aiReviewRequired: false`; it never synthesizes a clean provider
   verdict. Medium and above require completed evidence from every selected

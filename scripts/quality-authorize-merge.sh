@@ -57,13 +57,14 @@ ACTUAL_BASE_NAME="$(printf '%s' "$PR_JSON" | jq -r '.baseRefName')"
   exit 1
 }
 if [ "$ACTUAL_STATE" = MERGED ]; then
-  [ -n "$STAMP_HEAD" ] && [ "$ACTUAL_HEAD" = "$STAMP_HEAD" ] &&
+  MERGED_EXPECTED_HEAD="${STAMP_HEAD:-$EXPECTED_HEAD}"
+  [ "$ACTUAL_HEAD" = "$MERGED_EXPECTED_HEAD" ] &&
     [ "$(printf '%s' "$PR_JSON" | jq -r '.mergedAt // empty')" != "" ] &&
     [ "$(printf '%s' "$PR_JSON" | jq -r '.mergeCommit.oid // empty')" != "" ] || {
       echo "❌ MERGE BLOCKED: merged PR does not match the persisted expected head." >&2
       exit 1
   }
-  echo "[quality] PR already merged at exact persisted stamp $STAMP_HEAD"
+  echo "[quality] PR already merged at exact persisted candidate $MERGED_EXPECTED_HEAD"
   [ "$PREFLIGHT" = false ] || echo "BS_QUALITY_ALREADY_MERGED=true"
   exit 0
 fi
@@ -127,12 +128,19 @@ else
     echo "❌ MERGE BLOCKED: PR HEAD does not match reviewed HEAD." >&2
     exit 1
   }
-  [ -n "$STAMP_HEAD" ] && [ "$LOCAL_HEAD" = "$STAMP_HEAD" ] &&
-    [ "$(git rev-parse HEAD~1)" = "$EXPECTED_HEAD" ] &&
-    git diff --quiet HEAD~1 HEAD || {
-      echo "❌ MERGE BLOCKED: PR HEAD is not the persisted empty stamp of reviewed HEAD." >&2
+  if [ -n "$STAMP_HEAD" ]; then
+    [ "$LOCAL_HEAD" = "$STAMP_HEAD" ] &&
+      [ "$(git rev-parse HEAD~1)" = "$EXPECTED_HEAD" ] &&
+      git diff --quiet HEAD~1 HEAD || {
+        echo "❌ MERGE BLOCKED: PR HEAD is not the persisted empty stamp of reviewed HEAD." >&2
+        exit 1
+      }
+  else
+    [ "$LOCAL_HEAD" = "$EXPECTED_HEAD" ] || {
+      echo "❌ MERGE BLOCKED: PR HEAD is not the exact reviewed candidate." >&2
       exit 1
     }
+  fi
   CI_BILLING_WAIVER_ARTIFACT="${BS_QUALITY_CI_BILLING_WAIVER_ARTIFACT:-}"
   CI_BILLING_WAIVED=false
   if [ -n "$CI_BILLING_WAIVER_ARTIFACT" ]; then

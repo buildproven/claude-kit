@@ -94,104 +94,53 @@ PERSISTED_REMOTE="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" m
   exit 1
 }
 
+MERGE_HEAD="$REVIEWED_HEAD"
 if [ -n "$STAMP_HEAD" ]; then
+  # Backward compatibility for campaigns that were created before the
+  # check-run evidence transport landed. Never create another stamp, but let
+  # an interrupted legacy campaign finish its already-published child.
   [ "$LOCAL_HEAD" = "$STAMP_HEAD" ] || {
     echo "❌ MERGE BLOCKED: persisted quality stamp $STAMP_HEAD is not checked out." >&2
     exit 1
   }
-else
-  if [ "$LOCAL_HEAD" = "$REVIEWED_HEAD" ]; then
-    TRAILERS="$(node "$SCRIPT_DIR/quality-invocation.js" trailers "$MANIFEST")"
-    REVIEW_AUTHORIZATION="$(node "$SCRIPT_DIR/quality-invocation.js" review-authorization "$MANIFEST")"
-    REVIEW_BASE="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.base')"
-    REVIEW_TIER="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.tier')"
-    REVIEW_PROVIDER="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.provider')"
-    REVIEW_PRIMARY="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.primary')"
-    REVIEW_FALLBACK="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.fallback')"
-    REVIEW_FINDINGS="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.blockingCount')"
-    REVIEW_CONTRACT="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.contractVersion')"
-    SIGNATURE_ARGS=(
-      --head "$REVIEWED_HEAD" --base "$REVIEW_BASE" --tier "$REVIEW_TIER"
-      --findings "$REVIEW_FINDINGS" --reviewer "$REVIEW_PROVIDER"
-      --primary "$REVIEW_PRIMARY" --fallback "$REVIEW_FALLBACK"
-    )
-    if [ "$REVIEW_CONTRACT" -ge 2 ]; then
-      REVIEW_LEADS="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.leads')"
-      REVIEW_STATUS="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.reviewStatus')"
-      REVIEW_POLICY="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.policyDigest')"
-      REVIEW_AGENTS="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.agentsSha256')"
-      REVIEW_DOMAIN="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.domain')"
-      REVIEW_SELECTION="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.selectionRule')"
-      REVIEW_REPOSITORY="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.repositoryKey')"
-      REVIEW_DIFF="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.diffSha256')"
-      REVIEW_EVIDENCE="$(printf '%s' "$REVIEW_AUTHORIZATION" | jq -er '.evidenceSha256')"
-      SIGNATURE_ARGS+=(
-        --contractVersion "$REVIEW_CONTRACT" --leads "$REVIEW_LEADS"
-        --reviewStatus "$REVIEW_STATUS" --policyDigest "$REVIEW_POLICY"
-        --agentsSha256 "$REVIEW_AGENTS" --domain "$REVIEW_DOMAIN"
-        --selectionRule "$REVIEW_SELECTION"
-        --repositoryKey "$REVIEW_REPOSITORY" --diffSha256 "$REVIEW_DIFF"
-        --evidenceSha256 "$REVIEW_EVIDENCE"
-      )
-    fi
-    if { [ "$REVIEW_CONTRACT" -ge 2 ] || [ "$REVIEW_TIER" = high ] || \
-      [ "$REVIEW_TIER" = critical ]; } && \
-      [ -z "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY:-}" ] && \
-      [ -z "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY_FILE:-}" ]; then
-      echo "❌ MERGE BLOCKED: this review contract requires a signing key before creating a stamp." >&2
+  [ "$(git rev-parse "${STAMP_HEAD}~1")" = "$REVIEWED_HEAD" ] &&
+    git diff --quiet "${STAMP_HEAD}~1" "$STAMP_HEAD" || {
+      echo "❌ MERGE BLOCKED: persisted review stamp is not an empty child of reviewed HEAD." >&2
       exit 1
-    fi
-    if [ -n "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY:-}" ] || \
-       [ -n "${QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY_FILE:-}" ]; then
-      REVIEW_SIGNATURE="$(node "$SCRIPT_DIR/quality-review-evidence.js" sign \
-        "${SIGNATURE_ARGS[@]}")"
-      TRAILERS="$TRAILERS
-Quality-Evidence-Signature: $REVIEW_SIGNATURE"
-    fi
-    # HUSKY=0: this is quality's own empty stamp commit in the target repo. Its
-    # husky pre-commit hooks would re-run lint/tests the pipeline just ran —
-    # unbounded work outside the campaign governor, on a commit that changes no
-    # files. Skip the target repo's hooks here (not --no-verify, per policy;
-    # HUSKY=0 disables husky specifically without a blanket hook bypass).
-    HUSKY=0 git commit --allow-empty -m "chore: quality review stamp
-
-$TRAILERS"
-    LOCAL_HEAD="$(git rev-parse HEAD)"
+    }
+  if [ -z "$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" merge.stampPublication.remote)" ]; then
+    node "$SCRIPT_DIR/quality-invocation.js" record-stamp "$MANIFEST" \
+      --head "$STAMP_HEAD" --remote "$HEAD_REMOTE" \
+      --expected-old-head "$PREFLIGHT_PR_HEAD" >/dev/null
   fi
-  node "$SCRIPT_DIR/quality-invocation.js" record-stamp "$MANIFEST" \
-    --head "$LOCAL_HEAD" --remote "$HEAD_REMOTE" \
-    --expected-old-head "$PREFLIGHT_PR_HEAD" >/dev/null
-  STAMP_HEAD="$LOCAL_HEAD"
-fi
-
-[ "$(git rev-parse "${STAMP_HEAD}~1")" = "$REVIEWED_HEAD" ] &&
-  git diff --quiet "${STAMP_HEAD}~1" "$STAMP_HEAD" || {
-    echo "❌ MERGE BLOCKED: persisted review stamp is not an empty child of reviewed HEAD." >&2
+  [ -n "$PR" ] || { echo "❌ MERGE BLOCKED: manifest has no PR identity." >&2; exit 1; }
+  [ -n "$EXPECTED_REPOSITORY" ] && [ -n "$EXPECTED_HEAD_REF" ] || {
+    echo "❌ MERGE BLOCKED: manifest lacks persisted GitHub repository/head identity." >&2
     exit 1
   }
-
-# A stamp persisted by an interrupted/older runner may predate publication
-# metadata. Reattach that exact local stamp to the already-verified remote and
-# PR head without creating a second commit.
-if [ -z "$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" merge.stampPublication.remote)" ]; then
-  node "$SCRIPT_DIR/quality-invocation.js" record-stamp "$MANIFEST" \
+  if [ "$PREFLIGHT_PR_HEAD" != "$STAMP_HEAD" ]; then
+    git push \
+      --force-with-lease="refs/heads/$EXPECTED_HEAD_REF:$PREFLIGHT_PR_HEAD" \
+      "$HEAD_REMOTE" "$STAMP_HEAD:refs/heads/$EXPECTED_HEAD_REF"
+  fi
+  node "$SCRIPT_DIR/quality-invocation.js" record-stamp-published "$MANIFEST" \
     --head "$STAMP_HEAD" --remote "$HEAD_REMOTE" \
-    --expected-old-head "$PREFLIGHT_PR_HEAD" >/dev/null
+    --previous-head "$PREFLIGHT_PR_HEAD" >/dev/null
+  MERGE_HEAD="$STAMP_HEAD"
+else
+  [ "$LOCAL_HEAD" = "$REVIEWED_HEAD" ] || {
+    echo "❌ MERGE BLOCKED: local HEAD changed after review." >&2
+    exit 1
+  }
+  # Publish signed evidence on the reviewed commit itself. This is idempotent
+  # and never rewrites or force-pushes the PR branch.
+  node "$SCRIPT_DIR/quality-review-check.js" publish --manifest "$MANIFEST" >/dev/null
 fi
 
-[ -n "$PR" ] || { echo "❌ MERGE BLOCKED: manifest has no PR identity." >&2; exit 1; }
-[ -n "$EXPECTED_REPOSITORY" ] && [ -n "$EXPECTED_HEAD_REF" ] || {
-  echo "❌ MERGE BLOCKED: manifest lacks persisted GitHub repository/head identity." >&2
+[ "$PREFLIGHT_PR_HEAD" = "$MERGE_HEAD" ] || {
+  echo "❌ MERGE BLOCKED: PR HEAD does not match the exact reviewed candidate." >&2
   exit 1
 }
-if [ "$PREFLIGHT_PR_HEAD" != "$STAMP_HEAD" ]; then
-  git push \
-    --force-with-lease="refs/heads/$EXPECTED_HEAD_REF:$PREFLIGHT_PR_HEAD" \
-    "$HEAD_REMOTE" "$STAMP_HEAD:refs/heads/$EXPECTED_HEAD_REF"
-fi
-node "$SCRIPT_DIR/quality-invocation.js" record-stamp-published "$MANIFEST" \
-  --head "$STAMP_HEAD" --remote "$HEAD_REMOTE" \
-  --previous-head "$PREFLIGHT_PR_HEAD" >/dev/null
 
 # GitHub's PR API can briefly lag a just-completed push (read-after-write
 # consistency delay), which produced a false MERGE BLOCKED on this exact
@@ -201,6 +150,7 @@ node "$SCRIPT_DIR/quality-invocation.js" record-stamp-published "$MANIFEST" \
 # a genuine divergence (someone else pushed to the branch) still fails after
 # the retry window exhausts.
 PR_HEAD_RETRIES="${QUALITY_STAMP_PR_HEAD_RETRIES:-3}"
+MERGE_HEAD="${MERGE_HEAD:-${STAMP_HEAD:-}}"
 case "$PR_HEAD_RETRIES" in
   ''|*[!0-9]*) echo "❌ MERGE BLOCKED: QUALITY_STAMP_PR_HEAD_RETRIES must be a non-negative integer." >&2; exit 1 ;;
 esac
@@ -236,20 +186,20 @@ while [ "$attempt" -le "$PR_HEAD_RETRIES" ]; do
     PR_HEAD=""
     GH_PR_VIEW_FAILED=true
   fi
-  [ "$PR_HEAD" = "$STAMP_HEAD" ] && break
+  [ "$PR_HEAD" = "$MERGE_HEAD" ] && break
   if [ "$attempt" -lt "$PR_HEAD_RETRIES" ]; then
     if [ "$GH_PR_VIEW_FAILED" = true ]; then
       echo "[quality] retrying in ${PR_HEAD_RETRY_DELAY}s after the gh pr view failure above (attempt $attempt/$PR_HEAD_RETRIES)" >&2
     else
-      echo "[quality] PR HEAD mismatch on attempt $attempt/$PR_HEAD_RETRIES (got $PR_HEAD, want $STAMP_HEAD) — retrying in ${PR_HEAD_RETRY_DELAY}s, likely GitHub API lag" >&2
+      echo "[quality] PR HEAD mismatch on attempt $attempt/$PR_HEAD_RETRIES (got $PR_HEAD, want $MERGE_HEAD) — retrying in ${PR_HEAD_RETRY_DELAY}s, likely GitHub API lag" >&2
     fi
     sleep "$PR_HEAD_RETRY_DELAY"
   fi
   attempt=$((attempt + 1))
 done
 rm -f "$PR_HEAD_ERR_FILE"
-[ "$PR_HEAD" = "$STAMP_HEAD" ] || {
-  echo "❌ MERGE BLOCKED: pushed PR HEAD does not match persisted stamp $STAMP_HEAD after $PR_HEAD_RETRIES attempts." >&2
+[ "$PR_HEAD" = "$MERGE_HEAD" ] || {
+  echo "❌ MERGE BLOCKED: PR HEAD does not match the exact reviewed candidate $MERGE_HEAD after $PR_HEAD_RETRIES attempts." >&2
   exit 1
 }
 CI_TIMEOUT="${QUALITY_STAMP_CI_TIMEOUT:-900}"
@@ -260,7 +210,7 @@ esac
   echo "❌ MERGE BLOCKED: QUALITY_STAMP_CI_TIMEOUT must be positive." >&2
   exit 1
 }
-echo "[quality] waiting up to ${CI_TIMEOUT}s for required CI on stamp $STAMP_HEAD"
+echo "[quality] waiting up to ${CI_TIMEOUT}s for required CI on exact candidate $MERGE_HEAD"
 BASE_BRANCH="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseRef)"
 BASE_BRANCH="${BASE_BRANCH#refs/heads/}"
 BASE_BRANCH="${BASE_BRANCH#origin/}"
@@ -275,7 +225,7 @@ if [ "$PREFLIGHT_BASE_PROTECTION" = unprotectable ]; then
 else
   ENSURE_JSON="$(node "$SCRIPT_DIR/quality-required-checks.js" ensure \
     --repo "$EXPECTED_REPOSITORY" --base "$BASE_BRANCH" \
-    --source-head "$REVIEWED_HEAD" --head "$STAMP_HEAD" \
+    --source-head "$REVIEWED_HEAD" --head "$MERGE_HEAD" \
     --head-ref "$EXPECTED_HEAD_REF")" || exit 1
   if [ "$(printf '%s' "$ENSURE_JSON" | jq '.deferred | length')" -gt 0 ]; then
     printf '%s' "$ENSURE_JSON" | jq -r \
@@ -284,21 +234,21 @@ else
   bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CI_TIMEOUT" -- \
     node "$SCRIPT_DIR/quality-required-checks.js" wait \
       --repo "$EXPECTED_REPOSITORY" --base "$BASE_BRANCH" \
-      --head "$STAMP_HEAD" --timeout "$CI_TIMEOUT" --interval 10 || RC=$?
+      --head "$MERGE_HEAD" --timeout "$CI_TIMEOUT" --interval 10 || RC=$?
 fi
 CI_BILLING_WAIVED=false
 if [ "$RC" -ne 0 ]; then
   CI_WAIVER_ARTIFACT="$(dirname "$MANIFEST")/ci-billing-waiver.json"
   if node "$SCRIPT_DIR/quality-ci-billing-waiver.js" \
-    --repo "$EXPECTED_REPOSITORY" --pr "$PR" --head "$STAMP_HEAD" \
+    --repo "$EXPECTED_REPOSITORY" --pr "$PR" --head "$MERGE_HEAD" \
     --artifact "$CI_WAIVER_ARTIFACT"; then
     CI_BILLING_WAIVED=true
     echo "⚠️  [quality] GitHub Actions billing prevented runner allocation; exact-HEAD local gates and review remain authoritative (waiver: $CI_WAIVER_ARTIFACT)." >&2
   else
     if [ "$RC" -eq 124 ]; then
-      DETAIL="timed out waiting for CI on stamp $STAMP_HEAD"
+      DETAIL="timed out waiting for CI on exact candidate $MERGE_HEAD"
     else
-      DETAIL="required CI failed on stamp $STAMP_HEAD"
+      DETAIL="required CI failed on exact candidate $MERGE_HEAD"
     fi
     echo "❌ MERGE BLOCKED: $DETAIL." >&2
     node "$SCRIPT_DIR/quality-terminal-status.js" \
@@ -307,8 +257,8 @@ if [ "$RC" -ne 0 ]; then
   fi
 fi
 [ "$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
-  --json headRefOid --jq .headRefOid)" = "$STAMP_HEAD" ] || {
-  echo "❌ MERGE BLOCKED: PR HEAD changed while waiting for stamp CI." >&2
+  --json headRefOid --jq .headRefOid)" = "$MERGE_HEAD" ] || {
+  echo "❌ MERGE BLOCKED: PR HEAD changed while waiting for exact-candidate CI." >&2
   exit 1
 }
 if [ "$CI_BILLING_WAIVED" = true ]; then
