@@ -64,40 +64,9 @@ if [ "$ACTUAL_STATE" = MERGED ]; then
       echo "❌ MERGE BLOCKED: merged PR does not match the persisted expected head." >&2
       exit 1
   }
-  if [ -z "$STAMP_HEAD" ]; then
-    [ "$PREFLIGHT" = false ] || {
-      echo "❌ MERGE BLOCKED: unstamped PR was already merged before exact evidence authorization." >&2
-      exit 1
-    }
-    BASE_REF="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseRef)"
-    bash "$SCRIPT_DIR/quality-validate-review-trailers.sh" \
-      --manifest "$MANIFEST" --base "$BASE_REF" \
-      --required-tier "$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)" \
-      --require-signature || exit 1
-  else
-    [ "$STAMP_PUBLICATION" = published ] || {
-      echo "❌ MERGE BLOCKED: already-merged stamped PR lacks persisted publication evidence." >&2
-      exit 1
-    }
-  fi
-  if [ -n "${BS_QUALITY_CI_BILLING_WAIVER_ARTIFACT:-}" ]; then
-    node "$SCRIPT_DIR/quality-ci-billing-waiver.js" \
-      --repo "$EXPECTED_REPOSITORY" --pr "$PR" --head "$ACTUAL_HEAD" \
-      --artifact "$BS_QUALITY_CI_BILLING_WAIVER_ARTIFACT" >/dev/null || {
-      echo "❌ MERGE BLOCKED: already-merged PR billing waiver is not exact-head evidence." >&2
-      exit 1
-    }
-  else
-    node "$SCRIPT_DIR/quality-required-checks.js" assert \
-      --repo "$EXPECTED_REPOSITORY" --base "$ACTUAL_BASE_NAME" \
-      --head "$ACTUAL_HEAD" >/dev/null || {
-      echo "❌ MERGE BLOCKED: already-merged PR lacks exact-head required CI evidence." >&2
-      exit 1
-    }
-  fi
-  echo "[quality] PR already merged at exact persisted candidate $MERGED_EXPECTED_HEAD"
-  [ "$PREFLIGHT" = false ] || echo "BS_QUALITY_ALREADY_MERGED=true"
-  exit 0
+  echo "❌ MERGE BLOCKED: PR was already merged at $MERGED_EXPECTED_HEAD without this invocation's persisted pre-merge authorization." >&2
+  echo "   Treating the result as an out-of-band merge; exact-head evidence and post-merge CI cannot prove pre-merge authorization." >&2
+  exit 1
 fi
 [ "$ACTUAL_STATE" = OPEN ] || {
   echo "❌ MERGE BLOCKED: PR is not open or safely merged (state=$ACTUAL_STATE)." >&2

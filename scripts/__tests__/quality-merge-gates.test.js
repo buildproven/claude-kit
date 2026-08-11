@@ -155,20 +155,11 @@ describe("quality merge gates", () => {
     expect(STAMP_AND_MERGE).not.toMatch(/quality-repo-lease\.js" release/);
   });
 
-  it("persists success terminal states before cleanup or telemetry", () => {
-    const alreadyMerged = STAMP_AND_MERGE.indexOf(
-      "BS_QUALITY_ALREADY_MERGED=true",
+  it("fails closed on already-merged PRs without pre-merge authorization", () => {
+    expect(STAMP_AND_MERGE).not.toContain("BS_QUALITY_ALREADY_MERGED=true");
+    expect(AUTHORIZE).toMatch(
+      /already merged at \$MERGED_EXPECTED_HEAD without this invocation's persisted pre-merge authorization/,
     );
-    const earlyTerminal = STAMP_AND_MERGE.indexOf(
-      "--state merged",
-      alreadyMerged,
-    );
-    const earlyCleanup = STAMP_AND_MERGE.indexOf(
-      "quality-merge-cleanup.sh",
-      alreadyMerged,
-    );
-    expect(earlyTerminal).toBeGreaterThan(alreadyMerged);
-    expect(earlyTerminal).toBeLessThan(earlyCleanup);
     expect(SKILL).toMatch(/--state verified-unmerged/);
     expect(SKILL.indexOf("--state verified-unmerged")).toBeLessThan(
       SKILL.indexOf('quality-telemetry.js" record'),
@@ -191,7 +182,7 @@ describe("quality merge gates", () => {
       /if \[ -z "\$STAMP_HEAD" \] && \[ "\$PREFLIGHT_PR_HEAD" != "\$MERGE_HEAD" \]; then/,
     );
     expect(AUTHORIZE).toMatch(
-      /unstamped PR was already merged before exact evidence authorization/,
+      /already merged at \$MERGED_EXPECTED_HEAD without this invocation's persisted pre-merge authorization/,
     );
     expect(STAMP_AND_MERGE).not.toMatch(/HUSKY=0 git commit --allow-empty/);
     expect(AUTHORIZE).toMatch(/repo\.githubRepository/);

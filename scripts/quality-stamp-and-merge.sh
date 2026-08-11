@@ -66,13 +66,6 @@ done < <(git remote)
 PREFLIGHT_OUTPUT="$(bash "$SCRIPT_DIR/quality-authorize-merge.sh" \
   --manifest "$MANIFEST" --preflight)"
 printf '%s\n' "$PREFLIGHT_OUTPUT"
-if printf '%s\n' "$PREFLIGHT_OUTPUT" |
-  grep -Fxq 'BS_QUALITY_ALREADY_MERGED=true'; then
-  node "$SCRIPT_DIR/quality-invocation.js" terminal-state "$MANIFEST" \
-    --state merged --detail "pr:$PR" >/dev/null || true
-  bash "$SCRIPT_DIR/quality-merge-cleanup.sh" --manifest "$MANIFEST"
-  exit 0
-fi
 PREFLIGHT_PR_HEAD="$(printf '%s\n' "$PREFLIGHT_OUTPUT" |
   sed -n 's/^BS_QUALITY_PR_HEAD=//p')"
 [ -n "$PREFLIGHT_PR_HEAD" ] || {
