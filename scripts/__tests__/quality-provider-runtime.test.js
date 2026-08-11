@@ -216,9 +216,9 @@ describe("provider review runtime", () => {
       "cached provider-health failure; probing live availability",
     );
     expect(runner).toContain("claude auth status --json");
-    expect(runner).toContain("codex login status");
+    expect(runner).toContain("codex login status 2>&1");
     expect(runner).toContain("Claude -> Codex and Codex -> Claude");
-    expect(runner).not.toMatch(/REVIEW_PROVIDER[^\n]*!== claude/);
+    expect(runner).not.toMatch(/REVIEW_PROVIDER[^\n]*!= claude/);
   });
 
   it("kills the provider tree when the wrapper itself is cancelled", () => {

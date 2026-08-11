@@ -420,7 +420,7 @@ provider_live_probe() {
     codex)
       command -v codex >/dev/null 2>&1 || return 1
       output="$(bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout 10 -- \
-        codex login status 2>/dev/null)"
+        codex login status 2>&1)"
       rc=$?
       [ "$rc" -eq 0 ] || return 1
       printf '%s' "$output" | grep -q 'Logged in'
