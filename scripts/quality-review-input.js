@@ -19,7 +19,10 @@ function digest(value) {
 }
 
 function escapedJson(value) {
-  return JSON.stringify(value, null, 2)
+  // The envelope is machine-readable evidence, not a human-facing report.
+  // Compact JSON removes formatting whitespace from every provider prompt while
+  // preserving the digest and delimiter escaping contract.
+  return JSON.stringify(value)
     .replace(/</g, "\\u003c")
     .replace(/>/g, "\\u003e")
     .replace(/&/g, "\\u0026")

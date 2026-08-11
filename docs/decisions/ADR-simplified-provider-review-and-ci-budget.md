@@ -32,6 +32,11 @@ that command is allowed to rediscover repository context inside the timeout.
 Provider execution starts in the review artifact directory with no repository
 context. The provider may inspect only the supplied envelope and must return the
 structured schema. Preparation and hashing remain outside the provider timeout.
+The envelope uses compact JSON because formatting whitespace is repeated in each
+provider request and does not improve review quality. Terminal telemetry records
+the exact prompt/output artifact character counts and a clearly labelled
+`artifact-chars/4` token estimate; provider-reported token usage remains nullable
+until a stable cross-provider usage contract exists.
 
 ### 2. Provider order is configuration, not architecture
 
