@@ -252,7 +252,7 @@ describe("provider review runtime", () => {
     expect(runner).toContain("return 2");
   });
 
-  it("rechecks cached provider failures and keeps provider order neutral", () => {
+  it("rechecks cached provider failures and uses fallback only after primary failure", () => {
     const runner = readFileSync(RUN_REVIEW, "utf8");
     expect(runner).toContain("provider_live_probe()");
     expect(runner).toContain(
@@ -260,7 +260,7 @@ describe("provider review runtime", () => {
     );
     expect(runner).toContain("claude auth status --json");
     expect(runner).toContain("codex login status 2>&1");
-    expect(runner).toContain("Claude -> Codex and Codex -> Claude");
+    expect(runner).toContain("fallback is an availability path");
     expect(runner).not.toMatch(/REVIEW_PROVIDER[^\n]*!= claude/);
   });
 

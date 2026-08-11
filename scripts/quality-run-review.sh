@@ -675,21 +675,13 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
 fi
 
 DIFF_SHA="$(shasum -a 256 "$REVIEW_OUT/diff.txt" | awk '{print $1}')"
-INCOMPLETE_DISCOVERY_ARGS=()
-# Critical diversity is an evidence label, not a hard-coded Claude requirement.
-# A successful primary-only run is incomplete discovery; a successful fallback
-# proves that both configured providers were attempted. Either route works:
-# Claude -> Codex and Codex -> Claude.
-if [ "$TIER" = critical ] && {
-  [ "$QUALITY_FALLBACK" = none ] || [ "$REVIEW_PROVIDER" = "$QUALITY_PRIMARY" ];
-}; then
-  INCOMPLETE_DISCOVERY_ARGS+=(--incomplete)
-  echo "⚠️  [quality] Critical discovery used one configured provider; recording incomplete diversity without blocking deterministic delivery." >&2
-fi
+# A fallback is an availability path, not a second-review requirement. Once the
+# configured primary returns a valid, zero-finding review, that exact evidence
+# is complete at every tier. Calling a healthy-but-quota-exhausted fallback
+# would consume capacity without adding a failure signal.
 node "$SCRIPT_DIR/quality-invocation.js" inventory "$MANIFEST" \
   --artifact-dir "$REVIEW_OUT" \
-  --provider "$REVIEW_PROVIDER" \
-  ${INCOMPLETE_DISCOVERY_ARGS[@]+"${INCOMPLETE_DISCOVERY_ARGS[@]}"} || exit 1
+  --provider "$REVIEW_PROVIDER" || exit 1
 node "$SCRIPT_DIR/quality-invocation.js" record-review "$MANIFEST" \
   --from "$REVIEW_DIFF_BASE" \
   --to "$REVIEWED_HEAD" \
@@ -698,8 +690,7 @@ node "$SCRIPT_DIR/quality-invocation.js" record-review "$MANIFEST" \
   --fallback "$QUALITY_FALLBACK" \
   --effort "$QUALITY_REVIEW_DEPTH" \
   --artifact-dir "$REVIEW_OUT" \
-  --diff-sha "$DIFF_SHA" \
-  ${INCOMPLETE_DISCOVERY_ARGS[@]+"${INCOMPLETE_DISCOVERY_ARGS[@]}"} || exit 1
+  --diff-sha "$DIFF_SHA" || exit 1
 
 echo "REVIEW_OUT=$REVIEW_OUT"
 echo "REVIEW_BASE=$RESOLVED_BASE"
