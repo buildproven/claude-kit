@@ -112,6 +112,41 @@ describe("quality-review-check", () => {
     });
   });
 
+  it("includes signed operator override details when override authorization is active", () => {
+    const fields = evidenceFields({
+      ...authorization,
+      reviewer: "operator-quality-override",
+      primary: "unavailable",
+      fallback: "unavailable",
+      operatorOverride: true,
+      contractVersion: 2,
+      leads: 0,
+      reviewStatus: "incomplete",
+      policyDigest: "c".repeat(64),
+      agentsSha256: "d".repeat(64),
+      domain: "operator-override",
+      selectionRule: "operator-override",
+      repositoryKey: "buildproven/claude-kit",
+      diffSha256: "e".repeat(64),
+      evidenceSha256: "f".repeat(64),
+      override: {
+        scope: "operator-quality-override",
+        reason: "accepted bounded gate failure",
+        acceptedConditions: ["gate:test"],
+        approver: "brett",
+        issuedAt: "2026-08-11T12:00:00.000Z",
+        expiresAt: "2026-08-11T12:15:00.000Z",
+        artifactSha256: "1".repeat(64),
+      },
+    });
+
+    expect(fields.override).toMatchObject({
+      scope: "operator-quality-override",
+      acceptedConditions: ["gate:test"],
+      approver: "brett",
+    });
+  });
+
   it("rejects stale evidence but preserves an explicit incomplete advisory state", () => {
     const fields = evidenceFields({
       ...authorization,

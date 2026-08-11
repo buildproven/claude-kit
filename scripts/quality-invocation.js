@@ -5114,6 +5114,15 @@ function operatorOverrideAuthorization(manifest) {
     overrideReason: manifest.approval.reason,
     overrideAcceptedConditions: acceptedConditions,
     overrideApprover: manifest.approval.approver,
+    override: {
+      scope: manifest.approval.scope,
+      reason: manifest.approval.reason,
+      acceptedConditions,
+      approver: manifest.approval.approver,
+      issuedAt: manifest.approval.issuedAt,
+      expiresAt: manifest.approval.expiresAt,
+      artifactSha256: manifest.approval.artifactSha256,
+    },
   };
 }
 

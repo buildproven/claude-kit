@@ -107,6 +107,9 @@ function evidenceFields(authorization) {
       evidenceSha256: authorization.evidenceSha256,
     });
   }
+  if (authorization.operatorOverride) {
+    fields.override = authorization.override;
+  }
   return fields;
 }
 
@@ -321,7 +324,14 @@ function verify({ repository, head, requiredTier, manifestPath, baseRef }) {
       head,
       tier: record.evidence.tier,
       reviewer: record.evidence.reviewer,
-      status: "verified",
+      // Incomplete AI discovery is an explicit advisory state under the
+      // bounded-review ADR. Deterministic gates, signed exact-head identity,
+      // and branch protection remain the merge authority; surface that state
+      // instead of making the check look like a clean model verdict.
+      status:
+        record.evidence.reviewStatus === "incomplete"
+          ? "verified-advisory"
+          : "verified",
     })}\n`,
   );
 }

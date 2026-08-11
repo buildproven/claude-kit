@@ -40,6 +40,42 @@ const REVIEWERS = new Set([
 const OPERATOR_OVERRIDE_REVIEWER = "operator-quality-override";
 const UNAVAILABLE_REVIEWER = "unavailable";
 
+function validateOverrideEvidence(override) {
+  if (!override || typeof override !== "object" || Array.isArray(override)) {
+    throw new Error("operator override evidence is required");
+  }
+  if (override.scope !== OPERATOR_OVERRIDE_REVIEWER) {
+    throw new Error("operator override evidence scope is invalid");
+  }
+  for (const field of ["reason", "approver", "issuedAt", "expiresAt"]) {
+    if (typeof override[field] !== "string" || override[field].trim() === "") {
+      throw new Error(`operator override evidence ${field} is required`);
+    }
+  }
+  if (!Array.isArray(override.acceptedConditions)) {
+    throw new Error("operator override evidence conditions are invalid");
+  }
+  if (
+    override.acceptedConditions.length === 0 ||
+    override.acceptedConditions.some(
+      (condition) => typeof condition !== "string" || condition.trim() === "",
+    )
+  ) {
+    throw new Error("operator override evidence conditions are invalid");
+  }
+  if (!/^[0-9a-f]{64}$/i.test(String(override.artifactSha256 || ""))) {
+    throw new Error("operator override evidence artifact hash is invalid");
+  }
+  const issuedAt = Date.parse(override.issuedAt);
+  const expiresAt = Date.parse(override.expiresAt);
+  if (Number.isNaN(issuedAt)) {
+    throw new Error("operator override evidence issuedAt is invalid");
+  }
+  if (Number.isNaN(expiresAt) || expiresAt <= issuedAt) {
+    throw new Error("operator override evidence expiresAt is invalid");
+  }
+}
+
 function canonicalJson(value) {
   if (Array.isArray(value)) return value.map(canonicalJson);
   if (value && typeof value === "object") {
@@ -76,6 +112,11 @@ function evidencePayload(fields) {
         "operator override evidence must use unavailable primary and fallback reviewers",
       );
     }
+    validateOverrideEvidence(fields.override);
+  } else if (fields.override !== undefined) {
+    throw new Error(
+      "operator override evidence is not valid for this reviewer",
+    );
   } else {
     if (!REVIEWERS.has(fields.reviewer)) {
       throw new Error("evidence reviewer is invalid");
@@ -184,6 +225,9 @@ function evidencePayload(fields) {
           repositoryKey: fields.repositoryKey,
           diffSha256: fields.diffSha256.toLowerCase(),
           evidenceSha256: fields.evidenceSha256.toLowerCase(),
+          ...(isOperatorOverride
+            ? { override: canonicalJson(fields.override) }
+            : {}),
         }
       : {}),
   };
