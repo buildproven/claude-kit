@@ -190,6 +190,9 @@ describe("quality merge gates", () => {
     expect(STAMP_AND_MERGE).toMatch(
       /if \[ -z "\$STAMP_HEAD" \] && \[ "\$PREFLIGHT_PR_HEAD" != "\$MERGE_HEAD" \]; then/,
     );
+    expect(AUTHORIZE).toMatch(
+      /unstamped PR was already merged before exact evidence authorization/,
+    );
     expect(STAMP_AND_MERGE).not.toMatch(/HUSKY=0 git commit --allow-empty/);
     expect(AUTHORIZE).toMatch(/repo\.githubRepository/);
     expect(AUTHORIZE).toMatch(/repo\.headRefName/);

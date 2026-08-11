@@ -7,6 +7,7 @@ const {
   recordForFields,
   recordFromCheckRun,
   validateStandaloneEvidence,
+  verifyOptions,
 } = require("../quality-review-check");
 const { signEvidence, verifyEvidence } = require("../quality-review-evidence");
 
@@ -158,5 +159,22 @@ describe("quality-review-check", () => {
     expect(checkRunBody({ ...common, includeHead: false })).not.toHaveProperty(
       "head_sha",
     );
+  });
+
+  it("maps hyphenated verifier CLI options to verify parameters", () => {
+    expect(
+      verifyOptions({
+        repository: "buildproven/claude-kit",
+        head: "a".repeat(40),
+        "required-tier": "critical",
+        base: "origin/main",
+      }),
+    ).toEqual({
+      repository: "buildproven/claude-kit",
+      head: "a".repeat(40),
+      requiredTier: "critical",
+      manifestPath: undefined,
+      baseRef: "origin/main",
+    });
   });
 });

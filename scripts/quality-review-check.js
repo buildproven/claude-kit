@@ -141,6 +141,16 @@ function checkRunBody({
   return body;
 }
 
+function verifyOptions(parsed) {
+  return {
+    repository: parsed.repository,
+    head: parsed.head,
+    requiredTier: parsed["required-tier"],
+    manifestPath: parsed.manifest,
+    baseRef: parsed.base,
+  };
+}
+
 function recordFromCheckRun(checkRun) {
   const text = checkRun?.output?.text;
   if (typeof text !== "string" || text.length === 0) return null;
@@ -196,18 +206,30 @@ function publish({ manifestPath }) {
   const signature = signEvidence(fields, signingKeyFromEnvironment());
   const record = recordForFields(fields, signature);
   const existing = newestSuccessfulEvidence(checkRuns(repository, head));
+  if (
+    existing &&
+    JSON.stringify(recordFromCheckRun(existing)) === JSON.stringify(record)
+  ) {
+    process.stdout.write(
+      `${JSON.stringify({
+        checkRunId: existing.id,
+        repository,
+        head,
+        status: "already-published",
+      })}\n`,
+    );
+    return;
+  }
   const body = checkRunBody({
     repository,
     pullRequest,
     head,
     authorization,
     record,
-    includeHead: !existing,
+    includeHead: true,
   });
-  const path = existing
-    ? `repos/${repository}/check-runs/${existing.id}`
-    : `repos/${repository}/check-runs`;
-  const method = existing ? "PATCH" : "POST";
+  const path = `repos/${repository}/check-runs`;
+  const method = "POST";
   const response = parseJson(
     runGh(
       [
@@ -309,7 +331,7 @@ if (require.main === module) {
     const parsed = options(argv);
     if (command === "publish") publish({ manifestPath: parsed.manifest });
     else if (command === "verify") {
-      verify({ ...parsed, manifestPath: parsed.manifest });
+      verify(verifyOptions(parsed));
     } else {
       throw new Error(
         "usage: quality-review-check.js publish --manifest <path> | verify --repository <owner/repo> --head <sha> --base <ref> --required-tier <tier>",
@@ -329,6 +351,7 @@ module.exports = {
   recordForFields,
   recordFromCheckRun,
   checkRunBody,
+  verifyOptions,
   newestSuccessfulEvidence,
   validateStandaloneEvidence,
 };
