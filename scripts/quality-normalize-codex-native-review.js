@@ -15,6 +15,14 @@ const SAFE_CHANGE_SENTENCES = new Set([
 const AFFIRMATIVE_VERIFICATION_SENTENCES = new Set([
   "the changed files also pass `./scripts/verify-fast`",
 ]);
+const SAFE_CHANGE_PATTERNS = [
+  /\b(?:has|have)\s+no\s+(?:remaining|live)\s+(?:callers?|references?)\b/i,
+];
+const AFFIRMATIVE_VERIFICATION_PATTERNS = [
+  /\bconsistent(?:ly)?\s+with\b/i,
+  /\balign(?:s|ed)?\s+with\b/i,
+  /\bresolve(?:s|d)?\s+cleanly\b/i,
+];
 
 function parseHeader(line) {
   const prefix = line.match(/^- \[P([0-3])\] /);
@@ -75,8 +83,12 @@ function isSuccessfulVerificationSentence(
   sentence,
   { negativePrefix, contrast, incomplete },
 ) {
+  const normalized = normalizedSentence(sentence);
   return (
-    AFFIRMATIVE_VERIFICATION_SENTENCES.has(normalizedSentence(sentence)) &&
+    (AFFIRMATIVE_VERIFICATION_SENTENCES.has(normalized) ||
+      AFFIRMATIVE_VERIFICATION_PATTERNS.some((pattern) =>
+        pattern.test(normalized),
+      )) &&
     !negativePrefix.test(sentence) &&
     !contrast.test(sentence) &&
     !incomplete.test(sentence)
@@ -84,8 +96,10 @@ function isSuccessfulVerificationSentence(
 }
 
 function isSafeChangeSentence(sentence, { negativePrefix, contrast }) {
+  const normalized = normalizedSentence(sentence);
   return (
-    SAFE_CHANGE_SENTENCES.has(normalizedSentence(sentence)) &&
+    (SAFE_CHANGE_SENTENCES.has(normalized) ||
+      SAFE_CHANGE_PATTERNS.some((pattern) => pattern.test(normalized))) &&
     !negativePrefix.test(sentence) &&
     !contrast.test(sentence)
   );

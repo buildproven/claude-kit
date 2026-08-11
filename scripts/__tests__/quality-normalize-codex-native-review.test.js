@@ -66,6 +66,8 @@ Full review comments:
   it.each([
     "The setup-node version bump is applied consistently across all workflow references without altering existing inputs. The changed files also pass `./scripts/verify-fast`.",
     "The dependency upgrades and lockfile changes are consistent, resolve cleanly, and introduce no evident compatibility regressions. Type checking, linting, dependency resolution, and the affected runtime APIs succeeded.",
+    "The removed archiver targets the retired JSON queue and has no remaining callers. The ratchet and ignore updates are consistent with that cleanup and existing runtime telemetry handling.",
+    "The deleted archiver has no live references and depends on the retired JSON queue. The mypy ratchet and ignore changes align with that removal and the existing local-runtime telemetry design.",
   ])("approves verified descriptive prose: %s", (prose) => {
     expect(parseNativeReview(prose).verdict).toBe("approve");
   });
@@ -111,6 +113,9 @@ Full review comments:
     "The bump is applied consistently without altering existing inputs.",
     "Tests pass.",
     "The bump is applied consistently without altering existing inputs. Tests were not run.",
+    "The removed archiver has no remaining callers.",
+    "The removed archiver has no live references. The ratchet updates are consistent with the cleanup, but another path could not be reviewed.",
+    "The removed archiver has no live references. The ratchet updates are consistent with the cleanup, but a regression remains.",
   ])("rejects qualified no-finding prose: %s", (prose) => {
     expect(() => parseNativeReview(prose)).toThrow(/no recognizable verdict/);
   });
