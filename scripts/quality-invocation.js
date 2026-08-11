@@ -1540,6 +1540,32 @@ function providerRecoveryEligibility(
   };
 }
 
+// A deliberate pre-review supersession is an orchestration interruption, not
+// a quality verdict. It needs a new immutable packet: the
+// old packet is terminal and cannot be resumed, while the deterministic
+// identity otherwise resolves every fresh bootstrap back to that terminal
+// packet. This is intentionally narrower than a generic rerun. Once a review,
+// provider attempt, or failed gate exists, replacing the packet would let an
+// operator discard adverse evidence by labelling the campaign "superseded".
+function supersededCampaignRecoveryEligibility(
+  existing,
+  existingIdentity,
+  campaignIdentity,
+) {
+  if (
+    JSON.stringify(canonicalJson(existingIdentity)) !==
+    JSON.stringify(canonicalJson(campaignIdentity))
+  )
+    return null;
+  if (existing.terminalState?.state !== "superseded") return null;
+  if (existing.supersededBy?.invocationId) return null;
+  if ((existing.reviews || []).length !== 0) return null;
+  if ((existing.governor?.providerAttempts || []).length !== 0) return null;
+  if ((existing.gates || []).some((gate) => gate.status !== "success"))
+    return null;
+  return "explicit resume after superseded campaign";
+}
+
 function providerRecoveryManifest(
   existingPath,
   existing,
@@ -1561,9 +1587,56 @@ function providerRecoveryManifest(
   return manifestPath;
 }
 
-function existingCampaign(manifestPath, campaignIdentity) {
+function supersededCampaignSuccessor(
+  manifestPath,
+  existing,
+  supersessionChain,
+) {
+  if (
+    existing.terminalState?.state !== "superseded" ||
+    !existing.supersededBy?.manifestPath
+  )
+    return null;
+  const successorPath = existing.supersededBy.manifestPath;
+  if (supersessionChain.has(successorPath)) {
+    throw new Error("deterministic quality campaign identity collision");
+  }
+  const successor = loadManifest(successorPath);
+  if (
+    successor.manifest.supersedes?.invocationId !== existing.invocationId ||
+    successor.manifest.supersedes?.manifestPath !== manifestPath
+  ) {
+    throw new Error("deterministic quality campaign identity collision");
+  }
+  const nextChain = new Set(supersessionChain);
+  nextChain.add(manifestPath);
+  return { manifestPath: successor.manifestPath, supersessionChain: nextChain };
+}
+
+function existingCampaign(
+  manifestPath,
+  campaignIdentity,
+  supersessionChain = new Set(),
+) {
   const existing = loadManifest(manifestPath).manifest;
   const existingIdentity = manifestIdentity(existing);
+  // Fresh bootstraps always resolve the original deterministic path. When an
+  // eligible pre-review campaign has already been superseded, follow its
+  // immutable successor link instead of returning the terminal predecessor.
+  // Validate the reciprocal link and reject a cycle so a local manifest edit
+  // cannot turn a resume into an unbounded traversal or an unrelated packet.
+  const successor = supersededCampaignSuccessor(
+    manifestPath,
+    existing,
+    supersessionChain,
+  );
+  if (successor) {
+    return existingCampaign(
+      successor.manifestPath,
+      campaignIdentity,
+      successor.supersessionChain,
+    );
+  }
   const environmentReason = environmentRecoveryEligibility(
     existing,
     existingIdentity,
@@ -1593,6 +1666,20 @@ function existingCampaign(manifestPath, campaignIdentity) {
       existing,
       campaignIdentity,
       providerRecovery,
+    );
+  }
+  const supersededRecovery = supersededCampaignRecoveryEligibility(
+    existing,
+    existingIdentity,
+    campaignIdentity,
+  );
+  if (supersededRecovery) {
+    return supersedingManifest(
+      manifestPath,
+      existing,
+      campaignIdentity,
+      supersededRecovery,
+      "supersededCampaign",
     );
   }
   if (existing.environmentRecovery?.supersededBy) {

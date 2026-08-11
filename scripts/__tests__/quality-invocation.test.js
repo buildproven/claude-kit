@@ -866,6 +866,48 @@ describe("quality invocation manifest", () => {
     ).toThrow(/deterministic quality campaign identity collision/);
   });
 
+  it("replaces a superseded pre-review campaign without discarding review evidence", () => {
+    const root = repo("superseded-pre-review-recovery");
+    const predecessor = create(root);
+    invocation.withManifestLock(predecessor, (manifest) => {
+      manifest.gates.push({
+        name: "lint",
+        status: "success",
+        head: manifest.revisions.currentHead,
+      });
+    });
+    invocation.recordTerminalState(
+      predecessor,
+      "superseded",
+      "operator stopped before review",
+    );
+
+    const replacement = create(root);
+    expect(replacement).not.toBe(predecessor);
+    expect(JSON.parse(readFileSync(replacement, "utf8"))).toMatchObject({
+      supersedes: {
+        invocationId: JSON.parse(readFileSync(predecessor, "utf8"))
+          .invocationId,
+        reason: "explicit resume after superseded campaign",
+      },
+      gates: [],
+      reviews: [],
+    });
+    expect(create(root)).toBe(replacement);
+
+    invocation.withManifestLock(replacement, (manifest) => {
+      manifest.reviews.push({ status: "success", provider: "codex" });
+    });
+    invocation.recordTerminalState(
+      replacement,
+      "superseded",
+      "operator stopped after review",
+    );
+    // The deterministic root must keep resolving to this terminal packet,
+    // rather than minting another successor and discarding its review.
+    expect(create(root)).toBe(replacement);
+  });
+
   it("supersedes a pre-review missing-executable gate failure", () => {
     const root = repo("environment-recovery");
     const predecessor = create(root);
