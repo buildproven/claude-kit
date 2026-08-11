@@ -7,6 +7,7 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 const invocation = require("./quality-invocation.js");
 const taxonomy = require("./quality-condition-taxonomy.js");
+const { evidenceDigestValid } = require("./quality-ci-billing-waiver.js");
 
 // High-risk condition namespaces require an explicit, category-specific
 // acknowledgement flag in addition to --accept (BUI-575). This mirrors, but
@@ -467,7 +468,7 @@ function ensureCiBillingEvidence(manifest) {
     evidence.category !== "github-actions-billing-preallocation" ||
     !Array.isArray(evidence.failedJobs) ||
     evidence.failedJobs.length === 0 ||
-    !/^[a-f0-9]{64}$/.test(evidence.evidenceSha256 || "")
+    !evidenceDigestValid(evidence)
   ) {
     throw new Error(
       "CI billing waiver evidence is not bound to the exact PR head",

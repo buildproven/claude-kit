@@ -36,10 +36,19 @@ function canonicalJson(value) {
 }
 
 function evidenceSha256(evidence) {
+  const unsignedEvidence = { ...evidence };
+  delete unsignedEvidence.evidenceSha256;
   return require("node:crypto")
     .createHash("sha256")
-    .update(JSON.stringify(canonicalJson(evidence)))
+    .update(JSON.stringify(canonicalJson(unsignedEvidence)))
     .digest("hex");
+}
+
+function evidenceDigestValid(evidence) {
+  return (
+    /^[a-f0-9]{64}$/.test(evidence?.evidenceSha256 || "") &&
+    evidenceSha256(evidence) === evidence.evidenceSha256
+  );
 }
 
 function parseJobId(link, repository) {
@@ -255,6 +264,8 @@ if (require.main === module) {
 module.exports = {
   classifyBillingWaiver,
   configuredWaiverUntil,
+  evidenceDigestValid,
+  evidenceSha256,
   jobIsPreallocationBillingFailure,
   parseJobId,
 };

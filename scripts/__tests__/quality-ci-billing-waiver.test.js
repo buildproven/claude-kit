@@ -8,6 +8,7 @@ const require = createRequire(import.meta.url);
 const {
   classifyBillingWaiver,
   configuredWaiverUntil,
+  evidenceDigestValid,
   jobIsPreallocationBillingFailure,
   parseJobId,
 } = require(
@@ -54,6 +55,17 @@ describe("quality CI billing waiver", () => {
     expect(classify().evidenceSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(jobIsPreallocationBillingFailure(job)).toBe(true);
     expect(parseJobId(check.link, repository)).toBe("34");
+  });
+
+  it("rejects evidence tampering that retains the original digest", () => {
+    const evidence = classify();
+    expect(evidenceDigestValid(evidence)).toBe(true);
+    expect(
+      evidenceDigestValid({
+        ...evidence,
+        failedJobs: [{ check: "different", jobId: "34" }],
+      }),
+    ).toBe(false);
   });
 
   it.each([

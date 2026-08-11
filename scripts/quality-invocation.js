@@ -16,6 +16,7 @@ const { execFileSync, spawnSync } = require("child_process");
 const riskScore = require("./risk-score.js");
 const agentSelection = require("./quality-agent-selection.js");
 const conditionTaxonomy = require("./quality-condition-taxonomy.js");
+const { evidenceDigestValid } = require("./quality-ci-billing-waiver.js");
 
 const SCHEMA_VERSION = 1;
 const REVIEW_CONTRACT_VERSION = 2;
@@ -2862,6 +2863,7 @@ function assertApprovalPayloadShape(manifest, payload) {
       evidence.category !== "github-actions-billing-preallocation" ||
       !Array.isArray(evidence.failedJobs) ||
       evidence.failedJobs.length === 0 ||
+      !evidenceDigestValid(evidence) ||
       evidence.evidenceSha256 !== payload.ciBillingEvidenceSha256
     ) {
       throw new Error("CI billing waiver evidence binding is invalid");

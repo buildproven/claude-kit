@@ -20,6 +20,24 @@ done
 source "$SCRIPT_DIR/quality-repo-lease-pin.sh" || exit 1
 quality_pin_repository_lease "$MANIFEST" || exit 1
 
+verify_ci_billing_digest() {
+  local artifact="$1"
+  local expected="$2"
+  node - "$SCRIPT_DIR" "$artifact" "$expected" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const [scriptDir, artifactPath, expected] = process.argv.slice(2);
+const { evidenceDigestValid } = require(path.join(
+  scriptDir,
+  "quality-ci-billing-waiver.js",
+));
+const evidence = JSON.parse(fs.readFileSync(artifactPath, "utf8"));
+if (!evidenceDigestValid(evidence) || evidence.evidenceSha256 !== expected) {
+  process.exit(1);
+}
+NODE
+}
+
 node "$SCRIPT_DIR/quality-invocation.js" review-authorization "$MANIFEST" >/dev/null || exit 1
 MERGE_REQUESTED="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" options.merge)"
 [ "$MERGE_REQUESTED" = true ] || {
@@ -161,8 +179,7 @@ else
     if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
       --scope operator-ci-billing-override >/dev/null 2>&1; then
       SIGNED_WAIVER_DIGEST="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" approval.ciBillingEvidenceSha256)"
-      LIVE_WAIVER_DIGEST="$(jq -r '.evidenceSha256 // empty' "$CI_BILLING_WAIVER_ARTIFACT")"
-      [ -n "$SIGNED_WAIVER_DIGEST" ] && [ "$SIGNED_WAIVER_DIGEST" = "$LIVE_WAIVER_DIGEST" ] || {
+      verify_ci_billing_digest "$CI_BILLING_WAIVER_ARTIFACT" "$SIGNED_WAIVER_DIGEST" || {
         echo "❌ MERGE BLOCKED: live CI billing evidence differs from the signed operator diagnosis." >&2
         exit 1
       }
@@ -453,8 +470,7 @@ if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
   }
   if [ "$OPERATOR_CI_BILLING_APPROVED" = true ]; then
     SIGNED_WAIVER_DIGEST="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" approval.ciBillingEvidenceSha256)"
-    LIVE_WAIVER_DIGEST="$(jq -r '.evidenceSha256 // empty' "$CI_BILLING_WAIVER_ARTIFACT")"
-    [ -n "$SIGNED_WAIVER_DIGEST" ] && [ "$SIGNED_WAIVER_DIGEST" = "$LIVE_WAIVER_DIGEST" ] || {
+    verify_ci_billing_digest "$CI_BILLING_WAIVER_ARTIFACT" "$SIGNED_WAIVER_DIGEST" || {
       echo "❌ MERGE BLOCKED: live CI billing evidence differs from the signed operator diagnosis." >&2
       exit 1
     }
