@@ -51,6 +51,10 @@ describe("quality review input boundary", () => {
     expect(first.inputDigest).not.toBe(changed.inputDigest);
   });
 
+  it("keeps the provider envelope compact to avoid formatting-token waste", () => {
+    expect(build().serialized).not.toContain("\n");
+  });
+
   it("rejects missing verification evidence instead of omitting its field", () => {
     expect(() => build({ priorFindings: undefined })).toThrow(
       "review input 'priorFindings' must be text",

@@ -47,7 +47,8 @@ const {
   coveredReviews,
 } = require("./quality-review-history");
 
-const TELEMETRY_SCHEMA_VERSION = 4;
+const TELEMETRY_SCHEMA_VERSION = 5;
+const REVIEW_TOKEN_CHARS_PER_TOKEN = 4;
 const TELEMETRY_TERMINAL_STATES = new Set([
   "merged",
   "verified-unmerged",
@@ -154,6 +155,99 @@ function coveredFiles(manifest, execFileSync) {
       .filter(Boolean);
   } catch {
     return [];
+  }
+}
+
+/**
+ * Estimate review token volume from the immutable provider artifacts. Provider
+ * CLIs do not expose one stable usage schema, so these are explicitly a proxy,
+ * never reported provider usage. Counting the prompt files that were actually
+ * sent avoids charging a review for repository context that the runtime
+ * deliberately prepared outside the provider clock.
+ */
+function artifactNames(review) {
+  if (!review.artifactDir || typeof review.artifactDir !== "string") return [];
+  try {
+    return fs.readdirSync(review.artifactDir);
+  } catch {
+    return [];
+  }
+}
+
+function sumArtifactChars(directory, names, multiplier = 1) {
+  return names.reduce(
+    (sum, name) =>
+      sum + readableArtifactChars(path.join(directory, name)) * multiplier,
+    0,
+  );
+}
+
+function measureReviewArtifacts(review, agentCount) {
+  const names = artifactNames(review);
+  if (names.length === 0) return { inputChars: 0, outputChars: 0 };
+  const providerPromptNames = names.filter((name) =>
+    /^(?:codex-\d+|gemini-\d+)\.prompt$/.test(name),
+  );
+  const claudePromptNames = names.filter(
+    (name) => name === "review-prompt.txt",
+  );
+  const promptNames =
+    providerPromptNames.length > 0 ? providerPromptNames : claudePromptNames;
+  const claudeMultiplier =
+    review.provider === "claude" ? Math.max(1, agentCount) : 1;
+  return {
+    inputChars: sumArtifactChars(
+      review.artifactDir,
+      promptNames,
+      claudeMultiplier,
+    ),
+    outputChars: sumArtifactChars(
+      review.artifactDir,
+      names.filter((name) => /\.normalized\.json$/.test(name)),
+    ),
+  };
+}
+
+function reviewTokenProxy(manifest) {
+  let inputChars = 0;
+  let outputChars = 0;
+  const reviews = Array.isArray(manifest.reviews) ? manifest.reviews : [];
+  const agentCount = Array.isArray(manifest.agents)
+    ? manifest.agents.length
+    : 0;
+  for (const review of reviews) {
+    const measures = measureReviewArtifacts(review, agentCount);
+    inputChars += measures.inputChars;
+    outputChars += measures.outputChars;
+  }
+  const hasMeasurements = inputChars > 0 || outputChars > 0;
+  return {
+    reviewInputChars: hasMeasurements ? inputChars : null,
+    reviewInputTokensEstimated: hasMeasurements
+      ? Math.ceil(inputChars / REVIEW_TOKEN_CHARS_PER_TOKEN)
+      : null,
+    reviewOutputChars: hasMeasurements ? outputChars : null,
+    reviewOutputTokensEstimated: hasMeasurements
+      ? Math.ceil(outputChars / REVIEW_TOKEN_CHARS_PER_TOKEN)
+      : null,
+    reviewTokenEstimateSource: hasMeasurements
+      ? `artifact-chars/${REVIEW_TOKEN_CHARS_PER_TOKEN}`
+      : null,
+  };
+}
+
+function readableArtifactChars(file) {
+  let descriptor;
+  try {
+    const noFollow = fs.constants.O_NOFOLLOW || 0;
+    descriptor = fs.openSync(file, fs.constants.O_RDONLY | noFollow);
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile()) return 0;
+    return fs.readFileSync(descriptor, "utf8").length;
+  } catch {
+    return 0;
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
   }
 }
 
@@ -287,8 +381,11 @@ function reviewFields(manifest) {
     reviewProvider: provider.reviewer ?? null,
     reviewEffort: provider.effort ?? null,
     // Provider CLIs do not expose a stable cross-provider token counter yet.
-    // Preserve the absence explicitly rather than estimating from wall time.
+    // Preserve the absence explicitly; the separate proxy fields below are
+    // measured from exact prompt/output artifacts and never masquerade as
+    // provider-reported usage.
     reviewTokens: null,
+    ...reviewTokenProxy(manifest),
     reviewStatus: incomplete
       ? "incomplete"
       : exempt
@@ -325,6 +422,11 @@ function validateRecord(record) {
     record.providerDurationSeconds === null ||
     (Number.isInteger(record.providerDurationSeconds) &&
       record.providerDurationSeconds >= 0);
+  const validProxyMetric = (value) =>
+    value === null || (Number.isInteger(value) && value >= 0);
+  const validProxySource =
+    record.reviewTokenEstimateSource === null ||
+    record.reviewTokenEstimateSource === "artifact-chars/4";
   const validTerminalState =
     record.terminalState === null ||
     TELEMETRY_TERMINAL_STATES.has(record.terminalState);
@@ -338,6 +440,11 @@ function validateRecord(record) {
     (record.reviewEffort === null || typeof record.reviewEffort === "string") &&
     validTokens &&
     validProviderDuration &&
+    validProxyMetric(record.reviewInputChars) &&
+    validProxyMetric(record.reviewInputTokensEstimated) &&
+    validProxyMetric(record.reviewOutputChars) &&
+    validProxyMetric(record.reviewOutputTokensEstimated) &&
+    validProxySource &&
     validTerminalState &&
     [null, "complete", "incomplete", "policy-exempt"].includes(
       record.reviewStatus,
@@ -474,6 +581,7 @@ module.exports = {
   resolveTelemetryFile,
   successfulReviewCount,
   coveredFiles,
+  reviewTokenProxy,
   deriveVerdict,
   buildRecord,
   deterministicBlockingCount,
