@@ -642,7 +642,17 @@ function reviewBudgetDecision(context, sentinelPath) {
       error: `[quality] governor sentinel missing required fields at ${sentinelPath} — failing CLOSED (halting), not silently passing.\n`,
     };
   }
-  if (result.roundTripped) {
+  // A manifest campaign reserves one bounded verification pass after the
+  // normal fix/re-review cap when remediation consumed the ordinary budget.
+  // Evaluate that exception before the generic round-cap error; otherwise
+  // `result.roundTripped` makes the reserved path unreachable by definition.
+  const mandatoryOverride = mandatoryValidationHasReservedBudget(
+    state,
+    priorRounds,
+    result,
+    sentinelPath,
+  );
+  if (result.roundTripped && !mandatoryOverride) {
     return {
       result,
       error:
@@ -651,12 +661,6 @@ function reviewBudgetDecision(context, sentinelPath) {
         `[quality] Override deliberately with BS_QUALITY_MAX_REVIEW_ROUNDS if a repo genuinely needs more.\n`,
     };
   }
-  const mandatoryOverride = mandatoryValidationHasReservedBudget(
-    state,
-    priorRounds,
-    result,
-    sentinelPath,
-  );
   if (result.ok || mandatoryOverride) {
     return { result, mandatoryOverride };
   }
