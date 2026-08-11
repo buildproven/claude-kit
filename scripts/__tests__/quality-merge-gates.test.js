@@ -238,6 +238,8 @@ describe("quality merge gates", () => {
     expect(AUTHORIZE).toMatch(
       /quality-ci-billing-waiver\.js[\s\S]*LEASE_ADMIN=true/,
     );
+    expect(STAMP_AND_MERGE).toContain("BS_QUALITY_ALLOW_LOCAL_REVIEW_EVIDENCE");
+    expect(VALIDATOR).toContain("QUALITY_LOCAL_REVIEW");
   });
 
   it("validates an exact-head billing waiver before bypassing the green-CI guard", () => {

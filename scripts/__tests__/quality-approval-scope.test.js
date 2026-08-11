@@ -70,9 +70,39 @@ describe("quality approve command scope parsing", () => {
       "--head",
       head,
       "--override-ci-billing",
+      "--reason",
+      "known Actions billing outage",
+      "--ci-failure",
+      "failed",
+      "--accept",
+      "ci:failed",
+      "--i-understand-missing-ci",
     ]);
-    expect(parsed.scope).toBe("operator-ci-billing-override");
+    expect(parsed).toMatchObject({
+      scope: "operator-ci-billing-override",
+      reason: "known Actions billing outage",
+      ciFailureReason: "failed",
+      acceptedConditions: ["ci:failed"],
+    });
     expect(parsed.argv).not.toContain("--override-ci-billing");
+  });
+
+  it("requires a classified CI failure for the billing override", () => {
+    expect(() =>
+      parseApprovalCommand([
+        "approve",
+        "--pr",
+        "676",
+        "--head",
+        head,
+        "--override-ci-billing",
+        "--reason",
+        "known Actions billing outage",
+        "--accept",
+        "ci:failed",
+        "--i-understand-missing-ci",
+      ]),
+    ).toThrow(/--ci-failure/);
   });
 
   it("rejects combining two override flags on one capability", () => {
@@ -111,6 +141,13 @@ describe("quality approve command scope parsing", () => {
       "--head",
       head,
       "--override-ci-billing",
+      "--reason",
+      "known Actions billing outage",
+      "--ci-failure",
+      "failed",
+      "--accept",
+      "ci:failed",
+      "--i-understand-missing-ci",
       "--merge",
     ]);
     expect(parsed.argv).toEqual(["--pr", "676", "--merge"]);

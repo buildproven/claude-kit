@@ -47,8 +47,63 @@ if [ -z "$QUALITY_TRAILER" ]; then
   # synthetic child commit or its trailers. Legacy stamped campaigns continue
   # through the trailer validator below for resumability.
   if [ -n "$MANIFEST" ]; then
-    node "$SCRIPT_DIR/quality-review-check.js" verify \
-      --manifest "$MANIFEST" --required-tier "$REQUIRED_TIER"
+    if { [ "${QUALITY_LOCAL_REVIEW:-false}" = true ] ||
+      { [ "${QUALITY_CI_BILLING_LOCAL_REVIEW:-false}" = true ] &&
+        node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
+          --scope operator-ci-billing-override >/dev/null 2>&1; }; }; then
+      # A user token cannot create GitHub check-runs (the API requires an App
+      # token). Under the exact-head, independently verified billing waiver,
+      # use the persisted local review checkpoint instead of pretending a
+      # remote check exists. The operator capability and CI waiver remain the
+      # separate, signed authorities for this exceptional path.
+      AUTHORIZATION="$(node "$SCRIPT_DIR/quality-invocation.js" \
+        review-authorization "$MANIFEST")" || exit 1
+      AUTH_HEAD="$(printf '%s' "$AUTHORIZATION" | jq -r '.head')"
+      AUTH_BASE="$(printf '%s' "$AUTHORIZATION" | jq -r '.base')"
+      AUTH_TIER="$(printf '%s' "$AUTHORIZATION" | jq -r '.tier')"
+      AUTH_FINDINGS="$(printf '%s' "$AUTHORIZATION" | jq -r '.blockingCount')"
+      AUTH_STATUS="$(printf '%s' "$AUTHORIZATION" | jq -r '.reviewStatus // empty')"
+      CURRENT_HEAD="$(git rev-parse HEAD)"
+      CURRENT_BASE="$(git merge-base HEAD "$BASE_REF")" || exit 1
+      [ "$AUTH_HEAD" = "$CURRENT_HEAD" ] || {
+        echo "local review evidence head is stale" >&2
+        exit 1
+      }
+      [ "$AUTH_BASE" = "$CURRENT_BASE" ] || {
+        echo "local review evidence base is stale" >&2
+        exit 1
+      }
+      [ "$AUTH_FINDINGS" = 0 ] || {
+        echo "local review evidence contains blocking findings" >&2
+        exit 1
+      }
+      [ "$AUTH_STATUS" = complete ] || {
+        echo "local review evidence is not complete" >&2
+        exit 1
+      }
+      rank() {
+        case "$1" in
+          low) echo 0 ;; medium) echo 1 ;; high) echo 2 ;; critical) echo 3 ;;
+          *) return 1 ;;
+        esac
+      }
+      AUTH_RANK="$(rank "$AUTH_TIER")" || {
+        echo "local review evidence tier is invalid" >&2
+        exit 1
+      }
+      REQUIRED_RANK="$(rank "$REQUIRED_TIER")" || {
+        echo "required quality tier is invalid" >&2
+        exit 1
+      }
+      [ "$AUTH_RANK" -ge "$REQUIRED_RANK" ] || {
+        echo "local review evidence tier is below the required tier" >&2
+        exit 1
+      }
+      echo "[quality] verified local signed review checkpoint for exact-head merge" >&2
+    else
+      node "$SCRIPT_DIR/quality-review-check.js" verify \
+        --manifest "$MANIFEST" --required-tier "$REQUIRED_TIER"
+    fi
   else
     REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
     node "$SCRIPT_DIR/quality-review-check.js" verify \

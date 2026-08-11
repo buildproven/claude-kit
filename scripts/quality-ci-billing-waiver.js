@@ -23,6 +23,48 @@ function parseJson(raw, label) {
   }
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicalJson(value[key])]),
+    );
+  }
+  return value;
+}
+
+function canonicalEvidence(value) {
+  const normalized = { ...value };
+  for (const field of ["failedJobs", "successfulOrSkippedChecks"]) {
+    if (Array.isArray(normalized[field])) {
+      normalized[field] = [...normalized[field]].sort((left, right) =>
+        JSON.stringify(canonicalJson(left)).localeCompare(
+          JSON.stringify(canonicalJson(right)),
+        ),
+      );
+    }
+  }
+  return canonicalJson(normalized);
+}
+
+function evidenceSha256(evidence) {
+  const unsignedEvidence = { ...evidence };
+  delete unsignedEvidence.evidenceSha256;
+  return require("node:crypto")
+    .createHash("sha256")
+    .update(JSON.stringify(canonicalEvidence(unsignedEvidence)))
+    .digest("hex");
+}
+
+function evidenceDigestValid(evidence) {
+  return (
+    /^[a-f0-9]{64}$/.test(evidence?.evidenceSha256 || "") &&
+    evidenceSha256(evidence) === evidence.evidenceSha256
+  );
+}
+
 function parseJobId(link, repository) {
   const escaped = repository.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = String(link || "").match(
@@ -127,7 +169,7 @@ function classifyBillingWaiver({
       completedAt: job.completed_at,
     };
   });
-  return {
+  const evidence = {
     schemaVersion: 1,
     category: "github-actions-billing-preallocation",
     repository,
@@ -138,6 +180,10 @@ function classifyBillingWaiver({
     successfulOrSkippedChecks: checks
       .filter((check) => check.state !== WAIVABLE_STATE)
       .map((check) => ({ name: check.name, state: check.state })),
+  };
+  return {
+    ...evidence,
+    evidenceSha256: evidenceSha256(evidence),
   };
 }
 
@@ -232,6 +278,8 @@ if (require.main === module) {
 module.exports = {
   classifyBillingWaiver,
   configuredWaiverUntil,
+  evidenceDigestValid,
+  evidenceSha256,
   jobIsPreallocationBillingFailure,
   parseJobId,
 };

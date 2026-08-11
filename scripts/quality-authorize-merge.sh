@@ -20,6 +20,24 @@ done
 source "$SCRIPT_DIR/quality-repo-lease-pin.sh" || exit 1
 quality_pin_repository_lease "$MANIFEST" || exit 1
 
+verify_ci_billing_digest() {
+  local artifact="$1"
+  local expected="$2"
+  node - "$SCRIPT_DIR" "$artifact" "$expected" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const [scriptDir, artifactPath, expected] = process.argv.slice(2);
+const { evidenceDigestValid } = require(path.join(
+  scriptDir,
+  "quality-ci-billing-waiver.js",
+));
+const evidence = JSON.parse(fs.readFileSync(artifactPath, "utf8"));
+if (!evidenceDigestValid(evidence) || evidence.evidenceSha256 !== expected) {
+  process.exit(1);
+}
+NODE
+}
+
 node "$SCRIPT_DIR/quality-invocation.js" review-authorization "$MANIFEST" >/dev/null || exit 1
 MERGE_REQUESTED="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" options.merge)"
 [ "$MERGE_REQUESTED" = true ] || {
@@ -158,6 +176,14 @@ else
       echo "❌ MERGE BLOCKED: CI billing waiver no longer matches live exact-HEAD evidence." >&2
       exit 1
     }
+    if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
+      --scope operator-ci-billing-override >/dev/null 2>&1; then
+      SIGNED_WAIVER_DIGEST="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" approval.ciBillingEvidenceSha256)"
+      verify_ci_billing_digest "$CI_BILLING_WAIVER_ARTIFACT" "$SIGNED_WAIVER_DIGEST" || {
+        echo "❌ MERGE BLOCKED: live CI billing evidence differs from the signed operator diagnosis." >&2
+        exit 1
+      }
+    fi
     CI_BILLING_WAIVED=true
   fi
 fi
@@ -384,9 +410,16 @@ fi
   exit 0
 }
 BASE_REF="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseRef)"
-bash "$SCRIPT_DIR/quality-validate-review-trailers.sh" \
-  --manifest "$MANIFEST" --base "$BASE_REF" \
-  --required-tier "$TIER" --require-signature || exit 1
+if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
+  QUALITY_CI_BILLING_LOCAL_REVIEW=true bash \
+    "$SCRIPT_DIR/quality-validate-review-trailers.sh" \
+    --manifest "$MANIFEST" --base "$BASE_REF" \
+    --required-tier "$TIER" --require-signature || exit 1
+else
+  bash "$SCRIPT_DIR/quality-validate-review-trailers.sh" \
+    --manifest "$MANIFEST" --base "$BASE_REF" \
+    --required-tier "$TIER" --require-signature || exit 1
+fi
 FINAL_PR_JSON="$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \
   --json headRefName,headRefOid,baseRefName)" || exit 1
 [ "$(printf '%s' "$FINAL_PR_JSON" | jq -r '.headRefName')" = "$EXPECTED_HEAD_REF" ] || {
@@ -435,6 +468,13 @@ if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
     echo "❌ MERGE BLOCKED: CI billing waiver changed before merge." >&2
     exit 1
   }
+  if [ "$OPERATOR_CI_BILLING_APPROVED" = true ]; then
+    SIGNED_WAIVER_DIGEST="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" approval.ciBillingEvidenceSha256)"
+    verify_ci_billing_digest "$CI_BILLING_WAIVER_ARTIFACT" "$SIGNED_WAIVER_DIGEST" || {
+      echo "❌ MERGE BLOCKED: live CI billing evidence differs from the signed operator diagnosis." >&2
+      exit 1
+    }
+  fi
   LEASE_ADMIN=true
   echo "⚠️  [quality] using admin merge only for verified GitHub Actions billing preallocation failures." >&2
 fi

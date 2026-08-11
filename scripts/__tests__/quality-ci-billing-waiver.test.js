@@ -8,6 +8,7 @@ const require = createRequire(import.meta.url);
 const {
   classifyBillingWaiver,
   configuredWaiverUntil,
+  evidenceDigestValid,
   jobIsPreallocationBillingFailure,
   parseJobId,
 } = require(
@@ -51,8 +52,42 @@ describe("quality CI billing waiver", () => {
       head,
       failedJobs: [{ check: "test", jobId: "34" }],
     });
+    expect(classify().evidenceSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(jobIsPreallocationBillingFailure(job)).toBe(true);
     expect(parseJobId(check.link, repository)).toBe("34");
+  });
+
+  it("rejects evidence tampering that retains the original digest", () => {
+    const evidence = classify();
+    expect(evidenceDigestValid(evidence)).toBe(true);
+    expect(
+      evidenceDigestValid({
+        ...evidence,
+        failedJobs: [{ check: "different", jobId: "34" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps equivalent evidence digests stable when GitHub reorders results", () => {
+    const secondCheck = {
+      name: "security",
+      state: "FAILURE",
+      link: "https://github.com/owner/repo/actions/runs/12/job/35",
+    };
+    const secondJob = {
+      ...job,
+      started_at: "2026-07-20T01:00:04Z",
+      completed_at: "2026-07-20T01:00:07Z",
+    };
+    const ordered = classify({
+      checks: [check, secondCheck],
+      jobsById: { 34: job, 35: secondJob },
+    });
+    const reversed = classify({
+      checks: [secondCheck, check],
+      jobsById: { 34: job, 35: secondJob },
+    });
+    expect(reversed.evidenceSha256).toBe(ordered.evidenceSha256);
   });
 
   it.each([

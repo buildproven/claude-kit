@@ -88,6 +88,7 @@ PERSISTED_REMOTE="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" m
 }
 
 MERGE_HEAD="$REVIEWED_HEAD"
+LOCAL_REVIEW_EVIDENCE=false
 if [ -n "$STAMP_HEAD" ]; then
   # Backward compatibility for campaigns that were created before the
   # check-run evidence transport landed. Never create another stamp, but let
@@ -126,8 +127,18 @@ else
     exit 1
   }
   # Publish signed evidence on the reviewed commit itself. This is idempotent
-  # and never rewrites or force-pushes the PR branch.
-  node "$SCRIPT_DIR/quality-review-check.js" publish --manifest "$MANIFEST" >/dev/null
+  # and never rewrites or force-pushes the PR branch. GitHub's check-run API
+  # requires an App token; during a verified Actions billing outage the signed
+  # operator capability is the explicit local evidence transport instead.
+  if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
+    --scope operator-ci-billing-override >/dev/null 2>&1; then
+    echo "⚠️  [quality] skipping GitHub review check publication under the exact-head CI billing override; final authorization will validate the local signed review checkpoint." >&2
+  elif [ "${BS_QUALITY_ALLOW_LOCAL_REVIEW_EVIDENCE:-false}" = true ]; then
+    LOCAL_REVIEW_EVIDENCE=true
+    echo "⚠️  [quality] using local signed review evidence; the protected PR's required checks remain mandatory and will be verified below." >&2
+  else
+    node "$SCRIPT_DIR/quality-review-check.js" publish --manifest "$MANIFEST" >/dev/null
+  fi
 fi
 
 if [ -z "$STAMP_HEAD" ] && [ "$PREFLIGHT_PR_HEAD" != "$MERGE_HEAD" ]; then
@@ -256,6 +267,9 @@ fi
 }
 if [ "$CI_BILLING_WAIVED" = true ]; then
   BS_QUALITY_CI_BILLING_WAIVER_ARTIFACT="$CI_WAIVER_ARTIFACT" \
+    bash "$SCRIPT_DIR/quality-authorize-merge.sh" --manifest "$MANIFEST"
+elif [ "$LOCAL_REVIEW_EVIDENCE" = true ]; then
+  QUALITY_LOCAL_REVIEW=true \
     bash "$SCRIPT_DIR/quality-authorize-merge.sh" --manifest "$MANIFEST"
 else
   bash "$SCRIPT_DIR/quality-authorize-merge.sh" --manifest "$MANIFEST"
