@@ -107,6 +107,42 @@ describe("quality review evidence signatures", () => {
     );
   });
 
+  it("binds operator override scope and approval details into signed evidence", () => {
+    const override = {
+      ...fields,
+      reviewer: "operator-quality-override",
+      primary: "unavailable",
+      fallback: "unavailable",
+      contractVersion: 2,
+      leads: 0,
+      reviewStatus: "incomplete",
+      policyDigest: "c".repeat(64),
+      agentsSha256: "d".repeat(64),
+      domain: "operator-override",
+      selectionRule: "operator-override",
+      repositoryKey: "repository-key",
+      diffSha256: "e".repeat(64),
+      evidenceSha256: "f".repeat(64),
+      override: {
+        scope: "operator-quality-override",
+        reason: "accepted bounded gate failure",
+        acceptedConditions: ["gate:test"],
+        approver: "brett",
+        issuedAt: "2026-08-11T12:00:00.000Z",
+        expiresAt: "2026-08-11T12:15:00.000Z",
+        artifactSha256: "1".repeat(64),
+      },
+    };
+    const keys = keyPair();
+    const signature = signEvidence(override, keys.privateKey);
+    expect(verifyEvidence(override, signature, keys.publicKey)).toMatchObject(
+      override,
+    );
+    expect(() =>
+      signEvidence({ ...override, override: undefined }, keys.privateKey),
+    ).toThrow(/operator override evidence is required/);
+  });
+
   it("rejects policy-exempt as a configured fallback reviewer", () => {
     expect(() =>
       signEvidence(
@@ -168,6 +204,25 @@ describe("quality review evidence signatures", () => {
       reviewer: "operator-quality-override",
       primary: "unavailable",
       fallback: "unavailable",
+      contractVersion: 2,
+      leads: 0,
+      reviewStatus: "incomplete",
+      policyDigest: "c".repeat(64),
+      agentsSha256: "d".repeat(64),
+      domain: "operator-override",
+      selectionRule: "operator-override",
+      repositoryKey: "repository-key",
+      diffSha256: "e".repeat(64),
+      evidenceSha256: "f".repeat(64),
+      override: {
+        scope: "operator-quality-override",
+        reason: "accepted bounded gate failure",
+        acceptedConditions: ["gate:test"],
+        approver: "brett",
+        issuedAt: "2026-08-11T12:00:00.000Z",
+        expiresAt: "2026-08-11T12:15:00.000Z",
+        artifactSha256: "1".repeat(64),
+      },
     };
     const signature = signEvidence(override, keys.privateKey);
     expect(verifyEvidence(override, signature, keys.publicKey)).toMatchObject(

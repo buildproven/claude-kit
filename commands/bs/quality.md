@@ -187,7 +187,8 @@ invocation drift, or expiry, refuses reuse and requires a fresh, explicit
 decision. Deterministic gates and mutation evidence still gate the merge for
 every condition that was NOT explicitly accepted; CI, protected-base
 freshness, and the merge audit trail remain mandatory regardless of what was
-accepted. The resulting stamp carries `Quality-Override:
+accepted. New campaigns carry this decision in signed exact-head evidence;
+legacy stamped campaigns additionally carry `Quality-Override:
 operator-quality-override`, `Quality-Override-Reason`,
 `Quality-Override-Accepted`, and `Quality-Override-Approver` alongside — not
 instead of — the normal evidence trailers; it never fabricates a clean AI

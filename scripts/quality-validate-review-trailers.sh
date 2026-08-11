@@ -41,7 +41,22 @@ fi
 
 PARSED="$(git log -1 --format=%B | git interpret-trailers --parse 2>/dev/null)"
 QUALITY_TRAILER="$(printf '%s\n' "$PARSED" | grep -E '^Reviewed-By: quality( |$)' | head -1)"
-[ -n "$QUALITY_TRAILER" ] || { echo "quality trailer missing on HEAD" >&2; exit 1; }
+if [ -z "$QUALITY_TRAILER" ]; then
+  # New campaigns keep the reviewed branch immutable. Their signed evidence
+  # lives in an exact-head GitHub check run, so validation must not require a
+  # synthetic child commit or its trailers. Legacy stamped campaigns continue
+  # through the trailer validator below for resumability.
+  if [ -n "$MANIFEST" ]; then
+    node "$SCRIPT_DIR/quality-review-check.js" verify \
+      --manifest "$MANIFEST" --required-tier "$REQUIRED_TIER"
+  else
+    REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
+    node "$SCRIPT_DIR/quality-review-check.js" verify \
+      --repository "$REPOSITORY" --head "$(git rev-parse HEAD)" --base "$BASE_REF" \
+      --required-tier "$REQUIRED_TIER"
+  fi
+  exit $?
+fi
 for key in Quality-Tier Quality-Reviewer Quality-Primary Quality-Fallback Quality-Findings Quality-Head Quality-Base; do
   [ "$(printf '%s\n' "$PARSED" | grep -c "^${key}: ")" -eq 1 ] || {
     echo "quality trailer ${key} is missing or duplicated" >&2
