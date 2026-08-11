@@ -12,6 +12,28 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.6.0](https://github.com/buildproven/claude-kit/compare/v4.5.0...v4.6.0) (2026-08-11)
+
+
+### Features
+
+* **quality:** measure review token proxy and compact prompts ([#314](https://github.com/buildproven/claude-kit/issues/314)) ([b2cf5b2](https://github.com/buildproven/claude-kit/commit/b2cf5b24ced15678034648dcd2689443d292f475))
+
+
+### Bug Fixes
+
+* accept successful primary critical reviews ([#315](https://github.com/buildproven/claude-kit/issues/315)) ([be4560b](https://github.com/buildproven/claude-kit/commit/be4560b05b78bb29dd7f7a0e799511d21b1c46dd))
+* bound provider review to prepared evidence ([08564ec](https://github.com/buildproven/claude-kit/commit/08564ec69a06725f278b25147a52708f5a13d7d2))
+* **quality:** generalize descriptive Codex approvals ([#311](https://github.com/buildproven/claude-kit/issues/311)) ([4625f4f](https://github.com/buildproven/claude-kit/commit/4625f4fe32f85f382e03fdd3ce8bd77275dc8231))
+* **quality:** recover interrupted gate campaigns ([#316](https://github.com/buildproven/claude-kit/issues/316)) ([b2daa22](https://github.com/buildproven/claude-kit/commit/b2daa2285b3a3f5331f7f3c82f498b8490516b14))
+* **quality:** remove new empty stamp commits ([#313](https://github.com/buildproven/claude-kit/issues/313)) ([7248646](https://github.com/buildproven/claude-kit/commit/72486465f2e938a498d5f9a98cfa5a9b5bd8edde))
+* reap detached provider helpers ([25c76b5](https://github.com/buildproven/claude-kit/commit/25c76b569e57ebbf6ea97d6e55c20ad3648b089d))
+
+
+### Performance Improvements
+
+* throttle provider tree tracking ([#312](https://github.com/buildproven/claude-kit/issues/312)) ([3567e24](https://github.com/buildproven/claude-kit/commit/3567e246aff663eb8e7952a534088984ab3cc4fe))
+
 ## [4.5.0](https://github.com/buildproven/claude-kit/compare/v4.4.3...v4.5.0) (2026-08-10)
 
 
