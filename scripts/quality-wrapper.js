@@ -101,6 +101,14 @@ const APPROVAL_SCOPE_FLAGS = {
   "--override-quality": "operator-quality-override",
   "--override-ci-billing": "operator-ci-billing-override",
 };
+const OPERATOR_OVERRIDE_SCOPES = new Set([
+  "operator-quality-override",
+  "operator-ci-billing-override",
+]);
+
+function isOperatorOverrideScope(scope) {
+  return OPERATOR_OVERRIDE_SCOPES.has(scope);
+}
 
 function readManifestArgument(value, nextValue, currentManifest) {
   const matched = value === "--manifest" || value.startsWith("--manifest=");
@@ -125,6 +133,8 @@ function bootstrapArgsForManifest(forwarded, exactManifest) {
     if (value.startsWith("--pr=")) return false;
     if (value === "--pr") return false;
     if (index > 0 && forwarded[index - 1] === "--pr") return false;
+    if (value === "--ci-failure") return false;
+    if (index > 0 && forwarded[index - 1] === "--ci-failure") return false;
     return true;
   });
   if (nonIdentityArgs.length > 0) {
@@ -143,6 +153,7 @@ function scanApprovalArgv(argv, initialScope) {
   let scope = initialScope;
   let reason = null;
   let acceptRaw = null;
+  let ciFailureReason = null;
   const acknowledgedFlags = [];
   const ackFlagNames = new Set(HIGH_RISK_ACK_FLAGS.map((entry) => entry.flag));
   for (let index = 1; index < argv.length; index += 1) {
@@ -170,6 +181,10 @@ function scanApprovalArgv(argv, initialScope) {
       reason = argv[++index];
     } else if (value.startsWith("--reason=")) {
       reason = value.slice("--reason=".length);
+    } else if (value === "--ci-failure") {
+      ciFailureReason = argv[++index];
+    } else if (value.startsWith("--ci-failure=")) {
+      ciFailureReason = value.slice("--ci-failure=".length);
     } else if (value === "--accept") {
       acceptRaw = argv[++index];
     } else if (value.startsWith("--accept=")) {
@@ -194,6 +209,7 @@ function scanApprovalArgv(argv, initialScope) {
     scope,
     reason,
     acceptRaw,
+    ciFailureReason,
     acknowledgedFlags,
   };
 }
@@ -255,8 +271,16 @@ function parseApprovalCommand(argv) {
   if (!/^[0-9a-f]{40}$/.test(scanned.expectedHead || "")) {
     throw new Error("quality approve requires --head <exact-40-character-sha>");
   }
-  const isOverride = scanned.scope === "operator-quality-override";
+  const isOverride = isOperatorOverrideScope(scanned.scope);
   const acceptedConditions = taxonomy.parseAcceptList(scanned.acceptRaw);
+  if (
+    scanned.scope === "operator-ci-billing-override" &&
+    !["missing", "failed", "pending", "stale"].includes(scanned.ciFailureReason)
+  ) {
+    throw new Error(
+      "CI billing override requires --ci-failure <missing|failed|pending|stale>",
+    );
+  }
   assertOverrideRequestComplete(
     isOverride,
     scanned.reason,
@@ -272,6 +296,7 @@ function parseApprovalCommand(argv) {
     scope: scanned.scope,
     reason: scanned.reason,
     acceptedConditions,
+    ciFailureReason: scanned.ciFailureReason,
     acknowledgedFlags: scanned.acknowledgedFlags,
     exactManifest: scanned.exactManifest,
   };
@@ -372,7 +397,9 @@ function resolveOverrideAcceptedConditions(
   expectedIdentity,
 ) {
   const requestedAccept = expectedIdentity.acceptedConditions || [];
-  const diagnosed = taxonomy.diagnoseConditions(manifest, {});
+  const diagnosed = taxonomy.diagnoseConditions(manifest, {
+    ciFailureReason: expectedIdentity.ciFailureReason,
+  });
   printOverrideDiagnosis(manifestPath, manifest, diagnosed);
   taxonomy.assertAcceptListComplete(diagnosed, requestedAccept);
   return requestedAccept;
@@ -393,7 +420,7 @@ function issueApprovalCapability(
     "quality manifest",
   );
   const scope = expectedIdentity?.scope || "standard";
-  const isOverride = scope === "operator-quality-override";
+  const isOverride = isOperatorOverrideScope(scope);
   const ttl = resolveApprovalTtlSeconds(isOverride);
   const issuedAt = new Date();
   assertExpectedIdentityMatches(manifest, expectedIdentity);
@@ -554,7 +581,7 @@ function manifestPathFromBootstrap(stdout) {
 }
 
 function printExplicitApproval(approval) {
-  const isOverride = approval.scope === "operator-quality-override";
+  const isOverride = isOperatorOverrideScope(approval.scope);
   process.stdout.write(
     [
       isOverride
@@ -617,7 +644,7 @@ function main() {
     environment.BS_QUALITY_APPROVAL_EXPECTED_PR = String(request.expectedPr);
     environment.BS_QUALITY_APPROVAL_ONLY = "1";
     environment.BS_QUALITY_APPROVAL_SCOPE = request.scope;
-    if (request.scope === "operator-quality-override") {
+    if (isOperatorOverrideScope(request.scope)) {
       environment.BS_QUALITY_APPROVAL_ACCEPTED_CONDITIONS =
         request.acceptedConditions.join(",");
     }
@@ -645,6 +672,7 @@ function main() {
               scope: request.scope,
               reason: request.reason,
               acceptedConditions: request.acceptedConditions,
+              ciFailureReason: request.ciFailureReason,
             }
           : null,
       }),

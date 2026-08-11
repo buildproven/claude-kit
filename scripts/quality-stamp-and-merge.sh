@@ -126,8 +126,15 @@ else
     exit 1
   }
   # Publish signed evidence on the reviewed commit itself. This is idempotent
-  # and never rewrites or force-pushes the PR branch.
-  node "$SCRIPT_DIR/quality-review-check.js" publish --manifest "$MANIFEST" >/dev/null
+  # and never rewrites or force-pushes the PR branch. GitHub's check-run API
+  # requires an App token; during a verified Actions billing outage the signed
+  # operator capability is the explicit local evidence transport instead.
+  if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
+    --scope operator-ci-billing-override >/dev/null 2>&1; then
+    echo "⚠️  [quality] skipping GitHub review check publication under the exact-head CI billing override; final authorization will validate the local signed review checkpoint." >&2
+  else
+    node "$SCRIPT_DIR/quality-review-check.js" publish --manifest "$MANIFEST" >/dev/null
+  fi
 fi
 
 if [ -z "$STAMP_HEAD" ] && [ "$PREFLIGHT_PR_HEAD" != "$MERGE_HEAD" ]; then
