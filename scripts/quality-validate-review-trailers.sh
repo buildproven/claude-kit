@@ -52,7 +52,7 @@ if [ -z "$QUALITY_TRAILER" ]; then
   else
     REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
     node "$SCRIPT_DIR/quality-review-check.js" verify \
-      --repository "$REPOSITORY" --head "$(git rev-parse HEAD)" \
+      --repository "$REPOSITORY" --head "$(git rev-parse HEAD)" --base "$BASE_REF" \
       --required-tier "$REQUIRED_TIER"
   fi
   exit $?

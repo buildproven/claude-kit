@@ -187,6 +187,9 @@ describe("quality merge gates", () => {
     expect(STAMP_AND_MERGE).toMatch(
       /quality-review-check\.js" publish --manifest "\$MANIFEST"/,
     );
+    expect(STAMP_AND_MERGE).toMatch(
+      /if \[ -z "\$STAMP_HEAD" \] && \[ "\$PREFLIGHT_PR_HEAD" != "\$MERGE_HEAD" \]; then/,
+    );
     expect(STAMP_AND_MERGE).not.toMatch(/HUSKY=0 git commit --allow-empty/);
     expect(AUTHORIZE).toMatch(/repo\.githubRepository/);
     expect(AUTHORIZE).toMatch(/repo\.headRefName/);

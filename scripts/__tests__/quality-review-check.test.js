@@ -1,10 +1,12 @@
 const crypto = require("node:crypto");
 const {
   CHECK_NAME,
+  checkRunBody,
   evidenceFields,
   newestSuccessfulEvidence,
   recordForFields,
   recordFromCheckRun,
+  validateStandaloneEvidence,
 } = require("../quality-review-check");
 const { signEvidence, verifyEvidence } = require("../quality-review-evidence");
 
@@ -107,5 +109,54 @@ describe("quality-review-check", () => {
       reviewStatus: "complete",
       repositoryKey: "buildproven/claude-kit",
     });
+  });
+
+  it("rejects stale or incomplete standalone evidence", () => {
+    const fields = evidenceFields({
+      ...authorization,
+      contractVersion: 2,
+      leads: 0,
+      reviewStatus: "complete",
+      policyDigest: "c".repeat(64),
+      agentsSha256: "d".repeat(64),
+      domain: "reliability",
+      selectionRule: "reliability-domain",
+      repositoryKey: "buildproven/claude-kit",
+      diffSha256: "e".repeat(64),
+      evidenceSha256: "f".repeat(64),
+    });
+    const record = recordForFields(fields, "signature");
+
+    expect(() => validateStandaloneEvidence(record, "a".repeat(40))).toThrow(
+      /base is stale/,
+    );
+    expect(() => validateStandaloneEvidence(record, fields.base)).not.toThrow();
+    expect(() =>
+      validateStandaloneEvidence(
+        {
+          ...record,
+          evidence: { ...record.evidence, reviewStatus: "incomplete" },
+        },
+        fields.base,
+      ),
+    ).toThrow(/complete review evidence/);
+  });
+
+  it("omits create-only head_sha when updating an existing check run", () => {
+    const record = recordForFields(evidenceFields(authorization), "signature");
+    const common = {
+      repository: "buildproven/claude-kit",
+      pullRequest: 313,
+      head: authorization.head,
+      authorization,
+      record,
+    };
+
+    expect(checkRunBody({ ...common, includeHead: true }).head_sha).toBe(
+      authorization.head,
+    );
+    expect(checkRunBody({ ...common, includeHead: false })).not.toHaveProperty(
+      "head_sha",
+    );
   });
 });

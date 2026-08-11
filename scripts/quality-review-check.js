@@ -118,6 +118,29 @@ function recordForFields(fields, signature) {
   };
 }
 
+function checkRunBody({
+  repository,
+  pullRequest,
+  head,
+  authorization,
+  record,
+  includeHead,
+}) {
+  const body = {
+    name: CHECK_NAME,
+    status: "completed",
+    conclusion: "success",
+    details_url: `https://github.com/${repository}/pull/${pullRequest}`,
+    output: {
+      title: "Signed quality evidence",
+      summary: `Exact-head ${authorization.tier} review evidence for ${head}`,
+      text: JSON.stringify(record),
+    },
+  };
+  if (includeHead) body.head_sha = head;
+  return body;
+}
+
 function recordFromCheckRun(checkRun) {
   const text = checkRun?.output?.text;
   if (typeof text !== "string" || text.length === 0) return null;
@@ -128,6 +151,21 @@ function recordFromCheckRun(checkRun) {
     return record;
   } catch {
     return null;
+  }
+}
+
+function validateStandaloneEvidence(record, currentBase) {
+  if (record.evidence.base !== currentBase) {
+    fail("quality evidence base is stale");
+  }
+  if (record.evidence.findings !== 0) {
+    fail("quality evidence contains blocking findings");
+  }
+  if (
+    record.evidence.contractVersion >= 2 &&
+    record.evidence.reviewStatus !== "complete"
+  ) {
+    fail("standalone verification requires complete review evidence");
   }
 }
 
@@ -157,19 +195,15 @@ function publish({ manifestPath }) {
   const fields = evidenceFields(authorization);
   const signature = signEvidence(fields, signingKeyFromEnvironment());
   const record = recordForFields(fields, signature);
-  const body = {
-    name: CHECK_NAME,
-    head_sha: head,
-    status: "completed",
-    conclusion: "success",
-    details_url: `https://github.com/${repository}/pull/${pullRequest}`,
-    output: {
-      title: "Signed quality evidence",
-      summary: `Exact-head ${authorization.tier} review evidence for ${head}`,
-      text: JSON.stringify(record),
-    },
-  };
   const existing = newestSuccessfulEvidence(checkRuns(repository, head));
+  const body = checkRunBody({
+    repository,
+    pullRequest,
+    head,
+    authorization,
+    record,
+    includeHead: !existing,
+  });
   const path = existing
     ? `repos/${repository}/check-runs/${existing.id}`
     : `repos/${repository}/check-runs`;
@@ -203,7 +237,7 @@ function publish({ manifestPath }) {
   );
 }
 
-function verify({ repository, head, requiredTier, manifestPath }) {
+function verify({ repository, head, requiredTier, manifestPath, baseRef }) {
   let expectedAuthorization;
   if (manifestPath) {
     const manifest = invocation.loadManifest(manifestPath).manifest;
@@ -213,6 +247,9 @@ function verify({ repository, head, requiredTier, manifestPath }) {
     requiredTier = requiredTier || expectedAuthorization.tier;
   }
   if (!repository || !head) fail("verification requires repository and head");
+  if (!manifestPath && !baseRef) {
+    fail("standalone verification requires --base");
+  }
   if (!requiredTier || TIER_RANK[requiredTier] === undefined) {
     fail("verification requires a valid required tier");
   }
@@ -225,6 +262,15 @@ function verify({ repository, head, requiredTier, manifestPath }) {
   if (record.evidence.head !== head) fail("quality evidence head is stale");
   if (TIER_RANK[record.evidence.tier] < TIER_RANK[requiredTier]) {
     fail("quality evidence tier is below the required tier");
+  }
+  if (!manifestPath) {
+    const mergeBase = spawnSync("git", ["merge-base", "HEAD", baseRef], {
+      encoding: "utf8",
+    });
+    if (mergeBase.status !== 0 || !mergeBase.stdout.trim()) {
+      fail(`unable to resolve current merge-base against ${baseRef}`);
+    }
+    validateStandaloneEvidence(record, mergeBase.stdout.trim());
   }
   if (expectedAuthorization) {
     const expected = evidenceFields(expectedAuthorization);
@@ -266,7 +312,7 @@ if (require.main === module) {
       verify({ ...parsed, manifestPath: parsed.manifest });
     } else {
       throw new Error(
-        "usage: quality-review-check.js publish --manifest <path> | verify --repository <owner/repo> --head <sha> --required-tier <tier>",
+        "usage: quality-review-check.js publish --manifest <path> | verify --repository <owner/repo> --head <sha> --base <ref> --required-tier <tier>",
       );
     }
   } catch (error) {
@@ -282,5 +328,7 @@ module.exports = {
   evidenceFields,
   recordForFields,
   recordFromCheckRun,
+  checkRunBody,
   newestSuccessfulEvidence,
+  validateStandaloneEvidence,
 };

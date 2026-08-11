@@ -137,10 +137,10 @@ else
   node "$SCRIPT_DIR/quality-review-check.js" publish --manifest "$MANIFEST" >/dev/null
 fi
 
-[ "$PREFLIGHT_PR_HEAD" = "$MERGE_HEAD" ] || {
+if [ -z "$STAMP_HEAD" ] && [ "$PREFLIGHT_PR_HEAD" != "$MERGE_HEAD" ]; then
   echo "❌ MERGE BLOCKED: PR HEAD does not match the exact reviewed candidate." >&2
   exit 1
-}
+fi
 
 # GitHub's PR API can briefly lag a just-completed push (read-after-write
 # consistency delay), which produced a false MERGE BLOCKED on this exact
