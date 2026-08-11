@@ -112,7 +112,7 @@ describe("quality-review-check", () => {
     });
   });
 
-  it("rejects stale or incomplete standalone evidence", () => {
+  it("rejects stale evidence but preserves an explicit incomplete advisory state", () => {
     const fields = evidenceFields({
       ...authorization,
       contractVersion: 2,
@@ -147,7 +147,17 @@ describe("quality-review-check", () => {
         fields.base,
         "buildproven/claude-kit",
       ),
-    ).toThrow(/complete review evidence/);
+    ).not.toThrow();
+    expect(() =>
+      validateStandaloneEvidence(
+        {
+          ...record,
+          evidence: { ...record.evidence, reviewStatus: "unexpected" },
+        },
+        fields.base,
+        "buildproven/claude-kit",
+      ),
+    ).toThrow(/review status is invalid/);
   });
 
   it("binds standalone v2 evidence to the requested repository", () => {

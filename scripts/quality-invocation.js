@@ -4590,7 +4590,11 @@ function reviewCoverage(manifest) {
     agentsSha256: agentsSha256(manifest),
     domain: manifest.panel?.domain || "legacy",
     selectionRule: manifest.panel?.rule || "legacy-panel",
-    repositoryKey: manifest.repo.key,
+    // Contract-v2 evidence is verified outside the local manifest process,
+    // including by standalone CI. Bind it to the stable GitHub identity when
+    // one exists; the local repo key remains the identity for internal
+    // manifest/artifact namespaces.
+    repositoryKey: manifest.repo.githubRepository || manifest.repo.key,
     diffSha256: completeDiffSha256,
   };
 }
@@ -5103,7 +5107,7 @@ function operatorOverrideAuthorization(manifest) {
     agentsSha256: agentsSha256(manifest),
     domain: manifest.panel?.domain || "operator-override",
     selectionRule: manifest.panel?.rule || "operator-override",
-    repositoryKey: manifest.repo.key,
+    repositoryKey: manifest.repo.githubRepository || manifest.repo.key,
     diffSha256,
     evidenceSha256,
     operatorOverride: true,

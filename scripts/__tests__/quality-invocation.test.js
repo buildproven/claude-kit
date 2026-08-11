@@ -4518,7 +4518,7 @@ exit 1
 
   it("records v2 AI leads without granting a model judge merge authority", () => {
     const root = repo("judge-block");
-    const manifest = create(root);
+    const manifest = create(root, ["--pr", "21"]);
     invocation.withManifestLock(manifest, (loaded) => {
       invocation.setRisk(loaded, {
         tier: "medium",
@@ -4567,6 +4567,7 @@ exit 1
       blockingCount: 0,
       leads: 2,
       reviewStatus: "complete",
+      repositoryKey: "owner/repo",
     });
   });
 

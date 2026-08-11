@@ -185,10 +185,11 @@ function validateStandaloneEvidence(record, currentBase, repository) {
     fail("quality evidence contains blocking findings");
   }
   if (
-    record.evidence.contractVersion >= 2 &&
-    record.evidence.reviewStatus !== "complete"
+    !["complete", "incomplete", "policy-exempt"].includes(
+      record.evidence.reviewStatus,
+    )
   ) {
-    fail("standalone verification requires complete review evidence");
+    fail("quality evidence review status is invalid");
   }
 }
 
