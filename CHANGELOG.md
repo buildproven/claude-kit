@@ -12,6 +12,13 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.6.1](https://github.com/buildproven/claude-kit/compare/v4.6.0...v4.6.1) (2026-08-11)
+
+
+### Bug Fixes
+
+* **quality:** bind CI billing overrides to diagnosed evidence ([#317](https://github.com/buildproven/claude-kit/issues/317)) ([e6810d6](https://github.com/buildproven/claude-kit/commit/e6810d6dba2de37fece5ee30e36bf7004921d4bb))
+
 ## [4.6.0](https://github.com/buildproven/claude-kit/compare/v4.5.0...v4.6.0) (2026-08-11)
 
 
