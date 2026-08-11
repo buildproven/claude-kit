@@ -128,10 +128,16 @@ describe("quality-review-check", () => {
     });
     const record = recordForFields(fields, "signature");
 
-    expect(() => validateStandaloneEvidence(record, "a".repeat(40))).toThrow(
-      /base is stale/,
-    );
-    expect(() => validateStandaloneEvidence(record, fields.base)).not.toThrow();
+    expect(() =>
+      validateStandaloneEvidence(
+        record,
+        "a".repeat(40),
+        "buildproven/claude-kit",
+      ),
+    ).toThrow(/base is stale/);
+    expect(() =>
+      validateStandaloneEvidence(record, fields.base, "BuildProven/Claude-Kit"),
+    ).not.toThrow();
     expect(() =>
       validateStandaloneEvidence(
         {
@@ -139,8 +145,42 @@ describe("quality-review-check", () => {
           evidence: { ...record.evidence, reviewStatus: "incomplete" },
         },
         fields.base,
+        "buildproven/claude-kit",
       ),
     ).toThrow(/complete review evidence/);
+  });
+
+  it("binds standalone v2 evidence to the requested repository", () => {
+    const fields = evidenceFields({
+      ...authorization,
+      contractVersion: 2,
+      leads: 0,
+      reviewStatus: "complete",
+      policyDigest: "c".repeat(64),
+      agentsSha256: "d".repeat(64),
+      domain: "reliability",
+      selectionRule: "reliability-domain",
+      repositoryKey: "buildproven/claude-kit",
+      diffSha256: "e".repeat(64),
+      evidenceSha256: "f".repeat(64),
+    });
+    const record = recordForFields(fields, "signature");
+
+    expect(() =>
+      validateStandaloneEvidence(record, fields.base, "other/repository"),
+    ).toThrow(/repository is stale or mismatched/);
+  });
+
+  it("rejects unbound v1 evidence in standalone verification", () => {
+    const record = recordForFields(evidenceFields(authorization), "signature");
+
+    expect(() =>
+      validateStandaloneEvidence(
+        record,
+        record.evidence.base,
+        "buildproven/claude-kit",
+      ),
+    ).toThrow(/repository-bound v2 evidence/);
   });
 
   it("omits create-only head_sha when updating an existing check run", () => {

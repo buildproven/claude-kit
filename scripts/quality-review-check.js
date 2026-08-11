@@ -164,7 +164,20 @@ function recordFromCheckRun(checkRun) {
   }
 }
 
-function validateStandaloneEvidence(record, currentBase) {
+function validateStandaloneEvidence(record, currentBase, repository) {
+  if (
+    record.evidence.contractVersion < 2 ||
+    typeof record.evidence.repositoryKey !== "string"
+  ) {
+    fail("standalone verification requires repository-bound v2 evidence");
+  }
+  const expectedRepository = String(repository || "")
+    .trim()
+    .toLowerCase();
+  const evidenceRepository = record.evidence.repositoryKey.trim().toLowerCase();
+  if (!expectedRepository || evidenceRepository !== expectedRepository) {
+    fail("quality evidence repository is stale or mismatched");
+  }
   if (record.evidence.base !== currentBase) {
     fail("quality evidence base is stale");
   }
@@ -292,7 +305,7 @@ function verify({ repository, head, requiredTier, manifestPath, baseRef }) {
     if (mergeBase.status !== 0 || !mergeBase.stdout.trim()) {
       fail(`unable to resolve current merge-base against ${baseRef}`);
     }
-    validateStandaloneEvidence(record, mergeBase.stdout.trim());
+    validateStandaloneEvidence(record, mergeBase.stdout.trim(), repository);
   }
   if (expectedAuthorization) {
     const expected = evidenceFields(expectedAuthorization);
