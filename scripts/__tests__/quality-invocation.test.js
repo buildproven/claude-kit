@@ -908,6 +908,43 @@ describe("quality invocation manifest", () => {
     expect(create(root)).toBe(replacement);
   });
 
+  it("replaces a pre-review gate interrupted by a host signal", () => {
+    const root = repo("interrupted-gate-recovery");
+    const predecessor = create(root);
+    invocation.withManifestLock(predecessor, (manifest) => {
+      manifest.gates.push(
+        {
+          name: "lint",
+          status: "success",
+          head: manifest.revisions.currentHead,
+        },
+        {
+          name: "test",
+          status: "failed",
+          failureCode: "signal-interrupted",
+          head: manifest.revisions.currentHead,
+        },
+      );
+    });
+    invocation.recordTerminalState(
+      predecessor,
+      "interrupted",
+      "gate:test:signal-interrupted",
+    );
+
+    const replacement = create(root);
+    expect(replacement).not.toBe(predecessor);
+    expect(JSON.parse(readFileSync(replacement, "utf8"))).toMatchObject({
+      supersedes: {
+        invocationId: JSON.parse(readFileSync(predecessor, "utf8"))
+          .invocationId,
+        reason: "gate execution was interrupted by a host signal",
+      },
+      gates: [],
+      reviews: [],
+    });
+  });
+
   it("supersedes a pre-review missing-executable gate failure", () => {
     const root = repo("environment-recovery");
     const predecessor = create(root);
