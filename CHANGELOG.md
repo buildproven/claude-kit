@@ -12,6 +12,13 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.6.4](https://github.com/buildproven/claude-kit/compare/v4.6.3...v4.6.4) (2026-08-12)
+
+
+### Bug Fixes
+
+* account for repository exploration in review budget ([#332](https://github.com/buildproven/claude-kit/issues/332)) ([125b632](https://github.com/buildproven/claude-kit/commit/125b6324a64674040fd5b4f5c07a687a39fc0cda))
+
 ## [4.6.3](https://github.com/buildproven/claude-kit/compare/v4.6.2...v4.6.3) (2026-08-12)
 
 
