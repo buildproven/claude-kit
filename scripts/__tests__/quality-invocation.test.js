@@ -848,6 +848,28 @@ describe("quality invocation manifest", () => {
     );
   });
 
+  it("rejects an invalid provider policy before creating campaign state", () => {
+    const root = repo("invalid-provider-policy-bootstrap");
+    const result = spawnSync(
+      "node",
+      [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          BS_QUALITY_PRIMARY: "gemini",
+          BS_QUALITY_FALLBACK: "gemini",
+        },
+      },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(
+      /invalid provider policy: primary=gemini fallback=gemini/,
+    );
+    expect(result.stdout).toBe("");
+  });
+
   it("fails over an exhausted same-head campaign without resetting its budget", () => {
     const root = repo("durable-provider-failover");
     const manifest = create(root, [], {

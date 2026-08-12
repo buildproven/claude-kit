@@ -1069,17 +1069,44 @@ function unionRequiredGates(existing, discovered) {
 }
 
 function buildProvider(options) {
+  const primaryOverride = firstValue(
+    options.primary,
+    process.env.BS_QUALITY_PRIMARY,
+    "",
+  );
+  const fallbackOverride = firstValue(
+    options.fallback,
+    process.env.BS_QUALITY_FALLBACK,
+    "",
+  );
+  const allowedPrimary = new Set([
+    undefined,
+    "auto",
+    "claude",
+    "codex",
+    "gemini",
+  ]);
+  const allowedFallback = new Set([
+    undefined,
+    "none",
+    "claude",
+    "codex",
+    "gemini",
+  ]);
+  if (
+    !allowedPrimary.has(primaryOverride) ||
+    !allowedFallback.has(fallbackOverride) ||
+    (primaryOverride !== undefined &&
+      primaryOverride !== "auto" &&
+      primaryOverride === fallbackOverride)
+  ) {
+    throw new Error(
+      `invalid provider policy: primary=${primaryOverride || "<config>"} fallback=${fallbackOverride || "<config>"}`,
+    );
+  }
   return {
-    primaryOverride: firstValue(
-      options.primary,
-      process.env.BS_QUALITY_PRIMARY,
-      "",
-    ),
-    fallbackOverride: firstValue(
-      options.fallback,
-      process.env.BS_QUALITY_FALLBACK,
-      "",
-    ),
+    primaryOverride,
+    fallbackOverride,
     config: firstValue(
       options["provider-config"],
       process.env.BS_QUALITY_PROVIDER_CONFIG,
