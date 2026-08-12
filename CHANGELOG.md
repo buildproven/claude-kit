@@ -12,6 +12,18 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.7.0](https://github.com/buildproven/claude-kit/compare/v4.6.4...v4.7.0) (2026-08-12)
+
+
+### Features
+
+* enforce efficient fleet assurance ([#334](https://github.com/buildproven/claude-kit/issues/334)) ([5af4003](https://github.com/buildproven/claude-kit/commit/5af40031a4d1ccfc48516feb747f9f6f8edc9f5f))
+
+
+### Bug Fixes
+
+* reject invalid review provider policy at bootstrap ([#336](https://github.com/buildproven/claude-kit/issues/336)) ([ddbce00](https://github.com/buildproven/claude-kit/commit/ddbce0082bf8b60e57ea619edda60bc2e86c00c0))
+
 ## [4.6.4](https://github.com/buildproven/claude-kit/compare/v4.6.3...v4.6.4) (2026-08-12)
 
 
