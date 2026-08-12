@@ -184,7 +184,7 @@ For each approved parent task, expand into atomic subtasks. Rules:
 - Each subtask is doable in a single agent session (≤ 30 min wall time)
 - Each subtask names the file(s) it touches
 - Tests are part of the slice, not a later horizontal phase
-- Last subtask under each parent: `Run test suite; if green, commit`
+- Last subtask under each parent: `Run the evidence-backed affected tests; if green, commit`
 
 Example:
 
@@ -194,7 +194,7 @@ Example:
   - [ ] 1.2 Render pending, success, rate-limit, and failure states in the form
   - [ ] 1.3 Add an integration test through the public auth interface
   - [ ] 1.4 Add a browser test for the complete request flow
-  - [ ] 1.5 Run the focused tests and full suite; if green, commit
+  - [ ] 1.5 Run the evidence-backed affected tests; if green, commit
 ```
 
 ## Phase 5 — Machine-Verifiable Acceptance Criteria

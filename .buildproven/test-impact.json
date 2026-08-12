@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "jsRunner": "vitest",
+  "mappings": [
+    {
+      "paths": ["README.md", "commands/**/*.md"],
+      "commands": [
+        {
+          "executable": "npm",
+          "args": ["run", "check:commands"]
+        }
+      ]
+    },
+    {
+      "paths": ["agents/**/*.md", "skills/**/*.md"],
+      "commands": [
+        {
+          "executable": "npm",
+          "args": ["run", "test:patterns"]
+        }
+      ]
+    }
+  ],
+  "audits": [
+    {
+      "paths": [
+        "package.json",
+        "package-lock.json",
+        "vitest.config.*",
+        "scripts/test-impact.js",
+        ".buildproven/test-impact.json"
+      ],
+      "reason": "test dependency or selector contract changed",
+      "commands": [
+        {
+          "executable": "npm",
+          "args": ["test"]
+        }
+      ]
+    }
+  ]
+}

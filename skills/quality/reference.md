@@ -387,10 +387,12 @@ tracks governor state inside the explicit invocation manifest with:
 
 #### Fixed-cost repository gates
 
-Diff size controls review depth and the initial per-gate slice, but it does not
-predict the fixed cost of a repository's full suite. A micro change therefore
-retains a 120-second planned check slice plus enough bounded reserve to use the
-existing 600-second gate ledger when one required gate legitimately needs it.
+Diff size controls review depth and the initial per-gate slice. Test selection
+is independent: the repository's test-impact evidence chooses the smallest
+affected set, reports unmapped paths instead of guessing, and uses a complete
+suite only for an explicit audit. A micro change therefore retains a
+120-second planned check slice plus enough bounded reserve when a legitimate
+audit gate needs it.
 The shared ledger is allocated up front for the initial exact head and the one
 permitted remediation head, so advancing after review cannot mint more time.
 Within each pass, time used by lint or another gate reduces what remains for

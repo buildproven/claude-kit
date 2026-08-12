@@ -996,6 +996,11 @@ function discoverRequiredGates(
       `quality requires executable npm or Python repository gates for: ${missing.join(", ")}`,
     );
   }
+  const impactGate = discoverImpactTestGate(root, options, head, baseSha);
+  if (impactGate) {
+    const testIndex = required.findIndex((gate) => gate.name === "test");
+    required[testIndex] = impactGate;
+  }
   const buildGate = optionalBuildGate({ nativeGates, scripts, manager });
   if (buildGate) required.push(buildGate);
   const typeGate = optionalTypeGate({
@@ -1034,6 +1039,31 @@ function discoverRequiredGates(
   const verifyAppGate = discoverVerifyAppGate(options, nativeGates);
   if (verifyAppGate) required.push(verifyAppGate);
   return required;
+}
+
+function discoverImpactTestGate(root, options, head, baseSha) {
+  if (options["skip-tests"] === true) return null;
+  const impactPolicy = committedFile(
+    root,
+    head,
+    ".buildproven/test-impact.json",
+  );
+  if (impactPolicy === null) return null;
+  const impactFiles = changedFiles(root, baseSha, head);
+  if (impactFiles?.includes(".buildproven/test-impact.json")) return null;
+  return directGate(
+    "test",
+    "test-impact:.buildproven/test-impact.json",
+    process.execPath,
+    [
+      path.join(__dirname, "test-impact.js"),
+      "--execute",
+      "--policy-sha256",
+      crypto.createHash("sha256").update(impactPolicy).digest("hex"),
+      "--",
+      ...(impactFiles || []),
+    ],
+  );
 }
 
 // Opt-in only: verify-app boots the app (dev server / binary) and drives a
