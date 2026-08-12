@@ -3979,7 +3979,7 @@ function judgeContext(manifest) {
 }
 
 function recordReview(manifest, options) {
-  assertReviewHeadCurrent(manifest, options);
+  assertReviewHeadCurrent(manifest);
   if (manifest.governor.activeExecution?.kind === "provider") {
     completeActiveExecution(manifest, "provider");
   }
@@ -4057,16 +4057,18 @@ function recordReview(manifest, options) {
 // Evidence is persisted under the manifest lock, but a provider can finish
 // after another local process (or a remote PR update) has moved the candidate.
 // Re-read the checkout HEAD inside the same mutation that appends the review;
-// callers that have a PR also request the authoritative GitHub head here so a
-// second clone cannot silently invalidate the local campaign (BUI-645).
-function assertReviewHeadCurrent(manifest, options = {}) {
+// callers that have a PR always read the authoritative GitHub head here so a
+// second clone cannot silently invalidate the local campaign. The persistence
+// layer derives this from manifest identity rather than trusting an optional
+// caller flag (BUI-645).
+function assertReviewHeadCurrent(manifest) {
   const localHead = git(manifest.repo.realpath, ["rev-parse", "HEAD"]);
   if (localHead !== manifest.revisions.currentHead) {
     throw new Error(
       `review evidence head moved before recording (expected ${manifest.revisions.currentHead}, found local ${localHead})`,
     );
   }
-  if (options["validate-remote-head"] !== "true" || manifest.repo.pr == null) {
+  if (manifest.repo.pr == null) {
     return;
   }
   const remote = spawnSync(
@@ -4109,7 +4111,7 @@ function recordAdvisoryReview(manifest, options) {
   // checkout and, for PR-backed campaigns, the authoritative remote head
   // before persisting the record. This path is retained for v1 campaigns and
   // must not be a stale-head escape hatch (BUI-645).
-  assertReviewHeadCurrent(manifest, options);
+  assertReviewHeadCurrent(manifest);
   if ((manifest.reviewContractVersion || 1) >= 2) {
     throw new Error(
       "v2 campaigns use an explicit policy exemption, not provider-failure advisory coverage",

@@ -719,8 +719,11 @@ Quality-Evidence-Signature: ${signature}`;
     expect(
       readFileSync(path.join(ROOT, "scripts", "quality-invocation.js"), "utf8"),
     ).toMatch(
-      /function recordAdvisoryReview\(manifest, options\) \{[\s\S]*?assertReviewHeadCurrent\(manifest, options\);/,
+      /function recordAdvisoryReview\(manifest, options\) \{[\s\S]*?assertReviewHeadCurrent\(manifest\);/,
     );
+    expect(
+      readFileSync(path.join(ROOT, "scripts", "quality-invocation.js"), "utf8"),
+    ).toMatch(/if \(manifest\.repo\.pr == null\) \{\s*return;/);
   });
 
   it("runs Bash-only review entrypoints explicitly through Bash", () => {
