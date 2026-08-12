@@ -48,7 +48,9 @@ set +m
 process_start() {
   ps -o lstart= -p "$1" 2>/dev/null | sed 's/[[:space:]]*$//' || true
 }
-CHILD_START="$(process_start "$CHILD_PID")"
+process_group() {
+  ps -o pgid= -p "$1" 2>/dev/null | tr -d '[:space:]' || true
+}
 process_tree_postorder() {
   local pid="$1" child
   # Snapshot descendants before signalling the process group. A native helper
@@ -104,6 +106,7 @@ stop_tracker() {
 }
 terminate_provider() {
   local targets tracked current_snapshot current_pid current_start recorded_pid recorded_start
+  local child_start self_group child_group
   tracked="$(cat "$TRACKED_PIDS_FILE" 2>/dev/null || true)"
   current_snapshot="$(process_tree_postorder "$CHILD_PID")"
   targets=""
@@ -133,8 +136,12 @@ EOF
   sleep 1
   [ -z "$targets" ] || kill -KILL $targets 2>/dev/null || true
   # A normal descendant created after the snapshot remains in this group.
-  if [ -n "$CHILD_START" ] &&
-     [ "$(process_start "$CHILD_PID")" = "$CHILD_START" ]; then
+  child_start="$(process_start "$CHILD_PID")"
+  self_group="$(process_group "$$")"
+  child_group="$(process_group "$CHILD_PID")"
+  if [ -n "$child_start" ] &&
+     [ "$(process_start "$CHILD_PID")" = "$child_start" ] &&
+     [ -n "$child_group" ] && [ "$child_group" != "$self_group" ]; then
     kill -TERM "-${CHILD_PID}" 2>/dev/null || true
     kill -KILL "-${CHILD_PID}" 2>/dev/null || true
   fi
