@@ -4070,20 +4070,10 @@ function assertReviewHeadCurrent(manifest) {
     error.code = "QUALITY_REVIEW_HEAD_MOVED";
     throw error;
   }
-  // Vitest uses a local, synthetic GitHub namespace for manifest tests. The
-  // marker is created only inside those temporary repositories; real PR
-  // campaigns always take the authoritative API path below.
-  if (
-    manifest.repo.pr == null ||
-    fs.existsSync(
-      path.join(
-        gitCommonDir(manifest.repo.realpath),
-        ".quality-vitest-repository",
-      ),
-    )
-  ) {
-    return;
-  }
+  // A PR-backed campaign must always consult the authoritative GitHub head.
+  // Test fixtures provide a fake `gh` executable in PATH; no repository-
+  // writable marker may weaken this production invariant.
+  if (manifest.repo.pr == null) return;
   const remote = spawnSync(
     "gh",
     [
@@ -4101,9 +4091,11 @@ function assertReviewHeadCurrent(manifest) {
   );
   const remoteHead = remote.stdout?.trim();
   if (remote.status !== 0 || !/^[0-9a-f]{40}$/i.test(remoteHead || "")) {
-    throw new Error(
+    const error = new Error(
       `unable to verify authoritative PR HEAD before recording review${remote.stderr ? `: ${remote.stderr.trim()}` : ""}`,
     );
+    error.code = "QUALITY_REVIEW_HEAD_VALIDATION_UNAVAILABLE";
+    throw error;
   }
   if (remoteHead !== manifest.revisions.currentHead) {
     const error = new Error(
@@ -5673,10 +5665,22 @@ function mutate(manifestArg, operation) {
     try {
       operation(locked);
     } catch (error) {
+      // A provider may have completed before an evidence write fails (for
+      // example, because the authoritative PR-head API is unavailable). Do
+      // not leave that execution marked active: it would strand the governor
+      // and make every retry look like a concurrent provider.
+      if (
+        locked.governor.activeExecution?.kind === "provider" &&
+        [
+          "QUALITY_REVIEW_HEAD_MOVED",
+          "QUALITY_REVIEW_HEAD_VALIDATION_UNAVAILABLE",
+        ].includes(error?.code)
+      ) {
+        completeActiveExecution(locked, "provider");
+        locked.governor.lastActivityAt = new Date().toISOString();
+        saveManifestMidTransaction(manifestPath, locked);
+      }
       if (error?.code === "QUALITY_REVIEW_HEAD_MOVED") {
-        if (locked.governor.activeExecution?.kind === "provider") {
-          completeActiveExecution(locked, "provider");
-        }
         locked.terminalState ??= {
           state: "superseded",
           detail: "head-moved-before-review-record",
