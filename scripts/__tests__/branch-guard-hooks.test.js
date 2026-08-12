@@ -128,6 +128,24 @@ describe("block-push-main.sh", () => {
     ).toBe(2);
   });
 
+  it.each([
+    "cd /tmp && git push origin +main",
+    "true; git push origin HEAD:main",
+    "false || git push origin +master",
+  ])(
+    "denies an unflagged protected push after a shell separator: %s",
+    (command) => {
+      expect(runHook(PUSH_HOOK, command).code).toBe(2);
+    },
+  );
+
+  it("does not classify quoted prose as a chained push", () => {
+    expect(
+      runHook(PUSH_HOOK, `gh pr create --body 'then; git push origin main'`)
+        .code,
+    ).toBe(0);
+  });
+
   it("preserves non-special backslashes inside double quotes", () => {
     expect(runHook(PUSH_HOOK, 'git push origin "ma\\in"').code).toBe(0);
   });
