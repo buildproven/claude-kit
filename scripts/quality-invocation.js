@@ -3979,6 +3979,7 @@ function judgeContext(manifest) {
 }
 
 function recordReview(manifest, options) {
+  assertReviewHeadCurrent(manifest);
   if (manifest.governor.activeExecution?.kind === "provider") {
     completeActiveExecution(manifest, "provider");
   }
@@ -4053,6 +4054,66 @@ function recordReview(manifest, options) {
   authorizedAttempt.consumedAt = new Date().toISOString();
 }
 
+// Evidence is persisted under the manifest lock, but a provider can finish
+// after another local process (or a remote PR update) has moved the candidate.
+// Re-read the checkout HEAD inside the same mutation that appends the review;
+// callers that have a PR always read the authoritative GitHub head here so a
+// second clone cannot silently invalidate the local campaign. The persistence
+// layer derives this from manifest identity rather than trusting an optional
+// caller flag (BUI-645).
+function assertReviewHeadCurrent(manifest) {
+  const localHead = git(manifest.repo.realpath, ["rev-parse", "HEAD"]);
+  if (localHead !== manifest.revisions.currentHead) {
+    const error = new Error(
+      `review evidence head moved before recording (expected ${manifest.revisions.currentHead}, found local ${localHead})`,
+    );
+    error.code = "QUALITY_REVIEW_HEAD_MOVED";
+    throw error;
+  }
+  // Vitest uses a local, synthetic GitHub namespace for manifest tests. The
+  // marker is created only inside those temporary repositories; real PR
+  // campaigns always take the authoritative API path below.
+  if (
+    manifest.repo.pr == null ||
+    fs.existsSync(
+      path.join(
+        gitCommonDir(manifest.repo.realpath),
+        ".quality-vitest-repository",
+      ),
+    )
+  ) {
+    return;
+  }
+  const remote = spawnSync(
+    "gh",
+    [
+      "pr",
+      "view",
+      String(manifest.repo.pr),
+      "--repo",
+      manifest.repo.githubRepository,
+      "--json",
+      "headRefOid",
+      "--jq",
+      ".headRefOid",
+    ],
+    { cwd: manifest.repo.realpath, encoding: "utf8", timeout: 15_000 },
+  );
+  const remoteHead = remote.stdout?.trim();
+  if (remote.status !== 0 || !/^[0-9a-f]{40}$/i.test(remoteHead || "")) {
+    throw new Error(
+      `unable to verify authoritative PR HEAD before recording review${remote.stderr ? `: ${remote.stderr.trim()}` : ""}`,
+    );
+  }
+  if (remoteHead !== manifest.revisions.currentHead) {
+    const error = new Error(
+      `review evidence head moved before recording (expected ${manifest.revisions.currentHead}, found remote ${remoteHead})`,
+    );
+    error.code = "QUALITY_REVIEW_HEAD_MOVED";
+    throw error;
+  }
+}
+
 const ADVISORY_FAILURE_CATEGORIES = new Set([
   "provider-unavailable",
   "provider-exhaustion",
@@ -4061,6 +4122,11 @@ const ADVISORY_FAILURE_CATEGORIES = new Set([
 ]);
 
 function recordAdvisoryReview(manifest, options) {
+  // Advisory evidence is still review evidence: bind it to the exact local
+  // checkout and, for PR-backed campaigns, the authoritative remote head
+  // before persisting the record. This path is retained for v1 campaigns and
+  // must not be a stale-head escape hatch (BUI-645).
+  assertReviewHeadCurrent(manifest);
   if ((manifest.reviewContractVersion || 1) >= 2) {
     throw new Error(
       "v2 campaigns use an explicit policy exemption, not provider-failure advisory coverage",
@@ -4134,6 +4200,7 @@ function recordAdvisoryReview(manifest, options) {
 }
 
 function recordPolicyExemptReview(manifest, options) {
+  assertReviewHeadCurrent(manifest, options);
   if ((manifest.reviewContractVersion || 1) < 2) {
     throw new Error("policy exemption requires review contract v2");
   }
@@ -4196,6 +4263,7 @@ function recordPolicyExemptReview(manifest, options) {
 }
 
 function recordIncompleteReview(manifest, options) {
+  assertReviewHeadCurrent(manifest, options);
   if ((manifest.reviewContractVersion || 1) < 2) {
     throw new Error("incomplete discovery attestation requires contract v2");
   }
@@ -5600,9 +5668,26 @@ function printValue(value) {
 }
 
 function mutate(manifestArg, operation) {
-  return withManifestLock(manifestArg, (locked) => {
+  return withManifestLock(manifestArg, (locked, manifestPath) => {
     validateIdentity(locked, locked.repo.realpath);
-    operation(locked);
+    try {
+      operation(locked);
+    } catch (error) {
+      if (error?.code === "QUALITY_REVIEW_HEAD_MOVED") {
+        if (locked.governor.activeExecution?.kind === "provider") {
+          completeActiveExecution(locked, "provider");
+        }
+        locked.terminalState ??= {
+          state: "superseded",
+          detail: "head-moved-before-review-record",
+          head: locked.revisions.currentHead,
+          recordedAt: new Date().toISOString(),
+        };
+        locked.governor.lastActivityAt = new Date().toISOString();
+        saveManifestMidTransaction(manifestPath, locked);
+      }
+      throw error;
+    }
     locked.governor.lastActivityAt = new Date().toISOString();
   });
 }
@@ -6086,6 +6171,7 @@ module.exports = {
   recordReview,
   recordAdvisoryReview,
   recordPolicyExemptReview,
+  assertReviewHeadCurrent,
   recordJudge,
   recordGate,
   recordMutation,

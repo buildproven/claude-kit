@@ -136,6 +136,15 @@ describe("quality merge gates", () => {
     expect(REPOSITORY_LEASE).toMatch(/options\.expectedHead !== head/);
   });
 
+  it("does not mutate the lease-backed terminal state after merge releases the lease", () => {
+    expect(STAMP_AND_MERGE).toContain(
+      "quality-repo-lease.js merge` records the write-once `merged` terminal state",
+    );
+    expect(STAMP_AND_MERGE).not.toMatch(
+      /quality-invocation\.js" terminal-state[\s\S]*--state merged/,
+    );
+  });
+
   it("keeps post-merge cleanup on the phase-pinned lease credential", () => {
     expect(MERGE_CLEANUP).toMatch(
       /source "\$SCRIPT_DIR\/quality-repo-lease-pin\.sh"/,

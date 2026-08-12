@@ -478,6 +478,43 @@ describe("repository merge lease", () => {
     lease.release(second.manifestPath, recovered.token, "test-complete");
   });
 
+  it("exposes lease age and requires an explicit break-glass override for recent recovery", () => {
+    const first = fixture("recover-override-one");
+    const second = fixture("recover-override-two", {
+      linkedFrom: first,
+      repoKey: first.repoKey,
+    });
+    const owner = lease.acquire(first.manifestPath);
+    expect(lease.status(first.manifestPath)).toMatchObject({
+      state: "active",
+      stale: false,
+      staleAfterMs: lease.STALE_MS,
+      recoveryOverrideRequired: true,
+    });
+    const previous = process.env.BS_QUALITY_LEASE_RECOVERY_OVERRIDE;
+    try {
+      delete process.env.BS_QUALITY_LEASE_RECOVERY_OVERRIDE;
+      expect(() =>
+        lease.recover(second.manifestPath, owner.token, {
+          override: true,
+          reason: "operator confirmed the original campaign is abandoned",
+        }),
+      ).toThrow(/BS_QUALITY_LEASE_RECOVERY_OVERRIDE/);
+
+      process.env.BS_QUALITY_LEASE_RECOVERY_OVERRIDE = "1";
+      const recovered = lease.recover(second.manifestPath, owner.token, {
+        override: true,
+        reason: "operator confirmed the original campaign is abandoned",
+      });
+      expect(recovered.generation).toBe(2);
+      lease.release(second.manifestPath, recovered.token, "test-complete");
+    } finally {
+      if (previous === undefined)
+        delete process.env.BS_QUALITY_LEASE_RECOVERY_OVERRIDE;
+      else process.env.BS_QUALITY_LEASE_RECOVERY_OVERRIDE = previous;
+    }
+  });
+
   it("completes either crash point in the pending rotation write pair", () => {
     for (const crashPoint of ["before-manifest", "after-manifest"]) {
       const { manifestPath } = fixture(`rotation-${crashPoint}`);

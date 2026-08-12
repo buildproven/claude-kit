@@ -88,7 +88,11 @@ PERSISTED_REMOTE="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" m
 }
 
 MERGE_HEAD="$REVIEWED_HEAD"
-LOCAL_REVIEW_EVIDENCE=false
+LOCAL_REVIEW_EVIDENCE="${QUALITY_LOCAL_REVIEW_EVIDENCE:-false}"
+case "$LOCAL_REVIEW_EVIDENCE" in
+  true|false) ;;
+  *) echo "❌ MERGE BLOCKED: QUALITY_LOCAL_REVIEW_EVIDENCE must be true or false." >&2; exit 1 ;;
+esac
 if [ -n "$STAMP_HEAD" ]; then
   # Backward compatibility for campaigns that were created before the
   # check-run evidence transport landed. Never create another stamp, but let
@@ -130,7 +134,7 @@ else
   # and never rewrites or force-pushes the PR branch. GitHub's check-run API
   # requires an App token; during a verified Actions billing outage the signed
   # operator capability is the explicit local evidence transport instead.
-  if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
+  if [ "$LOCAL_REVIEW_EVIDENCE" = true ] || node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
     --scope operator-ci-billing-override >/dev/null 2>&1; then
     echo "⚠️  [quality] skipping GitHub review check publication under the exact-head CI billing override; final authorization will validate the local signed review checkpoint." >&2
   else
@@ -271,16 +275,9 @@ elif [ "$LOCAL_REVIEW_EVIDENCE" = true ]; then
 else
   bash "$SCRIPT_DIR/quality-authorize-merge.sh" --manifest "$MANIFEST"
 fi
-# Record the SUCCESS terminal state. Only the failure paths
-# (quality-run-gate.sh, quality-run-review.sh) recorded one, so a campaign that
-# actually merged was indistinguishable on disk from one still running —
-# exactly the ambiguity manifest.terminalState was added to remove, left open
-# for the most common ending. Placed after authorize-merge so it can only run
-# once the merge is proven, and before cleanup so a cleanup failure cannot
-# erase the fact that the merge happened.
-#
-# Write-once: if the campaign already recorded a terminal state, that first
-# cause stands and this is a no-op.
-node "$SCRIPT_DIR/quality-invocation.js" terminal-state "$MANIFEST" \
-  --state merged --detail "pr:$PR" >/dev/null || true
+# `quality-repo-lease.js merge` records the write-once `merged` terminal state
+# in the same verified-outcome transaction that releases the lease.  Do not
+# call the lease-aware terminal-state mutator again here: the lease has already
+# been released, so that redundant call used to emit a misleading credential
+# error after a successful exact-head merge (BUI-728).
 bash "$SCRIPT_DIR/quality-merge-cleanup.sh" --manifest "$MANIFEST"

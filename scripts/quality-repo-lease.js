@@ -9,6 +9,7 @@ const { execFileSync, spawnSync } = require("child_process");
 
 const SCHEMA_VERSION = 1;
 const STALE_MS = 6 * 60 * 60 * 1000;
+const RECOVERY_OVERRIDE_ENV = "BS_QUALITY_LEASE_RECOVERY_OVERRIDE";
 const DEFAULT_WAIT_MS = 30_000;
 const SLEEP_BUFFER = new SharedArrayBuffer(4);
 
@@ -626,7 +627,7 @@ function verify(manifestPath, presentedToken, options = {}) {
   return verifyUnderMetadata(manifestPath, presentedToken, options);
 }
 
-function recover(manifestPath, ownerToken) {
+function recover(manifestPath, ownerToken, options = {}) {
   const loaded = loadManifest(manifestPath);
   if (loaded.manifest.options?.merge !== true) {
     throw new Error("repository lease recovery requires a merge campaign");
@@ -658,7 +659,20 @@ function recover(manifestPath, ownerToken) {
       );
     }
     const renewedAt = Date.parse(current.renewedAt || "");
-    if (!Number.isFinite(renewedAt) || Date.now() - renewedAt < STALE_MS) {
+    const ageMs = Number.isFinite(renewedAt) ? Date.now() - renewedAt : null;
+    const override = options.override === true;
+    if (override && process.env[RECOVERY_OVERRIDE_ENV] !== "1") {
+      throw new Error(
+        `lease recovery override requires ${RECOVERY_OVERRIDE_ENV}=1`,
+      );
+    }
+    if (override && !String(options.reason || "").trim()) {
+      throw new Error("lease recovery override requires an explicit reason");
+    }
+    if (
+      !Number.isFinite(renewedAt) ||
+      (ageMs !== null && ageMs < STALE_MS && !override)
+    ) {
       throw new Error("repository lease owner is recent; recovery is refused");
     }
     const token = crypto.randomBytes(32).toString("hex");
@@ -671,6 +685,9 @@ function recover(manifestPath, ownerToken) {
       token,
       generation,
       renewedAt: new Date().toISOString(),
+      recoveryReason: override
+        ? String(options.reason).slice(0, 500)
+        : undefined,
     };
     atomicWrite(path.join(paths.lease, "owner.json"), pending);
     return completePending(paths, identity, loaded, pending);
@@ -713,7 +730,7 @@ function withManifestMutation(manifestPath, presentedToken, mutation) {
         ) {
           throw new Error("repository merge lease manifest credential changed");
         }
-        const result = mutation(manifest);
+        const result = mutation(manifest, manifestPath);
         record.renewedAt = new Date().toISOString();
         atomicWrite(path.join(paths.lease, "owner.json"), record);
         return result;
@@ -759,7 +776,11 @@ function status(manifestPath) {
     if (!fs.existsSync(paths.lease))
       return { required: true, state: "missing" };
     const record = leaseRecord(paths.lease);
-    const stale = Date.now() - Date.parse(record.renewedAt || "") >= STALE_MS;
+    const renewedAt = Date.parse(record.renewedAt || "");
+    const ageMs = Number.isFinite(renewedAt)
+      ? Math.max(0, Date.now() - renewedAt)
+      : null;
+    const stale = ageMs !== null && ageMs >= STALE_MS;
     let mergeGuard = null;
     if (fs.existsSync(paths.mergeGuard)) {
       const guard = guardOwner(paths.mergeGuard);
@@ -781,6 +802,9 @@ function status(manifestPath) {
       headRef: record.headRef,
       manifestPath: record.manifestPath,
       renewedAt: record.renewedAt,
+      ageMs,
+      staleAfterMs: STALE_MS,
+      recoveryOverrideRequired: !stale,
       generation: record.generation,
       owned: tupleMatches(
         record,
@@ -1176,7 +1200,16 @@ function recoverFromOptions(manifest, options) {
       "recovery requires the exact current owner invocation ID and pull request",
     );
   }
-  return recover(manifest, record.token);
+  const override = options.override === "true";
+  if (override && !String(options.reason || "").trim()) {
+    throw new Error(
+      "recover --override true requires --reason describing the operator decision",
+    );
+  }
+  return recover(manifest, record.token, {
+    override,
+    reason: options.reason,
+  });
 }
 
 function commandHandlers(manifest, options) {
@@ -1229,6 +1262,7 @@ if (require.main === module) {
 
 module.exports = {
   STALE_MS,
+  RECOVERY_OVERRIDE_ENV,
   accountHome,
   acquire,
   acquireMergeGuard,
