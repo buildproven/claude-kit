@@ -169,13 +169,21 @@ function classifyBillingWaiver({
       completedAt: job.completed_at,
     };
   });
+  // Keep the waiver digest stable across the two validations performed by a
+  // merge: classify once, then revalidate the exact same live job evidence.
+  // Wall-clock `classifiedAt` made an otherwise unchanged billing diagnosis
+  // produce a different signed digest on every invocation.
+  const classifiedAt = waivedJobs
+    .map((job) => Date.parse(job.completedAt))
+    .filter(Number.isFinite)
+    .sort((left, right) => right - left)[0];
   const evidence = {
     schemaVersion: 1,
     category: "github-actions-billing-preallocation",
     repository,
     head: expectedHead,
     waiverUntil: new Date(expiry).toISOString(),
-    classifiedAt: new Date(now).toISOString(),
+    classifiedAt: new Date(classifiedAt || now).toISOString(),
     failedJobs: waivedJobs,
     successfulOrSkippedChecks: checks
       .filter((check) => check.state !== WAIVABLE_STATE)
