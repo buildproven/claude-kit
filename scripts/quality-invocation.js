@@ -4105,6 +4105,11 @@ const ADVISORY_FAILURE_CATEGORIES = new Set([
 ]);
 
 function recordAdvisoryReview(manifest, options) {
+  // Advisory evidence is still review evidence: bind it to the exact local
+  // checkout and, for PR-backed campaigns, the authoritative remote head
+  // before persisting the record. This path is retained for v1 campaigns and
+  // must not be a stale-head escape hatch (BUI-645).
+  assertReviewHeadCurrent(manifest, options);
   if ((manifest.reviewContractVersion || 1) >= 2) {
     throw new Error(
       "v2 campaigns use an explicit policy exemption, not provider-failure advisory coverage",
