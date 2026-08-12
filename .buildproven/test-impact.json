@@ -19,6 +19,19 @@
           "args": ["run", "test:patterns"]
         }
       ]
+    },
+    {
+      "paths": ["scripts/block-push-main.sh"],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/branch-guard-hooks.test.js"
+          ]
+        }
+      ]
     }
   ],
   "audits": [
@@ -27,6 +40,7 @@
         "package.json",
         "package-lock.json",
         "vitest.config.*",
+        ".github/workflows/quality.yml",
         "scripts/test-impact.js",
         ".buildproven/test-impact.json"
       ],

@@ -27,13 +27,12 @@ Quick reference for the public `claude-kit` workflow.
 ## Core loop
 
 ```bash
-/bs:dev my-feature
-# ... make changes ...
-/bs:test --watch
-/bs:quality
+/bs:dev my-feature  # builds, verifies, reviews, and merges the exact candidate
 ```
 
-Use `/bs:quality --merge` when you want the quality loop to carry through merge as well.
+Use `/bs:dev --no-ship my-feature` only when you deliberately want a local
+candidate. You can then run `/bs:quality` for a non-merging team review or
+`/bs:quality --level 98 --merge --deploy` for a production release.
 
 All linked worktrees use one lifecycle API and live outside the primary
 repository:
@@ -92,8 +91,6 @@ This is the canonical pattern for parallel agent fan-outs — without it, the qu
 
 ```bash
 /bs:dev my-feature
-/bs:test --watch
-/bs:quality
 ```
 
 ### Larger ambiguous task
@@ -101,7 +98,6 @@ This is the canonical pattern for parallel agent fan-outs — without it, the qu
 ```bash
 /bs:prd my-feature
 /bs:dev implementation-step
-/bs:quality
 ```
 
 The PRD decomposes work into independently verifiable vertical slices with
@@ -113,7 +109,6 @@ contract so the branch stays green.
 ```bash
 /bs:dev login-timeout --fix
 # diagnosing-bugs establishes one red-capable reproduction command first
-/bs:quality
 ```
 
 ### UI work

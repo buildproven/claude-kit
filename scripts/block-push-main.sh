@@ -78,6 +78,27 @@ tokenize_command() {
               started=false
             fi
             ;;
+          ';'|'('|')')
+            if [ "$started" = true ]; then
+              COMMAND_TOKENS+=("$token")
+              token=""
+              started=false
+            fi
+            COMMAND_TOKENS+=("$char")
+            ;;
+          '&'|'|')
+            if [ "$started" = true ]; then
+              COMMAND_TOKENS+=("$token")
+              token=""
+              started=false
+            fi
+            if [ "${COMMAND:index+1:1}" = "$char" ]; then
+              COMMAND_TOKENS+=("$char$char")
+              index=$((index + 1))
+            else
+              COMMAND_TOKENS+=("$char")
+            fi
+            ;;
           *) token+="$char"; started=true ;;
         esac
         ;;
@@ -99,47 +120,72 @@ fi
 # Resolve the first push argument once. Git accepts several global options before
 # the subcommand; recognizing them here keeps the guard aligned with real git
 # invocations instead of silently treating those commands as non-pushes.
+is_command_separator() {
+  case "$1" in
+    ';'|'&'|'&&'|'|'|'||'|'('|')') return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 push_argument_start() {
-  local index=1
-  local token
-  [ "${COMMAND_TOKENS[0]:-}" = "git" ] || return 1
+  local index=0 scan token segment_end
   while [ "$index" -lt "${#COMMAND_TOKENS[@]}" ]; do
-    token="${COMMAND_TOKENS[$index]}"
-    if [ "$token" = "push" ]; then
-      printf '%s\n' "$((index + 1))"
-      return 0
+    if [ "${COMMAND_TOKENS[$index]}" != "git" ] ||
+      { [ "$index" -gt 0 ] && ! is_command_separator "${COMMAND_TOKENS[$((index - 1))]}"; }; then
+      index=$((index + 1))
+      continue
     fi
-    case "$token" in
+
+    segment_end=$((index + 1))
+    while [ "$segment_end" -lt "${#COMMAND_TOKENS[@]}" ] &&
+      ! is_command_separator "${COMMAND_TOKENS[$segment_end]}"; do
+      segment_end=$((segment_end + 1))
+    done
+    scan=$((index + 1))
+    while [ "$scan" -lt "$segment_end" ]; do
+      token="${COMMAND_TOKENS[$scan]}"
+      if [ "$token" = "push" ]; then
+        GIT_COMMAND_INDEX="$index"
+        PUSH_COMMAND_INDEX="$scan"
+        PUSH_ARGUMENT_START=$((scan + 1))
+        PUSH_ARGUMENT_END="$segment_end"
+        return 0
+      fi
+      case "$token" in
       # Global options that take a separate value.
       -C|-c|--config-env|--exec-path|--git-dir|--work-tree|--namespace|--super-prefix)
-        [ -n "${COMMAND_TOKENS[$((index + 1))]:-}" ] || return 2
-        index=$((index + 2))
+        [ "$((scan + 1))" -lt "$segment_end" ] || return 2
+        scan=$((scan + 2))
         ;;
       # The same value-bearing options in --name=value form.
       --config-env=*|--exec-path=*|--git-dir=*|--work-tree=*|--namespace=*|--super-prefix=*)
-        index=$((index + 1))
+        scan=$((scan + 1))
         ;;
       # Boolean global options.
       -p|-P|--no-pager|--paginate|--no-replace-objects|--no-lazy-fetch|--no-optional-locks|--no-advice|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs)
-        index=$((index + 1))
+        scan=$((scan + 1))
         ;;
       *)
         # A non-option is another git subcommand, so this is safely not a push.
         # An unknown option cannot be classified without risking a bypass.
         [[ "$token" == -* ]] && return 2
-        return 1
+        break
         ;;
-    esac
+      esac
+    done
+    index=$((segment_end + 1))
   done
   return 1
 }
 
 PUSH_ARGUMENT_START=""
-if PUSH_ARGUMENT_START="$(push_argument_start)"; then
-  PUSH_COMMAND_INDEX=$((PUSH_ARGUMENT_START - 1))
+PUSH_ARGUMENT_END=""
+PUSH_COMMAND_INDEX=""
+GIT_COMMAND_INDEX=""
+if push_argument_start; then
   # Preserve every parsed global option when checking the current branch for a
   # bare push (for example, `git --git-dir=/repo/.git push`).
-  GIT_ARGS=("${COMMAND_TOKENS[@]:0:$PUSH_COMMAND_INDEX}")
+  GIT_ARGS=("${COMMAND_TOKENS[@]:$GIT_COMMAND_INDEX:$((PUSH_COMMAND_INDEX - GIT_COMMAND_INDEX))}")
 else
   PUSH_PARSE_STATUS=$?
   if [ "$PUSH_PARSE_STATUS" -eq 2 ]; then
@@ -156,7 +202,7 @@ pushes_protected_branch() {
   local index token target
   [ -n "$PUSH_ARGUMENT_START" ] || return 1
   index="$PUSH_ARGUMENT_START"
-  for ((; index < ${#COMMAND_TOKENS[@]}; index += 1)); do
+  for ((; index < PUSH_ARGUMENT_END; index += 1)); do
     token="${COMMAND_TOKENS[$index]}"
     # A push refspec's destination is after the colon.  Normalize the
     # optional force marker and fully-qualified remote ref so the guard also
@@ -185,7 +231,7 @@ if pushes_protected_branch; then
     local index token
     [ -n "$PUSH_ARGUMENT_START" ] || return 1
     index="$PUSH_ARGUMENT_START"
-    for ((; index < ${#COMMAND_TOKENS[@]}; index += 1)); do
+    for ((; index < PUSH_ARGUMENT_END; index += 1)); do
       token="${COMMAND_TOKENS[$index]}"
       case "$token" in
         -f|--force|--force-with-lease|--delete) return 0 ;;
@@ -211,7 +257,7 @@ bare_push() {
   local index
   [ -n "$PUSH_ARGUMENT_START" ] || return 1
   index="$PUSH_ARGUMENT_START"
-  [ "$index" -eq "${#COMMAND_TOKENS[@]}" ]
+  [ "$index" -eq "$PUSH_ARGUMENT_END" ]
 }
 if bare_push; then
   CURRENT_BRANCH=$("${GIT_ARGS[@]}" branch --show-current 2>/dev/null || echo "")

@@ -67,13 +67,13 @@ node scripts/worktree-manager.js migrate --repo /path/to/repo --apply
 
 ## Workflow Selection
 
-| Scenario                  | Commands                                                                          | Time              |
-| ------------------------- | --------------------------------------------------------------------------------- | ----------------- |
-| Solo dev (fast iteration) | `/bs:dev` → code → `/bs:quality --merge`                                          | 30-60 min         |
-| Team collaboration        | `/bs:dev` → code → `/bs:quality` → team reviews → `git checkout main && git pull` | Varies            |
-| Production launch         | `/bs:dev` → code → `/bs:quality --level 98 --merge --deploy`                      | 1-3 hours         |
-| Emergency hotfix          | `/bs:hotfix "description"`                                                        | 5-10 min          |
-| Rapid iteration           | code → `/bs:quality --scope changed` (repeat) → `/bs:quality --merge`             | 2-5 min per chunk |
+| Scenario                  | Commands                                                              | Time              |
+| ------------------------- | --------------------------------------------------------------------- | ----------------- |
+| Solo dev (fast iteration) | `/bs:dev` → code → automatic quality/merge handoff                    | 30-60 min         |
+| Team collaboration        | `/bs:dev --no-ship` → `/bs:quality` → team reviews                    | Varies            |
+| Production launch         | `/bs:dev --no-ship` → `/bs:quality --level 98 --merge --deploy`       | 1-3 hours         |
+| Emergency hotfix          | `/bs:hotfix "description"`                                            | 5-10 min          |
+| Rapid iteration           | code → `/bs:quality --scope changed` (repeat) → `/bs:quality --merge` | 2-5 min per chunk |
 
 ## Autonomous Mode
 
@@ -105,7 +105,7 @@ sota                              # Score the setup, self-heal
 
 - **Target: < 50 turns per session** — Break at natural boundaries
 - **Warning signs:** Session slowing down, repeated questions, context compression messages
-- **Break pattern:** `/bs:dev` → code → `/bs:quality` → `/clear` → next feature
+- **Break pattern:** `/bs:dev` → automatic quality/merge → `/clear` → next feature. Use `/bs:dev --no-ship` only when deliberately stopping at a local candidate.
 
 **Commands:**
 

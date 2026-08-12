@@ -5,7 +5,7 @@ description: Start development work (features, bugs, refactoring, experiments)
 
 # /bs:dev - Start Development Work
 
-**Usage**: `/bs:dev <name|inline-list> [--fix|--refactor|--experiment] [--with-tests] [--tdd] [--wt] [--parallel "task1,task2,task3"] [--list] [--sequential] [--max=N] [--teams] [--next] [--alt]`
+**Usage**: `/bs:dev <name|inline-list> [--fix|--refactor|--experiment] [--with-tests] [--tdd] [--wt] [--parallel "task1,task2,task3"] [--list] [--sequential] [--max=N] [--teams] [--next] [--alt] [--no-ship]`
 
 Generic command for all development work. Auto-detects branch type or use flags.
 
@@ -311,7 +311,7 @@ Task(subagent_type: "Explore",
 
 ### Step 7: Development
 
-Use TodoWrite to track tasks. Read files before editing. Follow project conventions. Test incrementally. Break at < 50 turns: `/bs:dev` → code → `/bs:quality` → `/clear`.
+Use TodoWrite to track tasks. Read files before editing. Follow project conventions. Test incrementally. Break at < 50 turns: `/bs:dev` → automatic quality/merge → `/clear`.
 
 ### Step 7.5: Auto-Generate Tests (--with-tests flag only)
 
@@ -326,13 +326,16 @@ path is a mapping defect, not an automatic full-suite instruction. Complete
 regression is reserved for a scheduled/release audit or an explicit risk-based
 exception.
 
-### Step 8: Completion Signal
+### Step 8: Autonomous delivery handoff
 
-**CRITICAL: Explicit completion marker for agents**
+**Default: implementation is not terminal. Ship the exact candidate.**
 
-Successful development is the terminal handoff for the `bs:dev` owner. Release
-that exact lock before offering `/bs:quality`; a crashed or incomplete run
-leaves the lock as evidence and must not be taken over automatically:
+Successful implementation releases the `bs:dev` ownership lock, then hands the
+same worktree directly to the provider-neutral `quality` skill with `--merge`.
+Do not return a completion message and wait for the user to start quality: that
+gap is how verified local commits were repeatedly left unpushed and unreviewed.
+A crashed or incomplete run leaves the lock as evidence and must not be taken
+over automatically:
 
 ```bash
 node "$WORKTREE_MANAGER" unlock \
@@ -342,7 +345,25 @@ node "$WORKTREE_MANAGER" unlock \
   --terminal
 ```
 
-After implementation is complete, provide explicit completion signal:
+Unless the user supplied `--no-ship`, immediately invoke the `quality` skill as
+if the user had run:
+
+```text
+/bs:quality --merge --target-dir "$WORKTREE_DIR"
+```
+
+Carry its result through PR creation, exact-head gates, review, merge, and safe
+cleanup under the repository's normal authority policy. Provider exhaustion is
+handled by quality's bounded fallback contract; it is not a reason to leave the
+candidate at the handoff boundary. A real gate failure or missing authority
+still blocks visibly.
+
+`--no-ship` is the explicit escape hatch for a local experiment or a user who
+asked for implementation only. In that mode, stop after releasing the terminal
+lock and report the branch plus focused test evidence. Never infer `--no-ship`
+from `--experiment` alone.
+
+After quality returns, provide the terminal result:
 
 ```markdown
 🎯 TASK COMPLETE
@@ -354,14 +375,8 @@ After implementation is complete, provide explicit completion signal:
 - Tests: [added/updated/passing]
 - Documentation: [updated if needed]
 
-**Next steps:**
-
-1. Review the changes
-2. Run `/bs:quality --merge` to test, create PR, deploy
-   - Or `/bs:quality` if you want team review first
-   - Or `/bs:quality --level 98 --merge` for production-critical work
-
 **Branch:** $BRANCH_NAME
+**Delivery:** [merged PR URL | concrete blocking gate | local-only (--no-ship)]
 
 Use `/clear` after shipping to start fresh for next feature.
 ```
