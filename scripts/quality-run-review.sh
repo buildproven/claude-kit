@@ -65,6 +65,48 @@ REVIEW_OUT="$(printf '%s' "$REVIEW_INFO" | jq -r '.artifactDir')"
 mkdir -p "$REVIEW_OUT"
 git diff "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" > "$REVIEW_OUT/diff.txt"
 git diff --name-only "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" > "$REVIEW_OUT/files.txt"
+
+# A gitlink is executable policy, not a text-only pointer. When the reviewed
+# repository advances a `core` submodule, include the exact recursive diff in
+# the immutable review envelope so providers cannot approve an opaque trusted
+# control-plane update. Repositories without a gitlink are unchanged.
+# `git rev-parse <commit>:core` is not a safe existence test: for a missing
+# path Git can echo the path expression before returning non-zero. Read the
+# tree entry and require mode 160000 so ordinary repositories without a core
+# submodule never enter the recursive-review branch.
+BASE_CORE_SHA="$(git ls-tree "$REVIEW_DIFF_BASE" -- core |
+  awk '$1 == "160000" && $2 == "commit" {print $3}')"
+HEAD_CORE_SHA="$(git ls-tree "$REVIEWED_HEAD" -- core |
+  awk '$1 == "160000" && $2 == "commit" {print $3}')"
+# A fixture or ordinary repository may carry a path named `core` without an
+# initialized submodule checkout. Only expand an actual checkout; a real
+# target with a gitlink but no checkout remains a deliberate setup failure in
+# its own provenance gate rather than silently pretending the pointer is text.
+if { [ -d core/.git ] || [ -f core/.git ]; } &&
+  { [ -n "$BASE_CORE_SHA" ] || [ -n "$HEAD_CORE_SHA" ]; }; then
+  [ -n "$BASE_CORE_SHA" ] && [ -n "$HEAD_CORE_SHA" ] || {
+    echo "quality-run-review: core gitlink exists on only one side of the diff" >&2
+    exit 1
+  }
+  if [ "$BASE_CORE_SHA" != "$HEAD_CORE_SHA" ]; then
+    git -C core cat-file -e "$BASE_CORE_SHA^{commit}" 2>/dev/null || {
+      echo "quality-run-review: base core commit is unavailable for recursive review" >&2
+      exit 1
+    }
+    git -C core cat-file -e "$HEAD_CORE_SHA^{commit}" 2>/dev/null || {
+      echo "quality-run-review: head core commit is unavailable for recursive review" >&2
+      exit 1
+    }
+    {
+      printf '\n===== recursive submodule diff: core %s..%s =====\n' \
+        "$BASE_CORE_SHA" "$HEAD_CORE_SHA"
+      git -C core diff --submodule=diff "$BASE_CORE_SHA" "$HEAD_CORE_SHA"
+      printf '===== end recursive submodule diff: core =====\n'
+    } >> "$REVIEW_OUT/diff.txt"
+    git -C core diff --name-only "$BASE_CORE_SHA" "$HEAD_CORE_SHA" |
+      sed 's#^#core/#' >> "$REVIEW_OUT/files.txt"
+  fi
+fi
 git log "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" --oneline > "$REVIEW_OUT/log.txt"
 node "$SCRIPT_DIR/quality-invocation.js" review-identity "$MANIFEST" \
   > "$REVIEW_OUT/identity.json" || exit 1
