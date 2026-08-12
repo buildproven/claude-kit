@@ -183,7 +183,9 @@ describe("provider review runtime", () => {
     const result = await new Promise((resolve) => {
       runner.once("close", (code, signal) => resolve({ code, signal }));
     });
-    expect(result).toEqual({ code: 143, signal: null });
+    // Node reports a shell terminated by SIGTERM as either the conventional
+    // 128+signal exit code or the raw signal, depending on the host runner.
+    expect(result.signal === "SIGTERM" ? 143 : result.code).toBe(143);
   });
 
   it("throttles detached-provider tree snapshots and avoids duplicate writes", () => {
