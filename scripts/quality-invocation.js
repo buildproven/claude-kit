@@ -103,11 +103,16 @@ function reviewDiffBuffer(root, from, to) {
   const baseCore = treeEntry(from);
   const headCore = treeEntry(to);
   const coreCheckout = fs.existsSync(path.join(root, "core", ".git"));
-  if (!coreCheckout || (!baseCore && !headCore)) return diff;
+  if (!baseCore && !headCore) return diff;
   if (!baseCore || !headCore) {
     throw new Error("core gitlink exists on only one side of the diff");
   }
   if (baseCore === headCore) return diff;
+  if (!coreCheckout) {
+    throw new Error(
+      "changed core gitlink requires an initialized checkout for recursive review",
+    );
+  }
   for (const commit of [baseCore, headCore]) {
     execFileSync(
       "git",

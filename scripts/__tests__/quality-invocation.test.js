@@ -4,6 +4,7 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
+  rmSync,
   realpathSync,
   readFileSync,
   symlinkSync,
@@ -680,6 +681,50 @@ describe("quality invocation manifest", () => {
     );
     expect(diff).toContain("-echo base");
     expect(diff).toContain("+echo head");
+  });
+
+  it("refuses an uninitialized checkout when the core gitlink changes", () => {
+    const submodule = makeTempDir("quality-core-uninitialized-source-");
+    git(submodule, ["init", "-q", "-b", "main"]);
+    git(submodule, ["config", "user.name", "Quality Test"]);
+    git(submodule, ["config", "user.email", "quality@example.com"]);
+    writeFileSync(path.join(submodule, "policy.sh"), "echo base\n");
+    git(submodule, ["add", "policy.sh"]);
+    git(submodule, ["commit", "-q", "-m", "base"]);
+    const baseCore = git(submodule, ["rev-parse", "HEAD"]);
+    writeFileSync(path.join(submodule, "policy.sh"), "echo head\n");
+    git(submodule, ["commit", "-qam", "change"]);
+    const headCore = git(submodule, ["rev-parse", "HEAD"]);
+
+    const root = makeTempDir("quality-core-uninitialized-review-");
+    git(root, ["init", "-q", "-b", "main"]);
+    git(root, ["config", "user.name", "Quality Test"]);
+    git(root, ["config", "user.email", "quality@example.com"]);
+    writeFileSync(path.join(root, "README.md"), "root\n");
+    git(root, ["add", "README.md"]);
+    git(root, ["commit", "-q", "-m", "root"]);
+    git(root, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      "-q",
+      submodule,
+      "core",
+    ]);
+    git(root, ["-C", "core", "checkout", "-q", baseCore]);
+    git(root, ["add", "core"]);
+    git(root, ["commit", "-q", "-m", "add core"]);
+    const base = git(root, ["rev-parse", "HEAD"]);
+    git(root, ["-C", "core", "checkout", "-q", headCore]);
+    git(root, ["add", "core"]);
+    git(root, ["commit", "-q", "-m", "bump core"]);
+    const head = git(root, ["rev-parse", "HEAD"]);
+    rmSync(path.join(root, "core"), { recursive: true, force: true });
+
+    expect(() => invocation.reviewDiffBuffer(root, base, head)).toThrow(
+      /changed core gitlink requires an initialized checkout/,
+    );
   });
 
   it("requires a bound domain selector for v2 agent selection", () => {
