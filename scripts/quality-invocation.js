@@ -3979,6 +3979,7 @@ function judgeContext(manifest) {
 }
 
 function recordReview(manifest, options) {
+  assertReviewHeadCurrent(manifest, options);
   if (manifest.governor.activeExecution?.kind === "provider") {
     completeActiveExecution(manifest, "provider");
   }
@@ -4051,6 +4052,49 @@ function recordReview(manifest, options) {
     effort: options.effort || null,
   };
   authorizedAttempt.consumedAt = new Date().toISOString();
+}
+
+// Evidence is persisted under the manifest lock, but a provider can finish
+// after another local process (or a remote PR update) has moved the candidate.
+// Re-read the checkout HEAD inside the same mutation that appends the review;
+// callers that have a PR also request the authoritative GitHub head here so a
+// second clone cannot silently invalidate the local campaign (BUI-645).
+function assertReviewHeadCurrent(manifest, options = {}) {
+  const localHead = git(manifest.repo.realpath, ["rev-parse", "HEAD"]);
+  if (localHead !== manifest.revisions.currentHead) {
+    throw new Error(
+      `review evidence head moved before recording (expected ${manifest.revisions.currentHead}, found local ${localHead})`,
+    );
+  }
+  if (options["validate-remote-head"] !== "true" || manifest.repo.pr == null) {
+    return;
+  }
+  const remote = spawnSync(
+    "gh",
+    [
+      "pr",
+      "view",
+      String(manifest.repo.pr),
+      "--repo",
+      manifest.repo.githubRepository,
+      "--json",
+      "headRefOid",
+      "--jq",
+      ".headRefOid",
+    ],
+    { cwd: manifest.repo.realpath, encoding: "utf8", timeout: 15_000 },
+  );
+  const remoteHead = remote.stdout?.trim();
+  if (remote.status !== 0 || !/^[0-9a-f]{40}$/i.test(remoteHead || "")) {
+    throw new Error(
+      `unable to verify authoritative PR HEAD before recording review${remote.stderr ? `: ${remote.stderr.trim()}` : ""}`,
+    );
+  }
+  if (remoteHead !== manifest.revisions.currentHead) {
+    throw new Error(
+      `review evidence head moved before recording (expected ${manifest.revisions.currentHead}, found remote ${remoteHead})`,
+    );
+  }
 }
 
 const ADVISORY_FAILURE_CATEGORIES = new Set([
@@ -4134,6 +4178,7 @@ function recordAdvisoryReview(manifest, options) {
 }
 
 function recordPolicyExemptReview(manifest, options) {
+  assertReviewHeadCurrent(manifest, options);
   if ((manifest.reviewContractVersion || 1) < 2) {
     throw new Error("policy exemption requires review contract v2");
   }
@@ -4196,6 +4241,7 @@ function recordPolicyExemptReview(manifest, options) {
 }
 
 function recordIncompleteReview(manifest, options) {
+  assertReviewHeadCurrent(manifest, options);
   if ((manifest.reviewContractVersion || 1) < 2) {
     throw new Error("incomplete discovery attestation requires contract v2");
   }
@@ -6086,6 +6132,7 @@ module.exports = {
   recordReview,
   recordAdvisoryReview,
   recordPolicyExemptReview,
+  assertReviewHeadCurrent,
   recordJudge,
   recordGate,
   recordMutation,

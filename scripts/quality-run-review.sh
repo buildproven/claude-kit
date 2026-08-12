@@ -160,9 +160,10 @@ if [ "$TIER" = low ]; then
   node "$SCRIPT_DIR/quality-invocation.js" record-policy-exempt-review "$MANIFEST" \
     --from "$REVIEW_DIFF_BASE" \
     --to "$REVIEWED_HEAD" \
-    --primary "$QUALITY_PRIMARY" \
-    --fallback "$QUALITY_FALLBACK" \
-    --artifact-dir "$REVIEW_OUT" \
+     --primary "$QUALITY_PRIMARY" \
+     --fallback "$QUALITY_FALLBACK" \
+     --validate-remote-head true \
+     --artifact-dir "$REVIEW_OUT" \
     --diff-sha "$DIFF_SHA" || exit 1
   echo "ℹ️  [quality] low-risk policy requires deterministic gates and no AI reviewer." >&2
   echo "REVIEW_OUT=$REVIEW_OUT"
@@ -659,6 +660,7 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
       --primary "$QUALITY_PRIMARY" --fallback "$QUALITY_FALLBACK" \
       --failed-provider "$REVIEW_PROVIDER" \
       --failure-category "$INCOMPLETE_CATEGORY" \
+      --validate-remote-head true \
       --artifact-dir "$REVIEW_OUT" --diff-sha "$DIFF_SHA" || exit 1
     RETRY_STATUS="$(node "$SCRIPT_DIR/quality-invocation.js" \
       review-retry-status "$MANIFEST")" || exit 1
@@ -751,9 +753,10 @@ node "$SCRIPT_DIR/quality-invocation.js" record-review "$MANIFEST" \
   --to "$REVIEWED_HEAD" \
   --provider "$REVIEW_PROVIDER" \
   --primary "$QUALITY_PRIMARY" \
-  --fallback "$QUALITY_FALLBACK" \
-  --effort "$QUALITY_REVIEW_DEPTH" \
-  --artifact-dir "$REVIEW_OUT" \
+   --fallback "$QUALITY_FALLBACK" \
+   --effort "$QUALITY_REVIEW_DEPTH" \
+   --validate-remote-head true \
+   --artifact-dir "$REVIEW_OUT" \
   --diff-sha "$DIFF_SHA" || exit 1
 
 echo "REVIEW_OUT=$REVIEW_OUT"

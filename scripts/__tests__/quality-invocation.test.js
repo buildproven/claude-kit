@@ -3583,6 +3583,19 @@ exit 1
     expect(result.stderr).toMatch(/not authorized by the governor/);
   });
 
+  it("rejects review evidence when the checkout advances before the manifest mutation", () => {
+    const root = repo("record-review-head-drift");
+    const manifestPath = create(root);
+    const manifest = invocation.loadManifest(manifestPath).manifest;
+    writeFileSync(path.join(root, "drift.js"), "export const drift = true;\n");
+    git(root, ["add", "drift.js"]);
+    git(root, ["commit", "-q", "-m", "drift during review"]);
+
+    expect(() => invocation.assertReviewHeadCurrent(manifest, {})).toThrow(
+      /review evidence head moved before recording/,
+    );
+  });
+
   it("uses an explicit composite checkpoint for an incremental second review", () => {
     const root = repo("delta");
     const manifest = create(root);

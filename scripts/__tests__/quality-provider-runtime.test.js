@@ -712,6 +712,10 @@ Quality-Evidence-Signature: ${signature}`;
     expect(source).toContain(
       '--state superseded --detail "head-moved-during-review"',
     );
+    expect(source).toContain("--validate-remote-head true");
+    expect(
+      readFileSync(path.join(ROOT, "scripts", "quality-invocation.js"), "utf8"),
+    ).toMatch(/function assertReviewHeadCurrent[\s\S]*spawnSync\(\s*"gh"/);
   });
 
   it("runs Bash-only review entrypoints explicitly through Bash", () => {
