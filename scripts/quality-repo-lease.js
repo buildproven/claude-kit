@@ -730,7 +730,7 @@ function withManifestMutation(manifestPath, presentedToken, mutation) {
         ) {
           throw new Error("repository merge lease manifest credential changed");
         }
-        const result = mutation(manifest);
+        const result = mutation(manifest, manifestPath);
         record.renewedAt = new Date().toISOString();
         atomicWrite(path.join(paths.lease, "owner.json"), record);
         return result;

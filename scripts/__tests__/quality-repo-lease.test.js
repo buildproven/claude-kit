@@ -491,16 +491,17 @@ describe("repository merge lease", () => {
       staleAfterMs: lease.STALE_MS,
       recoveryOverrideRequired: true,
     });
-    expect(() =>
-      lease.recover(second.manifestPath, owner.token, {
-        override: true,
-        reason: "operator confirmed the original campaign is abandoned",
-      }),
-    ).toThrow(/BS_QUALITY_LEASE_RECOVERY_OVERRIDE/);
-
     const previous = process.env.BS_QUALITY_LEASE_RECOVERY_OVERRIDE;
-    process.env.BS_QUALITY_LEASE_RECOVERY_OVERRIDE = "1";
     try {
+      delete process.env.BS_QUALITY_LEASE_RECOVERY_OVERRIDE;
+      expect(() =>
+        lease.recover(second.manifestPath, owner.token, {
+          override: true,
+          reason: "operator confirmed the original campaign is abandoned",
+        }),
+      ).toThrow(/BS_QUALITY_LEASE_RECOVERY_OVERRIDE/);
+
+      process.env.BS_QUALITY_LEASE_RECOVERY_OVERRIDE = "1";
       const recovered = lease.recover(second.manifestPath, owner.token, {
         override: true,
         reason: "operator confirmed the original campaign is abandoned",

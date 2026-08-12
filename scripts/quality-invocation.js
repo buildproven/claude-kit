@@ -4064,9 +4064,11 @@ function recordReview(manifest, options) {
 function assertReviewHeadCurrent(manifest) {
   const localHead = git(manifest.repo.realpath, ["rev-parse", "HEAD"]);
   if (localHead !== manifest.revisions.currentHead) {
-    throw new Error(
+    const error = new Error(
       `review evidence head moved before recording (expected ${manifest.revisions.currentHead}, found local ${localHead})`,
     );
+    error.code = "QUALITY_REVIEW_HEAD_MOVED";
+    throw error;
   }
   if (manifest.repo.pr == null) {
     return;
@@ -4093,9 +4095,11 @@ function assertReviewHeadCurrent(manifest) {
     );
   }
   if (remoteHead !== manifest.revisions.currentHead) {
-    throw new Error(
+    const error = new Error(
       `review evidence head moved before recording (expected ${manifest.revisions.currentHead}, found remote ${remoteHead})`,
     );
+    error.code = "QUALITY_REVIEW_HEAD_MOVED";
+    throw error;
   }
 }
 
@@ -5653,9 +5657,26 @@ function printValue(value) {
 }
 
 function mutate(manifestArg, operation) {
-  return withManifestLock(manifestArg, (locked) => {
+  return withManifestLock(manifestArg, (locked, manifestPath) => {
     validateIdentity(locked, locked.repo.realpath);
-    operation(locked);
+    try {
+      operation(locked);
+    } catch (error) {
+      if (error?.code === "QUALITY_REVIEW_HEAD_MOVED") {
+        if (locked.governor.activeExecution?.kind === "provider") {
+          completeActiveExecution(locked, "provider");
+        }
+        locked.terminalState ??= {
+          state: "superseded",
+          detail: "head-moved-before-review-record",
+          head: locked.revisions.currentHead,
+          recordedAt: new Date().toISOString(),
+        };
+        locked.governor.lastActivityAt = new Date().toISOString();
+        saveManifestMidTransaction(manifestPath, locked);
+      }
+      throw error;
+    }
     locked.governor.lastActivityAt = new Date().toISOString();
   });
 }
