@@ -48,6 +48,7 @@ const REVIEW_EVIDENCE = path.join(
 const require = createRequire(import.meta.url);
 const invocation = require(INVOCATION);
 const lease = require("../quality-repo-lease");
+const FIXTURE_GH_BINS = new Map();
 
 function fixtureRepository(root) {
   const identity = `${realpathSync(root)}\0${git(root, ["rev-parse", "HEAD"])}`;
@@ -171,8 +172,17 @@ function create(root, extra = [], env = {}) {
           "false",
         ]
       : [];
-  if (mergeFixture || prIdentity.length > 0)
+  if (mergeFixture || prIdentity.length > 0) {
     prepareFixtureNamespace(root, githubRepository);
+    // PR-backed fixture mutations exercise the same authoritative `gh`
+    // lookup as production. This fake reports the checkout's current HEAD;
+    // tests that need a stale remote explicitly prepend their own fake.
+    const bin = fakeGh(root, git(root, ["rev-parse", "HEAD"]), {
+      dynamicHead: true,
+    });
+    FIXTURE_GH_BINS.set(realpathSync(root), bin);
+    process.env.PATH = `${bin}:${process.env.PATH}`;
+  }
   const manifestPath = execFileSync(
     "node",
     [
@@ -251,6 +261,10 @@ function prepareCodexReview(
       encoding: "utf8",
     }),
   );
+  const fixtureGhBin = FIXTURE_GH_BINS.get(realpathSync(root));
+  const fixtureEnv = fixtureGhBin
+    ? { ...process.env, PATH: `${fixtureGhBin}:${process.env.PATH}` }
+    : process.env;
   mkdirSync(info.artifactDir, { recursive: true });
   writeFileSync(
     path.join(info.artifactDir, "diff.txt"),
@@ -300,7 +314,7 @@ function prepareCodexReview(
       "--provider",
       "codex",
     ],
-    { cwd: root },
+    { cwd: root, env: fixtureEnv },
   );
   const diffSha = createHash("sha256")
     .update(readFileSync(path.join(info.artifactDir, "diff.txt")))
@@ -326,7 +340,7 @@ function prepareCodexReview(
       "--diff-sha",
       diffSha,
     ],
-    { cwd: root },
+    { cwd: root, env: fixtureEnv },
   );
   for (const name of ["lint", "test", "security"]) {
     recordGateFixture(manifestPath, name);
@@ -534,7 +548,7 @@ function recordJudgeArtifact(root, manifest, dispositions = []) {
   recordMutationFixture(manifest);
 }
 
-function fakeGh(root, head) {
+function fakeGh(root, head, { dynamicHead = false } = {}) {
   const bin = makeTempDir("quality-gh-");
   const gh = path.join(bin, "gh");
   const merged = path.join(bin, "merged");
@@ -547,14 +561,19 @@ function fakeGh(root, head) {
     gh,
     `#!/usr/bin/env bash
 if [ "$1 $2" = "pr view" ]; then
+  head_oid="${dynamicHead ? '$(git -C "$PWD" rev-parse HEAD)' : head}"
   args="$*"
   head_ref="\${QUALITY_TEST_HEAD_REF:-feature}"
+  if [[ "$args" == *"--jq .headRefOid"* ]]; then
+    printf '%s\\n' "$head_oid"
+    exit 0
+  fi
   if [[ "$args" == *"state,mergedAt,mergeCommit"* ]] && [ -f ${JSON.stringify(merged)} ]; then
-    printf '{"state":"MERGED","mergedAt":"2026-07-16T00:00:00Z","mergeCommit":{"oid":"merge"},"headRefName":"%s","headRefOid":"${head}","baseRefName":"main"}\\n' "$head_ref"
+    printf '{"state":"MERGED","mergedAt":"2026-07-16T00:00:00Z","mergeCommit":{"oid":"merge"},"headRefName":"%s","headRefOid":"%s","baseRefName":"main"}\\n' "$head_ref" "$head_oid"
   elif [[ "$args" == *"baseRefOid"* ]]; then
-    printf '{"state":"OPEN","mergedAt":null,"mergeCommit":null,"headRefName":"%s","headRefOid":"${head}","baseRefName":"main","baseRefOid":"${base}"}\\n' "$head_ref"
+    printf '{"state":"OPEN","mergedAt":null,"mergeCommit":null,"headRefName":"%s","headRefOid":"%s","baseRefName":"main","baseRefOid":"%s"}\\n' "$head_ref" "$head_oid" "${base}"
   else
-    printf '{"state":"OPEN","mergedAt":null,"mergeCommit":null,"headRefName":"%s","headRefOid":"${head}","baseRefName":"main"}\\n' "$head_ref"
+    printf '{"state":"OPEN","mergedAt":null,"mergeCommit":null,"headRefName":"%s","headRefOid":"%s","baseRefName":"main"}\\n' "$head_ref" "$head_oid"
   fi
   exit 0
 fi

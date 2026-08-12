@@ -723,7 +723,7 @@ Quality-Evidence-Signature: ${signature}`;
     );
     expect(
       readFileSync(path.join(ROOT, "scripts", "quality-invocation.js"), "utf8"),
-    ).toMatch(/manifest\.repo\.pr == null/);
+    ).toMatch(/if \(manifest\.repo\.pr == null\) return;/);
   });
 
   it("runs Bash-only review entrypoints explicitly through Bash", () => {

@@ -677,6 +677,9 @@ function recover(manifestPath, ownerToken, options = {}) {
     }
     const token = crypto.randomBytes(32).toString("hex");
     const generation = current.generation + 1;
+    const recoveryReason = override
+      ? String(options.reason).trim().slice(0, 500)
+      : undefined;
     const pending = {
       ...current,
       ...nextTuple,
@@ -685,9 +688,7 @@ function recover(manifestPath, ownerToken, options = {}) {
       token,
       generation,
       renewedAt: new Date().toISOString(),
-      recoveryReason: override
-        ? String(options.reason).slice(0, 500)
-        : undefined,
+      recoveryReason,
     };
     atomicWrite(path.join(paths.lease, "owner.json"), pending);
     return completePending(paths, identity, loaded, pending);
