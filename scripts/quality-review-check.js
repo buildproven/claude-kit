@@ -189,9 +189,18 @@ function validateStandaloneEvidence(record, currentBase, repository) {
   }
   // This is the standalone required-check boundary. A manifest-bound merge
   // authorization may preserve incomplete AI discovery as advisory under the
-  // ADR, but external branch protection must never treat that state as a
-  // successful review check. Low-tier policy exemption remains explicit.
-  if (!["complete", "policy-exempt"].includes(record.evidence.reviewStatus)) {
+  // ADR, but external branch protection must never treat an unscoped or
+  // unsigned incomplete state as a successful review check. The only
+  // incomplete evidence accepted here is the separately signed,
+  // exact-condition operator-quality-override record.
+  const signedOperatorOverride =
+    record.evidence.reviewStatus === "incomplete" &&
+    record.evidence.reviewer === "operator-quality-override" &&
+    record.evidence.override?.scope === "operator-quality-override";
+  if (
+    !["complete", "policy-exempt"].includes(record.evidence.reviewStatus) &&
+    !signedOperatorOverride
+  ) {
     fail("standalone verification requires complete review evidence");
   }
 }

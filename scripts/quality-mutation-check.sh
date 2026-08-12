@@ -90,6 +90,13 @@ if [ "$TEST_EXECUTABLE" = npm ] &&
   case "$TEST_SCRIPT" in
     vitest\ *|jest\ *|npx\ vitest\ *|npx\ jest\ *)
       MUTATION_TEST_ARGS+=(-- --bail=1)
+      # The mutation-check contract tests deliberately launch this script in
+      # temporary fixture repositories. Including them in the mutation proof
+      # would recursively launch more mutation proofs in the reviewed repo,
+      # exhausting the gate budget without testing the product change.
+      if [ -f "$ROOT/scripts/__tests__/quality-mutation-check.test.js" ]; then
+        MUTATION_TEST_ARGS+=(--exclude scripts/__tests__/quality-mutation-check.test.js)
+      fi
       ;;
     pytest|pytest\ *|python\ -m\ pytest|python\ -m\ pytest\ *|python3\ -m\ pytest|python3\ -m\ pytest\ *|uv\ run\ pytest|uv\ run\ pytest\ *|poetry\ run\ pytest|poetry\ run\ pytest\ *|pipenv\ run\ pytest|pipenv\ run\ pytest\ *)
       case "$TEST_SCRIPT" in
