@@ -45,6 +45,10 @@ set -m
 "$@" &
 CHILD_PID=$!
 set +m
+process_start() {
+  ps -o lstart= -p "$1" 2>/dev/null | sed 's/[[:space:]]*$//' || true
+}
+CHILD_START="$(process_start "$CHILD_PID")"
 process_tree_postorder() {
   local pid="$1" child
   # Snapshot descendants before signalling the process group. A native helper
@@ -55,6 +59,15 @@ process_tree_postorder() {
     process_tree_postorder "$child"
   done < <(pgrep -P "$pid" 2>/dev/null || true)
   printf '%s\n' "$pid"
+}
+record_snapshot() {
+  local snapshot_pid snapshot_start
+  while IFS= read -r snapshot_pid; do
+    [ -n "$snapshot_pid" ] || continue
+    snapshot_start="$(process_start "$snapshot_pid")"
+    [ -n "$snapshot_start" ] || continue
+    printf '%s\t%s\n' "$snapshot_pid" "$snapshot_start"
+  done
 }
 track_provider_tree() {
   # A provider can exit while a native helper it spawned is still alive. Once
@@ -69,13 +82,19 @@ track_provider_tree() {
     # exit and reparent a native helper. A quarter-second cadence bounds the
     # race without spawning thousands of pgrep/sleep processes per review.
     if [ "$snapshot" != "$last_snapshot" ]; then
-      printf '%s\n' "$snapshot" >> "$TRACKED_PIDS_FILE"
+      record_snapshot <<EOF >> "$TRACKED_PIDS_FILE"
+$snapshot
+EOF
       last_snapshot="$snapshot"
     fi
     sleep 0.25
   done
   snapshot="$(process_tree_postorder "$CHILD_PID")"
-  [ "$snapshot" = "$last_snapshot" ] || printf '%s\n' "$snapshot" >> "$TRACKED_PIDS_FILE"
+  [ "$snapshot" = "$last_snapshot" ] || {
+    record_snapshot <<EOF >> "$TRACKED_PIDS_FILE"
+$snapshot
+EOF
+  }
 }
 track_provider_tree &
 TRACKER_PID=$!
@@ -84,18 +103,41 @@ stop_tracker() {
   wait "$TRACKER_PID" 2>/dev/null || true
 }
 terminate_provider() {
-  local targets tracked
+  local targets tracked current_snapshot current_pid current_start recorded_pid recorded_start
   tracked="$(cat "$TRACKED_PIDS_FILE" 2>/dev/null || true)"
-  targets="$(printf '%s\n' "$tracked" "$(process_tree_postorder "$CHILD_PID")" |
-    awk 'NF && !seen[$1]++ { print $1 }')"
+  current_snapshot="$(process_tree_postorder "$CHILD_PID")"
+  targets=""
+  while IFS=$'\t' read -r recorded_pid recorded_start; do
+    [ -n "$recorded_pid" ] || continue
+    current_start="$(process_start "$recorded_pid")"
+    [ -n "$current_start" ] && [ "$current_start" = "$recorded_start" ] || continue
+    case $'\n'"$targets"$'\n' in
+      *$'\n'"$recorded_pid"$'\n'*) ;;
+      *) targets="${targets}${targets:+$'\n'}${recorded_pid}" ;;
+    esac
+  done <<EOF
+$tracked
+EOF
+  while IFS= read -r current_pid; do
+    [ -n "$current_pid" ] || continue
+    case $'\n'"$targets"$'\n' in
+      *$'\n'"$current_pid"$'\n'*) ;;
+      *) targets="${targets}${targets:+$'\n'}${current_pid}" ;;
+    esac
+  done <<EOF
+$current_snapshot
+EOF
   # Descendants first, then the provider leader. This ordering preserves the
   # PID list long enough to kill escaped session leaders as well.
   [ -z "$targets" ] || kill -TERM $targets 2>/dev/null || true
   sleep 1
   [ -z "$targets" ] || kill -KILL $targets 2>/dev/null || true
   # A normal descendant created after the snapshot remains in this group.
-  kill -TERM "-${CHILD_PID}" 2>/dev/null || true
-  kill -KILL "-${CHILD_PID}" 2>/dev/null || true
+  if [ -n "$CHILD_START" ] &&
+     [ "$(process_start "$CHILD_PID")" = "$CHILD_START" ]; then
+    kill -TERM "-${CHILD_PID}" 2>/dev/null || true
+    kill -KILL "-${CHILD_PID}" 2>/dev/null || true
+  fi
 }
 set -m
 watchdog() {

@@ -196,6 +196,58 @@ describe("quality-review-check", () => {
     ).toThrow(/complete review evidence/);
   });
 
+  it("accepts only the signed operator override form of incomplete evidence", () => {
+    const fields = evidenceFields({
+      ...authorization,
+      provider: "operator-quality-override",
+      primary: "unavailable",
+      fallback: "unavailable",
+      operatorOverride: true,
+      contractVersion: 2,
+      leads: 0,
+      reviewStatus: "incomplete",
+      policyDigest: "c".repeat(64),
+      agentsSha256: "d".repeat(64),
+      domain: "operator-override",
+      selectionRule: "operator-override",
+      repositoryKey: "buildproven/claude-kit",
+      diffSha256: "e".repeat(64),
+      evidenceSha256: "f".repeat(64),
+      override: {
+        scope: "operator-quality-override",
+        reason: "provider unavailable during outage",
+        acceptedConditions: ["provider:unavailable"],
+        approver: "brett",
+        issuedAt: "2026-08-11T12:00:00.000Z",
+        expiresAt: "2026-08-11T12:15:00.000Z",
+        artifactSha256: "1".repeat(64),
+      },
+    });
+    const record = recordForFields(fields, "signature");
+
+    expect(() =>
+      validateStandaloneEvidence(
+        record,
+        fields.base,
+        "buildproven/claude-kit",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateStandaloneEvidence(
+        {
+          ...record,
+          evidence: {
+            ...record.evidence,
+            reviewer: "codex",
+            override: undefined,
+          },
+        },
+        fields.base,
+        "buildproven/claude-kit",
+      ),
+    ).toThrow(/complete review evidence/);
+  });
+
   it("binds standalone v2 evidence to the requested repository", () => {
     const fields = evidenceFields({
       ...authorization,

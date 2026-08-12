@@ -18,9 +18,11 @@ const AFFIRMATIVE_VERIFICATION_SENTENCES = new Set([
 const SAFE_CHANGE_PATTERNS = [
   /\b(?:has|have)\s+no\s+(?:remaining|live)\s+(?:callers?|references?)\b/i,
 ];
+// Descriptive clean approvals need an observable verification action. Merely
+// saying that a change is "consistent with" or "aligned with" an old design
+// is a rationale, not evidence that the changed behavior was checked.
 const AFFIRMATIVE_VERIFICATION_PATTERNS = [
-  /\bconsistent(?:ly)?\s+with\b/i,
-  /\balign(?:s|ed)?\s+with\b/i,
+  /\b(?:tests?|checks?|lint(?:ing)?|type(?:check|checking)|verification|validation|review|analysis|audit|build|runtime)\b[^.!?\n]{0,80}\b(?:pass(?:ed)?|succeed(?:ed)?|verified|validated|confirmed|checked|green|clean)\b/i,
   /\bresolve(?:s|d)?\s+cleanly\b/i,
 ];
 

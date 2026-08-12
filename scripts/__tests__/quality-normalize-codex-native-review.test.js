@@ -66,8 +66,8 @@ Full review comments:
   it.each([
     "The setup-node version bump is applied consistently across all workflow references without altering existing inputs. The changed files also pass `./scripts/verify-fast`.",
     "The dependency upgrades and lockfile changes are consistent, resolve cleanly, and introduce no evident compatibility regressions. Type checking, linting, dependency resolution, and the affected runtime APIs succeeded.",
-    "The removed archiver targets the retired JSON queue and has no remaining callers. The ratchet and ignore updates are consistent with that cleanup and existing runtime telemetry handling.",
-    "The deleted archiver has no live references and depends on the retired JSON queue. The mypy ratchet and ignore changes align with that removal and the existing local-runtime telemetry design.",
+    "The removed archiver targets the retired JSON queue and has no remaining callers. Static analysis verified the ratchet and ignore updates against existing runtime telemetry handling.",
+    "The deleted archiver has no live references and depends on the retired JSON queue. The validation checks confirmed the mypy ratchet and ignore changes against the existing local-runtime telemetry design.",
   ])("approves verified descriptive prose: %s", (prose) => {
     expect(parseNativeReview(prose).verdict).toBe("approve");
   });
@@ -118,6 +118,8 @@ Full review comments:
     "The removed archiver has no live references. The ratchet updates are consistent with the cleanup, but a regression remains.",
     "The deleted archiver has no live references except a runtime plugin. The ratchet is consistent with that cleanup.",
     "The deleted archiver has no live references. The ratchet only superficially aligns with that cleanup.",
+    "The removed archiver has no remaining callers. The ratchet and ignore updates are consistent with that cleanup.",
+    "The deleted archiver has no live references. The ratchet and ignore changes align with that removal.",
   ])("rejects qualified no-finding prose: %s", (prose) => {
     expect(() => parseNativeReview(prose)).toThrow(/no recognizable verdict/);
   });
