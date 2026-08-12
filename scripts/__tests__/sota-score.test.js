@@ -41,6 +41,7 @@ describe("SOTA rubric 3.0 scorer", () => {
     expect(Object.keys(output.scores)).toHaveLength(15);
     expect(output.categories.skill_design.inert).toEqual([]);
     expect(output.categories.skill_design.score).toBe(10);
+    expect(output.categories.agent_orchestration.score).toBe(10);
   });
 
   it("pins currency scoring to the required Claude Code baseline", async () => {

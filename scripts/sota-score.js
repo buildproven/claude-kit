@@ -208,7 +208,12 @@ function scoreAgentOrchestration() {
   ].join("\n");
   let score = 0;
   const gaps = [];
-  if (/background (?:Agent|subagent)|run_in_background/.test(corpus))
+  // Match the documented portable forms ("background agents" and
+  // "background subagents") as well as the runtime's run_in_background
+  // option.  The previous case-sensitive singular-only expression scored
+  // the existing dev workflow as missing even though it explicitly
+  // documents spawning background agents.
+  if (/background (?:agents?|subagents?)|run_in_background/i.test(corpus))
     score += 2;
   else gaps.push("no native background-agent workflow found");
   if (/agent team|TeamCreate|TaskCreate/.test(corpus)) score += 2;
