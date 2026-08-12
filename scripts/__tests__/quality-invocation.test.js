@@ -4792,7 +4792,7 @@ exit 1
     });
   });
 
-  it("authorizes after the bounded incomplete retry while preserving incomplete status", () => {
+  it("blocks merge authorization after the bounded incomplete retry", () => {
     const root = repo("double-incomplete-provider-retry");
     const manifest = create(root);
     invocation.withManifestLock(manifest, (loaded) => {
@@ -4826,16 +4826,14 @@ exit 1
     expect(() => invocation.reviewInfo(state)).toThrow(
       "provider review remained incomplete after its authorized same-range retry",
     );
-    const authorization = JSON.parse(
+    expect(() =>
       execFileSync("node", [INVOCATION, "review-authorization", manifest], {
         cwd: root,
         encoding: "utf8",
       }),
+    ).toThrow(
+      "required provider review is incomplete; a signed exact-head operator override is required",
     );
-    expect(authorization).toMatchObject({
-      reviewStatus: "incomplete",
-      blockingCount: 0,
-    });
   });
 
   it("refuses HEAD advancement while an incomplete same-range retry is pending", () => {

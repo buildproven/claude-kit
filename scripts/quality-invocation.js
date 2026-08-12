@@ -5395,6 +5395,11 @@ function reviewAuthorization(manifest) {
       : covered.some((review) => review.status === "incomplete")
         ? "incomplete"
         : "complete";
+    if (reviewStatus === "incomplete") {
+      throw new Error(
+        "required provider review is incomplete; a signed exact-head operator override is required",
+      );
+    }
     assertMutationEvidence(manifest);
     return {
       ...authorization,
