@@ -226,11 +226,7 @@ describe("quality-review-check", () => {
     const record = recordForFields(fields, "signature");
 
     expect(() =>
-      validateStandaloneEvidence(
-        record,
-        fields.base,
-        "buildproven/claude-kit",
-      ),
+      validateStandaloneEvidence(record, fields.base, "buildproven/claude-kit"),
     ).not.toThrow();
     expect(() =>
       validateStandaloneEvidence(
