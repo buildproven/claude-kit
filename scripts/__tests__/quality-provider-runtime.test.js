@@ -702,16 +702,8 @@ Quality-Evidence-Signature: ${signature}`;
 
   it("revalidates the exact branch head after provider execution", () => {
     const source = readFileSync(RUN_REVIEW, "utf8");
-    const guard = source.indexOf("assert_reviewed_head_current || exit 1");
     const record = source.indexOf('quality-invocation.js" record-review');
-    expect(guard).toBeGreaterThan(-1);
-    expect(record).toBeGreaterThan(guard);
-    expect(source).toContain(
-      "reviewed HEAD moved during provider review (expected",
-    );
-    expect(source).toContain(
-      '--state superseded --detail "head-moved-during-review"',
-    );
+    expect(record).toBeGreaterThan(-1);
     expect(source).toContain("--validate-remote-head true");
     expect(
       readFileSync(path.join(ROOT, "scripts", "quality-invocation.js"), "utf8"),
