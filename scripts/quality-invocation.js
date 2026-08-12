@@ -84,6 +84,58 @@ function git(cwd, args) {
   }).trim();
 }
 
+// The review runner expands an initialized `core` gitlink into the exact
+// recursive submodule diff so a provider cannot approve an opaque control-
+// plane pointer. Canonical verification must hash the same byte stream or a
+// valid review is rejected after the provider has already spent its budget.
+function reviewDiffBuffer(root, from, to) {
+  const diff = execFileSync("git", ["diff", `${from}..${to}`], {
+    cwd: root,
+    encoding: "buffer",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 1024 * 1024 * 64,
+  });
+  const treeEntry = (commit) => {
+    const row = git(root, ["ls-tree", commit, "--", "core"]);
+    const fields = row.split(/\s+/);
+    return fields[0] === "160000" && fields[1] === "commit"
+      ? fields[2]
+      : "";
+  };
+  const baseCore = treeEntry(from);
+  const headCore = treeEntry(to);
+  const coreCheckout = fs.existsSync(path.join(root, "core", ".git"));
+  if (!coreCheckout || (!baseCore && !headCore)) return diff;
+  if (!baseCore || !headCore) {
+    throw new Error("core gitlink exists on only one side of the diff");
+  }
+  if (baseCore === headCore) return diff;
+  for (const commit of [baseCore, headCore]) {
+    execFileSync("git", ["-C", "core", "cat-file", "-e", `${commit}^{commit}`], {
+      cwd: root,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  }
+  const recursive = execFileSync(
+    "git",
+    ["-C", "core", "diff", "--submodule=diff", baseCore, headCore],
+    {
+      cwd: root,
+      encoding: "buffer",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 1024 * 1024 * 64,
+    },
+  );
+  return Buffer.concat([
+    diff,
+    Buffer.from(
+      `\n===== recursive submodule diff: core ${baseCore}..${headCore} =====\n`,
+    ),
+    recursive,
+    Buffer.from("===== end recursive submodule diff: core =====\n"),
+  ]);
+}
+
 function canonicalRoot(input) {
   const resolved = fs.realpathSync(input);
   return fs.realpathSync(git(resolved, ["rev-parse", "--show-toplevel"]));
@@ -4486,10 +4538,10 @@ function verifyReviewArtifact(manifest, review) {
   if (sha256File(diffFile) !== review.diffSha256) {
     throw new Error("review diff hash mismatch");
   }
-  const canonicalDiff = execFileSync(
-    "git",
-    ["diff", `${review.from}..${review.to}`],
-    { cwd: manifest.repo.realpath },
+  const canonicalDiff = reviewDiffBuffer(
+    manifest.repo.realpath,
+    review.from,
+    review.to,
   );
   const canonicalSha256 = crypto
     .createHash("sha256")
@@ -4679,10 +4731,10 @@ function reviewCoverage(manifest) {
   const completeDiffSha256 = crypto
     .createHash("sha256")
     .update(
-      execFileSync(
-        "git",
-        ["diff", `${authorizationBase}..${manifest.revisions.currentHead}`],
-        { cwd: manifest.repo.realpath },
+      reviewDiffBuffer(
+        manifest.repo.realpath,
+        authorizationBase,
+        manifest.revisions.currentHead,
       ),
     )
     .digest("hex");
@@ -5219,10 +5271,10 @@ function operatorOverrideAuthorization(manifest) {
   const diffSha256 = crypto
     .createHash("sha256")
     .update(
-      execFileSync(
-        "git",
-        ["diff", `${base}..${manifest.revisions.currentHead}`],
-        { cwd: manifest.repo.realpath },
+      reviewDiffBuffer(
+        manifest.repo.realpath,
+        base,
+        manifest.revisions.currentHead,
       ),
     )
     .digest("hex");
@@ -6036,6 +6088,7 @@ module.exports = {
   recordStamp,
   judgeContext,
   repoKey,
+  reviewDiffBuffer,
   reviewInfo,
   reserveIncompleteRetry,
   reviewIdentity,
