@@ -12,6 +12,16 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.6.2](https://github.com/buildproven/claude-kit/compare/v4.6.1...v4.6.2) (2026-08-12)
+
+
+### Bug Fixes
+
+* **quality:** block incomplete required reviews ([#324](https://github.com/buildproven/claude-kit/issues/324)) ([8c09ea6](https://github.com/buildproven/claude-kit/commit/8c09ea65a8d524b1d93b54e58b5cd7d5034dad03))
+* **quality:** canonicalize recursive review diffs ([#320](https://github.com/buildproven/claude-kit/issues/320)) ([07367ef](https://github.com/buildproven/claude-kit/commit/07367ef1ef9b40580a5b781a1c1844870983de72))
+* **quality:** fail closed on incomplete review inputs ([#323](https://github.com/buildproven/claude-kit/issues/323)) ([46124d2](https://github.com/buildproven/claude-kit/commit/46124d214349bcf7e74817a98ba79bd12fc4d747))
+* **quality:** prevent recursive mutation test runs ([#322](https://github.com/buildproven/claude-kit/issues/322)) ([fe07867](https://github.com/buildproven/claude-kit/commit/fe078676ab0211b667fc5dd754eba133045cb951))
+
 ## [4.6.1](https://github.com/buildproven/claude-kit/compare/v4.6.0...v4.6.1) (2026-08-11)
 
 
