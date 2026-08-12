@@ -277,8 +277,9 @@ describe("provider review runtime", () => {
 
   it("includes recursive core changes in the immutable review envelope", () => {
     const runner = readFileSync(RUN_REVIEW, "utf8");
-    expect(runner).toContain('git rev-parse "${REVIEW_DIFF_BASE}:core"');
-    expect(runner).toContain('git rev-parse "${REVIEWED_HEAD}:core"');
+    expect(runner).toContain('git ls-tree "$REVIEW_DIFF_BASE" -- core');
+    expect(runner).toContain('git ls-tree "$REVIEWED_HEAD" -- core');
+    expect(runner).toContain('"160000" && $2 == "commit"');
     expect(runner).toContain("git -C core diff --submodule=diff");
     expect(runner).toContain(
       "quality-run-review: head core commit is unavailable for recursive review",

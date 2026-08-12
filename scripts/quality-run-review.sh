@@ -70,8 +70,14 @@ git diff --name-only "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" > "$REVIEW_OUT/file
 # repository advances a `core` submodule, include the exact recursive diff in
 # the immutable review envelope so providers cannot approve an opaque trusted
 # control-plane update. Repositories without a gitlink are unchanged.
-BASE_CORE_SHA="$(git rev-parse "${REVIEW_DIFF_BASE}:core" 2>/dev/null || true)"
-HEAD_CORE_SHA="$(git rev-parse "${REVIEWED_HEAD}:core" 2>/dev/null || true)"
+# `git rev-parse <commit>:core` is not a safe existence test: for a missing
+# path Git can echo the path expression before returning non-zero. Read the
+# tree entry and require mode 160000 so ordinary repositories without a core
+# submodule never enter the recursive-review branch.
+BASE_CORE_SHA="$(git ls-tree "$REVIEW_DIFF_BASE" -- core |
+  awk '$1 == "160000" && $2 == "commit" {print $3}')"
+HEAD_CORE_SHA="$(git ls-tree "$REVIEWED_HEAD" -- core |
+  awk '$1 == "160000" && $2 == "commit" {print $3}')"
 if [ -n "$BASE_CORE_SHA" ] || [ -n "$HEAD_CORE_SHA" ]; then
   [ -n "$BASE_CORE_SHA" ] && [ -n "$HEAD_CORE_SHA" ] || {
     echo "quality-run-review: core gitlink exists on only one side of the diff" >&2
