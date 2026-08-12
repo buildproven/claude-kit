@@ -700,6 +700,20 @@ Quality-Evidence-Signature: ${signature}`;
     expect(source).toMatch(/normalized Codex findings could not be rendered/);
   });
 
+  it("revalidates the exact branch head after provider execution", () => {
+    const source = readFileSync(RUN_REVIEW, "utf8");
+    const guard = source.indexOf("assert_reviewed_head_current || exit 1");
+    const record = source.indexOf('quality-invocation.js" record-review');
+    expect(guard).toBeGreaterThan(-1);
+    expect(record).toBeGreaterThan(guard);
+    expect(source).toContain(
+      "reviewed HEAD moved during provider review (expected",
+    );
+    expect(source).toContain(
+      '--state superseded --detail "head-moved-during-review"',
+    );
+  });
+
   it("runs Bash-only review entrypoints explicitly through Bash", () => {
     const runner = readFileSync(RUN_REVIEW, "utf8");
     const policy = readFileSync(

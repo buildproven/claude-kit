@@ -62,6 +62,25 @@ REVIEW_OUT="$(printf '%s' "$REVIEW_INFO" | jq -r '.artifactDir')"
   exit 1
 }
 
+# A provider review can run for several minutes.  The branch may advance while
+# that provider is working (a second campaign, a human commit, or an automated
+# formatter).  Never attach the resulting evidence to a different revision:
+# the manifest is exact-head bound, so a moved head supersedes this campaign
+# and the caller must start/resume a fresh campaign for the new revision.
+assert_reviewed_head_current() {
+  local current_head
+  current_head="$(git rev-parse HEAD 2>/dev/null)" || {
+    echo "quality-run-review: cannot resolve current HEAD before recording review evidence" >&2
+    return 1
+  }
+  if [ "$current_head" != "$REVIEWED_HEAD" ]; then
+    echo "quality-run-review: reviewed HEAD moved during provider review (expected $REVIEWED_HEAD, found $current_head); refusing to record evidence" >&2
+    node "$SCRIPT_DIR/quality-invocation.js" terminal-state "$MANIFEST" \
+      --state superseded --detail "head-moved-during-review" >/dev/null || true
+    return 1
+  fi
+}
+
 mkdir -p "$REVIEW_OUT"
 git diff "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" > "$REVIEW_OUT/diff.txt"
 git diff --name-only "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" > "$REVIEW_OUT/files.txt"
@@ -631,6 +650,7 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
       "$REVIEW_OUT/identity.json" \
       > "$REVIEW_OUT/review-incomplete.result.json" || exit 1
     DIFF_SHA="$(shasum -a 256 "$REVIEW_OUT/diff.txt" | awk '{print $1}')"
+    assert_reviewed_head_current || exit 1
     node "$SCRIPT_DIR/quality-invocation.js" inventory "$MANIFEST" \
       --artifact-dir "$REVIEW_OUT" --provider review-incomplete \
       --incomplete || exit 1
@@ -722,6 +742,7 @@ DIFF_SHA="$(shasum -a 256 "$REVIEW_OUT/diff.txt" | awk '{print $1}')"
 # configured primary returns a valid, zero-finding review, that exact evidence
 # is complete at every tier. Calling a healthy-but-quota-exhausted fallback
 # would consume capacity without adding a failure signal.
+assert_reviewed_head_current || exit 1
 node "$SCRIPT_DIR/quality-invocation.js" inventory "$MANIFEST" \
   --artifact-dir "$REVIEW_OUT" \
   --provider "$REVIEW_PROVIDER" || exit 1

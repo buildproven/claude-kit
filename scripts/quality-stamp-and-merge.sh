@@ -271,16 +271,9 @@ elif [ "$LOCAL_REVIEW_EVIDENCE" = true ]; then
 else
   bash "$SCRIPT_DIR/quality-authorize-merge.sh" --manifest "$MANIFEST"
 fi
-# Record the SUCCESS terminal state. Only the failure paths
-# (quality-run-gate.sh, quality-run-review.sh) recorded one, so a campaign that
-# actually merged was indistinguishable on disk from one still running —
-# exactly the ambiguity manifest.terminalState was added to remove, left open
-# for the most common ending. Placed after authorize-merge so it can only run
-# once the merge is proven, and before cleanup so a cleanup failure cannot
-# erase the fact that the merge happened.
-#
-# Write-once: if the campaign already recorded a terminal state, that first
-# cause stands and this is a no-op.
-node "$SCRIPT_DIR/quality-invocation.js" terminal-state "$MANIFEST" \
-  --state merged --detail "pr:$PR" >/dev/null || true
+# `quality-repo-lease.js merge` records the write-once `merged` terminal state
+# in the same verified-outcome transaction that releases the lease.  Do not
+# call the lease-aware terminal-state mutator again here: the lease has already
+# been released, so that redundant call used to emit a misleading credential
+# error after a successful exact-head merge (BUI-728).
 bash "$SCRIPT_DIR/quality-merge-cleanup.sh" --manifest "$MANIFEST"
