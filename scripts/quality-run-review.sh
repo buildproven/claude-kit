@@ -78,17 +78,18 @@ BASE_CORE_SHA="$(git ls-tree "$REVIEW_DIFF_BASE" -- core |
   awk '$1 == "160000" && $2 == "commit" {print $3}')"
 HEAD_CORE_SHA="$(git ls-tree "$REVIEWED_HEAD" -- core |
   awk '$1 == "160000" && $2 == "commit" {print $3}')"
-# A fixture or ordinary repository may carry a path named `core` without an
-# initialized submodule checkout. Only expand an actual checkout; a real
-# target with a gitlink but no checkout remains a deliberate setup failure in
-# its own provenance gate rather than silently pretending the pointer is text.
-if { [ -d core/.git ] || [ -f core/.git ]; } &&
-  { [ -n "$BASE_CORE_SHA" ] || [ -n "$HEAD_CORE_SHA" ]; }; then
+# A changed gitlink is executable policy, so an uninitialized checkout cannot
+# silently degrade the review to an opaque pointer-only diff.
+if { [ -n "$BASE_CORE_SHA" ] || [ -n "$HEAD_CORE_SHA" ]; }; then
   [ -n "$BASE_CORE_SHA" ] && [ -n "$HEAD_CORE_SHA" ] || {
     echo "quality-run-review: core gitlink exists on only one side of the diff" >&2
     exit 1
   }
   if [ "$BASE_CORE_SHA" != "$HEAD_CORE_SHA" ]; then
+    if ! { [ -d core/.git ] || [ -f core/.git ]; }; then
+      echo "quality-run-review: changed core gitlink requires an initialized checkout for recursive review" >&2
+      exit 1
+    fi
     git -C core cat-file -e "$BASE_CORE_SHA^{commit}" 2>/dev/null || {
       echo "quality-run-review: base core commit is unavailable for recursive review" >&2
       exit 1

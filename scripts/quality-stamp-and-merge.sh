@@ -133,9 +133,6 @@ else
   if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
     --scope operator-ci-billing-override >/dev/null 2>&1; then
     echo "⚠️  [quality] skipping GitHub review check publication under the exact-head CI billing override; final authorization will validate the local signed review checkpoint." >&2
-  elif [ "${BS_QUALITY_ALLOW_LOCAL_REVIEW_EVIDENCE:-false}" = true ]; then
-    LOCAL_REVIEW_EVIDENCE=true
-    echo "⚠️  [quality] using local signed review evidence; the protected PR's required checks remain mandatory and will be verified below." >&2
   else
     node "$SCRIPT_DIR/quality-review-check.js" publish --manifest "$MANIFEST" >/dev/null
   fi
