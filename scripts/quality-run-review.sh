@@ -65,6 +65,37 @@ REVIEW_OUT="$(printf '%s' "$REVIEW_INFO" | jq -r '.artifactDir')"
 mkdir -p "$REVIEW_OUT"
 git diff "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" > "$REVIEW_OUT/diff.txt"
 git diff --name-only "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" > "$REVIEW_OUT/files.txt"
+
+# A gitlink is executable policy, not a text-only pointer. When the reviewed
+# repository advances a `core` submodule, include the exact recursive diff in
+# the immutable review envelope so providers cannot approve an opaque trusted
+# control-plane update. Repositories without a gitlink are unchanged.
+BASE_CORE_SHA="$(git rev-parse "${REVIEW_DIFF_BASE}:core" 2>/dev/null || true)"
+HEAD_CORE_SHA="$(git rev-parse "${REVIEWED_HEAD}:core" 2>/dev/null || true)"
+if [ -n "$BASE_CORE_SHA" ] || [ -n "$HEAD_CORE_SHA" ]; then
+  [ -n "$BASE_CORE_SHA" ] && [ -n "$HEAD_CORE_SHA" ] || {
+    echo "quality-run-review: core gitlink exists on only one side of the diff" >&2
+    exit 1
+  }
+  if [ "$BASE_CORE_SHA" != "$HEAD_CORE_SHA" ]; then
+    git -C core cat-file -e "$BASE_CORE_SHA^{commit}" 2>/dev/null || {
+      echo "quality-run-review: base core commit is unavailable for recursive review" >&2
+      exit 1
+    }
+    git -C core cat-file -e "$HEAD_CORE_SHA^{commit}" 2>/dev/null || {
+      echo "quality-run-review: head core commit is unavailable for recursive review" >&2
+      exit 1
+    }
+    {
+      printf '\n===== recursive submodule diff: core %s..%s =====\n' \
+        "$BASE_CORE_SHA" "$HEAD_CORE_SHA"
+      git -C core diff --submodule=diff "$BASE_CORE_SHA" "$HEAD_CORE_SHA"
+      printf '===== end recursive submodule diff: core =====\n'
+    } >> "$REVIEW_OUT/diff.txt"
+    git -C core diff --name-only "$BASE_CORE_SHA" "$HEAD_CORE_SHA" |
+      sed 's#^#core/#' >> "$REVIEW_OUT/files.txt"
+  fi
+fi
 git log "${REVIEW_DIFF_BASE}..${REVIEWED_HEAD}" --oneline > "$REVIEW_OUT/log.txt"
 node "$SCRIPT_DIR/quality-invocation.js" review-identity "$MANIFEST" \
   > "$REVIEW_OUT/identity.json" || exit 1

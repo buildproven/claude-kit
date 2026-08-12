@@ -275,6 +275,16 @@ describe("provider review runtime", () => {
     expect(companion).not.toContain('cat "$DIFF_FILE"');
   });
 
+  it("includes recursive core changes in the immutable review envelope", () => {
+    const runner = readFileSync(RUN_REVIEW, "utf8");
+    expect(runner).toContain('git rev-parse "${REVIEW_DIFF_BASE}:core"');
+    expect(runner).toContain('git rev-parse "${REVIEWED_HEAD}:core"');
+    expect(runner).toContain("git -C core diff --submodule=diff");
+    expect(runner).toContain(
+      "quality-run-review: head core commit is unavailable for recursive review",
+    );
+  });
+
   it("fails over when Codex cannot refresh an MCP OAuth token", () => {
     const runner = readFileSync(RUN_REVIEW, "utf8");
     expect(runner).toContain("OAuth token refresh failed:.*invalid_grant");
