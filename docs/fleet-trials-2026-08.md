@@ -5,15 +5,17 @@ unrelated real repositories without mutating them. Each selection completed in
 0.07 seconds wall time. Plugin packaging was separately checked with
 `claude plugin validate .`.
 
-| Class                                   | Representative change                             | Result                   | Reason                                                          |
-| --------------------------------------- | ------------------------------------------------- | ------------------------ | --------------------------------------------------------------- |
-| `retire-runway` Node/TypeScript product | `src/app.ts`, `tests/app.test.ts`                 | focused `vitest related` | Vitest has a dependency-aware selector                          |
-| `buildproven` Python/mixed product      | `scripts/publisher.py`, `tests/test_publisher.py` | complete suite           | changed Python source has no proven cross-file dependency graph |
-| `starknet` operational/private          | workflow plus shell deploy script                 | complete suite           | control-plane and shell changes are graph escape hatches        |
+| Class                                   | Representative change                             | Result                   | Reason                                                        |
+| --------------------------------------- | ------------------------------------------------- | ------------------------ | ------------------------------------------------------------- |
+| `retire-runway` Node/TypeScript product | `src/app.ts`, `tests/app.test.ts`                 | focused `vitest related` | Vitest has a dependency-aware selector                        |
+| `buildproven` Python/mixed product      | `scripts/publisher.py`, `tests/test_publisher.py` | unmapped                 | Python source needs a repository-owned test mapping           |
+| `starknet` operational/private          | workflow plus shell deploy script                 | unmapped                 | workflow and shell paths need repository-owned contract tests |
 
-This is the intended safety/efficiency boundary: focus only where the test tool
-can prove related coverage; otherwise pay for one complete exact-candidate run.
-It is not evidence of customer adoption or market demand.
+The original trial classified the last two rows as complete-suite fallbacks.
+BUI-733 corrected that policy: missing impact evidence is now a visible mapping
+gap, not permission to spend the fixed cost of every test. A complete run is an
+explicit scheduled, release, dependency-graph, or risk-exception audit. This is
+not evidence of customer adoption or market demand.
 
 Provider-path evidence from the same program:
 

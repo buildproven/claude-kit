@@ -6896,6 +6896,58 @@ exit 1
     );
   });
 
+  it("BUI-733: persists an evidence-backed affected test gate when the repository opts in", () => {
+    const root = repo("affected-test-gate");
+    mkdirSync(path.join(root, ".buildproven"));
+    writeFileSync(
+      path.join(root, ".buildproven", "test-impact.json"),
+      JSON.stringify({ version: 1, jsRunner: "vitest" }),
+    );
+    git(root, ["add", ".buildproven/test-impact.json"]);
+    git(root, ["commit", "-q", "-m", "configure affected tests"]);
+    git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    writeFileSync(path.join(root, "file.js"), "export const value = 3;\n");
+    git(root, ["commit", "-qam", "change implementation"]);
+
+    const manifest = create(root);
+    const testGate = JSON.parse(
+      readFileSync(manifest, "utf8"),
+    ).requiredGates.find((gate) => gate.name === "test");
+    expect(testGate).toMatchObject({
+      source: "test-impact:.buildproven/test-impact.json",
+      executable: process.execPath,
+    });
+    expect(testGate.args).toEqual([
+      path.join(ROOT, "scripts", "test-impact.js"),
+      "--execute",
+      "--policy-sha256",
+      expect.stringMatching(/^[0-9a-f]{64}$/),
+      "--",
+      "file.js",
+    ]);
+  });
+
+  it("BUI-733: a policy change cannot authorize its own narrower test gate", () => {
+    const root = repo("test-impact-policy-bootstrap");
+    mkdirSync(path.join(root, ".buildproven"));
+    writeFileSync(
+      path.join(root, ".buildproven", "test-impact.json"),
+      JSON.stringify({ version: 1, jsRunner: "vitest" }),
+    );
+    git(root, ["add", ".buildproven/test-impact.json"]);
+    git(root, ["commit", "-q", "-m", "configure affected tests"]);
+
+    const manifest = create(root);
+    const testGate = JSON.parse(
+      readFileSync(manifest, "utf8"),
+    ).requiredGates.find((gate) => gate.name === "test");
+    expect(testGate).toMatchObject({
+      source: "package-script:test",
+      executable: "npm",
+      args: ["run", "test"],
+    });
+  });
+
   it("rejects shell-command strings in native repository gate policy", () => {
     const root = repo("invalid-native-repository-gates");
     unlinkSync(path.join(root, "package.json"));

@@ -82,6 +82,14 @@ trail never reuses the exhausted review state.
 
 ## 2. Deterministic gates and formatting
 
+Before executing the test gate, classify the immutable diff with
+`scripts/test-impact.js`. Run only its persisted `focused` commands; record a
+clean no-test result for `none`; stop on `unmapped` and repair the repository's
+`.buildproven/test-impact.json`; run a complete regression only for an explicit
+`audit` result and record its reason. Never turn uncertainty into an automatic
+full-suite run. An exact-candidate success with the same source and command is
+reused rather than rerun.
+
 Run every immutable `requiredGates` entry through the recording runner. It
 accepts only manifest-policy argv, records results atomically, applies attempt
 and cumulative execution limits, and reuses only exact-HEAD successes whose

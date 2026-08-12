@@ -320,7 +320,11 @@ spawn a subagent to identify changed behavior and the highest existing public
 seam that observes it. Add or update the smallest behavioral tests at that
 seam. Do not create one test file per changed source file or test private
 implementation details merely to satisfy a file-count heuristic. Run the
-focused tests, then the full suite.
+smallest evidence-backed affected set. Use the repository's committed
+test-impact map when the test runner cannot infer dependencies; an unmapped
+path is a mapping defect, not an automatic full-suite instruction. Complete
+regression is reserved for a scheduled/release audit or an explicit risk-based
+exception.
 
 ### Step 8: Completion Signal
 
