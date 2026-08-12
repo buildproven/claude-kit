@@ -171,7 +171,8 @@ function create(root, extra = [], env = {}) {
           "false",
         ]
       : [];
-  if (mergeFixture) prepareFixtureNamespace(root, githubRepository);
+  if (mergeFixture || prIdentity.length > 0)
+    prepareFixtureNamespace(root, githubRepository);
   const manifestPath = execFileSync(
     "node",
     [

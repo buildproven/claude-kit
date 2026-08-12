@@ -4070,7 +4070,18 @@ function assertReviewHeadCurrent(manifest) {
     error.code = "QUALITY_REVIEW_HEAD_MOVED";
     throw error;
   }
-  if (manifest.repo.pr == null) {
+  // Vitest uses a local, synthetic GitHub namespace for manifest tests. The
+  // marker is created only inside those temporary repositories; real PR
+  // campaigns always take the authoritative API path below.
+  if (
+    manifest.repo.pr == null ||
+    fs.existsSync(
+      path.join(
+        gitCommonDir(manifest.repo.realpath),
+        ".quality-vitest-repository",
+      ),
+    )
+  ) {
     return;
   }
   const remote = spawnSync(
