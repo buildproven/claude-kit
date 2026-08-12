@@ -533,6 +533,7 @@ Quality-Evidence-Signature: ${signature}`;
 
   it("passes scorer effort and exact round count to Codex mechanically", () => {
     const source = spawnSync("cat", [RUN_REVIEW], { encoding: "utf8" }).stdout;
+    const planSource = spawnSync("cat", [PLAN], { encoding: "utf8" }).stdout;
     const preservation = spawnSync("cat", [PRESERVE_PRIMARY], {
       encoding: "utf8",
     }).stdout;
@@ -540,6 +541,8 @@ Quality-Evidence-Signature: ${signature}`;
       /while \[ "\$pass" -le "\$QUALITY_REVIEW_PASSES" \]/,
     );
     expect(source).toMatch(/model_reasoning_effort=.*QUALITY_REVIEW_DEPTH/);
+    expect(source).toMatch(/--model "\$QUALITY_CODEX_MODEL"/);
+    expect(planSource).toMatch(/QUALITY_CODEX_MODEL=gpt-5\.6-sol/);
     expect(source).toMatch(
       /codex exec --ephemeral --ignore-user-config --ignore-rules \\\n\s+--skip-git-repo-check -s read-only --json/,
     );

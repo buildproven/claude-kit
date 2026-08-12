@@ -62,6 +62,24 @@ const hasPush = hasGit && /\bpush\b/.test(command);
 const hasCommit = hasGit && /\bcommit\b/.test(command);
 const hasDestructive = hasDestructiveSyntax(command);
 
+// Refuse a direct push before it can create another Actions run when the
+// optional fleet budget is exhausted. Quality's signed exact-head path invokes
+// its own nested push after proving the local candidate, so it remains usable.
+if (hasPush) {
+  const admission = resolveGuard("ci-budget-admission.js");
+  if (fs.existsSync(admission)) {
+    const result = spawnSync(process.execPath, [admission], {
+      encoding: "utf8",
+    });
+    if (result.status !== 0) {
+      if (result.stderr) process.stderr.write(result.stderr);
+      deny(
+        "GitHub Actions minute policy denied this push; use the signed exact-head quality path.",
+      );
+    }
+  }
+}
+
 const guards = [];
 if (hasDestructive) guards.push("block-destructive-paths.sh");
 if (hasPush) guards.push("block-push-main.sh");

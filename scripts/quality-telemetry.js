@@ -47,7 +47,7 @@ const {
   coveredReviews,
 } = require("./quality-review-history");
 
-const TELEMETRY_SCHEMA_VERSION = 5;
+const TELEMETRY_SCHEMA_VERSION = 6;
 const REVIEW_TOKEN_CHARS_PER_TOKEN = 4;
 const TELEMETRY_TERMINAL_STATES = new Set([
   "merged",
@@ -374,11 +374,32 @@ function reviewFields(manifest) {
   const exempt =
     authorized.length > 0 &&
     authorized.every((review) => review.status === "exempt");
+  const providersAttempted = [
+    ...new Set(
+      (manifest.reviews || [])
+        .map((review) => review.provider)
+        .filter((provider) => typeof provider === "string" && provider),
+    ),
+  ];
+  const codexModel =
+    manifest.risk?.tier === "critical"
+      ? "gpt-5.6-sol"
+      : manifest.risk?.tier === "low"
+        ? "gpt-5.6-luna"
+        : "gpt-5.6-terra";
   return {
     // Older manifests predate the experiment and remain reportable as null.
     // All newly-created manifests persist one of these arms at creation time.
     reviewArm: manifest.options?.reviewArm ?? inferredArm,
     reviewProvider: provider.reviewer ?? null,
+    reviewModel: provider.reviewer === "codex" ? codexModel : null,
+    requestedProvider: provider.primary ?? null,
+    providersAttempted,
+    fallbackUsed: Boolean(
+      provider.primary &&
+      provider.reviewer &&
+      provider.reviewer !== provider.primary,
+    ),
     reviewEffort: provider.effort ?? null,
     // Provider CLIs do not expose a stable cross-provider token counter yet.
     // Preserve the absence explicitly; the separate proxy fields below are
@@ -438,8 +459,17 @@ function validateRecord(record) {
     (record.reviewProvider === null ||
       typeof record.reviewProvider === "string") &&
     (record.reviewEffort === null || typeof record.reviewEffort === "string") &&
+    (record.reviewModel === null || typeof record.reviewModel === "string") &&
     validTokens &&
     validProviderDuration &&
+    validProxyMetric(record.gateDurationSeconds) &&
+    validProxyMetric(record.fixCommitCount) &&
+    validProxyMetric(record.evidenceReusedCount) &&
+    Array.isArray(record.providersAttempted) &&
+    record.providersAttempted.every(
+      (provider) => typeof provider === "string",
+    ) &&
+    typeof record.fallbackUsed === "boolean" &&
     validProxyMetric(record.reviewInputChars) &&
     validProxyMetric(record.reviewInputTokensEstimated) &&
     validProxyMetric(record.reviewOutputChars) &&
@@ -452,6 +482,23 @@ function validateRecord(record) {
     Number.isInteger(record.leadCount) &&
     record.leadCount >= 0,
   );
+}
+
+function fixCommitCount(manifest, execFileSync) {
+  const from = manifest.revisions?.initialHead;
+  const to = manifest.revisions?.currentHead;
+  if (!from || !to || from === to) return 0;
+  try {
+    const count = Number(
+      execFileSync("git", ["rev-list", "--count", `${from}..${to}`], {
+        cwd: manifest.repo.realpath,
+        encoding: "utf8",
+      }).trim(),
+    );
+    return Number.isInteger(count) && count >= 0 ? count : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -472,6 +519,14 @@ function buildRecord(manifest, { execFileSync, nowIso }) {
     )
       ? manifest.governor.providerSecondsUsed
       : null,
+    gateDurationSeconds: Number.isInteger(manifest.governor?.gateSecondsUsed)
+      ? manifest.governor.gateSecondsUsed
+      : null,
+    fixCommitCount: fixCommitCount(manifest, execFileSync),
+    evidenceReusedCount: (manifest.gates || []).filter(
+      (gate) =>
+        gate.head === manifest.revisions?.currentHead && gate.remoteEvidence,
+    ).length,
     terminalState: manifest.terminalState?.state ?? null,
     reviewRounds: successfulReviewCount(manifest),
     agentsRun: Array.isArray(manifest.agents) ? manifest.agents.length : 0,

@@ -10,8 +10,8 @@ file taints a mixed changeset.
 That is not a prompt saying "please be thorough". It is
 [`risk-score.js`](scripts/risk-score.js) (537 lines), a
 [run governor](scripts/quality-run-governor.js) that caps runaway review loops and
-fails _closed_, and a target resolver — **415 tests with over 85% line and 75%
-branch coverage**.
+fails _closed_, and a target resolver — **thousands of behavioral tests with
+over 85% line and 75% branch coverage**.
 
 Plus autonomous backlog execution, multi-LLM strategy panels, active-repo fleet
 auditing, native Codex skills, and 14 specialist agents.
@@ -23,9 +23,9 @@ one substantially modified skill retains its upstream Apache-2.0 license.
 
 | Dir         | Contents                                                           |
 | ----------- | ------------------------------------------------------------------ |
-| `commands/` | 17 curated `/bs:*`, `/gh:*`, and `/cc:*` entry points              |
-| `skills/`   | 35 skills — quality, autonomous workflow, strategy, design, domain |
-| `agents/`   | 14 specialist agents                                               |
+| `commands/` | 25 curated `/bs:*`, `/gh:*`, and `/cc:*` entry points              |
+| `skills/`   | 33 skills — quality, autonomous workflow, strategy, design, domain |
+| `agents/`   | 17 specialist agents                                               |
 | `scripts/`  | Hooks, lint, quality governor, provider-neutral review companions  |
 | `config/`   | Instructions, provider policy, Codex skills, fleet and MCP schemas |
 
@@ -72,6 +72,13 @@ Reverse the two values for Claude-primary, or use `--fallback none`. HTTP 429 an
 weekly-limit responses are surfaced immediately instead of being misreported as
 timeouts. Quality re-review rounds inspect only commits added since the previous
 successful review.
+
+The interactive builder model stays under your control. Quality launches a
+separate bounded Codex reviewer at Luna for low risk, Terra for medium/high,
+and Sol for critical; starting on a stronger model does not silently downshift
+the active session. Claude agents inherit the selected Claude session model.
+The provider-neutral [assurance contract](docs/quality-assurance-contract.md)
+documents exact-revision evidence, conservative test impact, and cache reuse.
 
 **macOS-only:** the desktop-notification hooks use `osascript`. On Linux/WSL they
 are skipped — everything else works.

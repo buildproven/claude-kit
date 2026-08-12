@@ -23,10 +23,7 @@ const temporaryRoots = [];
 
 function trackTemporaryRoot(root) {
   const resolved = path.resolve(root);
-  const allowedPrefixes = [
-    path.join(os.tmpdir(), "wt-manager-"),
-    path.join(ROOT, ".hook test-"),
-  ];
+  const allowedPrefixes = [path.join(os.tmpdir(), "wt-manager-")];
   if (!allowedPrefixes.some((prefix) => resolved.startsWith(prefix))) {
     throw new Error(`refusing to clean unsafe test path: ${resolved}`);
   }
@@ -92,7 +89,10 @@ function fixture(name = "repo") {
 }
 
 function persistentFixture() {
-  const repo = mkdtempSync(path.join(ROOT, ".hook test-"));
+  // Keep fixtures outside the repository. Other tests copy the checkout to
+  // exercise installer upgrades, so transient in-tree directories make the
+  // full suite race when Vitest runs files concurrently.
+  const repo = mkdtempSync(path.join(os.tmpdir(), "wt-manager-"));
   trackTemporaryRoot(repo);
   run("git", ["init", "--initial-branch=main", repo]);
   git(repo, "config", "user.email", "tests@example.com");

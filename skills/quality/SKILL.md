@@ -171,6 +171,12 @@ the two Claude slots use distinct model families. A one-provider native run or
 missing diversity is signed as incomplete, never independent or clean. See
 `checklist.md` for provider failure handling.
 
+Codex review model selection is task-scoped: low uses Luna, medium/high uses
+Terra, and critical uses Sol. This does not change the interactive builder
+session. Claude agents continue to inherit the selected session model, with the
+existing critical diversity rule. Starting a session on a stronger model does
+not automatically downshift it; only an explicit scoped invocation can do that.
+
 ## 4. Lead verification, remediation, and terminal diagnosis
 
 Provider findings are leads, not verdicts. Read only manifest-listed artifacts
@@ -208,6 +214,13 @@ valid exact-head evidence, zero deterministic findings, current manifest identit
 required green CI, fresh base, and the required merge authority. Never use
 `gh pr merge`, `--no-verify`, a forged trailer, a skipped review, or a weaker tier
 to bypass these checks.
+
+An optional fleet CI-budget policy is checked before direct pushes and before
+merge admission. At its hard limit, ordinary pushes fail closed; only the
+signed, time-bounded exact-head billing override can select the local evidence
+path. Trusted GitHub Actions evidence may be reused without another API call
+only when repository, workflow, check, base SHA, candidate SHA/kind, source app,
+source URL, and successful conclusion all still match exactly.
 
 contiguous review checkpoints are mandatory.
 
