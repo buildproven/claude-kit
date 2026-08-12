@@ -12,6 +12,16 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.6.3](https://github.com/buildproven/claude-kit/compare/v4.6.2...v4.6.3) (2026-08-12)
+
+
+### Bug Fixes
+
+* harden review head and lease lifecycle ([#327](https://github.com/buildproven/claude-kit/issues/327)) ([ff53963](https://github.com/buildproven/claude-kit/commit/ff5396345e79bfb5ef22ba86c3717a403034596a))
+* make CI billing evidence digest stable ([630e411](https://github.com/buildproven/claude-kit/commit/630e411eff749ec989a317c91bb47d9ac632f2dd))
+* reconcile provider state on head drift ([eb4a6f9](https://github.com/buildproven/claude-kit/commit/eb4a6f9e3882948107846e14f8493bf0a1308f73))
+* require signed review evidence authorization ([ba4c166](https://github.com/buildproven/claude-kit/commit/ba4c166d481e9168e7ef02f2e32a780da906938a))
+
 ## [4.6.2](https://github.com/buildproven/claude-kit/compare/v4.6.1...v4.6.2) (2026-08-12)
 
 
