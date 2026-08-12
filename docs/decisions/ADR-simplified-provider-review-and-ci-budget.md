@@ -32,6 +32,11 @@ that command is allowed to rediscover repository context inside the timeout.
 Provider execution starts in the review artifact directory with no repository
 context. The provider may inspect only the supplied envelope and must return the
 structured schema. Preparation and hashing remain outside the provider timeout.
+Claude review also disables user/project setting sources and MCP loading and
+replaces the default system prompt with the selected reviewer body. A measured
+control invocation fell from roughly 176k-195k cached context tokens to 160
+input tokens before the actual review envelope; global setup context is not part
+of a bounded static review.
 The envelope uses compact JSON because formatting whitespace is repeated in each
 provider request and does not improve review quality. Terminal telemetry records
 the exact prompt/output artifact character counts and a clearly labelled
@@ -82,6 +87,29 @@ authoritative concern. Duplicate `test-setup.sh --ci` executions are removed
 where another required workflow already runs the same signal. Draft PRs do not
 start expensive jobs. The minute audit reports per-job rounded billing rather
 than raw wall-clock time so repeated retries are visible.
+
+The public runtime supports an optional fleet policy. Agent-initiated direct
+pushes and final merge admission consult one cached snapshot. At the hard limit,
+direct pushes stop before creating a workflow run; a signed, expiring operator
+capability may select the existing local exact-head path during a verified
+billing outage. Absence of private fleet policy keeps the public kit standalone.
+
+### 7. Model escalation is scoped, not session mutation
+
+The quality scorer selects the Codex reviewer mechanically: Luna for low,
+Terra for medium/high, and Sol for critical. The selected model and effort are
+passed on the bounded provider command. Skills do not replace the operator's
+interactive builder model, and a stronger interactive session does not silently
+downshift. Claude subagents continue to inherit the Claude session model; its
+critical diversity policy remains separate.
+
+### 8. Exact-head CI evidence is immutable and reusable
+
+A successful GitHub Actions check may be cached and reused without another API
+call only when repository, workflow, check name, base SHA, candidate SHA and
+kind, GitHub Actions app identity, source URL, and conclusion match. Any mismatch
+forces a fresh fetch or fails closed; PR-level rollups and user-authored
+attestations are not trusted evidence.
 
 ## Acceptance evidence
 

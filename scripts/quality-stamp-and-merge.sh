@@ -24,6 +24,21 @@ EXPECTED_HEAD_REF="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" 
 EXPECTED_HEAD_REPOSITORY="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" repo.headRepository)"
 LOCAL_HEAD="$(git rev-parse HEAD)"
 
+# A fleet operator may install a private Actions-minute policy. The public kit
+# remains standalone when none exists. At a hard limit, only the existing
+# signed exact-head billing override may select the time-bounded local path.
+CI_BUDGET_MODE=""
+if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
+  --scope operator-ci-billing-override >/dev/null 2>&1; then
+  CI_BUDGET_MODE="local-exact-head"
+fi
+CI_BUDGET_ARGS=()
+[ -z "$CI_BUDGET_MODE" ] || CI_BUDGET_ARGS=(--mode "$CI_BUDGET_MODE")
+node "$SCRIPT_DIR/ci-budget-admission.js" "${CI_BUDGET_ARGS[@]}" >/dev/null || {
+  echo "❌ MERGE BLOCKED: GitHub Actions minute policy denied this candidate." >&2
+  exit 1
+}
+
 # Keep the private signer outside every repository.  An explicit environment
 # setting wins; the conventional local path makes autonomous quality runs work
 # without requiring each shell to source a secret-bearing dotfile.

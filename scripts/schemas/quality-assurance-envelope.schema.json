@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/buildproven/claude-kit/schemas/quality-assurance-envelope-v1.json",
+  "title": "Quality Assurance Envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "requirements",
+    "revision",
+    "risk",
+    "gates",
+    "reviews",
+    "terminal"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256"],
+      "properties": {
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "source": { "type": ["string", "null"] }
+      }
+    },
+    "revision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "baseSha", "headSha", "candidateKind"],
+      "properties": {
+        "repository": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+        "baseSha": { "$ref": "#/$defs/gitSha" },
+        "headSha": { "$ref": "#/$defs/gitSha" },
+        "candidateKind": {
+          "enum": ["branch-head", "merge-group", "lease-head"]
+        }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tier", "score"],
+      "properties": {
+        "tier": { "enum": ["low", "medium", "high", "critical"] },
+        "score": { "type": "integer", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "gates": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
+    "reviews": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
+    "terminal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "at"],
+      "properties": {
+        "result": { "enum": ["passed", "blocked", "incomplete"] },
+        "at": { "$ref": "#/$defs/timestamp" },
+        "reason": { "type": ["string", "null"] }
+      }
+    },
+    "mergeReceipt": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["headSha", "mergeSha", "url", "at"],
+      "properties": {
+        "headSha": { "$ref": "#/$defs/gitSha" },
+        "mergeSha": { "$ref": "#/$defs/gitSha" },
+        "url": { "type": "string", "pattern": "^https://" },
+        "at": { "$ref": "#/$defs/timestamp" }
+      }
+    }
+  },
+  "$defs": {
+    "gitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "status",
+        "headSha",
+        "source",
+        "sha256",
+        "completedAt"
+      ],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["success", "failed", "incomplete", "exempt"] },
+        "headSha": { "$ref": "#/$defs/gitSha" },
+        "source": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "completedAt": { "$ref": "#/$defs/timestamp" }
+      }
+    }
+  }
+}

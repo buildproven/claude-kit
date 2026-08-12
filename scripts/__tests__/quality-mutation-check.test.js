@@ -7,6 +7,9 @@ import { makeTempDir } from "./helpers/tmp.js";
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const INVOCATION = path.join(ROOT, "scripts", "quality-invocation.js");
 const MUTATION = path.join(ROOT, "scripts", "quality-mutation-check.sh");
+// These fixtures prove argument routing, not timeout behavior. Three seconds
+// flakes under full-suite CPU contention before the tiny stub runner starts.
+const FAIL_FAST_CHECK_SECONDS = 15;
 
 function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -385,7 +388,7 @@ describe("quality-mutation-check", () => {
     const { root, manifest } = fixture(
       "pytest-fail-fast",
       "const { isAllowed } = require('./logic');\nif (!isAllowed('admin')) process.exit(1);\n",
-      { pytestRunner: true, checkSeconds: 3 },
+      { pytestRunner: true, checkSeconds: FAIL_FAST_CHECK_SECONDS },
     );
 
     expect(runMutation(root, manifest)).toMatch(
@@ -415,7 +418,7 @@ describe("quality-mutation-check", () => {
       {
         pytestRunner: true,
         pytestXdistSlowShutdown: true,
-        checkSeconds: 3,
+        checkSeconds: FAIL_FAST_CHECK_SECONDS,
       },
     );
 
@@ -474,7 +477,10 @@ describe("quality-mutation-check", () => {
     const { root, manifest } = fixture(
       "npm-pytest-fail-fast",
       "const { isAllowed } = require('./logic');\nif (!isAllowed('admin')) process.exit(1);\n",
-      { npmPytestScript: "pytest -n auto", checkSeconds: 3 },
+      {
+        npmPytestScript: "pytest -n auto",
+        checkSeconds: FAIL_FAST_CHECK_SECONDS,
+      },
     );
 
     expect(runMutation(root, manifest)).toMatch(

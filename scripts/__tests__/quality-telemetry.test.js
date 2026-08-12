@@ -138,7 +138,7 @@ describe("buildRecord", () => {
       nowIso: NOW,
     });
     expect(rec).toMatchObject({
-      telemetrySchemaVersion: 5,
+      telemetrySchemaVersion: 6,
       invocationId: "11111111-1111-4111-8111-111111111111",
       repoKey: "target-repo",
       taskType: "feature",
@@ -146,6 +146,10 @@ describe("buildRecord", () => {
       riskScore: 61,
       reviewArm: "bespoke",
       reviewProvider: "codex",
+      reviewModel: "gpt-5.6-terra",
+      requestedProvider: null,
+      providersAttempted: [],
+      fallbackUsed: false,
       reviewEffort: "high",
       reviewTokens: null,
       reviewInputChars: null,
@@ -157,6 +161,9 @@ describe("buildRecord", () => {
       leadCount: 0,
       durationSeconds: 0, // start 1000 > now 600 → clamps to 0
       providerDurationSeconds: null,
+      gateDurationSeconds: null,
+      fixCommitCount: 0,
+      evidenceReusedCount: 0,
       terminalState: null,
       reviewRounds: 1,
       agentsRun: 2,
@@ -204,6 +211,28 @@ describe("buildRecord", () => {
     } finally {
       fs.rmSync(artifactDir, { recursive: true, force: true });
     }
+  });
+
+  it("distinguishes configured diversity from an actual fallback", () => {
+    const diversity = buildRecord(
+      baseManifest({
+        provider: { primary: "codex", reviewer: "codex", effort: "high" },
+        reviews: [
+          { status: "success", provider: "codex", to: "bbb" },
+          { status: "success", provider: "claude", to: "bbb" },
+        ],
+      }),
+      { execFileSync: NO_FILES, nowIso: NOW },
+    );
+    expect(diversity.fallbackUsed).toBe(false);
+    const fallback = buildRecord(
+      baseManifest({
+        provider: { primary: "codex", reviewer: "claude", effort: "high" },
+        reviews: [{ status: "success", provider: "claude", to: "bbb" }],
+      }),
+      { execFileSync: NO_FILES, nowIso: NOW },
+    );
+    expect(fallback.fallbackUsed).toBe(true);
   });
 
   it("does not follow a symlinked review artifact", () => {

@@ -359,6 +359,7 @@ run_codex_review() {
     bash "$bounded" --timeout "$pass_timeout" -- \
       codex exec --ephemeral --ignore-user-config --ignore-rules \
       --skip-git-repo-check -s read-only --json \
+      --model "$QUALITY_CODEX_MODEL" \
       -C "$REVIEW_OUT" \
       -c "model_reasoning_effort=\"$QUALITY_REVIEW_DEPTH\"" \
       --output-schema "$schema" -o "$raw_file" - \

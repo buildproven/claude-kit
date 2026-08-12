@@ -680,8 +680,8 @@ fi
   });
 
   describe("agent-file resolution (drift guard)", () => {
-    // The whole design rests on pointing --append-system-prompt-file at the
-    // REAL agent bodies (no inlined copies to drift). Assert the kit-local
+    // The whole design rests on pointing --system-prompt-file at the REAL agent
+    // bodies (no inlined copies to drift). Assert the kit-local
     // agents referenced by the default panel actually exist on disk.
     const KIT_AGENTS = [
       "code-reviewer",
@@ -711,6 +711,10 @@ fi
       );
       expect(source).toContain("schemas/quality-review-output.schema.json");
       expect(source).toContain('--json-schema "$REVIEW_SCHEMA_JSON"');
+      expect(source).toContain('--setting-sources ""');
+      expect(source).toContain("--strict-mcp-config");
+      expect(source).toContain('--system-prompt-file "$sysfile"');
+      expect(source).not.toContain("--append-system-prompt-file");
       expect(source).toContain(".structured_output");
       expect(source).not.toContain("marker-only-findings");
       expect(schema.properties.verdict.description).toContain(

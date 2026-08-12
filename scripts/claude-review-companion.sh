@@ -12,7 +12,7 @@
 #   in ALL three contexts is a blocking subprocess — the same reason the
 #   Codex leg works everywhere. This is that mechanism for Claude review.
 #
-# Each agent runs as `claude -p` with the REAL agent body appended as its
+# Each agent runs as `claude -p` with the REAL agent body as its replacement
 # system prompt (resolved from the agent .md files at runtime — single source
 # of truth, no drift). Findings are written per-agent to $OUT_DIR; the caller
 # synthesizes them (Step 2.5).
@@ -33,7 +33,7 @@
 #   - MODEL: always pin a non-*\[1m\] review model. Inheriting the parent session
 #     can silently fan a 1M-context model out across every review agent;
 #     pinning a 1M variant can also trip the Extra Usage billing gate.
-#   - FIDELITY: use the real agent .md bodies via --append-system-prompt-file,
+#   - FIDELITY: use the real agent .md bodies via --system-prompt-file,
 #     never inlined summaries. Missing agent file => loud failure, not silent
 #     panel-shrink.
 #   - RECURSION: export BS_QUALITY_HEADLESS=1 to every child so the skill
@@ -293,7 +293,10 @@ run_agent() {
         env BS_QUALITY_HEADLESS=1 \
         claude -p "$(cat "$CTX_FILE")" \
           --no-session-persistence \
-          --append-system-prompt-file "$sysfile" \
+          --setting-sources "" \
+          --strict-mcp-config \
+          --mcp-config '{"mcpServers":{}}' \
+          --system-prompt-file "$sysfile" \
           --permission-mode bypassPermissions \
           --tools "" \
           --json-schema "$REVIEW_SCHEMA_JSON" \
