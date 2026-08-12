@@ -17,6 +17,7 @@ const {
   DEFAULTS,
   CRITICAL_RISK_SCORE,
 } = require("./risk-score");
+const { execFileSync } = require("node:child_process");
 
 const WORKLOAD_BANDS = [
   {
@@ -103,7 +104,27 @@ function riskTier(riskScore) {
 function workloadUnits(diffStats = {}) {
   const files = Math.max(0, Number(diffStats.files) || 0);
   const lines = Math.max(0, Number(diffStats.lines) || 0);
-  return lines + files * 25;
+  // A reviewer also pays a fixed exploration cost to find callers, policy, and
+  // tests. Bound that term so a large repository cannot create an unbounded
+  // review, while tiny diffs in large repositories leave the micro band before
+  // an agent is killed at its first tool call (BUI-688).
+  const repositoryFiles = Math.max(0, Number(diffStats.repositoryFiles) || 0);
+  const explorationUnits = Math.min(400, Math.ceil(repositoryFiles / 5));
+  return lines + files * 25 + explorationUnits;
+}
+
+function repositoryFileCount() {
+  try {
+    const output = execFileSync("git", ["ls-files", "-z"], {
+      encoding: "buffer",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return output.length === 0
+      ? 0
+      : output.toString("utf8").split("\0").length - 1;
+  } catch {
+    return 0;
+  }
 }
 
 function workloadBand(diffStats) {
@@ -144,7 +165,11 @@ function planRuntime({
   }
   const normalizedRisk = normalizedRiskScore(riskScore, minimumRisk);
   const tier = riskTier(normalizedRisk);
-  const band = workloadBand(diffStats);
+  const resolvedDiffStats = {
+    ...diffStats,
+    repositoryFiles: Math.max(0, Number(diffStats?.repositoryFiles) || 0),
+  };
+  const band = workloadBand(resolvedDiffStats);
   const riskFloor = RISK_FLOORS[tier];
   const resolvedKnobs = reviewKnobs(riskScore, normalizedRisk, knobs);
   const discoverySeconds = Math.max(
@@ -173,8 +198,9 @@ function planRuntime({
     workload: band.name,
     workloadUnits: band.units,
     diffStats: {
-      files: Math.max(0, Number(diffStats?.files) || 0),
-      lines: Math.max(0, Number(diffStats?.lines) || 0),
+      files: Math.max(0, Number(resolvedDiffStats.files) || 0),
+      lines: Math.max(0, Number(resolvedDiffStats.lines) || 0),
+      repositoryFiles: resolvedDiffStats.repositoryFiles,
     },
     mode,
     campaignSeconds,
@@ -220,7 +246,10 @@ function main() {
   const scored = score({ base: args.base });
   const plan = planRuntime({
     riskScore: scored.riskScore,
-    diffStats: scored.diffStats,
+    diffStats: {
+      ...scored.diffStats,
+      repositoryFiles: repositoryFileCount(),
+    },
     mode: args.mode,
     knobs: scored.knobs,
     minimumRisk: args.minimumRisk,
@@ -252,6 +281,7 @@ module.exports = {
   riskTier,
   workloadBand,
   workloadUnits,
+  repositoryFileCount,
   WORKLOAD_BANDS,
   RISK_FLOORS,
 };

@@ -41,6 +41,33 @@ describe("quality runtime planning", () => {
     expect(plan(10, 20, 20).workload).not.toBe(plan(10, 1, 20).workload);
   });
 
+  it("adds a bounded repository-exploration term for small diffs", () => {
+    const tinyRepo = workloadUnits({
+      files: 1,
+      lines: 20,
+      repositoryFiles: 20,
+    });
+    const largeRepo = workloadUnits({
+      files: 1,
+      lines: 20,
+      repositoryFiles: 2000,
+    });
+    expect(largeRepo).toBeGreaterThan(tinyRepo);
+    expect(workloadUnits({ files: 1, lines: 20, repositoryFiles: 20000 })).toBe(
+      workloadUnits({ files: 1, lines: 20, repositoryFiles: 8000 }),
+    );
+  });
+
+  it("moves a tiny change out of the micro band in a large repository", () => {
+    const plan = planRuntime({
+      riskScore: 10,
+      diffStats: { files: 1, lines: 20, repositoryFiles: 2000 },
+      mode: "discovery",
+    });
+    expect(plan.workload).toBe("medium");
+    expect(plan.reviewSeconds).toBe(210);
+  });
+
   it("lets a micro change use the bounded gate ledger for a fixed-cost suite", () => {
     const micro = plan(10, 1, 5);
 
