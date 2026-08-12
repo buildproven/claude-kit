@@ -661,10 +661,7 @@ function recover(manifestPath, ownerToken, options = {}) {
     const renewedAt = Date.parse(current.renewedAt || "");
     const ageMs = Number.isFinite(renewedAt) ? Date.now() - renewedAt : null;
     const override = options.override === true;
-    if (
-      override &&
-      process.env[RECOVERY_OVERRIDE_ENV] !== "1"
-    ) {
+    if (override && process.env[RECOVERY_OVERRIDE_ENV] !== "1") {
       throw new Error(
         `lease recovery override requires ${RECOVERY_OVERRIDE_ENV}=1`,
       );
@@ -688,7 +685,9 @@ function recover(manifestPath, ownerToken, options = {}) {
       token,
       generation,
       renewedAt: new Date().toISOString(),
-      recoveryReason: override ? String(options.reason).slice(0, 500) : undefined,
+      recoveryReason: override
+        ? String(options.reason).slice(0, 500)
+        : undefined,
     };
     atomicWrite(path.join(paths.lease, "owner.json"), pending);
     return completePending(paths, identity, loaded, pending);
