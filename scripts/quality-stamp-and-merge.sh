@@ -88,7 +88,11 @@ PERSISTED_REMOTE="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" m
 }
 
 MERGE_HEAD="$REVIEWED_HEAD"
-LOCAL_REVIEW_EVIDENCE=false
+LOCAL_REVIEW_EVIDENCE="${QUALITY_LOCAL_REVIEW_EVIDENCE:-false}"
+case "$LOCAL_REVIEW_EVIDENCE" in
+  true|false) ;;
+  *) echo "❌ MERGE BLOCKED: QUALITY_LOCAL_REVIEW_EVIDENCE must be true or false." >&2; exit 1 ;;
+esac
 if [ -n "$STAMP_HEAD" ]; then
   # Backward compatibility for campaigns that were created before the
   # check-run evidence transport landed. Never create another stamp, but let
@@ -130,7 +134,7 @@ else
   # and never rewrites or force-pushes the PR branch. GitHub's check-run API
   # requires an App token; during a verified Actions billing outage the signed
   # operator capability is the explicit local evidence transport instead.
-  if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
+  if [ "$LOCAL_REVIEW_EVIDENCE" = true ] || node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
     --scope operator-ci-billing-override >/dev/null 2>&1; then
     echo "⚠️  [quality] skipping GitHub review check publication under the exact-head CI billing override; final authorization will validate the local signed review checkpoint." >&2
   else
