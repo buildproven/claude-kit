@@ -98,9 +98,7 @@ function reviewDiffBuffer(root, from, to) {
   const treeEntry = (commit) => {
     const row = git(root, ["ls-tree", commit, "--", "core"]);
     const fields = row.split(/\s+/);
-    return fields[0] === "160000" && fields[1] === "commit"
-      ? fields[2]
-      : "";
+    return fields[0] === "160000" && fields[1] === "commit" ? fields[2] : "";
   };
   const baseCore = treeEntry(from);
   const headCore = treeEntry(to);
@@ -111,10 +109,14 @@ function reviewDiffBuffer(root, from, to) {
   }
   if (baseCore === headCore) return diff;
   for (const commit of [baseCore, headCore]) {
-    execFileSync("git", ["-C", "core", "cat-file", "-e", `${commit}^{commit}`], {
-      cwd: root,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    execFileSync(
+      "git",
+      ["-C", "core", "cat-file", "-e", `${commit}^{commit}`],
+      {
+        cwd: root,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
   }
   const recursive = execFileSync(
     "git",

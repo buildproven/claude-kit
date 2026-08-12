@@ -656,7 +656,15 @@ describe("quality invocation manifest", () => {
     writeFileSync(path.join(root, "README.md"), "root\n");
     git(root, ["add", "README.md"]);
     git(root, ["commit", "-q", "-m", "root"]);
-    git(root, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", submodule, "core"]);
+    git(root, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      "-q",
+      submodule,
+      "core",
+    ]);
     git(root, ["-C", "core", "checkout", "-q", baseCore]);
     git(root, ["add", "core"]);
     git(root, ["commit", "-q", "-m", "add core"]);
@@ -667,7 +675,9 @@ describe("quality invocation manifest", () => {
     const head = git(root, ["rev-parse", "HEAD"]);
 
     const diff = invocation.reviewDiffBuffer(root, base, head).toString("utf8");
-    expect(diff).toContain(`===== recursive submodule diff: core ${baseCore}..${headCore} =====`);
+    expect(diff).toContain(
+      `===== recursive submodule diff: core ${baseCore}..${headCore} =====`,
+    );
     expect(diff).toContain("-echo base");
     expect(diff).toContain("+echo head");
   });
