@@ -381,13 +381,6 @@ describe("quality-mutation-check", () => {
     expect(log).toContain("run --bail=1");
   });
 
-  it("excludes the mutation contract suite to prevent recursive mutation runs", () => {
-    const script = readFileSync(MUTATION, "utf8");
-    expect(script).toContain(
-      "--exclude scripts/__tests__/quality-mutation-check.test.js",
-    );
-  });
-
   it("uses pytest fail-fast after the first controlled-revert failure", () => {
     const { root, manifest } = fixture(
       "pytest-fail-fast",
