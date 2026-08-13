@@ -1,4 +1,4 @@
-const { execute, loadPolicy, plan } = require("../test-impact");
+const { changedPaths, execute, loadPolicy, plan } = require("../test-impact");
 const {
   mkdtempSync,
   mkdirSync,
@@ -7,7 +7,7 @@ const {
 } = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { spawnSync } = require("node:child_process");
+const { execFileSync, spawnSync } = require("node:child_process");
 const ROOT = path.resolve(__dirname, "..", "..");
 
 describe("cross-language test impact", () => {
@@ -507,6 +507,63 @@ describe("cross-language test impact", () => {
     );
     expect(child.status).toBe(2);
     expect(child.stderr).toContain("unsupported option --typo");
+  });
+
+  it("resolves an exact Git range inside the trusted selector", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "test-impact-range-"));
+    execFileSync("git", ["init", "--quiet", "--initial-branch=main"], {
+      cwd: root,
+    });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "test@example.com"], {
+      cwd: root,
+    });
+    writeFileSync(path.join(root, "README.md"), "one\n");
+    execFileSync("git", ["add", "README.md"], { cwd: root });
+    execFileSync("git", ["commit", "--quiet", "-m", "base"], { cwd: root });
+    const base = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim();
+    writeFileSync(path.join(root, "README.md"), "two\n");
+    execFileSync("git", ["commit", "--quiet", "-am", "head"], { cwd: root });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: root,
+      encoding: "utf8",
+    }).trim();
+    expect(changedPaths(base, head, root)).toEqual(["README.md"]);
+    const child = spawnSync(
+      process.execPath,
+      [
+        path.resolve(__dirname, "..", "test-impact.js"),
+        "--git-range",
+        base,
+        head,
+        "--",
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(child.status).toBe(0);
+    expect(JSON.parse(child.stdout)).toMatchObject({ mode: "none" });
+  });
+
+  it("rejects invalid Git ranges and mixed explicit paths", () => {
+    const script = path.resolve(__dirname, "..", "test-impact.js");
+    const invalid = spawnSync(
+      process.execPath,
+      [script, "--git-range", "main", "HEAD", "--"],
+      { cwd: ROOT, encoding: "utf8" },
+    );
+    expect(invalid.status).toBe(2);
+    expect(invalid.stderr).toContain("two exact 40-character SHAs");
+    const sha = "a".repeat(40);
+    const mixed = spawnSync(
+      process.execPath,
+      [script, "--git-range", sha, sha, "--", "README.md"],
+      { cwd: ROOT, encoding: "utf8" },
+    );
+    expect(mixed.status).toBe(2);
+    expect(mixed.stderr).toContain("does not accept explicit paths");
   });
 
   it("rejects misspelled policy fields instead of silently weakening selection", () => {
