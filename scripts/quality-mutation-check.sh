@@ -95,7 +95,7 @@ run_conventional_sibling_test() {
     "$directory/$stem.test.ts"; do
     [ -f "$SANDBOX/$sibling" ] || continue
     bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
-      npx "$runner" run "$sibling" --bail=1 >> "$log" 2>&1
+      npx "$runner" run --bail=1 "$sibling" >> "$log" 2>&1
     return $?
   done
   return 2
@@ -153,10 +153,10 @@ if [ "$TEST_EXECUTABLE" = npm ] &&
       fi
       ;;
     pytest|pytest\ *|python\ -m\ pytest|python\ -m\ pytest\ *|python3\ -m\ pytest|python3\ -m\ pytest\ *|uv\ run\ pytest|uv\ run\ pytest\ *|poetry\ run\ pytest|poetry\ run\ pytest\ *|pipenv\ run\ pytest|pipenv\ run\ pytest\ *)
-      case "$TEST_SCRIPT" in
+      case "$REPO_TEST_SCRIPT" in
         *[!A-Za-z0-9_./:=,@%+[:blank:]-]*) ;;
         *)
-          case " $TEST_SCRIPT " in
+          case " $REPO_TEST_SCRIPT " in
             *" -- "*) ;;
             *) MUTATION_TEST_ARGS+=(-- -x) ;;
           esac
