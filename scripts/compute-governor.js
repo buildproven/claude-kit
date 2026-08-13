@@ -24,39 +24,37 @@ function policyPath() {
   return path.join(__dirname, "..", "config", "compute-governor-policy.json");
 }
 
+function requireCondition(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+function routePolicyValid(routePolicy) {
+  return Boolean(
+    routePolicy?.providers?.codex &&
+    routePolicy?.providers?.claude &&
+    Number.isInteger(routePolicy.caps?.maxWallSeconds) &&
+    routePolicy.caps.maxWallSeconds > 0 &&
+    routePolicy.caps.maxWorkers === 1,
+  );
+}
+
 function loadPolicy(file = policyPath()) {
   const policy = JSON.parse(fs.readFileSync(file, "utf8"));
-  assertPolicySchema(policy);
-  ROUTES.forEach((route) => assertRoutePolicy(policy, route));
+  requireCondition(
+    policy.schemaVersion === 1 &&
+      typeof policy.policyVersion === "string" &&
+      policy.policyVersion.length > 0 &&
+      policy.routes &&
+      Array.isArray(policy.protectedSurfaces),
+    "compute-governor: unsupported policy schema version",
+  );
+  for (const route of ROUTES) {
+    requireCondition(
+      routePolicyValid(policy.routes[route]),
+      `compute-governor: policy missing route '${route}'`,
+    );
+  }
   return policy;
-}
-
-function assertPolicySchema(policy) {
-  if (
-    policy.schemaVersion !== 1 ||
-    typeof policy.policyVersion !== "string" ||
-    policy.policyVersion.length === 0 ||
-    !policy.routes ||
-    !Array.isArray(policy.protectedSurfaces)
-  ) {
-    throw new Error("compute-governor: unsupported policy schema version");
-  }
-}
-
-function assertRoutePolicy(policy, route) {
-  const routePolicy = policy.routes[route];
-  const validProviders =
-    routePolicy?.providers?.codex && routePolicy?.providers?.claude;
-  const validWallClock =
-    Number.isInteger(routePolicy?.caps?.maxWallSeconds) &&
-    routePolicy.caps.maxWallSeconds > 0;
-  if (
-    !validProviders ||
-    !validWallClock ||
-    routePolicy?.caps?.maxWorkers !== 1
-  ) {
-    throw new Error(`compute-governor: policy missing route '${route}'`);
-  }
 }
 
 function rank(route) {
@@ -70,7 +68,31 @@ function atLeast(current, candidate) {
   return rank(candidate) > rank(current) ? candidate : current;
 }
 
-function assertFacts(facts) {
+function protectedSurfacesValid(facts, policy) {
+  const surfaces = facts.protectedSurfaces ?? [];
+  return (
+    Array.isArray(surfaces) &&
+    surfaces.every(
+      (surface) =>
+        typeof surface === "string" &&
+        policy.protectedSurfaces.includes(surface),
+    )
+  );
+}
+
+function scalarFactsValid(facts) {
+  const changedFilesValid =
+    facts.changedFiles === undefined ||
+    (Number.isInteger(facts.changedFiles) && facts.changedFiles >= 0);
+  const failureStreakValid =
+    facts.sameFailureStreak === undefined ||
+    (Number.isInteger(facts.sameFailureStreak) && facts.sameFailureStreak >= 0);
+  const operatorRouteValid =
+    facts.operatorRoute === undefined || ROUTES.includes(facts.operatorRoute);
+  return changedFilesValid && failureStreakValid && operatorRouteValid;
+}
+
+function assertFacts(facts, policy) {
   if (!facts || typeof facts !== "object" || Array.isArray(facts)) {
     throw new Error("compute-governor: facts must be an object");
   }
@@ -81,6 +103,12 @@ function assertFacts(facts) {
     !["scan", "implement", "test", "review", "diagnose"].includes(facts.phase)
   ) {
     throw new Error("compute-governor: facts.phase is invalid");
+  }
+  if (!protectedSurfacesValid(facts, policy)) {
+    throw new Error("compute-governor: facts.protectedSurfaces is invalid");
+  }
+  if (!scalarFactsValid(facts)) {
+    throw new Error("compute-governor: numeric or route facts are invalid");
   }
 }
 
@@ -150,7 +178,7 @@ function workTier(facts) {
 }
 
 function resolve(facts, policy = loadPolicy()) {
-  assertFacts(facts);
+  assertFacts(facts, policy);
   const floor = safetyFloor(facts, policy);
   const work = workTier(facts);
   const route = atLeast(floor.route, work.route);
@@ -172,121 +200,116 @@ function resolve(facts, policy = loadPolicy()) {
   };
 }
 
-function validatePlan(plan, policy = loadPolicy()) {
-  if (!plan || plan.schemaVersion !== 1 || !ROUTES.includes(plan.route)) {
-    throw new Error("compute-governor: invalid execution plan");
-  }
-  if (!["codex", "claude"].includes(plan.provider)) {
-    throw new Error("compute-governor: invalid plan provider");
-  }
-  assertPlanPolicyMapping(plan, policy);
-  assertPlanSafetyFloor(plan);
-  assertPlanContract(plan, policy);
-  return plan;
-}
-
-function assertPlanPolicyMapping(plan, policy) {
+function planIdentityValid(plan, policy) {
   const mapping = policy.routes[plan.route].providers[plan.provider];
-  if (
-    plan.policyVersion !== policy.policyVersion ||
-    plan.model !== mapping.model ||
-    plan.effort !== mapping.effort
-  ) {
-    throw new Error("compute-governor: plan model/effort violates policy");
-  }
+  return (
+    plan.policyVersion === policy.policyVersion &&
+    plan.model === mapping.model &&
+    plan.effort === mapping.effort
+  );
 }
 
-function assertPlanSafetyFloor(plan) {
-  if (
-    !ROUTES.includes(plan.safetyFloor) ||
-    rank(plan.route) < rank(plan.safetyFloor)
-  ) {
-    throw new Error("compute-governor: plan route is below its safety floor");
-  }
-}
-
-function assertPlanContract(plan, policy) {
+function planContractValid(plan, policy) {
+  const expectedCaps = policy.routes[plan.route].caps;
   const expectedPromotion = plan.route.startsWith("economy")
     ? "candidate-requires-calibration"
     : "not-applicable";
-  const validReasons =
+  return (
+    plan.contextClass === "fresh-bounded" &&
+    JSON.stringify(plan.caps) === JSON.stringify(expectedCaps) &&
     Array.isArray(plan.reasons) &&
     plan.reasons.length > 0 &&
     plan.reasons.every(
       (reason) => typeof reason === "string" && reason.length > 0,
-    );
-  if (
-    plan.contextClass !== "fresh-bounded" ||
-    JSON.stringify(plan.caps) !==
-      JSON.stringify(policy.routes[plan.route].caps) ||
-    !validReasons ||
-    plan.promotion !== expectedPromotion
-  ) {
-    throw new Error("compute-governor: invalid execution plan contract");
+    ) &&
+    plan.promotion === expectedPromotion
+  );
+}
+
+function validatePlan(plan, policy = loadPolicy()) {
+  requireCondition(
+    plan && plan.schemaVersion === 1 && ROUTES.includes(plan.route),
+    "compute-governor: invalid execution plan",
+  );
+  requireCondition(
+    ["codex", "claude"].includes(plan.provider),
+    "compute-governor: invalid plan provider",
+  );
+  requireCondition(
+    planIdentityValid(plan, policy),
+    "compute-governor: plan model/effort violates policy",
+  );
+  requireCondition(
+    ROUTES.includes(plan.safetyFloor) &&
+      rank(plan.route) >= rank(plan.safetyFloor),
+    "compute-governor: plan route is below its safety floor",
+  );
+  requireCondition(
+    planContractValid(plan, policy),
+    "compute-governor: invalid execution plan contract",
+  );
+  return plan;
+}
+
+function runRecordIdentityValid(record) {
+  const identity = ["provider", "model", "effort"];
+  return (
+    identity.every((key) => record.requested[key] === record.plan[key]) &&
+    identity.every((key) => record.effective[key] === record.plan[key])
+  );
+}
+
+function timingValid(record) {
+  return (
+    Number.isInteger(record.attempts) &&
+    record.attempts > 0 &&
+    Number.isInteger(record.timing.startedAtEpochMs) &&
+    Number.isInteger(record.timing.finishedAtEpochMs) &&
+    record.timing.finishedAtEpochMs >= record.timing.startedAtEpochMs
+  );
+}
+
+function outcomeValid(outcome) {
+  const statuses = ["passed", "failed", "timeout", "unavailable", "exhausted"];
+  if (!Number.isInteger(outcome.exitCode) || !statuses.includes(outcome.status))
+    return false;
+  if (outcome.status === "passed") {
+    return outcome.exitCode === 0 && outcome.providerFailureCategory === null;
   }
+  return (
+    outcome.exitCode !== 0 &&
+    typeof outcome.providerFailureCategory === "string" &&
+    outcome.providerFailureCategory.length > 0
+  );
+}
+
+function usageValid(usage) {
+  return usage === null || (typeof usage === "object" && !Array.isArray(usage));
 }
 
 function validateRunRecord(record) {
-  if (
-    !record ||
-    record.schemaVersion !== 1 ||
-    !record.plan ||
-    !record.outcome ||
-    !record.requested ||
-    !record.effective ||
-    !record.timing
-  ) {
-    throw new Error("compute-governor: invalid run record");
-  }
+  requireCondition(
+    record &&
+      record.schemaVersion === 1 &&
+      record.plan &&
+      record.outcome &&
+      record.requested &&
+      record.effective &&
+      record.timing,
+    "compute-governor: invalid run record",
+  );
   assertNoSensitiveRecordFields(record);
   validatePlan(record.plan);
-  if (
-    !validRecordIdentity(record) ||
-    !validRecordTiming(record) ||
-    !validRecordOutcome(record)
-  ) {
-    throw new Error("compute-governor: invalid run record contract");
-  }
-  if (record.usage !== null && typeof record.usage !== "object") {
+  requireCondition(
+    runRecordIdentityValid(record) &&
+      timingValid(record) &&
+      outcomeValid(record.outcome),
+    "compute-governor: invalid run record contract",
+  );
+  if (!usageValid(record.usage)) {
     throw new Error("compute-governor: usage must be null or an object");
   }
   return record;
-}
-
-function validRecordIdentity(record) {
-  const identity = ["provider", "model", "effort"];
-  return (
-    identity.every(
-      (key) =>
-        record.requested[key] === record.plan[key] &&
-        record.effective[key] === record.plan[key],
-    ) &&
-    Number.isInteger(record.attempts) &&
-    record.attempts >= 1
-  );
-}
-
-function validRecordTiming(record) {
-  const { startedAtEpochMs, finishedAtEpochMs } = record.timing;
-  return (
-    Number.isInteger(startedAtEpochMs) &&
-    Number.isInteger(finishedAtEpochMs) &&
-    finishedAtEpochMs >= startedAtEpochMs
-  );
-}
-
-function validRecordOutcome(record) {
-  const validStatus = [
-    "passed",
-    "failed",
-    "timeout",
-    "unavailable",
-    "exhausted",
-  ].includes(record.outcome.status);
-  const validCategory =
-    record.outcome.providerFailureCategory === null ||
-    typeof record.outcome.providerFailureCategory === "string";
-  return validStatus && validCategory;
 }
 
 function assertNoSensitiveRecordFields(value) {
@@ -299,20 +322,40 @@ function assertNoSensitiveRecordFields(value) {
   }
 }
 
-function calibrationDecision(report) {
-  assertCalibrationShape(report);
-  const validRun = (run) =>
+function calibrationRunValid(run) {
+  return Boolean(
     run &&
     typeof run.accepted === "boolean" &&
     typeof run.gatesPassed === "boolean" &&
     Number.isInteger(run.attempts) &&
     run.attempts > 0 &&
     Number.isFinite(run.elapsedMs) &&
-    run.elapsedMs >= 0;
+    run.elapsedMs >= 0,
+  );
+}
+
+function calibrationThresholdValid(value) {
+  return (
+    value === undefined || (Number.isFinite(value) && value >= 0 && value <= 1)
+  );
+}
+
+function calibrationDecision(report) {
   if (
-    !report.baseline.every(validRun) ||
-    !report.candidate.every(validRun) ||
-    !validAcceptanceDrop(report.maxAcceptanceRateDrop)
+    !report ||
+    !Array.isArray(report.baseline) ||
+    !Array.isArray(report.candidate) ||
+    report.baseline.length === 0 ||
+    report.baseline.length !== report.candidate.length
+  ) {
+    throw new Error(
+      "compute-governor: calibration requires equal non-empty baseline and candidate arrays",
+    );
+  }
+  if (
+    !report.baseline.every(calibrationRunValid) ||
+    !report.candidate.every(calibrationRunValid) ||
+    !calibrationThresholdValid(report.maxAcceptanceRateDrop)
   ) {
     throw new Error("compute-governor: calibration run evidence is incomplete");
   }
@@ -352,26 +395,8 @@ function calibrationDecision(report) {
   };
 }
 
-function assertCalibrationShape(report) {
-  const equalNonEmptyArrays =
-    Array.isArray(report?.baseline) &&
-    Array.isArray(report?.candidate) &&
-    report.baseline.length > 0 &&
-    report.baseline.length === report.candidate.length;
-  if (!equalNonEmptyArrays)
-    throw new Error(
-      "compute-governor: calibration requires equal non-empty baseline and candidate arrays",
-    );
-}
-
-function validAcceptanceDrop(value) {
-  return (
-    value === undefined || (Number.isFinite(value) && value >= 0 && value <= 1)
-  );
-}
-
 function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
+  return JSON.parse(fs.readFileSync(file === "-" ? 0 : file, "utf8"));
 }
 
 function main(argv) {

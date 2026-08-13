@@ -6,7 +6,9 @@
       "paths": [
         "config/compute-governor-policy.json",
         "scripts/compute-governor.js",
-        "scripts/provider-run.sh"
+        "scripts/provider-run.sh",
+        "scripts/overnight-loop.sh",
+        "skills/ralph/reference.md"
       ],
       "commands": [
         {
@@ -15,7 +17,8 @@
             "vitest",
             "run",
             "scripts/__tests__/compute-governor.test.js",
-            "scripts/__tests__/provider-native.test.js"
+            "scripts/__tests__/provider-native.test.js",
+            "scripts/__tests__/overnight-loop.test.js"
           ]
         }
       ]

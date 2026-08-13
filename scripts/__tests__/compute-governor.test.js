@@ -70,6 +70,12 @@ describe("compute governor", () => {
     expect(plan.safetyFloor).toBe("critical");
   });
 
+  it("rejects an unknown protected-surface spelling instead of lowering it", () => {
+    expect(() =>
+      resolve({ ...base, protectedSurfaces: ["authentcation"] }),
+    ).toThrow("facts.protectedSurfaces is invalid");
+  });
+
   it("rejects a plan whose model/effort is not the configured mapping", () => {
     const plan = resolve(base);
     expect(() => validatePlan({ ...plan, effort: "xhigh" })).toThrow(
@@ -106,7 +112,11 @@ describe("compute governor", () => {
           model: plan.model,
           effort: plan.effort,
         },
-        outcome: { status: "passed" },
+        outcome: {
+          status: "passed",
+          exitCode: 0,
+          providerFailureCategory: null,
+        },
         timing: { startedAtEpochMs: 1, finishedAtEpochMs: 2 },
         attempts: 1,
         usage: null,
@@ -137,6 +147,35 @@ describe("compute governor", () => {
         usage: null,
       }),
     ).toThrow("forbidden run-record field 'credentials'");
+  });
+
+  it("rejects contradictory outcome evidence", () => {
+    const plan = resolve(base);
+    const record = {
+      schemaVersion: 1,
+      plan,
+      requested: {
+        provider: plan.provider,
+        model: plan.model,
+        effort: plan.effort,
+      },
+      effective: {
+        provider: plan.provider,
+        model: plan.model,
+        effort: plan.effort,
+      },
+      attempts: 1,
+      timing: { startedAtEpochMs: 1, finishedAtEpochMs: 2 },
+      outcome: {
+        status: "passed",
+        exitCode: 1,
+        providerFailureCategory: "provider-error",
+      },
+      usage: null,
+    };
+    expect(() => validateRunRecord(record)).toThrow(
+      "invalid run record contract",
+    );
   });
 
   it("loads a complete versioned policy", () => {

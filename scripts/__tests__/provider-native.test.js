@@ -1270,12 +1270,132 @@ describe("provider-native platform", () => {
       requested: { provider: "codex", model: "gpt-5.6-luna", effort: "high" },
       effective: { provider: "codex", model: "gpt-5.6-luna", effort: "high" },
       attempts: 1,
-      outcome: { status: "passed", providerFailureCategory: null },
+      outcome: {
+        status: "passed",
+        exitCode: 0,
+        providerFailureCategory: null,
+      },
       usage: null,
     });
     expect(record.timing.finishedAtEpochMs).toBeGreaterThanOrEqual(
       record.timing.startedAtEpochMs,
     );
+  });
+
+  it("resolves execution facts before launching and persists the exact plan", () => {
+    const dir = makeTempDir("provider-native-governed-facts-");
+    const bin = path.join(dir, "bin");
+    const output = path.join(dir, "output");
+    const prompt = path.join(dir, "prompt");
+    const facts = path.join(output, "execution-facts.json");
+    mkdirSync(bin);
+    mkdirSync(output);
+    writeFileSync(prompt, "perform a bounded scan\n");
+    writeFileSync(
+      facts,
+      JSON.stringify({
+        phase: "scan",
+        readOnly: true,
+        localized: true,
+        targetedProof: true,
+        changedFiles: 0,
+        protectedSurfaces: [],
+        sameFailureStreak: 0,
+      }),
+    );
+    executable(
+      path.join(bin, "codex"),
+      [
+        'for arg in "$@"; do',
+        '  if [ "$arg" = "-o" ]; then shift_next=1; continue; fi',
+        '  if [ "${shift_next:-0}" = 1 ]; then last_message="$arg"; shift_next=0; fi',
+        "done",
+        'echo "scan complete" > "$last_message"',
+      ].join("\n"),
+    );
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--execution-facts",
+        facts,
+        "--provider",
+        "codex",
+        "--target-dir",
+        dir,
+        "--output-dir",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(
+      JSON.parse(
+        readFileSync(path.join(output, "execution-plan.json"), "utf8"),
+      ),
+    ).toMatchObject({
+      route: "economy-micro",
+      provider: "codex",
+      model: "gpt-5.6-luna",
+      contextClass: "fresh-bounded",
+    });
+  });
+
+  it("launches a governed Claude child with explicit model and effort", () => {
+    const dir = makeTempDir("provider-native-governed-claude-");
+    const bin = path.join(dir, "bin");
+    const output = path.join(dir, "output");
+    const prompt = path.join(dir, "prompt");
+    const facts = path.join(dir, "facts.json");
+    const calls = path.join(dir, "claude.calls");
+    mkdirSync(bin);
+    writeFileSync(prompt, "diagnose this behavior\n");
+    writeFileSync(
+      facts,
+      JSON.stringify({
+        phase: "diagnose",
+        localized: false,
+        targetedProof: false,
+        ambiguous: true,
+        changedFiles: 0,
+        protectedSurfaces: [],
+        sameFailureStreak: 0,
+      }),
+    );
+    executable(
+      path.join(bin, "claude"),
+      `printf '%s\\n' "$*" > '${calls}'\nprintf '%s\\n' '{"is_error":false,"result":"done"}'`,
+    );
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--execution-facts",
+        facts,
+        "--provider",
+        "claude",
+        "--fallback",
+        "none",
+        "--target-dir",
+        dir,
+        "--output-dir",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(calls, "utf8")).toContain("--model claude-sonnet-5");
+    expect(readFileSync(calls, "utf8")).toContain("--effort medium");
   });
 
   it("keeps the public command surface within its budget", () => {
