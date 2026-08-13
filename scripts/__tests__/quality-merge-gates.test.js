@@ -279,6 +279,25 @@ describe("quality merge gates", () => {
     expect(VALIDATOR).toContain("QUALITY_LOCAL_REVIEW");
   });
 
+  it("consumes a signed billing override before workflow dispatch", () => {
+    const overrideBranch = STAMP_AND_MERGE.indexOf(
+      'if [ "$CI_BUDGET_MODE" = local-exact-head ]; then',
+    );
+    const waiverValidation = STAMP_AND_MERGE.indexOf(
+      'node "$SCRIPT_DIR/quality-ci-billing-waiver.js"',
+      overrideBranch,
+    );
+    const workflowDispatch = STAMP_AND_MERGE.indexOf(
+      'quality-required-checks.js" ensure',
+    );
+    expect(overrideBranch).toBeGreaterThan(-1);
+    expect(waiverValidation).toBeGreaterThan(overrideBranch);
+    expect(workflowDispatch).toBeGreaterThan(waiverValidation);
+    expect(STAMP_AND_MERGE).toMatch(
+      /if \[ "\$CI_BUDGET_MODE" = local-exact-head \]; then[\s\S]*CI_BILLING_WAIVED=true[\s\S]*elif \[ "\$PREFLIGHT_BASE_PROTECTION" = unprotectable \]/,
+    );
+  });
+
   it("validates an exact-head billing waiver before bypassing the green-CI guard", () => {
     const firstWaiverValidation = AUTHORIZE.indexOf(
       'node "$SCRIPT_DIR/quality-ci-billing-waiver.js"',
