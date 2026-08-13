@@ -378,6 +378,9 @@ describe("compute governor", () => {
         copy.routes.standard.providers.codex.model = "";
       },
       (copy) => {
+        copy.routes.standard.providers.codex.model = " gpt-5.6-terra ";
+      },
+      (copy) => {
         copy.routes.standard.providers.codex.effort = null;
       },
       (copy) => {

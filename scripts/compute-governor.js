@@ -77,7 +77,8 @@ function routePolicyValid(routePolicy) {
     if (
       !mapping ||
       typeof mapping.model !== "string" ||
-      mapping.model.trim().length === 0
+      mapping.model.trim().length === 0 ||
+      mapping.model !== mapping.model.trim()
     )
       return false;
     const efforts =
