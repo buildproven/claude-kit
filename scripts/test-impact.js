@@ -144,6 +144,16 @@ function plan(changed, rawPolicy = { version: 1 }) {
     commands.push(...rule.commands);
   }
 
+  // A mapping often names its exact behavioral test in argv. When that test
+  // is changed in the same diff, it is already exercised by the mapped
+  // command and must not also be fed to the dependency-aware runner. This is
+  // exact argv equality only: substrings and inferred paths remain uncovered.
+  for (const selected of commands) {
+    for (const file of files) {
+      if (selected.args.includes(file)) covered.add(file);
+    }
+  }
+
   const js = files.filter((file) => JS_SOURCE.test(file) && !covered.has(file));
   if (js.length > 0) {
     const related = relatedCommand(policy.jsRunner, js);

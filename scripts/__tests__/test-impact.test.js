@@ -78,6 +78,41 @@ describe("cross-language test impact", () => {
     });
   });
 
+  it("does not rerun a changed test already named by an explicit mapping", () => {
+    const policy = {
+      version: 1,
+      mappings: [
+        {
+          paths: ["scripts/tool.js"],
+          commands: [
+            {
+              executable: "npx",
+              args: ["vitest", "run", "scripts/__tests__/tool.test.js"],
+            },
+          ],
+        },
+      ],
+    };
+    expect(
+      plan(
+        ["scripts/tool.js", "scripts/__tests__/tool.test.js", "src/other.js"],
+        policy,
+      ),
+    ).toMatchObject({
+      mode: "focused",
+      commands: [
+        {
+          executable: "npx",
+          args: ["vitest", "run", "scripts/__tests__/tool.test.js"],
+        },
+        {
+          executable: "npx",
+          args: ["vitest", "related", "--run", "src/other.js"],
+        },
+      ],
+    });
+  });
+
   it("keeps a mixed diff blocked when one executable path is unmapped", () => {
     expect(plan(["README.md", "src/api.py", "src/view.ts"])).toMatchObject({
       mode: "unmapped",
