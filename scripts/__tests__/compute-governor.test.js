@@ -219,6 +219,31 @@ describe("compute governor", () => {
     ).toThrow("execution binding schema mismatch");
   });
 
+  it("accepts full SHA-256 Git object IDs in execution bindings", () => {
+    const candidate = resolve(base);
+    const plan = {
+      ...candidate,
+      route: "standard",
+      model: "gpt-5.6-terra",
+      effort: "medium",
+      caps: { maxWallSeconds: 1800, maxWorkers: 1 },
+      reasons: [
+        ...candidate.reasons,
+        "economy candidate lacks approved calibration",
+      ],
+      promotion: "calibration-required-standard-fallback",
+      executionBinding: {
+        schemaVersion: 1,
+        policyVersion: "2026-08-12",
+        promptSha256: "a".repeat(64),
+        targetIdentitySha256: "b".repeat(64),
+        targetHead: "c".repeat(64),
+        classifiedProtectedSurfaces: [],
+      },
+    };
+    expect(validatePlan(plan)).toEqual(plan);
+  });
+
   it("rejects a run record that contains prompt or credential material", () => {
     const plan = resolve(base);
     expect(() =>
