@@ -440,7 +440,7 @@ function outcomeValid(outcome) {
 }
 
 function usageValid(usage) {
-  return usage === null || (typeof usage === "object" && !Array.isArray(usage));
+  return usage === null;
 }
 
 function validateRunRecord(record) {
@@ -463,7 +463,9 @@ function validateRunRecord(record) {
     "compute-governor: invalid run record contract",
   );
   if (!usageValid(record.usage)) {
-    throw new Error("compute-governor: usage must be null or an object");
+    throw new Error(
+      "compute-governor: usage must remain null until a redacted schema is defined",
+    );
   }
   return record;
 }

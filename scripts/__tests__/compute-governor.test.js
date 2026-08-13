@@ -218,6 +218,35 @@ describe("compute governor", () => {
     );
   });
 
+  it("rejects arbitrary provider usage metadata until its schema is allowlisted", () => {
+    const plan = resolve(base);
+    const record = {
+      schemaVersion: 1,
+      plan,
+      requested: {
+        provider: plan.provider,
+        model: plan.model,
+        effort: plan.effort,
+      },
+      effective: {
+        provider: plan.provider,
+        model: plan.model,
+        effort: plan.effort,
+      },
+      attempts: 1,
+      timing: { startedAtEpochMs: 1, finishedAtEpochMs: 2 },
+      outcome: {
+        status: "passed",
+        exitCode: 0,
+        providerFailureCategory: null,
+      },
+      usage: { accessToken: "secret" },
+    };
+    expect(() => validateRunRecord(record)).toThrow(
+      "usage must remain null until a redacted schema is defined",
+    );
+  });
+
   it("loads a complete versioned policy", () => {
     const policy = loadPolicy();
     expect(policy.schemaVersion).toBe(1);

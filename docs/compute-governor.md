@@ -50,7 +50,9 @@ bash ~/.claude/scripts/provider-run.sh \
 
 The runner persists `execution-plan.json` before launch and atomically writes
 `run-record.json` after every governed attempt. The record includes requested/effective model
-identity, timing, attempt count, typed outcome, and nullable usage. It rejects
+identity, timing, attempt count, typed outcome, and `usage: null`. Usage remains
+null until an explicit redacted schema is defined; arbitrary provider metadata
+is not persisted. It rejects
 prompt or credential fields recursively.
 
 Every launchable plan embeds only the allowlisted execution facts used to

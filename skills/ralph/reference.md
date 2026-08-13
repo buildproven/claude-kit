@@ -72,7 +72,10 @@ Compute Governor:
 
 ```bash
 node "$SCRIPT_DIR/compute-governor.js" explain "$EVIDENCE_DIR/item-facts.json"
-node "$SCRIPT_DIR/compute-governor.js" resolve "$EVIDENCE_DIR/item-facts.json" \
+node "$SCRIPT_DIR/compute-governor.js" resolve-execution \
+  "$EVIDENCE_DIR/item-facts.json" \
+  "$EVIDENCE_DIR/item-prompt.md" \
+  "$TARGET_DIR" \
   > "$EVIDENCE_DIR/item-plan.json"
 ```
 
