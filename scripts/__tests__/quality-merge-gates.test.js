@@ -75,6 +75,9 @@ describe("quality merge gates", () => {
     expect(STAMP_AND_MERGE).toContain(
       'QUALITY_LOCAL_REVIEW_ARTIFACT="$LOCAL_REVIEW_EVIDENCE_ARTIFACT"',
     );
+    expect(STAMP_AND_MERGE).toMatch(
+      /if \[ "\$CI_BILLING_WAIVED" = true \]; then[\s\S]*QUALITY_CI_BILLING_LOCAL_REVIEW="\$LOCAL_REVIEW_EVIDENCE"[\s\S]*QUALITY_LOCAL_REVIEW_ARTIFACT="\$LOCAL_REVIEW_EVIDENCE_ARTIFACT"[\s\S]*quality-authorize-merge\.sh/,
+    );
     expect(VALIDATOR).toMatch(
       /QUALITY_LOCAL_REVIEW_ARTIFACT[\s\S]*quality-review-check\.js" verify-local/,
     );
