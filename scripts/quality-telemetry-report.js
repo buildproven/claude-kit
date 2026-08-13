@@ -47,6 +47,9 @@ function loadTelemetry(inputs) {
         continue;
       }
       if (
+        record === null ||
+        typeof record !== "object" ||
+        Array.isArray(record) ||
         !SUPPORTED_TELEMETRY_VERSIONS.has(record.telemetrySchemaVersion) ||
         typeof record.invocationId !== "string" ||
         typeof record.recordedAt !== "string"
@@ -93,8 +96,11 @@ function validCiSnapshot(value) {
   return (
     value?.schemaVersion === 1 &&
     Number.isFinite(value.usedMinutes) &&
+    value.usedMinutes >= 0 &&
     Number.isFinite(value.includedMinutes) &&
-    typeof value.fetchedAt === "string"
+    value.includedMinutes > 0 &&
+    typeof value.fetchedAt === "string" &&
+    Number.isFinite(Date.parse(value.fetchedAt))
   );
 }
 

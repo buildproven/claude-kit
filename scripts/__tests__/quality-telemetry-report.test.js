@@ -158,6 +158,18 @@ describe("quality telemetry report", () => {
     );
   });
 
+  it("counts valid JSON non-record values as unsupported without aborting", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "quality-values-"));
+    const file = path.join(directory, "sample.jsonl");
+    fs.writeFileSync(file, `null\n[]\n"text"\n${JSON.stringify(record())}\n`);
+    const loaded = loadTelemetry([file]);
+    expect(loaded).toMatchObject({
+      rawRecordCount: 1,
+      unsupportedRecords: 3,
+    });
+    expect(loaded.records).toHaveLength(1);
+  });
+
   it("uses older records only for metrics they actually contain", () => {
     const old = record({
       telemetrySchemaVersion: 1,
@@ -243,7 +255,23 @@ describe("quality telemetry report", () => {
         schemaVersion: 1,
         usedMinutes: 1,
         includedMinutes: 2,
-        fetchedAt: "now",
+        fetchedAt: "2026-08-13T00:00:00Z",
+      }),
+    ).toBe(true);
+    expect(
+      validCiSnapshot({
+        schemaVersion: 1,
+        usedMinutes: -1,
+        includedMinutes: 3000,
+        fetchedAt: "2026-08-13T00:00:00Z",
+      }),
+    ).toBe(false);
+    expect(
+      validCiSnapshot({
+        schemaVersion: 1,
+        usedMinutes: 3045,
+        includedMinutes: 3000,
+        fetchedAt: "2026-08-13T00:00:00Z",
       }),
     ).toBe(true);
     expect(
