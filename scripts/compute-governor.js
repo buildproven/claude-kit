@@ -38,8 +38,19 @@ function routePolicyValid(routePolicy) {
   );
 }
 
+function parseJson(text, source) {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(
+      `compute-governor: invalid JSON in ${source}: ${error.message}`,
+      { cause: error },
+    );
+  }
+}
+
 function loadPolicy(file = policyPath()) {
-  const policy = JSON.parse(fs.readFileSync(file, "utf8"));
+  const policy = parseJson(fs.readFileSync(file, "utf8"), file);
   requireCondition(
     policy.schemaVersion === 1 &&
       typeof policy.policyVersion === "string" &&
@@ -396,7 +407,7 @@ function calibrationDecision(report) {
 }
 
 function readJson(file) {
-  return JSON.parse(fs.readFileSync(file === "-" ? 0 : file, "utf8"));
+  return parseJson(fs.readFileSync(file === "-" ? 0 : file, "utf8"), file);
 }
 
 function main(argv) {
