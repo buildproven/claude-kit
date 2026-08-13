@@ -53,11 +53,14 @@
     "auth": [
       "\\bauth(?:entication)?\\b",
       "\\blogin\\b",
+      "\\bpassword(?:s)?\\b",
+      "\\bsign[ -]?in\\b",
       "\\boauth\\b",
       "\\bsession\\b"
     ],
     "authorization": [
       "\\bauthori[sz](?:e|ation)\\b",
+      "\\baccess control\\b",
       "\\bpermission(?:s)?\\b",
       "\\brole(?:s)?\\b"
     ],
