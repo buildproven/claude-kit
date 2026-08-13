@@ -2257,6 +2257,30 @@ function advanceHead(manifest, root, { acceptedConditions = [] } = {}) {
   }
   if (replay) recordBaseRebaseCarry(manifest, priorHead, nextHead, replay);
   invalidateApproval(manifest, nextHead);
+  const completed = completedReviews(manifest);
+  const previousReview = completed.at(-1);
+  const nextReviewRound = completed.length + 1;
+  if (previousReview) {
+    for (const authorization of manifest.governor.authorizedAttempts) {
+      const reservedFor =
+        authorization.reservedForReviewHead || authorization.head;
+      if (
+        authorization.number === nextReviewRound &&
+        authorization.consumedAt === null &&
+        !authorization.invalidatedAt &&
+        reservedFor === previousReview.to
+      ) {
+        authorization.reservedForReviewHead = previousReview.to;
+        authorization.advances ??= [];
+        authorization.advances.push({
+          from: authorization.head,
+          to: nextHead,
+          at: new Date().toISOString(),
+        });
+        authorization.head = nextHead;
+      }
+    }
+  }
   if (stampHead) {
     manifest.merge.invalidatedStamps.push({
       head: stampHead,

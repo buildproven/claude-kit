@@ -3656,6 +3656,39 @@ exit 1
     expect(result.stderr).toMatch(/not authorized by the governor/);
   });
 
+  it("carries an unused mandatory rereview round across descendant fixes", () => {
+    const root = repo("reserved-rereview-descendant");
+    const manifestPath = create(root);
+    execFileSync("node", [GOVERNOR, "bump-round", manifestPath], { cwd: root });
+    const firstReview = prepareCodexReview(root, manifestPath);
+    execFileSync("node", [GOVERNOR, "bump-round", manifestPath], { cwd: root });
+
+    writeFileSync(
+      path.join(root, "review-fix.js"),
+      "export const fixed = 1;\n",
+    );
+    git(root, ["add", "review-fix.js"]);
+    git(root, ["commit", "-q", "-m", "fix: address review"]);
+    const fixedHead = git(root, ["rev-parse", "HEAD"]);
+    execFileSync("node", [INVOCATION, "advance", manifestPath], { cwd: root });
+
+    const state = invocation.loadManifest(manifestPath).manifest;
+    expect(state.governor.authorizedAttempts.at(-1)).toMatchObject({
+      number: 2,
+      head: fixedHead,
+      reservedForReviewHead: firstReview.to,
+      consumedAt: null,
+      advances: [{ from: firstReview.to, to: fixedHead }],
+    });
+    expect(
+      spawnSync(
+        "node",
+        [INVOCATION, "provider-attempt", manifestPath, "--provider", "codex"],
+        { cwd: root, encoding: "utf8" },
+      ).status,
+    ).toBe(0);
+  });
+
   it("rejects review evidence when the checkout advances before the manifest mutation", () => {
     const root = repo("record-review-head-drift");
     const manifestPath = create(root);
