@@ -143,7 +143,19 @@ function relatedCommand(runner, files) {
   return null;
 }
 
-function plan(changed, rawPolicy = { version: 1 }) {
+function explicitMappingSelection(policy, files) {
+  const commands = [];
+  const covered = new Set();
+  for (const rule of policy.mappings) {
+    const matched = files.filter((file) => matches(file, rule.paths));
+    if (matched.length === 0) continue;
+    matched.forEach((file) => covered.add(file));
+    commands.push(...rule.commands);
+  }
+  return { commands, covered };
+}
+
+function plan(changed, rawPolicy = { version: 1 }, options = {}) {
   const policy = validatePolicy({ version: 1, ...rawPolicy });
   const files = [...new Set(changed.filter(Boolean))].sort();
   if (files.length === 0)
@@ -153,6 +165,18 @@ function plan(changed, rawPolicy = { version: 1 }) {
       files: [],
       uncovered: [],
       remediation: "provide the changed paths before authorizing tests",
+    };
+
+  const explicit = explicitMappingSelection(policy, files);
+  if (
+    options.preferExplicitMappings === true &&
+    files.every((file) => explicit.covered.has(file))
+  )
+    return {
+      mode: "focused",
+      reason: "explicit-mutation-mapping",
+      files,
+      commands: uniqueCommands(explicit.commands),
     };
 
   const auditRules = policy.audits.filter((rule) =>
@@ -166,14 +190,8 @@ function plan(changed, rawPolicy = { version: 1 }) {
       commands: uniqueCommands(auditRules.flatMap((rule) => rule.commands)),
     };
 
-  const commands = [];
-  const covered = new Set();
-  for (const rule of policy.mappings) {
-    const matched = files.filter((file) => matches(file, rule.paths));
-    if (matched.length === 0) continue;
-    matched.forEach((file) => covered.add(file));
-    commands.push(...rule.commands);
-  }
+  const commands = explicit.commands;
+  const covered = explicit.covered;
 
   // A mapping often names its exact behavioral test as a positional runner
   // target. When that test is changed in the same diff, it must not also be
@@ -288,6 +306,9 @@ function execute(result, root = process.cwd()) {
 
 function parseCliOptions(options) {
   const shouldExecute = options.includes("--execute");
+  const preferExplicitMappings = options.includes(
+    "--prefer-explicit-mappings",
+  );
   const digestIndex = options.indexOf("--policy-sha256");
   const expectedDigest = digestIndex === -1 ? "" : options[digestIndex + 1];
   const policyRootIndex = options.indexOf("--policy-root");
@@ -295,7 +316,7 @@ function parseCliOptions(options) {
     policyRootIndex === -1
       ? process.cwd()
       : path.resolve(options[policyRootIndex + 1] || "");
-  const consumed = new Set(["--execute"]);
+  const consumed = new Set(["--execute", "--prefer-explicit-mappings"]);
   if (digestIndex !== -1) {
     consumed.add("--policy-sha256");
     consumed.add(expectedDigest);
@@ -314,7 +335,12 @@ function parseCliOptions(options) {
   if (digestIndex !== -1 && !/^[0-9a-f]{64}$/.test(expectedDigest || "")) {
     throw new Error("--policy-sha256 requires a SHA-256 hex digest");
   }
-  return { shouldExecute, expectedDigest, policyRoot };
+  return {
+    shouldExecute,
+    expectedDigest,
+    policyRoot,
+    preferExplicitMappings,
+  };
 }
 
 function main(argv = process.argv.slice(2)) {
@@ -327,7 +353,12 @@ function main(argv = process.argv.slice(2)) {
     process.stderr.write(`test-impact: ${error.message}\n`);
     return 2;
   }
-  const { shouldExecute, expectedDigest, policyRoot } = parsed;
+  const {
+    shouldExecute,
+    expectedDigest,
+    policyRoot,
+    preferExplicitMappings,
+  } = parsed;
   const files = separator === -1 ? argv : argv.slice(separator + 1);
   if (expectedDigest && policyDigest(policyRoot) !== expectedDigest) {
     process.stderr.write(
@@ -338,6 +369,7 @@ function main(argv = process.argv.slice(2)) {
   const result = plan(
     files.map((file) => path.normalize(file)),
     loadPolicy(policyRoot),
+    { preferExplicitMappings },
   );
   if (shouldExecute) return execute(result);
   console.log(JSON.stringify(result, null, 2));

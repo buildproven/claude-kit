@@ -115,7 +115,12 @@ run_candidate_tests() {
   [ "$SIBLING_TEST_SELECTED" = false ] || return "$sibling_result"
   if [ -f "$SANDBOX/.buildproven/test-impact.json" ] &&
      [ -f "$SCRIPT_DIR/test-impact.js" ]; then
-    plan="$(cd "$SANDBOX" && node "$SCRIPT_DIR/test-impact.js" -- "$candidate" 2>> "$log")" || plan=""
+    # A delivery audit can still require the complete suite. A mutation proof
+    # needs only the explicit behavioral test that can turn red. Prefer a
+    # repository-owned mapping here so central workflow changes do not spend
+    # the full mutation budget before reaching their guard test.
+    plan="$(cd "$SANDBOX" && node "$SCRIPT_DIR/test-impact.js" \
+      --prefer-explicit-mappings -- "$candidate" 2>> "$log")" || plan=""
     mode="$(printf '%s' "$plan" | jq -r '.mode // empty' 2>/dev/null || true)"
     command_count="$(printf '%s' "$plan" | jq -r '.commands | length' 2>/dev/null || printf 0)"
     if [ "$mode" = focused ] && [ "$command_count" -gt 0 ]; then
@@ -285,6 +290,19 @@ if [ "${#CANDIDATES[@]}" -eq 0 ]; then
           /\.(ya?ml|json|toml|ini|cfg|conf)$/ { print }
         '
     )
+    if [ "${#CANDIDATES[@]}" -gt 1 ]; then
+      ORDERED_CANDIDATES=()
+      SELECTOR_CANDIDATE=""
+      for CONFIG_CANDIDATE in "${CANDIDATES[@]}"; do
+        if [ "$CONFIG_CANDIDATE" = ".buildproven/test-impact.json" ]; then
+          SELECTOR_CANDIDATE="$CONFIG_CANDIDATE"
+        else
+          ORDERED_CANDIDATES+=("$CONFIG_CANDIDATE")
+        fi
+      done
+      [ -z "$SELECTOR_CANDIDATE" ] || ORDERED_CANDIDATES+=("$SELECTOR_CANDIDATE")
+      CANDIDATES=("${ORDERED_CANDIDATES[@]}")
+    fi
   fi
 
   SKIP_METHOD=""
