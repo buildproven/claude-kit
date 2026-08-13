@@ -24,9 +24,13 @@ ORIGINAL_TARGET_DIR=""
 GOVERNED_PATCH=""
 GOVERNED_HANDOFF_LOCK=""
 GOVERNED_HANDOFF_LOCK_PRESERVE=0
+GOVERNED_HANDOFF_APPLIED=0
 PLAN_SNAPSHOT=""
 
 cleanup_governed_inputs() {
+  if [ "$GOVERNED_HANDOFF_APPLIED" -eq 1 ]; then
+    rollback_or_preserve_governed_handoff "governed handoff exited before delivery verification completed" || true
+  fi
   if [ -n "$GOVERNED_TARGET_SNAPSHOT" ] && [ -n "$ORIGINAL_TARGET_DIR" ]; then
     git -C "$ORIGINAL_TARGET_DIR" worktree remove --force "$GOVERNED_TARGET_SNAPSHOT" >/dev/null 2>&1 || true
   fi
@@ -200,6 +204,7 @@ rollback_or_preserve_governed_handoff() {
   local context="$1"
   if git -C "$ORIGINAL_TARGET_DIR" apply --reverse --binary "$GOVERNED_PATCH" >/dev/null 2>&1 &&
     git -C "$ORIGINAL_TARGET_DIR" reset --mixed "$PLAN_TARGET_HEAD" -- >/dev/null 2>&1; then
+    GOVERNED_HANDOFF_APPLIED=0
     return 0
   fi
 
@@ -342,6 +347,10 @@ if [ "$RC" -eq 0 ]; then
       git -C "$ORIGINAL_TARGET_DIR" apply --index --binary "$GOVERNED_PATCH" || {
         fail_governed_handoff "provider-run: governed provider changes could not be applied atomically"
       }
+      # From this point until verification and index normalization complete,
+      # every exit path is transactional. The EXIT trap rolls the patch back,
+      # or preserves the exclusion lock if rollback cannot be proven.
+      GOVERNED_HANDOFF_APPLIED=1
       GOVERNED_LIVE_PATCH=$(mktemp "${TMPDIR:-/tmp}/provider-live.XXXXXX") ||
         fail_governed_handoff "provider-run: cannot allocate handoff verification"
       git -C "$ORIGINAL_TARGET_DIR" add -N --all
@@ -353,6 +362,7 @@ if [ "$RC" -eq 0 ]; then
       fi
       rm -f "$GOVERNED_LIVE_PATCH"
       git -C "$ORIGINAL_TARGET_DIR" reset --mixed "$PLAN_TARGET_HEAD" --
+      GOVERNED_HANDOFF_APPLIED=0
     fi
   fi
   if ! write_governed_record passed "$PROVIDER" 0 ""; then
