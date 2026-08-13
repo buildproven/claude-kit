@@ -91,6 +91,9 @@ describe("quality merge gates", () => {
     expect(VALIDATOR).toMatch(
       /QUALITY_LOCAL_REVIEW_ARTIFACT[\s\S]*quality-review-check\.js" verify-local/,
     );
+    expect(VALIDATOR).toMatch(
+      /AUTH_STATUS" = complete.*AUTH_STATUS" = policy-exempt/,
+    );
   });
   it("keeps deterministic failures blocking while AI leads stay advisory", () => {
     expect(SKILL).toMatch(/zero deterministic findings/);
