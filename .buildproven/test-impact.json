@@ -37,6 +37,24 @@
       ]
     },
     {
+      "paths": [
+        "scripts/quality-stamp-and-merge.sh",
+        "scripts/quality-validate-review-trailers.sh",
+        "scripts/quality-review-check.js"
+      ],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/quality-merge-gates.test.js",
+            "scripts/__tests__/quality-review-check.test.js"
+          ]
+        }
+      ]
+    },
+    {
       "paths": ["README.md", "commands/**/*.md"],
       "commands": [
         {
