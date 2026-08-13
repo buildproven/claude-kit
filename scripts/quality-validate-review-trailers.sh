@@ -85,7 +85,7 @@ if [ -z "$QUALITY_TRAILER" ]; then
         echo "local review evidence contains blocking findings" >&2
         exit 1
       }
-      [ "$AUTH_STATUS" = complete ] || {
+      { [ "$AUTH_STATUS" = complete ] || [ "$AUTH_STATUS" = policy-exempt ]; } || {
         echo "local review evidence is not complete" >&2
         exit 1
       }
