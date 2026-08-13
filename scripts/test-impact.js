@@ -39,10 +39,12 @@ function validatePolicy(value) {
     throw new Error(
       `${POLICY_FILE} has unsupported fields: ${unsupported.join(", ")}`,
     );
-  const allowedRunners = new Set(["vitest", "jest", "none"]);
+  const allowedRunners = new Set(["vitest", "jest", "node", "none"]);
   const jsRunner = value.jsRunner || "vitest";
   if (!allowedRunners.has(jsRunner))
-    throw new Error(`${POLICY_FILE} jsRunner must be vitest, jest, or none`);
+    throw new Error(
+      `${POLICY_FILE} jsRunner must be vitest, jest, node, or none`,
+    );
   const normalizeRules = (rules, kind) => {
     if (rules !== undefined && !Array.isArray(rules))
       throw new Error(`${POLICY_FILE} ${kind} must be an array`);
@@ -174,10 +176,18 @@ function plan(changed, rawPolicy = { version: 1 }) {
 
   const js = files.filter((file) => JS_SOURCE.test(file) && !covered.has(file));
   if (js.length > 0) {
-    const related = relatedCommand(policy.jsRunner, js);
-    if (related) {
-      commands.push(related);
-      js.forEach((file) => covered.add(file));
+    if (policy.jsRunner === "node") {
+      const directTests = js.filter((file) => JS_TEST.test(file));
+      commands.push(
+        ...directTests.map((file) => ({ executable: "node", args: [file] })),
+      );
+      directTests.forEach((file) => covered.add(file));
+    } else {
+      const related = relatedCommand(policy.jsRunner, js);
+      if (related) {
+        commands.push(related);
+        js.forEach((file) => covered.add(file));
+      }
     }
   }
   const pythonTests = files.filter(
