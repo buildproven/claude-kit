@@ -4,7 +4,7 @@
 const path = require("node:path");
 const fs = require("node:fs");
 const crypto = require("node:crypto");
-const { spawnSync } = require("node:child_process");
+const { execFileSync, spawnSync } = require("node:child_process");
 
 const POLICY_FILE = ".buildproven/test-impact.json";
 const JS_SOURCE = /\.(?:[cm]?js|jsx|ts|tsx)$/;
@@ -312,6 +312,9 @@ function parseCliOptions(options) {
     policyRootIndex === -1
       ? process.cwd()
       : path.resolve(options[policyRootIndex + 1] || "");
+  const gitRangeIndex = options.indexOf("--git-range");
+  const gitBase = gitRangeIndex === -1 ? "" : options[gitRangeIndex + 1];
+  const gitHead = gitRangeIndex === -1 ? "" : options[gitRangeIndex + 2];
   const consumed = new Set(["--execute", "--prefer-explicit-mappings"]);
   if (digestIndex !== -1) {
     consumed.add("--policy-sha256");
@@ -320,6 +323,11 @@ function parseCliOptions(options) {
   if (policyRootIndex !== -1) {
     consumed.add("--policy-root");
     consumed.add(options[policyRootIndex + 1]);
+  }
+  if (gitRangeIndex !== -1) {
+    consumed.add("--git-range");
+    consumed.add(gitBase);
+    consumed.add(gitHead);
   }
   const unknown = options.filter((option) => !consumed.has(option));
   if (unknown.length > 0) {
@@ -331,12 +339,30 @@ function parseCliOptions(options) {
   if (digestIndex !== -1 && !/^[0-9a-f]{64}$/.test(expectedDigest || "")) {
     throw new Error("--policy-sha256 requires a SHA-256 hex digest");
   }
+  if (
+    gitRangeIndex !== -1 &&
+    (!/^[0-9a-f]{40}$/.test(gitBase || "") ||
+      !/^[0-9a-f]{40}$/.test(gitHead || ""))
+  ) {
+    throw new Error("--git-range requires two exact 40-character SHAs");
+  }
   return {
     shouldExecute,
     expectedDigest,
     policyRoot,
     preferExplicitMappings,
+    gitBase,
+    gitHead,
   };
+}
+
+function changedPaths(base, head, root = process.cwd()) {
+  const output = execFileSync(
+    "git",
+    ["diff", "--name-only", "-z", base, head],
+    { cwd: root, encoding: "buffer", stdio: ["ignore", "pipe", "inherit"] },
+  );
+  return output.toString("utf8").split("\0").filter(Boolean);
 }
 
 function main(argv = process.argv.slice(2)) {
@@ -349,9 +375,30 @@ function main(argv = process.argv.slice(2)) {
     process.stderr.write(`test-impact: ${error.message}\n`);
     return 2;
   }
-  const { shouldExecute, expectedDigest, policyRoot, preferExplicitMappings } =
-    parsed;
-  const files = separator === -1 ? argv : argv.slice(separator + 1);
+  const {
+    shouldExecute,
+    expectedDigest,
+    policyRoot,
+    preferExplicitMappings,
+    gitBase,
+    gitHead,
+  } = parsed;
+  const explicitFiles = separator === -1 ? argv : argv.slice(separator + 1);
+  if (gitBase && explicitFiles.length > 0) {
+    process.stderr.write(
+      "test-impact: --git-range does not accept explicit paths\n",
+    );
+    return 2;
+  }
+  let files;
+  try {
+    files = gitBase ? changedPaths(gitBase, gitHead) : explicitFiles;
+  } catch (error) {
+    process.stderr.write(
+      `test-impact: cannot resolve Git range: ${error.message}\n`,
+    );
+    return 2;
+  }
   if (expectedDigest && policyDigest(policyRoot) !== expectedDigest) {
     process.stderr.write(
       `test-impact: ${POLICY_FILE} does not match the persisted exact-head policy\n`,
@@ -378,6 +425,7 @@ module.exports = {
   plan,
   policyDigest,
   parseCliOptions,
+  changedPaths,
   validatePolicy,
   explicitTestTargets,
 };
