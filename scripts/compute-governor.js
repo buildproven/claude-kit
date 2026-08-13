@@ -454,7 +454,7 @@ function executionBindingValid(binding, policy) {
     binding.policyVersion === policy.policyVersion &&
     /^[0-9a-f]{64}$/.test(binding.promptSha256) &&
     /^[0-9a-f]{64}$/.test(binding.targetIdentitySha256) &&
-    /^[0-9a-f]{40}$/.test(binding.targetHead) &&
+    /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(binding.targetHead) &&
     Array.isArray(binding.classifiedProtectedSurfaces) &&
     binding.classifiedProtectedSurfaces.every(
       (surface) =>
