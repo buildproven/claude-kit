@@ -542,6 +542,17 @@ function committedFile(root, head, file) {
   }
 }
 
+function committedFileBuffer(root, head, file) {
+  try {
+    return execFileSync("git", ["show", `${head}:${file}`], {
+      cwd: root,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch {
+    return null;
+  }
+}
+
 function packageManagerAt(root, head, packageJson) {
   const declared = String(packageJson.packageManager || "").split("@")[0];
   if (["npm", "pnpm", "yarn", "bun"].includes(declared)) return declared;
@@ -1043,7 +1054,7 @@ function discoverRequiredGates(
 
 function discoverImpactTestGate(root, options, head, baseSha) {
   if (options["skip-tests"] === true) return null;
-  const impactPolicy = committedFile(
+  const impactPolicy = committedFileBuffer(
     root,
     head,
     ".buildproven/test-impact.json",

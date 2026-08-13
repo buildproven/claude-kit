@@ -7413,6 +7413,15 @@ exit 1
       executable: process.execPath,
       args: expect.arrayContaining(["--execute", "--policy-sha256"]),
     });
+    const testGate = advanced.requiredGates.find(
+      (gate) => gate.name === "test",
+    );
+    const digestIndex = testGate.args.indexOf("--policy-sha256") + 1;
+    expect(testGate.args[digestIndex]).toBe(
+      createHash("sha256")
+        .update(readFileSync(path.join(root, ".buildproven/test-impact.json")))
+        .digest("hex"),
+    );
   });
 
   it("drops a stale inferred python:mypy gate on a v2->v3 migration when the diff doesn't touch .py (BUI-467)", () => {
