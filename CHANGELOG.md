@@ -12,6 +12,13 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.7.2](https://github.com/buildproven/claude-kit/compare/v4.7.1...v4.7.2) (2026-08-13)
+
+
+### Bug Fixes
+
+* accept policy-exempt local review evidence ([#371](https://github.com/buildproven/claude-kit/issues/371)) ([4848d21](https://github.com/buildproven/claude-kit/commit/4848d219ff9e9559006358c8065a76771664602e))
+
 ## [4.7.1](https://github.com/buildproven/claude-kit/compare/v4.7.0...v4.7.1) (2026-08-13)
 
 
