@@ -125,6 +125,10 @@ installs the curated native Codex skills under `~/.agents/skills`, and points
 but skills land unprefixed, so they can shadow Claude Code built-ins. Prefer the
 plugin.
 
+Fresh headless provider runs can use the [Compute Governor](docs/compute-governor.md)
+to resolve and persist an explicit least-cost model/effort plan without changing
+the interactive builder session.
+
 </details>
 
 ## Core commands

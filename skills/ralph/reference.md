@@ -39,6 +39,10 @@ non-persistent provider process per item through `scripts/provider-run.sh`.
 That runner uses `codex exec --ephemeral` or Claude's
 `--no-session-persistence`, so an item receives only its explicit prompt and
 the persisted backlog/quality state—not its parent's session history.
+The unattended launcher also passes conservative execution facts through the
+[Compute Governor](../../docs/compute-governor.md), which persists the exact
+provider/model/effort plan before launch. It never claims localization or
+targeted proof that the caller has not established.
 
 Before an unattended run, acquire operator-scoped admission with
 `scripts/autonomous-loop-runtime.js admit`. Its launcher **must** pass the
@@ -57,11 +61,14 @@ repository.
 
 ## Governed provider launch
 
-Before launching a fresh provider child for an item, write a fact packet that
+When interactive Ralph has inspected an item, write a fact packet that
 states its phase, provider, protected surfaces, scope, ambiguity, targeted
 deterministic proof, and matching-failure streak. Do not describe every coding
 task as `standard` by default, and do not call a change cheap solely because it
-is small. Resolve the packet through the kit's Compute Governor:
+is small. The unattended shell launcher cannot infer those facts safely, so it
+uses a conservative `standard` packet and a durable per-attempt evidence
+directory. Resolve an evidence-backed interactive packet through the kit's
+Compute Governor:
 
 ```bash
 node "$SCRIPT_DIR/compute-governor.js" explain "$EVIDENCE_DIR/item-facts.json"
