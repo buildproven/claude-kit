@@ -35,9 +35,7 @@ function validatePolicy(value) {
     throw new Error(`${POLICY_FILE} must declare version 1`);
   const unsupported = Object.keys(value).filter(
     (key) =>
-      !["version", "jsRunner", "mappings", "audits", "fallback"].includes(
-        key,
-      ),
+      !["version", "jsRunner", "mappings", "audits", "fallback"].includes(key),
   );
   if (unsupported.length > 0)
     throw new Error(
