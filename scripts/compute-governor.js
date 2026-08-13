@@ -45,6 +45,14 @@ const BOOLEAN_FACT_KEYS = new Set([
   "publicContract",
   "crossRepository",
 ]);
+const EXECUTION_BINDING_KEYS = [
+  "schemaVersion",
+  "policyVersion",
+  "promptSha256",
+  "targetIdentitySha256",
+  "targetHead",
+  "classifiedProtectedSurfaces",
+];
 
 function policyPath() {
   return path.join(__dirname, "..", "config", "compute-governor-policy.json");
@@ -401,6 +409,31 @@ function planContractValid(plan, policy) {
   );
 }
 
+function executionBindingValid(binding, policy) {
+  if (!binding || typeof binding !== "object" || Array.isArray(binding))
+    return false;
+  const keys = Object.keys(binding).sort();
+  const expectedKeys = [...EXECUTION_BINDING_KEYS].sort();
+  return (
+    JSON.stringify(keys) === JSON.stringify(expectedKeys) &&
+    binding.schemaVersion === 1 &&
+    binding.policyVersion === policy.policyVersion &&
+    /^[0-9a-f]{64}$/.test(binding.promptSha256) &&
+    /^[0-9a-f]{64}$/.test(binding.targetIdentitySha256) &&
+    /^[0-9a-f]{40}$/.test(binding.targetHead) &&
+    Array.isArray(binding.classifiedProtectedSurfaces) &&
+    binding.classifiedProtectedSurfaces.every(
+      (surface) =>
+        typeof surface === "string" &&
+        policy.protectedSurfaces.includes(surface),
+    ) &&
+    new Set(binding.classifiedProtectedSurfaces).size ===
+      binding.classifiedProtectedSurfaces.length &&
+    JSON.stringify(binding.classifiedProtectedSurfaces) ===
+      JSON.stringify([...binding.classifiedProtectedSurfaces].sort())
+  );
+}
+
 function validatePlan(plan, policy = loadPolicy()) {
   requireCondition(
     plan && plan.schemaVersion === 1 && ROUTES.includes(plan.route),
@@ -422,6 +455,11 @@ function validatePlan(plan, policy = loadPolicy()) {
   requireCondition(
     planContractValid(plan, policy),
     "compute-governor: invalid execution plan contract",
+  );
+  requireCondition(
+    plan.executionBinding === undefined ||
+      executionBindingValid(plan.executionBinding, policy),
+    "compute-governor: execution binding schema mismatch",
   );
   const expected = {
     ...resolve(plan.facts, policy),
