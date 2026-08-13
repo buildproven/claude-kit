@@ -232,6 +232,19 @@ describe("cross-language test impact", () => {
     });
   });
 
+  it("does not direct-run TypeScript tests with plain Node", () => {
+    expect(
+      plan(["tests/a.test.ts", "tests/b.test.tsx"], {
+        version: 1,
+        jsRunner: "node",
+      }),
+    ).toMatchObject({
+      mode: "unmapped",
+      uncovered: ["tests/a.test.ts", "tests/b.test.tsx"],
+      commands: [],
+    });
+  });
+
   it("runs a complete regression only for an explicit audit rule", () => {
     const result = plan(["package-lock.json"], {
       version: 1,

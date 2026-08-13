@@ -27,7 +27,8 @@ Terminal results have deliberately narrow meanings:
 
 Use `scripts/test-impact.js <changed-files...>` for the test plan. JS/TS uses
 the configured Vitest or Jest related-test selector. Plain Node suites run each
-changed JavaScript test file directly; Node source files still need a mapping.
+changed `.js`, `.mjs`, or `.cjs` test file directly. TypeScript tests and Node
+source files still need a mapping.
 Changed Python tests run directly, and prose-only documentation needs no
 behavioral test. Files without a sound native selector use committed
 path-to-command mappings in

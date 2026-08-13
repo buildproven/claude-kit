@@ -39,8 +39,9 @@ The normal merge gate runs the smallest test set with evidence that it covers
 the diff:
 
 1. JavaScript and TypeScript use the repository's supported related-test
-   selector. Plain Node script suites run changed test files directly; source
-   files still need a repository mapping because Node has no dependency graph.
+   selector. Plain Node script suites run changed JavaScript test files directly;
+   TypeScript tests and source files still need a repository mapping because
+   Node has no portable dependency graph or TypeScript-loader contract.
 2. Changed Python test files run directly.
 3. Python source, shell, workflow, configuration, executable documentation,
    and other domain-specific files use repository-owned path-to-test mappings.
