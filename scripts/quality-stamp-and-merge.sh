@@ -34,11 +34,21 @@ if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
 fi
 CI_BUDGET_ARGS=()
 [ -z "$CI_BUDGET_MODE" ] || CI_BUDGET_ARGS=(--mode "$CI_BUDGET_MODE")
-REQUIRED_CHECKS_JSON="$(gh pr checks "$PR" --repo "$EXPECTED_REPOSITORY" \
-  --required --json state 2>/dev/null || true)"
+REQUIRED_CHECKS_JSON=""
+REQUIRED_CHECKS_ABSENT=false
+if ! REQUIRED_CHECKS_OUTPUT="$(gh pr checks "$PR" \
+  --repo "$EXPECTED_REPOSITORY" --required --json state 2>&1)"; then
+  case "$REQUIRED_CHECKS_OUTPUT" in
+    "no required checks reported"*) REQUIRED_CHECKS_ABSENT=true ;;
+    *)
+      echo "[quality] required-check lookup failed; retaining normal CI budget admission." >&2
+      ;;
+  esac
+else
+  REQUIRED_CHECKS_JSON="$REQUIRED_CHECKS_OUTPUT"
+fi
 CHECKS_FOR_ADMISSION_JSON="$REQUIRED_CHECKS_JSON"
-if printf '%s' "$REQUIRED_CHECKS_JSON" | jq -e 'length == 0' \
-  >/dev/null 2>&1; then
+if [ "$REQUIRED_CHECKS_ABSENT" = true ]; then
   # Private repositories on plans without enforceable required contexts can
   # still have exact-head CI. Reuse every registered check in that repository
   # class, matching quality-wait-required-checks.sh, rather than asking the

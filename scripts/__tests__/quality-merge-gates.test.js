@@ -57,9 +57,12 @@ describe("quality merge gates", () => {
     const source = STAMP_AND_MERGE;
     expect(source).toContain('gh pr checks "$PR"');
     expect(source).toContain("--required --json state");
-    expect(source).toContain("--json state 2>/dev/null || true");
+    expect(source).toContain('"no required checks reported"*');
+    expect(source).not.toMatch(
+      /--required --json state 2>\/dev\/null \|\| true/,
+    );
     expect(source).toMatch(
-      /REQUIRED_CHECKS_JSON[\s\S]*length == 0[\s\S]*REGISTERED_CHECKS_JSON[\s\S]*gh pr checks "\$PR"/,
+      /REQUIRED_CHECKS_ABSENT=true[\s\S]*REGISTERED_CHECKS_JSON[\s\S]*gh pr checks "\$PR"/,
     );
     expect(source).toMatch(
       /CHECKS_FOR_ADMISSION_JSON="\$REQUIRED_CHECKS_JSON"[\s\S]*CHECKS_FOR_ADMISSION_JSON="\$REGISTERED_CHECKS_JSON"/,
