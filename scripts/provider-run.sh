@@ -295,6 +295,17 @@ if [ "$RC" -eq 0 ]; then
         echo "provider-run: governed provider changes could not be applied atomically" >&2
         exit 78
       }
+      GOVERNED_LIVE_PATCH=$(mktemp "${TMPDIR:-/tmp}/provider-live.XXXXXX") || exit 78
+      git -C "$ORIGINAL_TARGET_DIR" add -N --all
+      git -C "$ORIGINAL_TARGET_DIR" diff --binary "$PLAN_TARGET_HEAD" -- > "$GOVERNED_LIVE_PATCH"
+      if ! cmp -s "$GOVERNED_PATCH" "$GOVERNED_LIVE_PATCH"; then
+        git -C "$ORIGINAL_TARGET_DIR" apply --reverse --binary "$GOVERNED_PATCH" >/dev/null 2>&1 || true
+        git -C "$ORIGINAL_TARGET_DIR" reset --mixed "$PLAN_TARGET_HEAD" --
+        rm -f "$GOVERNED_LIVE_PATCH"
+        echo "provider-run: target changed during governed handoff; provider changes rolled back" >&2
+        exit 78
+      fi
+      rm -f "$GOVERNED_LIVE_PATCH"
       git -C "$ORIGINAL_TARGET_DIR" reset --mixed "$PLAN_TARGET_HEAD" --
     fi
     rm -f "$GOVERNED_HANDOFF_LOCK/owner"
