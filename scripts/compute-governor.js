@@ -196,8 +196,26 @@ function resolveExecution(facts, promptFile, targetDir, policy = loadPolicy()) {
     ...new Set([...declared, ...binding.classifiedProtectedSurfaces]),
   ].sort();
   return {
-    ...resolve({ ...facts, protectedSurfaces }, policy),
+    ...resolveLaunch({ ...facts, protectedSurfaces }, policy),
     executionBinding: binding,
+  };
+}
+
+function resolveLaunch(facts, policy = loadPolicy()) {
+  const candidate = resolve(facts, policy);
+  if (!candidate.route.startsWith("economy")) return candidate;
+  const mapping = policy.routes.standard.providers[candidate.provider];
+  return {
+    ...candidate,
+    route: "standard",
+    model: mapping.model,
+    effort: mapping.effort,
+    caps: policy.routes.standard.caps,
+    reasons: [
+      ...candidate.reasons,
+      "economy candidate lacks approved calibration",
+    ],
+    promotion: "calibration-required-standard-fallback",
   };
 }
 
@@ -392,9 +410,11 @@ function planIdentityValid(plan, policy) {
 
 function planContractValid(plan, policy) {
   const expectedCaps = policy.routes[plan.route].caps;
-  const expectedPromotion = plan.route.startsWith("economy")
-    ? "candidate-requires-calibration"
-    : "not-applicable";
+  const expectedPromotion = plan.executionBinding
+    ? resolveLaunch(plan.facts, policy).promotion
+    : plan.route.startsWith("economy")
+      ? "candidate-requires-calibration"
+      : "not-applicable";
   return (
     plan.contextClass === "fresh-bounded" &&
     plan.facts &&
@@ -462,7 +482,9 @@ function validatePlan(plan, policy = loadPolicy()) {
     "compute-governor: execution binding schema mismatch",
   );
   const expected = {
-    ...resolve(plan.facts, policy),
+    ...(plan.executionBinding
+      ? resolveLaunch(plan.facts, policy)
+      : resolve(plan.facts, policy)),
     ...(plan.executionBinding
       ? { executionBinding: plan.executionBinding }
       : {}),
