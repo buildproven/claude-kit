@@ -23,6 +23,7 @@ GOVERNED_TARGET_SNAPSHOT=""
 ORIGINAL_TARGET_DIR=""
 GOVERNED_PATCH=""
 GOVERNED_HANDOFF_LOCK=""
+PLAN_SNAPSHOT=""
 
 cleanup_governed_inputs() {
   if [ -n "$GOVERNED_TARGET_SNAPSHOT" ] && [ -n "$ORIGINAL_TARGET_DIR" ]; then
@@ -30,6 +31,7 @@ cleanup_governed_inputs() {
   fi
   [ -z "$PROMPT_SNAPSHOT" ] || rm -f "$PROMPT_SNAPSHOT"
   [ -z "$GOVERNED_PATCH" ] || rm -f "$GOVERNED_PATCH"
+  [ -z "$PLAN_SNAPSHOT" ] || rm -f "$PLAN_SNAPSHOT"
   if [ -n "$GOVERNED_HANDOFF_LOCK" ]; then
     rm -f "$GOVERNED_HANDOFF_LOCK/owner"
     rmdir "$GOVERNED_HANDOFF_LOCK" 2>/dev/null || true
@@ -112,6 +114,11 @@ fi
 # effort. Validate the versioned plan before any provider subprocess starts,
 # then require its provider to match an explicit --provider if one was supplied.
 if [ -n "$EXECUTION_PLAN" ]; then
+  PLAN_SNAPSHOT=$(mktemp "${TMPDIR:-/tmp}/provider-plan.XXXXXX") \
+    || { echo "provider-run: cannot allocate execution plan snapshot" >&2; exit 2; }
+  cp "$EXECUTION_PLAN" "$PLAN_SNAPSHOT"
+  chmod 400 "$PLAN_SNAPSHOT"
+  EXECUTION_PLAN="$PLAN_SNAPSHOT"
   node "$SCRIPT_DIR/compute-governor.js" validate-execution-plan "$EXECUTION_PLAN" "$PROMPT_FILE" "$TARGET_DIR" >/dev/null \
     || { echo "provider-run: invalid execution plan" >&2; exit 2; }
   PLAN_PROVIDER=$(jq -r '.provider' "$EXECUTION_PLAN")
@@ -169,6 +176,13 @@ write_governed_record() {
     return 1
   fi
   mv "$record_temp" "$OUTPUT_DIR/run-record.json"
+}
+
+fail_governed_handoff() {
+  local message="$1"
+  write_governed_record failed "$PROVIDER" 78 delivery-failed >/dev/null 2>&1 || true
+  echo "$message" >&2
+  exit 78
 }
 
 # Classify a provider failure from STRUCTURED error metadata only — never by
@@ -271,39 +285,41 @@ run_one "$PROVIDER"
 RC=$?
 set -e
 if [ "$RC" -eq 0 ]; then
+  # A valid terminal provider receipt must be durable before any provider
+  # changes can reach the caller's live worktree.
+  if ! write_governed_record passed "$PROVIDER" 0 ""; then
+    echo "provider-run: provider succeeded but terminal evidence could not be persisted: $OUTPUT_DIR" >&2
+    exit 78
+  fi
   if [ -n "$EXECUTION_PLAN" ]; then
     GOVERNED_GIT_COMMON_DIR=$(git -C "$ORIGINAL_TARGET_DIR" rev-parse --path-format=absolute --git-common-dir)
     GOVERNED_HANDOFF_LOCK="$GOVERNED_GIT_COMMON_DIR/buildproven-governed-handoff.lock"
     mkdir "$GOVERNED_HANDOFF_LOCK" 2>/dev/null || {
-      echo "provider-run: another governed target handoff is active" >&2
-      exit 78
+      fail_governed_handoff "provider-run: another governed target handoff is active"
     }
     printf '%s\n' "pid=$$ head=$PLAN_TARGET_HEAD" > "$GOVERNED_HANDOFF_LOCK/owner"
     [ "$(git -C "$ORIGINAL_TARGET_DIR" rev-parse HEAD)" = "$PLAN_TARGET_HEAD" ] &&
       [ -z "$(git -C "$ORIGINAL_TARGET_DIR" status --porcelain=v1 --untracked-files=all)" ] || {
-        echo "provider-run: original target changed during governed execution; refusing to apply provider changes" >&2
-        exit 78
+        fail_governed_handoff "provider-run: original target changed during governed execution; refusing to apply provider changes"
       }
     GOVERNED_PATCH=$(mktemp "${TMPDIR:-/tmp}/provider-changes.XXXXXX") || {
-      echo "provider-run: cannot allocate governed change handoff" >&2
-      exit 78
+      fail_governed_handoff "provider-run: cannot allocate governed change handoff"
     }
     git -C "$TARGET_DIR" add -N --all
     git -C "$TARGET_DIR" diff --binary "$PLAN_TARGET_HEAD" -- > "$GOVERNED_PATCH"
     if [ -s "$GOVERNED_PATCH" ]; then
       git -C "$ORIGINAL_TARGET_DIR" apply --index --binary "$GOVERNED_PATCH" || {
-        echo "provider-run: governed provider changes could not be applied atomically" >&2
-        exit 78
+        fail_governed_handoff "provider-run: governed provider changes could not be applied atomically"
       }
-      GOVERNED_LIVE_PATCH=$(mktemp "${TMPDIR:-/tmp}/provider-live.XXXXXX") || exit 78
+      GOVERNED_LIVE_PATCH=$(mktemp "${TMPDIR:-/tmp}/provider-live.XXXXXX") ||
+        fail_governed_handoff "provider-run: cannot allocate handoff verification"
       git -C "$ORIGINAL_TARGET_DIR" add -N --all
       git -C "$ORIGINAL_TARGET_DIR" diff --binary "$PLAN_TARGET_HEAD" -- > "$GOVERNED_LIVE_PATCH"
       if ! cmp -s "$GOVERNED_PATCH" "$GOVERNED_LIVE_PATCH"; then
         git -C "$ORIGINAL_TARGET_DIR" apply --reverse --binary "$GOVERNED_PATCH" >/dev/null 2>&1 || true
         git -C "$ORIGINAL_TARGET_DIR" reset --mixed "$PLAN_TARGET_HEAD" --
         rm -f "$GOVERNED_LIVE_PATCH"
-        echo "provider-run: target changed during governed handoff; provider changes rolled back" >&2
-        exit 78
+        fail_governed_handoff "provider-run: target changed during governed handoff; provider changes rolled back"
       fi
       rm -f "$GOVERNED_LIVE_PATCH"
       git -C "$ORIGINAL_TARGET_DIR" reset --mixed "$PLAN_TARGET_HEAD" --
@@ -311,10 +327,6 @@ if [ "$RC" -eq 0 ]; then
     rm -f "$GOVERNED_HANDOFF_LOCK/owner"
     rmdir "$GOVERNED_HANDOFF_LOCK"
     GOVERNED_HANDOFF_LOCK=""
-  fi
-  if ! write_governed_record passed "$PROVIDER" 0 ""; then
-    echo "provider-run: provider succeeded but terminal evidence could not be persisted: $OUTPUT_DIR" >&2
-    exit 78
   fi
   printf '%s\n' "$PROVIDER" > "$OUTPUT_DIR/provider"
   cat "$OUTPUT_DIR/$PROVIDER.stdout"
