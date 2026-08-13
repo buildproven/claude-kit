@@ -1570,10 +1570,101 @@ describe("provider-native platform", () => {
 
     expect(result.status, result.stderr).toBe(78);
     expect(result.stderr).toContain(
-      "provider succeeded but terminal evidence could not be persisted",
+      "provider succeeded but pending delivery evidence could not be persisted",
     );
     expect(existsSync(path.join(output, "provider"))).toBe(false);
     expect(existsSync(path.join(output, "run-record.json"))).toBe(false);
+  });
+
+  it("retains delivered changes and an exclusion lock when receipt promotion fails", () => {
+    const dir = makeTempDir("provider-native-rollback-failure-");
+    const bin = path.join(dir, "bin");
+    const output = path.join(dir, "output");
+    const prompt = path.join(dir, "prompt");
+    const facts = path.join(dir, "facts.json");
+    const delivered = path.join(dir, "delivered.txt");
+    mkdirSync(bin);
+    writeFileSync(prompt, "implement governed work\n");
+    writeFileSync(
+      facts,
+      JSON.stringify({
+        phase: "implement",
+        localized: true,
+        reversible: true,
+        targetedProof: true,
+        changedFiles: 1,
+        protectedSurfaces: [],
+        sameFailureStreak: 0,
+      }),
+    );
+    initializeGovernedTarget(dir);
+    executable(
+      path.join(bin, "codex"),
+      [
+        'for arg in "$@"; do',
+        '  if [ "$arg" = "-C" ]; then target_next=1; continue; fi',
+        '  if [ "${target_next:-0}" = 1 ]; then provider_target="$arg"; target_next=0; fi',
+        '  if [ "$arg" = "-o" ]; then shift_next=1; continue; fi',
+        '  if [ "${shift_next:-0}" = 1 ]; then last_message="$arg"; shift_next=0; fi',
+        "done",
+        'echo "provider completed" > "$last_message"',
+        'echo "delivered" > "$provider_target/delivered.txt"',
+      ].join("\n"),
+    );
+    executable(
+      path.join(bin, "mv"),
+      [
+        `counter='${path.join(output, ".record-moves")}'`,
+        `if [ "\${!#}" = '${path.join(output, "run-record.json")}' ]; then`,
+        '  count=$(($(cat "$counter" 2>/dev/null || echo 0) + 1))',
+        '  printf "%s\\n" "$count" > "$counter"',
+        '  if [ "$count" -eq 2 ]; then',
+        "    exit 1",
+        "  fi",
+        "fi",
+        'exec /bin/mv "$@"',
+      ].join("\n"),
+    );
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--execution-facts",
+        facts,
+        "--provider",
+        "codex",
+        "--target-dir",
+        dir,
+        "--output-dir",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+
+    const recoveryLock = path.join(
+      dir,
+      ".git",
+      "buildproven-governed-handoff.lock",
+    );
+    expect(result.status, result.stderr).toBe(78);
+    expect(result.stderr).toContain(
+      "changes and reconciliation lock were retained",
+    );
+    expect(readFileSync(delivered, "utf8")).toBe("delivered\n");
+    expect(existsSync(recoveryLock)).toBe(true);
+    expect(
+      JSON.parse(readFileSync(path.join(output, "run-record.json"), "utf8")),
+    ).toMatchObject({
+      outcome: {
+        status: "failed",
+        providerFailureCategory: "delivery-pending",
+      },
+    });
   });
 
   it("launches a governed Claude child with explicit model and effort", () => {

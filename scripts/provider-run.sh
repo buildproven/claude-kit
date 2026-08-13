@@ -23,6 +23,7 @@ GOVERNED_TARGET_SNAPSHOT=""
 ORIGINAL_TARGET_DIR=""
 GOVERNED_PATCH=""
 GOVERNED_HANDOFF_LOCK=""
+GOVERNED_HANDOFF_LOCK_PRESERVE=0
 PLAN_SNAPSHOT=""
 
 cleanup_governed_inputs() {
@@ -32,7 +33,7 @@ cleanup_governed_inputs() {
   [ -z "$PROMPT_SNAPSHOT" ] || rm -f "$PROMPT_SNAPSHOT"
   [ -z "$GOVERNED_PATCH" ] || rm -f "$GOVERNED_PATCH"
   [ -z "$PLAN_SNAPSHOT" ] || rm -f "$PLAN_SNAPSHOT"
-  if [ -n "$GOVERNED_HANDOFF_LOCK" ]; then
+  if [ -n "$GOVERNED_HANDOFF_LOCK" ] && [ "$GOVERNED_HANDOFF_LOCK_PRESERVE" -eq 0 ]; then
     rm -f "$GOVERNED_HANDOFF_LOCK/owner"
     rmdir "$GOVERNED_HANDOFF_LOCK" 2>/dev/null || true
   fi
@@ -185,6 +186,20 @@ fail_governed_handoff() {
   exit 78
 }
 
+rollback_or_preserve_governed_handoff() {
+  local context="$1"
+  if git -C "$ORIGINAL_TARGET_DIR" apply --reverse --binary "$GOVERNED_PATCH" >/dev/null 2>&1 &&
+    git -C "$ORIGINAL_TARGET_DIR" reset --mixed "$PLAN_TARGET_HEAD" -- >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # The live diff is the recovery evidence. Keep it visible and fence another
+  # governed handoff rather than creating a second fallible artifact copy.
+  GOVERNED_HANDOFF_LOCK_PRESERVE=1
+  echo "provider-run: $context; target may contain delivered changes and reconciliation lock was preserved: $GOVERNED_HANDOFF_LOCK" >&2
+  return 1
+}
+
 # Classify a provider failure from STRUCTURED error metadata only — never by
 # grepping the raw transcript (BUI-325). Model output can legitimately contain
 # incidental exhaustion-marker text (this repo's own quality docs mention
@@ -285,10 +300,11 @@ run_one "$PROVIDER"
 RC=$?
 set -e
 if [ "$RC" -eq 0 ]; then
-  # A valid terminal provider receipt must be durable before any provider
-  # changes can reach the caller's live worktree.
-  if ! write_governed_record passed "$PROVIDER" 0 ""; then
-    echo "provider-run: provider succeeded but terminal evidence could not be persisted: $OUTPUT_DIR" >&2
+  # Persist a non-success receipt before handoff. It is promoted to `passed`
+  # only after delivery succeeds, so a failed state transition can never leave
+  # an undelivered run represented as successful.
+  if ! write_governed_record failed "$PROVIDER" 78 delivery-pending; then
+    echo "provider-run: provider succeeded but pending delivery evidence could not be persisted: $OUTPUT_DIR" >&2
     exit 78
   fi
   if [ -n "$EXECUTION_PLAN" ]; then
@@ -316,14 +332,24 @@ if [ "$RC" -eq 0 ]; then
       git -C "$ORIGINAL_TARGET_DIR" add -N --all
       git -C "$ORIGINAL_TARGET_DIR" diff --binary "$PLAN_TARGET_HEAD" -- > "$GOVERNED_LIVE_PATCH"
       if ! cmp -s "$GOVERNED_PATCH" "$GOVERNED_LIVE_PATCH"; then
-        git -C "$ORIGINAL_TARGET_DIR" apply --reverse --binary "$GOVERNED_PATCH" >/dev/null 2>&1 || true
-        git -C "$ORIGINAL_TARGET_DIR" reset --mixed "$PLAN_TARGET_HEAD" --
+        rollback_or_preserve_governed_handoff "target changed during governed handoff" || exit 78
         rm -f "$GOVERNED_LIVE_PATCH"
         fail_governed_handoff "provider-run: target changed during governed handoff; provider changes rolled back"
       fi
       rm -f "$GOVERNED_LIVE_PATCH"
       git -C "$ORIGINAL_TARGET_DIR" reset --mixed "$PLAN_TARGET_HEAD" --
     fi
+  fi
+  if ! write_governed_record passed "$PROVIDER" 0 ""; then
+    # Delivery has already completed. Rolling it back would create a second
+    # transaction that can also fail. Keep the visible changes, the durable
+    # non-success receipt, and the exclusion lock until an operator reconciles
+    # the outcome.
+    GOVERNED_HANDOFF_LOCK_PRESERVE=1
+    echo "provider-run: delivery completed but terminal success evidence could not be persisted; changes and reconciliation lock were retained: $GOVERNED_HANDOFF_LOCK" >&2
+    exit 78
+  fi
+  if [ -n "$GOVERNED_HANDOFF_LOCK" ]; then
     rm -f "$GOVERNED_HANDOFF_LOCK/owner"
     rmdir "$GOVERNED_HANDOFF_LOCK"
     GOVERNED_HANDOFF_LOCK=""
