@@ -23,6 +23,7 @@ GOVERNED_TARGET_SNAPSHOT=""
 ORIGINAL_TARGET_DIR=""
 GOVERNED_PATCH=""
 GOVERNED_HANDOFF_LOCK=""
+GOVERNED_HANDOFF_LOCK_PRESERVE=0
 PLAN_SNAPSHOT=""
 
 cleanup_governed_inputs() {
@@ -32,7 +33,7 @@ cleanup_governed_inputs() {
   [ -z "$PROMPT_SNAPSHOT" ] || rm -f "$PROMPT_SNAPSHOT"
   [ -z "$GOVERNED_PATCH" ] || rm -f "$GOVERNED_PATCH"
   [ -z "$PLAN_SNAPSHOT" ] || rm -f "$PLAN_SNAPSHOT"
-  if [ -n "$GOVERNED_HANDOFF_LOCK" ]; then
+  if [ -n "$GOVERNED_HANDOFF_LOCK" ] && [ "$GOVERNED_HANDOFF_LOCK_PRESERVE" -eq 0 ]; then
     rm -f "$GOVERNED_HANDOFF_LOCK/owner"
     rmdir "$GOVERNED_HANDOFF_LOCK" 2>/dev/null || true
   fi
@@ -185,6 +186,24 @@ fail_governed_handoff() {
   exit 78
 }
 
+rollback_governed_handoff() {
+  local context="$1"
+  if git -C "$ORIGINAL_TARGET_DIR" apply --reverse --binary "$GOVERNED_PATCH" >/dev/null 2>&1 &&
+    git -C "$ORIGINAL_TARGET_DIR" reset --mixed "$PLAN_TARGET_HEAD" -- >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # A failed rollback is an operator-recovery state, not an ordinary failed
+  # delivery. Preserve both the exclusion lock and the exact inverse patch so
+  # another governed run cannot compound an ambiguous live worktree.
+  GOVERNED_HANDOFF_LOCK_PRESERVE=1
+  cp "$GOVERNED_PATCH" "$GOVERNED_HANDOFF_LOCK/rollback.patch" >/dev/null 2>&1 || true
+  printf '%s\n' "state=rollback-failed head=$PLAN_TARGET_HEAD output=$OUTPUT_DIR" \
+    > "$GOVERNED_HANDOFF_LOCK/recovery" 2>/dev/null || true
+  echo "provider-run: $context; rollback failed and recovery lock was preserved: $GOVERNED_HANDOFF_LOCK" >&2
+  return 1
+}
+
 # Classify a provider failure from STRUCTURED error metadata only — never by
 # grepping the raw transcript (BUI-325). Model output can legitimately contain
 # incidental exhaustion-marker text (this repo's own quality docs mention
@@ -317,8 +336,7 @@ if [ "$RC" -eq 0 ]; then
       git -C "$ORIGINAL_TARGET_DIR" add -N --all
       git -C "$ORIGINAL_TARGET_DIR" diff --binary "$PLAN_TARGET_HEAD" -- > "$GOVERNED_LIVE_PATCH"
       if ! cmp -s "$GOVERNED_PATCH" "$GOVERNED_LIVE_PATCH"; then
-        git -C "$ORIGINAL_TARGET_DIR" apply --reverse --binary "$GOVERNED_PATCH" >/dev/null 2>&1 || true
-        git -C "$ORIGINAL_TARGET_DIR" reset --mixed "$PLAN_TARGET_HEAD" --
+        rollback_governed_handoff "target changed during governed handoff" || exit 78
         rm -f "$GOVERNED_LIVE_PATCH"
         fail_governed_handoff "provider-run: target changed during governed handoff; provider changes rolled back"
       fi
@@ -328,8 +346,7 @@ if [ "$RC" -eq 0 ]; then
   fi
   if ! write_governed_record passed "$PROVIDER" 0 ""; then
     if [ -n "$EXECUTION_PLAN" ] && [ -s "$GOVERNED_PATCH" ]; then
-      git -C "$ORIGINAL_TARGET_DIR" apply --reverse --binary "$GOVERNED_PATCH" >/dev/null 2>&1 || true
-      git -C "$ORIGINAL_TARGET_DIR" reset --mixed "$PLAN_TARGET_HEAD" --
+      rollback_governed_handoff "terminal success evidence could not be persisted" || exit 78
     fi
     echo "provider-run: delivery completed but terminal success evidence could not be persisted: $OUTPUT_DIR" >&2
     exit 78
