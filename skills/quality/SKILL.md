@@ -292,5 +292,20 @@ The recorder writes to `$BS_QUALITY_TELEMETRY_FILE` or the operator state
 directory, never the audited checkout by default. For recovery or historical
 backfill only, `node "$QUALITY_SCRIPTS_DIR/quality-telemetry.js" record
 "<exact-manifest-path>"` remains an idempotent direct entrypoint. Use the
-quality-value report for escaped-defect rate, heuristic capture-rate proxy, and
-cost per deterministic failure.
+standalone report for campaign p50/p95, fallback, convergence, and repeated
+complete-suite rates:
+
+```bash
+node "$QUALITY_SCRIPTS_DIR/quality-telemetry-report.js" \
+  --input "$HOME/.local/state/claude-kit/quality-telemetry" \
+  --ci-snapshot /path/to/ci-budget-snapshot.json \
+  --dispositions /path/to/finding-dispositions.json
+```
+
+The optional evidence files are schema-versioned JSON. A CI snapshot requires
+`schemaVersion`, `usedMinutes`, `includedMinutes`, and `fetchedAt`; a finding
+ledger requires `schemaVersion`, `confirmed`, `refuted`, `escaped`, `source`,
+and `asOf`.
+Unavailable, historical, malformed, or unsupported data is labeled in the
+report's `completeness` section, never inferred as zero. Use the quality-value
+report for escaped-defect attribution and cost per deterministic failure.

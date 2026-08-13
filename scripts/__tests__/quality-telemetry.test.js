@@ -138,7 +138,7 @@ describe("buildRecord", () => {
       nowIso: NOW,
     });
     expect(rec).toMatchObject({
-      telemetrySchemaVersion: 6,
+      telemetrySchemaVersion: 7,
       invocationId: "11111111-1111-4111-8111-111111111111",
       repoKey: "target-repo",
       taskType: "feature",
@@ -164,6 +164,7 @@ describe("buildRecord", () => {
       gateDurationSeconds: null,
       fixCommitCount: 0,
       evidenceReusedCount: 0,
+      testSelectionMode: null,
       terminalState: null,
       reviewRounds: 1,
       agentsRun: 2,
@@ -171,6 +172,32 @@ describe("buildRecord", () => {
       mergeRequested: false,
       verdict: "passed",
     });
+  });
+
+  it("records the persisted affected-test mode without re-deriving the plan", () => {
+    const rec = buildRecord(
+      baseManifest({
+        requiredGates: [
+          {
+            name: "test",
+            source: "test-impact:.buildproven/test-impact.json",
+            testImpactMode: "audit",
+          },
+        ],
+      }),
+      { execFileSync: NO_FILES, nowIso: NOW },
+    );
+    expect(rec.testSelectionMode).toBe("audit");
+  });
+
+  it("labels a conventional repository test gate as complete regression", () => {
+    const rec = buildRecord(
+      baseManifest({
+        requiredGates: [{ name: "test", source: "package-script:test" }],
+      }),
+      { execFileSync: NO_FILES, nowIso: NOW },
+    );
+    expect(rec.testSelectionMode).toBe("complete");
   });
 
   it("measures provider prompt/output artifacts with an explicit estimate label", () => {

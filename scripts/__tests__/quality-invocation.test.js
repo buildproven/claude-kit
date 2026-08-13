@@ -6980,6 +6980,7 @@ exit 1
     expect(testGate).toMatchObject({
       source: "test-impact:.buildproven/test-impact.json",
       executable: process.execPath,
+      testImpactMode: "focused",
     });
     expect(testGate.args).toEqual([
       path.join(ROOT, "scripts", "test-impact.js"),
@@ -7444,6 +7445,7 @@ exit 1
     ).toMatchObject({
       source: "test-impact:.buildproven/test-impact.json",
       executable: process.execPath,
+      testImpactMode: "focused",
       args: expect.arrayContaining(["--execute", "--policy-sha256"]),
     });
     const testGate = advanced.requiredGates.find(
