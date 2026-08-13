@@ -24,6 +24,19 @@
       ]
     },
     {
+      "paths": ["scripts/quality-mutation-check.sh"],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/quality-mutation-check.test.js"
+          ]
+        }
+      ]
+    },
+    {
       "paths": ["README.md", "commands/**/*.md"],
       "commands": [
         {

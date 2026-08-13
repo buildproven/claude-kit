@@ -16,6 +16,7 @@ function git(cwd, args) {
 }
 
 function fixtureTestScript(options) {
+  if (options.testScript) return options.testScript;
   if (options.vitestRunner) return "vitest run";
   if (options.npmPytestScript) return options.npmPytestScript;
   return "node logic.test.js";
@@ -88,6 +89,28 @@ function fixture(label, testBody, options = {}) {
     }),
   );
   writeFileSync(path.join(root, ".gitignore"), "node_modules/\ntest-bin/\n");
+  if (options.focusedMapping) {
+    mkdirSync(path.join(root, ".buildproven"), { recursive: true });
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(
+      path.join(root, ".buildproven", "test-impact.json"),
+      JSON.stringify({
+        version: 1,
+        jsRunner: "none",
+        mappings: [
+          {
+            paths: ["logic.js"],
+            commands: [{ executable: "node", args: ["logic.test.js"] }],
+          },
+        ],
+        audits: [],
+      }),
+    );
+    writeFileSync(
+      path.join(root, "scripts", "test-impact.js"),
+      readFileSync(path.join(ROOT, "scripts", "test-impact.js")),
+    );
+  }
   if (options.pytestRunner) {
     writeFileSync(
       path.join(root, ".quality-gates.json"),
@@ -331,6 +354,20 @@ describe("quality-mutation-check", () => {
     const state = JSON.parse(readFileSync(manifest, "utf8"));
     expect(state.governor.activeExecution).toBeNull();
     expect(state.governor.gateSecondsUsed).toBeGreaterThanOrEqual(1);
+  });
+
+  it("uses a committed focused mapping instead of the complete suite for each candidate", () => {
+    const { root, manifest } = fixture(
+      "focused",
+      "const { isAllowed } = require('./logic');\nif (!isAllowed('admin')) process.exit(1);\n",
+      {
+        focusedMapping: true,
+        testScript: "node complete-suite-must-not-run.js",
+      },
+    );
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
   });
 
   it("initializes committed submodules before running the mutation baseline", () => {
