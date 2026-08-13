@@ -71,7 +71,7 @@ if [ -n "$EXECUTION_FACTS" ]; then
   PLAN_TEMP=$(mktemp "$OUTPUT_DIR/.execution-plan.XXXXXX") \
     || { echo "provider-run: cannot allocate execution plan" >&2; exit 2; }
   if ! jq --arg provider "$PROVIDER" '. + {provider:$provider}' "$EXECUTION_FACTS" \
-    | node "$SCRIPT_DIR/compute-governor.js" resolve - > "$PLAN_TEMP"; then
+    | node "$SCRIPT_DIR/compute-governor.js" resolve-execution - "$PROMPT_FILE" "$TARGET_DIR" > "$PLAN_TEMP"; then
     rm -f "$PLAN_TEMP"
     echo "provider-run: execution facts cannot be resolved" >&2
     exit 2
@@ -83,7 +83,7 @@ fi
 # effort. Validate the versioned plan before any provider subprocess starts,
 # then require its provider to match an explicit --provider if one was supplied.
 if [ -n "$EXECUTION_PLAN" ]; then
-  node "$SCRIPT_DIR/compute-governor.js" validate-plan "$EXECUTION_PLAN" >/dev/null \
+  node "$SCRIPT_DIR/compute-governor.js" validate-execution-plan "$EXECUTION_PLAN" "$PROMPT_FILE" "$TARGET_DIR" >/dev/null \
     || { echo "provider-run: invalid execution plan" >&2; exit 2; }
   PLAN_PROVIDER=$(jq -r '.provider' "$EXECUTION_PLAN")
   if [ -n "$REQUESTED_PROVIDER" ] && [ "$REQUESTED_PROVIDER" != auto ] && [ "$REQUESTED_PROVIDER" != "$PLAN_PROVIDER" ]; then

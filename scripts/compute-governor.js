@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 "use strict";
 
+const crypto = require("crypto");
+const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
@@ -70,7 +72,8 @@ function loadPolicy(file = policyPath()) {
       typeof policy.policyVersion === "string" &&
       policy.policyVersion.length > 0 &&
       policy.routes &&
-      Array.isArray(policy.protectedSurfaces),
+      Array.isArray(policy.protectedSurfaces) &&
+      policy.protectedPromptPatterns,
     "compute-governor: unsupported policy schema version",
   );
   for (const route of ROUTES) {
@@ -80,6 +83,68 @@ function loadPolicy(file = policyPath()) {
     );
   }
   return policy;
+}
+
+function sha256(value) {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function targetHead(targetDir) {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: targetDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } catch {
+    return "unversioned";
+  }
+}
+
+function classifiedProtectedSurfaces(prompt, policy) {
+  return Object.entries(policy.protectedPromptPatterns)
+    .filter(([surface, patterns]) => {
+      requireCondition(
+        policy.protectedSurfaces.includes(surface) &&
+          Array.isArray(patterns) &&
+          patterns.length > 0 &&
+          patterns.every((pattern) => typeof pattern === "string"),
+        `compute-governor: invalid protected prompt policy for '${surface}'`,
+      );
+      return patterns.some((pattern) => new RegExp(pattern, "iu").test(prompt));
+    })
+    .map(([surface]) => surface)
+    .sort();
+}
+
+function executionBinding(promptFile, targetDir, policy = loadPolicy()) {
+  const prompt = fs.readFileSync(promptFile);
+  const target = fs.realpathSync(targetDir);
+  return {
+    schemaVersion: 1,
+    policyVersion: policy.policyVersion,
+    promptSha256: sha256(prompt),
+    targetIdentitySha256: sha256(target),
+    targetHead: targetHead(target),
+    classifiedProtectedSurfaces: classifiedProtectedSurfaces(
+      prompt.toString("utf8"),
+      policy,
+    ),
+  };
+}
+
+function resolveExecution(facts, promptFile, targetDir, policy = loadPolicy()) {
+  const binding = executionBinding(promptFile, targetDir, policy);
+  const declared = Array.isArray(facts.protectedSurfaces)
+    ? facts.protectedSurfaces
+    : [];
+  const protectedSurfaces = [
+    ...new Set([...declared, ...binding.classifiedProtectedSurfaces]),
+  ].sort();
+  return {
+    ...resolve({ ...facts, protectedSurfaces }, policy),
+    executionBinding: binding,
+  };
 }
 
 function rank(route) {
@@ -304,11 +369,40 @@ function validatePlan(plan, policy = loadPolicy()) {
     planContractValid(plan, policy),
     "compute-governor: invalid execution plan contract",
   );
-  const expected = resolve(plan.facts, policy);
+  const expected = {
+    ...resolve(plan.facts, policy),
+    ...(plan.executionBinding
+      ? { executionBinding: plan.executionBinding }
+      : {}),
+  };
   requireCondition(
     JSON.stringify(canonicalJson(plan)) ===
       JSON.stringify(canonicalJson(expected)),
     "compute-governor: execution plan is not bound to its facts",
+  );
+  return plan;
+}
+
+function validateExecutionPlan(
+  plan,
+  promptFile,
+  targetDir,
+  policy = loadPolicy(),
+) {
+  validatePlan(plan, policy);
+  requireCondition(
+    plan.executionBinding &&
+      JSON.stringify(canonicalJson(plan.executionBinding)) ===
+        JSON.stringify(
+          canonicalJson(executionBinding(promptFile, targetDir, policy)),
+        ),
+    "compute-governor: execution plan is not bound to this prompt and target",
+  );
+  const expected = resolveExecution(plan.facts, promptFile, targetDir, policy);
+  requireCondition(
+    JSON.stringify(canonicalJson(plan)) ===
+      JSON.stringify(canonicalJson(expected)),
+    "compute-governor: protected execution facts do not match task evidence",
   );
   return plan;
 }
@@ -465,30 +559,42 @@ function readJson(file) {
 }
 
 function main(argv) {
-  const [command, file] = argv;
+  const [command, file, promptFile, targetDir] = argv;
   if (
     !file ||
     ![
       "resolve",
+      "resolve-execution",
       "explain",
       "validate-plan",
+      "validate-execution-plan",
       "validate-run-record",
       "calibrate",
     ].includes(command)
   ) {
     throw new Error(
-      "usage: compute-governor.js resolve|explain|validate-plan|validate-run-record|calibrate <json-file>",
+      "usage: compute-governor.js resolve|explain|validate-plan|validate-run-record|calibrate <json-file>; resolve-execution|validate-execution-plan <json-file> <prompt-file> <target-dir>",
     );
+  }
+  if (
+    ["resolve-execution", "validate-execution-plan"].includes(command) &&
+    (!promptFile || !targetDir)
+  ) {
+    throw new Error(`${command} requires a prompt file and target directory`);
   }
   const input = readJson(file);
   const result =
-    command === "resolve" || command === "explain"
-      ? resolve(input)
-      : command === "validate-plan"
-        ? validatePlan(input)
-        : command === "validate-run-record"
-          ? validateRunRecord(input)
-          : calibrationDecision(input);
+    command === "resolve-execution"
+      ? resolveExecution(input, promptFile, targetDir)
+      : command === "validate-execution-plan"
+        ? validateExecutionPlan(input, promptFile, targetDir)
+        : command === "resolve" || command === "explain"
+          ? resolve(input)
+          : command === "validate-plan"
+            ? validatePlan(input)
+            : command === "validate-run-record"
+              ? validateRunRecord(input)
+              : calibrationDecision(input);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
@@ -505,7 +611,9 @@ module.exports = {
   ROUTES,
   loadPolicy,
   resolve,
+  resolveExecution,
   validatePlan,
+  validateExecutionPlan,
   validateRunRecord,
   calibrationDecision,
 };

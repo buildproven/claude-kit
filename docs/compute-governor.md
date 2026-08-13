@@ -53,15 +53,25 @@ The runner persists `execution-plan.json` before launch and atomically writes
 identity, timing, attempt count, typed outcome, and nullable usage. It rejects
 prompt or credential fields recursively.
 
-Every plan embeds only the allowlisted execution facts used to resolve it.
-Validation recomputes the complete plan from those facts and the installed
-policy, so a caller cannot lower a protected-surface floor by editing the plan.
-Unknown fact fields—including prompts and credentials—are rejected.
+Every launchable plan embeds only the allowlisted execution facts used to
+resolve it plus a non-sensitive binding to the prompt hash, target identity,
+target Git HEAD, policy version, and independently classified protected
+surfaces. `provider-run.sh` recomputes that binding from the prompt and target
+before launch. It adds any protected prompt signals to caller facts, so an
+empty caller list cannot lower a detected auth, payment, data, migration,
+public-contract, deployment, security, or cross-repository floor. Unknown fact
+fields—including prompts and credentials—are rejected.
+
+The classifier protects against accidental omission and stale-plan reuse; it
+is not an OS security boundary against a hostile process that can rewrite the
+prompt, repository, policy, and launcher together. Ambiguous work should be
+declared protected by the orchestrator and remains subject to normal risk
+scoring and review.
 
 Use `--execution-plan plan.json` when a workflow has already persisted and
-approved the plan. The runner rejects a provider mismatch, policy/model drift,
-a route below its declared safety floor, modified caps, or an unknown schema
-before starting either provider.
+approved a plan created for the same prompt and target. The runner rejects a
+prompt, target, HEAD, provider, policy/model, safety-floor, cap, or schema
+mismatch before starting either provider.
 
 Unattended Ralph uses one durable output directory per issue attempt so the
 resolved plan, provider output, and terminal record survive success and failure.

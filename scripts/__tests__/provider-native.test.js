@@ -33,11 +33,15 @@ function executable(file, body) {
   chmodSync(file, 0o755);
 }
 
-function governedPlan(facts) {
-  return execFileSync("node", [COMPUTE_GOVERNOR, "resolve", "-"], {
-    input: JSON.stringify(facts),
-    encoding: "utf8",
-  });
+function governedPlan(facts, prompt, target) {
+  return execFileSync(
+    "node",
+    [COMPUTE_GOVERNOR, "resolve-execution", "-", prompt, target],
+    {
+      input: JSON.stringify(facts),
+      encoding: "utf8",
+    },
+  );
 }
 
 describe("provider-native platform", () => {
@@ -1220,16 +1224,20 @@ describe("provider-native platform", () => {
     writeFileSync(prompt, "implement this narrow behavior\n");
     writeFileSync(
       plan,
-      governedPlan({
-        provider: "codex",
-        phase: "implement",
-        localized: true,
-        reversible: true,
-        targetedProof: true,
-        changedFiles: 1,
-        protectedSurfaces: [],
-        sameFailureStreak: 0,
-      }),
+      governedPlan(
+        {
+          provider: "codex",
+          phase: "implement",
+          localized: true,
+          reversible: true,
+          targetedProof: true,
+          changedFiles: 1,
+          protectedSurfaces: [],
+          sameFailureStreak: 0,
+        },
+        prompt,
+        dir,
+      ),
     );
     executable(
       path.join(bin, "codex"),
@@ -1277,6 +1285,82 @@ describe("provider-native platform", () => {
       attempts: 1,
       usage: null,
     });
+  });
+
+  it("raises a falsely empty protected-surface list from task evidence", () => {
+    const dir = makeTempDir("provider-native-protected-binding-");
+    const prompt = path.join(dir, "prompt");
+    writeFileSync(prompt, "change the OAuth login session behavior\n");
+    const plan = JSON.parse(
+      governedPlan(
+        {
+          provider: "codex",
+          phase: "implement",
+          localized: true,
+          reversible: true,
+          targetedProof: true,
+          changedFiles: 1,
+          protectedSurfaces: [],
+          sameFailureStreak: 0,
+        },
+        prompt,
+        dir,
+      ),
+    );
+    expect(plan).toMatchObject({
+      route: "critical",
+      model: "gpt-5.6-sol",
+      safetyFloor: "critical",
+      facts: { protectedSurfaces: ["auth"] },
+      executionBinding: { classifiedProtectedSurfaces: ["auth"] },
+    });
+  });
+
+  it("rejects a persisted plan reused for a different protected prompt", () => {
+    const dir = makeTempDir("provider-native-stale-binding-");
+    const output = path.join(dir, "output");
+    const prompt = path.join(dir, "prompt");
+    const plan = path.join(output, "execution-plan.json");
+    mkdirSync(output);
+    writeFileSync(prompt, "update a local label\n");
+    writeFileSync(
+      plan,
+      governedPlan(
+        {
+          provider: "codex",
+          phase: "implement",
+          localized: true,
+          reversible: true,
+          targetedProof: true,
+          changedFiles: 1,
+          protectedSurfaces: [],
+          sameFailureStreak: 0,
+        },
+        prompt,
+        dir,
+      ),
+    );
+    writeFileSync(prompt, "change Stripe payment authorization\n");
+
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--execution-plan",
+        plan,
+        "--target-dir",
+        dir,
+        "--output-dir",
+        output,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "execution plan is not bound to this prompt and target",
+    );
   });
 
   it("resolves execution facts before launching and persists the exact plan", () => {
@@ -1354,17 +1438,21 @@ describe("provider-native platform", () => {
     writeFileSync(prompt, "perform the approved work\n");
     writeFileSync(
       plan,
-      governedPlan({
-        provider: "codex",
-        phase: "implement",
-        localized: false,
-        reversible: false,
-        targetedProof: false,
-        ambiguous: true,
-        changedFiles: 0,
-        protectedSurfaces: [],
-        sameFailureStreak: 0,
-      }),
+      governedPlan(
+        {
+          provider: "codex",
+          phase: "implement",
+          localized: false,
+          reversible: false,
+          targetedProof: false,
+          ambiguous: true,
+          changedFiles: 0,
+          protectedSurfaces: [],
+          sameFailureStreak: 0,
+        },
+        prompt,
+        dir,
+      ),
     );
     executable(
       path.join(bin, "codex"),
