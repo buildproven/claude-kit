@@ -91,7 +91,6 @@ function fixture(label, testBody, options = {}) {
   writeFileSync(path.join(root, ".gitignore"), "node_modules/\ntest-bin/\n");
   if (options.focusedMapping) {
     mkdirSync(path.join(root, ".buildproven"), { recursive: true });
-    mkdirSync(path.join(root, "scripts"), { recursive: true });
     writeFileSync(
       path.join(root, ".buildproven", "test-impact.json"),
       JSON.stringify({
@@ -105,10 +104,6 @@ function fixture(label, testBody, options = {}) {
         ],
         audits: [],
       }),
-    );
-    writeFileSync(
-      path.join(root, "scripts", "test-impact.js"),
-      readFileSync(path.join(ROOT, "scripts", "test-impact.js")),
     );
   }
   if (options.pytestRunner) {
@@ -365,7 +360,7 @@ describe("quality-mutation-check", () => {
     expect(state.governor.gateSecondsUsed).toBeGreaterThanOrEqual(1);
   });
 
-  it("uses a committed focused mapping instead of the complete suite for each candidate", () => {
+  it("uses the shared planner with a committed focused mapping instead of the complete suite", () => {
     const { root, manifest } = fixture(
       "focused",
       "const { isAllowed } = require('./logic');\nif (!isAllowed('admin')) process.exit(1);\n",

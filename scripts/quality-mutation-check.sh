@@ -114,8 +114,8 @@ run_candidate_tests() {
   fi
   [ "$SIBLING_TEST_SELECTED" = false ] || return "$sibling_result"
   if [ -f "$SANDBOX/.buildproven/test-impact.json" ] &&
-     [ -f "$SANDBOX/scripts/test-impact.js" ]; then
-    plan="$(cd "$SANDBOX" && node scripts/test-impact.js -- "$candidate" 2>> "$log")" || plan=""
+     [ -f "$SCRIPT_DIR/test-impact.js" ]; then
+    plan="$(cd "$SANDBOX" && node "$SCRIPT_DIR/test-impact.js" -- "$candidate" 2>> "$log")" || plan=""
     mode="$(printf '%s' "$plan" | jq -r '.mode // empty' 2>/dev/null || true)"
     command_count="$(printf '%s' "$plan" | jq -r '.commands | length' 2>/dev/null || printf 0)"
     if [ "$mode" = focused ] && [ "$command_count" -gt 0 ]; then
