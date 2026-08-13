@@ -13,7 +13,7 @@ const PYTHON_TEST = /(^|\/)(?:tests?|test)\/.*\.py$|(^|\/)test_[^/]+\.py$/;
 const DOC_ONLY = /\.(?:md|txt)$/;
 const JS_TEST =
   /(^|\/)(?:tests?|spec|__tests__)(\/|$)|\.(?:test|spec)\.[cm]?[jt]sx?$/;
-const NODE_TEST = /\.(?:[cm]?js)$/;
+const NODE_TEST_ENTRY = /\.(?:test|spec)\.[cm]?js$/;
 
 function command(value, label) {
   const invalid =
@@ -207,9 +207,7 @@ function plan(changed, rawPolicy = { version: 1 }, options = {}) {
   const js = files.filter((file) => JS_SOURCE.test(file) && !covered.has(file));
   if (js.length > 0) {
     if (policy.jsRunner === "node") {
-      const directTests = js.filter(
-        (file) => JS_TEST.test(file) && NODE_TEST.test(file),
-      );
+      const directTests = js.filter((file) => NODE_TEST_ENTRY.test(file));
       commands.push(
         ...directTests.map((file) => ({ executable: "node", args: [file] })),
       );

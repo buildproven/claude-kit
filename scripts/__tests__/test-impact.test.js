@@ -30,6 +30,21 @@ describe("cross-language test impact", () => {
     });
   });
 
+  it("does not execute Node test helpers as standalone tests", () => {
+    expect(
+      plan(["tests/helpers/fixture.js"], { version: 1, jsRunner: "node" }),
+    ).toMatchObject({
+      mode: "unmapped",
+      uncovered: ["tests/helpers/fixture.js"],
+    });
+    expect(
+      plan(["tests/behavior.test.js"], { version: 1, jsRunner: "node" }),
+    ).toMatchObject({
+      mode: "focused",
+      commands: [{ executable: "node", args: ["tests/behavior.test.js"] }],
+    });
+  });
+
   it.each([
     "src/api.py",
     "package-lock.json",
