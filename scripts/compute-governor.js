@@ -73,9 +73,22 @@ function parseJson(raw, label) {
 }
 
 function routePolicyValid(routePolicy) {
+  const providerValid = (provider, mapping) => {
+    if (
+      !mapping ||
+      typeof mapping.model !== "string" ||
+      mapping.model.trim().length === 0
+    )
+      return false;
+    const efforts =
+      provider === "codex"
+        ? ["low", "medium", "high", "xhigh"]
+        : [null, "low", "medium", "high"];
+    return efforts.includes(mapping.effort);
+  };
   return Boolean(
-    routePolicy?.providers?.codex &&
-    routePolicy?.providers?.claude &&
+    providerValid("codex", routePolicy?.providers?.codex) &&
+    providerValid("claude", routePolicy?.providers?.claude) &&
     Number.isInteger(routePolicy.caps?.maxWallSeconds) &&
     routePolicy.caps.maxWallSeconds > 0 &&
     routePolicy.caps.maxWorkers === 1,

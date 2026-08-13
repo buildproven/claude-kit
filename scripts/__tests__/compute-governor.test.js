@@ -371,6 +371,29 @@ describe("compute governor", () => {
     expect(policy.routes.critical.providers.claude.model).toBe("claude-opus-5");
   });
 
+  it("rejects provider mappings that cannot pin model and effort", () => {
+    const policy = loadPolicy();
+    for (const mutate of [
+      (copy) => {
+        copy.routes.standard.providers.codex.model = "";
+      },
+      (copy) => {
+        copy.routes.standard.providers.codex.effort = null;
+      },
+      (copy) => {
+        copy.routes.standard.providers.claude.effort = "xhigh";
+      },
+    ]) {
+      const copy = structuredClone(policy);
+      mutate(copy);
+      const file = path.join(makeTempDir("governor-policy-"), "policy.json");
+      writeFileSync(file, JSON.stringify(copy));
+      expect(() => loadPolicy(file)).toThrow(
+        "compute-governor: policy missing route 'standard'",
+      );
+    }
+  });
+
   it("rejects missing or extra protected classifier policy entries", () => {
     const policy = loadPolicy();
     for (const mutate of [
