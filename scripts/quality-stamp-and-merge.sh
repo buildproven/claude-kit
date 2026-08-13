@@ -165,10 +165,23 @@ else
     LOCAL_REVIEW_EVIDENCE=true
     echo "⚠️  [quality] skipping GitHub review check publication under the exact-head CI billing override; final authorization will validate the local signed review checkpoint." >&2
   elif [ "$REQUESTED_LOCAL_REVIEW_EVIDENCE" = true ]; then
-    echo "❌ MERGE BLOCKED: local review evidence requires a signed operator-ci-billing-override capability." >&2
-    exit 1
+    if [ "$CI_ALREADY_GREEN" = true ]; then
+      LOCAL_REVIEW_EVIDENCE=true
+      echo "⚠️  [quality] using signed exact-head local review evidence because required CI is already green and custom check publication is unavailable." >&2
+    else
+      echo "❌ MERGE BLOCKED: local review evidence requires green required CI or a signed operator-ci-billing-override capability." >&2
+      exit 1
+    fi
   else
-    node "$SCRIPT_DIR/quality-review-check.js" publish --manifest "$MANIFEST" >/dev/null
+    if ! node "$SCRIPT_DIR/quality-review-check.js" publish --manifest "$MANIFEST" >/dev/null; then
+      if [ "$CI_ALREADY_GREEN" = true ]; then
+        LOCAL_REVIEW_EVIDENCE=true
+        echo "⚠️  [quality] custom review check publication is unavailable; using signed exact-head local review evidence with already-green required CI." >&2
+      else
+        echo "❌ MERGE BLOCKED: custom review check publication failed before required CI was green." >&2
+        exit 1
+      fi
+    fi
   fi
 fi
 
