@@ -578,6 +578,9 @@ function acquireOnce(manifestPath, options = {}) {
 
 function acquire(manifestPath, options = {}) {
   const waitMs = options.waitMs ?? DEFAULT_WAIT_MS;
+  if (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > DEFAULT_WAIT_MS) {
+    throw new Error(`waitMs must be an integer from 0 to ${DEFAULT_WAIT_MS}`);
+  }
   const deadline = Date.now() + waitMs;
   for (;;) {
     try {

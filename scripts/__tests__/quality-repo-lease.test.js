@@ -426,6 +426,16 @@ describe("repository merge lease", () => {
     ).toThrow(/--wait-ms must be an integer from 0 to 30000/);
   });
 
+  it.each([-1, 30001, Infinity, 1.5])(
+    "rejects an unbounded public API wait request: %s",
+    (waitMs) => {
+      const { manifestPath } = fixture(`bounded-api-wait-${String(waitMs)}`);
+      expect(() => lease.acquire(manifestPath, { waitMs })).toThrow(
+        /waitMs must be an integer from 0 to 30000/,
+      );
+    },
+  );
+
   it("fences every public manifest mutation through the pinned process token", () => {
     const { manifestPath } = fixture("mutation-fence");
     const owner = lease.acquire(manifestPath);
