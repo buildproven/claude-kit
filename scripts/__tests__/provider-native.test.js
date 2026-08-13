@@ -1779,6 +1779,85 @@ describe("provider-native platform", () => {
     });
   });
 
+  it("rolls back an applied handoff when post-apply verification infrastructure fails", () => {
+    const dir = makeTempDir("provider-native-post-apply-failure-");
+    const bin = path.join(dir, "bin");
+    const output = path.join(makeTempDir("provider-output-"), "output");
+    const prompt = path.join(dir, "prompt");
+    const facts = path.join(dir, "facts.json");
+    mkdirSync(bin);
+    writeFileSync(prompt, "implement governed work\n");
+    writeFileSync(
+      facts,
+      JSON.stringify({
+        phase: "implement",
+        localized: true,
+        reversible: true,
+        targetedProof: true,
+        changedFiles: 1,
+        protectedSurfaces: [],
+        sameFailureStreak: 0,
+      }),
+    );
+    initializeGovernedTarget(dir);
+    executable(
+      path.join(bin, "codex"),
+      [
+        'for arg in "$@"; do',
+        '  if [ "$arg" = "-C" ]; then target_next=1; continue; fi',
+        '  if [ "${target_next:-0}" = 1 ]; then provider_target="$arg"; target_next=0; fi',
+        '  if [ "$arg" = "-o" ]; then shift_next=1; continue; fi',
+        '  if [ "${shift_next:-0}" = 1 ]; then last_message="$arg"; shift_next=0; fi',
+        "done",
+        'echo "provider completed" > "$last_message"',
+        'echo "delivered" > "$provider_target/delivered.txt"',
+      ].join("\n"),
+    );
+    executable(
+      path.join(bin, "mktemp"),
+      [
+        'case "$*" in',
+        "  *provider-live.*) exit 1 ;;",
+        "esac",
+        'exec /usr/bin/mktemp "$@"',
+      ].join("\n"),
+    );
+
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--execution-facts",
+        facts,
+        "--provider",
+        "codex",
+        "--target-dir",
+        dir,
+        "--output-dir",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(78);
+    expect(result.stderr).toContain("cannot allocate handoff verification");
+    expect(existsSync(path.join(dir, "delivered.txt"))).toBe(false);
+    expect(
+      existsSync(path.join(dir, ".git", "buildproven-governed-handoff.lock")),
+    ).toBe(false);
+    expect(
+      execFileSync("git", ["status", "--porcelain"], {
+        cwd: dir,
+        encoding: "utf8",
+      }),
+    ).toBe("");
+  });
+
   it("launches a governed Claude child with explicit model and effort", () => {
     const dir = makeTempDir("provider-native-governed-claude-");
     const bin = path.join(dir, "bin");
