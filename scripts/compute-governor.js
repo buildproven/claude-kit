@@ -26,13 +26,23 @@ function policyPath() {
 
 function loadPolicy(file = policyPath()) {
   const policy = JSON.parse(fs.readFileSync(file, "utf8"));
-  if (policy.schemaVersion !== 1 || !policy.routes) {
+  if (
+    policy.schemaVersion !== 1 ||
+    typeof policy.policyVersion !== "string" ||
+    policy.policyVersion.length === 0 ||
+    !policy.routes ||
+    !Array.isArray(policy.protectedSurfaces)
+  ) {
     throw new Error("compute-governor: unsupported policy schema version");
   }
   for (const route of ROUTES) {
+    const routePolicy = policy.routes[route];
     if (
-      !policy.routes[route]?.providers?.codex ||
-      !policy.routes[route]?.providers?.claude
+      !routePolicy?.providers?.codex ||
+      !routePolicy?.providers?.claude ||
+      !Number.isInteger(routePolicy.caps?.maxWallSeconds) ||
+      routePolicy.caps.maxWallSeconds <= 0 ||
+      routePolicy.caps?.maxWorkers !== 1
     ) {
       throw new Error(`compute-governor: policy missing route '${route}'`);
     }
@@ -138,6 +148,7 @@ function resolve(facts, policy = loadPolicy()) {
   const mapping = policy.routes[route].providers[facts.provider];
   return {
     schemaVersion: 1,
+    policyVersion: policy.policyVersion,
     route,
     provider: facts.provider,
     model: mapping.model,
@@ -160,16 +171,34 @@ function validatePlan(plan, policy = loadPolicy()) {
     throw new Error("compute-governor: invalid plan provider");
   }
   const mapping = policy.routes[plan.route].providers[plan.provider];
-  if (plan.model !== mapping.model || plan.effort !== mapping.effort) {
+  if (
+    plan.policyVersion !== policy.policyVersion ||
+    plan.model !== mapping.model ||
+    plan.effort !== mapping.effort
+  ) {
     throw new Error("compute-governor: plan model/effort violates policy");
   }
   if (
-    !plan.caps ||
-    !Number.isInteger(plan.caps.maxTurns) ||
-    !Number.isInteger(plan.caps.maxWallSeconds) ||
-    !Number.isInteger(plan.caps.maxWorkers)
+    !ROUTES.includes(plan.safetyFloor) ||
+    rank(plan.route) < rank(plan.safetyFloor)
   ) {
-    throw new Error("compute-governor: invalid plan caps");
+    throw new Error("compute-governor: plan route is below its safety floor");
+  }
+  const expectedCaps = policy.routes[plan.route].caps;
+  if (
+    plan.contextClass !== "fresh-bounded" ||
+    JSON.stringify(plan.caps) !== JSON.stringify(expectedCaps) ||
+    !Array.isArray(plan.reasons) ||
+    plan.reasons.length === 0 ||
+    !plan.reasons.every(
+      (reason) => typeof reason === "string" && reason.length > 0,
+    ) ||
+    plan.promotion !==
+      (plan.route.startsWith("economy")
+        ? "candidate-requires-calibration"
+        : "not-applicable")
+  ) {
+    throw new Error("compute-governor: invalid execution plan contract");
   }
   return plan;
 }
@@ -179,12 +208,34 @@ function validateRunRecord(record) {
     !record ||
     record.schemaVersion !== 1 ||
     !record.plan ||
-    !record.outcome
+    !record.outcome ||
+    !record.requested ||
+    !record.effective ||
+    !record.timing
   ) {
     throw new Error("compute-governor: invalid run record");
   }
   assertNoSensitiveRecordFields(record);
   validatePlan(record.plan);
+  const identity = ["provider", "model", "effort"];
+  if (
+    identity.some((key) => record.requested[key] !== record.plan[key]) ||
+    identity.some((key) => record.effective[key] !== record.plan[key]) ||
+    !Number.isInteger(record.attempts) ||
+    record.attempts < 1 ||
+    !Number.isInteger(record.timing.startedAtEpochMs) ||
+    !Number.isInteger(record.timing.finishedAtEpochMs) ||
+    record.timing.finishedAtEpochMs < record.timing.startedAtEpochMs ||
+    !["passed", "failed", "timeout", "unavailable", "exhausted"].includes(
+      record.outcome.status,
+    ) ||
+    !(
+      record.outcome.providerFailureCategory === null ||
+      typeof record.outcome.providerFailureCategory === "string"
+    )
+  ) {
+    throw new Error("compute-governor: invalid run record contract");
+  }
   if (record.usage !== null && typeof record.usage !== "object") {
     throw new Error("compute-governor: usage must be null or an object");
   }
@@ -213,6 +264,24 @@ function calibrationDecision(report) {
       "compute-governor: calibration requires equal non-empty baseline and candidate arrays",
     );
   }
+  const validRun = (run) =>
+    run &&
+    typeof run.accepted === "boolean" &&
+    typeof run.gatesPassed === "boolean" &&
+    Number.isInteger(run.attempts) &&
+    run.attempts > 0 &&
+    Number.isFinite(run.elapsedMs) &&
+    run.elapsedMs >= 0;
+  if (
+    !report.baseline.every(validRun) ||
+    !report.candidate.every(validRun) ||
+    (report.maxAcceptanceRateDrop !== undefined &&
+      (!Number.isFinite(report.maxAcceptanceRateDrop) ||
+        report.maxAcceptanceRateDrop < 0 ||
+        report.maxAcceptanceRateDrop > 1))
+  ) {
+    throw new Error("compute-governor: calibration run evidence is incomplete");
+  }
   const allowedDrop = Number.isFinite(report.maxAcceptanceRateDrop)
     ? report.maxAcceptanceRateDrop
     : 0.05;
@@ -226,6 +295,8 @@ function calibrationDecision(report) {
           sum + (Number.isFinite(run.attempts) ? run.attempts : Infinity),
         0,
       ) / runs.length,
+    averageElapsedMs:
+      runs.reduce((sum, run) => sum + run.elapsedMs, 0) / runs.length,
   });
   const baseline = metrics(report.baseline);
   const candidate = metrics(report.candidate);
