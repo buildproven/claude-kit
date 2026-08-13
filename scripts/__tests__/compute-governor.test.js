@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
@@ -73,6 +74,36 @@ describe("compute governor", () => {
     expect(plan.route).toBe("critical");
     expect(plan.safetyFloor).toBe("critical");
   });
+
+  it.each([
+    ["reset the user's password", "auth"],
+    ["repair the sign-in flow", "auth"],
+    ["change access control for editors", "authorization"],
+  ])(
+    "classifies omitted protected surfaces in %s",
+    (promptText, expectedSurface) => {
+      const target = makeTempDir("governor-protected-prompt-");
+      const prompt = path.join(target, "prompt.txt");
+      writeFileSync(prompt, `${promptText}\n`);
+      execFileSync("git", ["init", "-q"], { cwd: target });
+      execFileSync("git", ["config", "user.email", "tests@buildproven.local"], {
+        cwd: target,
+      });
+      execFileSync("git", ["config", "user.name", "BuildProven Tests"], {
+        cwd: target,
+      });
+      execFileSync("git", ["add", "."], { cwd: target });
+      execFileSync("git", ["commit", "-qm", "fixture"], { cwd: target });
+
+      const plan = resolveExecution(base, prompt, target);
+
+      expect(plan.route).toBe("critical");
+      expect(plan.safetyFloor).toBe("critical");
+      expect(plan.executionBinding.classifiedProtectedSurfaces).toContain(
+        expectedSurface,
+      );
+    },
+  );
 
   it("rejects an unknown protected-surface spelling instead of lowering it", () => {
     expect(() =>
