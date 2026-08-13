@@ -78,6 +78,105 @@ describe("cross-language test impact", () => {
     });
   });
 
+  it("does not rerun a changed test already named by an explicit mapping", () => {
+    const policy = {
+      version: 1,
+      mappings: [
+        {
+          paths: ["scripts/tool.js"],
+          commands: [
+            {
+              executable: "npx",
+              args: ["vitest", "run", "scripts/__tests__/tool.test.js"],
+            },
+          ],
+        },
+      ],
+    };
+    expect(
+      plan(
+        ["scripts/tool.js", "scripts/__tests__/tool.test.js", "src/other.js"],
+        policy,
+      ),
+    ).toMatchObject({
+      mode: "focused",
+      commands: [
+        {
+          executable: "npx",
+          args: ["vitest", "run", "scripts/__tests__/tool.test.js"],
+        },
+        {
+          executable: "npx",
+          args: ["vitest", "related", "--run", "src/other.js"],
+        },
+      ],
+    });
+  });
+
+  it("does not treat an option value as an executed test target", () => {
+    const test = "scripts/__tests__/tool.test.js";
+    const result = plan(["scripts/tool.js", test], {
+      version: 1,
+      mappings: [
+        {
+          paths: ["scripts/tool.js"],
+          commands: [
+            {
+              executable: "npx",
+              args: ["vitest", "run", "--config", test],
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.commands).toContainEqual({
+      executable: "npx",
+      args: ["vitest", "related", "--run", test],
+    });
+  });
+
+  it("keeps related coverage when a positional Jest target has runner options", () => {
+    const test = "tests/tool.test.js";
+    const result = plan(["src/tool.js", test], {
+      version: 1,
+      jsRunner: "jest",
+      mappings: [
+        {
+          paths: ["src/tool.js"],
+          commands: [
+            { executable: "npx", args: ["jest", test, "--runInBand"] },
+          ],
+        },
+      ],
+    });
+    expect(result.commands).toEqual([
+      { executable: "npx", args: ["jest", test, "--runInBand"] },
+      { executable: "npx", args: ["jest", "--findRelatedTests", test] },
+    ]);
+  });
+
+  it("keeps related coverage when a trailing option can exclude the target", () => {
+    const test = "scripts/__tests__/tool.test.js";
+    const result = plan(["scripts/tool.js", test], {
+      version: 1,
+      mappings: [
+        {
+          paths: ["scripts/tool.js"],
+          commands: [
+            {
+              executable: "npx",
+              args: ["vitest", "run", test, "--exclude", test],
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.commands).toContainEqual({
+      executable: "npx",
+      args: ["vitest", "related", "--run", test],
+    });
+  });
+
   it("keeps a mixed diff blocked when one executable path is unmapped", () => {
     expect(plan(["README.md", "src/api.py", "src/view.ts"])).toMatchObject({
       mode: "unmapped",

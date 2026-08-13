@@ -159,7 +159,9 @@ function buildReport(loaded, { ciEvidence, dispositionEvidence, generatedAt }) {
   ).length;
   const fullSuite = duplicateFullSuite(records);
   const telemetryComplete =
-    loaded.malformedLines === 0 && loaded.unsupportedRecords === 0;
+    records.length > 0 &&
+    loaded.malformedLines === 0 &&
+    loaded.unsupportedRecords === 0;
   return {
     schemaVersion: 1,
     generatedAt,
@@ -214,7 +216,10 @@ function buildReport(loaded, { ciEvidence, dispositionEvidence, generatedAt }) {
       ciMinutes: ciEvidence.complete,
       findingDispositions: dispositionEvidence.complete,
       reasons: [
-        !telemetryComplete ? "telemetry-malformed-or-unsupported" : null,
+        records.length === 0 ? "no-telemetry-records" : null,
+        loaded.malformedLines > 0 || loaded.unsupportedRecords > 0
+          ? "telemetry-malformed-or-unsupported"
+          : null,
         durations.length !== records.length
           ? "historical-records-missing-duration"
           : null,

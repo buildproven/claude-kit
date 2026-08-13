@@ -94,6 +94,7 @@ run_conventional_sibling_test() {
     "$directory/$stem.test.js" \
     "$directory/$stem.test.ts"; do
     [ -f "$SANDBOX/$sibling" ] || continue
+    SIBLING_TEST_SELECTED=true
     bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
       npx "$runner" run --bail=1 "$sibling" >> "$log" 2>&1
     return $?
@@ -105,12 +106,13 @@ run_candidate_tests() {
   local candidate="$1" log="$2" timeout_seconds="$3" plan mode command_count index executable
   local -a args=()
   local sibling_result
+  SIBLING_TEST_SELECTED=false
   if run_conventional_sibling_test "$candidate" "$log" "$timeout_seconds"; then
-    return 0
+    sibling_result=0
   else
     sibling_result=$?
   fi
-  [ "$sibling_result" -eq 2 ] || return "$sibling_result"
+  [ "$SIBLING_TEST_SELECTED" = false ] || return "$sibling_result"
   if [ -f "$SANDBOX/.buildproven/test-impact.json" ] &&
      [ -f "$SANDBOX/scripts/test-impact.js" ]; then
     plan="$(cd "$SANDBOX" && node scripts/test-impact.js -- "$candidate" 2>> "$log")" || plan=""

@@ -202,7 +202,8 @@ function fixture(label, testBody, options = {}) {
       path.join(bin, "vitest"),
       `#!/usr/bin/env bash
 printf "%s\\n" "$*"
-${options.relatedNoTests ? 'case " $* " in *" related "*) echo "No test files found"; exit 0 ;; esac\n' : ""}node ${testPath}
+${options.relatedNoTests ? 'case " $* " in *" related "*) echo "No test files found"; exit 0 ;; esac\n' : ""}
+${options.siblingExitTwo ? `case " $* " in *" ${testPath} "*) exit 2 ;; esac\n` : ""}node ${testPath}
 `,
       { mode: 0o755 },
     );
@@ -391,6 +392,22 @@ describe("quality-mutation-check", () => {
     );
     expect(runMutation(root, manifest)).toMatch(
       /mutation evidence: revert-diff/,
+    );
+  });
+
+  it("propagates status 2 from a selected sibling instead of treating it as absent", () => {
+    const { root, manifest } = fixture(
+      "sibling-status-two",
+      "const { isAllowed } = require('../logic');\nif (!isAllowed('admin')) process.exit(1);\n",
+      {
+        sourcePath: "scripts/logic.js",
+        testPath: "scripts/__tests__/logic.test.js",
+        vitestRunner: true,
+        siblingExitTwo: true,
+      },
+    );
+    expect(() => runMutation(root, manifest)).toThrow(
+      /serialized baseline test failed/,
     );
   });
 

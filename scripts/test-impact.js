@@ -11,6 +11,8 @@ const JS_SOURCE = /\.(?:[cm]?js|jsx|ts|tsx)$/;
 const PYTHON = /\.py$/;
 const PYTHON_TEST = /(^|\/)(?:tests?|test)\/.*\.py$|(^|\/)test_[^/]+\.py$/;
 const DOC_ONLY = /\.(?:md|txt)$/;
+const JS_TEST =
+  /(^|\/)(?:tests?|spec|__tests__)(\/|$)|\.(?:test|spec)\.[cm]?[jt]sx?$/;
 
 function command(value, label) {
   const invalid =
@@ -98,6 +100,21 @@ function uniqueCommands(commands) {
   });
 }
 
+function explicitTestTargets(selected) {
+  if (selected.executable !== "npx") return [];
+  const [runner, verb, ...rest] = selected.args;
+  let candidates;
+  if (runner === "vitest" && verb === "run") candidates = rest;
+  else if (runner === "jest" && !verb?.startsWith("-"))
+    candidates = [verb, ...rest];
+  else return [];
+  // Any runner option can narrow, exclude, shard, or name-filter the selected
+  // tests. Only an option-free exact target list proves every positional test
+  // was executed and is therefore safe to remove from related-test coverage.
+  if (candidates.some((argument) => argument.startsWith("-"))) return [];
+  return candidates.filter((argument) => JS_TEST.test(argument));
+}
+
 function relatedCommand(runner, files) {
   if (runner === "vitest")
     return {
@@ -142,6 +159,17 @@ function plan(changed, rawPolicy = { version: 1 }) {
     if (matched.length === 0) continue;
     matched.forEach((file) => covered.add(file));
     commands.push(...rule.commands);
+  }
+
+  // A mapping often names its exact behavioral test as a positional runner
+  // target. When that test is changed in the same diff, it must not also be
+  // fed to the dependency-aware runner. Arbitrary argv mentions and option
+  // values are not execution proof, so this parser is deliberately narrow.
+  for (const selected of commands) {
+    const targets = explicitTestTargets(selected);
+    for (const file of files) {
+      if (targets.includes(file)) covered.add(file);
+    }
   }
 
   const js = files.filter((file) => JS_SOURCE.test(file) && !covered.has(file));
@@ -264,4 +292,5 @@ module.exports = {
   plan,
   policyDigest,
   validatePolicy,
+  explicitTestTargets,
 };
