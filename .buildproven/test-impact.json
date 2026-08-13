@@ -3,6 +3,24 @@
   "jsRunner": "vitest",
   "mappings": [
     {
+      "paths": [
+        "config/compute-governor-policy.json",
+        "scripts/compute-governor.js",
+        "scripts/provider-run.sh"
+      ],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/compute-governor.test.js",
+            "scripts/__tests__/provider-native.test.js"
+          ]
+        }
+      ]
+    },
+    {
       "paths": ["README.md", "commands/**/*.md"],
       "commands": [
         {

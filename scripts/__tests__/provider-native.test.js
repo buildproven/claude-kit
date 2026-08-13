@@ -1201,6 +1201,77 @@ describe("provider-native platform", () => {
     expect(readFileSync(observed, "utf8").trim()).toBe("22");
   });
 
+  it("launches a governed Codex child with the plan's explicit model and effort", () => {
+    const dir = makeTempDir("provider-native-governed-codex-");
+    const bin = path.join(dir, "bin");
+    const output = path.join(dir, "output");
+    const prompt = path.join(dir, "prompt");
+    const plan = path.join(dir, "plan.json");
+    const calls = path.join(dir, "codex.calls");
+    mkdirSync(bin);
+    writeFileSync(prompt, "implement this narrow behavior\n");
+    writeFileSync(
+      plan,
+      JSON.stringify({
+        schemaVersion: 1,
+        route: "economy-builder",
+        provider: "codex",
+        model: "gpt-5.6-luna",
+        effort: "high",
+        contextClass: "fresh-bounded",
+        caps: { maxTurns: 12, maxWallSeconds: 900, maxWorkers: 1 },
+        safetyFloor: "economy-micro",
+        reasons: ["fixture"],
+        promotion: "candidate-requires-calibration",
+      }),
+    );
+    executable(
+      path.join(bin, "codex"),
+      [
+        `printf '%s\\n' "$*" > '${calls}'`,
+        'for arg in "$@"; do',
+        '  if [ "$arg" = "-o" ]; then shift_next=1; continue; fi',
+        '  if [ "${shift_next:-0}" = 1 ]; then last_message="$arg"; shift_next=0; fi',
+        "done",
+        'echo "governed codex completed" > "$last_message"',
+        "exit 0",
+      ].join("\n"),
+    );
+
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--target-dir",
+        dir,
+        "--execution-plan",
+        plan,
+        "--output-dir",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(calls, "utf8")).toContain("--model gpt-5.6-luna");
+    expect(readFileSync(calls, "utf8")).toContain(
+      'model_reasoning_effort="high"',
+    );
+    const record = JSON.parse(
+      readFileSync(path.join(output, "run-record.json"), "utf8"),
+    );
+    expect(record).toMatchObject({
+      effective: { provider: "codex", model: "gpt-5.6-luna", effort: "high" },
+      outcome: { status: "passed" },
+      usage: null,
+    });
+  });
+
   it("keeps the public command surface within its budget", () => {
     const report = JSON.parse(
       execFileSync("node", [SURFACE, "--json"], {
