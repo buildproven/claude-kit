@@ -8,6 +8,7 @@ const {
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const ROOT = path.resolve(__dirname, "..", "..");
 
 describe("cross-language test impact", () => {
   it("uses Vitest dependency-aware related tests for JS and TS", () => {
@@ -120,6 +121,24 @@ describe("cross-language test impact", () => {
       reason: "dependency graph changed",
       files: ["package-lock.json"],
       commands: [{ executable: "npm", args: ["test"] }],
+    });
+  });
+
+  it("maps the protected-push guard to its behavioral contract", () => {
+    expect(
+      plan(["scripts/block-push-main.sh"], loadPolicy(ROOT)),
+    ).toMatchObject({
+      mode: "focused",
+      commands: [
+        {
+          executable: "npx",
+          args: [
+            "vitest",
+            "run",
+            "scripts/__tests__/branch-guard-hooks.test.js",
+          ],
+        },
+      ],
     });
   });
 
