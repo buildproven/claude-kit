@@ -88,6 +88,15 @@ describe("compute governor", () => {
     );
   });
 
+  it("rejects string booleans that could lower a protected floor", () => {
+    expect(() => resolve({ ...base, publicContract: "true" })).toThrow(
+      "numeric or route facts are invalid",
+    );
+    expect(() => resolve({ ...base, crossRepository: "false" })).toThrow(
+      "numeric or route facts are invalid",
+    );
+  });
+
   it("rejects a low-cost plan whose bound facts require a protected floor", () => {
     const economy = resolve(base);
     expect(() =>
@@ -245,6 +254,41 @@ describe("compute governor", () => {
     expect(() => validateRunRecord(record)).toThrow(
       "usage must remain null until a redacted schema is defined",
     );
+  });
+
+  it("rejects unknown run-record metadata at every persisted object boundary", () => {
+    const plan = resolve(base);
+    const record = {
+      schemaVersion: 1,
+      plan,
+      requested: {
+        provider: plan.provider,
+        model: plan.model,
+        effort: plan.effort,
+      },
+      effective: {
+        provider: plan.provider,
+        model: plan.model,
+        effort: plan.effort,
+      },
+      attempts: 1,
+      timing: { startedAtEpochMs: 1, finishedAtEpochMs: 2 },
+      outcome: {
+        status: "passed",
+        exitCode: 0,
+        providerFailureCategory: null,
+      },
+      usage: null,
+    };
+    expect(() => validateRunRecord({ ...record, transcript: "raw" })).toThrow(
+      "run record schema mismatch",
+    );
+    expect(() =>
+      validateRunRecord({
+        ...record,
+        outcome: { ...record.outcome, detail: "raw provider response" },
+      }),
+    ).toThrow("outcome schema mismatch");
   });
 
   it("loads a complete versioned policy", () => {

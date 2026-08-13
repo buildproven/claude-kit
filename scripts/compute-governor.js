@@ -36,6 +36,15 @@ const FACT_KEYS = new Set([
   "crossRepository",
   "operatorRoute",
 ]);
+const BOOLEAN_FACT_KEYS = new Set([
+  "readOnly",
+  "localized",
+  "reversible",
+  "targetedProof",
+  "ambiguous",
+  "publicContract",
+  "crossRepository",
+]);
 
 function policyPath() {
   return path.join(__dirname, "..", "config", "compute-governor-policy.json");
@@ -179,7 +188,15 @@ function scalarFactsValid(facts) {
     (Number.isInteger(facts.sameFailureStreak) && facts.sameFailureStreak >= 0);
   const operatorRouteValid =
     facts.operatorRoute === undefined || ROUTES.includes(facts.operatorRoute);
-  return changedFilesValid && failureStreakValid && operatorRouteValid;
+  const booleansValid = [...BOOLEAN_FACT_KEYS].every(
+    (key) => facts[key] === undefined || typeof facts[key] === "boolean",
+  );
+  return (
+    changedFilesValid &&
+    failureStreakValid &&
+    operatorRouteValid &&
+    booleansValid
+  );
 }
 
 function assertFacts(facts, policy) {
@@ -455,6 +472,40 @@ function validateRunRecord(record) {
     "compute-governor: invalid run record",
   );
   assertNoSensitiveRecordFields(record);
+  assertExactKeys(
+    record,
+    [
+      "schemaVersion",
+      "plan",
+      "requested",
+      "effective",
+      "attempts",
+      "timing",
+      "outcome",
+      "usage",
+    ],
+    "run record",
+  );
+  assertExactKeys(
+    record.requested,
+    ["provider", "model", "effort"],
+    "requested identity",
+  );
+  assertExactKeys(
+    record.effective,
+    ["provider", "model", "effort"],
+    "effective identity",
+  );
+  assertExactKeys(
+    record.timing,
+    ["startedAtEpochMs", "finishedAtEpochMs"],
+    "timing",
+  );
+  assertExactKeys(
+    record.outcome,
+    ["status", "exitCode", "providerFailureCategory"],
+    "outcome",
+  );
   validatePlan(record.plan);
   requireCondition(
     runRecordIdentityValid(record) &&
@@ -468,6 +519,16 @@ function validateRunRecord(record) {
     );
   }
   return record;
+}
+
+function assertExactKeys(value, allowed, label) {
+  const expected = new Set(allowed);
+  const unknown = Object.keys(value).filter((key) => !expected.has(key));
+  const missing = allowed.filter((key) => !(key in value));
+  requireCondition(
+    unknown.length === 0 && missing.length === 0,
+    `compute-governor: ${label} schema mismatch`,
+  );
 }
 
 function assertNoSensitiveRecordFields(value) {
