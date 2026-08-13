@@ -76,10 +76,41 @@ while IFS= read -r ARGUMENT; do
   TEST_ARGS+=("$ARGUMENT")
 done < <(printf '%s' "$TEST_PLAN" | jq -r '.args[]')
 MUTATION_TEST_ARGS=("${TEST_ARGS[@]}")
+REPO_TEST_SCRIPT="$(git -C "$ROOT" show "$HEAD:package.json" 2>/dev/null | jq -r '.scripts.test // ""' || true)"
+
+run_conventional_sibling_test() {
+  local candidate="$1" log="$2" timeout_seconds="$3" directory stem sibling runner
+  case "$REPO_TEST_SCRIPT" in
+    vitest\ *|npx\ vitest\ *) runner=vitest ;;
+    jest\ *|npx\ jest\ *) runner=jest ;;
+    *) return 2 ;;
+  esac
+  directory="$(dirname "$candidate")"
+  stem="$(basename "$candidate")"
+  stem="${stem%.*}"
+  for sibling in \
+    "$directory/__tests__/$stem.test.js" \
+    "$directory/__tests__/$stem.test.ts" \
+    "$directory/$stem.test.js" \
+    "$directory/$stem.test.ts"; do
+    [ -f "$SANDBOX/$sibling" ] || continue
+    bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
+      npx "$runner" run "$sibling" --bail=1 >> "$log" 2>&1
+    return $?
+  done
+  return 2
+}
 
 run_candidate_tests() {
   local candidate="$1" log="$2" timeout_seconds="$3" plan mode command_count index executable
   local -a args=()
+  local sibling_result
+  if run_conventional_sibling_test "$candidate" "$log" "$timeout_seconds"; then
+    return 0
+  else
+    sibling_result=$?
+  fi
+  [ "$sibling_result" -eq 2 ] || return "$sibling_result"
   if [ -f "$SANDBOX/.buildproven/test-impact.json" ] &&
      [ -f "$SANDBOX/scripts/test-impact.js" ]; then
     plan="$(cd "$SANDBOX" && node scripts/test-impact.js -- "$candidate" 2>> "$log")" || plan=""
@@ -110,9 +141,7 @@ run_candidate_tests() {
 if [ "$TEST_EXECUTABLE" = npm ] &&
    [ "${TEST_ARGS[0]:-}" = run ] &&
    [ "${TEST_ARGS[1]:-}" = test ]; then
-  TEST_SCRIPT="$(git -C "$ROOT" show "$HEAD:package.json" |
-    jq -r '.scripts.test // ""')"
-  case "$TEST_SCRIPT" in
+  case "$REPO_TEST_SCRIPT" in
     vitest\ *|jest\ *|npx\ vitest\ *|npx\ jest\ *)
       MUTATION_TEST_ARGS+=(-- --bail=1)
       # The mutation-check contract tests deliberately launch this script in
