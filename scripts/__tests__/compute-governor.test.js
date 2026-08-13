@@ -128,6 +128,14 @@ describe("compute governor", () => {
     ).toThrow("execution plan is not bound to its facts");
   });
 
+  it("accepts an equivalent plan regardless of JSON object key order", () => {
+    const plan = resolve(base);
+    const reordered = Object.fromEntries(Object.entries(plan).reverse());
+    reordered.facts = Object.fromEntries(Object.entries(plan.facts).reverse());
+    reordered.caps = Object.fromEntries(Object.entries(plan.caps).reverse());
+    expect(validatePlan(reordered)).toEqual(reordered);
+  });
+
   it("rejects a run record that contains prompt or credential material", () => {
     const plan = resolve(base);
     expect(() =>

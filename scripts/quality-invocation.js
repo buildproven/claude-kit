@@ -1088,11 +1088,16 @@ function discoverVerifyAppGate(options, nativeGates) {
   };
 }
 
-function unionRequiredGates(existing, discovered) {
+function unionRequiredGates(existing, discovered, replaceNames = new Set()) {
   const required = [...existing];
   for (const gate of discovered) {
-    if (!required.some((current) => current.name === gate.name)) {
+    const currentIndex = required.findIndex(
+      (current) => current.name === gate.name,
+    );
+    if (currentIndex === -1) {
       required.push(gate);
+    } else if (replaceNames.has(gate.name)) {
+      required[currentIndex] = gate;
     }
   }
   return required;
@@ -6041,6 +6046,7 @@ function runAdvance(manifestArg, manifest, rawArgs) {
     reconcileAbandonedExecution(locked);
     validateIdentity(locked, manifest.repo.realpath, { requireHead: false });
     bindPrRepositoryIdentity(locked, options);
+    const priorHead = locked.revisions.currentHead;
     const nextHead = git(locked.repo.realpath, ["rev-parse", "HEAD"]);
     if (options["allow-exhausted-review"]) {
       validateDescendantAdvanceAuthorization(
@@ -6058,11 +6064,27 @@ function runAdvance(manifestArg, manifest, rawArgs) {
         "verify-app": locked.options?.verifyApp === true,
       },
       locked.revisions.currentHead,
-      effectiveBaseSha(locked),
+      priorHead,
     );
+    const replaceNames = new Set();
+    const priorTestPassed = locked.gates.some(
+      (gate) =>
+        gate.name === "test" &&
+        gate.head === priorHead &&
+        gate.status === "success",
+    );
+    if (
+      nextHead !== priorHead &&
+      priorTestPassed &&
+      !changedFiles(locked.repo.realpath, priorHead, nextHead).includes(
+        ".buildproven/test-impact.json",
+      )
+    ) {
+      replaceNames.add("test");
+    }
     locked.requiredGates = locked[NEEDS_REQUIRED_GATES_MIGRATION]
       ? discovered
-      : unionRequiredGates(locked.requiredGates, discovered);
+      : unionRequiredGates(locked.requiredGates, discovered, replaceNames);
     locked.requiredGatesPolicyVersion = REQUIRED_GATES_POLICY_VERSION;
     locked[NEEDS_REQUIRED_GATES_MIGRATION] = false;
     locked.governor.lastActivityAt = new Date().toISOString();
@@ -6261,6 +6283,7 @@ module.exports = {
   writeArtifactInventory,
   validateIdentity,
   validateDescendantAdvanceAuthorization,
+  unionRequiredGates,
   withManifestLock,
   withManifestLockRaw,
 };

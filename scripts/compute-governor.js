@@ -152,6 +152,18 @@ function canonicalFacts(facts) {
   );
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicalJson(value[key])]),
+    );
+  }
+  return value;
+}
+
 function safetyFloor(facts, policy) {
   const surfaces = Array.isArray(facts.protectedSurfaces)
     ? facts.protectedSurfaces
@@ -259,7 +271,8 @@ function planContractValid(plan, policy) {
   return (
     plan.contextClass === "fresh-bounded" &&
     plan.facts &&
-    JSON.stringify(plan.caps) === JSON.stringify(expectedCaps) &&
+    JSON.stringify(canonicalJson(plan.caps)) ===
+      JSON.stringify(canonicalJson(expectedCaps)) &&
     Array.isArray(plan.reasons) &&
     plan.reasons.length > 0 &&
     plan.reasons.every(
@@ -293,7 +306,8 @@ function validatePlan(plan, policy = loadPolicy()) {
   );
   const expected = resolve(plan.facts, policy);
   requireCondition(
-    JSON.stringify(plan) === JSON.stringify(expected),
+    JSON.stringify(canonicalJson(plan)) ===
+      JSON.stringify(canonicalJson(expected)),
     "compute-governor: execution plan is not bound to its facts",
   );
   return plan;
