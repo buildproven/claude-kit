@@ -6057,6 +6057,9 @@ function runAdvance(manifestArg, manifest, rawArgs) {
     }
     advanceHead(locked, manifest.repo.realpath, { acceptedConditions });
     validateIdentity(locked, manifest.repo.realpath);
+    const gateBase = isAncestorOf(locked.repo.realpath, priorHead, nextHead)
+      ? priorHead
+      : effectiveBaseSha(locked);
     const discovered = discoverRequiredGates(
       locked.repo.realpath,
       {
@@ -6064,7 +6067,7 @@ function runAdvance(manifestArg, manifest, rawArgs) {
         "verify-app": locked.options?.verifyApp === true,
       },
       locked.revisions.currentHead,
-      priorHead,
+      gateBase,
     );
     const replaceNames = new Set();
     const priorTestPassed = locked.gates.some(
@@ -6076,7 +6079,7 @@ function runAdvance(manifestArg, manifest, rawArgs) {
     if (
       nextHead !== priorHead &&
       priorTestPassed &&
-      !changedFiles(locked.repo.realpath, priorHead, nextHead).includes(
+      !changedFiles(locked.repo.realpath, gateBase, nextHead).includes(
         ".buildproven/test-impact.json",
       )
     ) {
