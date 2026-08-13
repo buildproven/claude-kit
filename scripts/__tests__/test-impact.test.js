@@ -135,7 +135,7 @@ describe("cross-language test impact", () => {
     });
   });
 
-  it("recognizes a positional Jest test target", () => {
+  it("keeps related coverage when a positional Jest target has runner options", () => {
     const test = "tests/tool.test.js";
     const result = plan(["src/tool.js", test], {
       version: 1,
@@ -151,7 +151,30 @@ describe("cross-language test impact", () => {
     });
     expect(result.commands).toEqual([
       { executable: "npx", args: ["jest", test, "--runInBand"] },
+      { executable: "npx", args: ["jest", "--findRelatedTests", test] },
     ]);
+  });
+
+  it("keeps related coverage when a trailing option can exclude the target", () => {
+    const test = "scripts/__tests__/tool.test.js";
+    const result = plan(["scripts/tool.js", test], {
+      version: 1,
+      mappings: [
+        {
+          paths: ["scripts/tool.js"],
+          commands: [
+            {
+              executable: "npx",
+              args: ["vitest", "run", test, "--exclude", test],
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.commands).toContainEqual({
+      executable: "npx",
+      args: ["vitest", "related", "--run", test],
+    });
   });
 
   it("keeps a mixed diff blocked when one executable path is unmapped", () => {

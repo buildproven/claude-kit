@@ -108,12 +108,11 @@ function explicitTestTargets(selected) {
   else if (runner === "jest" && !verb?.startsWith("-"))
     candidates = [verb, ...rest];
   else return [];
-  const targets = [];
-  for (const argument of candidates) {
-    if (argument.startsWith("-")) break;
-    if (JS_TEST.test(argument)) targets.push(argument);
-  }
-  return targets;
+  // Any runner option can narrow, exclude, shard, or name-filter the selected
+  // tests. Only an option-free exact target list proves every positional test
+  // was executed and is therefore safe to remove from related-test coverage.
+  if (candidates.some((argument) => argument.startsWith("-"))) return [];
+  return candidates.filter((argument) => JS_TEST.test(argument));
 }
 
 function relatedCommand(runner, files) {
