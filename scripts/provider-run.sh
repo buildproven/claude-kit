@@ -22,6 +22,7 @@ PROMPT_SNAPSHOT=""
 GOVERNED_TARGET_SNAPSHOT=""
 ORIGINAL_TARGET_DIR=""
 GOVERNED_PATCH=""
+GOVERNED_HANDOFF_LOCK=""
 
 cleanup_governed_inputs() {
   if [ -n "$GOVERNED_TARGET_SNAPSHOT" ] && [ -n "$ORIGINAL_TARGET_DIR" ]; then
@@ -29,6 +30,10 @@ cleanup_governed_inputs() {
   fi
   [ -z "$PROMPT_SNAPSHOT" ] || rm -f "$PROMPT_SNAPSHOT"
   [ -z "$GOVERNED_PATCH" ] || rm -f "$GOVERNED_PATCH"
+  if [ -n "$GOVERNED_HANDOFF_LOCK" ]; then
+    rm -f "$GOVERNED_HANDOFF_LOCK/owner"
+    rmdir "$GOVERNED_HANDOFF_LOCK" 2>/dev/null || true
+  fi
 }
 trap cleanup_governed_inputs EXIT
 
@@ -267,6 +272,13 @@ RC=$?
 set -e
 if [ "$RC" -eq 0 ]; then
   if [ -n "$EXECUTION_PLAN" ]; then
+    GOVERNED_GIT_COMMON_DIR=$(git -C "$ORIGINAL_TARGET_DIR" rev-parse --path-format=absolute --git-common-dir)
+    GOVERNED_HANDOFF_LOCK="$GOVERNED_GIT_COMMON_DIR/buildproven-governed-handoff.lock"
+    mkdir "$GOVERNED_HANDOFF_LOCK" 2>/dev/null || {
+      echo "provider-run: another governed target handoff is active" >&2
+      exit 78
+    }
+    printf '%s\n' "pid=$$ head=$PLAN_TARGET_HEAD" > "$GOVERNED_HANDOFF_LOCK/owner"
     [ "$(git -C "$ORIGINAL_TARGET_DIR" rev-parse HEAD)" = "$PLAN_TARGET_HEAD" ] &&
       [ -z "$(git -C "$ORIGINAL_TARGET_DIR" status --porcelain=v1 --untracked-files=all)" ] || {
         echo "provider-run: original target changed during governed execution; refusing to apply provider changes" >&2
@@ -285,6 +297,9 @@ if [ "$RC" -eq 0 ]; then
       }
       git -C "$ORIGINAL_TARGET_DIR" reset --mixed "$PLAN_TARGET_HEAD" --
     fi
+    rm -f "$GOVERNED_HANDOFF_LOCK/owner"
+    rmdir "$GOVERNED_HANDOFF_LOCK"
+    GOVERNED_HANDOFF_LOCK=""
   fi
   if ! write_governed_record passed "$PROVIDER" 0 ""; then
     echo "provider-run: provider succeeded but terminal evidence could not be persisted: $OUTPUT_DIR" >&2
