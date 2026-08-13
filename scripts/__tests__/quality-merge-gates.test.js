@@ -53,6 +53,13 @@ const WORKFLOW_COMMAND = readFileSync(
  * PASSED. These tests pin the gate that closes that hole.
  */
 describe("quality merge gates", () => {
+  it("does not treat an already-green exact-head check set as new CI spend", () => {
+    const source = STAMP_AND_MERGE;
+    expect(source).toContain('gh pr checks "$PR"');
+    expect(source).toContain("--required --json state");
+    expect(source).toContain('if [ "$CI_ALREADY_GREEN" != true ]; then');
+    expect(source).toMatch(/CI_ALREADY_GREEN[\s\S]*ci-budget-admission\.js/);
+  });
   it("keeps deterministic failures blocking while AI leads stay advisory", () => {
     expect(SKILL).toMatch(/zero deterministic findings/);
     expect(SKILL).toMatch(/AI leads and completion status are advisory/);

@@ -34,10 +34,20 @@ if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
 fi
 CI_BUDGET_ARGS=()
 [ -z "$CI_BUDGET_MODE" ] || CI_BUDGET_ARGS=(--mode "$CI_BUDGET_MODE")
-node "$SCRIPT_DIR/ci-budget-admission.js" "${CI_BUDGET_ARGS[@]}" >/dev/null || {
-  echo "❌ MERGE BLOCKED: GitHub Actions minute policy denied this candidate." >&2
-  exit 1
-}
+REQUIRED_CHECKS_JSON="$(gh pr checks "$PR" --repo "$EXPECTED_REPOSITORY" \
+  --required --json state 2>/dev/null || true)"
+CI_ALREADY_GREEN=false
+if printf '%s' "$REQUIRED_CHECKS_JSON" | jq -e \
+  'length > 0 and all(.[]; .state == "SUCCESS" or .state == "SKIPPED" or .state == "NEUTRAL")' \
+  >/dev/null 2>&1; then
+  CI_ALREADY_GREEN=true
+fi
+if [ "$CI_ALREADY_GREEN" != true ]; then
+  node "$SCRIPT_DIR/ci-budget-admission.js" "${CI_BUDGET_ARGS[@]}" >/dev/null || {
+    echo "❌ MERGE BLOCKED: GitHub Actions minute policy denied this candidate." >&2
+    exit 1
+  }
+fi
 
 # Keep the private signer outside every repository.  An explicit environment
 # setting wins; the conventional local path makes autonomous quality runs work
