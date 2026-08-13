@@ -131,11 +131,14 @@ function fixture(label, testBody, options = {}) {
       }),
     );
   }
-  const source = options.shellSource
-    ? "policy.sh"
-    : options.addedSource
-      ? "policy.js"
-      : "logic.js";
+  const source =
+    options.sourcePath ||
+    (options.shellSource
+      ? "policy.sh"
+      : options.addedSource
+        ? "policy.js"
+        : "logic.js");
+  mkdirSync(path.dirname(path.join(root, source)), { recursive: true });
   if (!options.addedSource) {
     writeFileSync(
       path.join(root, source),
@@ -169,7 +172,9 @@ function fixture(label, testBody, options = {}) {
       { cwd: root, env: { ...process.env, GIT_ALLOW_PROTOCOL: "file" } },
     );
   }
-  writeFileSync(path.join(root, "logic.test.js"), testBody);
+  const testPath = options.testPath || "logic.test.js";
+  mkdirSync(path.dirname(path.join(root, testPath)), { recursive: true });
+  writeFileSync(path.join(root, testPath), testBody);
   git(root, ["add", "."]);
   git(root, ["commit", "-q", "-m", "base"]);
   git(root, ["remote", "add", "origin", root]);
@@ -195,7 +200,10 @@ function fixture(label, testBody, options = {}) {
     mkdirSync(bin, { recursive: true });
     writeFileSync(
       path.join(bin, "vitest"),
-      '#!/usr/bin/env bash\nprintf "%s\\n" "$*"\nnode logic.test.js\n',
+      `#!/usr/bin/env bash
+printf "%s\\n" "$*"
+${options.relatedNoTests ? 'case " $* " in *" related "*) echo "No test files found"; exit 0 ;; esac\n' : ""}node ${testPath}
+`,
       { mode: 0o755 },
     );
   }
@@ -363,6 +371,22 @@ describe("quality-mutation-check", () => {
       {
         focusedMapping: true,
         testScript: "node complete-suite-must-not-run.js",
+      },
+    );
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+  });
+
+  it("uses a conventional sibling test before a CommonJS related selector can return zero tests", () => {
+    const { root, manifest } = fixture(
+      "commonjs-sibling",
+      "const { isAllowed } = require('../logic');\nif (!isAllowed('admin')) process.exit(1);\n",
+      {
+        sourcePath: "scripts/logic.js",
+        testPath: "scripts/__tests__/logic.test.js",
+        vitestRunner: true,
+        relatedNoTests: true,
       },
     );
     expect(runMutation(root, manifest)).toMatch(

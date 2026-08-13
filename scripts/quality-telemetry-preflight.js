@@ -44,6 +44,7 @@ function preflightRecord(reviewArm, recordedAt) {
     gateDurationSeconds: null,
     fixCommitCount: 0,
     evidenceReusedCount: 0,
+    testSelectionMode: null,
     terminalState: null,
     reviewRounds: 0,
     agentsRun: 0,

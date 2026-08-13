@@ -17,6 +17,7 @@ const riskScore = require("./risk-score.js");
 const agentSelection = require("./quality-agent-selection.js");
 const conditionTaxonomy = require("./quality-condition-taxonomy.js");
 const { evidenceDigestValid } = require("./quality-ci-billing-waiver.js");
+const testImpact = require("./test-impact.js");
 
 const SCHEMA_VERSION = 1;
 const REVIEW_CONTRACT_VERSION = 2;
@@ -1062,19 +1063,26 @@ function discoverImpactTestGate(root, options, head, baseSha) {
   if (impactPolicy === null) return null;
   const impactFiles = changedFiles(root, baseSha, head);
   if (impactFiles?.includes(".buildproven/test-impact.json")) return null;
-  return directGate(
-    "test",
-    "test-impact:.buildproven/test-impact.json",
-    process.execPath,
-    [
-      path.join(__dirname, "test-impact.js"),
-      "--execute",
-      "--policy-sha256",
-      crypto.createHash("sha256").update(impactPolicy).digest("hex"),
-      "--",
-      ...(impactFiles || []),
-    ],
+  const selection = testImpact.plan(
+    impactFiles || [],
+    parseJson(impactPolicy.toString("utf8"), ".buildproven/test-impact.json"),
   );
+  return {
+    ...directGate(
+      "test",
+      "test-impact:.buildproven/test-impact.json",
+      process.execPath,
+      [
+        path.join(__dirname, "test-impact.js"),
+        "--execute",
+        "--policy-sha256",
+        crypto.createHash("sha256").update(impactPolicy).digest("hex"),
+        "--",
+        ...(impactFiles || []),
+      ],
+    ),
+    testImpactMode: selection.mode,
+  };
 }
 
 // Opt-in only: verify-app boots the app (dev server / binary) and drives a

@@ -47,7 +47,7 @@ const {
   coveredReviews,
 } = require("./quality-review-history");
 
-const TELEMETRY_SCHEMA_VERSION = 6;
+const TELEMETRY_SCHEMA_VERSION = 7;
 const REVIEW_TOKEN_CHARS_PER_TOKEN = 4;
 const TELEMETRY_TERMINAL_STATES = new Set([
   "merged",
@@ -432,6 +432,24 @@ function deterministicBlockingCount(manifest) {
   return manifest.terminalState?.state === "blocked" ? 1 : 0;
 }
 
+function testSelectionMode(manifest) {
+  const gate = (manifest.requiredGates || []).find(
+    (candidate) => candidate.name === "test",
+  );
+  if (!gate) return null;
+  if (gate.source === "test-impact:.buildproven/test-impact.json") {
+    return gate.testImpactMode ?? null;
+  }
+  if (
+    gate.source?.startsWith("package-script:") ||
+    gate.source?.startsWith("quality-gates:") ||
+    gate.source?.startsWith("python:")
+  ) {
+    return "complete";
+  }
+  return null;
+}
+
 function validateRecord(record) {
   const validArm =
     record.reviewArm === null ||
@@ -476,6 +494,9 @@ function validateRecord(record) {
     validProxyMetric(record.reviewOutputTokensEstimated) &&
     validProxySource &&
     validTerminalState &&
+    [null, "none", "focused", "audit", "complete", "unmapped"].includes(
+      record.testSelectionMode,
+    ) &&
     [null, "complete", "incomplete", "policy-exempt"].includes(
       record.reviewStatus,
     ) &&
@@ -527,6 +548,7 @@ function buildRecord(manifest, { execFileSync, nowIso }) {
       (gate) =>
         gate.head === manifest.revisions?.currentHead && gate.remoteEvidence,
     ).length,
+    testSelectionMode: testSelectionMode(manifest),
     terminalState: manifest.terminalState?.state ?? null,
     reviewRounds: successfulReviewCount(manifest),
     agentsRun: Array.isArray(manifest.agents) ? manifest.agents.length : 0,
@@ -640,6 +662,7 @@ module.exports = {
   deriveVerdict,
   buildRecord,
   deterministicBlockingCount,
+  testSelectionMode,
   validateRecord,
   alreadyRecorded,
   recordCampaign,
