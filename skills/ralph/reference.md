@@ -55,6 +55,39 @@ percentages/outcomes under `$XDG_STATE_HOME/claude-kit/autonomous-loops/`.
 Never put account credentials, raw usage responses, or that telemetry in a
 repository.
 
+## Governed provider launch
+
+Before launching a fresh provider child for an item, write a fact packet that
+states its phase, provider, protected surfaces, scope, ambiguity, targeted
+deterministic proof, and matching-failure streak. Do not describe every coding
+task as `standard` by default, and do not call a change cheap solely because it
+is small. Resolve the packet through the kit's Compute Governor:
+
+```bash
+node "$SCRIPT_DIR/compute-governor.js" explain "$EVIDENCE_DIR/item-facts.json"
+node "$SCRIPT_DIR/compute-governor.js" resolve "$EVIDENCE_DIR/item-facts.json" \
+  > "$EVIDENCE_DIR/item-plan.json"
+```
+
+The plan is a proposed route. `economy-*` remains a calibration candidate until
+the configured evidence promotes it; protected work may never be routed below
+its safety floor. Launch the fresh child through the plan, never by inheriting
+the current session model or effort:
+
+```bash
+bash "$SCRIPT_DIR/provider-run.sh" \
+  --prompt-file "$EVIDENCE_DIR/item-prompt.md" \
+  --execution-plan "$EVIDENCE_DIR/item-plan.json" \
+  --target-dir "$TARGET_DIR" \
+  --output-dir "$EVIDENCE_DIR/provider-output"
+```
+
+`provider-run.sh` validates the plan before spawning a provider, pins Codex or
+Claude model/effort where supported, and writes a redacted `run-record.json`.
+An unsupported or mismatched plan is a launch failure; do not silently fall
+back to the interactive model. Two matching failures are a concrete escalation
+trigger. A model asking for more compute is not.
+
 For corrupt admission state, stop that loop and use its exact ID (or the
 64-character filename hash) for this audited repair. It refuses readable
 records, so cannot silently free a live loop:
