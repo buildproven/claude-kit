@@ -161,6 +161,55 @@ describe("compute governor", () => {
     expect(validatePlan(reordered)).toEqual(reordered);
   });
 
+  it("rejects unexpected or sensitive fields in an execution binding", () => {
+    const plan = {
+      ...resolve(base),
+      executionBinding: {
+        schemaVersion: 1,
+        policyVersion: "2026-08-12",
+        promptSha256: "a".repeat(64),
+        targetIdentitySha256: "b".repeat(64),
+        targetHead: "c".repeat(40),
+        classifiedProtectedSurfaces: [],
+      },
+    };
+    const invalidPlan = {
+      ...plan,
+      executionBinding: {
+        ...plan.executionBinding,
+        password: "must-not-persist",
+      },
+    };
+
+    expect(() => validatePlan(invalidPlan)).toThrow(
+      "execution binding schema mismatch",
+    );
+    expect(() =>
+      validateRunRecord({
+        schemaVersion: 1,
+        plan: invalidPlan,
+        requested: {
+          provider: plan.provider,
+          model: plan.model,
+          effort: plan.effort,
+        },
+        effective: {
+          provider: plan.provider,
+          model: plan.model,
+          effort: plan.effort,
+        },
+        outcome: {
+          status: "passed",
+          exitCode: 0,
+          providerFailureCategory: null,
+        },
+        timing: { startedAtEpochMs: 1, finishedAtEpochMs: 2 },
+        attempts: 1,
+        usage: null,
+      }),
+    ).toThrow("execution binding schema mismatch");
+  });
+
   it("rejects a run record that contains prompt or credential material", () => {
     const plan = resolve(base);
     expect(() =>
