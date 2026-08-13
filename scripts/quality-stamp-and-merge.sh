@@ -119,6 +119,13 @@ case "$REQUESTED_LOCAL_REVIEW_EVIDENCE" in
   *) echo "❌ MERGE BLOCKED: QUALITY_LOCAL_REVIEW_EVIDENCE must be true or false." >&2; exit 1 ;;
 esac
 LOCAL_REVIEW_EVIDENCE=false
+LOCAL_REVIEW_EVIDENCE_ARTIFACT="$(dirname "$MANIFEST")/local-review-evidence.json"
+prepare_local_review_evidence() {
+  node "$SCRIPT_DIR/quality-review-check.js" write-local \
+    --manifest "$MANIFEST" --artifact "$LOCAL_REVIEW_EVIDENCE_ARTIFACT" >/dev/null
+  node "$SCRIPT_DIR/quality-review-check.js" verify-local \
+    --manifest "$MANIFEST" --artifact "$LOCAL_REVIEW_EVIDENCE_ARTIFACT" >/dev/null
+}
 if [ -n "$STAMP_HEAD" ]; then
   # Backward compatibility for campaigns that were created before the
   # check-run evidence transport landed. Never create another stamp, but let
@@ -162,10 +169,12 @@ else
   # operator capability is the explicit local evidence transport instead.
   if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
     --scope operator-ci-billing-override >/dev/null 2>&1; then
+    prepare_local_review_evidence
     LOCAL_REVIEW_EVIDENCE=true
     echo "⚠️  [quality] skipping GitHub review check publication under the exact-head CI billing override; final authorization will validate the local signed review checkpoint." >&2
   elif [ "$REQUESTED_LOCAL_REVIEW_EVIDENCE" = true ]; then
     if [ "$CI_ALREADY_GREEN" = true ]; then
+      prepare_local_review_evidence
       LOCAL_REVIEW_EVIDENCE=true
       echo "⚠️  [quality] using signed exact-head local review evidence because required CI is already green and custom check publication is unavailable." >&2
     else
@@ -175,6 +184,7 @@ else
   else
     if ! node "$SCRIPT_DIR/quality-review-check.js" publish --manifest "$MANIFEST" >/dev/null; then
       if [ "$CI_ALREADY_GREEN" = true ]; then
+        prepare_local_review_evidence
         LOCAL_REVIEW_EVIDENCE=true
         echo "⚠️  [quality] custom review check publication is unavailable; using signed exact-head local review evidence with already-green required CI." >&2
       else
@@ -314,6 +324,7 @@ if [ "$CI_BILLING_WAIVED" = true ]; then
     bash "$SCRIPT_DIR/quality-authorize-merge.sh" --manifest "$MANIFEST"
 elif [ "$LOCAL_REVIEW_EVIDENCE" = true ]; then
   QUALITY_LOCAL_REVIEW=true \
+    QUALITY_LOCAL_REVIEW_ARTIFACT="$LOCAL_REVIEW_EVIDENCE_ARTIFACT" \
     bash "$SCRIPT_DIR/quality-authorize-merge.sh" --manifest "$MANIFEST"
 else
   bash "$SCRIPT_DIR/quality-authorize-merge.sh" --manifest "$MANIFEST"

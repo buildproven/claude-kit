@@ -9,6 +9,8 @@
  * head only locate the evidence and bind it to the candidate being merged.
  */
 const { spawnSync } = require("child_process");
+const fs = require("node:fs");
+const path = require("node:path");
 const invocation = require("./quality-invocation.js");
 const {
   signEvidence,
@@ -119,6 +121,54 @@ function recordForFields(fields, signature) {
     evidence: fields,
     signature,
   };
+}
+
+function writeLocal({ manifestPath, artifactPath }) {
+  if (!artifactPath) fail("local evidence requires --artifact");
+  const manifest = invocation.loadManifest(manifestPath).manifest;
+  const authorization = invocation.reviewAuthorization(manifest);
+  const fields = evidenceFields(authorization);
+  const record = recordForFields(
+    fields,
+    signEvidence(fields, signingKeyFromEnvironment()),
+  );
+  const temporary = `${artifactPath}.${process.pid}.tmp`;
+  fs.mkdirSync(path.dirname(artifactPath), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(temporary, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+  fs.renameSync(temporary, artifactPath);
+  process.stdout.write(
+    `${JSON.stringify({ artifact: artifactPath, head: fields.head, status: "signed-local" })}\n`,
+  );
+}
+
+function verifyLocal({ manifestPath, artifactPath, requiredTier }) {
+  if (!artifactPath) fail("local evidence requires --artifact");
+  const manifest = invocation.loadManifest(manifestPath).manifest;
+  const authorization = invocation.reviewAuthorization(manifest);
+  const expected = evidenceFields(authorization);
+  const record = parseJson(
+    fs.readFileSync(artifactPath, "utf8"),
+    "local quality evidence",
+  );
+  if (record?.schemaVersion !== CHECK_SCHEMA_VERSION || !record.evidence) {
+    fail("local quality evidence schema is invalid");
+  }
+  const publicKey = process.env.QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY;
+  if (!publicKey) fail("QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY is not configured");
+  verifyEvidence(record.evidence, record.signature, publicKey);
+  if (JSON.stringify(record.evidence) !== JSON.stringify(expected)) {
+    fail("local quality evidence does not match the manifest authorization");
+  }
+  const floor = requiredTier || authorization.tier;
+  if (
+    TIER_RANK[floor] === undefined ||
+    TIER_RANK[record.evidence.tier] < TIER_RANK[floor]
+  ) {
+    fail("local quality evidence tier is below the required tier");
+  }
+  process.stdout.write(
+    `${JSON.stringify({ artifact: artifactPath, head: expected.head, status: "verified-local" })}\n`,
+  );
 }
 
 function checkRunBody({
@@ -382,11 +432,22 @@ if (require.main === module) {
     const [command, ...argv] = process.argv.slice(2);
     const parsed = options(argv);
     if (command === "publish") publish({ manifestPath: parsed.manifest });
-    else if (command === "verify") {
+    else if (command === "write-local") {
+      writeLocal({
+        manifestPath: parsed.manifest,
+        artifactPath: parsed.artifact,
+      });
+    } else if (command === "verify-local") {
+      verifyLocal({
+        manifestPath: parsed.manifest,
+        artifactPath: parsed.artifact,
+        requiredTier: parsed["required-tier"],
+      });
+    } else if (command === "verify") {
       verify(verifyOptions(parsed));
     } else {
       throw new Error(
-        "usage: quality-review-check.js publish --manifest <path> | verify --repository <owner/repo> --head <sha> --base <ref> --required-tier <tier>",
+        "usage: quality-review-check.js publish --manifest <path> | write-local|verify-local --manifest <path> --artifact <path> | verify --repository <owner/repo> --head <sha> --base <ref> --required-tier <tier>",
       );
     }
   } catch (error) {
@@ -407,4 +468,6 @@ module.exports = {
   newestSuccessfulEvidence,
   validateStandaloneEvidence,
   validateStandaloneHead,
+  writeLocal,
+  verifyLocal,
 };

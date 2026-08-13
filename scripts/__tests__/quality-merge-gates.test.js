@@ -69,6 +69,15 @@ describe("quality merge gates", () => {
       "custom review check publication failed before required CI was green",
     );
     expect(STAMP_AND_MERGE).toContain("QUALITY_LOCAL_REVIEW=true");
+    expect(STAMP_AND_MERGE).toMatch(
+      /quality-review-check\.js" write-local[\s\S]*quality-review-check\.js" verify-local[\s\S]*LOCAL_REVIEW_EVIDENCE=true/,
+    );
+    expect(STAMP_AND_MERGE).toContain(
+      'QUALITY_LOCAL_REVIEW_ARTIFACT="$LOCAL_REVIEW_EVIDENCE_ARTIFACT"',
+    );
+    expect(VALIDATOR).toMatch(
+      /QUALITY_LOCAL_REVIEW_ARTIFACT[\s\S]*quality-review-check\.js" verify-local/,
+    );
   });
   it("keeps deterministic failures blocking while AI leads stay advisory", () => {
     expect(SKILL).toMatch(/zero deterministic findings/);
