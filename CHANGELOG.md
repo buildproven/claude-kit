@@ -12,6 +12,43 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.7.0](https://github.com/buildproven/claude-kit/compare/v4.6.4...v4.7.0) (2026-08-13)
+
+
+### Features
+
+* add safe test impact fallback ([#363](https://github.com/buildproven/claude-kit/issues/363)) ([54f4b62](https://github.com/buildproven/claude-kit/commit/54f4b6287a9ecd1b69338651cca9d7593257ba6f))
+* enforce efficient fleet assurance ([#334](https://github.com/buildproven/claude-kit/issues/334)) ([5af4003](https://github.com/buildproven/claude-kit/commit/5af40031a4d1ccfc48516feb747f9f6f8edc9f5f))
+* govern fresh provider compute ([#342](https://github.com/buildproven/claude-kit/issues/342)) ([57bb5f1](https://github.com/buildproven/claude-kit/commit/57bb5f167d24c0a367e0b2e170892ed8341ca6b5))
+* report fleet quality efficiency ([#356](https://github.com/buildproven/claude-kit/issues/356)) ([4405064](https://github.com/buildproven/claude-kit/commit/440506414aa7b531d566a0119bdb17608b661203))
+* resolve protected test Git ranges ([#367](https://github.com/buildproven/claude-kit/issues/367)) ([80c21bd](https://github.com/buildproven/claude-kit/commit/80c21bdbe2c21128d5e46b38818f0c0625f474e3))
+* select changed Node tests ([#359](https://github.com/buildproven/claude-kit/issues/359)) ([0fbf4c3](https://github.com/buildproven/claude-kit/commit/0fbf4c389b698471da158e83f06fd8f01e8e8eaa))
+
+
+### Bug Fixes
+
+* automate safe dev delivery handoff ([2111799](https://github.com/buildproven/claude-kit/commit/2111799ed1be6c6d1269ee6b751ed78d072f7c6b))
+* automate safe dev delivery handoff ([8388aab](https://github.com/buildproven/claude-kit/commit/8388aab463183b25cf93344c4481899197db7edd))
+* bind delivery evidence lifecycle ([#346](https://github.com/buildproven/claude-kit/issues/346)) ([87d7d2a](https://github.com/buildproven/claude-kit/commit/87d7d2ae8152ae8e99ed2ea88f0f25600c4dce3b))
+* bind governed launches to immutable inputs ([#345](https://github.com/buildproven/claude-kit/issues/345)) ([9a137d2](https://github.com/buildproven/claude-kit/commit/9a137d2c0638b7e89dd411ec539c3164a502ed0a))
+* bound public lease waits ([#366](https://github.com/buildproven/claude-kit/issues/366)) ([9166cb7](https://github.com/buildproven/claude-kit/commit/9166cb730716b5c0587bcdd4a379bac5fa82da94))
+* classify common protected auth prompts ([#354](https://github.com/buildproven/claude-kit/issues/354)) ([a87abae](https://github.com/buildproven/claude-kit/commit/a87abae4e13f5222804db97e865f7ef739428188))
+* close governed execution binding schema ([#348](https://github.com/buildproven/claude-kit/issues/348)) ([6f36e70](https://github.com/buildproven/claude-kit/commit/6f36e70bd24b321e002b58e067df014eafceb969))
+* consume CI waiver before dispatch ([#349](https://github.com/buildproven/claude-kit/issues/349)) ([8dc264e](https://github.com/buildproven/claude-kit/commit/8dc264e418f0950f6b2e1bf1d9137dbc131ab080))
+* enforce governed launch contract ([#350](https://github.com/buildproven/claude-kit/issues/350)) ([6470f2b](https://github.com/buildproven/claude-kit/commit/6470f2bd317e45da2a7f0d835be6c21f8fd3a882))
+* fail closed on absent quality evidence ([#358](https://github.com/buildproven/claude-kit/issues/358)) ([72e00ca](https://github.com/buildproven/claude-kit/commit/72e00cab46ae7309254f4362116758fe333d0cbd))
+* focus mutation proof on mapped behavior ([#364](https://github.com/buildproven/claude-kit/issues/364)) ([05a42b5](https://github.com/buildproven/claude-kit/commit/05a42b5f655dc0b558a1a8286e03c27216032d05))
+* forward local review evidence under CI waiver ([#355](https://github.com/buildproven/claude-kit/issues/355)) ([9d561de](https://github.com/buildproven/claude-kit/commit/9d561de2216fd8a5194634f8dca43f817f99f856))
+* make governed delivery receipt monotonic ([#347](https://github.com/buildproven/claude-kit/issues/347)) ([77c6c69](https://github.com/buildproven/claude-kit/commit/77c6c69ca61717de3609fc36bc01e253e5608a61))
+* make governed handoff post-apply transactional ([#353](https://github.com/buildproven/claude-kit/issues/353)) ([f89e055](https://github.com/buildproven/claude-kit/commit/f89e055e817d23c408878f471c8aa83a6922cc1d))
+* reject invalid review provider policy at bootstrap ([#336](https://github.com/buildproven/claude-kit/issues/336)) ([ddbce00](https://github.com/buildproven/claude-kit/commit/ddbce0082bf8b60e57ea619edda60bc2e86c00c0))
+* require explicit Node test entry points ([#365](https://github.com/buildproven/claude-kit/issues/365)) ([40cb959](https://github.com/buildproven/claude-kit/commit/40cb9593e27189508402378ee2586e303c2cace7))
+* select evidence-backed affected tests ([#338](https://github.com/buildproven/claude-kit/issues/338)) ([88ee230](https://github.com/buildproven/claude-kit/commit/88ee2300bcbb2ac293a7f9e374b4a8dda687aedb))
+* support SHA-256 governed Git heads ([#352](https://github.com/buildproven/claude-kit/issues/352)) ([dc61b7c](https://github.com/buildproven/claude-kit/commit/dc61b7ce22eb598aab60334f7fd68cc1cbcdeecf))
+* trust base test policy and bound quality startup ([#361](https://github.com/buildproven/claude-kit/issues/361)) ([b208c86](https://github.com/buildproven/claude-kit/commit/b208c8690426df390a45d122439caf59642e4c3f))
+* use shared planner for mutation checks ([#362](https://github.com/buildproven/claude-kit/issues/362)) ([f17dcc4](https://github.com/buildproven/claude-kit/commit/f17dcc49adaf335c7e3168d15d4ed2ada1d818d8))
+* validate governed provider mappings ([#351](https://github.com/buildproven/claude-kit/issues/351)) ([3373442](https://github.com/buildproven/claude-kit/commit/33734427e75f707dcdb0706187650f4d12530883))
+
 ## [4.6.4](https://github.com/buildproven/claude-kit/compare/v4.6.3...v4.6.4) (2026-08-12)
 
 
