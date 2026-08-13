@@ -288,6 +288,43 @@ describe("cross-language test impact", () => {
     });
   });
 
+  it("uses an explicit mapping for mutation proof without weakening the audit", () => {
+    const policy = {
+      version: 1,
+      mappings: [
+        {
+          paths: [".github/workflows/quality.yml"],
+          commands: [
+            { executable: "node", args: ["tests/quality-workflow.test.js"] },
+          ],
+        },
+      ],
+      audits: [
+        {
+          paths: [".github/workflows/**"],
+          reason: "workflow changed",
+          commands: [{ executable: "npm", args: ["test"] }],
+        },
+      ],
+    };
+
+    expect(plan([".github/workflows/quality.yml"], policy)).toMatchObject({
+      mode: "audit",
+      commands: [{ executable: "npm", args: ["test"] }],
+    });
+    expect(
+      plan([".github/workflows/quality.yml"], policy, {
+        preferExplicitMappings: true,
+      }),
+    ).toMatchObject({
+      mode: "focused",
+      reason: "explicit-mutation-mapping",
+      commands: [
+        { executable: "node", args: ["tests/quality-workflow.test.js"] },
+      ],
+    });
+  });
+
   it("maps the protected-push guard to its behavioral contract", () => {
     expect(
       plan(["scripts/block-push-main.sh"], loadPolicy(ROOT)),
