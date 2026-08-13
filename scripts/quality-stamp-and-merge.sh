@@ -36,8 +36,19 @@ CI_BUDGET_ARGS=()
 [ -z "$CI_BUDGET_MODE" ] || CI_BUDGET_ARGS=(--mode "$CI_BUDGET_MODE")
 REQUIRED_CHECKS_JSON="$(gh pr checks "$PR" --repo "$EXPECTED_REPOSITORY" \
   --required --json state 2>/dev/null || true)"
+CHECKS_FOR_ADMISSION_JSON="$REQUIRED_CHECKS_JSON"
+if printf '%s' "$REQUIRED_CHECKS_JSON" | jq -e 'length == 0' \
+  >/dev/null 2>&1; then
+  # Private repositories on plans without enforceable required contexts can
+  # still have exact-head CI. Reuse every registered check in that repository
+  # class, matching quality-wait-required-checks.sh, rather than asking the
+  # fleet budget gate to admit CI that already ran.
+  REGISTERED_CHECKS_JSON="$(gh pr checks "$PR" --repo "$EXPECTED_REPOSITORY" \
+    --json state 2>/dev/null || true)"
+  CHECKS_FOR_ADMISSION_JSON="$REGISTERED_CHECKS_JSON"
+fi
 CI_ALREADY_GREEN=false
-if printf '%s' "$REQUIRED_CHECKS_JSON" | jq -e \
+if printf '%s' "$CHECKS_FOR_ADMISSION_JSON" | jq -e \
   'length > 0 and all(.[]; .state == "SUCCESS" or .state == "SKIPPED" or .state == "NEUTRAL")' \
   >/dev/null 2>&1; then
   CI_ALREADY_GREEN=true
