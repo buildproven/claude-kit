@@ -36,8 +36,13 @@ path-to-command mappings in
 `unmapped` and blocks authorization with a remediation; it never silently skips
 tests and never automatically launches the complete suite. Glob patterns use
 Node path-glob syntax; a pattern ending in `/` explicitly covers that directory
-prefix. The persisted test gate binds the policy's SHA-256 digest, so a policy
-edit after manifest creation cannot change the command selection.
+prefix.
+
+Use the protected base policy in trusted CI controllers by passing
+`--policy-root <protected-checkout>`. Candidate code remains the execution root;
+the candidate cannot replace its own selector policy.
+The persisted test gate binds the policy's SHA-256 digest, so a policy edit after
+manifest creation cannot change the command selection.
 
 The impact plan intentionally selects the normal test gate after the repository
 declares its complete/native gate. That native gate remains the bootstrap and

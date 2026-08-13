@@ -376,6 +376,63 @@ describe("cross-language test impact", () => {
     );
   });
 
+  it("uses a trusted policy root while it plans candidate files", () => {
+    const candidate = mkdtempSync(
+      path.join(os.tmpdir(), "test-impact-candidate-"),
+    );
+    const trusted = mkdtempSync(path.join(os.tmpdir(), "test-impact-trusted-"));
+    mkdirSync(path.join(candidate, ".buildproven"));
+    mkdirSync(path.join(trusted, ".buildproven"));
+    writeFileSync(
+      path.join(candidate, ".buildproven", "test-impact.json"),
+      JSON.stringify({ version: 1, audits: [] }),
+    );
+    writeFileSync(
+      path.join(trusted, ".buildproven", "test-impact.json"),
+      JSON.stringify({
+        version: 1,
+        audits: [
+          {
+            paths: [".buildproven/test-impact.json"],
+            reason: "trusted policy changed",
+            commands: [{ executable: "node", args: ["tests/a.test.js"] }],
+          },
+        ],
+      }),
+    );
+    const child = spawnSync(
+      process.execPath,
+      [
+        path.resolve(__dirname, "..", "test-impact.js"),
+        "--policy-root",
+        trusted,
+        "--",
+        ".buildproven/test-impact.json",
+      ],
+      { cwd: candidate, encoding: "utf8" },
+    );
+    expect(child.status).toBe(0);
+    expect(JSON.parse(child.stdout)).toMatchObject({
+      mode: "audit",
+      reason: "trusted policy changed",
+    });
+  });
+
+  it("rejects unsupported options", () => {
+    const child = spawnSync(
+      process.execPath,
+      [
+        path.resolve(__dirname, "..", "test-impact.js"),
+        "--typo",
+        "--",
+        "README.md",
+      ],
+      { cwd: ROOT, encoding: "utf8" },
+    );
+    expect(child.status).toBe(2);
+    expect(child.stderr).toContain("unsupported option --typo");
+  });
+
   it("rejects misspelled policy fields instead of silently weakening selection", () => {
     expect(() => plan(["src/a.ts"], { version: 1, mapping: [] })).toThrow(
       /unsupported fields: mapping/,

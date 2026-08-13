@@ -408,6 +408,24 @@ describe("repository merge lease", () => {
     lease.release(first.manifestPath, owner.token, "test-complete");
   });
 
+  it("rejects an unbounded CLI wait request", () => {
+    const { manifestPath } = fixture("bounded-cli-wait");
+    expect(() =>
+      execFileSync(
+        process.execPath,
+        [
+          LEASE_CLI,
+          "acquire",
+          "--manifest",
+          manifestPath,
+          "--wait-ms",
+          "30001",
+        ],
+        { encoding: "utf8" },
+      ),
+    ).toThrow(/--wait-ms must be an integer from 0 to 30000/);
+  });
+
   it("fences every public manifest mutation through the pinned process token", () => {
     const { manifestPath } = fixture("mutation-fence");
     const owner = lease.acquire(manifestPath);

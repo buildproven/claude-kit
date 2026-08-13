@@ -577,7 +577,7 @@ function acquireOnce(manifestPath, options = {}) {
 }
 
 function acquire(manifestPath, options = {}) {
-  const waitMs = options.waitMs ?? 30 * 60 * 1000;
+  const waitMs = options.waitMs ?? DEFAULT_WAIT_MS;
   const deadline = Date.now() + waitMs;
   for (;;) {
     try {
@@ -1213,9 +1213,24 @@ function recoverFromOptions(manifest, options) {
   });
 }
 
+function requestedWaitMs(options) {
+  const waitMs =
+    options["wait-ms"] === undefined ? undefined : Number(options["wait-ms"]);
+  if (
+    waitMs !== undefined &&
+    (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > DEFAULT_WAIT_MS)
+  ) {
+    throw new Error(
+      `--wait-ms must be an integer from 0 to ${DEFAULT_WAIT_MS}`,
+    );
+  }
+  return waitMs;
+}
+
 function commandHandlers(manifest, options) {
+  const waitMs = requestedWaitMs(options);
   return {
-    acquire: () => publicCredential(acquire(manifest)),
+    acquire: () => publicCredential(acquire(manifest, { waitMs })),
     verify() {
       verify(manifest, presentedToken());
     },

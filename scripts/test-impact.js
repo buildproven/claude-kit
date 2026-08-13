@@ -267,20 +267,50 @@ function execute(result, root = process.cwd()) {
   return 0;
 }
 
-function main(argv = process.argv.slice(2)) {
-  const separator = argv.indexOf("--");
-  const options = separator === -1 ? [] : argv.slice(0, separator);
+function parseCliOptions(options) {
   const shouldExecute = options.includes("--execute");
   const digestIndex = options.indexOf("--policy-sha256");
   const expectedDigest = digestIndex === -1 ? "" : options[digestIndex + 1];
-  const files = separator === -1 ? argv : argv.slice(separator + 1);
+  const policyRootIndex = options.indexOf("--policy-root");
+  const policyRoot =
+    policyRootIndex === -1
+      ? process.cwd()
+      : path.resolve(options[policyRootIndex + 1] || "");
+  const consumed = new Set(["--execute"]);
+  if (digestIndex !== -1) {
+    consumed.add("--policy-sha256");
+    consumed.add(expectedDigest);
+  }
+  if (policyRootIndex !== -1) {
+    consumed.add("--policy-root");
+    consumed.add(options[policyRootIndex + 1]);
+  }
+  const unknown = options.filter((option) => !consumed.has(option));
+  if (unknown.length > 0) {
+    throw new Error(`unsupported option ${unknown[0]}`);
+  }
+  if (policyRootIndex !== -1 && !options[policyRootIndex + 1]) {
+    throw new Error("--policy-root requires a path");
+  }
   if (digestIndex !== -1 && !/^[0-9a-f]{64}$/.test(expectedDigest || "")) {
-    process.stderr.write(
-      "test-impact: --policy-sha256 requires a SHA-256 hex digest\n",
-    );
+    throw new Error("--policy-sha256 requires a SHA-256 hex digest");
+  }
+  return { shouldExecute, expectedDigest, policyRoot };
+}
+
+function main(argv = process.argv.slice(2)) {
+  const separator = argv.indexOf("--");
+  const options = separator === -1 ? [] : argv.slice(0, separator);
+  let parsed;
+  try {
+    parsed = parseCliOptions(options);
+  } catch (error) {
+    process.stderr.write(`test-impact: ${error.message}\n`);
     return 2;
   }
-  if (expectedDigest && policyDigest() !== expectedDigest) {
+  const { shouldExecute, expectedDigest, policyRoot } = parsed;
+  const files = separator === -1 ? argv : argv.slice(separator + 1);
+  if (expectedDigest && policyDigest(policyRoot) !== expectedDigest) {
     process.stderr.write(
       `test-impact: ${POLICY_FILE} does not match the persisted exact-head policy\n`,
     );
@@ -288,7 +318,7 @@ function main(argv = process.argv.slice(2)) {
   }
   const result = plan(
     files.map((file) => path.normalize(file)),
-    loadPolicy(),
+    loadPolicy(policyRoot),
   );
   if (shouldExecute) return execute(result);
   console.log(JSON.stringify(result, null, 2));
@@ -304,6 +334,7 @@ module.exports = {
   main,
   plan,
   policyDigest,
+  parseCliOptions,
   validatePolicy,
   explicitTestTargets,
 };
