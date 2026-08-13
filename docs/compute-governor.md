@@ -53,6 +53,11 @@ The runner persists `execution-plan.json` before launch and atomically writes
 identity, timing, attempt count, typed outcome, and nullable usage. It rejects
 prompt or credential fields recursively.
 
+Every plan embeds only the allowlisted execution facts used to resolve it.
+Validation recomputes the complete plan from those facts and the installed
+policy, so a caller cannot lower a protected-surface floor by editing the plan.
+Unknown fact fields—including prompts and credentials—are rejected.
+
 Use `--execution-plan plan.json` when a workflow has already persisted and
 approved the plan. The runner rejects a provider mismatch, policy/model drift,
 a route below its declared safety floor, modified caps, or an unknown schema

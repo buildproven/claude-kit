@@ -16,6 +16,7 @@ import { makeTempDir } from "./helpers/tmp.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const PROVIDER_RUN = path.join(ROOT, "scripts", "provider-run.sh");
+const COMPUTE_GOVERNOR = path.join(ROOT, "scripts", "compute-governor.js");
 const SKILL_SYNC = path.join(ROOT, "scripts", "setup-codex-skills.sh");
 const MCP_SYNC = path.join(ROOT, "scripts", "mcp-sync.py");
 const AUDIT_REPO = path.join(ROOT, "scripts", "steward", "audit-repo.sh");
@@ -30,6 +31,13 @@ const SURFACE = path.join(ROOT, "scripts", "surface-audit.js");
 function executable(file, body) {
   writeFileSync(file, `#!/usr/bin/env bash\n${body}\n`);
   chmodSync(file, 0o755);
+}
+
+function governedPlan(facts) {
+  return execFileSync("node", [COMPUTE_GOVERNOR, "resolve", "-"], {
+    input: JSON.stringify(facts),
+    encoding: "utf8",
+  });
 }
 
 describe("provider-native platform", () => {
@@ -1212,18 +1220,15 @@ describe("provider-native platform", () => {
     writeFileSync(prompt, "implement this narrow behavior\n");
     writeFileSync(
       plan,
-      JSON.stringify({
-        schemaVersion: 1,
-        policyVersion: "2026-08-12",
-        route: "economy-builder",
+      governedPlan({
         provider: "codex",
-        model: "gpt-5.6-luna",
-        effort: "high",
-        contextClass: "fresh-bounded",
-        caps: { maxWallSeconds: 900, maxWorkers: 1 },
-        safetyFloor: "economy-micro",
-        reasons: ["fixture"],
-        promotion: "candidate-requires-calibration",
+        phase: "implement",
+        localized: true,
+        reversible: true,
+        targetedProof: true,
+        changedFiles: 1,
+        protectedSurfaces: [],
+        sameFailureStreak: 0,
       }),
     );
     executable(
@@ -1349,18 +1354,16 @@ describe("provider-native platform", () => {
     writeFileSync(prompt, "perform the approved work\n");
     writeFileSync(
       plan,
-      JSON.stringify({
-        schemaVersion: 1,
-        policyVersion: "2026-08-12",
-        route: "standard",
+      governedPlan({
         provider: "codex",
-        model: "gpt-5.6-terra",
-        effort: "medium",
-        contextClass: "fresh-bounded",
-        caps: { maxWallSeconds: 1800, maxWorkers: 1 },
-        safetyFloor: "economy-micro",
-        reasons: ["approved fixture"],
-        promotion: "not-applicable",
+        phase: "implement",
+        localized: false,
+        reversible: false,
+        targetedProof: false,
+        ambiguous: true,
+        changedFiles: 0,
+        protectedSurfaces: [],
+        sameFailureStreak: 0,
       }),
     );
     executable(

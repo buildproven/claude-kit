@@ -19,6 +19,21 @@ const SENSITIVE_RECORD_KEYS = new Set([
   "token",
   "apiKey",
 ]);
+const FACT_KEYS = new Set([
+  "provider",
+  "phase",
+  "readOnly",
+  "localized",
+  "reversible",
+  "targetedProof",
+  "ambiguous",
+  "changedFiles",
+  "protectedSurfaces",
+  "sameFailureStreak",
+  "publicContract",
+  "crossRepository",
+  "operatorRoute",
+]);
 
 function policyPath() {
   return path.join(__dirname, "..", "config", "compute-governor-policy.json");
@@ -120,6 +135,21 @@ function assertFacts(facts, policy) {
   if (!scalarFactsValid(facts)) {
     throw new Error("compute-governor: numeric or route facts are invalid");
   }
+  const unsupported = Object.keys(facts).filter((key) => !FACT_KEYS.has(key));
+  if (unsupported.length > 0) {
+    throw new Error(
+      `compute-governor: unsupported execution fact '${unsupported[0]}'`,
+    );
+  }
+}
+
+function canonicalFacts(facts) {
+  return Object.fromEntries(
+    [...FACT_KEYS]
+      .filter((key) => facts[key] !== undefined)
+      .sort()
+      .map((key) => [key, facts[key]]),
+  );
 }
 
 function safetyFloor(facts, policy) {
@@ -189,6 +219,7 @@ function workTier(facts) {
 
 function resolve(facts, policy = loadPolicy()) {
   assertFacts(facts, policy);
+  const boundFacts = canonicalFacts(facts);
   const floor = safetyFloor(facts, policy);
   const work = workTier(facts);
   const route = atLeast(floor.route, work.route);
@@ -203,6 +234,7 @@ function resolve(facts, policy = loadPolicy()) {
     contextClass: "fresh-bounded",
     caps: policy.routes[route].caps,
     safetyFloor: floor.route,
+    facts: boundFacts,
     reasons: [floor.reason, ...work.reasons],
     promotion: route.startsWith("economy")
       ? "candidate-requires-calibration"
@@ -226,6 +258,7 @@ function planContractValid(plan, policy) {
     : "not-applicable";
   return (
     plan.contextClass === "fresh-bounded" &&
+    plan.facts &&
     JSON.stringify(plan.caps) === JSON.stringify(expectedCaps) &&
     Array.isArray(plan.reasons) &&
     plan.reasons.length > 0 &&
@@ -257,6 +290,11 @@ function validatePlan(plan, policy = loadPolicy()) {
   requireCondition(
     planContractValid(plan, policy),
     "compute-governor: invalid execution plan contract",
+  );
+  const expected = resolve(plan.facts, policy);
+  requireCondition(
+    JSON.stringify(plan) === JSON.stringify(expected),
+    "compute-governor: execution plan is not bound to its facts",
   );
   return plan;
 }

@@ -76,6 +76,28 @@ describe("compute governor", () => {
     ).toThrow("facts.protectedSurfaces is invalid");
   });
 
+  it("rejects unsupported execution facts instead of silently omitting them", () => {
+    expect(() => resolve({ ...base, emergencyOverride: true })).toThrow(
+      "unsupported execution fact 'emergencyOverride'",
+    );
+  });
+
+  it("rejects unsupported or sensitive execution facts", () => {
+    expect(() => resolve({ ...base, prompt: "secret task" })).toThrow(
+      "unsupported execution fact 'prompt'",
+    );
+  });
+
+  it("rejects a low-cost plan whose bound facts require a protected floor", () => {
+    const economy = resolve(base);
+    expect(() =>
+      validatePlan({
+        ...economy,
+        facts: { ...economy.facts, protectedSurfaces: ["auth"] },
+      }),
+    ).toThrow("not bound to its facts");
+  });
+
   it("rejects a plan whose model/effort is not the configured mapping", () => {
     const plan = resolve(base);
     expect(() => validatePlan({ ...plan, effort: "xhigh" })).toThrow(
@@ -94,6 +116,16 @@ describe("compute governor", () => {
         caps: { ...plan.caps, maxWallSeconds: plan.caps.maxWallSeconds + 1 },
       }),
     ).toThrow("invalid execution plan contract");
+  });
+
+  it("rejects a plan whose declared facts no longer produce it", () => {
+    const plan = resolve(base);
+    expect(() =>
+      validatePlan({
+        ...plan,
+        facts: { ...plan.facts, protectedSurfaces: ["auth"] },
+      }),
+    ).toThrow("execution plan is not bound to its facts");
   });
 
   it("rejects a run record that contains prompt or credential material", () => {
