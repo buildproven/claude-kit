@@ -279,10 +279,11 @@ if [ "$RC" -eq 0 ]; then
     git -C "$TARGET_DIR" add -N --all
     git -C "$TARGET_DIR" diff --binary "$PLAN_TARGET_HEAD" -- > "$GOVERNED_PATCH"
     if [ -s "$GOVERNED_PATCH" ]; then
-      git -C "$ORIGINAL_TARGET_DIR" apply --binary "$GOVERNED_PATCH" || {
+      git -C "$ORIGINAL_TARGET_DIR" apply --index --binary "$GOVERNED_PATCH" || {
         echo "provider-run: governed provider changes could not be applied atomically" >&2
         exit 78
       }
+      git -C "$ORIGINAL_TARGET_DIR" reset --mixed "$PLAN_TARGET_HEAD" --
     fi
   fi
   if ! write_governed_record passed "$PROVIDER" 0 ""; then
