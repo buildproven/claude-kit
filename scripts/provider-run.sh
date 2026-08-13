@@ -18,6 +18,19 @@ EXECUTION_PLAN=""
 EXECUTION_FACTS=""
 GOVERNED_MODEL=""
 GOVERNED_EFFORT=""
+PROMPT_SNAPSHOT=""
+GOVERNED_TARGET_SNAPSHOT=""
+ORIGINAL_TARGET_DIR=""
+GOVERNED_PATCH=""
+
+cleanup_governed_inputs() {
+  if [ -n "$GOVERNED_TARGET_SNAPSHOT" ] && [ -n "$ORIGINAL_TARGET_DIR" ]; then
+    git -C "$ORIGINAL_TARGET_DIR" worktree remove --force "$GOVERNED_TARGET_SNAPSHOT" >/dev/null 2>&1 || true
+  fi
+  [ -z "$PROMPT_SNAPSHOT" ] || rm -f "$PROMPT_SNAPSHOT"
+  [ -z "$GOVERNED_PATCH" ] || rm -f "$GOVERNED_PATCH"
+}
+trap cleanup_governed_inputs EXIT
 
 usage() {
   echo "usage: provider-run.sh --prompt-file file [--execution-plan plan.json | --execution-facts facts.json] [--provider auto|codex|claude] [--fallback none|codex|claude] [--target-dir dir] [--timeout seconds] [--sandbox read-only|workspace-write] [--output-dir dir]" >&2
@@ -65,7 +78,6 @@ fi
 if [ -n "$EXECUTION_PLAN" ] || [ -n "$EXECUTION_FACTS" ]; then
   PROMPT_SNAPSHOT=$(mktemp "${TMPDIR:-/tmp}/provider-prompt.XXXXXX") \
     || { echo "provider-run: cannot allocate prompt snapshot" >&2; exit 2; }
-  trap 'rm -f "$PROMPT_SNAPSHOT"' EXIT
   cp "$PROMPT_FILE" "$PROMPT_SNAPSHOT"
   chmod 400 "$PROMPT_SNAPSHOT"
   PROMPT_FILE="$PROMPT_SNAPSHOT"
@@ -110,6 +122,21 @@ if [ -n "$EXECUTION_PLAN" ]; then
     TIMEOUT_SECONDS="$PLAN_TIMEOUT"
   fi
   FALLBACK=none
+
+  # Execute from a detached worktree at the exact bound HEAD. The provider can
+  # never observe concurrent edits to the caller's live target. Its resulting
+  # binary patch is applied back only if that target is still clean and at the
+  # same HEAD, preventing either overwrite or mixed-state delivery.
+  ORIGINAL_TARGET_DIR="$TARGET_DIR"
+  GOVERNED_TARGET_SNAPSHOT=$(mktemp -d "${TMPDIR:-/tmp}/provider-target.XXXXXX") \
+    || { echo "provider-run: cannot allocate target snapshot" >&2; exit 2; }
+  PLAN_TARGET_HEAD=$(jq -r '.executionBinding.targetHead' "$EXECUTION_PLAN")
+  git -C "$ORIGINAL_TARGET_DIR" worktree add --detach "$GOVERNED_TARGET_SNAPSHOT" "$PLAN_TARGET_HEAD" >/dev/null \
+    || { echo "provider-run: cannot create immutable target snapshot" >&2; exit 2; }
+  node "$SCRIPT_DIR/compute-governor.js" validate-execution-plan \
+    "$EXECUTION_PLAN" "$PROMPT_FILE" "$ORIGINAL_TARGET_DIR" >/dev/null \
+    || { echo "provider-run: governed inputs changed before launch" >&2; exit 2; }
+  TARGET_DIR="$GOVERNED_TARGET_SNAPSHOT"
 fi
 
 DEADLINE="$SCRIPT_DIR/run-with-deadline.py"
@@ -162,11 +189,6 @@ run_one() {
   local stderr_file="$OUTPUT_DIR/$provider.stderr"
   : > "$stdout_file"
   : > "$stderr_file"
-  if [ -n "$EXECUTION_PLAN" ]; then
-    node "$SCRIPT_DIR/compute-governor.js" validate-execution-plan \
-      "$EXECUTION_PLAN" "$PROMPT_FILE" "$TARGET_DIR" >/dev/null \
-      || { echo "provider-run: governed inputs changed before launch" >&2; return 78; }
-  fi
   case "$provider" in
     codex)
       command -v codex >/dev/null 2>&1 || return 74
@@ -244,6 +266,25 @@ run_one "$PROVIDER"
 RC=$?
 set -e
 if [ "$RC" -eq 0 ]; then
+  if [ -n "$EXECUTION_PLAN" ]; then
+    [ "$(git -C "$ORIGINAL_TARGET_DIR" rev-parse HEAD)" = "$PLAN_TARGET_HEAD" ] &&
+      [ -z "$(git -C "$ORIGINAL_TARGET_DIR" status --porcelain=v1 --untracked-files=all)" ] || {
+        echo "provider-run: original target changed during governed execution; refusing to apply provider changes" >&2
+        exit 78
+      }
+    GOVERNED_PATCH=$(mktemp "${TMPDIR:-/tmp}/provider-changes.XXXXXX") || {
+      echo "provider-run: cannot allocate governed change handoff" >&2
+      exit 78
+    }
+    git -C "$TARGET_DIR" add -N --all
+    git -C "$TARGET_DIR" diff --binary "$PLAN_TARGET_HEAD" -- > "$GOVERNED_PATCH"
+    if [ -s "$GOVERNED_PATCH" ]; then
+      git -C "$ORIGINAL_TARGET_DIR" apply --binary "$GOVERNED_PATCH" || {
+        echo "provider-run: governed provider changes could not be applied atomically" >&2
+        exit 78
+      }
+    fi
+  fi
   if ! write_governed_record passed "$PROVIDER" 0 ""; then
     echo "provider-run: provider succeeded but terminal evidence could not be persisted: $OUTPUT_DIR" >&2
     exit 78

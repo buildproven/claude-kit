@@ -1568,7 +1568,7 @@ describe("provider-native platform", () => {
     );
     chmodSync(output, 0o755);
 
-    expect(result.status).toBe(78);
+    expect(result.status, result.stderr).toBe(78);
     expect(result.stderr).toContain(
       "provider succeeded but terminal evidence could not be persisted",
     );
