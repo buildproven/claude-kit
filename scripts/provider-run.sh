@@ -14,9 +14,12 @@ TARGET_DIR="$(pwd)"
 TIMEOUT_SECONDS=1800
 SANDBOX="workspace-write"
 OUTPUT_DIR=""
+EXECUTION_PLAN=""
+GOVERNED_MODEL=""
+GOVERNED_EFFORT=""
 
 usage() {
-  echo "usage: provider-run.sh --prompt-file file [--provider auto|codex|claude] [--fallback none|codex|claude] [--target-dir dir] [--timeout seconds] [--sandbox read-only|workspace-write] [--output-dir dir]" >&2
+  echo "usage: provider-run.sh --prompt-file file [--execution-plan plan.json] [--provider auto|codex|claude] [--fallback none|codex|claude] [--target-dir dir] [--timeout seconds] [--sandbox read-only|workspace-write] [--output-dir dir]" >&2
 }
 
 while [ $# -gt 0 ]; do
@@ -28,6 +31,7 @@ while [ $# -gt 0 ]; do
     --timeout) TIMEOUT_SECONDS="${2:-}"; shift 2 ;;
     --sandbox) SANDBOX="${2:-}"; shift 2 ;;
     --output-dir) OUTPUT_DIR="${2:-}"; shift 2 ;;
+    --execution-plan) EXECUTION_PLAN="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) usage; exit 2 ;;
   esac
@@ -37,16 +41,47 @@ done
 [ -d "$TARGET_DIR" ] || { echo "provider-run: target directory does not exist" >&2; exit 2; }
 [[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || { echo "provider-run: timeout must be positive" >&2; exit 2; }
 case "$SANDBOX" in read-only|workspace-write) ;; *) echo "provider-run: invalid sandbox" >&2; exit 2 ;; esac
+[ -z "$EXECUTION_PLAN" ] || [ -r "$EXECUTION_PLAN" ] || { echo "provider-run: unreadable execution plan" >&2; exit 2; }
 
 read -r POLICY_PRIMARY POLICY_FALLBACK < <(bs_provider_load)
+REQUESTED_PROVIDER="$PROVIDER"
 PROVIDER="${PROVIDER:-$POLICY_PRIMARY}"
 FALLBACK="${FALLBACK:-$POLICY_FALLBACK}"
 if [ "$PROVIDER" = auto ]; then PROVIDER=$(bs_provider_invoker); fi
 bs_provider_validate "$PROVIDER" "$FALLBACK" || { echo "provider-run: invalid provider selection" >&2; exit 2; }
 
+# A governed invocation may not inherit the interactive session's model or
+# effort. Validate the versioned plan before any provider subprocess starts,
+# then require its provider to match an explicit --provider if one was supplied.
+if [ -n "$EXECUTION_PLAN" ]; then
+  node "$SCRIPT_DIR/compute-governor.js" validate-plan "$EXECUTION_PLAN" >/dev/null \
+    || { echo "provider-run: invalid execution plan" >&2; exit 2; }
+  PLAN_PROVIDER=$(jq -r '.provider' "$EXECUTION_PLAN")
+  if [ -n "$REQUESTED_PROVIDER" ] && [ "$REQUESTED_PROVIDER" != auto ] && [ "$REQUESTED_PROVIDER" != "$PLAN_PROVIDER" ]; then
+    echo "provider-run: explicit provider conflicts with execution plan" >&2
+    exit 2
+  fi
+  PROVIDER="$PLAN_PROVIDER"
+  GOVERNED_MODEL=$(jq -r '.model' "$EXECUTION_PLAN")
+  GOVERNED_EFFORT=$(jq -r '.effort // empty' "$EXECUTION_PLAN")
+  FALLBACK=none
+fi
+
 OUTPUT_DIR="${OUTPUT_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/provider-run.XXXXXX")}"
 mkdir -p "$OUTPUT_DIR"
 DEADLINE="$SCRIPT_DIR/run-with-deadline.py"
+
+write_governed_record() {
+  local status="$1" effective_provider="$2"
+  [ -n "$EXECUTION_PLAN" ] || return 0
+  jq -n \
+    --argjson plan "$(cat "$EXECUTION_PLAN")" \
+    --arg status "$status" \
+    --arg provider "$effective_provider" \
+    '{schemaVersion:1, plan:$plan, effective:{provider:$provider,model:$plan.model,effort:$plan.effort}, outcome:{status:$status}, usage:null}' \
+    > "$OUTPUT_DIR/run-record.json"
+  node "$SCRIPT_DIR/compute-governor.js" validate-run-record "$OUTPUT_DIR/run-record.json" >/dev/null
+}
 
 # Classify a provider failure from STRUCTURED error metadata only — never by
 # grepping the raw transcript (BUI-325). Model output can legitimately contain
@@ -66,6 +101,7 @@ classify_provider_failure() {
 
 run_one() {
   local provider="$1" rc last_message_file events_file result category detail
+  local -a CODEX_PLAN_ARGS=() CLAUDE_MODEL_ARGS=()
   local stdout_file="$OUTPUT_DIR/$provider.stdout"
   local stderr_file="$OUTPUT_DIR/$provider.stderr"
   : > "$stdout_file"
@@ -76,8 +112,11 @@ run_one() {
       last_message_file="$OUTPUT_DIR/$provider.last-message"
       events_file="$OUTPUT_DIR/$provider.events.jsonl"
       : > "$last_message_file"
+      [ -z "$GOVERNED_MODEL" ] || CODEX_PLAN_ARGS+=(--model "$GOVERNED_MODEL")
+      [ -z "$GOVERNED_EFFORT" ] || CODEX_PLAN_ARGS+=(-c "model_reasoning_effort=\"$GOVERNED_EFFORT\"")
       if python3 "$DEADLINE" --timeout-seconds "$TIMEOUT_SECONDS" -- \
         codex exec --ephemeral -C "$TARGET_DIR" -s "$SANDBOX" --json \
+        "${CODEX_PLAN_ARGS[@]}" \
         -o "$last_message_file" - \
         < "$PROMPT_FILE" > "$events_file" 2> "$stderr_file"; then
         rc=0
@@ -105,9 +144,11 @@ run_one() {
       command -v claude >/dev/null 2>&1 || return 74
       if (
         cd "$TARGET_DIR"
+        [ -z "$GOVERNED_MODEL" ] || CLAUDE_MODEL_ARGS+=(--model "$GOVERNED_MODEL")
+        [ -z "$GOVERNED_EFFORT" ] || CLAUDE_MODEL_ARGS+=(--effort "$GOVERNED_EFFORT")
         python3 "$DEADLINE" --timeout-seconds "$TIMEOUT_SECONDS" -- \
           claude -p "$(cat "$PROMPT_FILE")" --no-session-persistence \
-            --dangerously-skip-permissions --output-format json
+            --dangerously-skip-permissions --output-format json "${CLAUDE_MODEL_ARGS[@]}"
       ) > "$stdout_file" 2> "$stderr_file"; then
         rc=0
       else
@@ -143,6 +184,7 @@ RC=$?
 set -e
 if [ "$RC" -eq 0 ]; then
   printf '%s\n' "$PROVIDER" > "$OUTPUT_DIR/provider"
+  write_governed_record passed "$PROVIDER"
   cat "$OUTPUT_DIR/$PROVIDER.stdout"
   exit 0
 fi
