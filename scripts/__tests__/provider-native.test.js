@@ -44,6 +44,22 @@ function governedPlan(facts, prompt, target) {
   );
 }
 
+function initializeGovernedTarget(dir) {
+  writeFileSync(
+    path.join(dir, ".gitignore"),
+    "bin/\noutput/\nplan.json\nfacts.json\ncodex.calls\nclaude.calls\n",
+  );
+  execFileSync("git", ["init", "-q"], { cwd: dir });
+  execFileSync("git", ["config", "user.email", "tests@buildproven.local"], {
+    cwd: dir,
+  });
+  execFileSync("git", ["config", "user.name", "BuildProven Tests"], {
+    cwd: dir,
+  });
+  execFileSync("git", ["add", "."], { cwd: dir });
+  execFileSync("git", ["commit", "-qm", "fixture"], { cwd: dir });
+}
+
 describe("provider-native platform", () => {
   it("invokes codex exec without the removed -a/--ask-for-approval flag", () => {
     const source = readFileSync(PROVIDER_RUN, "utf8");
@@ -1222,6 +1238,7 @@ describe("provider-native platform", () => {
     const calls = path.join(dir, "codex.calls");
     mkdirSync(bin);
     writeFileSync(prompt, "implement this narrow behavior\n");
+    initializeGovernedTarget(dir);
     writeFileSync(
       plan,
       governedPlan(
@@ -1291,6 +1308,7 @@ describe("provider-native platform", () => {
     const dir = makeTempDir("provider-native-protected-binding-");
     const prompt = path.join(dir, "prompt");
     writeFileSync(prompt, "change the OAuth login session behavior\n");
+    initializeGovernedTarget(dir);
     const plan = JSON.parse(
       governedPlan(
         {
@@ -1323,6 +1341,7 @@ describe("provider-native platform", () => {
     const plan = path.join(output, "execution-plan.json");
     mkdirSync(output);
     writeFileSync(prompt, "update a local label\n");
+    initializeGovernedTarget(dir);
     writeFileSync(
       plan,
       governedPlan(
@@ -1358,9 +1377,7 @@ describe("provider-native platform", () => {
       { encoding: "utf8" },
     );
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(
-      "execution plan is not bound to this prompt and target",
-    );
+    expect(result.stderr).toContain("provider-run: invalid execution plan");
   });
 
   it("resolves execution facts before launching and persists the exact plan", () => {
@@ -1384,6 +1401,7 @@ describe("provider-native platform", () => {
         sameFailureStreak: 0,
       }),
     );
+    initializeGovernedTarget(dir);
     executable(
       path.join(bin, "codex"),
       [
@@ -1436,6 +1454,7 @@ describe("provider-native platform", () => {
     mkdirSync(bin);
     mkdirSync(output);
     writeFileSync(prompt, "perform the approved work\n");
+    initializeGovernedTarget(dir);
     writeFileSync(
       plan,
       governedPlan(
@@ -1514,6 +1533,7 @@ describe("provider-native platform", () => {
         sameFailureStreak: 0,
       }),
     );
+    initializeGovernedTarget(dir);
     executable(
       path.join(bin, "codex"),
       [
@@ -1577,6 +1597,7 @@ describe("provider-native platform", () => {
         sameFailureStreak: 0,
       }),
     );
+    initializeGovernedTarget(dir);
     executable(
       path.join(bin, "claude"),
       `printf '%s\\n' "$*" > '${calls}'\nprintf '%s\\n' '{"is_error":false,"result":"done"}'`,

@@ -91,6 +91,22 @@ function loadPolicy(file = policyPath()) {
       `compute-governor: policy missing route '${route}'`,
     );
   }
+  const patternSurfaces = Object.keys(policy.protectedPromptPatterns).sort();
+  const protectedSurfaces = [...policy.protectedSurfaces].sort();
+  requireCondition(
+    JSON.stringify(patternSurfaces) === JSON.stringify(protectedSurfaces) &&
+      patternSurfaces.every((surface) => {
+        const patterns = policy.protectedPromptPatterns[surface];
+        return (
+          Array.isArray(patterns) &&
+          patterns.length > 0 &&
+          patterns.every(
+            (pattern) => typeof pattern === "string" && pattern.length > 0,
+          )
+        );
+      }),
+    "compute-governor: protected prompt policy must exactly cover protected surfaces",
+  );
   return policy;
 }
 
@@ -108,6 +124,28 @@ function targetHead(targetDir) {
   } catch {
     return "unversioned";
   }
+}
+
+function requireCleanVersionedTarget(targetDir) {
+  const head = targetHead(targetDir);
+  requireCondition(
+    head !== "unversioned",
+    "compute-governor: governed target must be a versioned git worktree",
+  );
+  const status = execFileSync(
+    "git",
+    ["status", "--porcelain=v1", "--untracked-files=all"],
+    {
+      cwd: targetDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  requireCondition(
+    status.length === 0,
+    "compute-governor: governed target worktree must be clean",
+  );
+  return head;
 }
 
 function classifiedProtectedSurfaces(prompt, policy) {
@@ -134,7 +172,7 @@ function executionBinding(promptFile, targetDir, policy = loadPolicy()) {
     policyVersion: policy.policyVersion,
     promptSha256: sha256(prompt),
     targetIdentitySha256: sha256(target),
-    targetHead: targetHead(target),
+    targetHead: requireCleanVersionedTarget(target),
     classifiedProtectedSurfaces: classifiedProtectedSurfaces(
       prompt.toString("utf8"),
       policy,

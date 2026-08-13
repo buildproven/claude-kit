@@ -59,6 +59,18 @@ if [ -e "$OUTPUT_DIR/execution-plan.json" ]; then
   [ "$OUTPUT_PLAN_REAL" = "$INPUT_PLAN_REAL" ] || { echo "provider-run: output directory already contains governed evidence" >&2; exit 2; }
 fi
 
+# Governed launches validate and execute the same private prompt snapshot.
+# This closes the gap where another process could replace the caller-owned
+# prompt between plan validation and provider stdin expansion.
+if [ -n "$EXECUTION_PLAN" ] || [ -n "$EXECUTION_FACTS" ]; then
+  PROMPT_SNAPSHOT=$(mktemp "${TMPDIR:-/tmp}/provider-prompt.XXXXXX") \
+    || { echo "provider-run: cannot allocate prompt snapshot" >&2; exit 2; }
+  trap 'rm -f "$PROMPT_SNAPSHOT"' EXIT
+  cp "$PROMPT_FILE" "$PROMPT_SNAPSHOT"
+  chmod 400 "$PROMPT_SNAPSHOT"
+  PROMPT_FILE="$PROMPT_SNAPSHOT"
+fi
+
 read -r POLICY_PRIMARY POLICY_FALLBACK < <(bs_provider_load)
 REQUESTED_PROVIDER="$PROVIDER"
 PROVIDER="${PROVIDER:-$POLICY_PRIMARY}"
@@ -150,6 +162,11 @@ run_one() {
   local stderr_file="$OUTPUT_DIR/$provider.stderr"
   : > "$stdout_file"
   : > "$stderr_file"
+  if [ -n "$EXECUTION_PLAN" ]; then
+    node "$SCRIPT_DIR/compute-governor.js" validate-execution-plan \
+      "$EXECUTION_PLAN" "$PROMPT_FILE" "$TARGET_DIR" >/dev/null \
+      || { echo "provider-run: governed inputs changed before launch" >&2; return 78; }
+  fi
   case "$provider" in
     codex)
       command -v codex >/dev/null 2>&1 || return 74

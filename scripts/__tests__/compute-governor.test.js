@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { writeFileSync } from "node:fs";
+import path from "node:path";
+import { makeTempDir } from "./helpers/tmp.js";
 import {
   loadPolicy,
   resolve,
@@ -308,6 +311,24 @@ describe("compute governor", () => {
     const policy = loadPolicy();
     expect(policy.schemaVersion).toBe(1);
     expect(policy.routes.critical.providers.claude.model).toBe("claude-opus-5");
+  });
+
+  it("rejects missing or extra protected classifier policy entries", () => {
+    const policy = loadPolicy();
+    for (const mutate of [
+      (copy) => delete copy.protectedPromptPatterns.auth,
+      (copy) => {
+        copy.protectedPromptPatterns.unknown = ["unknown"];
+      },
+    ]) {
+      const copy = structuredClone(policy);
+      mutate(copy);
+      const file = path.join(makeTempDir("governor-policy-"), "policy.json");
+      writeFileSync(file, JSON.stringify(copy));
+      expect(() => loadPolicy(file)).toThrow(
+        "protected prompt policy must exactly cover protected surfaces",
+      );
+    }
   });
 
   it("does not promote a cheaper candidate that loses acceptance quality", () => {
