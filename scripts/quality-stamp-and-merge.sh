@@ -277,7 +277,18 @@ BASE_BRANCH="${BASE_BRANCH#origin/}"
   exit 1
 }
 RC=0
-if [ "$PREFLIGHT_BASE_PROTECTION" = unprotectable ]; then
+CI_BILLING_WAIVED=false
+CI_WAIVER_ARTIFACT="$(dirname "$MANIFEST")/ci-billing-waiver.json"
+if [ "$CI_BUDGET_MODE" = local-exact-head ]; then
+  # The operator capability is already bound to independently classified
+  # billing-preallocation evidence. Revalidate it before any workflow dispatch
+  # so the outage path cannot spend minutes or depend on workflow_dispatch.
+  node "$SCRIPT_DIR/quality-ci-billing-waiver.js" \
+    --repo "$EXPECTED_REPOSITORY" --pr "$PR" --head "$MERGE_HEAD" \
+    --artifact "$CI_WAIVER_ARTIFACT"
+  CI_BILLING_WAIVED=true
+  echo "⚠️  [quality] exact-HEAD CI billing override validated before workflow dispatch; using local gates and review." >&2
+elif [ "$PREFLIGHT_BASE_PROTECTION" = unprotectable ]; then
   bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CI_TIMEOUT" -- \
     bash "$SCRIPT_DIR/quality-wait-required-checks.sh" --pr "$PR" || RC=$?
 else
@@ -294,9 +305,7 @@ else
       --repo "$EXPECTED_REPOSITORY" --base "$BASE_BRANCH" \
       --head "$MERGE_HEAD" --timeout "$CI_TIMEOUT" --interval 10 || RC=$?
 fi
-CI_BILLING_WAIVED=false
 if [ "$RC" -ne 0 ]; then
-  CI_WAIVER_ARTIFACT="$(dirname "$MANIFEST")/ci-billing-waiver.json"
   if node "$SCRIPT_DIR/quality-ci-billing-waiver.js" \
     --repo "$EXPECTED_REPOSITORY" --pr "$PR" --head "$MERGE_HEAD" \
     --artifact "$CI_WAIVER_ARTIFACT"; then
