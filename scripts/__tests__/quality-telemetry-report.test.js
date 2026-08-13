@@ -38,6 +38,33 @@ describe("quality telemetry report", () => {
     expect(percentile([], 50)).toBeNull();
   });
 
+  it("labels a zero-campaign population incomplete", () => {
+    const report = buildReport(
+      {
+        records: [],
+        rawRecordCount: 0,
+        duplicateRecordCount: 0,
+        malformedLines: 0,
+        unsupportedRecords: 0,
+      },
+      {
+        ciEvidence: {
+          value: null,
+          complete: false,
+          reason: "ci-snapshot-not-provided",
+        },
+        dispositionEvidence: {
+          value: null,
+          complete: false,
+          reason: "finding-dispositions-not-provided",
+        },
+        generatedAt: "2026-08-13T01:00:00Z",
+      },
+    );
+    expect(report.completeness.telemetry).toBe(false);
+    expect(report.completeness.reasons).toContain("no-telemetry-records");
+  });
+
   it("reports duration, fallback, convergence, duplicate suites, CI, and findings", () => {
     const records = [
       record({
