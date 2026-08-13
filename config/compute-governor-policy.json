@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "policyVersion": "2026-08-12",
+  "routes": {
+    "economy-micro": {
+      "caps": { "maxWallSeconds": 300, "maxWorkers": 1 },
+      "providers": {
+        "codex": { "model": "gpt-5.6-luna", "effort": "medium" },
+        "claude": { "model": "claude-haiku-4-5", "effort": null }
+      }
+    },
+    "economy-builder": {
+      "caps": { "maxWallSeconds": 900, "maxWorkers": 1 },
+      "providers": {
+        "codex": { "model": "gpt-5.6-luna", "effort": "high" },
+        "claude": { "model": "claude-sonnet-5", "effort": "low" }
+      }
+    },
+    "standard": {
+      "caps": { "maxWallSeconds": 1800, "maxWorkers": 1 },
+      "providers": {
+        "codex": { "model": "gpt-5.6-terra", "effort": "medium" },
+        "claude": { "model": "claude-sonnet-5", "effort": "medium" }
+      }
+    },
+    "expert": {
+      "caps": { "maxWallSeconds": 2700, "maxWorkers": 1 },
+      "providers": {
+        "codex": { "model": "gpt-5.6-terra", "effort": "high" },
+        "claude": { "model": "claude-sonnet-5", "effort": "high" }
+      }
+    },
+    "critical": {
+      "caps": { "maxWallSeconds": 3600, "maxWorkers": 1 },
+      "providers": {
+        "codex": { "model": "gpt-5.6-sol", "effort": "high" },
+        "claude": { "model": "claude-opus-5", "effort": "high" }
+      }
+    }
+  },
+  "protectedSurfaces": [
+    "auth",
+    "authorization",
+    "payments",
+    "durable-data",
+    "migration",
+    "public-contract",
+    "deployment",
+    "security",
+    "cross-repository"
+  ],
+  "protectedPromptPatterns": {
+    "auth": [
+      "\\bauth(?:entication)?\\b",
+      "\\blogin\\b",
+      "\\boauth\\b",
+      "\\bsession\\b"
+    ],
+    "authorization": [
+      "\\bauthori[sz](?:e|ation)\\b",
+      "\\bpermission(?:s)?\\b",
+      "\\brole(?:s)?\\b"
+    ],
+    "payments": [
+      "\\bpayment(?:s)?\\b",
+      "\\bstripe\\b",
+      "\\bbilling\\b",
+      "\\bcheckout\\b",
+      "\\bsubscription(?:s)?\\b"
+    ],
+    "durable-data": [
+      "\\bdatabase\\b",
+      "\\bpersist(?:ence|ent|ed)?\\b",
+      "\\bdurable data\\b",
+      "\\bqueue database\\b"
+    ],
+    "migration": ["\\bmigration(?:s)?\\b", "\\bschema change\\b"],
+    "public-contract": [
+      "\\bpublic api\\b",
+      "\\bsdk\\b",
+      "\\bcli contract\\b",
+      "\\bpublished package\\b"
+    ],
+    "deployment": [
+      "\\bdeploy(?:ment|ing)?\\b",
+      "\\bproduction\\b",
+      "\\brelease workflow\\b"
+    ],
+    "security": [
+      "\\bsecurity\\b",
+      "\\bsecret(?:s)?\\b",
+      "\\bcredential(?:s)?\\b",
+      "\\bvulnerabilit(?:y|ies)\\b"
+    ],
+    "cross-repository": [
+      "\\bcross[- ]repo(?:sitory)?\\b",
+      "\\bsubmodule\\b",
+      "\\bmultiple repositories\\b"
+    ]
+  }
+}

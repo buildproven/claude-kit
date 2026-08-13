@@ -34,10 +34,20 @@ if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
 fi
 CI_BUDGET_ARGS=()
 [ -z "$CI_BUDGET_MODE" ] || CI_BUDGET_ARGS=(--mode "$CI_BUDGET_MODE")
-node "$SCRIPT_DIR/ci-budget-admission.js" "${CI_BUDGET_ARGS[@]}" >/dev/null || {
-  echo "❌ MERGE BLOCKED: GitHub Actions minute policy denied this candidate." >&2
-  exit 1
-}
+REQUIRED_CHECKS_JSON="$(gh pr checks "$PR" --repo "$EXPECTED_REPOSITORY" \
+  --required --json state 2>/dev/null || true)"
+CI_ALREADY_GREEN=false
+if printf '%s' "$REQUIRED_CHECKS_JSON" | jq -e \
+  'length > 0 and all(.[]; .state == "SUCCESS" or .state == "SKIPPED" or .state == "NEUTRAL")' \
+  >/dev/null 2>&1; then
+  CI_ALREADY_GREEN=true
+fi
+if [ "$CI_ALREADY_GREEN" != true ]; then
+  node "$SCRIPT_DIR/ci-budget-admission.js" "${CI_BUDGET_ARGS[@]}" >/dev/null || {
+    echo "❌ MERGE BLOCKED: GitHub Actions minute policy denied this candidate." >&2
+    exit 1
+  }
+fi
 
 # Keep the private signer outside every repository.  An explicit environment
 # setting wins; the conventional local path makes autonomous quality runs work
@@ -109,6 +119,13 @@ case "$REQUESTED_LOCAL_REVIEW_EVIDENCE" in
   *) echo "❌ MERGE BLOCKED: QUALITY_LOCAL_REVIEW_EVIDENCE must be true or false." >&2; exit 1 ;;
 esac
 LOCAL_REVIEW_EVIDENCE=false
+LOCAL_REVIEW_EVIDENCE_ARTIFACT="$(dirname "$MANIFEST")/local-review-evidence.json"
+prepare_local_review_evidence() {
+  node "$SCRIPT_DIR/quality-review-check.js" write-local \
+    --manifest "$MANIFEST" --artifact "$LOCAL_REVIEW_EVIDENCE_ARTIFACT" >/dev/null
+  node "$SCRIPT_DIR/quality-review-check.js" verify-local \
+    --manifest "$MANIFEST" --artifact "$LOCAL_REVIEW_EVIDENCE_ARTIFACT" >/dev/null
+}
 if [ -n "$STAMP_HEAD" ]; then
   # Backward compatibility for campaigns that were created before the
   # check-run evidence transport landed. Never create another stamp, but let
@@ -152,13 +169,29 @@ else
   # operator capability is the explicit local evidence transport instead.
   if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
     --scope operator-ci-billing-override >/dev/null 2>&1; then
+    prepare_local_review_evidence
     LOCAL_REVIEW_EVIDENCE=true
     echo "⚠️  [quality] skipping GitHub review check publication under the exact-head CI billing override; final authorization will validate the local signed review checkpoint." >&2
   elif [ "$REQUESTED_LOCAL_REVIEW_EVIDENCE" = true ]; then
-    echo "❌ MERGE BLOCKED: local review evidence requires a signed operator-ci-billing-override capability." >&2
-    exit 1
+    if [ "$CI_ALREADY_GREEN" = true ]; then
+      prepare_local_review_evidence
+      LOCAL_REVIEW_EVIDENCE=true
+      echo "⚠️  [quality] using signed exact-head local review evidence because required CI is already green and custom check publication is unavailable." >&2
+    else
+      echo "❌ MERGE BLOCKED: local review evidence requires green required CI or a signed operator-ci-billing-override capability." >&2
+      exit 1
+    fi
   else
-    node "$SCRIPT_DIR/quality-review-check.js" publish --manifest "$MANIFEST" >/dev/null
+    if ! node "$SCRIPT_DIR/quality-review-check.js" publish --manifest "$MANIFEST" >/dev/null; then
+      if [ "$CI_ALREADY_GREEN" = true ]; then
+        prepare_local_review_evidence
+        LOCAL_REVIEW_EVIDENCE=true
+        echo "⚠️  [quality] custom review check publication is unavailable; using signed exact-head local review evidence with already-green required CI." >&2
+      else
+        echo "❌ MERGE BLOCKED: custom review check publication failed before required CI was green." >&2
+        exit 1
+      fi
+    fi
   fi
 fi
 
@@ -291,6 +324,7 @@ if [ "$CI_BILLING_WAIVED" = true ]; then
     bash "$SCRIPT_DIR/quality-authorize-merge.sh" --manifest "$MANIFEST"
 elif [ "$LOCAL_REVIEW_EVIDENCE" = true ]; then
   QUALITY_LOCAL_REVIEW=true \
+    QUALITY_LOCAL_REVIEW_ARTIFACT="$LOCAL_REVIEW_EVIDENCE_ARTIFACT" \
     bash "$SCRIPT_DIR/quality-authorize-merge.sh" --manifest "$MANIFEST"
 else
   bash "$SCRIPT_DIR/quality-authorize-merge.sh" --manifest "$MANIFEST"

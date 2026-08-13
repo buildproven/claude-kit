@@ -253,7 +253,7 @@ main() {
   log "Scoped Linear backlog reachable; next issue=$current_issue"
   if [ "$DRY_RUN" -eq 1 ]; then finish "dry-run" 0; return $?; fi
 
-  local error_streak=0 now remaining main_before main_after run_rc receipt issue_state iteration_log
+  local error_streak=0 now remaining main_before main_after run_rc receipt issue_state iteration_log provider_output_dir
   while [ "$items_done" -lt "$MAX_ITEMS" ]; do
     now=$(date +%s)
     [ "$now" -lt "$DEADLINE_EPOCH" ] || { finish "max-hours" 0; return $?; }
@@ -267,13 +267,20 @@ main() {
     log "Attempt $attempts: exact Linear item $current_issue (${remaining}s wall budget left)"
 
     prompt_file="$LOG_DIR/overnight-loop-${current_issue}-${START_EPOCH}-${attempts}.prompt"
+    execution_facts_file="$LOG_DIR/overnight-loop-${current_issue}-${START_EPOCH}-${attempts}.facts.json"
+    provider_output_dir="$LOG_DIR/overnight-loop-${current_issue}-${START_EPOCH}-${attempts}.provider"
     printf '%s\n' "Run the ralph workflow until exactly item:$current_issue in target directory $TARGET_DIR. Use the repository's quality merge gate and stop after this exact item is merged." > "$prompt_file"
-    provider_args=(--prompt-file "$prompt_file" --target-dir "$TARGET_DIR" --timeout "$remaining")
+    # The unattended Ralph child starts from a conservative deterministic
+    # plan. A future classifier can strengthen these facts; it may never claim
+    # localization or proof that the caller has not established.
+    printf '%s\n' '{"phase":"implement","localized":false,"reversible":false,"targetedProof":false,"ambiguous":true,"changedFiles":0,"protectedSurfaces":[],"sameFailureStreak":0}' > "$execution_facts_file"
+    provider_args=(--prompt-file "$prompt_file" --execution-facts "$execution_facts_file" --target-dir "$TARGET_DIR" --timeout "$remaining" --output-dir "$provider_output_dir")
     [ -z "$PROVIDER" ] || provider_args+=(--provider "$PROVIDER")
     [ -z "$PROVIDER_FALLBACK" ] || provider_args+=(--fallback "$PROVIDER_FALLBACK")
     "$SCRIPT_DIR/provider-run.sh" "${provider_args[@]}" 2>&1 | tee -a "$LOG_FILE" "$iteration_log" >/dev/null
     run_rc=${PIPESTATUS[0]}
     rm -f "$prompt_file"
+    rm -f "$execution_facts_file"
     main_after=$(main_tip)
     [ -n "$main_after" ] || { finish "git-unreadable" 1; return $?; }
     issue_state=$(linear_issue_state "$current_issue") || { finish "linear-unreachable" 1; return $?; }

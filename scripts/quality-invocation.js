@@ -542,6 +542,17 @@ function committedFile(root, head, file) {
   }
 }
 
+function committedFileBuffer(root, head, file) {
+  try {
+    return execFileSync("git", ["show", `${head}:${file}`], {
+      cwd: root,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch {
+    return null;
+  }
+}
+
 function packageManagerAt(root, head, packageJson) {
   const declared = String(packageJson.packageManager || "").split("@")[0];
   if (["npm", "pnpm", "yarn", "bun"].includes(declared)) return declared;
@@ -1043,7 +1054,7 @@ function discoverRequiredGates(
 
 function discoverImpactTestGate(root, options, head, baseSha) {
   if (options["skip-tests"] === true) return null;
-  const impactPolicy = committedFile(
+  const impactPolicy = committedFileBuffer(
     root,
     head,
     ".buildproven/test-impact.json",
@@ -1088,11 +1099,16 @@ function discoverVerifyAppGate(options, nativeGates) {
   };
 }
 
-function unionRequiredGates(existing, discovered) {
+function unionRequiredGates(existing, discovered, replaceNames = new Set()) {
   const required = [...existing];
   for (const gate of discovered) {
-    if (!required.some((current) => current.name === gate.name)) {
+    const currentIndex = required.findIndex(
+      (current) => current.name === gate.name,
+    );
+    if (currentIndex === -1) {
       required.push(gate);
+    } else if (replaceNames.has(gate.name)) {
+      required[currentIndex] = gate;
     }
   }
   return required;
@@ -2241,6 +2257,30 @@ function advanceHead(manifest, root, { acceptedConditions = [] } = {}) {
   }
   if (replay) recordBaseRebaseCarry(manifest, priorHead, nextHead, replay);
   invalidateApproval(manifest, nextHead);
+  const completed = completedReviews(manifest);
+  const previousReview = completed.at(-1);
+  const nextReviewRound = completed.length + 1;
+  if (previousReview) {
+    for (const authorization of manifest.governor.authorizedAttempts) {
+      const reservedFor =
+        authorization.reservedForReviewHead || authorization.head;
+      if (
+        authorization.number === nextReviewRound &&
+        authorization.consumedAt === null &&
+        !authorization.invalidatedAt &&
+        reservedFor === previousReview.to
+      ) {
+        authorization.reservedForReviewHead = previousReview.to;
+        authorization.advances ??= [];
+        authorization.advances.push({
+          from: authorization.head,
+          to: nextHead,
+          at: new Date().toISOString(),
+        });
+        authorization.head = nextHead;
+      }
+    }
+  }
   if (stampHead) {
     manifest.merge.invalidatedStamps.push({
       head: stampHead,
@@ -6041,6 +6081,7 @@ function runAdvance(manifestArg, manifest, rawArgs) {
     reconcileAbandonedExecution(locked);
     validateIdentity(locked, manifest.repo.realpath, { requireHead: false });
     bindPrRepositoryIdentity(locked, options);
+    const priorHead = locked.revisions.currentHead;
     const nextHead = git(locked.repo.realpath, ["rev-parse", "HEAD"]);
     if (options["allow-exhausted-review"]) {
       validateDescendantAdvanceAuthorization(
@@ -6051,6 +6092,27 @@ function runAdvance(manifestArg, manifest, rawArgs) {
     }
     advanceHead(locked, manifest.repo.realpath, { acceptedConditions });
     validateIdentity(locked, manifest.repo.realpath);
+    const gateBase = isAncestorOf(locked.repo.realpath, priorHead, nextHead)
+      ? priorHead
+      : effectiveBaseSha(locked);
+    const reusableTestGate = [...locked.gates]
+      .reverse()
+      .find(
+        (gate) =>
+          gate.name === "test" &&
+          gate.status === "success" &&
+          isAncestorOf(locked.repo.realpath, gate.head, nextHead),
+      );
+    const reuseTestEvidence = Boolean(
+      reusableTestGate &&
+      nextHead !== reusableTestGate.head &&
+      !changedFiles(
+        locked.repo.realpath,
+        reusableTestGate.head,
+        nextHead,
+      ).includes(".buildproven/test-impact.json"),
+    );
+    const discoveryBase = reuseTestEvidence ? reusableTestGate.head : gateBase;
     const discovered = discoverRequiredGates(
       locked.repo.realpath,
       {
@@ -6058,11 +6120,13 @@ function runAdvance(manifestArg, manifest, rawArgs) {
         "verify-app": locked.options?.verifyApp === true,
       },
       locked.revisions.currentHead,
-      effectiveBaseSha(locked),
+      discoveryBase,
     );
+    const replaceNames = new Set();
+    if (reuseTestEvidence) replaceNames.add("test");
     locked.requiredGates = locked[NEEDS_REQUIRED_GATES_MIGRATION]
       ? discovered
-      : unionRequiredGates(locked.requiredGates, discovered);
+      : unionRequiredGates(locked.requiredGates, discovered, replaceNames);
     locked.requiredGatesPolicyVersion = REQUIRED_GATES_POLICY_VERSION;
     locked[NEEDS_REQUIRED_GATES_MIGRATION] = false;
     locked.governor.lastActivityAt = new Date().toISOString();
@@ -6261,6 +6325,7 @@ module.exports = {
   writeArtifactInventory,
   validateIdentity,
   validateDescendantAdvanceAuthorization,
+  unionRequiredGates,
   withManifestLock,
   withManifestLockRaw,
 };

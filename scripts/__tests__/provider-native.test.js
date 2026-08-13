@@ -16,6 +16,7 @@ import { makeTempDir } from "./helpers/tmp.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const PROVIDER_RUN = path.join(ROOT, "scripts", "provider-run.sh");
+const COMPUTE_GOVERNOR = path.join(ROOT, "scripts", "compute-governor.js");
 const SKILL_SYNC = path.join(ROOT, "scripts", "setup-codex-skills.sh");
 const MCP_SYNC = path.join(ROOT, "scripts", "mcp-sync.py");
 const AUDIT_REPO = path.join(ROOT, "scripts", "steward", "audit-repo.sh");
@@ -30,6 +31,17 @@ const SURFACE = path.join(ROOT, "scripts", "surface-audit.js");
 function executable(file, body) {
   writeFileSync(file, `#!/usr/bin/env bash\n${body}\n`);
   chmodSync(file, 0o755);
+}
+
+function governedPlan(facts, prompt, target) {
+  return execFileSync(
+    "node",
+    [COMPUTE_GOVERNOR, "resolve-execution", "-", prompt, target],
+    {
+      input: JSON.stringify(facts),
+      encoding: "utf8",
+    },
+  );
 }
 
 describe("provider-native platform", () => {
@@ -1199,6 +1211,401 @@ describe("provider-native platform", () => {
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout).failedChecks).toBe(0);
     expect(readFileSync(observed, "utf8").trim()).toBe("22");
+  });
+
+  it("launches a governed Codex child with the plan's explicit model and effort", () => {
+    const dir = makeTempDir("provider-native-governed-codex-");
+    const bin = path.join(dir, "bin");
+    const output = path.join(dir, "output");
+    const prompt = path.join(dir, "prompt");
+    const plan = path.join(dir, "plan.json");
+    const calls = path.join(dir, "codex.calls");
+    mkdirSync(bin);
+    writeFileSync(prompt, "implement this narrow behavior\n");
+    writeFileSync(
+      plan,
+      governedPlan(
+        {
+          provider: "codex",
+          phase: "implement",
+          localized: true,
+          reversible: true,
+          targetedProof: true,
+          changedFiles: 1,
+          protectedSurfaces: [],
+          sameFailureStreak: 0,
+        },
+        prompt,
+        dir,
+      ),
+    );
+    executable(
+      path.join(bin, "codex"),
+      [
+        `printf '%s\\n' "$*" > '${calls}'`,
+        'for arg in "$@"; do',
+        '  if [ "$arg" = "-o" ]; then shift_next=1; continue; fi',
+        '  if [ "${shift_next:-0}" = 1 ]; then last_message="$arg"; shift_next=0; fi',
+        "done",
+        'echo "governed codex completed" > "$last_message"',
+        "exit 0",
+      ].join("\n"),
+    );
+
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--target-dir",
+        dir,
+        "--execution-plan",
+        plan,
+        "--output-dir",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(calls, "utf8")).toContain("--model gpt-5.6-luna");
+    expect(readFileSync(calls, "utf8")).toContain(
+      'model_reasoning_effort="high"',
+    );
+    const record = JSON.parse(
+      readFileSync(path.join(output, "run-record.json"), "utf8"),
+    );
+    expect(record).toMatchObject({
+      effective: { provider: "codex", model: "gpt-5.6-luna", effort: "high" },
+      outcome: { status: "passed" },
+      attempts: 1,
+      usage: null,
+    });
+  });
+
+  it("raises a falsely empty protected-surface list from task evidence", () => {
+    const dir = makeTempDir("provider-native-protected-binding-");
+    const prompt = path.join(dir, "prompt");
+    writeFileSync(prompt, "change the OAuth login session behavior\n");
+    const plan = JSON.parse(
+      governedPlan(
+        {
+          provider: "codex",
+          phase: "implement",
+          localized: true,
+          reversible: true,
+          targetedProof: true,
+          changedFiles: 1,
+          protectedSurfaces: [],
+          sameFailureStreak: 0,
+        },
+        prompt,
+        dir,
+      ),
+    );
+    expect(plan).toMatchObject({
+      route: "critical",
+      model: "gpt-5.6-sol",
+      safetyFloor: "critical",
+      facts: { protectedSurfaces: ["auth"] },
+      executionBinding: { classifiedProtectedSurfaces: ["auth"] },
+    });
+  });
+
+  it("rejects a persisted plan reused for a different protected prompt", () => {
+    const dir = makeTempDir("provider-native-stale-binding-");
+    const output = path.join(dir, "output");
+    const prompt = path.join(dir, "prompt");
+    const plan = path.join(output, "execution-plan.json");
+    mkdirSync(output);
+    writeFileSync(prompt, "update a local label\n");
+    writeFileSync(
+      plan,
+      governedPlan(
+        {
+          provider: "codex",
+          phase: "implement",
+          localized: true,
+          reversible: true,
+          targetedProof: true,
+          changedFiles: 1,
+          protectedSurfaces: [],
+          sameFailureStreak: 0,
+        },
+        prompt,
+        dir,
+      ),
+    );
+    writeFileSync(prompt, "change Stripe payment authorization\n");
+
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--execution-plan",
+        plan,
+        "--target-dir",
+        dir,
+        "--output-dir",
+        output,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "execution plan is not bound to this prompt and target",
+    );
+  });
+
+  it("resolves execution facts before launching and persists the exact plan", () => {
+    const dir = makeTempDir("provider-native-governed-facts-");
+    const bin = path.join(dir, "bin");
+    const output = path.join(dir, "output");
+    const prompt = path.join(dir, "prompt");
+    const facts = path.join(output, "execution-facts.json");
+    mkdirSync(bin);
+    mkdirSync(output);
+    writeFileSync(prompt, "perform a bounded scan\n");
+    writeFileSync(
+      facts,
+      JSON.stringify({
+        phase: "scan",
+        readOnly: true,
+        localized: true,
+        targetedProof: true,
+        changedFiles: 0,
+        protectedSurfaces: [],
+        sameFailureStreak: 0,
+      }),
+    );
+    executable(
+      path.join(bin, "codex"),
+      [
+        'for arg in "$@"; do',
+        '  if [ "$arg" = "-o" ]; then shift_next=1; continue; fi',
+        '  if [ "${shift_next:-0}" = 1 ]; then last_message="$arg"; shift_next=0; fi',
+        "done",
+        'echo "scan complete" > "$last_message"',
+      ].join("\n"),
+    );
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--execution-facts",
+        facts,
+        "--provider",
+        "codex",
+        "--target-dir",
+        dir,
+        "--output-dir",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(
+      JSON.parse(
+        readFileSync(path.join(output, "execution-plan.json"), "utf8"),
+      ),
+    ).toMatchObject({
+      route: "economy-micro",
+      provider: "codex",
+      model: "gpt-5.6-luna",
+      contextClass: "fresh-bounded",
+    });
+  });
+
+  it("accepts an approved plan already persisted in its evidence directory", () => {
+    const dir = makeTempDir("provider-native-persisted-plan-");
+    const bin = path.join(dir, "bin");
+    const output = path.join(dir, "output");
+    const prompt = path.join(dir, "prompt");
+    const plan = path.join(output, "execution-plan.json");
+    mkdirSync(bin);
+    mkdirSync(output);
+    writeFileSync(prompt, "perform the approved work\n");
+    writeFileSync(
+      plan,
+      governedPlan(
+        {
+          provider: "codex",
+          phase: "implement",
+          localized: false,
+          reversible: false,
+          targetedProof: false,
+          ambiguous: true,
+          changedFiles: 0,
+          protectedSurfaces: [],
+          sameFailureStreak: 0,
+        },
+        prompt,
+        dir,
+      ),
+    );
+    executable(
+      path.join(bin, "codex"),
+      [
+        'for arg in "$@"; do',
+        '  if [ "$arg" = "-o" ]; then shift_next=1; continue; fi',
+        '  if [ "${shift_next:-0}" = 1 ]; then last_message="$arg"; shift_next=0; fi',
+        "done",
+        'echo "approved run complete" > "$last_message"',
+      ].join("\n"),
+    );
+
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--execution-plan",
+        plan,
+        "--target-dir",
+        dir,
+        "--output-dir",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(plan, "utf8"))).toMatchObject({
+      route: "standard",
+      model: "gpt-5.6-terra",
+    });
+    expect(
+      JSON.parse(readFileSync(path.join(output, "run-record.json"), "utf8")),
+    ).toMatchObject({ outcome: { status: "passed" } });
+  });
+
+  it("does not publish a provider receipt when terminal evidence cannot be persisted", () => {
+    const dir = makeTempDir("provider-native-record-failure-");
+    const bin = path.join(dir, "bin");
+    const output = path.join(dir, "output");
+    const prompt = path.join(dir, "prompt");
+    const facts = path.join(dir, "facts.json");
+    mkdirSync(bin);
+    writeFileSync(prompt, "perform governed work\n");
+    writeFileSync(
+      facts,
+      JSON.stringify({
+        phase: "scan",
+        readOnly: true,
+        localized: true,
+        targetedProof: true,
+        changedFiles: 0,
+        protectedSurfaces: [],
+        sameFailureStreak: 0,
+      }),
+    );
+    executable(
+      path.join(bin, "codex"),
+      [
+        'for arg in "$@"; do',
+        '  if [ "$arg" = "-o" ]; then shift_next=1; continue; fi',
+        '  if [ "${shift_next:-0}" = 1 ]; then last_message="$arg"; shift_next=0; fi',
+        "done",
+        'echo "provider completed" > "$last_message"',
+        `chmod 0555 '${output}'`,
+      ].join("\n"),
+    );
+
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--execution-facts",
+        facts,
+        "--provider",
+        "codex",
+        "--target-dir",
+        dir,
+        "--output-dir",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+    chmodSync(output, 0o755);
+
+    expect(result.status).toBe(78);
+    expect(result.stderr).toContain(
+      "provider succeeded but terminal evidence could not be persisted",
+    );
+    expect(existsSync(path.join(output, "provider"))).toBe(false);
+    expect(existsSync(path.join(output, "run-record.json"))).toBe(false);
+  });
+
+  it("launches a governed Claude child with explicit model and effort", () => {
+    const dir = makeTempDir("provider-native-governed-claude-");
+    const bin = path.join(dir, "bin");
+    const output = path.join(dir, "output");
+    const prompt = path.join(dir, "prompt");
+    const facts = path.join(dir, "facts.json");
+    const calls = path.join(dir, "claude.calls");
+    mkdirSync(bin);
+    writeFileSync(prompt, "diagnose this behavior\n");
+    writeFileSync(
+      facts,
+      JSON.stringify({
+        phase: "diagnose",
+        localized: false,
+        targetedProof: false,
+        ambiguous: true,
+        changedFiles: 0,
+        protectedSurfaces: [],
+        sameFailureStreak: 0,
+      }),
+    );
+    executable(
+      path.join(bin, "claude"),
+      `printf '%s\\n' "$*" > '${calls}'\nprintf '%s\\n' '{"is_error":false,"result":"done"}'`,
+    );
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--execution-facts",
+        facts,
+        "--provider",
+        "claude",
+        "--fallback",
+        "none",
+        "--target-dir",
+        dir,
+        "--output-dir",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(calls, "utf8")).toContain("--model claude-sonnet-5");
+    expect(readFileSync(calls, "utf8")).toContain("--effort medium");
   });
 
   it("keeps the public command surface within its budget", () => {

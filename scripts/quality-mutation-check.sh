@@ -77,6 +77,31 @@ while IFS= read -r ARGUMENT; do
 done < <(printf '%s' "$TEST_PLAN" | jq -r '.args[]')
 MUTATION_TEST_ARGS=("${TEST_ARGS[@]}")
 
+run_candidate_tests() {
+  local candidate="$1" log="$2" timeout_seconds="$3" plan mode command_count index executable
+  local -a args=()
+  if [ -f "$SANDBOX/.buildproven/test-impact.json" ] &&
+     [ -f "$SANDBOX/scripts/test-impact.js" ]; then
+    plan="$(cd "$SANDBOX" && node scripts/test-impact.js -- "$candidate" 2>> "$log")" || plan=""
+    mode="$(printf '%s' "$plan" | jq -r '.mode // empty' 2>/dev/null || true)"
+    command_count="$(printf '%s' "$plan" | jq -r '.commands | length' 2>/dev/null || printf 0)"
+    if [ "$mode" = focused ] && [ "$command_count" -gt 0 ]; then
+      for ((index = 0; index < command_count; index += 1)); do
+        executable="$(printf '%s' "$plan" | jq -r ".commands[$index].executable")"
+        args=()
+        while IFS= read -r argument; do args+=("$argument"); done < <(
+          printf '%s' "$plan" | jq -r ".commands[$index].args[]"
+        )
+        bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
+          "$executable" "${args[@]}" >> "$log" 2>&1 || return $?
+      done
+      return 0
+    fi
+  fi
+  bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
+    "$TEST_EXECUTABLE" "${MUTATION_TEST_ARGS[@]}" >> "$log" 2>&1
+}
+
 # Mutation evidence needs one observed failure, not a complete failure report.
 # Use the test runner's native fail-fast option when the persisted npm test
 # script names a supported runner. This preserves the exact test suite while
@@ -370,8 +395,8 @@ for CANDIDATE in "${CANDIDATES[@]}"; do
   BASELINE_LOG="$STATE_ROOT/mutation/${HEAD}.$(basename "$CANDIDATE").baseline.log"
   set +e
   cd "$SANDBOX"
-  bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$REMAINING" -- \
-    "$TEST_EXECUTABLE" "${MUTATION_TEST_ARGS[@]}" > "$BASELINE_LOG" 2>&1
+  : > "$BASELINE_LOG"
+  run_candidate_tests "$CANDIDATE" "$BASELINE_LOG" "$REMAINING"
   BASELINE_RESULT=$?
   set -e
   cd "$ROOT"
@@ -394,8 +419,8 @@ for CANDIDATE in "${CANDIDATES[@]}"; do
 
   set +e
   cd "$SANDBOX"
-  bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$REMAINING" -- \
-    "$TEST_EXECUTABLE" "${MUTATION_TEST_ARGS[@]}" > "$LOG" 2>&1
+  : > "$LOG"
+  run_candidate_tests "$CANDIDATE" "$LOG" "$REMAINING"
   RESULT=$?
   set -e
   cd "$ROOT"

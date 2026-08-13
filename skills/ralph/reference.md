@@ -39,6 +39,10 @@ non-persistent provider process per item through `scripts/provider-run.sh`.
 That runner uses `codex exec --ephemeral` or Claude's
 `--no-session-persistence`, so an item receives only its explicit prompt and
 the persisted backlog/quality state—not its parent's session history.
+The unattended launcher also passes conservative execution facts through the
+[Compute Governor](../../docs/compute-governor.md), which persists the exact
+provider/model/effort plan before launch. It never claims localization or
+targeted proof that the caller has not established.
 
 Before an unattended run, acquire operator-scoped admission with
 `scripts/autonomous-loop-runtime.js admit`. Its launcher **must** pass the
@@ -54,6 +58,45 @@ loop across all repositories for the operator, and records only sanitized
 percentages/outcomes under `$XDG_STATE_HOME/claude-kit/autonomous-loops/`.
 Never put account credentials, raw usage responses, or that telemetry in a
 repository.
+
+## Governed provider launch
+
+When interactive Ralph has inspected an item, write a fact packet that
+states its phase, provider, protected surfaces, scope, ambiguity, targeted
+deterministic proof, and matching-failure streak. Do not describe every coding
+task as `standard` by default, and do not call a change cheap solely because it
+is small. The unattended shell launcher cannot infer those facts safely, so it
+uses a conservative `standard` packet and a durable per-attempt evidence
+directory. Resolve an evidence-backed interactive packet through the kit's
+Compute Governor:
+
+```bash
+node "$SCRIPT_DIR/compute-governor.js" explain "$EVIDENCE_DIR/item-facts.json"
+node "$SCRIPT_DIR/compute-governor.js" resolve-execution \
+  "$EVIDENCE_DIR/item-facts.json" \
+  "$EVIDENCE_DIR/item-prompt.md" \
+  "$TARGET_DIR" \
+  > "$EVIDENCE_DIR/item-plan.json"
+```
+
+The plan is a proposed route. `economy-*` remains a calibration candidate until
+the configured evidence promotes it; protected work may never be routed below
+its safety floor. Launch the fresh child through the plan, never by inheriting
+the current session model or effort:
+
+```bash
+bash "$SCRIPT_DIR/provider-run.sh" \
+  --prompt-file "$EVIDENCE_DIR/item-prompt.md" \
+  --execution-plan "$EVIDENCE_DIR/item-plan.json" \
+  --target-dir "$TARGET_DIR" \
+  --output-dir "$EVIDENCE_DIR/provider-output"
+```
+
+`provider-run.sh` validates the plan before spawning a provider, pins Codex or
+Claude model/effort where supported, and writes a redacted `run-record.json`.
+An unsupported or mismatched plan is a launch failure; do not silently fall
+back to the interactive model. Two matching failures are a concrete escalation
+trigger. A model asking for more compute is not.
 
 For corrupt admission state, stop that loop and use its exact ID (or the
 64-character filename hash) for this audited repair. It refuses readable

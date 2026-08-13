@@ -14,9 +14,13 @@ TARGET_DIR="$(pwd)"
 TIMEOUT_SECONDS=1800
 SANDBOX="workspace-write"
 OUTPUT_DIR=""
+EXECUTION_PLAN=""
+EXECUTION_FACTS=""
+GOVERNED_MODEL=""
+GOVERNED_EFFORT=""
 
 usage() {
-  echo "usage: provider-run.sh --prompt-file file [--provider auto|codex|claude] [--fallback none|codex|claude] [--target-dir dir] [--timeout seconds] [--sandbox read-only|workspace-write] [--output-dir dir]" >&2
+  echo "usage: provider-run.sh --prompt-file file [--execution-plan plan.json | --execution-facts facts.json] [--provider auto|codex|claude] [--fallback none|codex|claude] [--target-dir dir] [--timeout seconds] [--sandbox read-only|workspace-write] [--output-dir dir]" >&2
 }
 
 while [ $# -gt 0 ]; do
@@ -28,6 +32,8 @@ while [ $# -gt 0 ]; do
     --timeout) TIMEOUT_SECONDS="${2:-}"; shift 2 ;;
     --sandbox) SANDBOX="${2:-}"; shift 2 ;;
     --output-dir) OUTPUT_DIR="${2:-}"; shift 2 ;;
+    --execution-plan) EXECUTION_PLAN="${2:-}"; shift 2 ;;
+    --execution-facts) EXECUTION_FACTS="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) usage; exit 2 ;;
   esac
@@ -37,16 +43,89 @@ done
 [ -d "$TARGET_DIR" ] || { echo "provider-run: target directory does not exist" >&2; exit 2; }
 [[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || { echo "provider-run: timeout must be positive" >&2; exit 2; }
 case "$SANDBOX" in read-only|workspace-write) ;; *) echo "provider-run: invalid sandbox" >&2; exit 2 ;; esac
+[ -z "$EXECUTION_PLAN" ] || [ -r "$EXECUTION_PLAN" ] || { echo "provider-run: unreadable execution plan" >&2; exit 2; }
+[ -z "$EXECUTION_FACTS" ] || [ -r "$EXECUTION_FACTS" ] || { echo "provider-run: unreadable execution facts" >&2; exit 2; }
+[ -z "$EXECUTION_PLAN" ] || [ -z "$EXECUTION_FACTS" ] || { echo "provider-run: choose execution plan or facts, not both" >&2; exit 2; }
+
+OUTPUT_DIR="${OUTPUT_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/provider-run.XXXXXX")}"
+mkdir -p "$OUTPUT_DIR"
+for evidence_name in run-record.json provider; do
+  [ ! -e "$OUTPUT_DIR/$evidence_name" ] || { echo "provider-run: output directory already contains governed evidence" >&2; exit 2; }
+done
+if [ -e "$OUTPUT_DIR/execution-plan.json" ]; then
+  [ -n "$EXECUTION_PLAN" ] || { echo "provider-run: output directory already contains governed evidence" >&2; exit 2; }
+  OUTPUT_PLAN_REAL=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$OUTPUT_DIR/execution-plan.json")
+  INPUT_PLAN_REAL=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$EXECUTION_PLAN")
+  [ "$OUTPUT_PLAN_REAL" = "$INPUT_PLAN_REAL" ] || { echo "provider-run: output directory already contains governed evidence" >&2; exit 2; }
+fi
 
 read -r POLICY_PRIMARY POLICY_FALLBACK < <(bs_provider_load)
+REQUESTED_PROVIDER="$PROVIDER"
 PROVIDER="${PROVIDER:-$POLICY_PRIMARY}"
 FALLBACK="${FALLBACK:-$POLICY_FALLBACK}"
 if [ "$PROVIDER" = auto ]; then PROVIDER=$(bs_provider_invoker); fi
 bs_provider_validate "$PROVIDER" "$FALLBACK" || { echo "provider-run: invalid provider selection" >&2; exit 2; }
 
-OUTPUT_DIR="${OUTPUT_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/provider-run.XXXXXX")}"
-mkdir -p "$OUTPUT_DIR"
+if [ -n "$EXECUTION_FACTS" ]; then
+  EXECUTION_PLAN="$OUTPUT_DIR/execution-plan.json"
+  PLAN_TEMP=$(mktemp "$OUTPUT_DIR/.execution-plan.XXXXXX") \
+    || { echo "provider-run: cannot allocate execution plan" >&2; exit 2; }
+  if ! jq --arg provider "$PROVIDER" '. + {provider:$provider}' "$EXECUTION_FACTS" \
+    | node "$SCRIPT_DIR/compute-governor.js" resolve-execution - "$PROMPT_FILE" "$TARGET_DIR" > "$PLAN_TEMP"; then
+    rm -f "$PLAN_TEMP"
+    echo "provider-run: execution facts cannot be resolved" >&2
+    exit 2
+  fi
+  mv "$PLAN_TEMP" "$EXECUTION_PLAN"
+fi
+
+# A governed invocation may not inherit the interactive session's model or
+# effort. Validate the versioned plan before any provider subprocess starts,
+# then require its provider to match an explicit --provider if one was supplied.
+if [ -n "$EXECUTION_PLAN" ]; then
+  node "$SCRIPT_DIR/compute-governor.js" validate-execution-plan "$EXECUTION_PLAN" "$PROMPT_FILE" "$TARGET_DIR" >/dev/null \
+    || { echo "provider-run: invalid execution plan" >&2; exit 2; }
+  PLAN_PROVIDER=$(jq -r '.provider' "$EXECUTION_PLAN")
+  if [ -n "$REQUESTED_PROVIDER" ] && [ "$REQUESTED_PROVIDER" != auto ] && [ "$REQUESTED_PROVIDER" != "$PLAN_PROVIDER" ]; then
+    echo "provider-run: explicit provider conflicts with execution plan" >&2
+    exit 2
+  fi
+  PROVIDER="$PLAN_PROVIDER"
+  GOVERNED_MODEL=$(jq -r '.model' "$EXECUTION_PLAN")
+  GOVERNED_EFFORT=$(jq -r '.effort // empty' "$EXECUTION_PLAN")
+  PLAN_TIMEOUT=$(jq -r '.caps.maxWallSeconds' "$EXECUTION_PLAN")
+  if [ "$TIMEOUT_SECONDS" -gt "$PLAN_TIMEOUT" ]; then
+    TIMEOUT_SECONDS="$PLAN_TIMEOUT"
+  fi
+  FALLBACK=none
+fi
+
 DEADLINE="$SCRIPT_DIR/run-with-deadline.py"
+GOVERNED_STARTED_AT_MS=""
+[ -z "$EXECUTION_PLAN" ] || GOVERNED_STARTED_AT_MS=$(python3 -c 'import time; print(time.time_ns() // 1000000)')
+
+write_governed_record() {
+  local status="$1" effective_provider="$2" exit_code="$3" failure_category="$4" finished_at_ms record_temp
+  [ -n "$EXECUTION_PLAN" ] || return 0
+  finished_at_ms=$(python3 -c 'import time; print(time.time_ns() // 1000000)')
+  record_temp=$(mktemp "$OUTPUT_DIR/.run-record.XXXXXX") \
+    || { echo "provider-run: cannot allocate run record" >&2; return 1; }
+  jq -n \
+    --argjson plan "$(cat "$EXECUTION_PLAN")" \
+    --arg status "$status" \
+    --arg provider "$effective_provider" \
+    --arg failureCategory "$failure_category" \
+    --argjson exitCode "$exit_code" \
+    --argjson startedAt "$GOVERNED_STARTED_AT_MS" \
+    --argjson finishedAt "$finished_at_ms" \
+    '{schemaVersion:1, plan:$plan, requested:{provider:$plan.provider,model:$plan.model,effort:$plan.effort}, effective:{provider:$provider,model:$plan.model,effort:$plan.effort}, attempts:1, timing:{startedAtEpochMs:$startedAt,finishedAtEpochMs:$finishedAt}, outcome:{status:$status,exitCode:$exitCode,providerFailureCategory:(if $failureCategory == "" then null else $failureCategory end)}, usage:null}' \
+    > "$record_temp"
+  if ! node "$SCRIPT_DIR/compute-governor.js" validate-run-record "$record_temp" >/dev/null; then
+    rm -f "$record_temp"
+    return 1
+  fi
+  mv "$record_temp" "$OUTPUT_DIR/run-record.json"
+}
 
 # Classify a provider failure from STRUCTURED error metadata only — never by
 # grepping the raw transcript (BUI-325). Model output can legitimately contain
@@ -66,6 +145,7 @@ classify_provider_failure() {
 
 run_one() {
   local provider="$1" rc last_message_file events_file result category detail
+  local -a CODEX_PLAN_ARGS=() CLAUDE_MODEL_ARGS=()
   local stdout_file="$OUTPUT_DIR/$provider.stdout"
   local stderr_file="$OUTPUT_DIR/$provider.stderr"
   : > "$stdout_file"
@@ -76,8 +156,11 @@ run_one() {
       last_message_file="$OUTPUT_DIR/$provider.last-message"
       events_file="$OUTPUT_DIR/$provider.events.jsonl"
       : > "$last_message_file"
+      [ -z "$GOVERNED_MODEL" ] || CODEX_PLAN_ARGS+=(--model "$GOVERNED_MODEL")
+      [ -z "$GOVERNED_EFFORT" ] || CODEX_PLAN_ARGS+=(-c "model_reasoning_effort=\"$GOVERNED_EFFORT\"")
       if python3 "$DEADLINE" --timeout-seconds "$TIMEOUT_SECONDS" -- \
         codex exec --ephemeral -C "$TARGET_DIR" -s "$SANDBOX" --json \
+        "${CODEX_PLAN_ARGS[@]}" \
         -o "$last_message_file" - \
         < "$PROMPT_FILE" > "$events_file" 2> "$stderr_file"; then
         rc=0
@@ -105,9 +188,11 @@ run_one() {
       command -v claude >/dev/null 2>&1 || return 74
       if (
         cd "$TARGET_DIR"
+        [ -z "$GOVERNED_MODEL" ] || CLAUDE_MODEL_ARGS+=(--model "$GOVERNED_MODEL")
+        [ -z "$GOVERNED_EFFORT" ] || CLAUDE_MODEL_ARGS+=(--effort "$GOVERNED_EFFORT")
         python3 "$DEADLINE" --timeout-seconds "$TIMEOUT_SECONDS" -- \
           claude -p "$(cat "$PROMPT_FILE")" --no-session-persistence \
-            --dangerously-skip-permissions --output-format json
+            --dangerously-skip-permissions --output-format json "${CLAUDE_MODEL_ARGS[@]}"
       ) > "$stdout_file" 2> "$stderr_file"; then
         rc=0
       else
@@ -142,9 +227,24 @@ run_one "$PROVIDER"
 RC=$?
 set -e
 if [ "$RC" -eq 0 ]; then
+  if ! write_governed_record passed "$PROVIDER" 0 ""; then
+    echo "provider-run: provider succeeded but terminal evidence could not be persisted: $OUTPUT_DIR" >&2
+    exit 78
+  fi
   printf '%s\n' "$PROVIDER" > "$OUTPUT_DIR/provider"
   cat "$OUTPUT_DIR/$PROVIDER.stdout"
   exit 0
+fi
+
+case "$RC" in
+  74) GOVERNED_STATUS="unavailable"; GOVERNED_FAILURE="provider-unavailable" ;;
+  75) GOVERNED_STATUS="exhausted"; GOVERNED_FAILURE="provider-exhaustion" ;;
+  76) GOVERNED_STATUS="timeout"; GOVERNED_FAILURE="provider-timeout" ;;
+  *) GOVERNED_STATUS="failed"; GOVERNED_FAILURE="provider-error" ;;
+esac
+if ! write_governed_record "$GOVERNED_STATUS" "$PROVIDER" "$RC" "$GOVERNED_FAILURE"; then
+  echo "provider-run: provider failed and terminal evidence could not be persisted: $OUTPUT_DIR" >&2
+  exit 78
 fi
 
 if [ "$FALLBACK" != none ] && [ "$FALLBACK" != "$PROVIDER" ] && { [ "$RC" -eq 74 ] || [ "$RC" -eq 75 ] || [ "$RC" -eq 76 ]; }; then

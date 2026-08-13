@@ -51,6 +51,14 @@ if [ -z "$QUALITY_TRAILER" ]; then
       { [ "${QUALITY_CI_BILLING_LOCAL_REVIEW:-false}" = true ] &&
         node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
           --scope operator-ci-billing-override >/dev/null 2>&1; }; }; then
+      LOCAL_ARTIFACT="${QUALITY_LOCAL_REVIEW_ARTIFACT:-}"
+      [ -n "$LOCAL_ARTIFACT" ] || {
+        echo "signed local review evidence artifact is required" >&2
+        exit 1
+      }
+      node "$SCRIPT_DIR/quality-review-check.js" verify-local \
+        --manifest "$MANIFEST" --artifact "$LOCAL_ARTIFACT" \
+        --required-tier "$REQUIRED_TIER" >/dev/null || exit 1
       # A user token cannot create GitHub check-runs (the API requires an App
       # token). Under the exact-head, independently verified billing waiver,
       # use the persisted local review checkpoint instead of pretending a

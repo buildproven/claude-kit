@@ -53,6 +53,32 @@ const WORKFLOW_COMMAND = readFileSync(
  * PASSED. These tests pin the gate that closes that hole.
  */
 describe("quality merge gates", () => {
+  it("does not treat an already-green exact-head check set as new CI spend", () => {
+    const source = STAMP_AND_MERGE;
+    expect(source).toContain('gh pr checks "$PR"');
+    expect(source).toContain("--required --json state");
+    expect(source).toContain('if [ "$CI_ALREADY_GREEN" != true ]; then');
+    expect(source).toMatch(/CI_ALREADY_GREEN[\s\S]*ci-budget-admission\.js/);
+  });
+
+  it("falls back to signed local review evidence only after required CI is green", () => {
+    expect(STAMP_AND_MERGE).toMatch(
+      /quality-review-check\.js" publish[\s\S]*CI_ALREADY_GREEN[\s\S]*LOCAL_REVIEW_EVIDENCE=true/,
+    );
+    expect(STAMP_AND_MERGE).toContain(
+      "custom review check publication failed before required CI was green",
+    );
+    expect(STAMP_AND_MERGE).toContain("QUALITY_LOCAL_REVIEW=true");
+    expect(STAMP_AND_MERGE).toMatch(
+      /quality-review-check\.js" write-local[\s\S]*quality-review-check\.js" verify-local[\s\S]*LOCAL_REVIEW_EVIDENCE=true/,
+    );
+    expect(STAMP_AND_MERGE).toContain(
+      'QUALITY_LOCAL_REVIEW_ARTIFACT="$LOCAL_REVIEW_EVIDENCE_ARTIFACT"',
+    );
+    expect(VALIDATOR).toMatch(
+      /QUALITY_LOCAL_REVIEW_ARTIFACT[\s\S]*quality-review-check\.js" verify-local/,
+    );
+  });
   it("keeps deterministic failures blocking while AI leads stay advisory", () => {
     expect(SKILL).toMatch(/zero deterministic findings/);
     expect(SKILL).toMatch(/AI leads and completion status are advisory/);

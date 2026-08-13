@@ -656,6 +656,37 @@ describe("mutationEvidenceValid — BUI-603 #1 fail-closed on unresolved risk", 
   });
 });
 
+describe("required gate reuse", () => {
+  const fullTest = {
+    name: "test",
+    source: "package.json#scripts.test",
+    command: { kind: "exec", program: "npm", args: ["test"] },
+  };
+  const focusedTest = {
+    name: "test",
+    source: "test-impact:auto:javascript",
+    command: {
+      kind: "exec",
+      program: "npx",
+      args: ["vitest", "related", "--run", "scripts/fix.js"],
+    },
+  };
+
+  it("replaces a completed full test requirement with the remediation delta", () => {
+    const required = invocation.unionRequiredGates(
+      [fullTest],
+      [focusedTest],
+      new Set(["test"]),
+    );
+    expect(required).toEqual([focusedTest]);
+  });
+
+  it("keeps the authoritative full test requirement without reuse evidence", () => {
+    const required = invocation.unionRequiredGates([fullTest], [focusedTest]);
+    expect(required).toEqual([fullTest]);
+  });
+});
+
 describe("quality invocation manifest", () => {
   it("hashes the same recursive core diff that the review envelope contains", () => {
     const submodule = makeTempDir("quality-core-source-");
@@ -3623,6 +3654,39 @@ exit 1
     );
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/not authorized by the governor/);
+  });
+
+  it("carries an unused mandatory rereview round across descendant fixes", () => {
+    const root = repo("reserved-rereview-descendant");
+    const manifestPath = create(root);
+    execFileSync("node", [GOVERNOR, "bump-round", manifestPath], { cwd: root });
+    const firstReview = prepareCodexReview(root, manifestPath);
+    execFileSync("node", [GOVERNOR, "bump-round", manifestPath], { cwd: root });
+
+    writeFileSync(
+      path.join(root, "review-fix.js"),
+      "export const fixed = 1;\n",
+    );
+    git(root, ["add", "review-fix.js"]);
+    git(root, ["commit", "-q", "-m", "fix: address review"]);
+    const fixedHead = git(root, ["rev-parse", "HEAD"]);
+    execFileSync("node", [INVOCATION, "advance", manifestPath], { cwd: root });
+
+    const state = invocation.loadManifest(manifestPath).manifest;
+    expect(state.governor.authorizedAttempts.at(-1)).toMatchObject({
+      number: 2,
+      head: fixedHead,
+      reservedForReviewHead: firstReview.to,
+      consumedAt: null,
+      advances: [{ from: firstReview.to, to: fixedHead }],
+    });
+    expect(
+      spawnSync(
+        "node",
+        [INVOCATION, "provider-attempt", manifestPath, "--provider", "codex"],
+        { cwd: root, encoding: "utf8" },
+      ).status,
+    ).toBe(0);
   });
 
   it("rejects review evidence when the checkout advances before the manifest mutation", () => {
@@ -7333,6 +7397,64 @@ exit 1
     expect(
       advanced.requiredGates.find((gate) => gate.name === "type"),
     ).toBeUndefined();
+  });
+
+  it("replaces a passed audit test gate with the descendant's focused plan", () => {
+    const root = repo("descendant-focused-test-plan");
+    mkdirSync(path.join(root, ".buildproven"));
+    writeFileSync(
+      path.join(root, ".buildproven", "test-impact.json"),
+      JSON.stringify({
+        version: 1,
+        jsRunner: "vitest",
+        mappings: [
+          {
+            paths: ["file.js"],
+            commands: [{ executable: "node", args: ["-e", "process.exit(0)"] }],
+          },
+        ],
+        audits: [
+          {
+            paths: [".buildproven/test-impact.json"],
+            reason: "selector contract changed",
+            commands: [{ executable: "npm", args: ["test"] }],
+          },
+        ],
+      }),
+    );
+    git(root, ["add", ".buildproven/test-impact.json"]);
+    git(root, ["commit", "-q", "-m", "add selector policy"]);
+
+    const manifestPath = create(root);
+    recordGateFixture(manifestPath, "test");
+    writeFileSync(path.join(root, "first-fix.js"), "export const first = 1;\n");
+    git(root, ["add", "first-fix.js"]);
+    git(root, ["commit", "-q", "-m", "fix: first descendant"]);
+    execFileSync("node", [INVOCATION, "advance", manifestPath], { cwd: root });
+
+    // A review fix can advance again before its focused gate is recorded. The
+    // last successful ancestor audit remains the safe delta anchor.
+    writeFileSync(path.join(root, "file.js"), "export const value = 3;\n");
+    git(root, ["commit", "-qam", "fix: focused descendant"]);
+
+    execFileSync("node", [INVOCATION, "advance", manifestPath], { cwd: root });
+    const advanced = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(
+      advanced.requiredGates.find((gate) => gate.name === "test"),
+    ).toMatchObject({
+      source: "test-impact:.buildproven/test-impact.json",
+      executable: process.execPath,
+      args: expect.arrayContaining(["--execute", "--policy-sha256"]),
+    });
+    const testGate = advanced.requiredGates.find(
+      (gate) => gate.name === "test",
+    );
+    const digestIndex = testGate.args.indexOf("--policy-sha256") + 1;
+    expect(testGate.args[digestIndex]).toBe(
+      createHash("sha256")
+        .update(readFileSync(path.join(root, ".buildproven/test-impact.json")))
+        .digest("hex"),
+    );
   });
 
   it("drops a stale inferred python:mypy gate on a v2->v3 migration when the diff doesn't touch .py (BUI-467)", () => {
