@@ -203,7 +203,7 @@ if [ -n "$MANIFEST_ARG" ]; then
   BS_QUALITY_REPOSITORY_LEASE_TOKEN=""
   if [ "$RESUME_MERGE" = true ]; then
     node "$SCRIPT_DIR/quality-repo-lease.js" acquire \
-      --manifest "$MANIFEST_ARG" >/dev/null || exit 1
+      --manifest "$MANIFEST_ARG" --wait-ms 0 >/dev/null || exit 1
     BS_QUALITY_REPOSITORY_LEASE_TOKEN="$(node -e '
       const q = require(process.argv[1]);
       const token = q.loadManifest(process.argv[2]).manifest.merge?.repositoryLease?.token;
@@ -684,7 +684,7 @@ BS_QUALITY_MANIFEST="$(node "$SCRIPT_DIR/quality-invocation.js" "${CREATE_ARGS[@
 BS_QUALITY_REPOSITORY_LEASE_TOKEN=""
 if [ "$ARGS_MERGE" = true ]; then
   node "$SCRIPT_DIR/quality-repo-lease.js" acquire \
-    --manifest "$BS_QUALITY_MANIFEST" >/dev/null || exit 1
+    --manifest "$BS_QUALITY_MANIFEST" --wait-ms 0 >/dev/null || exit 1
   BS_QUALITY_REPOSITORY_LEASE_TOKEN="$(node "$SCRIPT_DIR/quality-invocation.js" field \
     "$BS_QUALITY_MANIFEST" merge.repositoryLease.token)" || exit 1
   export BS_QUALITY_REPOSITORY_LEASE_TOKEN

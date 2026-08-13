@@ -682,12 +682,19 @@ function printExplicitApproval(approval) {
   );
 }
 
+function readRequestFromStdin() {
+  if (process.stdin.isTTY) {
+    throw new Error(
+      "internal wrapper requires a JSON request on standard input; use quality-bootstrap.sh for an interactive run",
+    );
+  }
+  return parseApprovalCommand(parseRequest(fs.readFileSync(0, "utf8")));
+}
+
 function main() {
   const bootstrap = process.argv[2];
   if (!bootstrap) throw new Error("bootstrap path is required");
-  const request = parseApprovalCommand(
-    parseRequest(fs.readFileSync(0, "utf8")),
-  );
+  const request = readRequestFromStdin();
   const argv = request.argv;
   const environmentApproval = approvalRequested();
   if (environmentApproval) assertOuterApprovalContext();
