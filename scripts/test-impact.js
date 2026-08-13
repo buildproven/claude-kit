@@ -11,6 +11,8 @@ const JS_SOURCE = /\.(?:[cm]?js|jsx|ts|tsx)$/;
 const PYTHON = /\.py$/;
 const PYTHON_TEST = /(^|\/)(?:tests?|test)\/.*\.py$|(^|\/)test_[^/]+\.py$/;
 const DOC_ONLY = /\.(?:md|txt)$/;
+const JS_TEST =
+  /(^|\/)(?:tests?|spec|__tests__)(\/|$)|\.(?:test|spec)\.[cm]?[jt]sx?$/;
 
 function command(value, label) {
   const invalid =
@@ -98,6 +100,22 @@ function uniqueCommands(commands) {
   });
 }
 
+function explicitTestTargets(selected) {
+  if (selected.executable !== "npx") return [];
+  const [runner, verb, ...rest] = selected.args;
+  let candidates;
+  if (runner === "vitest" && verb === "run") candidates = rest;
+  else if (runner === "jest" && !verb?.startsWith("-"))
+    candidates = [verb, ...rest];
+  else return [];
+  const targets = [];
+  for (const argument of candidates) {
+    if (argument.startsWith("-")) break;
+    if (JS_TEST.test(argument)) targets.push(argument);
+  }
+  return targets;
+}
+
 function relatedCommand(runner, files) {
   if (runner === "vitest")
     return {
@@ -144,13 +162,14 @@ function plan(changed, rawPolicy = { version: 1 }) {
     commands.push(...rule.commands);
   }
 
-  // A mapping often names its exact behavioral test in argv. When that test
-  // is changed in the same diff, it is already exercised by the mapped
-  // command and must not also be fed to the dependency-aware runner. This is
-  // exact argv equality only: substrings and inferred paths remain uncovered.
+  // A mapping often names its exact behavioral test as a positional runner
+  // target. When that test is changed in the same diff, it must not also be
+  // fed to the dependency-aware runner. Arbitrary argv mentions and option
+  // values are not execution proof, so this parser is deliberately narrow.
   for (const selected of commands) {
+    const targets = explicitTestTargets(selected);
     for (const file of files) {
-      if (selected.args.includes(file)) covered.add(file);
+      if (targets.includes(file)) covered.add(file);
     }
   }
 
@@ -274,4 +293,5 @@ module.exports = {
   plan,
   policyDigest,
   validatePolicy,
+  explicitTestTargets,
 };

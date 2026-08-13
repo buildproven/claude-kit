@@ -113,6 +113,47 @@ describe("cross-language test impact", () => {
     });
   });
 
+  it("does not treat an option value as an executed test target", () => {
+    const test = "scripts/__tests__/tool.test.js";
+    const result = plan(["scripts/tool.js", test], {
+      version: 1,
+      mappings: [
+        {
+          paths: ["scripts/tool.js"],
+          commands: [
+            {
+              executable: "npx",
+              args: ["vitest", "run", "--config", test],
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.commands).toContainEqual({
+      executable: "npx",
+      args: ["vitest", "related", "--run", test],
+    });
+  });
+
+  it("recognizes a positional Jest test target", () => {
+    const test = "tests/tool.test.js";
+    const result = plan(["src/tool.js", test], {
+      version: 1,
+      jsRunner: "jest",
+      mappings: [
+        {
+          paths: ["src/tool.js"],
+          commands: [
+            { executable: "npx", args: ["jest", test, "--runInBand"] },
+          ],
+        },
+      ],
+    });
+    expect(result.commands).toEqual([
+      { executable: "npx", args: ["jest", test, "--runInBand"] },
+    ]);
+  });
+
   it("keeps a mixed diff blocked when one executable path is unmapped", () => {
     expect(plan(["README.md", "src/api.py", "src/view.ts"])).toMatchObject({
       mode: "unmapped",
