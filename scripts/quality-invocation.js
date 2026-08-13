@@ -6060,6 +6060,24 @@ function runAdvance(manifestArg, manifest, rawArgs) {
     const gateBase = isAncestorOf(locked.repo.realpath, priorHead, nextHead)
       ? priorHead
       : effectiveBaseSha(locked);
+    const reusableTestGate = [...locked.gates]
+      .reverse()
+      .find(
+        (gate) =>
+          gate.name === "test" &&
+          gate.status === "success" &&
+          isAncestorOf(locked.repo.realpath, gate.head, nextHead),
+      );
+    const reuseTestEvidence = Boolean(
+      reusableTestGate &&
+      nextHead !== reusableTestGate.head &&
+      !changedFiles(
+        locked.repo.realpath,
+        reusableTestGate.head,
+        nextHead,
+      ).includes(".buildproven/test-impact.json"),
+    );
+    const discoveryBase = reuseTestEvidence ? reusableTestGate.head : gateBase;
     const discovered = discoverRequiredGates(
       locked.repo.realpath,
       {
@@ -6067,24 +6085,10 @@ function runAdvance(manifestArg, manifest, rawArgs) {
         "verify-app": locked.options?.verifyApp === true,
       },
       locked.revisions.currentHead,
-      gateBase,
+      discoveryBase,
     );
     const replaceNames = new Set();
-    const priorTestPassed = locked.gates.some(
-      (gate) =>
-        gate.name === "test" &&
-        gate.head === priorHead &&
-        gate.status === "success",
-    );
-    if (
-      nextHead !== priorHead &&
-      priorTestPassed &&
-      !changedFiles(locked.repo.realpath, gateBase, nextHead).includes(
-        ".buildproven/test-impact.json",
-      )
-    ) {
-      replaceNames.add("test");
-    }
+    if (reuseTestEvidence) replaceNames.add("test");
     locked.requiredGates = locked[NEEDS_REQUIRED_GATES_MIGRATION]
       ? discovered
       : unionRequiredGates(locked.requiredGates, discovered, replaceNames);

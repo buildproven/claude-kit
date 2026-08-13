@@ -7394,6 +7394,13 @@ exit 1
 
     const manifestPath = create(root);
     recordGateFixture(manifestPath, "test");
+    writeFileSync(path.join(root, "first-fix.js"), "export const first = 1;\n");
+    git(root, ["add", "first-fix.js"]);
+    git(root, ["commit", "-q", "-m", "fix: first descendant"]);
+    execFileSync("node", [INVOCATION, "advance", manifestPath], { cwd: root });
+
+    // A review fix can advance again before its focused gate is recorded. The
+    // last successful ancestor audit remains the safe delta anchor.
     writeFileSync(path.join(root, "file.js"), "export const value = 3;\n");
     git(root, ["commit", "-qam", "fix: focused descendant"]);
 
