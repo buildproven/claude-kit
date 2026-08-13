@@ -212,7 +212,7 @@ describe("provider-native platform", () => {
       },
     );
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toContain("codex exhausted");
     expect(result.stderr).toContain("trying claude");
     expect(result.stdout).toContain("claude fallback completed");
@@ -1214,12 +1214,13 @@ describe("provider-native platform", () => {
       plan,
       JSON.stringify({
         schemaVersion: 1,
+        policyVersion: "2026-08-12",
         route: "economy-builder",
         provider: "codex",
         model: "gpt-5.6-luna",
         effort: "high",
         contextClass: "fresh-bounded",
-        caps: { maxTurns: 12, maxWallSeconds: 900, maxWorkers: 1 },
+        caps: { maxWallSeconds: 900, maxWorkers: 1 },
         safetyFloor: "economy-micro",
         reasons: ["fixture"],
         promotion: "candidate-requires-calibration",
@@ -1257,7 +1258,7 @@ describe("provider-native platform", () => {
       },
     );
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(calls, "utf8")).toContain("--model gpt-5.6-luna");
     expect(readFileSync(calls, "utf8")).toContain(
       'model_reasoning_effort="high"',
@@ -1266,10 +1267,15 @@ describe("provider-native platform", () => {
       readFileSync(path.join(output, "run-record.json"), "utf8"),
     );
     expect(record).toMatchObject({
+      requested: { provider: "codex", model: "gpt-5.6-luna", effort: "high" },
       effective: { provider: "codex", model: "gpt-5.6-luna", effort: "high" },
-      outcome: { status: "passed" },
+      attempts: 1,
+      outcome: { status: "passed", providerFailureCategory: null },
       usage: null,
     });
+    expect(record.timing.finishedAtEpochMs).toBeGreaterThanOrEqual(
+      record.timing.startedAtEpochMs,
+    );
   });
 
   it("keeps the public command surface within its budget", () => {

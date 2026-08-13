@@ -17,6 +17,7 @@ OUTPUT_DIR=""
 EXECUTION_PLAN=""
 GOVERNED_MODEL=""
 GOVERNED_EFFORT=""
+GOVERNED_STARTED_AT_MS=""
 
 usage() {
   echo "usage: provider-run.sh --prompt-file file [--execution-plan plan.json] [--provider auto|codex|claude] [--fallback none|codex|claude] [--target-dir dir] [--timeout seconds] [--sandbox read-only|workspace-write] [--output-dir dir]" >&2
@@ -64,6 +65,7 @@ if [ -n "$EXECUTION_PLAN" ]; then
   PROVIDER="$PLAN_PROVIDER"
   GOVERNED_MODEL=$(jq -r '.model' "$EXECUTION_PLAN")
   GOVERNED_EFFORT=$(jq -r '.effort // empty' "$EXECUTION_PLAN")
+  GOVERNED_STARTED_AT_MS=$(node -e 'process.stdout.write(String(Date.now()))')
   FALLBACK=none
 fi
 
@@ -78,7 +80,9 @@ write_governed_record() {
     --argjson plan "$(cat "$EXECUTION_PLAN")" \
     --arg status "$status" \
     --arg provider "$effective_provider" \
-    '{schemaVersion:1, plan:$plan, effective:{provider:$provider,model:$plan.model,effort:$plan.effort}, outcome:{status:$status}, usage:null}' \
+    --argjson startedAtEpochMs "$GOVERNED_STARTED_AT_MS" \
+    --argjson finishedAtEpochMs "$(node -e 'process.stdout.write(String(Date.now()))')" \
+    '{schemaVersion:1, plan:$plan, requested:{provider:$plan.provider,model:$plan.model,effort:$plan.effort}, effective:{provider:$provider,model:$plan.model,effort:$plan.effort}, attempts:1, timing:{startedAtEpochMs:$startedAtEpochMs,finishedAtEpochMs:$finishedAtEpochMs}, outcome:{status:$status,providerFailureCategory:null}, usage:null}' \
     > "$OUTPUT_DIR/run-record.json"
   node "$SCRIPT_DIR/compute-governor.js" validate-run-record "$OUTPUT_DIR/run-record.json" >/dev/null
 }
