@@ -186,21 +186,17 @@ fail_governed_handoff() {
   exit 78
 }
 
-rollback_governed_handoff() {
+rollback_or_preserve_governed_handoff() {
   local context="$1"
   if git -C "$ORIGINAL_TARGET_DIR" apply --reverse --binary "$GOVERNED_PATCH" >/dev/null 2>&1 &&
     git -C "$ORIGINAL_TARGET_DIR" reset --mixed "$PLAN_TARGET_HEAD" -- >/dev/null 2>&1; then
     return 0
   fi
 
-  # A failed rollback is an operator-recovery state, not an ordinary failed
-  # delivery. Preserve both the exclusion lock and the exact inverse patch so
-  # another governed run cannot compound an ambiguous live worktree.
+  # The live diff is the recovery evidence. Keep it visible and fence another
+  # governed handoff rather than creating a second fallible artifact copy.
   GOVERNED_HANDOFF_LOCK_PRESERVE=1
-  cp "$GOVERNED_PATCH" "$GOVERNED_HANDOFF_LOCK/rollback.patch" >/dev/null 2>&1 || true
-  printf '%s\n' "state=rollback-failed head=$PLAN_TARGET_HEAD output=$OUTPUT_DIR" \
-    > "$GOVERNED_HANDOFF_LOCK/recovery" 2>/dev/null || true
-  echo "provider-run: $context; rollback failed and recovery lock was preserved: $GOVERNED_HANDOFF_LOCK" >&2
+  echo "provider-run: $context; target may contain delivered changes and reconciliation lock was preserved: $GOVERNED_HANDOFF_LOCK" >&2
   return 1
 }
 
@@ -336,7 +332,7 @@ if [ "$RC" -eq 0 ]; then
       git -C "$ORIGINAL_TARGET_DIR" add -N --all
       git -C "$ORIGINAL_TARGET_DIR" diff --binary "$PLAN_TARGET_HEAD" -- > "$GOVERNED_LIVE_PATCH"
       if ! cmp -s "$GOVERNED_PATCH" "$GOVERNED_LIVE_PATCH"; then
-        rollback_governed_handoff "target changed during governed handoff" || exit 78
+        rollback_or_preserve_governed_handoff "target changed during governed handoff" || exit 78
         rm -f "$GOVERNED_LIVE_PATCH"
         fail_governed_handoff "provider-run: target changed during governed handoff; provider changes rolled back"
       fi
@@ -345,10 +341,12 @@ if [ "$RC" -eq 0 ]; then
     fi
   fi
   if ! write_governed_record passed "$PROVIDER" 0 ""; then
-    if [ -n "$EXECUTION_PLAN" ] && [ -s "$GOVERNED_PATCH" ]; then
-      rollback_governed_handoff "terminal success evidence could not be persisted" || exit 78
-    fi
-    echo "provider-run: delivery completed but terminal success evidence could not be persisted: $OUTPUT_DIR" >&2
+    # Delivery has already completed. Rolling it back would create a second
+    # transaction that can also fail. Keep the visible changes, the durable
+    # non-success receipt, and the exclusion lock until an operator reconciles
+    # the outcome.
+    GOVERNED_HANDOFF_LOCK_PRESERVE=1
+    echo "provider-run: delivery completed but terminal success evidence could not be persisted; changes and reconciliation lock were retained: $GOVERNED_HANDOFF_LOCK" >&2
     exit 78
   fi
   if [ -n "$GOVERNED_HANDOFF_LOCK" ]; then

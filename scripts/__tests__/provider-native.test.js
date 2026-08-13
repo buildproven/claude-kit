@@ -1576,7 +1576,7 @@ describe("provider-native platform", () => {
     expect(existsSync(path.join(output, "run-record.json"))).toBe(false);
   });
 
-  it("preserves an exclusion lock and recovery patch when receipt rollback fails", () => {
+  it("retains delivered changes and an exclusion lock when receipt promotion fails", () => {
     const dir = makeTempDir("provider-native-rollback-failure-");
     const bin = path.join(dir, "bin");
     const output = path.join(dir, "output");
@@ -1619,24 +1619,12 @@ describe("provider-native platform", () => {
         '  count=$(($(cat "$counter" 2>/dev/null || echo 0) + 1))',
         '  printf "%s\\n" "$count" > "$counter"',
         '  if [ "$count" -eq 2 ]; then',
-        `    echo "concurrent divergence" > '${delivered}'`,
-        `    : > '${path.join(output, ".force-rollback-failure")}'`,
         "    exit 1",
         "  fi",
         "fi",
         'exec /bin/mv "$@"',
       ].join("\n"),
     );
-    executable(
-      path.join(bin, "git"),
-      [
-        `if [[ "$*" == *"apply --reverse"* ]] && [ -e '${path.join(output, ".force-rollback-failure")}' ]; then`,
-        "  exit 1",
-        "fi",
-        'exec /usr/bin/git "$@"',
-      ].join("\n"),
-    );
-
     const result = spawnSync(
       "bash",
       [
@@ -1665,11 +1653,10 @@ describe("provider-native platform", () => {
     );
     expect(result.status, result.stderr).toBe(78);
     expect(result.stderr).toContain(
-      "rollback failed and recovery lock was preserved",
+      "changes and reconciliation lock were retained",
     );
-    expect(readFileSync(delivered, "utf8")).toBe("concurrent divergence\n");
-    expect(existsSync(path.join(recoveryLock, "rollback.patch"))).toBe(true);
-    expect(existsSync(path.join(recoveryLock, "recovery"))).toBe(true);
+    expect(readFileSync(delivered, "utf8")).toBe("delivered\n");
+    expect(existsSync(recoveryLock)).toBe(true);
     expect(
       JSON.parse(readFileSync(path.join(output, "run-record.json"), "utf8")),
     ).toMatchObject({
