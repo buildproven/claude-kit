@@ -306,9 +306,7 @@ function execute(result, root = process.cwd()) {
 
 function parseCliOptions(options) {
   const shouldExecute = options.includes("--execute");
-  const preferExplicitMappings = options.includes(
-    "--prefer-explicit-mappings",
-  );
+  const preferExplicitMappings = options.includes("--prefer-explicit-mappings");
   const digestIndex = options.indexOf("--policy-sha256");
   const expectedDigest = digestIndex === -1 ? "" : options[digestIndex + 1];
   const policyRootIndex = options.indexOf("--policy-root");
@@ -353,12 +351,8 @@ function main(argv = process.argv.slice(2)) {
     process.stderr.write(`test-impact: ${error.message}\n`);
     return 2;
   }
-  const {
-    shouldExecute,
-    expectedDigest,
-    policyRoot,
-    preferExplicitMappings,
-  } = parsed;
+  const { shouldExecute, expectedDigest, policyRoot, preferExplicitMappings } =
+    parsed;
   const files = separator === -1 ? argv : argv.slice(separator + 1);
   if (expectedDigest && policyDigest(policyRoot) !== expectedDigest) {
     process.stderr.write(
