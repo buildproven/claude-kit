@@ -23,6 +23,7 @@ describe("compute governor", () => {
     const plan = resolve(base);
     expect(plan).toMatchObject({
       schemaVersion: 1,
+      policyVersion: "2026-08-12",
       route: "economy-builder",
       provider: "codex",
       model: "gpt-5.6-luna",
@@ -76,13 +77,38 @@ describe("compute governor", () => {
     );
   });
 
+  it("rejects tampered safety floors and execution caps", () => {
+    const plan = resolve(base);
+    expect(() => validatePlan({ ...plan, safetyFloor: "critical" })).toThrow(
+      "below its safety floor",
+    );
+    expect(() =>
+      validatePlan({
+        ...plan,
+        caps: { ...plan.caps, maxWallSeconds: plan.caps.maxWallSeconds + 1 },
+      }),
+    ).toThrow("invalid execution plan contract");
+  });
+
   it("rejects a run record that contains prompt or credential material", () => {
     const plan = resolve(base);
     expect(() =>
       validateRunRecord({
         schemaVersion: 1,
         plan,
+        requested: {
+          provider: plan.provider,
+          model: plan.model,
+          effort: plan.effort,
+        },
+        effective: {
+          provider: plan.provider,
+          model: plan.model,
+          effort: plan.effort,
+        },
         outcome: { status: "passed" },
+        timing: { startedAtEpochMs: 1, finishedAtEpochMs: 2 },
+        attempts: 1,
         usage: null,
         prompt: "do not persist me",
       }),
@@ -91,7 +117,23 @@ describe("compute governor", () => {
       validateRunRecord({
         schemaVersion: 1,
         plan,
-        outcome: { status: "passed", credentials: "forbidden" },
+        requested: {
+          provider: plan.provider,
+          model: plan.model,
+          effort: plan.effort,
+        },
+        effective: {
+          provider: plan.provider,
+          model: plan.model,
+          effort: plan.effort,
+        },
+        outcome: {
+          status: "passed",
+          providerFailureCategory: null,
+          credentials: "forbidden",
+        },
+        timing: { startedAtEpochMs: 1, finishedAtEpochMs: 2 },
+        attempts: 1,
         usage: null,
       }),
     ).toThrow("forbidden run-record field 'credentials'");
@@ -107,12 +149,12 @@ describe("compute governor", () => {
     const result = calibrationDecision({
       maxAcceptanceRateDrop: 0.05,
       baseline: [
-        { accepted: true, gatesPassed: true, attempts: 1 },
-        { accepted: true, gatesPassed: true, attempts: 1 },
+        { accepted: true, gatesPassed: true, attempts: 1, elapsedMs: 10 },
+        { accepted: true, gatesPassed: true, attempts: 1, elapsedMs: 10 },
       ],
       candidate: [
-        { accepted: true, gatesPassed: true, attempts: 1 },
-        { accepted: false, gatesPassed: false, attempts: 2 },
+        { accepted: true, gatesPassed: true, attempts: 1, elapsedMs: 5 },
+        { accepted: false, gatesPassed: false, attempts: 2, elapsedMs: 5 },
       ],
     });
     expect(result.status).toBe("candidate-only");
@@ -121,14 +163,23 @@ describe("compute governor", () => {
   it("promotes only a candidate that meets both acceptance and retry thresholds", () => {
     const result = calibrationDecision({
       baseline: [
-        { accepted: true, gatesPassed: true, attempts: 1 },
-        { accepted: true, gatesPassed: true, attempts: 2 },
+        { accepted: true, gatesPassed: true, attempts: 1, elapsedMs: 10 },
+        { accepted: true, gatesPassed: true, attempts: 2, elapsedMs: 20 },
       ],
       candidate: [
-        { accepted: true, gatesPassed: true, attempts: 1 },
-        { accepted: true, gatesPassed: true, attempts: 1 },
+        { accepted: true, gatesPassed: true, attempts: 1, elapsedMs: 8 },
+        { accepted: true, gatesPassed: true, attempts: 1, elapsedMs: 9 },
       ],
     });
     expect(result.status).toBe("eligible-for-default");
+  });
+
+  it("rejects incomplete calibration evidence instead of promoting it", () => {
+    expect(() =>
+      calibrationDecision({
+        baseline: [{ accepted: true, gatesPassed: true }],
+        candidate: [{ accepted: true, gatesPassed: true }],
+      }),
+    ).toThrow("calibration run evidence is incomplete");
   });
 });
