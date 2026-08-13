@@ -26,9 +26,12 @@ Terminal results have deliberately narrow meanings:
   clean result.
 
 Use `scripts/test-impact.js <changed-files...>` for the test plan. JS/TS uses
-the configured Vitest or Jest related-test selector, changed Python tests run
-directly, and prose-only documentation needs no behavioral test. Files without
-a sound native selector use committed path-to-command mappings in
+the configured Vitest or Jest related-test selector. Plain Node suites run each
+changed `.js`, `.mjs`, or `.cjs` test file directly. TypeScript tests and Node
+source files still need a mapping.
+Changed Python tests run directly, and prose-only documentation needs no
+behavioral test. Files without a sound native selector use committed
+path-to-command mappings in
 `.buildproven/test-impact.json`. An uncovered executable path returns
 `unmapped` and blocks authorization with a remediation; it never silently skips
 tests and never automatically launches the complete suite. Glob patterns use

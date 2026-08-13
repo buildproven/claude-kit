@@ -204,6 +204,47 @@ describe("cross-language test impact", () => {
     });
   });
 
+  it("runs changed plain Node test files directly", () => {
+    expect(
+      plan(["tests/a.test.js", "scripts/__tests__/b.test.js"], {
+        version: 1,
+        jsRunner: "node",
+      }),
+    ).toMatchObject({
+      mode: "focused",
+      commands: [
+        { executable: "node", args: ["scripts/__tests__/b.test.js"] },
+        { executable: "node", args: ["tests/a.test.js"] },
+      ],
+    });
+  });
+
+  it("keeps Node source changes unmapped without a repository mapping", () => {
+    expect(
+      plan(["lib/a.js", "tests/a.test.js"], {
+        version: 1,
+        jsRunner: "node",
+      }),
+    ).toMatchObject({
+      mode: "unmapped",
+      uncovered: ["lib/a.js"],
+      commands: [{ executable: "node", args: ["tests/a.test.js"] }],
+    });
+  });
+
+  it("does not direct-run TypeScript tests with plain Node", () => {
+    expect(
+      plan(["tests/a.test.ts", "tests/b.test.tsx"], {
+        version: 1,
+        jsRunner: "node",
+      }),
+    ).toMatchObject({
+      mode: "unmapped",
+      uncovered: ["tests/a.test.ts", "tests/b.test.tsx"],
+      commands: [],
+    });
+  });
+
   it("runs a complete regression only for an explicit audit rule", () => {
     const result = plan(["package-lock.json"], {
       version: 1,
