@@ -195,7 +195,7 @@ describe("provider-native platform", () => {
   it("falls back immediately on a structured quota error event (BUI-325)", () => {
     const dir = makeTempDir("provider-native-");
     const bin = path.join(dir, "bin");
-    const output = path.join(dir, "output");
+    const output = path.join(makeTempDir("provider-output-"), "output");
     const prompt = path.join(dir, "prompt");
     mkdirSync(bin);
     writeFileSync(prompt, "review this\n");
@@ -252,7 +252,7 @@ describe("provider-native platform", () => {
   it("does not classify incidental exhaustion-marker text in the transcript as exhaustion (BUI-325)", () => {
     const dir = makeTempDir("provider-native-fp-");
     const bin = path.join(dir, "bin");
-    const output = path.join(dir, "output");
+    const output = path.join(makeTempDir("provider-output-"), "output");
     const prompt = path.join(dir, "prompt");
     mkdirSync(bin);
     writeFileSync(prompt, "review this\n");
@@ -307,7 +307,7 @@ describe("provider-native platform", () => {
   it("classifies claude exhaustion from a status-0 error envelope (BUI-325)", () => {
     const dir = makeTempDir("provider-native-claude-exh-");
     const bin = path.join(dir, "bin");
-    const output = path.join(dir, "output");
+    const output = path.join(makeTempDir("provider-output-"), "output");
     const prompt = path.join(dir, "prompt");
     mkdirSync(bin);
     writeFileSync(prompt, "review this\n");
@@ -350,7 +350,7 @@ describe("provider-native platform", () => {
   it("does not classify a successful claude status-0 envelope as exhausted (BUI-325)", () => {
     const dir = makeTempDir("provider-native-claude-ok-");
     const bin = path.join(dir, "bin");
-    const output = path.join(dir, "output");
+    const output = path.join(makeTempDir("provider-output-"), "output");
     const prompt = path.join(dir, "prompt");
     mkdirSync(bin);
     writeFileSync(prompt, "review this\n");
@@ -1232,7 +1232,7 @@ describe("provider-native platform", () => {
   it("launches a governed Codex child with the plan's explicit model and effort", () => {
     const dir = makeTempDir("provider-native-governed-codex-");
     const bin = path.join(dir, "bin");
-    const output = path.join(dir, "output");
+    const output = path.join(makeTempDir("provider-output-"), "output");
     const prompt = path.join(dir, "prompt");
     const plan = path.join(dir, "plan.json");
     const calls = path.join(dir, "codex.calls");
@@ -1289,19 +1289,130 @@ describe("provider-native platform", () => {
     );
 
     expect(result.status).toBe(0);
-    expect(readFileSync(calls, "utf8")).toContain("--model gpt-5.6-luna");
+    expect(readFileSync(calls, "utf8")).toContain("--model gpt-5.6-terra");
     expect(readFileSync(calls, "utf8")).toContain(
-      'model_reasoning_effort="high"',
+      'model_reasoning_effort="medium"',
     );
     const record = JSON.parse(
       readFileSync(path.join(output, "run-record.json"), "utf8"),
     );
     expect(record).toMatchObject({
-      effective: { provider: "codex", model: "gpt-5.6-luna", effort: "high" },
+      effective: {
+        provider: "codex",
+        model: "gpt-5.6-terra",
+        effort: "medium",
+      },
       outcome: { status: "passed" },
       attempts: 1,
       usage: null,
     });
+  });
+
+  it("rejects governed evidence stored inside the target worktree", () => {
+    const dir = makeTempDir("provider-native-target-evidence-");
+    const prompt = path.join(dir, "prompt");
+    const facts = path.join(dir, "facts.json");
+    writeFileSync(prompt, "perform governed work\n");
+    writeFileSync(
+      facts,
+      JSON.stringify({
+        phase: "implement",
+        localized: true,
+        reversible: true,
+        targetedProof: true,
+        changedFiles: 1,
+        protectedSurfaces: [],
+        sameFailureStreak: 0,
+      }),
+    );
+    initializeGovernedTarget(dir);
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--execution-facts",
+        facts,
+        "--target-dir",
+        dir,
+        "--output-dir",
+        path.join(dir, ".claude", "run-evidence"),
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(
+      "governed output directory must be outside the target worktree",
+    );
+  });
+
+  it("fails visibly when a governed provider creates an ignored file", () => {
+    const dir = makeTempDir("provider-native-ignored-delivery-");
+    const bin = path.join(dir, "bin");
+    const output = path.join(makeTempDir("provider-output-"), "output");
+    const prompt = path.join(dir, "prompt");
+    const facts = path.join(dir, "facts.json");
+    mkdirSync(bin);
+    writeFileSync(prompt, "create generated output\n");
+    writeFileSync(
+      facts,
+      JSON.stringify({
+        phase: "implement",
+        localized: true,
+        reversible: true,
+        targetedProof: true,
+        changedFiles: 1,
+        protectedSurfaces: [],
+        sameFailureStreak: 0,
+      }),
+    );
+    initializeGovernedTarget(dir);
+    executable(
+      path.join(bin, "codex"),
+      [
+        'for arg in "$@"; do',
+        '  if [ "$arg" = "-C" ]; then target_next=1; continue; fi',
+        '  if [ "${target_next:-0}" = 1 ]; then provider_target="$arg"; target_next=0; fi',
+        '  if [ "$arg" = "-o" ]; then message_next=1; continue; fi',
+        '  if [ "${message_next:-0}" = 1 ]; then last_message="$arg"; message_next=0; fi',
+        "done",
+        'echo "provider completed" > "$last_message"',
+        'mkdir -p "$provider_target/bin"',
+        'echo "ignored output" > "$provider_target/bin/generated.txt"',
+      ].join("\n"),
+    );
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--execution-facts",
+        facts,
+        "--provider",
+        "codex",
+        "--target-dir",
+        dir,
+        "--output-dir",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+    expect(result.status, result.stderr).toBe(78);
+    expect(result.stderr).toContain(
+      "created ignored files that cannot be delivered safely",
+    );
+    expect(
+      readFileSync(
+        path.join(output, "undeliverable-ignored-files.txt"),
+        "utf8",
+      ),
+    ).toContain("bin/generated.txt");
+    expect(existsSync(path.join(dir, "bin", "generated.txt"))).toBe(false);
   });
 
   it("raises a falsely empty protected-surface list from task evidence", () => {
@@ -1336,7 +1447,7 @@ describe("provider-native platform", () => {
 
   it("rejects a persisted plan reused for a different protected prompt", () => {
     const dir = makeTempDir("provider-native-stale-binding-");
-    const output = path.join(dir, "output");
+    const output = path.join(makeTempDir("provider-output-"), "output");
     const prompt = path.join(dir, "prompt");
     const plan = path.join(output, "execution-plan.json");
     mkdirSync(output);
@@ -1383,7 +1494,7 @@ describe("provider-native platform", () => {
   it("resolves execution facts before launching and persists the exact plan", () => {
     const dir = makeTempDir("provider-native-governed-facts-");
     const bin = path.join(dir, "bin");
-    const output = path.join(dir, "output");
+    const output = path.join(makeTempDir("provider-output-"), "output");
     const prompt = path.join(dir, "prompt");
     const facts = path.join(output, "execution-facts.json");
     mkdirSync(bin);
@@ -1438,17 +1549,18 @@ describe("provider-native platform", () => {
         readFileSync(path.join(output, "execution-plan.json"), "utf8"),
       ),
     ).toMatchObject({
-      route: "economy-micro",
+      route: "standard",
       provider: "codex",
-      model: "gpt-5.6-luna",
+      model: "gpt-5.6-terra",
       contextClass: "fresh-bounded",
+      promotion: "calibration-required-standard-fallback",
     });
   });
 
   it("accepts an approved plan already persisted in its evidence directory", () => {
     const dir = makeTempDir("provider-native-persisted-plan-");
     const bin = path.join(dir, "bin");
-    const output = path.join(dir, "output");
+    const output = path.join(makeTempDir("provider-output-"), "output");
     const prompt = path.join(dir, "prompt");
     const plan = path.join(output, "execution-plan.json");
     mkdirSync(bin);
@@ -1516,7 +1628,7 @@ describe("provider-native platform", () => {
   it("does not publish a provider receipt when terminal evidence cannot be persisted", () => {
     const dir = makeTempDir("provider-native-record-failure-");
     const bin = path.join(dir, "bin");
-    const output = path.join(dir, "output");
+    const output = path.join(makeTempDir("provider-output-"), "output");
     const prompt = path.join(dir, "prompt");
     const facts = path.join(dir, "facts.json");
     mkdirSync(bin);
@@ -1579,7 +1691,7 @@ describe("provider-native platform", () => {
   it("retains delivered changes and an exclusion lock when receipt promotion fails", () => {
     const dir = makeTempDir("provider-native-rollback-failure-");
     const bin = path.join(dir, "bin");
-    const output = path.join(dir, "output");
+    const output = path.join(makeTempDir("provider-output-"), "output");
     const prompt = path.join(dir, "prompt");
     const facts = path.join(dir, "facts.json");
     const delivered = path.join(dir, "delivered.txt");
@@ -1670,7 +1782,7 @@ describe("provider-native platform", () => {
   it("launches a governed Claude child with explicit model and effort", () => {
     const dir = makeTempDir("provider-native-governed-claude-");
     const bin = path.join(dir, "bin");
-    const output = path.join(dir, "output");
+    const output = path.join(makeTempDir("provider-output-"), "output");
     const prompt = path.join(dir, "prompt");
     const facts = path.join(dir, "facts.json");
     const calls = path.join(dir, "claude.calls");

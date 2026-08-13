@@ -69,6 +69,16 @@ case "$SANDBOX" in read-only|workspace-write) ;; *) echo "provider-run: invalid 
 [ -z "$EXECUTION_PLAN" ] || [ -z "$EXECUTION_FACTS" ] || { echo "provider-run: choose execution plan or facts, not both" >&2; exit 2; }
 
 OUTPUT_DIR="${OUTPUT_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/provider-run.XXXXXX")}"
+if [ -n "$EXECUTION_PLAN" ] || [ -n "$EXECUTION_FACTS" ]; then
+  OUTPUT_REAL=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$OUTPUT_DIR")
+  TARGET_REAL=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$TARGET_DIR")
+  case "$OUTPUT_REAL/" in
+    "$TARGET_REAL"/*)
+      echo "provider-run: governed output directory must be outside the target worktree" >&2
+      exit 2
+      ;;
+  esac
+fi
 mkdir -p "$OUTPUT_DIR"
 for evidence_name in run-record.json provider; do
   [ ! -e "$OUTPUT_DIR/$evidence_name" ] || { echo "provider-run: output directory already contains governed evidence" >&2; exit 2; }
@@ -322,6 +332,11 @@ if [ "$RC" -eq 0 ]; then
       fail_governed_handoff "provider-run: cannot allocate governed change handoff"
     }
     git -C "$TARGET_DIR" add -N --all
+    GOVERNED_IGNORED=$(git -C "$TARGET_DIR" ls-files --others --ignored --exclude-standard)
+    [ -z "$GOVERNED_IGNORED" ] || {
+      printf '%s\n' "$GOVERNED_IGNORED" > "$OUTPUT_DIR/undeliverable-ignored-files.txt"
+      fail_governed_handoff "provider-run: governed provider created ignored files that cannot be delivered safely"
+    }
     git -C "$TARGET_DIR" diff --binary "$PLAN_TARGET_HEAD" -- > "$GOVERNED_PATCH"
     if [ -s "$GOVERNED_PATCH" ]; then
       git -C "$ORIGINAL_TARGET_DIR" apply --index --binary "$GOVERNED_PATCH" || {

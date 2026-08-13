@@ -31,11 +31,13 @@ Then inspect the deterministic plan:
 node ~/.claude/scripts/compute-governor.js explain facts.json
 ```
 
-The result names the semantic route, exact provider model and effort, enforced
+The result names the semantic route, candidate provider model and effort, enforced
 wall-time and worker caps, safety floor, and ordered reasons. Economy routes
 remain labelled `candidate-requires-calibration`; the calibration command must
 produce `eligible-for-default` evidence before an operator makes one a default
-for a task class.
+for a task class. Launch resolution promotes an uncalibrated economy candidate
+to the standard route, so candidate analysis never silently becomes the
+execution default.
 
 ## Launch from facts or an already-persisted plan
 
@@ -45,7 +47,7 @@ bash ~/.claude/scripts/provider-run.sh \
   --execution-facts facts.json \
   --provider codex \
   --target-dir /path/to/repo \
-  --output-dir .claude/run-evidence
+  --output-dir /tmp/run-evidence
 ```
 
 The runner persists `execution-plan.json` before launch and atomically writes
@@ -54,6 +56,12 @@ identity, timing, attempt count, typed outcome, and `usage: null`. Usage remains
 null until an explicit redacted schema is defined; arbitrary provider metadata
 is not persisted. It rejects
 prompt or credential fields recursively.
+
+Governed evidence must live outside the target worktree so creating it cannot
+invalidate the clean-HEAD binding. The detached handoff delivers tracked and
+ordinary untracked changes as one binary patch. If a provider creates an
+ignored file, the run fails visibly and records its path rather than claiming
+success while silently discarding it.
 
 Every launchable plan embeds only the allowlisted execution facts used to
 resolve it plus a non-sensitive binding to the prompt hash, target identity,

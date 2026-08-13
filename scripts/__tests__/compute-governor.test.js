@@ -164,6 +164,15 @@ describe("compute governor", () => {
   it("rejects unexpected or sensitive fields in an execution binding", () => {
     const plan = {
       ...resolve(base),
+      route: "standard",
+      model: "gpt-5.6-terra",
+      effort: "medium",
+      caps: { maxWallSeconds: 1800, maxWorkers: 1 },
+      reasons: [
+        ...resolve(base).reasons,
+        "economy candidate lacks approved calibration",
+      ],
+      promotion: "calibration-required-standard-fallback",
       executionBinding: {
         schemaVersion: 1,
         policyVersion: "2026-08-12",
