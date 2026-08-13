@@ -47,8 +47,9 @@ the diff:
    and other domain-specific files use repository-owned path-to-test mappings.
 4. Prose-only Markdown and text require no behavioral test.
 5. If any changed file has no proven selector or mapping, the plan is
-   `unmapped`. Authorization stops with the uncovered paths and a remediation;
-   it does not silently skip tests and does not launch the full suite.
+   `unmapped`. Authorization stops with the uncovered paths and a remediation.
+   A repository may declare an explicit complete-suite `fallback`; it runs only
+   when uncovered paths remain and keeps new file classes safe during migration.
 6. A complete suite is an explicit `audit` mapping with a concrete reason. Use
    it for releases, scheduled selector audits, dependency/test-infrastructure
    changes that genuinely invalidate the graph, or an approved risk exception.
@@ -69,6 +70,8 @@ remain blocked when even one executable path is unmapped.
 - Unknown impact becomes actionable evidence instead of hidden compute spend.
 - Repositories must maintain a small map for ecosystems without a sound native
   dependency selector.
+- An explicit fallback preserves coverage for a new or missed file class without
+  making the complete suite the normal path.
 - Complete regression still exists, but its frequency and reason are explicit
   and measurable.
 - Selector safety is audited rather than assumed.

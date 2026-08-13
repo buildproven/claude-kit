@@ -33,8 +33,10 @@ Changed Python tests run directly, and prose-only documentation needs no
 behavioral test. Files without a sound native selector use committed
 path-to-command mappings in
 `.buildproven/test-impact.json`. An uncovered executable path returns
-`unmapped` and blocks authorization with a remediation; it never silently skips
-tests and never automatically launches the complete suite. Glob patterns use
+`unmapped` and blocks authorization with a remediation unless the repository
+declares an explicit `fallback`. A fallback runs the complete native gate only
+for uncovered paths. It does not affect mapped, related-test, direct-test, or
+documentation-only changes. Glob patterns use
 Node path-glob syntax; a pattern ending in `/` explicitly covers that directory
 prefix.
 
@@ -81,7 +83,8 @@ Example policy:
       "reason": "dependency graph changed",
       "commands": [{ "executable": "npm", "args": ["test"] }]
     }
-  ]
+  ],
+  "fallback": [{ "executable": "npm", "args": ["test"] }]
 }
 ```
 

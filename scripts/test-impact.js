@@ -34,7 +34,8 @@ function validatePolicy(value) {
   if (!value || Array.isArray(value) || value.version !== 1)
     throw new Error(`${POLICY_FILE} must declare version 1`);
   const unsupported = Object.keys(value).filter(
-    (key) => !["version", "jsRunner", "mappings", "audits"].includes(key),
+    (key) =>
+      !["version", "jsRunner", "mappings", "audits", "fallback"].includes(key),
   );
   if (unsupported.length > 0)
     throw new Error(
@@ -82,6 +83,16 @@ function validatePolicy(value) {
     jsRunner,
     mappings: normalizeRules(value.mappings, "mappings"),
     audits: normalizeRules(value.audits, "audits"),
+    fallback:
+      value.fallback === undefined
+        ? []
+        : (() => {
+            if (!Array.isArray(value.fallback))
+              throw new Error(`${POLICY_FILE} fallback must be an array`);
+            return value.fallback.map((item, index) =>
+              command(item, `${POLICY_FILE} fallback[${index}]`),
+            );
+          })(),
   };
 }
 
@@ -205,6 +216,14 @@ function plan(changed, rawPolicy = { version: 1 }) {
     .forEach((file) => covered.add(file));
 
   const uncovered = files.filter((file) => !covered.has(file));
+  if (uncovered.length > 0 && policy.fallback.length > 0)
+    return {
+      mode: "audit",
+      reason: "unmapped-fallback",
+      files,
+      fallbackFiles: uncovered,
+      commands: uniqueCommands(policy.fallback),
+    };
   if (uncovered.length > 0)
     return {
       mode: "unmapped",

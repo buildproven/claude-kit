@@ -104,5 +104,11 @@
         }
       ]
     }
+  ],
+  "fallback": [
+    {
+      "executable": "npm",
+      "args": ["test"]
+    }
   ]
 }

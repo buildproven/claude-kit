@@ -190,6 +190,30 @@ describe("cross-language test impact", () => {
     });
   });
 
+  it("uses an explicit complete fallback only for uncovered paths", () => {
+    expect(
+      plan(["README.md", "src/api.py", "src/view.ts"], {
+        version: 1,
+        fallback: [{ executable: "npm", args: ["test"] }],
+      }),
+    ).toEqual({
+      mode: "audit",
+      reason: "unmapped-fallback",
+      files: ["README.md", "src/api.py", "src/view.ts"],
+      fallbackFiles: ["src/api.py"],
+      commands: [{ executable: "npm", args: ["test"] }],
+    });
+  });
+
+  it("does not use the fallback for mapped, related, or documentation paths", () => {
+    const policy = {
+      version: 1,
+      fallback: [{ executable: "npm", args: ["test"] }],
+    };
+    expect(plan(["src/view.ts"], policy)).toMatchObject({ mode: "focused" });
+    expect(plan(["README.md"], policy)).toMatchObject({ mode: "none" });
+  });
+
   it("supports Jest related-test selection", () => {
     expect(
       plan(["src/view.ts"], { version: 1, jsRunner: "jest" }),
