@@ -143,10 +143,9 @@ function executionBinding(promptFile, targetDir, policy = loadPolicy()) {
 }
 
 function resolveExecution(facts, promptFile, targetDir, policy = loadPolicy()) {
+  assertFacts(facts, policy);
   const binding = executionBinding(promptFile, targetDir, policy);
-  const declared = Array.isArray(facts.protectedSurfaces)
-    ? facts.protectedSurfaces
-    : [];
+  const declared = facts.protectedSurfaces ?? [];
   const protectedSurfaces = [
     ...new Set([...declared, ...binding.classifiedProtectedSurfaces]),
   ].sort();

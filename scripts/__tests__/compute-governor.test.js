@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   loadPolicy,
   resolve,
+  resolveExecution,
   validatePlan,
   validateRunRecord,
   calibrationDecision,
@@ -74,6 +75,18 @@ describe("compute governor", () => {
     expect(() =>
       resolve({ ...base, protectedSurfaces: ["authentcation"] }),
     ).toThrow("facts.protectedSurfaces is invalid");
+  });
+
+  it("rejects malformed execution protected surfaces before classification", () => {
+    for (const protectedSurfaces of ["auth", { surface: "auth" }]) {
+      expect(() =>
+        resolveExecution(
+          { ...base, protectedSurfaces },
+          "/nonexistent/prompt",
+          "/nonexistent/target",
+        ),
+      ).toThrow("facts.protectedSurfaces is invalid");
+    }
   });
 
   it("rejects unsupported execution facts instead of silently omitting them", () => {
