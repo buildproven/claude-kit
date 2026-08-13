@@ -285,10 +285,11 @@ run_one "$PROVIDER"
 RC=$?
 set -e
 if [ "$RC" -eq 0 ]; then
-  # A valid terminal provider receipt must be durable before any provider
-  # changes can reach the caller's live worktree.
-  if ! write_governed_record passed "$PROVIDER" 0 ""; then
-    echo "provider-run: provider succeeded but terminal evidence could not be persisted: $OUTPUT_DIR" >&2
+  # Persist a non-success receipt before handoff. It is promoted to `passed`
+  # only after delivery succeeds, so a failed state transition can never leave
+  # an undelivered run represented as successful.
+  if ! write_governed_record failed "$PROVIDER" 78 delivery-pending; then
+    echo "provider-run: provider succeeded but pending delivery evidence could not be persisted: $OUTPUT_DIR" >&2
     exit 78
   fi
   if [ -n "$EXECUTION_PLAN" ]; then
@@ -324,6 +325,16 @@ if [ "$RC" -eq 0 ]; then
       rm -f "$GOVERNED_LIVE_PATCH"
       git -C "$ORIGINAL_TARGET_DIR" reset --mixed "$PLAN_TARGET_HEAD" --
     fi
+  fi
+  if ! write_governed_record passed "$PROVIDER" 0 ""; then
+    if [ -n "$EXECUTION_PLAN" ] && [ -s "$GOVERNED_PATCH" ]; then
+      git -C "$ORIGINAL_TARGET_DIR" apply --reverse --binary "$GOVERNED_PATCH" >/dev/null 2>&1 || true
+      git -C "$ORIGINAL_TARGET_DIR" reset --mixed "$PLAN_TARGET_HEAD" --
+    fi
+    echo "provider-run: delivery completed but terminal success evidence could not be persisted: $OUTPUT_DIR" >&2
+    exit 78
+  fi
+  if [ -n "$GOVERNED_HANDOFF_LOCK" ]; then
     rm -f "$GOVERNED_HANDOFF_LOCK/owner"
     rmdir "$GOVERNED_HANDOFF_LOCK"
     GOVERNED_HANDOFF_LOCK=""

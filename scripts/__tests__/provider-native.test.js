@@ -1570,7 +1570,7 @@ describe("provider-native platform", () => {
 
     expect(result.status, result.stderr).toBe(78);
     expect(result.stderr).toContain(
-      "provider succeeded but terminal evidence could not be persisted",
+      "provider succeeded but pending delivery evidence could not be persisted",
     );
     expect(existsSync(path.join(output, "provider"))).toBe(false);
     expect(existsSync(path.join(output, "run-record.json"))).toBe(false);
