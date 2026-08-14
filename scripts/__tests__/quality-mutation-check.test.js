@@ -24,13 +24,35 @@ function fixtureTestScript(options) {
 
 function fixturePackage(options) {
   return {
-    ...(options.pnpmRunner ? { packageManager: "pnpm@11.13.1" } : {}),
+    ...(options.pnpmWorkspace ? { packageManager: "pnpm@10.33.0" } : {}),
+    ...(options.localDependency
+      ? { dependencies: { zod: "file:vendor/zod" } }
+      : {}),
+    ...(options.pnpmWorkspace ? { dependencies: { zod: "workspace:*" } } : {}),
     scripts: {
       lint: "true",
       test: fixtureTestScript(options),
       "security:audit": "true",
     },
   };
+}
+
+function installLocalNodeDependency(root, options) {
+  if (!options.localDependency) return;
+  const dependency = path.join(root, "vendor", "zod");
+  mkdirSync(dependency, { recursive: true });
+  writeFileSync(
+    path.join(dependency, "package.json"),
+    JSON.stringify({ name: "zod", version: "1.0.0", main: "index.js" }),
+  );
+  writeFileSync(
+    path.join(dependency, "index.js"),
+    "exports.location = __dirname;\n",
+  );
+  execFileSync("npm", ["install", "--ignore-scripts", "--no-audit"], {
+    cwd: root,
+    stdio: "ignore",
+  });
 }
 
 function installPytestRunner(root, options) {
@@ -84,30 +106,32 @@ exit 0
   }
 }
 
-function installPnpmRunner(root, options) {
-  if (!options.pnpmRunner) return;
-  writeFileSync(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
-  const bin = path.join(root, "test-bin");
-  mkdirSync(bin, { recursive: true });
+function installPnpmWorkspace(root, options) {
+  if (!options.pnpmWorkspace) return;
   writeFileSync(
-    path.join(bin, "pnpm"),
-    `#!/usr/bin/env bash
-set -eu
-if [ "\${1:-}" = install ]; then
-  [ "\${CI:-}" = true ] || { echo "pnpm install was not headless" >&2; exit 2; }
-  [ -f pnpm-lock.yaml ] || { echo "pnpm install did not run in the mutation sandbox" >&2; exit 5; }
-  [ ! -L node_modules ] || { echo "source node_modules was reused" >&2; exit 3; }
-  mkdir -p node_modules
-  exit 0
-fi
-if [ "\${1:-}" = run ] && [ "\${2:-}" = test ]; then
-  node logic.test.js
-  exit $?
-fi
-echo "unexpected pnpm arguments: $*" >&2
-exit 4
-`,
-    { mode: 0o755 },
+    path.join(root, "pnpm-workspace.yaml"),
+    "packages:\n  - packages/*\n",
+  );
+  const dependency = path.join(root, "packages", "zod");
+  mkdirSync(dependency, { recursive: true });
+  writeFileSync(
+    path.join(dependency, "package.json"),
+    JSON.stringify({ name: "zod", version: "1.0.0", main: "index.js" }),
+  );
+  writeFileSync(
+    path.join(dependency, "index.js"),
+    "exports.location = __dirname;\n",
+  );
+  execFileSync(
+    "corepack",
+    [
+      "pnpm",
+      "install",
+      "--offline",
+      "--frozen-lockfile=false",
+      "--ignore-scripts",
+    ],
+    { cwd: root, stdio: "ignore" },
   );
 }
 
@@ -121,7 +145,8 @@ function fixture(label, testBody, options = {}) {
     JSON.stringify(fixturePackage(options)),
   );
   writeFileSync(path.join(root, ".gitignore"), "node_modules/\ntest-bin/\n");
-  installPnpmRunner(root, options);
+  installPnpmWorkspace(root, options);
+  installLocalNodeDependency(root, options);
   if (options.focusedMapping) {
     mkdirSync(path.join(root, ".buildproven"), { recursive: true });
     writeFileSync(
@@ -350,13 +375,23 @@ describe("config-promotion filter", () => {
 });
 
 describe("quality-mutation-check", () => {
-  it("prepares pnpm mutation worktrees headlessly without reusing source node_modules", () => {
+  it("prepares non-pnpm dependencies inside the detached mutation worktree", () => {
     const { root, manifest } = fixture(
-      "pnpm-headless",
-      "const { isAllowed } = require('./logic');\nif (!isAllowed('admin')) process.exit(1);\n",
-      { pnpmRunner: true },
+      "npm-isolated-dependency",
+      "const path = require('node:path');\nconst { isAllowed } = require('./logic');\nconst { location } = require('zod');\nif (!path.resolve(location).startsWith(process.cwd() + path.sep) || !isAllowed('admin')) process.exit(1);\n",
+      { localDependency: true },
     );
-    mkdirSync(path.join(root, "node_modules"));
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+  });
+
+  it("resolves a pnpm workspace dependency inside the detached mutation worktree", () => {
+    const { root, manifest } = fixture(
+      "pnpm-workspace",
+      "const path = require('node:path');\nconst { isAllowed } = require('./logic');\nconst { location } = require('zod');\nif (!path.resolve(location).startsWith(process.cwd() + path.sep) || !isAllowed('admin')) process.exit(1);\n",
+      { pnpmWorkspace: true },
+    );
     expect(runMutation(root, manifest)).toMatch(
       /mutation evidence: revert-diff/,
     );

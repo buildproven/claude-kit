@@ -373,22 +373,71 @@ initialize_mutation_worktree() {
 }
 
 prepare_mutation_dependencies() {
-  local log="$1" timeout_seconds="$2"
-  if [ "$TEST_EXECUTABLE" = pnpm ] && [ -f "$SANDBOX/pnpm-lock.yaml" ]; then
-    # pnpm binds node_modules to its workspace. Reusing the source worktree's
-    # directory makes pnpm attempt an interactive purge in this detached,
-    # headless worktree and can also mutate the source through the symlink.
-    # Build an isolated modules tree from the already-populated pnpm store.
-    (
-      cd "$SANDBOX" || exit 1
+  local log="$1" timeout_seconds="$2" declared manager dependency_count
+  [ -f "$SANDBOX/package.json" ] || return 0
+  declared="$(jq -r '.packageManager // ""' "$SANDBOX/package.json")"
+  case "${declared%%@*}" in
+    npm|pnpm|yarn|bun) manager="${declared%%@*}" ;;
+    *)
+      if [ -f "$SANDBOX/pnpm-lock.yaml" ]; then manager=pnpm
+      elif [ -f "$SANDBOX/yarn.lock" ]; then manager=yarn
+      elif [ -f "$SANDBOX/bun.lock" ] || [ -f "$SANDBOX/bun.lockb" ]; then manager=bun
+      elif [ -f "$SANDBOX/package-lock.json" ] || [ -f "$SANDBOX/npm-shrinkwrap.json" ]; then manager=npm
+      else manager=""
+      fi
+      ;;
+  esac
+  dependency_count="$(jq '[.dependencies, .devDependencies, .optionalDependencies] | map(. // {} | length) | add' "$SANDBOX/package.json")"
+  if [ "$dependency_count" -eq 0 ] && [ -z "$manager" ]; then
+    mkdir -p "$SANDBOX/node_modules"
+    return 0
+  fi
+  if [ -z "$manager" ]; then
+    echo "quality-mutation-check: package.json declares dependencies but no supported committed lockfile or packageManager" >> "$log"
+    return 1
+  fi
+  (
+  cd "$SANDBOX"
+  case "$manager" in
+    pnpm)
+      [ -f "$SANDBOX/pnpm-lock.yaml" ] || {
+        echo "quality-mutation-check: pnpm requires committed pnpm-lock.yaml for offline mutation setup" >> "$log"
+        return 1
+      }
       bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
-        env CI=true pnpm install --offline --frozen-lockfile
-    ) >> "$log" 2>&1
-    return $?
-  fi
-  if [ -d "$ROOT/node_modules" ] && [ ! -e "$SANDBOX/node_modules" ]; then
-    ln -s "$ROOT/node_modules" "$SANDBOX/node_modules"
-  fi
+        env CI=true COREPACK_ENABLE_NETWORK=0 corepack pnpm install --offline --frozen-lockfile >> "$log" 2>&1
+      ;;
+    npm)
+      [ -f "$SANDBOX/package-lock.json" ] || [ -f "$SANDBOX/npm-shrinkwrap.json" ] || {
+        echo "quality-mutation-check: npm requires a committed package-lock.json or npm-shrinkwrap.json for offline mutation setup" >> "$log"
+        return 1
+      }
+      bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
+        env CI=true npm ci --offline >> "$log" 2>&1
+      ;;
+    yarn)
+      [ -f "$SANDBOX/yarn.lock" ] || {
+        echo "quality-mutation-check: yarn requires committed yarn.lock for offline mutation setup" >> "$log"
+        return 1
+      }
+      if [ -f "$SANDBOX/.yarnrc.yml" ]; then
+        bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
+          env CI=true COREPACK_ENABLE_NETWORK=0 YARN_ENABLE_NETWORK=0 corepack yarn install --immutable --immutable-cache >> "$log" 2>&1
+      else
+        bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
+          env CI=true COREPACK_ENABLE_NETWORK=0 corepack yarn install --offline --frozen-lockfile --non-interactive >> "$log" 2>&1
+      fi
+      ;;
+    bun)
+      [ -f "$SANDBOX/bun.lock" ] || [ -f "$SANDBOX/bun.lockb" ] || {
+        echo "quality-mutation-check: bun requires a committed bun.lock or bun.lockb for offline mutation setup" >> "$log"
+        return 1
+      }
+      bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
+        env CI=true bun install --offline --frozen-lockfile >> "$log" 2>&1
+      ;;
+  esac
+  )
 }
 
 record_evidence() {
