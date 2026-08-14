@@ -1,33 +1,36 @@
 #!/usr/bin/env bash
 # Read-only convergence audit for one local repository.
-set -uo pipefail
+set -euo pipefail
 
 REPO="${1:-}"
 [ -d "$REPO" ] || { echo "audit-repo: repository path required" >&2; exit 2; }
 REPO=$(cd "$REPO" && pwd -P)
 
-branch=$(git -C "$REPO" branch --show-current 2>/dev/null || true)
-default=main
-git -C "$REPO" rev-parse --verify main >/dev/null 2>&1 || default=master
+branch=$(git -C "$REPO" branch --show-current)
+if git -C "$REPO" rev-parse --verify main >/dev/null 2>&1; then
+  default=main
+elif git -C "$REPO" rev-parse --verify master >/dev/null 2>&1; then
+  default=master
+else
+  echo "audit-repo: cannot resolve main or master in $REPO" >&2
+  exit 1
+fi
 dirty_count=$(git -C "$REPO" status --porcelain=v1 2>/dev/null | wc -l | tr -d ' ')
-git -C "$REPO" fetch --prune --quiet 2>/dev/null || true
-counts=$(git -C "$REPO" rev-list --left-right --count "$default...origin/$default" 2>/dev/null || echo "0 0")
+git -C "$REPO" fetch --prune --quiet
+counts=$(git -C "$REPO" rev-list --left-right --count "$default...origin/$default")
 ahead=$(printf '%s\n' "$counts" | awk '{print $1}')
 behind=$(printf '%s\n' "$counts" | awk '{print $2}')
-open_prs=0
-if command -v gh >/dev/null 2>&1; then
-  remote=$(git -C "$REPO" remote get-url origin 2>/dev/null || true)
-  slug=$(printf '%s\n' "$remote" | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')
-  if [ -n "$slug" ]; then
-    open_prs=$(gh pr list --repo "$slug" --state open --json number --jq length 2>/dev/null || echo 0)
-  fi
-fi
+command -v gh >/dev/null 2>&1 || { echo "audit-repo: gh is required" >&2; exit 1; }
+remote=$(git -C "$REPO" remote get-url origin)
+slug=$(printf '%s\n' "$remote" | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')
+[ -n "$slug" ] || { echo "audit-repo: cannot resolve GitHub repository for $REPO" >&2; exit 1; }
+open_prs=$(gh pr list --repo "$slug" --state open --json number --jq length)
 instruction_ok=false
 if [ -f "$REPO/AGENTS.md" ] && [ -L "$REPO/CLAUDE.md" ] && [ "$(readlink "$REPO/CLAUDE.md")" = "AGENTS.md" ]; then
   instruction_ok=true
 fi
 
-worktree_state=$(git -C "$REPO" worktree list --porcelain 2>/dev/null || true)
+worktree_state=$(git -C "$REPO" worktree list --porcelain)
 worktree_count=$(printf '%s\n' "$worktree_state" | awk '/^worktree /{n++} END{print n+0}')
 extra_worktrees=$((worktree_count > 0 ? worktree_count - 1 : 0))
 locked_worktrees=$(printf '%s\n' "$worktree_state" | awk '/^locked( |$)/{n++} END{print n+0}')

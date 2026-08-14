@@ -1229,6 +1229,35 @@ describe("provider-native platform", () => {
     });
   });
 
+  it("fails closed when a lifecycle probe cannot be read", () => {
+    const dir = makeTempDir("steward-probe-failure-");
+    const repo = path.join(dir, "repo");
+    const bin = path.join(dir, "bin");
+    mkdirSync(repo);
+    mkdirSync(bin);
+    executable(
+      path.join(bin, "git"),
+      `case "$*" in
+        *"branch --show-current"*) echo main ;;
+        *"rev-parse --verify main"*) exit 0 ;;
+        *"status --porcelain"*) exit 0 ;;
+        *"fetch --prune"*) exit 0 ;;
+        *"rev-list --left-right --count"*) echo "0 0" ;;
+        *"remote get-url"*) echo https://github.com/buildproven/example.git ;;
+        *"worktree list --porcelain"*) exit 1 ;;
+      esac`,
+    );
+    executable(path.join(bin, "gh"), "echo 0");
+
+    const result = spawnSync("bash", [AUDIT_REPO, repo], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toBe("");
+  });
+
   it("limits steward repair to proven residue and instruction drift", () => {
     const script = readFileSync(STEWARD_ORCHESTRATE, "utf8");
     const reconcile = script.indexOf('worktree-manager.js" reconcile');
