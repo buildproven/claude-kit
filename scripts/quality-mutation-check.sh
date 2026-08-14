@@ -524,6 +524,8 @@ for CANDIDATE in "${CANDIDATES[@]}"; do
   cd "$ROOT"
   if [ "$BASELINE_RESULT" -ne 0 ]; then
     git -C "$ROOT" worktree remove --force "$SANDBOX" >/dev/null
+    echo "quality-mutation-check: baseline test output follows from $BASELINE_LOG" >&2
+    tail -n 40 "$BASELINE_LOG" >&2 || true
     if [ "$BASELINE_RESULT" -eq 124 ]; then
       echo "quality-mutation-check: serialized baseline test timed out; no red-capable evidence" >&2
     else

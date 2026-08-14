@@ -23,12 +23,14 @@ function fixtureTestScript(options) {
 }
 
 function fixturePackage(options) {
+  const dependencies = {
+    ...(options.localDependency ? { zod: "file:vendor/zod" } : {}),
+    ...(options.pnpmWorkspace ? { zod: "workspace:*" } : {}),
+    ...(options.vitestRunner ? { vitest: "file:vendor/vitest" } : {}),
+  };
   return {
     ...(options.pnpmWorkspace ? { packageManager: "pnpm@10.33.0" } : {}),
-    ...(options.localDependency
-      ? { dependencies: { zod: "file:vendor/zod" } }
-      : {}),
-    ...(options.pnpmWorkspace ? { dependencies: { zod: "workspace:*" } } : {}),
+    ...(Object.keys(dependencies).length > 0 ? { dependencies } : {}),
     scripts: {
       lint: "true",
       test: fixtureTestScript(options),
@@ -38,17 +40,40 @@ function fixturePackage(options) {
 }
 
 function installLocalNodeDependency(root, options) {
-  if (!options.localDependency) return;
-  const dependency = path.join(root, "vendor", "zod");
-  mkdirSync(dependency, { recursive: true });
-  writeFileSync(
-    path.join(dependency, "package.json"),
-    JSON.stringify({ name: "zod", version: "1.0.0", main: "index.js" }),
-  );
-  writeFileSync(
-    path.join(dependency, "index.js"),
-    "exports.location = __dirname;\n",
-  );
+  if (options.localDependency) {
+    const dependency = path.join(root, "vendor", "zod");
+    mkdirSync(dependency, { recursive: true });
+    writeFileSync(
+      path.join(dependency, "package.json"),
+      JSON.stringify({ name: "zod", version: "1.0.0", main: "index.js" }),
+    );
+    writeFileSync(
+      path.join(dependency, "index.js"),
+      "exports.location = __dirname;\n",
+    );
+  }
+  if (options.vitestRunner) {
+    const dependency = path.join(root, "vendor", "vitest");
+    mkdirSync(dependency, { recursive: true });
+    writeFileSync(
+      path.join(dependency, "package.json"),
+      JSON.stringify({
+        name: "vitest",
+        version: "1.0.0",
+        bin: { vitest: "vitest.sh" },
+      }),
+    );
+    writeFileSync(
+      path.join(dependency, "vitest.sh"),
+      `#!/usr/bin/env bash
+printf "%s\\n" "$*"
+${options.relatedNoTests ? 'case " $* " in *" related "*) echo "No test files found"; exit 0 ;; esac\n' : ""}
+${options.siblingExitTwo ? `case " $* " in *" ${options.testPath || "logic.test.js"} "*) exit 2 ;; esac\n` : ""}node ${options.testPath || "logic.test.js"}
+`,
+      { mode: 0o755 },
+    );
+  }
+  if (!options.localDependency && !options.vitestRunner) return;
   execFileSync("npm", ["install", "--ignore-scripts", "--no-audit"], {
     cwd: root,
     stdio: "ignore",
@@ -248,19 +273,6 @@ function fixture(label, testBody, options = {}) {
   );
   git(root, ["add", source]);
   git(root, ["commit", "-qm", "feat: authorize admin"]);
-  if (options.vitestRunner) {
-    const bin = path.join(root, "node_modules", ".bin");
-    mkdirSync(bin, { recursive: true });
-    writeFileSync(
-      path.join(bin, "vitest"),
-      `#!/usr/bin/env bash
-printf "%s\\n" "$*"
-${options.relatedNoTests ? 'case " $* " in *" related "*) echo "No test files found"; exit 0 ;; esac\n' : ""}
-${options.siblingExitTwo ? `case " $* " in *" ${testPath} "*) exit 2 ;; esac\n` : ""}node ${testPath}
-`,
-      { mode: 0o755 },
-    );
-  }
   installPytestRunner(root, options);
   const manifest = execFileSync(
     "node",
