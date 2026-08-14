@@ -1234,7 +1234,13 @@ describe("provider-native platform", () => {
     ]);
     writeFileSync(path.join(repo, "AGENTS.md"), "# Changed\n");
     execFileSync("git", ["-C", repo, "stash", "push"]);
-    executable(path.join(bin, "gh"), "echo 1");
+    executable(
+      path.join(bin, "gh"),
+      `case "$*" in
+        *"repo view"*) echo main ;;
+        *"pr list"*) echo 1 ;;
+      esac`,
+    );
     executable(path.join(bin, "npm"), "exit 99");
 
     const result = spawnSync("bash", [AUDIT_REPO, repo], {
@@ -1273,7 +1279,13 @@ describe("provider-native platform", () => {
         *"worktree list --porcelain"*) exit 1 ;;
       esac`,
     );
-    executable(path.join(bin, "gh"), "echo 0");
+    executable(
+      path.join(bin, "gh"),
+      `case "$*" in
+        *"repo view"*) echo main ;;
+        *"pr list"*) echo 0 ;;
+      esac`,
+    );
 
     const result = spawnSync("bash", [AUDIT_REPO, repo], {
       encoding: "utf8",
@@ -1286,15 +1298,18 @@ describe("provider-native platform", () => {
 
   it("limits steward repair to proven residue and instruction drift", () => {
     const script = readFileSync(STEWARD_ORCHESTRATE, "utf8");
+    const lifecycleGuard = script.indexOf("reconcilable=$(python3");
     const reconcile = script.indexOf('worktree-manager.js" reconcile');
     const reaudit = script.indexOf('audit-repo.sh" "$repo"', reconcile);
-    const lifecycleGuard = script.indexOf("repairable=$(python3", reaudit);
-    const provider = script.indexOf('provider-run.sh"', lifecycleGuard);
+    const repairGuard = script.indexOf("repairable=$(python3", reaudit);
+    const provider = script.indexOf('provider-run.sh"', repairGuard);
 
+    expect(lifecycleGuard).toBeGreaterThan(-1);
+    expect(reconcile).toBeGreaterThan(lifecycleGuard);
     expect(reconcile).toBeGreaterThan(-1);
     expect(reaudit).toBeGreaterThan(reconcile);
-    expect(lifecycleGuard).toBeGreaterThan(reaudit);
-    expect(provider).toBeGreaterThan(lifecycleGuard);
+    expect(repairGuard).toBeGreaterThan(reaudit);
+    expect(provider).toBeGreaterThan(repairGuard);
     expect(script).toContain('not d["instructionSync"]');
     expect(script).toContain('d["openPullRequests"]');
     expect(script).toContain('d["stashes"]');
