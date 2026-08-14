@@ -172,6 +172,17 @@ function fixture(label, testBody, options = {}) {
   writeFileSync(path.join(root, ".gitignore"), "node_modules/\ntest-bin/\n");
   installPnpmWorkspace(root, options);
   installLocalNodeDependency(root, options);
+  if (options.pnpmWorkspace) {
+    writeFileSync(
+      path.join(root, ".quality-gates.json"),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          test: { executable: "node", args: ["logic.test.js"] },
+        },
+      }),
+    );
+  }
   if (options.focusedMapping) {
     mkdirSync(path.join(root, ".buildproven"), { recursive: true });
     writeFileSync(
