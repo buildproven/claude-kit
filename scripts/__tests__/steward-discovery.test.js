@@ -20,7 +20,9 @@ function initCheckout(root, name, remote) {
 
 describe("steward active-repository discovery", () => {
   it("keeps the first configured primary checkout for a duplicate remote", () => {
-    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "steward-roots-"));
+    const fixtureRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "steward-roots-"),
+    );
     try {
       const preferredRoot = path.join(fixtureRoot, "preferred");
       const fallbackRoot = path.join(fixtureRoot, "fallback");
