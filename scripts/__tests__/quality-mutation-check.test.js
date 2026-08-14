@@ -95,6 +95,7 @@ function installPnpmRunner(root, options) {
 set -eu
 if [ "\${1:-}" = install ]; then
   [ "\${CI:-}" = true ] || { echo "pnpm install was not headless" >&2; exit 2; }
+  [ -f pnpm-lock.yaml ] || { echo "pnpm install did not run in the mutation sandbox" >&2; exit 5; }
   [ ! -L node_modules ] || { echo "source node_modules was reused" >&2; exit 3; }
   mkdir -p node_modules
   exit 0

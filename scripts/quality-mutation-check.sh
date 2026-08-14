@@ -379,8 +379,11 @@ prepare_mutation_dependencies() {
     # directory makes pnpm attempt an interactive purge in this detached,
     # headless worktree and can also mutate the source through the symlink.
     # Build an isolated modules tree from the already-populated pnpm store.
-    bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
-      env CI=true pnpm install --offline --frozen-lockfile >> "$log" 2>&1
+    (
+      cd "$SANDBOX" || exit 1
+      bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
+        env CI=true pnpm install --offline --frozen-lockfile
+    ) >> "$log" 2>&1
     return $?
   fi
   if [ -d "$ROOT/node_modules" ] && [ ! -e "$SANDBOX/node_modules" ]; then
