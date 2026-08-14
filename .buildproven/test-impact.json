@@ -84,6 +84,22 @@
           ]
         }
       ]
+    },
+    {
+      "paths": [
+        "scripts/steward/discover-active-repos.py",
+        "scripts/__tests__/steward-discovery.test.js"
+      ],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/steward-discovery.test.js"
+          ]
+        }
+      ]
     }
   ],
   "audits": [
