@@ -49,7 +49,11 @@ def local_map(roots: list[str]) -> dict[str, str]:
                 ).stdout
             except subprocess.CalledProcessError:
                 continue
-            mapped[normalize_remote(remote)] = str(repo.resolve())
+            # localRoots are ordered by operator preference. Keep the first
+            # primary checkout when the same remote exists under more than one
+            # root. A later stale clone must not silently replace the
+            # canonical checkout used for fleet repair and measurement.
+            mapped.setdefault(normalize_remote(remote), str(repo.resolve()))
     return mapped
 
 
