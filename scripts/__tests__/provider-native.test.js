@@ -20,6 +20,12 @@ const COMPUTE_GOVERNOR = path.join(ROOT, "scripts", "compute-governor.js");
 const SKILL_SYNC = path.join(ROOT, "scripts", "setup-codex-skills.sh");
 const MCP_SYNC = path.join(ROOT, "scripts", "mcp-sync.py");
 const AUDIT_REPO = path.join(ROOT, "scripts", "steward", "audit-repo.sh");
+const STEWARD_ORCHESTRATE = path.join(
+  ROOT,
+  "scripts",
+  "steward",
+  "orchestrate.sh",
+);
 const DISCOVER = path.join(
   ROOT,
   "scripts",
@@ -1182,51 +1188,62 @@ describe("provider-native platform", () => {
     );
   });
 
-  it("runs fleet checks with the repository's declared Node version", () => {
+  it("audits convergence residue without running repository test suites", () => {
     const dir = makeTempDir("steward-node-version-");
     const repo = path.join(dir, "repo");
     const bin = path.join(dir, "bin");
-    const nvm = path.join(dir, "nvm");
-    const observed = path.join(dir, "observed-version");
     mkdirSync(repo);
     mkdirSync(bin);
-    mkdirSync(nvm);
-    writeFileSync(path.join(repo, ".nvmrc"), "22\n");
-    writeFileSync(
-      path.join(repo, "package.json"),
-      JSON.stringify({ scripts: { test: "test" } }),
-    );
+    writeFileSync(path.join(repo, "AGENTS.md"), "# Instructions\n");
+    symlinkSync("AGENTS.md", path.join(repo, "CLAUDE.md"));
     executable(
       path.join(bin, "git"),
       `case "$*" in
         *"branch --show-current"*) echo main ;;
+        *"rev-parse --verify main"*) exit 0 ;;
         *"rev-list --left-right --count"*) echo "0 0" ;;
-        *"remote get-url"*) exit 0 ;;
+        *"remote get-url"*) echo https://github.com/buildproven/example.git ;;
+        *"worktree list --porcelain"*) printf 'worktree %s\\nHEAD abc\\nbranch refs/heads/main\\n\\nworktree %s/extra\\nHEAD def\\nbranch refs/heads/feature\\nlocked owner\\n' "$PWD" "$PWD" ;;
+        *"stash list"*) echo 'stash@{0}: WIP' ;;
+        *"for-each-ref"*) echo feature ;;
       esac`,
     );
-    executable(path.join(bin, "npm"), 'echo "npm $*"');
-    writeFileSync(
-      path.join(nvm, "nvm.sh"),
-      `nvm() {
-        shift
-        shift
-        printf '%s\\n' "$1" > '${observed}'
-        shift
-        "$@"
-      }`,
-    );
+    executable(path.join(bin, "gh"), "echo 1");
+    executable(path.join(bin, "npm"), "exit 99");
 
     const result = spawnSync("bash", [AUDIT_REPO, repo], {
       encoding: "utf8",
       env: {
         ...process.env,
-        NVM_DIR: nvm,
         PATH: `${bin}:${process.env.PATH}`,
       },
     });
     expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout).failedChecks).toBe(0);
-    expect(readFileSync(observed, "utf8").trim()).toBe("22");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      converged: false,
+      extraWorktrees: 1,
+      lockedWorktrees: 1,
+      openPullRequests: 1,
+      stashes: 1,
+      unmergedLocalBranches: 1,
+    });
+  });
+
+  it("limits steward repair to proven residue and instruction drift", () => {
+    const script = readFileSync(STEWARD_ORCHESTRATE, "utf8");
+    const reconcile = script.indexOf('worktree-manager.js" reconcile');
+    const reaudit = script.indexOf('audit-repo.sh" "$repo"', reconcile);
+    const lifecycleGuard = script.indexOf("repairable=$(python3", reaudit);
+    const provider = script.indexOf('provider-run.sh"', lifecycleGuard);
+
+    expect(reconcile).toBeGreaterThan(-1);
+    expect(reaudit).toBeGreaterThan(reconcile);
+    expect(lifecycleGuard).toBeGreaterThan(reaudit);
+    expect(provider).toBeGreaterThan(lifecycleGuard);
+    expect(script).toContain('not d["instructionSync"]');
+    expect(script).toContain('d["openPullRequests"]');
+    expect(script).toContain('d["stashes"]');
+    expect(script).toContain('d["lockedWorktrees"]');
   });
 
   it("launches a governed Codex child with the plan's explicit model and effort", () => {

@@ -27,39 +27,17 @@ if [ -f "$REPO/AGENTS.md" ] && [ -L "$REPO/CLAUDE.md" ] && [ "$(readlink "$REPO/
   instruction_ok=true
 fi
 
-checks_json="[]"
-failed=0
-run_npm_script() {
-  local script="$1"
-  local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
-  if [ -f "$REPO/.nvmrc" ] && [ -s "$nvm_dir/nvm.sh" ]; then
-    local node_version
-    node_version=$(tr -d '[:space:]' < "$REPO/.nvmrc")
-    (
-      cd "$REPO" || exit 1
-      # shellcheck source=/dev/null
-      . "$nvm_dir/nvm.sh"
-      nvm exec --silent "$node_version" npm run "$script"
-    )
-  else
-    (cd "$REPO" && npm run "$script")
-  fi
-}
-
-if [ -f "$REPO/package.json" ]; then
-  checks=()
-  for script in lint typecheck type-check test build security:audit security:scan; do
-    if node -e 'const p=require(process.argv[1]);process.exit(p.scripts&&p.scripts[process.argv[2]]?0:1)' "$REPO/package.json" "$script" 2>/dev/null; then
-      log=$(mktemp "${TMPDIR:-/tmp}/steward-check.XXXXXX")
-      if run_npm_script "$script" >"$log" 2>&1; then rc=0; else rc=$?; failed=$((failed + 1)); fi
-      checks+=("{\"name\":\"$script\",\"exitCode\":$rc,\"log\":\"$log\"}")
-    fi
-  done
-  if [ "${#checks[@]}" -gt 0 ]; then checks_json="[$(IFS=,; echo "${checks[*]}")]"; fi
-fi
+worktree_state=$(git -C "$REPO" worktree list --porcelain 2>/dev/null || true)
+worktree_count=$(printf '%s\n' "$worktree_state" | awk '/^worktree /{n++} END{print n+0}')
+extra_worktrees=$((worktree_count > 0 ? worktree_count - 1 : 0))
+locked_worktrees=$(printf '%s\n' "$worktree_state" | awk '/^locked( |$)/{n++} END{print n+0}')
+stash_count=$(git -C "$REPO" stash list 2>/dev/null | wc -l | tr -d ' ')
+unmerged_branches=$(git -C "$REPO" for-each-ref --format='%(refname:short)' --no-merged "$default" refs/heads 2>/dev/null \
+  | awk -v default="$default" '$0 != default {n++} END{print n+0}')
 
 REPO="$REPO" BRANCH="$branch" DEFAULT_BRANCH="$default" DIRTY="$dirty_count" AHEAD="$ahead" BEHIND="$behind" \
-OPEN_PRS="$open_prs" INSTRUCTION_OK="$instruction_ok" FAILED="$failed" CHECKS="$checks_json" python3 - <<'PY'
+OPEN_PRS="$open_prs" INSTRUCTION_OK="$instruction_ok" EXTRA_WORKTREES="$extra_worktrees" \
+LOCKED_WORKTREES="$locked_worktrees" STASHES="$stash_count" UNMERGED_BRANCHES="$unmerged_branches" python3 - <<'PY'
 import json, os
 print(json.dumps({
     "repo": os.environ["REPO"],
@@ -70,15 +48,21 @@ print(json.dumps({
     "behind": int(os.environ["BEHIND"]),
     "openPullRequests": int(os.environ["OPEN_PRS"]),
     "instructionSync": os.environ["INSTRUCTION_OK"] == "true",
-    "failedChecks": int(os.environ["FAILED"]),
-    "checks": json.loads(os.environ["CHECKS"]),
+    "extraWorktrees": int(os.environ["EXTRA_WORKTREES"]),
+    "lockedWorktrees": int(os.environ["LOCKED_WORKTREES"]),
+    "stashes": int(os.environ["STASHES"]),
+    "unmergedLocalBranches": int(os.environ["UNMERGED_BRANCHES"]),
     "converged": (
         os.environ["BRANCH"] == os.environ["DEFAULT_BRANCH"]
         and int(os.environ["DIRTY"]) == 0
         and int(os.environ["AHEAD"]) == 0
         and int(os.environ["BEHIND"]) == 0
+        and int(os.environ["OPEN_PRS"]) == 0
         and os.environ["INSTRUCTION_OK"] == "true"
-        and int(os.environ["FAILED"]) == 0
+        and int(os.environ["EXTRA_WORKTREES"]) == 0
+        and int(os.environ["LOCKED_WORKTREES"]) == 0
+        and int(os.environ["STASHES"]) == 0
+        and int(os.environ["UNMERGED_BRANCHES"]) == 0
     ),
 }, sort_keys=True))
 PY
