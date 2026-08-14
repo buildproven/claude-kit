@@ -1192,22 +1192,48 @@ describe("provider-native platform", () => {
     const dir = makeTempDir("steward-node-version-");
     const repo = path.join(dir, "repo");
     const bin = path.join(dir, "bin");
-    mkdirSync(repo);
+    const remote = path.join(dir, "origin.git");
+    const extra = path.join(dir, "extra");
     mkdirSync(bin);
+    execFileSync("git", ["init", "--bare", remote]);
+    execFileSync("git", ["init", "-b", "main", repo]);
+    execFileSync("git", [
+      "-C",
+      repo,
+      "config",
+      "user.email",
+      "test@example.com",
+    ]);
+    execFileSync("git", ["-C", repo, "config", "user.name", "Test"]);
     writeFileSync(path.join(repo, "AGENTS.md"), "# Instructions\n");
     symlinkSync("AGENTS.md", path.join(repo, "CLAUDE.md"));
-    executable(
-      path.join(bin, "git"),
-      `case "$*" in
-        *"branch --show-current"*) echo main ;;
-        *"rev-parse --verify main"*) exit 0 ;;
-        *"rev-list --left-right --count"*) echo "0 0" ;;
-        *"remote get-url"*) echo https://github.com/buildproven/example.git ;;
-        *"worktree list --porcelain"*) printf 'worktree %s\\nHEAD abc\\nbranch refs/heads/main\\n\\nworktree %s/extra\\nHEAD def\\nbranch refs/heads/feature\\nlocked owner\\n' "$PWD" "$PWD" ;;
-        *"stash list"*) echo 'stash@{0}: WIP' ;;
-        *"for-each-ref"*) echo feature ;;
-      esac`,
-    );
+    execFileSync("git", ["-C", repo, "add", "AGENTS.md", "CLAUDE.md"]);
+    execFileSync("git", ["-C", repo, "commit", "-m", "initial"]);
+    execFileSync("git", ["-C", repo, "remote", "add", "origin", remote]);
+    execFileSync("git", ["-C", repo, "push", "-u", "origin", "main"]);
+    execFileSync("git", [
+      "-C",
+      repo,
+      "worktree",
+      "add",
+      "-b",
+      "feature",
+      extra,
+    ]);
+    writeFileSync(path.join(extra, "feature.txt"), "feature\n");
+    execFileSync("git", ["-C", extra, "add", "feature.txt"]);
+    execFileSync("git", ["-C", extra, "commit", "-m", "feature"]);
+    execFileSync("git", [
+      "-C",
+      repo,
+      "worktree",
+      "lock",
+      extra,
+      "--reason",
+      "owner",
+    ]);
+    writeFileSync(path.join(repo, "AGENTS.md"), "# Changed\n");
+    execFileSync("git", ["-C", repo, "stash", "push"]);
     executable(path.join(bin, "gh"), "echo 1");
     executable(path.join(bin, "npm"), "exit 99");
 
@@ -1218,7 +1244,7 @@ describe("provider-native platform", () => {
         PATH: `${bin}:${process.env.PATH}`,
       },
     });
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({
       converged: false,
       extraWorktrees: 1,
