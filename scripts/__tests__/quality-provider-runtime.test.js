@@ -211,6 +211,21 @@ describe("provider review runtime", () => {
     expect(result.stdout).toBe("xhigh|2");
   });
 
+  it("maps the critical risk tier to a supported Codex reasoning effort", () => {
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `TIER=critical; source "$1"; printf '%s' "$QUALITY_REVIEW_DEPTH"`,
+        "plan",
+        PLAN,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("high");
+  });
+
   it("loads persisted risk state at the runner boundary", () => {
     const plan = readFileSync(PLAN, "utf8");
     const runner = readFileSync(RUN_REVIEW, "utf8");

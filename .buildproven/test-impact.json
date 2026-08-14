@@ -37,6 +37,19 @@
       ]
     },
     {
+      "paths": ["scripts/quality-review-plan.sh"],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/quality-provider-runtime.test.js"
+          ]
+        }
+      ]
+    },
+    {
       "paths": [
         "scripts/quality-stamp-and-merge.sh",
         "scripts/quality-validate-review-trailers.sh",
