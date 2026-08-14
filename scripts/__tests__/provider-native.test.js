@@ -20,6 +20,12 @@ const COMPUTE_GOVERNOR = path.join(ROOT, "scripts", "compute-governor.js");
 const SKILL_SYNC = path.join(ROOT, "scripts", "setup-codex-skills.sh");
 const MCP_SYNC = path.join(ROOT, "scripts", "mcp-sync.py");
 const AUDIT_REPO = path.join(ROOT, "scripts", "steward", "audit-repo.sh");
+const STEWARD_ORCHESTRATE = path.join(
+  ROOT,
+  "scripts",
+  "steward",
+  "orchestrate.sh",
+);
 const DISCOVER = path.join(
   ROOT,
   "scripts",
@@ -1182,51 +1188,132 @@ describe("provider-native platform", () => {
     );
   });
 
-  it("runs fleet checks with the repository's declared Node version", () => {
+  it("audits convergence residue without running repository test suites", () => {
     const dir = makeTempDir("steward-node-version-");
     const repo = path.join(dir, "repo");
     const bin = path.join(dir, "bin");
-    const nvm = path.join(dir, "nvm");
-    const observed = path.join(dir, "observed-version");
-    mkdirSync(repo);
+    const remote = path.join(dir, "origin.git");
+    const extra = path.join(dir, "extra");
     mkdirSync(bin);
-    mkdirSync(nvm);
-    writeFileSync(path.join(repo, ".nvmrc"), "22\n");
-    writeFileSync(
-      path.join(repo, "package.json"),
-      JSON.stringify({ scripts: { test: "test" } }),
-    );
+    execFileSync("git", ["init", "--bare", remote]);
+    execFileSync("git", ["init", "-b", "main", repo]);
+    execFileSync("git", [
+      "-C",
+      repo,
+      "config",
+      "user.email",
+      "test@example.com",
+    ]);
+    execFileSync("git", ["-C", repo, "config", "user.name", "Test"]);
+    writeFileSync(path.join(repo, "AGENTS.md"), "# Instructions\n");
+    symlinkSync("AGENTS.md", path.join(repo, "CLAUDE.md"));
+    execFileSync("git", ["-C", repo, "add", "AGENTS.md", "CLAUDE.md"]);
+    execFileSync("git", ["-C", repo, "commit", "-m", "initial"]);
+    execFileSync("git", ["-C", repo, "remote", "add", "origin", remote]);
+    execFileSync("git", ["-C", repo, "push", "-u", "origin", "main"]);
+    execFileSync("git", [
+      "-C",
+      repo,
+      "worktree",
+      "add",
+      "-b",
+      "feature",
+      extra,
+    ]);
+    writeFileSync(path.join(extra, "feature.txt"), "feature\n");
+    execFileSync("git", ["-C", extra, "add", "feature.txt"]);
+    execFileSync("git", ["-C", extra, "commit", "-m", "feature"]);
+    execFileSync("git", [
+      "-C",
+      repo,
+      "worktree",
+      "lock",
+      extra,
+      "--reason",
+      "owner",
+    ]);
+    writeFileSync(path.join(repo, "AGENTS.md"), "# Changed\n");
+    execFileSync("git", ["-C", repo, "stash", "push"]);
     executable(
-      path.join(bin, "git"),
+      path.join(bin, "gh"),
       `case "$*" in
-        *"branch --show-current"*) echo main ;;
-        *"rev-list --left-right --count"*) echo "0 0" ;;
-        *"remote get-url"*) exit 0 ;;
+        *"repo view"*) echo main ;;
+        *"pr list"*) echo 1 ;;
       esac`,
     );
-    executable(path.join(bin, "npm"), 'echo "npm $*"');
-    writeFileSync(
-      path.join(nvm, "nvm.sh"),
-      `nvm() {
-        shift
-        shift
-        printf '%s\\n' "$1" > '${observed}'
-        shift
-        "$@"
-      }`,
-    );
+    executable(path.join(bin, "npm"), "exit 99");
 
     const result = spawnSync("bash", [AUDIT_REPO, repo], {
       encoding: "utf8",
       env: {
         ...process.env,
-        NVM_DIR: nvm,
         PATH: `${bin}:${process.env.PATH}`,
       },
     });
-    expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout).failedChecks).toBe(0);
-    expect(readFileSync(observed, "utf8").trim()).toBe("22");
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      converged: false,
+      extraWorktrees: 1,
+      lockedWorktrees: 1,
+      openPullRequests: 1,
+      stashes: 1,
+      unmergedLocalBranches: 1,
+    });
+  });
+
+  it("fails closed when a lifecycle probe cannot be read", () => {
+    const dir = makeTempDir("steward-probe-failure-");
+    const repo = path.join(dir, "repo");
+    const bin = path.join(dir, "bin");
+    mkdirSync(repo);
+    mkdirSync(bin);
+    executable(
+      path.join(bin, "git"),
+      `case "$*" in
+        *"branch --show-current"*) echo main ;;
+        *"rev-parse --verify main"*) exit 0 ;;
+        *"status --porcelain"*) exit 0 ;;
+        *"fetch --prune"*) exit 0 ;;
+        *"rev-list --left-right --count"*) echo "0 0" ;;
+        *"remote get-url"*) echo https://github.com/buildproven/example.git ;;
+        *"worktree list --porcelain"*) exit 1 ;;
+      esac`,
+    );
+    executable(
+      path.join(bin, "gh"),
+      `case "$*" in
+        *"repo view"*) echo main ;;
+        *"pr list"*) echo 0 ;;
+      esac`,
+    );
+
+    const result = spawnSync("bash", [AUDIT_REPO, repo], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toBe("");
+  });
+
+  it("limits steward repair to proven residue and instruction drift", () => {
+    const script = readFileSync(STEWARD_ORCHESTRATE, "utf8");
+    const lifecycleGuard = script.indexOf("reconcilable=$(python3");
+    const reconcile = script.indexOf('worktree-manager.js" reconcile');
+    const reaudit = script.indexOf('audit-repo.sh" "$repo"', reconcile);
+    const repairGuard = script.indexOf("repairable=$(python3", reaudit);
+    const provider = script.indexOf('provider-run.sh"', repairGuard);
+
+    expect(lifecycleGuard).toBeGreaterThan(-1);
+    expect(reconcile).toBeGreaterThan(lifecycleGuard);
+    expect(reconcile).toBeGreaterThan(-1);
+    expect(reaudit).toBeGreaterThan(reconcile);
+    expect(repairGuard).toBeGreaterThan(reaudit);
+    expect(provider).toBeGreaterThan(repairGuard);
+    expect(script).toContain('not d["instructionSync"]');
+    expect(script).toContain('d["openPullRequests"]');
+    expect(script).toContain('d["stashes"]');
+    expect(script).toContain('d["lockedWorktrees"]');
   });
 
   it("launches a governed Codex child with the plan's explicit model and effort", () => {
