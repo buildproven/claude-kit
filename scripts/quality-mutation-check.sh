@@ -372,6 +372,22 @@ initialize_mutation_worktree() {
   fi
 }
 
+prepare_mutation_dependencies() {
+  local log="$1" timeout_seconds="$2"
+  if [ "$TEST_EXECUTABLE" = pnpm ] && [ -f "$SANDBOX/pnpm-lock.yaml" ]; then
+    # pnpm binds node_modules to its workspace. Reusing the source worktree's
+    # directory makes pnpm attempt an interactive purge in this detached,
+    # headless worktree and can also mutate the source through the symlink.
+    # Build an isolated modules tree from the already-populated pnpm store.
+    bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
+      env CI=true pnpm install --offline --frozen-lockfile >> "$log" 2>&1
+    return $?
+  fi
+  if [ -d "$ROOT/node_modules" ] && [ ! -e "$SANDBOX/node_modules" ]; then
+    ln -s "$ROOT/node_modules" "$SANDBOX/node_modules"
+  fi
+}
+
 record_evidence() {
   METHOD="$1"
   jq -n \
@@ -403,8 +419,12 @@ if [ -n "$STRYKER_CONFIG" ] && \
   SANDBOX="$TEMP_ROOT/worktree"
   git -C "$ROOT" worktree add --detach --quiet "$SANDBOX" "$HEAD"
   initialize_mutation_worktree || exit 1
-  ln -s "$ROOT/node_modules" "$SANDBOX/node_modules"
   LOG="$STATE_ROOT/mutation/${HEAD}.stryker.log"
+  : > "$LOG"
+  prepare_mutation_dependencies "$LOG" "$CHECK_SECONDS" || {
+    echo "quality-mutation-check: failed to prepare isolated mutation dependencies; see $LOG" >&2
+    exit 1
+  }
   set +e
   cd "$SANDBOX"
   bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CHECK_SECONDS" -- \
@@ -438,13 +458,14 @@ for CANDIDATE in "${CANDIDATES[@]}"; do
   SANDBOX="$TEMP_ROOT/worktree"
   git -C "$ROOT" worktree add --detach --quiet "$SANDBOX" "$HEAD"
   initialize_mutation_worktree || exit 1
-  if [ -d "$ROOT/node_modules" ] && [ ! -e "$SANDBOX/node_modules" ]; then
-    ln -s "$ROOT/node_modules" "$SANDBOX/node_modules"
-  fi
   BASELINE_LOG="$STATE_ROOT/mutation/${HEAD}.$(basename "$CANDIDATE").baseline.log"
+  : > "$BASELINE_LOG"
+  prepare_mutation_dependencies "$BASELINE_LOG" "$REMAINING" || {
+    echo "quality-mutation-check: failed to prepare isolated mutation dependencies; see $BASELINE_LOG" >&2
+    exit 1
+  }
   set +e
   cd "$SANDBOX"
-  : > "$BASELINE_LOG"
   run_candidate_tests "$CANDIDATE" "$BASELINE_LOG" "$REMAINING"
   BASELINE_RESULT=$?
   set -e

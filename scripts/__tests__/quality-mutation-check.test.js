@@ -22,6 +22,17 @@ function fixtureTestScript(options) {
   return "node logic.test.js";
 }
 
+function fixturePackage(options) {
+  return {
+    ...(options.pnpmRunner ? { packageManager: "pnpm@11.13.1" } : {}),
+    scripts: {
+      lint: "true",
+      test: fixtureTestScript(options),
+      "security:audit": "true",
+    },
+  };
+}
+
 function installPytestRunner(root, options) {
   if (!options.pytestRunner && !options.npmPytestScript) {
     return;
@@ -73,6 +84,32 @@ exit 0
   }
 }
 
+function installPnpmRunner(root, options) {
+  if (!options.pnpmRunner) return;
+  writeFileSync(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+  const bin = path.join(root, "test-bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(
+    path.join(bin, "pnpm"),
+    `#!/usr/bin/env bash
+set -eu
+if [ "\${1:-}" = install ]; then
+  [ "\${CI:-}" = true ] || { echo "pnpm install was not headless" >&2; exit 2; }
+  [ ! -L node_modules ] || { echo "source node_modules was reused" >&2; exit 3; }
+  mkdir -p node_modules
+  exit 0
+fi
+if [ "\${1:-}" = run ] && [ "\${2:-}" = test ]; then
+  node logic.test.js
+  exit $?
+fi
+echo "unexpected pnpm arguments: $*" >&2
+exit 4
+`,
+    { mode: 0o755 },
+  );
+}
+
 function fixture(label, testBody, options = {}) {
   const root = makeTempDir(`quality-mutation-${label}-`);
   git(root, ["init", "-q", "-b", "main"]);
@@ -80,15 +117,10 @@ function fixture(label, testBody, options = {}) {
   git(root, ["config", "user.email", "quality@example.com"]);
   writeFileSync(
     path.join(root, "package.json"),
-    JSON.stringify({
-      scripts: {
-        lint: "true",
-        test: fixtureTestScript(options),
-        "security:audit": "true",
-      },
-    }),
+    JSON.stringify(fixturePackage(options)),
   );
   writeFileSync(path.join(root, ".gitignore"), "node_modules/\ntest-bin/\n");
+  installPnpmRunner(root, options);
   if (options.focusedMapping) {
     mkdirSync(path.join(root, ".buildproven"), { recursive: true });
     writeFileSync(
@@ -317,6 +349,18 @@ describe("config-promotion filter", () => {
 });
 
 describe("quality-mutation-check", () => {
+  it("prepares pnpm mutation worktrees headlessly without reusing source node_modules", () => {
+    const { root, manifest } = fixture(
+      "pnpm-headless",
+      "const { isAllowed } = require('./logic');\nif (!isAllowed('admin')) process.exit(1);\n",
+      { pnpmRunner: true },
+    );
+    mkdirSync(path.join(root, "node_modules"));
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+  });
+
   it("fails when a vacuous test stays green after the changed behavior is reverted", () => {
     const { root, manifest } = fixture(
       "vacuous",
