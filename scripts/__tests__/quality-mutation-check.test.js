@@ -25,7 +25,9 @@ function fixtureTestScript(options) {
 function fixturePackage(options) {
   const dependencies = {
     ...(options.localDependency ? { zod: "file:vendor/zod" } : {}),
-    ...(options.pnpmWorkspace ? { zod: "workspace:*" } : {}),
+    ...(options.pnpmWorkspace && !options.pnpmWorkspaceRootNoDependencies
+      ? { zod: "workspace:*" }
+      : {}),
     ...(options.vitestRunner ? { vitest: "file:vendor/vitest" } : {}),
   };
   return {
@@ -149,6 +151,22 @@ function installPnpmWorkspace(root, options) {
     path.join(dependency, "index.js"),
     "exports.location = __dirname;\n",
   );
+  if (options.pnpmWorkspaceRootNoDependencies) {
+    const app = path.join(root, "packages", "app");
+    mkdirSync(app, { recursive: true });
+    writeFileSync(
+      path.join(app, "package.json"),
+      JSON.stringify({
+        name: "app",
+        version: "1.0.0",
+        dependencies: { zod: "workspace:*" },
+      }),
+    );
+    writeFileSync(
+      path.join(app, "index.js"),
+      "exports.location = require('zod').location;\n",
+    );
+  }
   execFileSync(
     "corepack",
     [
@@ -439,6 +457,17 @@ describe("quality-mutation-check", () => {
       "pnpm-workspace",
       "const path = require('node:path');\nconst { isAllowed } = require('./logic');\nconst { location } = require('zod');\nif (!path.resolve(location).startsWith(process.cwd() + path.sep) || !isAllowed('admin')) process.exit(1);\n",
       { pnpmWorkspace: true },
+    );
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+  });
+
+  it("installs workspace dependencies when the root has none", () => {
+    const { root, manifest } = fixture(
+      "pnpm-workspace-root-no-dependencies",
+      "const path = require('node:path');\nconst { isAllowed } = require('./logic');\nconst { location } = require('./packages/app');\nif (!path.resolve(location).startsWith(process.cwd() + path.sep) || !isAllowed('admin')) process.exit(1);\n",
+      { pnpmWorkspace: true, pnpmWorkspaceRootNoDependencies: true },
     );
     expect(runMutation(root, manifest)).toMatch(
       /mutation evidence: revert-diff/,
