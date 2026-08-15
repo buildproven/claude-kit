@@ -405,7 +405,7 @@ prepare_mutation_dependencies() {
         return 1
       }
       bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
-        env CI=true COREPACK_ENABLE_NETWORK=0 corepack pnpm install --offline --frozen-lockfile >> "$log" 2>&1
+        env CI=true COREPACK_ENABLE_NETWORK=0 corepack pnpm install --offline --frozen-lockfile --ignore-scripts >> "$log" 2>&1
       ;;
     npm)
       [ -f "$SANDBOX/package-lock.json" ] || [ -f "$SANDBOX/npm-shrinkwrap.json" ] || {
@@ -413,7 +413,7 @@ prepare_mutation_dependencies() {
         return 1
       }
       bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
-        env CI=true npm ci --offline >> "$log" 2>&1
+        env CI=true npm ci --offline --ignore-scripts >> "$log" 2>&1
       ;;
     yarn)
       [ -f "$SANDBOX/yarn.lock" ] || {
@@ -422,10 +422,10 @@ prepare_mutation_dependencies() {
       }
       if [ -f "$SANDBOX/.yarnrc.yml" ]; then
         bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
-          env CI=true COREPACK_ENABLE_NETWORK=0 YARN_ENABLE_NETWORK=0 corepack yarn install --immutable --immutable-cache >> "$log" 2>&1
+          env CI=true COREPACK_ENABLE_NETWORK=0 YARN_ENABLE_NETWORK=0 corepack yarn install --immutable --immutable-cache --mode=skip-builds >> "$log" 2>&1
       else
         bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
-          env CI=true COREPACK_ENABLE_NETWORK=0 corepack yarn install --offline --frozen-lockfile --non-interactive >> "$log" 2>&1
+          env CI=true COREPACK_ENABLE_NETWORK=0 corepack yarn install --offline --frozen-lockfile --non-interactive --ignore-scripts >> "$log" 2>&1
       fi
       ;;
     bun)
@@ -434,7 +434,7 @@ prepare_mutation_dependencies() {
         return 1
       }
       bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
-        env CI=true bun install --offline --frozen-lockfile >> "$log" 2>&1
+        env CI=true bun install --offline --frozen-lockfile --ignore-scripts >> "$log" 2>&1
       ;;
   esac
   )
