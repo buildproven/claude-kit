@@ -90,6 +90,17 @@ outcome all match. It never derives a remote outcome by replaying local
 receipts. An unavailable or inconsistent read after a remote operation enters
 `quarantined`.
 
+Every remote enqueue is at most once. Before the request, the coordinator
+persists a fenced `enqueue-requested` receipt with a unique local operation ID,
+exact repository, pull request, reviewed head, adapter, and request fingerprint.
+It then marks `requestStartedAt` and sends one request. A successful response
+atomically binds the returned queue-entry identity to that receipt. If the
+process stops, times out, or loses the response after `requestStartedAt`, the
+operation enters `quarantined` and cannot be retried. Reconciliation may release
+it only from durable server evidence for that exact request and entry. If GitHub
+does not expose such evidence or a proved idempotency key, an operator must
+resolve the exact entry; the coordinator never guesses that the request failed.
+
 `cancel` records intent before any remote operation. Before enqueue, it may
 cancel an exact waiting or admitted intent after releasing only its scheduling
 reservation. After enqueue, it requests adapter cancellation and then calls
@@ -130,21 +141,24 @@ The adapter:
 
 1. validates the immutable quality manifest and exact reviewed pull-request
    head for the train being enqueued;
-2. enqueues the pull request through GitHub instead of merging it directly and
-   records the returned queue-entry identity before monitoring;
-3. discovers the exact merge-group identity, complete ordered membership,
+2. persists the fenced `enqueue-requested` operation receipt, marks the request
+   started, and sends exactly one GitHub enqueue request instead of merging
+   directly;
+3. atomically binds the returned queue-entry identity, or quarantines an
+   accepted, failed, timed-out, or unavailable response that cannot be proved;
+4. discovers the exact merge-group identity, complete ordered membership,
    candidate SHA and tree, and effective base from GitHub;
-4. verifies every member's exact signed review evidence, then binds required
+5. verifies every member's exact signed review evidence, then binds required
    check evidence to that merge-group SHA and a
    `merge_group` Actions run;
-5. monitors replacement merge-group generations when an earlier queue member
+6. monitors replacement merge-group generations when an earlier queue member
    changes the candidate;
-6. enters `merge-pending` only for the latest successful candidate generation;
-7. accepts success only when durable GitHub evidence binds the recorded queue
+7. enters `merge-pending` only for the latest successful candidate generation;
+8. accepts success only when durable GitHub evidence binds the recorded queue
    entry and merge group to the protected-branch result, and that result has the
    tested candidate tree, expected prior base, merge method, and reviewed pull
    request head; and
-8. quarantines an unavailable, out-of-band, or ambiguous remote result.
+9. quarantines an unavailable, out-of-band, or ambiguous remote result.
 
 The implementation must first prove that GitHub exposes enough durable API,
 event, or webhook identity to bind a completed queue entry to the protected
@@ -335,6 +349,9 @@ look like merge authority.
     invocation or replenish an operator budget.
 12. Capability is read live and fails closed. Repository visibility, plan, or
     configuration is never inferred from a stale local profile.
+13. No remote enqueue starts without its fenced pre-request receipt. Once
+    `requestStartedAt` exists, an unknown outcome cannot be retried or treated as
+    a failed request.
 
 ## Failure handling
 
@@ -349,6 +366,9 @@ look like merge authority.
 - A GitHub enqueue, dequeue, or merge result that cannot be reconciled remains
   quarantined. An operator must use an exact repository, pull request, head,
   and remote operation identity to resolve it.
+- An enqueue process that stops after `requestStartedAt` never repeats the
+  request. Missing response identity remains quarantined until durable GitHub
+  evidence or an exact operator reconciliation proves the result.
 - Cancellation reaches `cancelled` only after GitHub proves the exact queue
   entry is absent and the pull request did not merge. A cancellation race is
   quarantined.
@@ -437,6 +457,9 @@ must be reconciled before rollback continues.
 - Native-adapter contract tests prove `merge_group` workflow identity,
   exact-candidate required checks, replacement generations, dequeue, merge, and
   ambiguous-result quarantine.
+- Enqueue crash tests stop before the request, after `requestStartedAt`, after
+  GitHub accepts, and before response persistence. Only the pre-request stop may
+  retry; every post-request uncertainty quarantines without another enqueue.
 - Capability tests reject a queue candidate whose complete ordered membership
   or member review evidence cannot be proved.
 - Final read-back tests prove that a matching PR head with the wrong queue
