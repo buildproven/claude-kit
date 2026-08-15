@@ -49,10 +49,43 @@ for repo in "${repos[@]}"; do
   converged=$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["converged"]).lower())' "$audit_file")
   [ "$MODE" = fix ] && [ "$converged" != true ] || continue
 
-  dirty=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dirtyFiles"])' "$audit_file")
-  ahead=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ahead"])' "$audit_file")
-  [ "$dirty" -eq 0 ] && [ "$ahead" -eq 0 ] || {
-    echo "steward: refusing to repair ambiguous local work in $repo" >&2
+  reconcilable=$(python3 -c '
+import json, sys
+d=json.load(open(sys.argv[1]))
+blocked=(d["branch"] != d["defaultBranch"] or d["dirtyFiles"] or d["ahead"] or d["behind"] or
+         d["openPullRequests"] or d["lockedWorktrees"] or d["stashes"] or
+         d["unmergedLocalBranches"])
+print("true" if not blocked else "false")
+' "$audit_file")
+  [ "$reconcilable" = true ] || {
+    echo "steward: preserving active or ambiguous lifecycle state in $repo; see $audit_file" >&2
+    continue
+  }
+
+  # Steward may remove only residue that the lifecycle manager proves is
+  # terminal. Active locks, open PRs, dirty trees, unpushed commits, recent
+  # activity, and ambiguous branches remain protected by reconcile.
+  node "$KIT_ROOT/scripts/worktree-manager.js" reconcile \
+    --repo "$repo" \
+    --apply \
+    --grace-hours 24 \
+    --recent-minutes 60 \
+    --delete-branch \
+    --repair-stale > "$STATE_DIR/$(basename "$repo")-reconcile.json"
+  bash "$SCRIPT_DIR/audit-repo.sh" "$repo" > "$audit_file"
+  converged=$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["converged"]).lower())' "$audit_file")
+  [ "$converged" != true ] || continue
+
+  repairable=$(python3 -c '
+import json, sys
+d=json.load(open(sys.argv[1]))
+blocked=(d["branch"] != d["defaultBranch"] or d["dirtyFiles"] or d["ahead"] or d["behind"] or
+         d["openPullRequests"] or d["extraWorktrees"] or d["lockedWorktrees"] or
+         d["stashes"] or d["unmergedLocalBranches"])
+print("true" if not blocked and not d["instructionSync"] else "false")
+' "$audit_file")
+  [ "$repairable" = true ] || {
+    echo "steward: preserving active or ambiguous lifecycle state in $repo; see $audit_file" >&2
     continue
   }
 

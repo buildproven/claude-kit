@@ -23,8 +23,22 @@ Defaults:
   non-draft pull request;
 - at most 10 locally available repositories are audited;
 - `audit` is read-only apart from fetch/prune and external state evidence;
-- `fix` refuses dirty or locally-ahead repositories, creates a worktree and feature
-  branch, and requires the repository's quality merge workflow.
+- `audit` checks convergence state only: default-branch drift, dirty files,
+  open PRs, unmerged branches, stashes, and extra or locked worktrees. The
+  creator workflow's quality run owns source validation;
+- `fix` asks the lifecycle manager to remove only proven terminal residue, then
+  re-audits. It preserves any remaining lifecycle state. It creates a repair
+  worktree only when instruction synchronization is the sole remaining defect,
+  and requires the repository's quality merge workflow.
+
+## Lifecycle ownership
+
+The command, skill, or agent that creates a branch, worktree, lock, lease, or
+temporary artifact owns its normal terminal cleanup. Quality owns its merge
+cleanup tail. Dev and Ralph must release their exact lock at terminal handoff.
+Steward is the fallback reconciler for residue after the creator is no longer
+active; it never takes over a live exact-owner lock or discards an ambiguous
+stash, dirty checkout, or unpushed branch.
 
 ## Execution
 
@@ -54,6 +68,8 @@ manifest.
 
 - Never edit a primary checkout.
 - Never repair ambiguous local work.
+- Never run repository test/build suites during convergence audit; protected
+  delivery already owns those gates.
 - Never push a default branch.
 - Keep one concern per repair branch.
 - Surface provider quota, authentication, and timeout failures as their real type.
