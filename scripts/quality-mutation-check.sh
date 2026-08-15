@@ -388,7 +388,11 @@ prepare_mutation_dependencies() {
       ;;
   esac
   dependency_count="$(jq '[.dependencies, .devDependencies, .optionalDependencies] | map(. // {} | length) | add' "$SANDBOX/package.json")"
-  if [ "$dependency_count" -eq 0 ] && [ -z "$manager" ]; then
+  if [ "$dependency_count" -eq 0 ]; then
+    if [ -n "$manager" ] && ! command -v "$manager" >/dev/null 2>&1; then
+      echo "quality-mutation-check: declared package manager '$manager' is unavailable; enable its Corepack shim before mutation checking" >> "$log"
+      return 1
+    fi
     mkdir -p "$SANDBOX/node_modules"
     return 0
   fi
