@@ -372,6 +372,74 @@ initialize_mutation_worktree() {
   fi
 }
 
+prepare_mutation_dependencies() {
+  local log="$1" timeout_seconds="$2" declared manager dependency_count
+  [ -f "$SANDBOX/package.json" ] || return 0
+  declared="$(jq -r '.packageManager // ""' "$SANDBOX/package.json")"
+  case "${declared%%@*}" in
+    npm|pnpm|yarn|bun) manager="${declared%%@*}" ;;
+    *)
+      if [ -f "$SANDBOX/pnpm-lock.yaml" ]; then manager=pnpm
+      elif [ -f "$SANDBOX/yarn.lock" ]; then manager=yarn
+      elif [ -f "$SANDBOX/bun.lock" ] || [ -f "$SANDBOX/bun.lockb" ]; then manager=bun
+      elif [ -f "$SANDBOX/package-lock.json" ] || [ -f "$SANDBOX/npm-shrinkwrap.json" ]; then manager=npm
+      else manager=""
+      fi
+      ;;
+  esac
+  dependency_count="$(jq '[.dependencies, .devDependencies, .optionalDependencies] | map(. // {} | length) | add' "$SANDBOX/package.json")"
+  if [ "$dependency_count" -eq 0 ] && [ -z "$manager" ]; then
+    mkdir -p "$SANDBOX/node_modules"
+    return 0
+  fi
+  if [ -z "$manager" ]; then
+    echo "quality-mutation-check: package.json declares dependencies but no supported committed lockfile or packageManager" >> "$log"
+    return 1
+  fi
+  (
+  cd "$SANDBOX"
+  case "$manager" in
+    pnpm)
+      [ -f "$SANDBOX/pnpm-lock.yaml" ] || {
+        echo "quality-mutation-check: pnpm requires committed pnpm-lock.yaml for offline mutation setup" >> "$log"
+        return 1
+      }
+      bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
+        env CI=true COREPACK_ENABLE_NETWORK=0 corepack pnpm install --offline --frozen-lockfile --ignore-scripts >> "$log" 2>&1
+      ;;
+    npm)
+      [ -f "$SANDBOX/package-lock.json" ] || [ -f "$SANDBOX/npm-shrinkwrap.json" ] || {
+        echo "quality-mutation-check: npm requires a committed package-lock.json or npm-shrinkwrap.json for offline mutation setup" >> "$log"
+        return 1
+      }
+      bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
+        env CI=true npm ci --offline --ignore-scripts >> "$log" 2>&1
+      ;;
+    yarn)
+      [ -f "$SANDBOX/yarn.lock" ] || {
+        echo "quality-mutation-check: yarn requires committed yarn.lock for offline mutation setup" >> "$log"
+        return 1
+      }
+      if [ -f "$SANDBOX/.yarnrc.yml" ]; then
+        bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
+          env CI=true COREPACK_ENABLE_NETWORK=0 YARN_ENABLE_NETWORK=0 corepack yarn install --immutable --immutable-cache --mode=skip-builds >> "$log" 2>&1
+      else
+        bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
+          env CI=true COREPACK_ENABLE_NETWORK=0 corepack yarn install --offline --frozen-lockfile --non-interactive --ignore-scripts >> "$log" 2>&1
+      fi
+      ;;
+    bun)
+      [ -f "$SANDBOX/bun.lock" ] || [ -f "$SANDBOX/bun.lockb" ] || {
+        echo "quality-mutation-check: bun requires a committed bun.lock or bun.lockb for offline mutation setup" >> "$log"
+        return 1
+      }
+      bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
+        env CI=true bun install --offline --frozen-lockfile --ignore-scripts >> "$log" 2>&1
+      ;;
+  esac
+  )
+}
+
 record_evidence() {
   METHOD="$1"
   jq -n \
@@ -403,8 +471,12 @@ if [ -n "$STRYKER_CONFIG" ] && \
   SANDBOX="$TEMP_ROOT/worktree"
   git -C "$ROOT" worktree add --detach --quiet "$SANDBOX" "$HEAD"
   initialize_mutation_worktree || exit 1
-  ln -s "$ROOT/node_modules" "$SANDBOX/node_modules"
   LOG="$STATE_ROOT/mutation/${HEAD}.stryker.log"
+  : > "$LOG"
+  prepare_mutation_dependencies "$LOG" "$CHECK_SECONDS" || {
+    echo "quality-mutation-check: failed to prepare isolated mutation dependencies; see $LOG" >&2
+    exit 1
+  }
   set +e
   cd "$SANDBOX"
   bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CHECK_SECONDS" -- \
@@ -438,19 +510,22 @@ for CANDIDATE in "${CANDIDATES[@]}"; do
   SANDBOX="$TEMP_ROOT/worktree"
   git -C "$ROOT" worktree add --detach --quiet "$SANDBOX" "$HEAD"
   initialize_mutation_worktree || exit 1
-  if [ -d "$ROOT/node_modules" ] && [ ! -e "$SANDBOX/node_modules" ]; then
-    ln -s "$ROOT/node_modules" "$SANDBOX/node_modules"
-  fi
   BASELINE_LOG="$STATE_ROOT/mutation/${HEAD}.$(basename "$CANDIDATE").baseline.log"
+  : > "$BASELINE_LOG"
+  prepare_mutation_dependencies "$BASELINE_LOG" "$REMAINING" || {
+    echo "quality-mutation-check: failed to prepare isolated mutation dependencies; see $BASELINE_LOG" >&2
+    exit 1
+  }
   set +e
   cd "$SANDBOX"
-  : > "$BASELINE_LOG"
   run_candidate_tests "$CANDIDATE" "$BASELINE_LOG" "$REMAINING"
   BASELINE_RESULT=$?
   set -e
   cd "$ROOT"
   if [ "$BASELINE_RESULT" -ne 0 ]; then
     git -C "$ROOT" worktree remove --force "$SANDBOX" >/dev/null
+    echo "quality-mutation-check: baseline test output follows from $BASELINE_LOG" >&2
+    tail -n 40 "$BASELINE_LOG" >&2 || true
     if [ "$BASELINE_RESULT" -eq 124 ]; then
       echo "quality-mutation-check: serialized baseline test timed out; no red-capable evidence" >&2
     else
