@@ -168,7 +168,7 @@ function installPackageManagerShim(root, options) {
   mkdirSync(bin, { recursive: true });
   writeFileSync(
     path.join(bin, "pnpm"),
-    "#!/usr/bin/env bash\nif [ \"$1\" = \"test\" ]; then shift; elif [ \"$1\" = \"run\" ] && [ \"$2\" = \"test\" ]; then shift 2; else exit 1; fi\nnode logic.test.js\n",
+    '#!/usr/bin/env bash\nif [ "$1" = "test" ]; then shift; elif [ "$1" = "run" ] && [ "$2" = "test" ]; then shift 2; else exit 1; fi\nnode logic.test.js\n',
     { mode: 0o755 },
   );
 }
