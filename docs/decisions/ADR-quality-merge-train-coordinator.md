@@ -58,8 +58,8 @@ implement candidate construction.
 The first interface is small:
 
 ```text
-inspect(repository, base) -> capability
-submit(intent) -> trainId
+inspect(repository, base) -> capabilityReceipt
+submit(intent, capabilityReceiptId) -> trainId
 admit(trainId) -> waiting | reservation
 bind(reservation, manifest) -> receipt
 enqueue(trainId) -> receipt
@@ -69,19 +69,27 @@ cancel(trainId, reason) -> state
 
 `submit` writes a durable intent before a quality manifest exists. The intent
 contains the repository, protected base, pull request, expected head, adapter
-policy, unresolved upstream train IDs, budget identity, and submitter identity.
-It grants no review, lease, or merge authority.
+policy, capability-receipt identity and fingerprint, unresolved upstream train
+IDs, budget identity, and submitter identity. It grants no review, lease, or
+merge authority.
 
-`inspect` reads live repository and protected-branch capability. Its result
-binds the observed protection and queue policy, required workflows, observation
-time, and expiry. It writes no intent and grants no authority. An expired,
-partial, or failed observation is not reusable by `submit` or `admit`.
+`inspect` reads live repository and protected-branch capability and persists an
+immutable capability receipt. It binds the repository, protected base and SHA,
+observed protection and queue policy, required workflows, adapter choice,
+policy fingerprint, observation time, and expiry. It writes no intent and
+grants no authority. An expired, partial, or failed observation is not reusable
+by `submit` or `admit`.
 
-`admit` resolves dependencies and orders repository work. Its reservation is a
-short-lived, fenced scheduling credential. For the lease adapter, only the
-repository queue head may create and bind a merge manifest. `bind` then proves
-that the manifest acquired the existing repository lease. The reservation does
-not replace that lease and cannot authorize a remote operation.
+`admit` resolves dependencies and orders repository work. While holding the
+repository admission lock, it performs a fresh live inspection, persists that
+capability receipt, and compares its repository, protected base, adapter choice,
+and policy fingerprint with the submitted intent. A mismatch moves the intent
+to `stale`; admission cannot silently change adapters or policy. A match binds
+the fresh receipt ID and expiry into the short-lived, fenced scheduling
+reservation. For the lease adapter, only the repository queue head may create
+and bind a merge manifest. `bind` then proves that the manifest acquired the
+existing repository lease. The reservation does not replace that lease and
+cannot authorize a remote operation.
 
 `reconcile` starts from the latest valid receipt and performs the adapter's live
 authoritative read. It appends a transition only when the remote repository,
@@ -89,6 +97,23 @@ pull request, head, candidate generation, queue or operation identity, and
 outcome all match. It never derives a remote outcome by replaying local
 receipts. An unavailable or inconsistent read after a remote operation enters
 `quarantined`.
+
+`quarantined` preserves the original ambiguous receipt and blocks new remote
+operations. Recovery rotates the local fencing generation and appends a
+`quarantine-reconciled` receipt; it never edits the ambiguous record. Exact
+authoritative evidence permits only these transitions:
+
+- an exact live queue entry for the recorded PR, head, and operation returns the
+  train to `enqueued` and its candidate to the exact observed active state;
+- an exact bound candidate merged into the protected branch moves both records
+  to `merged`;
+- an exact PR closed without merge, with its queue entry absent, moves both
+  records to `cancelled`; or
+- a server-proved replacement generation moves the old candidate to
+  `superseded` and creates the exact observed generation.
+
+Missing identity, a changed head, multiple matching entries, or any unavailable
+or inconsistent evidence remains `quarantined`.
 
 Every remote enqueue is at most once. Before the request, the coordinator
 persists a fenced `enqueue-requested` receipt with a unique local operation ID,
@@ -245,13 +270,14 @@ submitted -> dependency-wait -> admitted -> manifest-bound -> reviewing
 
 Valid exits are explicit:
 
-| Active train state             | Valid non-success exits                       |
+| Active train state             | Valid exits                                   |
 | ------------------------------ | --------------------------------------------- |
 | `submitted`, `dependency-wait` | `blocked`, `stale`, `deferred`, `cancelled`   |
 | `admitted`                     | `stale`, `deferred`, `cancelled`              |
 | `manifest-bound`, `reviewing`  | `failed`, `stale`, `cancelled`                |
 | `ready`                        | `failed`, `stale`, `deferred`, `cancelled`    |
 | `enqueued`                     | `failed`, `stale`, `quarantined`, `cancelled` |
+| `quarantined`                  | `enqueued`, `merged`, `cancelled`             |
 
 An enqueued train has one current candidate generation:
 
@@ -262,6 +288,11 @@ created -> checking -> green -> merge-pending -> merged
         \-> quarantined
         \-> cancelled
 ```
+
+A quarantined candidate may return only to the exact observed
+`created`/`checking`/`green`/`merge-pending` state, or move to `merged`,
+`cancelled`, or `superseded`, through the fenced `quarantine-reconciled`
+receipt above.
 
 `created` means the adapter persisted the complete ordered membership,
 effective base, candidate SHA and tree, and remote generation identity.
@@ -352,6 +383,11 @@ look like merge authority.
 13. No remote enqueue starts without its fenced pre-request receipt. Once
     `requestStartedAt` exists, an unknown outcome cannot be retried or treated as
     a failed request.
+14. Admission atomically binds an unexpired live capability receipt whose
+    repository, protected base, adapter, and policy fingerprint match the
+    submitted intent.
+15. Quarantine recovery preserves the ambiguous receipt, rotates local fencing,
+    and advances only to a state proved by exact authoritative remote evidence.
 
 ## Failure handling
 
@@ -462,6 +498,9 @@ must be reconciled before rollback continues.
   retry; every post-request uncertainty quarantines without another enqueue.
 - Capability tests reject a queue candidate whose complete ordered membership
   or member review evidence cannot be proved.
+- Admission capability tests expire and change protection, base, workflow, and
+  adapter observations between submit and admit. Each mismatch becomes `stale`
+  before a reservation or manifest exists.
 - Final read-back tests prove that a matching PR head with the wrong queue
   generation, candidate tree, prior base, merge method, or remote operation
   identity is quarantined.
@@ -480,6 +519,9 @@ must be reconciled before rollback continues.
   starts no gate or provider process before it owns the repository reservation.
 - Failure injection after each remote request proves that uncertainty enters
   `quarantined` and never releases or advances another candidate.
+- Quarantine recovery tests accept only exact entry, merge, closed-unmerged, or
+  replacement-generation evidence; missing, duplicate, stale, or inconsistent
+  identities remain quarantined.
 - Focused tests, complete repository verification, prompt parity, protected CI,
   and exact-head independent review pass before release.
 
