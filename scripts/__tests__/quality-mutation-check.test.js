@@ -29,7 +29,9 @@ function fixturePackage(options) {
     ...(options.vitestRunner ? { vitest: "file:vendor/vitest" } : {}),
   };
   return {
-    ...(options.pnpmWorkspace ? { packageManager: "pnpm@10.33.0" } : {}),
+    ...(options.packageManager || options.pnpmWorkspace
+      ? { packageManager: options.packageManager || "pnpm@10.33.0" }
+      : {}),
     ...(Object.keys(dependencies).length > 0 ? { dependencies } : {}),
     scripts: {
       lint: "true",
@@ -403,6 +405,17 @@ describe("quality-mutation-check", () => {
       "npm-isolated-dependency",
       "const path = require('node:path');\nconst { isAllowed } = require('./logic');\nconst { location } = require('zod');\nif (!path.resolve(location).startsWith(process.cwd() + path.sep) || !isAllowed('admin')) process.exit(1);\n",
       { localDependency: true },
+    );
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+  });
+
+  it("does not require a lockfile for dependency-free declared package managers", () => {
+    const { root, manifest } = fixture(
+      "pnpm-no-dependencies",
+      "const { isAllowed } = require('./logic');\nif (!isAllowed('admin')) process.exit(1);\n",
+      { packageManager: "pnpm@10.33.0" },
     );
     expect(runMutation(root, manifest)).toMatch(
       /mutation evidence: revert-diff/,

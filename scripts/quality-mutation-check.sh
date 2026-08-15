@@ -388,7 +388,7 @@ prepare_mutation_dependencies() {
       ;;
   esac
   dependency_count="$(jq '[.dependencies, .devDependencies, .optionalDependencies] | map(. // {} | length) | add' "$SANDBOX/package.json")"
-  if [ "$dependency_count" -eq 0 ] && [ -z "$manager" ]; then
+  if [ "$dependency_count" -eq 0 ]; then
     mkdir -p "$SANDBOX/node_modules"
     return 0
   fi
