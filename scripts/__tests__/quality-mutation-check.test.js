@@ -22,6 +22,64 @@ function fixtureTestScript(options) {
   return "node logic.test.js";
 }
 
+function fixturePackage(options) {
+  const dependencies = {
+    ...(options.localDependency ? { zod: "file:vendor/zod" } : {}),
+    ...(options.pnpmWorkspace ? { zod: "workspace:*" } : {}),
+    ...(options.vitestRunner ? { vitest: "file:vendor/vitest" } : {}),
+  };
+  return {
+    ...(options.pnpmWorkspace ? { packageManager: "pnpm@10.33.0" } : {}),
+    ...(Object.keys(dependencies).length > 0 ? { dependencies } : {}),
+    scripts: {
+      lint: "true",
+      test: fixtureTestScript(options),
+      "security:audit": "true",
+    },
+  };
+}
+
+function installLocalNodeDependency(root, options) {
+  if (options.localDependency) {
+    const dependency = path.join(root, "vendor", "zod");
+    mkdirSync(dependency, { recursive: true });
+    writeFileSync(
+      path.join(dependency, "package.json"),
+      JSON.stringify({ name: "zod", version: "1.0.0", main: "index.js" }),
+    );
+    writeFileSync(
+      path.join(dependency, "index.js"),
+      "exports.location = __dirname;\n",
+    );
+  }
+  if (options.vitestRunner) {
+    const dependency = path.join(root, "vendor", "vitest");
+    mkdirSync(dependency, { recursive: true });
+    writeFileSync(
+      path.join(dependency, "package.json"),
+      JSON.stringify({
+        name: "vitest",
+        version: "1.0.0",
+        bin: { vitest: "vitest.sh" },
+      }),
+    );
+    writeFileSync(
+      path.join(dependency, "vitest.sh"),
+      `#!/usr/bin/env bash
+printf "%s\\n" "$*"
+${options.relatedNoTests ? 'case " $* " in *" related "*) echo "No test files found"; exit 0 ;; esac\n' : ""}
+${options.siblingExitTwo ? `case " $* " in *" ${options.testPath || "logic.test.js"} "*) exit 2 ;; esac\n` : ""}node ${options.testPath || "logic.test.js"}
+`,
+      { mode: 0o755 },
+    );
+  }
+  if (!options.localDependency && !options.vitestRunner) return;
+  execFileSync("npm", ["install", "--ignore-scripts", "--no-audit"], {
+    cwd: root,
+    stdio: "ignore",
+  });
+}
+
 function installPytestRunner(root, options) {
   if (!options.pytestRunner && !options.npmPytestScript) {
     return;
@@ -73,6 +131,35 @@ exit 0
   }
 }
 
+function installPnpmWorkspace(root, options) {
+  if (!options.pnpmWorkspace) return;
+  writeFileSync(
+    path.join(root, "pnpm-workspace.yaml"),
+    "packages:\n  - packages/*\n",
+  );
+  const dependency = path.join(root, "packages", "zod");
+  mkdirSync(dependency, { recursive: true });
+  writeFileSync(
+    path.join(dependency, "package.json"),
+    JSON.stringify({ name: "zod", version: "1.0.0", main: "index.js" }),
+  );
+  writeFileSync(
+    path.join(dependency, "index.js"),
+    "exports.location = __dirname;\n",
+  );
+  execFileSync(
+    "corepack",
+    [
+      "pnpm",
+      "install",
+      "--offline",
+      "--frozen-lockfile=false",
+      "--ignore-scripts",
+    ],
+    { cwd: root, stdio: "ignore" },
+  );
+}
+
 function fixture(label, testBody, options = {}) {
   const root = makeTempDir(`quality-mutation-${label}-`);
   git(root, ["init", "-q", "-b", "main"]);
@@ -80,15 +167,22 @@ function fixture(label, testBody, options = {}) {
   git(root, ["config", "user.email", "quality@example.com"]);
   writeFileSync(
     path.join(root, "package.json"),
-    JSON.stringify({
-      scripts: {
-        lint: "true",
-        test: fixtureTestScript(options),
-        "security:audit": "true",
-      },
-    }),
+    JSON.stringify(fixturePackage(options)),
   );
   writeFileSync(path.join(root, ".gitignore"), "node_modules/\ntest-bin/\n");
+  installPnpmWorkspace(root, options);
+  installLocalNodeDependency(root, options);
+  if (options.pnpmWorkspace) {
+    writeFileSync(
+      path.join(root, ".quality-gates.json"),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          test: { executable: "node", args: ["logic.test.js"] },
+        },
+      }),
+    );
+  }
   if (options.focusedMapping) {
     mkdirSync(path.join(root, ".buildproven"), { recursive: true });
     writeFileSync(
@@ -190,19 +284,6 @@ function fixture(label, testBody, options = {}) {
   );
   git(root, ["add", source]);
   git(root, ["commit", "-qm", "feat: authorize admin"]);
-  if (options.vitestRunner) {
-    const bin = path.join(root, "node_modules", ".bin");
-    mkdirSync(bin, { recursive: true });
-    writeFileSync(
-      path.join(bin, "vitest"),
-      `#!/usr/bin/env bash
-printf "%s\\n" "$*"
-${options.relatedNoTests ? 'case " $* " in *" related "*) echo "No test files found"; exit 0 ;; esac\n' : ""}
-${options.siblingExitTwo ? `case " $* " in *" ${testPath} "*) exit 2 ;; esac\n` : ""}node ${testPath}
-`,
-      { mode: 0o755 },
-    );
-  }
   installPytestRunner(root, options);
   const manifest = execFileSync(
     "node",
@@ -317,6 +398,28 @@ describe("config-promotion filter", () => {
 });
 
 describe("quality-mutation-check", () => {
+  it("prepares non-pnpm dependencies inside the detached mutation worktree", () => {
+    const { root, manifest } = fixture(
+      "npm-isolated-dependency",
+      "const path = require('node:path');\nconst { isAllowed } = require('./logic');\nconst { location } = require('zod');\nif (!path.resolve(location).startsWith(process.cwd() + path.sep) || !isAllowed('admin')) process.exit(1);\n",
+      { localDependency: true },
+    );
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+  });
+
+  it("resolves a pnpm workspace dependency inside the detached mutation worktree", () => {
+    const { root, manifest } = fixture(
+      "pnpm-workspace",
+      "const path = require('node:path');\nconst { isAllowed } = require('./logic');\nconst { location } = require('zod');\nif (!path.resolve(location).startsWith(process.cwd() + path.sep) || !isAllowed('admin')) process.exit(1);\n",
+      { pnpmWorkspace: true },
+    );
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+  });
+
   it("fails when a vacuous test stays green after the changed behavior is reverted", () => {
     const { root, manifest } = fixture(
       "vacuous",
