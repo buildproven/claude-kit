@@ -162,6 +162,17 @@ function installPnpmWorkspace(root, options) {
   );
 }
 
+function installPackageManagerShim(root, options) {
+  if (!options.packageManager?.startsWith("pnpm@")) return;
+  const bin = path.join(root, "test-bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(
+    path.join(bin, "pnpm"),
+    "#!/usr/bin/env bash\nif [ \"$1\" = \"test\" ]; then shift; elif [ \"$1\" = \"run\" ] && [ \"$2\" = \"test\" ]; then shift 2; else exit 1; fi\nnode logic.test.js\n",
+    { mode: 0o755 },
+  );
+}
+
 function fixture(label, testBody, options = {}) {
   const root = makeTempDir(`quality-mutation-${label}-`);
   git(root, ["init", "-q", "-b", "main"]);
@@ -174,6 +185,7 @@ function fixture(label, testBody, options = {}) {
   writeFileSync(path.join(root, ".gitignore"), "node_modules/\ntest-bin/\n");
   installPnpmWorkspace(root, options);
   installLocalNodeDependency(root, options);
+  installPackageManagerShim(root, options);
   if (options.pnpmWorkspace) {
     writeFileSync(
       path.join(root, ".quality-gates.json"),
