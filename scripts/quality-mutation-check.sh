@@ -373,13 +373,14 @@ initialize_mutation_worktree() {
 }
 
 prepare_mutation_dependencies() {
-  local log="$1" timeout_seconds="$2" declared manager dependency_count
+  local log="$1" timeout_seconds="$2" declared manager dependency_count workspace_manifest=false
   [ -f "$SANDBOX/package.json" ] || return 0
   declared="$(jq -r '.packageManager // ""' "$SANDBOX/package.json")"
   case "${declared%%@*}" in
     npm|pnpm|yarn|bun) manager="${declared%%@*}" ;;
     *)
-      if [ -f "$SANDBOX/pnpm-lock.yaml" ]; then manager=pnpm
+      if [ -f "$SANDBOX/pnpm-workspace.yaml" ]; then manager=pnpm
+      elif [ -f "$SANDBOX/pnpm-lock.yaml" ]; then manager=pnpm
       elif [ -f "$SANDBOX/yarn.lock" ]; then manager=yarn
       elif [ -f "$SANDBOX/bun.lock" ] || [ -f "$SANDBOX/bun.lockb" ]; then manager=bun
       elif [ -f "$SANDBOX/package-lock.json" ] || [ -f "$SANDBOX/npm-shrinkwrap.json" ]; then manager=npm
@@ -387,8 +388,12 @@ prepare_mutation_dependencies() {
       fi
       ;;
   esac
+  if [ -f "$SANDBOX/pnpm-workspace.yaml" ] ||
+    jq -e 'has("workspaces")' "$SANDBOX/package.json" >/dev/null 2>&1; then
+    workspace_manifest=true
+  fi
   dependency_count="$(jq '[.dependencies, .devDependencies, .optionalDependencies] | map(. // {} | length) | add' "$SANDBOX/package.json")"
-  if [ "$dependency_count" -eq 0 ]; then
+  if [ "$dependency_count" -eq 0 ] && [ "$workspace_manifest" = false ]; then
     if [ -n "$manager" ] && ! command -v "$manager" >/dev/null 2>&1; then
       echo "quality-mutation-check: declared package manager '$manager' is unavailable; enable its Corepack shim before mutation checking" >> "$log"
       return 1
