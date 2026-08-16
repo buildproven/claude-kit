@@ -47,9 +47,9 @@ describe("SOTA rubric 3.0 scorer", () => {
   it("pins currency scoring to the required Claude Code baseline", async () => {
     const output = await scoreRepository({ schema: SETTINGS_SCHEMA });
 
-    expect(CURRENT_BASELINE).toBe("2.1.210");
+    expect(CURRENT_BASELINE).toBe("2.1.233");
     expect(output.categories.currency.details).toBeUndefined();
-    expect(output.categories.currency.pinned).toBe("2.1.210");
+    expect(output.categories.currency.pinned).toBe("2.1.233");
     expect(output.categories.currency.score).toBe(10);
   });
 

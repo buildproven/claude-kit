@@ -14,7 +14,7 @@ const Ajv = require("ajv");
 const ROOT = path.resolve(process.env.SOTA_ROOT || path.join(__dirname, ".."));
 const SETTINGS_SCHEMA_URL =
   "https://json.schemastore.org/claude-code-settings.json";
-const CURRENT_BASELINE = "2.1.210";
+const CURRENT_BASELINE = "2.1.233";
 
 function exists(relativePath) {
   return fs.existsSync(path.join(ROOT, relativePath));
