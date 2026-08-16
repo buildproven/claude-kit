@@ -27,7 +27,7 @@ Repeatable scorecard that rates your Claude Code setup against state-of-the-art 
 
 ### Step 0: Rubric Refresh + Fetch Latest CC Features
 
-**Rubric version: 3.0 | Last reviewed: 2026-07-15 | Baseline: Claude Code 2.1.210**
+**Rubric version: 3.0 | Last reviewed: 2026-08-16 | Baseline: Claude Code 2.1.233**
 
 > **Why 3.0 is a rewrite, not a bump.** Rubric 2.1 claimed to be fresh (its own
 > staleness check only fires at >30 days) while scoring people against a Q1 2026
