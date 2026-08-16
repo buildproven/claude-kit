@@ -14,7 +14,13 @@ esac
 QUALITY_REVIEW_TIMEOUT="${PLANNED_REVIEW_TIMEOUT:-$QUALITY_REVIEW_TIMEOUT}"
 QUALITY_REVIEW_TIMEOUT="${BS_QUALITY_REVIEW_TIMEOUT:-$QUALITY_REVIEW_TIMEOUT}"
 QUALITY_REVIEW_DEPTH="${CODEX_DEPTH:-$QUALITY_REVIEW_TIER}"
-case "$QUALITY_REVIEW_DEPTH" in skip) QUALITY_REVIEW_DEPTH=low ;; esac
+case "$QUALITY_REVIEW_DEPTH" in
+  skip|low) QUALITY_REVIEW_DEPTH=low ;;
+  medium|95) QUALITY_REVIEW_DEPTH=medium ;;
+  high|98|critical) QUALITY_REVIEW_DEPTH=high ;;
+  xhigh|max) ;;
+  *) echo "quality: invalid Codex review effort '$QUALITY_REVIEW_DEPTH'" >&2; return 1 2>/dev/null || exit 1 ;;
+esac
 # Provider model choice is task-scoped and mechanical. The caller's interactive
 # Codex model is intentionally irrelevant: routine reviews use the balanced
 # model, while only critical release-veto work pays for the flagship model.

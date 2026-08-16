@@ -69,6 +69,7 @@ Omitting the uncertainties section is the common failure: a reviewer that cannot
 where you are unsure spends its budget re-deriving what you already know.
 
 ```bash
+OUT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cross-review-evidence.XXXXXX")"
 PROMPT_FILE="$(mktemp "${TMPDIR:-/tmp}/cross-review.XXXXXX")"
 cat > "$PROMPT_FILE" <<'PROMPT'
 Review this change for defects. Report actionable defects only — each with
@@ -92,10 +93,19 @@ PROMPT
 ### Step 3 — run the review
 
 ```bash
+TARGET_DIR="$(git rev-parse --show-toplevel)"
+EXECUTION_FACTS="$OUT_DIR/execution-facts.json"
+CHANGED_FILES="$(git diff --name-only "$BASE"...HEAD | wc -l | tr -d ' ')"
+jq -n \
+  --argjson changedFiles "$CHANGED_FILES" \
+  '{phase:"scan",readOnly:true,localized:true,targetedProof:true,changedFiles:$changedFiles,protectedSurfaces:[],sameFailureStreak:0}' \
+  > "$EXECUTION_FACTS"
 bash ~/.claude/scripts/provider-run.sh \
   --prompt-file "$PROMPT_FILE" \
+  --execution-facts "$EXECUTION_FACTS" \
   --provider "$REVIEWER" \
   --fallback none \
+  --target-dir "$TARGET_DIR" \
   --sandbox read-only \
   --timeout 900 \
   --output-dir "$OUT_DIR"

@@ -105,6 +105,7 @@ describe("provider-native platform", () => {
     // (BUI-468, from the Codex side).
     expect(skill).toContain("--fallback none");
     expect(skill).toContain("--sandbox read-only");
+    expect(skill).toContain('--execution-facts "$EXECUTION_FACTS"');
     expect(skill).toContain("provider-run.sh");
     // Must not bypass the runner: a direct CLI shell-out loses the deadline,
     // the structured error classification, and the 74/75/76 exit contract.
