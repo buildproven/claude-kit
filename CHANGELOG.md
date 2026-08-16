@@ -12,6 +12,19 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.7.3](https://github.com/buildproven/claude-kit/compare/v4.7.2...v4.7.3) (2026-08-16)
+
+
+### Bug Fixes
+
+* allow dependency-free mutation sandboxes ([#379](https://github.com/buildproven/claude-kit/issues/379)) ([8b9848d](https://github.com/buildproven/claude-kit/commit/8b9848df185c46a8bac00623aaff286741f82008))
+* bound steward convergence repairs ([#377](https://github.com/buildproven/claude-kit/issues/377)) ([14246e2](https://github.com/buildproven/claude-kit/commit/14246e2deef37ded3ef3254beebed93d31f7a143))
+* govern review model effort ([#376](https://github.com/buildproven/claude-kit/issues/376)) ([a6227b2](https://github.com/buildproven/claude-kit/commit/a6227b2339c885cd1d741ca34941bcb398fe6aab))
+* prefer canonical fleet checkout ([#373](https://github.com/buildproven/claude-kit/issues/373)) ([ab97dc5](https://github.com/buildproven/claude-kit/commit/ab97dc5a6a90de1340293d95e17a5e19524b8dc0))
+* prepare mutation dependencies in sandbox ([#375](https://github.com/buildproven/claude-kit/issues/375)) ([3546f41](https://github.com/buildproven/claude-kit/commit/3546f417bfcb14f56b301d9f2eccc482beaca744))
+* prepare workspace mutation dependencies ([#380](https://github.com/buildproven/claude-kit/issues/380)) ([bf38aaa](https://github.com/buildproven/claude-kit/commit/bf38aaa591f36c6bbda26bafd2f1c45da027897f))
+* refresh SOTA currency baseline ([#381](https://github.com/buildproven/claude-kit/issues/381)) ([2f28fc6](https://github.com/buildproven/claude-kit/commit/2f28fc6af1cd19638e0a60baaa0a6c7abe312505))
+
 ## [4.7.2](https://github.com/buildproven/claude-kit/compare/v4.7.1...v4.7.2) (2026-08-13)
 
 
