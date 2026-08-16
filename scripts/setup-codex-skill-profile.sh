@@ -105,4 +105,8 @@ elif [ "$PROFILE" != default ]; then
   for pack in "${PACKS[@]}"; do add_pack "$pack"; done
 fi
 
-bash "$ENGINE" "${ARGS[@]}" "${MODE[@]}"
+if [ ${#MODE[@]} -gt 0 ]; then
+  bash "$ENGINE" "${ARGS[@]}" "${MODE[@]}"
+else
+  bash "$ENGINE" "${ARGS[@]}"
+fi
