@@ -2,6 +2,7 @@
 "use strict";
 
 const { spawnSync } = require("node:child_process");
+const crypto = require("node:crypto");
 
 const ACCEPTED_CONCLUSIONS = new Set(["success"]);
 
@@ -244,7 +245,8 @@ function matchingRuns(runs, requirement) {
     .filter(
       (run) =>
         run.name === requirement.context &&
-        (requirement.appId === null || run.app?.id === requirement.appId),
+        (requirement.appId === null || run.app?.id === requirement.appId) &&
+        (!requirement.externalId || run.external_id === requirement.externalId),
     )
     .sort((left, right) => Number(right.id || 0) - Number(left.id || 0));
 }
@@ -415,7 +417,6 @@ function ensureChecks({
   const dispatched = [];
   const dispatchedRequirements = [];
   const dispatchedWorkflowIds = new Set();
-  const dispatchEvents = new Map();
   for (const requirement of requirements) {
     const target = checkState(targetRuns, requirement);
     if (["pending", "success"].includes(target.state)) continue;
@@ -431,26 +432,36 @@ function ensureChecks({
       );
     }
     const workflowId = workflowIdForRun(repository, source);
-    if (!dispatchedWorkflowIds.has(workflowId)) {
+    const protectedSecret = requirement.context === "secret-history-scan";
+    const dispatchKey = `${workflowId}:${protectedSecret ? "repository_dispatch" : "workflow_dispatch"}`;
+    let dispatchedRequirement = requirement;
+    if (!dispatchedWorkflowIds.has(dispatchKey)) {
       try {
-        if (requirement.context === "secret-history-scan") {
+        if (protectedSecret) {
+          const nonce = crypto.randomBytes(16).toString("hex");
           dispatchRepositoryEvent(repository, "secret-history-scan", {
             head_sha: targetHead,
+            nonce,
           });
-          dispatchEvents.set(workflowId, "repository_dispatch");
+          dispatchedRequirement = {
+            ...requirement,
+            externalId: `secret-history-scan:${targetHead}:${nonce}`,
+          };
         } else {
           dispatchWorkflow(repository, workflowId, headRef);
-          dispatchEvents.set(workflowId, "workflow_dispatch");
         }
       } catch (error) {
         targetRuns = checkRuns(repository, targetHead);
         const refreshed = checkState(targetRuns, requirement);
         if (!["pending", "success"].includes(refreshed.state)) throw error;
       }
-      dispatchedWorkflowIds.add(workflowId);
+      dispatchedWorkflowIds.add(dispatchKey);
     }
     dispatched.push({ context: requirement.context, workflowId });
-    dispatchedRequirements.push({ requirement, workflowId });
+    dispatchedRequirements.push({
+      requirement: dispatchedRequirement,
+      workflowId,
+    });
   }
   const deferred = [];
   if (dispatched.length > 0) {
@@ -466,29 +477,21 @@ function ensureChecks({
     const missing = dispatchedRequirements.filter(
       (entry) => checkState(targetRuns, entry.requirement).state === "missing",
     );
-    const workflowIds = new Set(missing.map((entry) => entry.workflowId));
-    const workflowRuns = new Set(
-      [...workflowIds].filter(
-        (workflowId) =>
-          (dispatchEvents.get(workflowId) || "workflow_dispatch") ===
-          "workflow_dispatch",
-      ),
-    ).size
+    const normalWorkflowIds = new Set(
+      missing
+        .filter((entry) => entry.requirement.context !== "secret-history-scan")
+        .map((entry) => entry.workflowId),
+    );
+    const workflowRuns = normalWorkflowIds.size
       ? dispatchedRunsForHead(
           repository,
           headRef,
           targetHead,
-          new Set(
-            [...workflowIds].filter(
-              (workflowId) =>
-                (dispatchEvents.get(workflowId) || "workflow_dispatch") ===
-                "workflow_dispatch",
-            ),
-          ),
+          normalWorkflowIds,
         )
       : new Map();
     const unregistered = missing.filter((entry) => {
-      if (dispatchEvents.get(entry.workflowId) === "repository_dispatch") {
+      if (entry.requirement.context === "secret-history-scan") {
         // Repository-dispatch runs use the default branch metadata. The
         // target check is the only safe correlation signal; do not accept an
         // unrelated or merely active dispatch run as registration evidence.

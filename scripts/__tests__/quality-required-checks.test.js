@@ -368,10 +368,13 @@ esac
       ],
       fixture,
     );
-    expect(result.status, result.stderr).toBe(0);
-    expect(fs.readFileSync(fixture.log, "utf8")).toContain(
-      'repos/owner/repo/dispatches --input - {"event_type":"secret-history-scan","client_payload":{"head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}',
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/did not register on stamp/);
+    const dispatch = fs.readFileSync(fixture.log, "utf8");
+    expect(dispatch).toContain(
+      'repos/owner/repo/dispatches --input - {"event_type":"secret-history-scan","client_payload":{"head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","nonce":"',
     );
+    expect(dispatch).toMatch(/"nonce":"[0-9a-f]{32}"/);
   });
 
   it("does not treat an unrelated repository-dispatch run as registration", () => {
