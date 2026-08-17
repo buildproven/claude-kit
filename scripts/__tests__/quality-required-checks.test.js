@@ -203,8 +203,9 @@ case "$*" in
       },
     ],
   ])}' ;;
+  *DELETE*refs/tags/refs/tags/*) echo "unexpected duplicated ref prefix" >&2; exit 1 ;;
   *DELETE*buildproven-dispatch-claim-v3/${oldSuffix}*) printf '%s\\n' '{}' ;;
-  *DELETE*buildproven-dispatch-claim-v3-meta/${oldSuffix}/${issuedAtSeconds}*) printf '%s\\n' '{}' ;;
+  *DELETE*repos/owner/repo/git/refs/tags/buildproven-dispatch-claim-v3-meta/${oldSuffix}/${issuedAtSeconds}*) printf '%s\\n' '{}' ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
 `,

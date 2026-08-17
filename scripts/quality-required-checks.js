@@ -316,7 +316,11 @@ function parseRemoteDispatchMetadataEntry(entry, prefix) {
   if (!valid) {
     return null;
   }
-  return { ref, claimHash, issuedAt: Number(issuedAtSeconds) * 1000 };
+  return {
+    ref: `${REMOTE_DISPATCH_CLAIM_METADATA_PREFIX}/${suffix}`,
+    claimHash,
+    issuedAt: Number(issuedAtSeconds) * 1000,
+  };
 }
 
 function deleteRemoteDispatchRef(repository, ref) {
