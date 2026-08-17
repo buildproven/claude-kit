@@ -285,6 +285,30 @@ if [ "${CI_BILLING_WAIVED:-false}" = true ] &&
     RULESET_DETAIL="$(gh api \
       "repos/$REPOSITORY/rulesets/$RULESET_ID?includes_parents=true" \
       2>/dev/null || true)"
+    AUTHORIZED_TEAM_ACTOR_IDS_JSON='[]'
+    TEAM_ACTOR_IDS="$(printf '%s' "$RULESET_DETAIL" |
+      jq -r '.bypass_actors[]? | select(.actor_type == "Team") | .actor_id | tostring' |
+      sort -u)"
+    if [ -n "$TEAM_ACTOR_IDS" ] && [ -n "$CURRENT_USER_LOGIN" ]; then
+      ORGANIZATION="${REPOSITORY%%/*}"
+      TEAM_INDEX="$(gh api --paginate \
+        "orgs/$ORGANIZATION/teams?per_page=100" \
+        --jq '.[] | [(.id | tostring), .slug] | @tsv' 2>/dev/null || true)"
+      while IFS= read -r TEAM_ACTOR_ID; do
+        [ -n "$TEAM_ACTOR_ID" ] || continue
+        TEAM_SLUG="$(printf '%s\n' "$TEAM_INDEX" |
+          awk -F '\t' -v actor_id "$TEAM_ACTOR_ID" '$1 == actor_id { print $2; exit }')"
+        [ -n "$TEAM_SLUG" ] || continue
+        if [ "$(gh api \
+          "orgs/$ORGANIZATION/teams/$TEAM_SLUG/memberships/$CURRENT_USER_LOGIN" \
+          --jq '.state == "active"' 2>/dev/null || true)" = true ]; then
+          AUTHORIZED_TEAM_ACTOR_IDS_JSON="$(printf '%s' "$AUTHORIZED_TEAM_ACTOR_IDS_JSON" |
+            jq -c --arg actor_id "$TEAM_ACTOR_ID" '. + [$actor_id]')"
+        fi
+      done <<EOF
+$TEAM_ACTOR_IDS
+EOF
+    fi
     if ! printf '%s' "$EFFECTIVE_RULES" |
       jq -e --arg ruleset_id "$RULESET_ID" '
         any(.[]?;
@@ -296,14 +320,18 @@ if [ "${CI_BILLING_WAIVED:-false}" = true ] &&
       jq -e \
         --arg user_id "$CURRENT_USER_ID" \
         --arg admin "$REPOSITORY_ADMIN_PERMISSION" \
-        --arg org_admin "$ORGANIZATION_ADMIN_PERMISSION" '
+        --arg org_admin "$ORGANIZATION_ADMIN_PERMISSION" \
+        --argjson authorized_team_actor_ids "$AUTHORIZED_TEAM_ACTOR_IDS_JSON" '
         .enforcement == "active" and
         (.bypass_actors | type == "array") and
         any(.bypass_actors[]?;
           (.bypass_mode == "always" or .bypass_mode == "pull_request" or .bypass_mode == "exempt") and
           ((.actor_type == "OrganizationAdmin" and $org_admin == "true") or
            (.actor_type == "RepositoryRole" and (.actor_id | tostring) == "5" and $admin == "true") or
-           (.actor_type == "User" and (.actor_id | tostring) == $user_id))
+           (.actor_type == "User" and (.actor_id | tostring) == $user_id) or
+           (.actor_type == "Team" and
+             ((.actor_id | tostring) as $actor_id |
+               any($authorized_team_actor_ids[]?; tostring == $actor_id))))
         )
       ' >/dev/null 2>&1; then
       RULESET_ADMIN_FRESHNESS=false
