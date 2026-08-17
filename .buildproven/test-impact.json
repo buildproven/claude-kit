@@ -68,6 +68,19 @@
       ]
     },
     {
+      "paths": ["scripts/quality-wrapper.js"],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/quality-approval-scope.test.js"
+          ]
+        }
+      ]
+    },
+    {
       "paths": ["README.md", "commands/**/*.md"],
       "commands": [
         {
