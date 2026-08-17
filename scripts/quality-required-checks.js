@@ -334,6 +334,14 @@ function workflowDispatchInputs(requirement, targetHead) {
   return {};
 }
 
+function workflowDispatchRef(requirement, base, headRef) {
+  // The secret scanner must execute from the protected default branch. The
+  // reviewed SHA is passed as data and becomes the exact-head check target;
+  // dispatching the PR ref would let the PR control its own scanner.
+  if (requirement.context === "secret-history-scan") return base;
+  return headRef;
+}
+
 function dispatchedRunsForHead(repository, headRef, targetHead, workflowIds) {
   const matching = new Map();
   const encodedRef = encodeURIComponent(headRef);
@@ -426,7 +434,7 @@ function ensureChecks({
         dispatchWorkflow(
           repository,
           workflowId,
-          headRef,
+          workflowDispatchRef(requirement, base, headRef),
           workflowDispatchInputs(requirement, targetHead),
         );
       } catch (error) {
@@ -650,6 +658,7 @@ module.exports = {
   checkState,
   dispatchedRunsForHead,
   ensureChecks,
+  workflowDispatchRef,
   matchingRuns,
   requiredChecks,
   waitForChecks,
