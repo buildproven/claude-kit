@@ -205,7 +205,14 @@ ATOMIC_BASE_FRESHNESS=false
 ADMIN_BASE_FRESHNESS=false
 ATOMIC_BASE_SOURCE=""
 ADMIN_BASE_SOURCE=""
+REPOSITORY_ADMIN_PERMISSION=false
+CURRENT_USER_ID=""
 ENCODED_BASE_NAME="$(jq -rn --arg value "$ACTUAL_BASE_NAME" '$value | @uri')" || exit 1
+if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
+  REPOSITORY_ADMIN_PERMISSION="$(gh api "repos/$REPOSITORY" \
+    --jq '.permissions.admin' 2>/dev/null || true)"
+  CURRENT_USER_ID="$(gh api user --jq '.id' 2>/dev/null || true)"
+fi
 if [ "$(gh api "repos/$REPOSITORY/branches/$ENCODED_BASE_NAME/protection/required_status_checks" \
   --jq '.strict' 2>/dev/null || true)" = true ]; then
   ATOMIC_BASE_FRESHNESS=true
@@ -213,7 +220,8 @@ if [ "$(gh api "repos/$REPOSITORY/branches/$ENCODED_BASE_NAME/protection/require
 fi
 if [ "${CI_BILLING_WAIVED:-false}" = true ] &&
   [ "$(gh api "repos/$REPOSITORY/branches/$ENCODED_BASE_NAME/protection" \
-    --jq '.enforce_admins.enabled' 2>/dev/null || true)" = true ]; then
+    --jq '.enforce_admins.enabled' 2>/dev/null || true)" = false ] &&
+  [ "$REPOSITORY_ADMIN_PERMISSION" = true ]; then
   ADMIN_BASE_FRESHNESS=true
   ADMIN_BASE_SOURCE=classic
 fi
@@ -260,8 +268,8 @@ if [ "${CI_BILLING_WAIVED:-false}" = true ] &&
   [ "$ATOMIC_BASE_SOURCE" = ruleset ]; then
   # The effective-rules response identifies every ruleset that supplies a
   # rule for this concrete branch. Fetch each complete ruleset before allowing
-  # an admin merge; an absent or hidden bypass_actors field is not proof that
-  # administrators are bound by the ruleset.
+  # an admin merge and require a bypass actor that matches the authenticated
+  # operator. An absent or hidden bypass_actors field is not authorization.
   RULESET_ADMIN_FRESHNESS=true
   RULESET_IDS="$(printf '%s' "$EFFECTIVE_RULES" |
     jq -r '.[]? | .ruleset_id // empty' | sort -u)"
@@ -271,9 +279,23 @@ if [ "${CI_BILLING_WAIVED:-false}" = true ] &&
     RULESET_DETAIL="$(gh api \
       "repos/$REPOSITORY/rulesets/$RULESET_ID?includes_parents=true" \
       2>/dev/null || true)"
-    if ! printf '%s' "$RULESET_DETAIL" |
-      jq -e '.enforcement == "active" and (.bypass_actors | type == "array" and length == 0)' \
-      >/dev/null 2>&1; then
+    if ! printf '%s' "$EFFECTIVE_RULES" |
+      jq -e --arg ruleset_id "$RULESET_ID" '
+        any(.[]?;
+          (.ruleset_id | tostring) == $ruleset_id and
+          .type == "required_status_checks" and
+          .parameters.strict_required_status_checks_policy == true
+        )
+      ' >/dev/null 2>&1 || ! printf '%s' "$RULESET_DETAIL" |
+      jq -e --arg user_id "$CURRENT_USER_ID" --arg admin "$REPOSITORY_ADMIN_PERMISSION" '
+        .enforcement == "active" and
+        (.bypass_actors | type == "array") and
+        any(.bypass_actors[]?;
+          (.bypass_mode == "always" or .bypass_mode == "pull_request" or .bypass_mode == "exempt") and
+          ((.actor_type == "OrganizationAdmin" and $admin == "true") or
+           (.actor_type == "User" and (.actor_id | tostring) == $user_id))
+        )
+      ' >/dev/null 2>&1; then
       RULESET_ADMIN_FRESHNESS=false
       break
     fi
@@ -317,7 +339,7 @@ if [ "$ATOMIC_BASE_FRESHNESS" != true ]; then
           | select(.matchingRefs.pageInfo.hasNextPage == false)
           | select(any(.matchingRefs.nodes[]?.name; . == $branch))]
           | length == 1 and .[0].requiresStrictStatusChecks == true
-          and .[0].isAdminEnforced == true)
+          and .[0].isAdminEnforced == false)
       ' >/dev/null 2>&1; then
     ADMIN_BASE_FRESHNESS=true
     ADMIN_BASE_SOURCE=graphql
@@ -420,8 +442,8 @@ if [ -n "${CI_BILLING_WAIVER_ARTIFACT:-}" ] &&
   { [ "$ADMIN_BASE_FRESHNESS" != true ] ||
     [ -z "$ATOMIC_BASE_SOURCE" ] ||
     [ "$ADMIN_BASE_SOURCE" != "$ATOMIC_BASE_SOURCE" ]; }; then
-  echo "❌ MERGE BLOCKED: CI billing waiver admin merge requires server-enforced administrator checks." >&2
-  echo "   GitHub did not prove that administrators are subject to the same strict rule." >&2
+  echo "❌ MERGE BLOCKED: CI billing waiver admin merge requires a current authorized bypass actor." >&2
+  echo "   GitHub did not prove that this authenticated operator can bypass the selected strict rule." >&2
   exit 1
 fi
 TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"
@@ -548,7 +570,7 @@ if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
     { [ "$ADMIN_BASE_FRESHNESS" = true ] &&
       [ -n "$ATOMIC_BASE_SOURCE" ] &&
       [ "$ADMIN_BASE_SOURCE" = "$ATOMIC_BASE_SOURCE" ]; } || {
-      echo "❌ MERGE BLOCKED: CI billing waiver admin merge requires server-enforced administrator checks." >&2
+      echo "❌ MERGE BLOCKED: CI billing waiver admin merge requires a current authorized bypass actor." >&2
       exit 1
     }
     # Revalidate the operator scope immediately before --admin, same
