@@ -161,7 +161,7 @@ describe("quality-required-checks", () => {
         externalId,
       );
       expect(claim).toMatch(
-        /^refs\/tags\/buildproven-dispatch-claim\/[0-9a-f]{64}$/,
+        /^refs\/tags\/buildproven-dispatch-claim-v2\/[0-9a-f]{64}$/,
       );
       expect(() =>
         claimRemoteDispatchNonce(
@@ -194,7 +194,7 @@ case "$*" in
   *matching-refs*) printf '%s\\n' '${JSON.stringify([
     [
       {
-        ref: `refs/tags/buildproven-dispatch-claim/${oldSuffix}`,
+        ref: `refs/tags/buildproven-dispatch-claim-v2/${oldSuffix}`,
         object: { type: "tag", sha: tagSha },
       },
       {
@@ -204,7 +204,7 @@ case "$*" in
     ],
   ])}' ;;
   *git/tags/${tagSha}*) printf '%s\\n' '{"tagger":{"date":"2020-01-01T00:00:00Z"}}' ;;
-  *DELETE*buildproven-dispatch-claim/${oldSuffix}*) printf '%s\\n' '{}' ;;
+  *DELETE*buildproven-dispatch-claim-v2/${oldSuffix}*) printf '%s\\n' '{}' ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
 `,

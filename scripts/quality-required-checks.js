@@ -25,6 +25,7 @@ const PROTECTED_CHECKS = Object.freeze({
     eventType: "harness-summary",
   }),
 });
+const REMOTE_DISPATCH_CLAIM_PREFIX = "buildproven-dispatch-claim-v2";
 
 function protectedCheckConfig(requirement) {
   return PROTECTED_CHECKS[requirement.context] || null;
@@ -204,7 +205,7 @@ function claimRemoteDispatchNonce(
   // caller receives HTTP 422 because the ref already exists. A list-then-
   // create check-run marker would leave a cross-host race. The ref points to
   // an annotated tag object so its creation time is retained for safe cleanup.
-  const claimRef = `refs/tags/buildproven-dispatch-claim/${crypto
+  const claimRef = `refs/tags/${REMOTE_DISPATCH_CLAIM_PREFIX}/${crypto
     .createHash("sha256")
     .update(`${eventType}\u0000${externalId}`)
     .digest("hex")}`;
@@ -277,14 +278,14 @@ function claimRemoteDispatchNonce(
 }
 
 function remoteDispatchClaimRefs(repository) {
-  const prefix = "refs/tags/buildproven-dispatch-claim/";
+  const prefix = `refs/tags/${REMOTE_DISPATCH_CLAIM_PREFIX}/`;
   try {
     const pages = JSON.parse(
       runGh([
         "api",
         "--paginate",
         "--slurp",
-        `repos/${repository}/git/matching-refs/tags/buildproven-dispatch-claim/`,
+        `repos/${repository}/git/matching-refs/tags/${REMOTE_DISPATCH_CLAIM_PREFIX}/`,
       ]),
     );
     if (!Array.isArray(pages)) {
@@ -337,7 +338,7 @@ function deleteRemoteDispatchClaim(repository, claim) {
       "api",
       "--method",
       "DELETE",
-      `repos/${repository}/git/refs/tags/buildproven-dispatch-claim/${claim.suffix}`,
+      `repos/${repository}/git/refs/tags/${REMOTE_DISPATCH_CLAIM_PREFIX}/${claim.suffix}`,
     ]);
   } catch (error) {
     throw new Error(

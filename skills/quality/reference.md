@@ -113,8 +113,8 @@ code-finding, and CI failures into one generic merge message.
 
 ### Remote dispatch claim retention
 
-Protected-check dispatch claims use annotated Git tags under
-`buildproven-dispatch-claim/`. The deterministic ref remains the atomic
+Protected-check dispatch claims use annotated Git tags under the versioned
+`buildproven-dispatch-claim-v2/` namespace. The deterministic ref remains the atomic
 cross-host nonce claim, while the tag metadata records the issue time. Prune
 expired claims with the bounded operator command (default retention: 24 hours):
 
@@ -124,8 +124,9 @@ node scripts/quality-required-checks.js cleanup-claims --repo owner/name
 
 The cleanup command deletes only expired annotated claim refs. It retains
 claims with missing or invalid metadata and never deletes legacy lightweight
-claim refs. Run it from a scheduled maintenance process, not from every
-quality invocation.
+claim refs in the original `buildproven-dispatch-claim/` namespace. Those
+legacy refs are quarantined and do not suppress v2 claims. Run cleanup from a
+scheduled maintenance process, not from every quality invocation.
 
 ## Regression History
 
