@@ -248,13 +248,35 @@ candidate_has_sibling_test() {
   return 1
 }
 
+candidate_has_planned_sibling_test() {
+  local candidate="$1" directory stem sibling
+  directory="$(dirname "$candidate")"
+  stem="$(basename "$candidate")"
+  stem="${stem%.*}"
+  for sibling in \
+    "$directory/__tests__/$stem.test.js" \
+    "$directory/__tests__/$stem.test.ts" \
+    "$directory/$stem.test.js" \
+    "$directory/$stem.test.ts"; do
+    [ -f "$ROOT/$sibling" ] || continue
+    printf '%s' "$TEST_PLAN" | jq -e --arg sibling "$sibling" \
+      '[.commands[]?.args[]?] | index($sibling) != null' >/dev/null 2>&1 && return 0
+  done
+  return 1
+}
+
 if [ "${#CANDIDATES[@]}" -gt 1 ]; then
   ORDERED_CANDIDATES=()
-  for PRIORITY in sibling fallback; do
+  for PRIORITY in planned-sibling sibling fallback; do
     for CANDIDATE in "${CANDIDATES[@]}"; do
       HAS_SIBLING=false
       candidate_has_sibling_test "$CANDIDATE" && HAS_SIBLING=true
-      if [ "$PRIORITY" = sibling ] && [ "$HAS_SIBLING" = true ]; then
+      HAS_PLANNED_SIBLING=false
+      candidate_has_planned_sibling_test "$CANDIDATE" && HAS_PLANNED_SIBLING=true
+      if [ "$PRIORITY" = planned-sibling ] && [ "$HAS_PLANNED_SIBLING" = true ]; then
+        ORDERED_CANDIDATES+=("$CANDIDATE")
+      elif [ "$PRIORITY" = sibling ] && [ "$HAS_SIBLING" = true ] &&
+        [ "$HAS_PLANNED_SIBLING" = false ]; then
         ORDERED_CANDIDATES+=("$CANDIDATE")
       elif [ "$PRIORITY" = fallback ] && [ "$HAS_SIBLING" = false ]; then
         ORDERED_CANDIDATES+=("$CANDIDATE")
