@@ -11,6 +11,7 @@ const {
   evidenceDigestValid,
   jobIsPreallocationBillingFailure,
   parseJobId,
+  synthesizeWorkflowDispatchEvidence,
 } = require(
   path.resolve(import.meta.dirname, "..", "quality-ci-billing-waiver.js"),
 );
@@ -55,6 +56,94 @@ describe("quality CI billing waiver", () => {
     expect(classify().evidenceSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(jobIsPreallocationBillingFailure(job)).toBe(true);
     expect(parseJobId(check.link, repository)).toBe("34");
+  });
+
+  it("synthesizes exact-head dispatch checks when GitHub has no PR check context", () => {
+    const evidence = synthesizeWorkflowDispatchEvidence(
+      repository,
+      head,
+      [
+        {
+          id: 12,
+          name: "Quality Checks",
+          event: "workflow_dispatch",
+          head_sha: head,
+          status: "completed",
+          conclusion: "failure",
+        },
+        {
+          id: 13,
+          name: "stale head",
+          event: "workflow_dispatch",
+          head_sha: "b".repeat(40),
+          status: "completed",
+          conclusion: "failure",
+        },
+      ],
+      {
+        12: [
+          {
+            ...job,
+            id: 34,
+            name: "lint-and-format",
+          },
+        ],
+        13: [
+          {
+            ...job,
+            id: 35,
+            name: "stale",
+          },
+        ],
+      },
+    );
+    expect(evidence.checks).toEqual([
+      {
+        name: "Quality Checks/lint-and-format",
+        state: "FAILURE",
+        link: "https://github.com/owner/repo/actions/runs/12/job/34",
+      },
+    ]);
+    expect(evidence.jobsById[34]).toMatchObject({
+      runner_name: "",
+      steps: [],
+    });
+    expect(evidence.jobsById[35]).toBeUndefined();
+  });
+
+  it("can restrict synthesized evidence to the quality workflow identity", () => {
+    const evidence = synthesizeWorkflowDispatchEvidence(
+      repository,
+      head,
+      [
+        {
+          id: 12,
+          name: "Quality Checks",
+          workflow_id: 77,
+          event: "workflow_dispatch",
+          head_sha: head,
+          status: "completed",
+          conclusion: "failure",
+        },
+        {
+          id: 14,
+          name: "Unrelated manual workflow",
+          workflow_id: 88,
+          event: "workflow_dispatch",
+          head_sha: head,
+          status: "completed",
+          conclusion: "failure",
+        },
+      ],
+      {
+        12: [{ ...job, id: 34, name: "lint-and-format" }],
+        14: [{ ...job, id: 36, name: "lint-and-format" }],
+      },
+      77,
+    );
+    expect(evidence.checks).toHaveLength(1);
+    expect(evidence.checks[0].link).toContain("/runs/12/job/34");
+    expect(evidence.jobsById[36]).toBeUndefined();
   });
 
   it("rejects evidence tampering that retains the original digest", () => {

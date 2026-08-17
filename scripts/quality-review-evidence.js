@@ -382,6 +382,20 @@ function signDispatchAuthorization(fields, privateKeyBase64) {
   );
 }
 
+function dispatchExternalId(fields) {
+  const payload = dispatchPayload(fields);
+  return `${payload.eventType}:${payload.head}:${payload.base}:${payload.nonce}`;
+}
+
+function assertDispatchNonceAvailable(fields, claimedExternalIds) {
+  if (!Array.isArray(claimedExternalIds))
+    throw new Error("claimed dispatch external IDs must be an array");
+  const externalId = dispatchExternalId(fields);
+  if (claimedExternalIds.includes(externalId))
+    throw new Error("dispatch authorization nonce has already been claimed");
+  return externalId;
+}
+
 function verifyDispatchAuthorization(fields, encoded, publicKeyBase64) {
   let envelope;
   try {
@@ -417,6 +431,8 @@ function verifyDispatchAuthorization(fields, encoded, publicKeyBase64) {
 
 module.exports = {
   canonicalJson,
+  assertDispatchNonceAvailable,
+  dispatchExternalId,
   dispatchPayload,
   evidencePayload,
   signDispatchAuthorization,

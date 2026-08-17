@@ -2,6 +2,8 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const {
+  assertDispatchNonceAvailable,
+  dispatchExternalId,
   publicKeyFromPrivate,
   signDispatchAuthorization,
   signEvidence,
@@ -95,6 +97,27 @@ describe("quality review evidence signatures", () => {
         keys.publicKey,
       ),
     ).toThrow(/eventType does not match/);
+  });
+
+  it("derives and claims one durable external ID per dispatch nonce", () => {
+    const dispatch = {
+      schemaVersion: 1,
+      repository: "owner/repo",
+      eventType: "harness-summary",
+      head: "a".repeat(40),
+      base: "b".repeat(40),
+      nonce: "c".repeat(32),
+      issuedAt: "2027-01-01T00:00:00.000Z",
+      expiresAt: "2027-01-01T00:10:00.000Z",
+    };
+    const externalId = dispatchExternalId(dispatch);
+    expect(externalId).toBe(
+      `harness-summary:${dispatch.head}:${dispatch.base}:${dispatch.nonce}`,
+    );
+    expect(assertDispatchNonceAvailable(dispatch, [])).toBe(externalId);
+    expect(() => assertDispatchNonceAvailable(dispatch, [externalId])).toThrow(
+      /already been claimed/,
+    );
   });
 
   it("verifies an exact canonical review tuple", () => {
