@@ -181,7 +181,7 @@ describe("quality-required-checks", () => {
     }));
     fs.writeFileSync(
       path.join(bin, "gh"),
-    `#!/usr/bin/env bash
+      `#!/usr/bin/env bash
 set -eu
 case "$*" in
   *protection/required_status_checks*) printf '%s\\n' '{"contexts":[],"checks":[]}' ;;
@@ -204,7 +204,9 @@ esac
 
   it("uses complete GraphQL branch protection when REST discovery is unavailable", () => {
     const originalPath = process.env.PATH;
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-graphql-rules-"));
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "quality-graphql-rules-"),
+    );
     const bin = path.join(root, "bin");
     fs.mkdirSync(bin);
     fs.writeFileSync(
@@ -237,7 +239,9 @@ esac
 
   it("keeps effective ruleset checks when GraphQL proves no classic rule", () => {
     const originalPath = process.env.PATH;
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-graphql-empty-"));
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "quality-graphql-empty-"),
+    );
     const bin = path.join(root, "bin");
     fs.mkdirSync(bin);
     fs.writeFileSync(
