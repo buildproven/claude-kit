@@ -272,13 +272,20 @@ if EFFECTIVE_RULES="$(gh api \
 fi
 if [ "${CI_BILLING_WAIVED:-false}" = true ] &&
   [ "$ATOMIC_BASE_SOURCE" = ruleset ]; then
-  # The effective-rules response identifies every ruleset that supplies a
-  # rule for this concrete branch. Fetch each complete ruleset before allowing
-  # an admin merge and require a bypass actor that matches the authenticated
-  # operator. An absent or hidden bypass_actors field is not authorization.
+  # The effective-rules response identifies the strict status-check rulesets
+  # that supply freshness for this concrete branch. Fetch each complete
+  # ruleset before allowing an admin merge and require a bypass actor that
+  # matches the authenticated operator. Unrelated rulesets do not authorize
+  # or deny this specific status-check bypass. An absent or hidden
+  # bypass_actors field is not authorization.
   RULESET_ADMIN_FRESHNESS=true
   RULESET_IDS="$(printf '%s' "$EFFECTIVE_RULES" |
-    jq -r '.[]? | .ruleset_id // empty' | sort -u)"
+    jq -r '
+      .[]?
+      | select(.type == "required_status_checks")
+      | select(.parameters.strict_required_status_checks_policy == true)
+      | .ruleset_id // empty
+    ' | sort -u)"
   [ -n "$RULESET_IDS" ] || RULESET_ADMIN_FRESHNESS=false
   while IFS= read -r RULESET_ID; do
     [ -n "$RULESET_ID" ] || continue
@@ -379,8 +386,10 @@ if [ "$ATOMIC_BASE_FRESHNESS" != true ]; then
           | length == 1 and .[0].requiresStrictStatusChecks == true
           and .[0].isAdminEnforced == false)
       ' >/dev/null 2>&1; then
-    ADMIN_BASE_FRESHNESS=true
-    ADMIN_BASE_SOURCE=graphql
+    if [ "$REPOSITORY_ADMIN_PERMISSION" = true ]; then
+      ADMIN_BASE_FRESHNESS=true
+      ADMIN_BASE_SOURCE=graphql
+    fi
   fi
 fi
 # Last resort, and only after BOTH classic protection and effective rulesets have

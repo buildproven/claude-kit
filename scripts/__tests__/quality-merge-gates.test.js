@@ -265,6 +265,12 @@ describe("quality merge gates", () => {
     expect(AUTHORIZE).toMatch(/orgs\/\$ORGANIZATION\/teams/);
     expect(AUTHORIZE).toMatch(/memberships\/\$CURRENT_USER_LOGIN/);
     expect(AUTHORIZE).toMatch(/AUTHORIZED_TEAM_ACTOR_IDS_JSON/);
+    expect(AUTHORIZE).toMatch(
+      /select\(\.type == "required_status_checks"\)[\s\S]*strict_required_status_checks_policy/,
+    );
+    expect(AUTHORIZE).toMatch(
+      /REPOSITORY_ADMIN_PERMISSION" = true[\s\S]*ADMIN_BASE_SOURCE=graphql/,
+    );
   });
 
   it("uses one manifest-bound operation for composed CI billing capability checks", () => {
