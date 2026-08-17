@@ -587,7 +587,15 @@ if [ "$1 $2" = "repo view" ]; then
   if [[ "$*" == *"nameWithOwner"* ]]; then printf '%s\\n' "\${QUALITY_TEST_REPOSITORY:-${repository}}"; else printf '%s\\n' 'main'; fi
   exit 0
 fi
-if [ "$1" = "api" ]; then
+  if [ "$1" = "api" ]; then
+  if [ "$2" = "graphql" ]; then
+    if [ "\${QUALITY_TEST_GRAPHQL_RULES:-}" = strict ]; then
+      printf '%s\\n' '{"data":{"repository":{"branchProtectionRules":{"nodes":[{"requiresStrictStatusChecks":true,"matchingRefs":{"nodes":[{"name":"main"}]}}]}}}}'
+    else
+      printf '%s\\n' '{"data":{"repository":{"branchProtectionRules":{"nodes":[]}}}}'
+    fi
+    exit 0
+  fi
   if [[ "$*" == *"protection/required_status_checks"* ]]; then
     if [ "\${QUALITY_TEST_STRICT_PROTECTION:-}" = true ]; then
       if [[ "$*" == *"--jq .strict"* ]]; then
@@ -4311,6 +4319,23 @@ exit 99
     );
     expect(unprotected.status).not.toBe(0);
     expect(unprotected.stderr).toMatch(/server-enforced strict freshness/);
+
+    const graphqlStrict = spawnSync(
+      "bash",
+      [AUTHORIZE, "--manifest", manifest, "--preflight"],
+      {
+        cwd: caller,
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          QUALITY_TEST_EFFECTIVE_RULES: "unavailable",
+          QUALITY_TEST_GRAPHQL_RULES: "strict",
+        },
+        encoding: "utf8",
+      },
+    );
+    expect(graphqlStrict.status, graphqlStrict.stderr).toBe(0);
+    expect(graphqlStrict.stdout).toContain("BS_QUALITY_BASE_PROTECTION=true");
 
     const queueOnly = spawnSync("bash", [AUTHORIZE, "--manifest", manifest], {
       cwd: caller,

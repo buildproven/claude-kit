@@ -251,6 +251,27 @@ if EFFECTIVE_RULES="$(gh api \
     ATOMIC_BASE_FRESHNESS=true
   fi
 fi
+# GitHub's classic protection and effective-rules REST endpoints can be
+# unavailable while the GraphQL branch-protection view remains healthy. Use
+# that independent, server-owned view as a read-only confirmation of strict
+# freshness. The branch is accepted only when the rule itself reports strict
+# checks and GitHub says it matches this concrete base ref.
+if [ "$ATOMIC_BASE_FRESHNESS" != true ]; then
+  GRAPHQL_OWNER="${REPOSITORY%%/*}"
+  GRAPHQL_NAME="${REPOSITORY#*/}"
+  GRAPHQL_RULES="$(gh api graphql \
+    -f 'query=query($owner:String!,$name:String!){repository(owner:$owner,name:$name){branchProtectionRules(first:100){nodes{requiresStrictStatusChecks matchingRefs(first:100){nodes{name}}}}}}' \
+    -F "owner=$GRAPHQL_OWNER" -F "name=$GRAPHQL_NAME" 2>/dev/null || true)"
+  if printf '%s' "$GRAPHQL_RULES" |
+    jq -e --arg branch "$ACTUAL_BASE_NAME" '
+      .data.repository.branchProtectionRules.nodes[]?
+      | select(.requiresStrictStatusChecks == true)
+      | .matchingRefs.nodes[]?.name
+      | select(. == $branch)
+    ' >/dev/null 2>&1; then
+    ATOMIC_BASE_FRESHNESS=true
+  fi
+fi
 # Last resort, and only after BOTH classic protection and effective rulesets have
 # had their chance to authorize: a ruleset can supply strict freshness on a repo
 # with no classic protection, so running this earlier would reject a properly
