@@ -3,9 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
+const dispatchKey = generateKeyPairSync("ed25519")
+  .privateKey.export({
+    type: "pkcs8",
+    format: "der",
+  })
+  .toString("base64");
 const SCRIPT = path.resolve(
   import.meta.dirname,
   "../quality-required-checks.js",
@@ -67,7 +74,11 @@ function run(root, args, fixture) {
   return spawnSync("node", [SCRIPT, ...args], {
     cwd: root,
     encoding: "utf8",
-    env: { ...process.env, PATH: `${fixture.bin}:${process.env.PATH}` },
+    env: {
+      ...process.env,
+      PATH: `${fixture.bin}:${process.env.PATH}`,
+      QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY: dispatchKey,
+    },
   });
 }
 
