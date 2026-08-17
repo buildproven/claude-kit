@@ -286,7 +286,7 @@ function trustedSecretCheckState(
     return { state: "missing", run: null };
   }
   const noncePrefix = `${SECRET_SCAN_RUN_PREFIX}${targetHead}:`;
-  const externalId = String(requirement.externalId || "");
+  const externalId = String(requirement.externalId || latest.external_id || "");
   if (!externalId.startsWith(noncePrefix)) {
     return { state: "missing", run: null };
   }
@@ -473,11 +473,13 @@ function ensureChecks({
   const dispatchedWorkflowIds = new Set();
   for (const requirement of requirements) {
     const protectedSecret = requirement.context === "secret-history-scan";
+    let source = null;
+    let workflowId = null;
     if (!protectedSecret) {
       const target = checkState(targetRuns, requirement);
       if (["pending", "success"].includes(target.state)) continue;
     }
-    const source = sourceRunForRequirement(
+    source = sourceRunForRequirement(
       repository,
       sourceHead,
       sourceRuns,
@@ -488,7 +490,18 @@ function ensureChecks({
         `cannot map required check '${requirement.context}' to a workflow from the reviewed head or its first-parent history`,
       );
     }
-    const workflowId = workflowIdForRun(repository, source);
+    workflowId = workflowIdForRun(repository, source);
+    if (protectedSecret) {
+      const target = trustedSecretCheckState(
+        repository,
+        targetRuns,
+        requirement,
+        workflowId,
+        base,
+        targetHead,
+      );
+      if (["pending", "success"].includes(target.state)) continue;
+    }
     const dispatchKey = `${workflowId}:${protectedSecret ? "repository_dispatch" : "workflow_dispatch"}`;
     let dispatchedRequirement = requirement;
     if (!dispatchedWorkflowIds.has(dispatchKey)) {
