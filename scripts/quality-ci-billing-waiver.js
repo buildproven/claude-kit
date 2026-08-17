@@ -91,6 +91,40 @@ function jobIsPreallocationBillingFailure(job) {
   );
 }
 
+function synthesizeWorkflowDispatchEvidence(
+  repository,
+  expectedHead,
+  runs,
+  jobsByRunId,
+) {
+  const checks = []
+  const jobsById = {}
+  for (const run of Array.isArray(runs) ? runs : []) {
+    if (
+      run?.head_sha !== expectedHead ||
+      run?.event !== "workflow_dispatch" ||
+      run?.status !== "completed" ||
+      run?.conclusion !== "failure"
+    )
+      continue
+    const jobs = jobsByRunId?.[String(run.id)]
+    if (!Array.isArray(jobs) || jobs.length === 0) continue
+    for (const job of jobs) {
+      if (!job || !Number.isInteger(job.id)) continue
+      jobsById[job.id] = job
+      checks.push({
+        name: `${run.name || run.workflow_id || "workflow"}/${job.name || job.id}`,
+        state:
+          job.status === "completed"
+            ? String(job.conclusion || "").toUpperCase()
+            : "IN_PROGRESS",
+        link: `https://github.com/${repository}/actions/runs/${run.id}/job/${job.id}`,
+      })
+    }
+  }
+  return { checks, jobsById }
+}
+
 function configuredWaiverUntil() {
   if (process.env.BS_QUALITY_CI_BILLING_WAIVER_UNTIL) {
     return process.env.BS_QUALITY_CI_BILLING_WAIVER_UNTIL;
@@ -197,12 +231,71 @@ function classifyBillingWaiver({
 
 function runGh(args, { allowFailure = false } = {}) {
   const result = spawnSync("gh", args, { encoding: "utf8" });
-  if ((!allowFailure && result.status !== 0) || !result.stdout.trim()) {
+  if (!allowFailure && (result.status !== 0 || !result.stdout.trim())) {
     throw new Error(
       result.stderr.trim() || `gh ${args.slice(0, 2).join(" ")} failed`,
     );
   }
   return result.stdout;
+}
+
+function listWorkflowDispatchRuns(repository, expectedHead) {
+  const runs = [];
+  for (let page = 1; page <= 100; page += 1) {
+    const response = parseJson(
+      runGh([
+        "api",
+        `repos/${repository}/actions/runs?head_sha=${expectedHead}&event=workflow_dispatch&per_page=100&page=${page}`,
+      ]),
+      "GitHub workflow dispatch runs response",
+    );
+    if (!Array.isArray(response.workflow_runs)) {
+      throw new Error("GitHub workflow dispatch runs response is invalid");
+    }
+    runs.push(...response.workflow_runs);
+    if (response.workflow_runs.length < 100) return runs;
+  }
+  throw new Error("GitHub workflow dispatch runs pagination exceeded 100 pages");
+}
+
+function listRunJobs(repository, runId) {
+  const jobs = [];
+  for (let page = 1; page <= 100; page += 1) {
+    const response = parseJson(
+      runGh([
+        "api",
+        `repos/${repository}/actions/runs/${runId}/jobs?per_page=100&page=${page}`,
+      ]),
+      `GitHub Actions run ${runId} jobs response`,
+    );
+    if (!Array.isArray(response.jobs)) {
+      throw new Error(`GitHub Actions run ${runId} jobs response is invalid`);
+    }
+    jobs.push(...response.jobs);
+    if (response.jobs.length < 100) return jobs;
+  }
+  throw new Error(`GitHub Actions run ${runId} jobs pagination exceeded 100 pages`);
+}
+
+function loadWorkflowDispatchEvidence(repository, expectedHead) {
+  const runs = listWorkflowDispatchRuns(repository, expectedHead);
+  const jobsByRunId = {};
+  for (const run of runs) {
+    if (
+      run?.head_sha === expectedHead &&
+      run?.event === "workflow_dispatch" &&
+      run?.status === "completed" &&
+      run?.conclusion === "failure"
+    ) {
+      jobsByRunId[String(run.id)] = listRunJobs(repository, run.id);
+    }
+  }
+  return synthesizeWorkflowDispatchEvidence(
+    repository,
+    expectedHead,
+    runs,
+    jobsByRunId,
+  );
 }
 
 function loadLiveEvidence(repository, pr, expectedHead) {
@@ -217,11 +310,11 @@ function loadLiveEvidence(repository, pr, expectedHead) {
     "--jq",
     ".headRefOid",
   ]).trim();
-  const checks = parseJson(
+  let checks = parseJson(
     runGh(
       ["pr", "checks", pr, "--repo", repository, "--json", "name,state,link"],
       { allowFailure: true },
-    ),
+    ) || "[]",
     "GitHub check response",
   );
   const jobsById = {};
@@ -234,6 +327,14 @@ function loadLiveEvidence(repository, pr, expectedHead) {
       runGh(["api", `repos/${repository}/actions/jobs/${jobId}`]),
       `GitHub Actions job ${jobId}`,
     );
+  }
+  if (checks.length === 0) {
+    const dispatchEvidence = loadWorkflowDispatchEvidence(
+      repository,
+      expectedHead,
+    );
+    checks = dispatchEvidence.checks;
+    Object.assign(jobsById, dispatchEvidence.jobsById);
   }
   return { actualHead, checks, jobsById, expectedHead, repository };
 }
@@ -289,5 +390,6 @@ module.exports = {
   evidenceDigestValid,
   evidenceSha256,
   jobIsPreallocationBillingFailure,
+  synthesizeWorkflowDispatchEvidence,
   parseJobId,
 };
