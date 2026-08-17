@@ -267,14 +267,15 @@ function checkRunState(latest) {
   };
 }
 
-function trustedSecretCheckState(
+function trustedSecretCheckState({
   repository,
   runs,
   requirement,
   workflowId,
   base,
   targetHead,
-) {
+  baseHead,
+}) {
   const latest = matchingRuns(runs, requirement)[0];
   if (!latest || typeof latest.details_url !== "string") {
     return { state: "missing", run: null };
@@ -285,8 +286,8 @@ function trustedSecretCheckState(
   } catch {
     return { state: "missing", run: null };
   }
-  const noncePrefix = `${SECRET_SCAN_RUN_PREFIX}${targetHead}:`;
-  const externalId = String(requirement.externalId || "");
+  const noncePrefix = `${SECRET_SCAN_RUN_PREFIX}${targetHead}:${baseHead}:`;
+  const externalId = String(requirement.externalId || latest.external_id || "");
   if (!externalId.startsWith(noncePrefix)) {
     return { state: "missing", run: null };
   }
@@ -299,6 +300,7 @@ function trustedSecretCheckState(
     (workflowId !== null && workflowRun.workflow_id !== workflowId) ||
     workflowRun.event !== "repository_dispatch" ||
     workflowRun.head_branch !== base ||
+    workflowRun.head_sha !== baseHead ||
     workflowRun.path !== SECRET_SCAN_WORKFLOW_PATH ||
     workflowRun.display_title !== expectedRunName ||
     !["queued", "in_progress", "completed"].includes(workflowRun.status)
@@ -309,6 +311,17 @@ function trustedSecretCheckState(
   if (workflowRun.conclusion !== "success")
     return { state: "failed", run: latest };
   return checkRunState(latest);
+}
+
+function branchHeadSha(repository, base) {
+  const response = apiJson(
+    `repos/${repository}/git/ref/heads/${encodeURIComponent(base)}`,
+  );
+  const sha = response.object?.sha;
+  if (typeof sha !== "string" || !/^[0-9a-f]{40}$/.test(sha)) {
+    throw new Error(`GitHub base ref '${base}' did not return a commit SHA`);
+  }
+  return sha;
 }
 
 function workflowIdForRun(repository, run) {
@@ -456,10 +469,17 @@ function ensureChecks({
   headRef,
   registrationSeconds = 30,
   registrationIntervalSeconds = 2,
+  baseRevisionRetry = false,
 }) {
   const requirements = requiredChecks(repository, base);
   const sourceRuns = checkRuns(repository, sourceHead);
   let targetRuns = checkRuns(repository, targetHead);
+  const protectedSecretRequired = requirements.some(
+    (requirement) => requirement.context === "secret-history-scan",
+  );
+  const baseHead = protectedSecretRequired
+    ? branchHeadSha(repository, base)
+    : null;
   targetRuns = waitForRegistration({
     repository,
     targetHead,
@@ -489,6 +509,18 @@ function ensureChecks({
       );
     }
     const workflowId = workflowIdForRun(repository, source);
+    if (protectedSecret) {
+      const target = trustedSecretCheckState({
+        repository,
+        runs: targetRuns,
+        requirement,
+        workflowId,
+        base,
+        targetHead,
+        baseHead,
+      });
+      if (["pending", "success"].includes(target.state)) continue;
+    }
     const dispatchKey = `${workflowId}:${protectedSecret ? "repository_dispatch" : "workflow_dispatch"}`;
     let dispatchedRequirement = requirement;
     if (!dispatchedWorkflowIds.has(dispatchKey)) {
@@ -497,11 +529,12 @@ function ensureChecks({
           const nonce = crypto.randomBytes(16).toString("hex");
           dispatchRepositoryEvent(repository, "secret-history-scan", {
             head_sha: targetHead,
+            base_sha: baseHead,
             nonce,
           });
           dispatchedRequirement = {
             ...requirement,
-            externalId: `secret-history-scan:${targetHead}:${nonce}`,
+            externalId: `secret-history-scan:${targetHead}:${baseHead}:${nonce}`,
           };
         } else {
           dispatchWorkflow(repository, workflowId, headRef);
@@ -535,14 +568,15 @@ function ensureChecks({
     const missing = dispatchedRequirements.filter((entry) => {
       const state =
         entry.requirement.context === "secret-history-scan"
-          ? trustedSecretCheckState(
+          ? trustedSecretCheckState({
               repository,
-              targetRuns,
-              entry.requirement,
-              entry.workflowId,
+              runs: targetRuns,
+              requirement: entry.requirement,
+              workflowId: entry.workflowId,
               base,
               targetHead,
-            )
+              baseHead,
+            })
           : checkState(targetRuns, entry.requirement);
       return state.state === "missing";
     });
@@ -601,16 +635,49 @@ function ensureChecks({
       });
     }
   }
+  if (protectedSecretRequired) {
+    const currentBaseHead = branchHeadSha(repository, base);
+    if (currentBaseHead !== baseHead) {
+      if (baseRevisionRetry) {
+        throw new Error(
+          `protected scan base branch '${base}' changed during preparation from ${baseHead} to ${currentBaseHead}; retry after the base settles`,
+        );
+      }
+      return ensureChecks({
+        repository,
+        base,
+        sourceHead,
+        targetHead,
+        headRef,
+        registrationSeconds,
+        registrationIntervalSeconds,
+        baseRevisionRetry: true,
+      });
+    }
+  }
   return { requirements, dispatched, deferred };
 }
 
 function inspectChecks(repository, base, head) {
   const requirements = requiredChecks(repository, base);
   const runs = checkRuns(repository, head);
+  const baseHead = requirements.some(
+    (requirement) => requirement.context === "secret-history-scan",
+  )
+    ? branchHeadSha(repository, base)
+    : null;
   return requirements.map((requirement) => ({
     ...requirement,
     ...(requirement.context === "secret-history-scan"
-      ? trustedSecretCheckState(repository, runs, requirement, null, base, head)
+      ? trustedSecretCheckState({
+          repository,
+          runs,
+          requirement,
+          workflowId: null,
+          base,
+          targetHead: head,
+          baseHead,
+        })
       : checkState(runs, requirement)),
   }));
 }
