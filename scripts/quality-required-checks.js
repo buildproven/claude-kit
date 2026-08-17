@@ -344,21 +344,11 @@ function dispatchRepositoryEvent(repository, eventType, payload) {
   throw failure;
 }
 
-function dispatchedRunsForHead(
-  repository,
-  headRef,
-  targetHead,
-  workflowIds,
-  event = "workflow_dispatch",
-) {
+function dispatchedRunsForHead(repository, headRef, targetHead, workflowIds) {
   const matching = new Map();
-  const branchQuery =
-    event === "workflow_dispatch"
-      ? `&branch=${encodeURIComponent(headRef)}`
-      : "";
   for (let page = 1; page <= 100; page += 1) {
     const response = apiJson(
-      `repos/${repository}/actions/runs?event=${event}${branchQuery}&per_page=100&page=${page}`,
+      `repos/${repository}/actions/runs?branch=${encodeURIComponent(headRef)}&event=workflow_dispatch&per_page=100&page=${page}`,
     );
     if (!Array.isArray(response.workflow_runs)) {
       throw new Error("GitHub workflow-runs response is invalid");
@@ -367,7 +357,7 @@ function dispatchedRunsForHead(
       if (
         run.head_sha === targetHead &&
         run.head_branch === headRef &&
-        run.event === event &&
+        run.event === "workflow_dispatch" &&
         workflowIds.has(run.workflow_id) &&
         !matching.has(run.workflow_id)
       ) {
@@ -477,31 +467,35 @@ function ensureChecks({
       (entry) => checkState(targetRuns, entry.requirement).state === "missing",
     );
     const workflowIds = new Set(missing.map((entry) => entry.workflowId));
-    const workflowRuns = new Map();
-    for (const event of new Set(
-      [...workflowIds].map(
-        (workflowId) => dispatchEvents.get(workflowId) || "workflow_dispatch",
+    const workflowRuns = new Set(
+      [...workflowIds].filter(
+        (workflowId) =>
+          (dispatchEvents.get(workflowId) || "workflow_dispatch") ===
+          "workflow_dispatch",
       ),
-    )) {
-      const eventWorkflowIds = new Set(
-        [...workflowIds].filter(
-          (workflowId) =>
-            (dispatchEvents.get(workflowId) || "workflow_dispatch") === event,
-        ),
-      );
-      for (const [workflowId, run] of dispatchedRunsForHead(
-        repository,
-        headRef,
-        targetHead,
-        eventWorkflowIds,
-        event,
-      )) {
-        workflowRuns.set(workflowId, run);
+    ).size
+      ? dispatchedRunsForHead(
+          repository,
+          headRef,
+          targetHead,
+          new Set(
+            [...workflowIds].filter(
+              (workflowId) =>
+                (dispatchEvents.get(workflowId) || "workflow_dispatch") ===
+                "workflow_dispatch",
+            ),
+          ),
+        )
+      : new Map();
+    const unregistered = missing.filter((entry) => {
+      if (dispatchEvents.get(entry.workflowId) === "repository_dispatch") {
+        // Repository-dispatch runs use the default branch metadata. The
+        // target check is the only safe correlation signal; do not accept an
+        // unrelated or merely active dispatch run as registration evidence.
+        return true;
       }
-    }
-    const unregistered = missing.filter(
-      (entry) => !workflowRuns.has(entry.workflowId),
-    );
+      return !workflowRuns.has(entry.workflowId);
+    });
     if (unregistered.length > 0) {
       throw new Error(
         `required checks or their exact-head workflows did not register on stamp ${targetHead} after workflow dispatch: ${unregistered

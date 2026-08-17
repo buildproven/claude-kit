@@ -374,6 +374,47 @@ esac
     );
   });
 
+  it("does not treat an unrelated repository-dispatch run as registration", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
+    const fixture = fakeGh(
+      root,
+      [
+        {
+          id: 1,
+          name: "secret-history-scan",
+          status: "completed",
+          conclusion: "success",
+          app: { id: 15368 },
+          details_url: "https://github.com/o/r/actions/runs/123/job/456",
+        },
+      ],
+      [],
+      [],
+      "secret-history-scan",
+    );
+    const result = run(
+      root,
+      [
+        "ensure",
+        "--repo",
+        "owner/repo",
+        "--base",
+        "main",
+        "--source-head",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--head",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "--head-ref",
+        "feature/fix",
+        "--registration-timeout",
+        "0",
+      ],
+      fixture,
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/did not register on stamp/);
+  });
+
   it("maps a required workflow from reviewed first-parent history", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
     const fixture = fakeGh(
