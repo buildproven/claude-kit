@@ -2993,26 +2993,23 @@ function assertApprovalPayloadShape(manifest, payload) {
     );
   }
   const hasCiBillingCondition =
-    Array.isArray(payload.acceptedConditions) &&
     payload.acceptedConditions.includes("ci:failed");
-  if (hasCiBillingCondition) {
+  if (payload.scope === "operator-ci-billing-override") {
     if (
-      payload.scope !== "operator-ci-billing-override" &&
-      payload.scope !== "operator-quality-override"
-    ) {
-      throw new Error(
-        "CI billing condition requires an operator override scope",
-      );
-    }
-    if (
-      payload.scope === "operator-ci-billing-override" &&
-      (payload.acceptedConditions.length !== 1 ||
-        payload.acceptedConditions[0] !== "ci:failed")
+      payload.acceptedConditions.length !== 1 ||
+      payload.acceptedConditions[0] !== "ci:failed"
     ) {
       throw new Error(
         "CI billing override capability must accept exactly ci:failed",
       );
     }
+  } else if (
+    hasCiBillingCondition &&
+    payload.scope !== "operator-quality-override"
+  ) {
+    throw new Error("CI billing condition requires an operator override scope");
+  }
+  if (hasCiBillingCondition) {
     if (!/^[a-f0-9]{64}$/.test(payload.ciBillingEvidenceSha256 || "")) {
       throw new Error(
         "CI billing override capability is missing evidence binding",
@@ -6297,6 +6294,7 @@ function main() {
 module.exports = {
   SCHEMA_VERSION,
   advanceHead,
+  assertApprovalPayloadShape,
   approvalValid,
   armApprovalChallenge,
   attachApproval,

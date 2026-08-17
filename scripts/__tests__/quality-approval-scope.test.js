@@ -6,6 +6,9 @@ const require = createRequire(import.meta.url);
 const { assertCiBillingConditions, parseApprovalCommand } = require(
   path.resolve(import.meta.dirname, "..", "quality-wrapper.js"),
 );
+const { assertApprovalPayloadShape } = require(
+  path.resolve(import.meta.dirname, "..", "quality-invocation.js"),
+);
 
 const head = "a".repeat(40);
 
@@ -132,6 +135,23 @@ describe("quality approve command scope parsing", () => {
         ["review:provider-exhaustion", "ci:failed"],
       ),
     ).toThrow(/ci:unavailable/);
+  });
+
+  it("rejects a billing override that omits the CI condition", () => {
+    expect(() =>
+      assertApprovalPayloadShape(
+        {
+          stateRoot: "/tmp/quality-test-state",
+          repo: { githubRepository: "owner/repo" },
+          revisions: { currentHead: head },
+        },
+        {
+          scope: "operator-ci-billing-override",
+          reason: "Actions billing outage",
+          acceptedConditions: ["review:provider-exhaustion"],
+        },
+      ),
+    ).toThrow(/exactly ci:failed/);
   });
 
   it("requires a classified CI failure for the billing override", () => {

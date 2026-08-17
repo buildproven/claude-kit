@@ -283,6 +283,13 @@ candidate_has_mapped_test() {
     "$ROOT/.buildproven/test-impact.json" >/dev/null 2>&1
 }
 
+FILTERED_CANDIDATES=()
+for CANDIDATE in "${CANDIDATES[@]}"; do
+  is_recursive_mutation_target "$CANDIDATE" ||
+    FILTERED_CANDIDATES+=("$CANDIDATE")
+done
+CANDIDATES=("${FILTERED_CANDIDATES[@]}")
+
 if [ "${#CANDIDATES[@]}" -gt 1 ]; then
   ORDERED_CANDIDATES=()
   for PRIORITY in mapped-test planned-sibling sibling fallback; do
@@ -301,7 +308,8 @@ if [ "${#CANDIDATES[@]}" -gt 1 ]; then
       elif [ "$PRIORITY" = sibling ] && [ "$HAS_SIBLING" = true ] &&
         [ "$HAS_PLANNED_SIBLING" = false ] && [ "$HAS_MAPPED_TEST" = false ]; then
         ORDERED_CANDIDATES+=("$CANDIDATE")
-      elif [ "$PRIORITY" = fallback ] && [ "$HAS_SIBLING" = false ]; then
+      elif [ "$PRIORITY" = fallback ] && [ "$HAS_SIBLING" = false ] &&
+        [ "$HAS_PLANNED_SIBLING" = false ] && [ "$HAS_MAPPED_TEST" = false ]; then
         ORDERED_CANDIDATES+=("$CANDIDATE")
       fi
     done
