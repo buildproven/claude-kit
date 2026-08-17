@@ -35,6 +35,7 @@ set -eu
 case "$*" in
   *protection/required_status_checks*) printf '%s\\n' '{"strict":true,"contexts":[${contextJson}],"checks":[{"context":${contextJson},"app_id":15368}]}' ;;
   *rules/branches/main*) printf '%s\\n' '[]' ;;
+  *git/ref/heads/main*) printf '%s\\n' '{"object":{"sha":"cccccccccccccccccccccccccccccccccccccccc"}}' ;;
   *commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/check-runs*) printf '%s\\n' '${JSON.stringify({ check_runs: sourceRuns })}' ;;
   *commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs*)
     if [ -f '${log}' ]; then
@@ -279,7 +280,7 @@ esac
       `#!/usr/bin/env bash
 set -eu
 case "$*" in
-  *actions/runs/124*) printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","path":".github/workflows/secret-history-scan.yml","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef","status":"completed","conclusion":"success"}' ;;
+  *actions/runs/124*) printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","head_sha":"cccccccccccccccccccccccccccccccccccccccc","path":".github/workflows/secret-history-scan.yml","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:cccccccccccccccccccccccccccccccccccccccc:0123456789abcdef0123456789abcdef","status":"completed","conclusion":"success"}' ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
 `,
@@ -288,9 +289,9 @@ esac
     process.env.PATH = `${bin}:${originalPath}`;
     try {
       expect(
-        trustedSecretCheckState(
-          "owner/repo",
-          [
+        trustedSecretCheckState({
+          repository: "owner/repo",
+          runs: [
             {
               id: 2,
               name: "secret-history-scan",
@@ -298,18 +299,19 @@ esac
               conclusion: "success",
               app: { id: 15368 },
               external_id:
-                "secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef",
+                "secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:cccccccccccccccccccccccccccccccccccccccc:0123456789abcdef0123456789abcdef",
               details_url: "https://github.com/o/r/actions/runs/124",
             },
           ],
-          {
+          requirement: {
             context: "secret-history-scan",
             appId: 15368,
           },
-          77,
-          "main",
-          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        ),
+          workflowId: 77,
+          base: "main",
+          targetHead: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          baseHead: "cccccccccccccccccccccccccccccccccccccccc",
+        }),
       ).toMatchObject({ state: "success" });
     } finally {
       process.env.PATH = originalPath;
@@ -326,7 +328,7 @@ esac
       `#!/usr/bin/env bash
 set -eu
 case "$*" in
-  *actions/runs/124*) printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","path":".github/workflows/secret-history-scan.yml","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef","status":"completed","conclusion":"failure"}' ;;
+  *actions/runs/124*) printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","head_sha":"cccccccccccccccccccccccccccccccccccccccc","path":".github/workflows/secret-history-scan.yml","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:cccccccccccccccccccccccccccccccccccccccc:0123456789abcdef0123456789abcdef","status":"completed","conclusion":"failure"}' ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
 `,
@@ -335,9 +337,9 @@ esac
     process.env.PATH = `${bin}:${originalPath}`;
     try {
       expect(
-        trustedSecretCheckState(
-          "owner/repo",
-          [
+        trustedSecretCheckState({
+          repository: "owner/repo",
+          runs: [
             {
               id: 2,
               name: "secret-history-scan",
@@ -345,20 +347,21 @@ esac
               conclusion: "success",
               app: { id: 15368 },
               external_id:
-                "secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef",
+                "secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:cccccccccccccccccccccccccccccccccccccccc:0123456789abcdef0123456789abcdef",
               details_url: "https://github.com/o/r/actions/runs/124",
             },
           ],
-          {
+          requirement: {
             context: "secret-history-scan",
             appId: 15368,
             externalId:
-              "secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef",
+              "secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:cccccccccccccccccccccccccccccccccccccccc:0123456789abcdef0123456789abcdef",
           },
-          77,
-          "main",
-          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        ),
+          workflowId: 77,
+          base: "main",
+          targetHead: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          baseHead: "cccccccccccccccccccccccccccccccccccccccc",
+        }),
       ).toMatchObject({ state: "failed" });
     } finally {
       process.env.PATH = originalPath;
@@ -375,7 +378,7 @@ esac
       `#!/usr/bin/env bash
 set -eu
 case "$*" in
-  *actions/runs/124*) printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","path":".github/workflows/secret-history-scan.yml","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef","status":"in_progress","conclusion":null}' ;;
+  *actions/runs/124*) printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","head_sha":"cccccccccccccccccccccccccccccccccccccccc","path":".github/workflows/secret-history-scan.yml","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:cccccccccccccccccccccccccccccccccccccccc:0123456789abcdef0123456789abcdef","status":"in_progress","conclusion":null}' ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
 `,
@@ -384,9 +387,9 @@ esac
     process.env.PATH = `${bin}:${originalPath}`;
     try {
       expect(
-        trustedSecretCheckState(
-          "owner/repo",
-          [
+        trustedSecretCheckState({
+          repository: "owner/repo",
+          runs: [
             {
               id: 2,
               name: "secret-history-scan",
@@ -394,20 +397,21 @@ esac
               conclusion: null,
               app: { id: 15368 },
               external_id:
-                "secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef",
+                "secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:cccccccccccccccccccccccccccccccccccccccc:0123456789abcdef0123456789abcdef",
               details_url: "https://github.com/o/r/actions/runs/124",
             },
           ],
-          {
+          requirement: {
             context: "secret-history-scan",
             appId: 15368,
             externalId:
-              "secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef",
+              "secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:cccccccccccccccccccccccccccccccccccccccc:0123456789abcdef0123456789abcdef",
           },
-          77,
-          "main",
-          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        ),
+          workflowId: 77,
+          base: "main",
+          targetHead: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          baseHead: "cccccccccccccccccccccccccccccccccccccccc",
+        }),
       ).toMatchObject({ state: "pending" });
     } finally {
       process.env.PATH = originalPath;
@@ -427,9 +431,10 @@ case "$*" in
   *protection/required_status_checks*) printf '%s\\n' '{"checks":[{"context":"secret-history-scan","app_id":15368}]}' ;;
   *rules/branches/main*) printf '%s\\n' '[]' ;;
   *commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/check-runs*) printf '%s\\n' '{"check_runs":[{"id":1,"name":"secret-history-scan","status":"completed","conclusion":"success","app":{"id":15368},"details_url":"https://github.com/o/r/actions/runs/123"}]}' ;;
-  *commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs*) printf '%s\\n' '{"check_runs":[{"id":2,"name":"secret-history-scan","status":"completed","conclusion":"success","app":{"id":15368},"external_id":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef","details_url":"https://github.com/o/r/actions/runs/124"}]}' ;;
+  *git/ref/heads/main*) printf '%s\\n' '{"object":{"sha":"cccccccccccccccccccccccccccccccccccccccc"}}' ;;
+  *commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs*) printf '%s\\n' '{"check_runs":[{"id":2,"name":"secret-history-scan","status":"completed","conclusion":"success","app":{"id":15368},"external_id":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:cccccccccccccccccccccccccccccccccccccccc:0123456789abcdef0123456789abcdef","details_url":"https://github.com/o/r/actions/runs/124"}]}' ;;
   *actions/runs/123*) printf '%s\\n' '{"workflow_id":77}' ;;
-  *actions/runs/124*) printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","path":".github/workflows/secret-history-scan.yml","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef","status":"completed","conclusion":"success"}' ;;
+  *actions/runs/124*) printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","head_sha":"cccccccccccccccccccccccccccccccccccccccc","path":".github/workflows/secret-history-scan.yml","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:cccccccccccccccccccccccccccccccccccccccc:0123456789abcdef0123456789abcdef","status":"completed","conclusion":"success"}' ;;
   *dispatches*) : > '${dispatch}'; exit 1 ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
@@ -564,7 +569,7 @@ esac
     expect(result.stderr).toMatch(/did not register on stamp/);
     const dispatch = fs.readFileSync(fixture.log, "utf8");
     expect(dispatch).toContain(
-      'repos/owner/repo/dispatches --input - {"event_type":"secret-history-scan","client_payload":{"head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","nonce":"',
+      'api --method POST repos/owner/repo/dispatches --input - {"event_type":"secret-history-scan","client_payload":{"head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","base_sha":"cccccccccccccccccccccccccccccccccccccccc","nonce":"',
     );
     expect(dispatch).toMatch(/"nonce":"[0-9a-f]{32}"/);
   });
