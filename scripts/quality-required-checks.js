@@ -25,6 +25,9 @@ const PROTECTED_CHECKS = Object.freeze({
     eventType: "harness-summary",
   }),
 });
+const REMOTE_DISPATCH_CLAIM_PREFIX = "buildproven-dispatch-claim-v3";
+const REMOTE_DISPATCH_CLAIM_METADATA_PREFIX =
+  "buildproven-dispatch-claim-v3-meta";
 
 function protectedCheckConfig(requirement) {
   return PROTECTED_CHECKS[requirement.context] || null;
@@ -192,15 +195,53 @@ function claimDispatchNonce({ repository, eventType, head, base, nonce }) {
   return { externalId, claimPath };
 }
 
-function claimRemoteDispatchNonce(repository, eventType, head, externalId) {
+function claimRemoteDispatchNonce(
+  repository,
+  eventType,
+  head,
+  externalId,
+  issuedAt = new Date().toISOString(),
+) {
   // GitHub's Git-ref creation is the durable conditional-create primitive:
-  // the first caller creates this immutable tag, and a concurrent or later
-  // caller receives HTTP 422 because the ref already exists. A list-then-
-  // create check-run marker would leave a cross-host race.
-  const claimRef = `refs/tags/buildproven-dispatch-claim/${crypto
+  // the first caller creates this immutable claim, and a concurrent or later
+  // caller receives HTTP 422 because the ref already exists. The separate
+  // lightweight metadata ref is created first, so a losing caller cannot
+  // orphan a Git object.
+  const claimHash = crypto
     .createHash("sha256")
     .update(`${eventType}\u0000${externalId}`)
-    .digest("hex")}`;
+    .digest("hex");
+  const claimRef = `refs/tags/${REMOTE_DISPATCH_CLAIM_PREFIX}/${claimHash}`;
+  if (!Number.isFinite(Date.parse(issuedAt))) {
+    throw new Error("dispatch claim issuedAt must be an ISO date");
+  }
+  const issuedAtSeconds = Math.floor(Date.parse(issuedAt) / 1000);
+  const metadataRef = `refs/tags/${REMOTE_DISPATCH_CLAIM_METADATA_PREFIX}/${claimHash}/${issuedAtSeconds}`;
+  try {
+    runGh([
+      "api",
+      "--method",
+      "POST",
+      `repos/${repository}/git/refs`,
+      "-f",
+      `ref=${metadataRef}`,
+      "-f",
+      `sha=${head}`,
+    ]);
+  } catch (error) {
+    if (
+      !/HTTP 422|already exists|Reference already exists/i.test(
+        `${error.message}\n${error.stderr || ""}`,
+      )
+    ) {
+      throw new Error(
+        `could not create dispatch claim metadata ref ${metadataRef}`,
+        {
+          cause: error,
+        },
+      );
+    }
+  }
   try {
     runGh([
       "api",
@@ -228,6 +269,155 @@ function claimRemoteDispatchNonce(repository, eventType, head, externalId) {
     );
   }
   return claimRef;
+}
+
+function remoteDispatchClaimMetadataRefs(repository) {
+  const prefix = `refs/tags/${REMOTE_DISPATCH_CLAIM_METADATA_PREFIX}/`;
+  try {
+    const pages = JSON.parse(
+      runGh([
+        "api",
+        "--paginate",
+        "--slurp",
+        `repos/${repository}/git/matching-refs/tags/${REMOTE_DISPATCH_CLAIM_METADATA_PREFIX}/`,
+      ]),
+    );
+    if (!Array.isArray(pages)) {
+      throw new Error("GitHub returned an invalid dispatch claim ref list");
+    }
+    const entries = pages.flatMap((page) =>
+      Array.isArray(page) ? page : [page],
+    );
+    const claims = entries
+      .map((entry) => parseRemoteDispatchMetadataEntry(entry, prefix))
+      .filter(Boolean);
+    return { claims, skipped: entries.length - claims.length };
+  } catch (error) {
+    throw new Error(
+      `could not list remote dispatch nonce claims for ${repository}`,
+      { cause: error },
+    );
+  }
+}
+
+function parseRemoteDispatchMetadataEntry(entry, prefix) {
+  const ref = entry?.ref;
+  const suffix =
+    typeof ref === "string" && ref.startsWith(prefix)
+      ? ref.slice(prefix.length)
+      : null;
+  const [claimHash, issuedAtSeconds] = (suffix || "").split("/");
+  const valid = [
+    /^[0-9a-f]{64}$/.test(claimHash || ""),
+    /^[0-9]{1,12}$/.test(issuedAtSeconds || ""),
+    entry?.object?.type === "commit",
+    /^[0-9a-f]{40}$/.test(entry?.object?.sha || ""),
+  ].every(Boolean);
+  if (!valid) {
+    return null;
+  }
+  return {
+    ref: `${REMOTE_DISPATCH_CLAIM_METADATA_PREFIX}/${suffix}`,
+    claimHash,
+    issuedAt: Number(issuedAtSeconds) * 1000,
+  };
+}
+
+function deleteRemoteDispatchRef(repository, ref) {
+  try {
+    runGh([
+      "api",
+      "--method",
+      "DELETE",
+      `repos/${repository}/git/refs/tags/${ref}`,
+    ]);
+    return true;
+  } catch (error) {
+    if (/HTTP 404|Not Found/i.test(`${error.message}\n${error.stderr || ""}`)) {
+      return false;
+    }
+    throw new Error(`could not delete expired remote dispatch ref ${ref}`, {
+      cause: error,
+    });
+  }
+}
+
+function cleanupRemoteDispatchClaimGroup(
+  repository,
+  claimHash,
+  group,
+  now,
+  retentionMs,
+) {
+  const fresh = group.filter((claim) => now - claim.issuedAt <= retentionMs);
+  const expired = group.filter((claim) => now - claim.issuedAt > retentionMs);
+  const result = { deleted: 0, metadataDeleted: 0, retained: 0 };
+  if (fresh.length > 0) {
+    result.retained = 1;
+    for (const claim of expired) {
+      if (deleteRemoteDispatchRef(repository, claim.ref))
+        result.metadataDeleted += 1;
+    }
+    return result;
+  }
+  if (
+    deleteRemoteDispatchRef(
+      repository,
+      `${REMOTE_DISPATCH_CLAIM_PREFIX}/${claimHash}`,
+    )
+  ) {
+    result.deleted = 1;
+  }
+  for (const claim of expired) {
+    if (deleteRemoteDispatchRef(repository, claim.ref))
+      result.metadataDeleted += 1;
+  }
+  return result;
+}
+
+function cleanupRemoteDispatchClaims(
+  repository,
+  { retentionMs = 24 * 60 * 60 * 1000, now = Date.now() } = {},
+) {
+  if (!Number.isInteger(retentionMs) || retentionMs <= 0) {
+    throw new Error("dispatch claim retention must be a positive integer");
+  }
+  if (!Number.isFinite(now)) {
+    throw new Error("dispatch claim cleanup time must be finite");
+  }
+  const { claims, skipped } = remoteDispatchClaimMetadataRefs(repository);
+  const result = { deleted: 0, metadataDeleted: 0, retained: 0, skipped };
+  const groups = new Map();
+  for (const claim of claims) {
+    const group = groups.get(claim.claimHash) || [];
+    group.push(claim);
+    groups.set(claim.claimHash, group);
+  }
+  for (const [claimHash, group] of groups) {
+    const groupResult = cleanupRemoteDispatchClaimGroup(
+      repository,
+      claimHash,
+      group,
+      now,
+      retentionMs,
+    );
+    result.deleted += groupResult.deleted;
+    result.metadataDeleted += groupResult.metadataDeleted;
+    result.retained += groupResult.retained;
+  }
+  return result;
+}
+
+function cleanupClaimsCommand(options) {
+  const repository = validateRepository(requiredOption(options, "repo"));
+  const retentionMs = Number.parseInt(
+    options["retention-ms"] || String(24 * 60 * 60 * 1000),
+    10,
+  );
+  if (!Number.isInteger(retentionMs) || retentionMs <= 0) {
+    throw new Error("--retention-ms must be a positive integer");
+  }
+  return cleanupRemoteDispatchClaims(repository, { retentionMs });
 }
 
 function apiJson(path) {
@@ -659,6 +849,7 @@ function dispatchRepositoryEvent(repository, eventType, payload) {
       eventType,
       payload.head_sha,
       claim.externalId,
+      issuedAt.toISOString(),
     );
   }
   try {
@@ -1076,7 +1267,13 @@ function main() {
     );
     return;
   }
-  throw new Error("usage: quality-required-checks.js <ensure|wait|assert> ...");
+  if (command === "cleanup-claims") {
+    process.stdout.write(`${JSON.stringify(cleanupClaimsCommand(options))}\n`);
+    return;
+  }
+  throw new Error(
+    "usage: quality-required-checks.js <ensure|wait|assert|cleanup-claims> ...",
+  );
 }
 
 if (require.main === module) {
@@ -1094,6 +1291,7 @@ module.exports = {
   checkState,
   claimDispatchNonce,
   claimRemoteDispatchNonce,
+  cleanupRemoteDispatchClaims,
   dispatchedRunsForHead,
   ensureChecks,
   matchingRuns,

@@ -22,6 +22,7 @@ const {
   checkState,
   claimDispatchNonce,
   claimRemoteDispatchNonce,
+  cleanupRemoteDispatchClaims,
   ensureChecks,
   matchingRuns,
   requiredChecks,
@@ -135,12 +136,17 @@ describe("quality-required-checks", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        `if [ -f '${calls}' ]; then`,
-        "  echo 'gh: Reference already exists (HTTP 422)' >&2",
-        "  exit 1",
-        "fi",
-        `: > '${calls}'`,
-        "printf '%s\\n' '{}'",
+        'case "$*" in',
+        "  *buildproven-dispatch-claim-v3-meta*) printf '%s\\n' '{}' ;;",
+        "  *buildproven-dispatch-claim-v3*)",
+        `    if [ -f '${calls}' ]; then`,
+        "      echo 'gh: Reference already exists (HTTP 422)' >&2",
+        "      exit 1",
+        "    fi",
+        `    : > '${calls}'`,
+        "    printf '%s\\n' '{}' ;;",
+        '  *) echo "unexpected gh call: $*" >&2; exit 1 ;;',
+        "esac",
         "",
       ].join("\n"),
       { mode: 0o755 },
@@ -155,7 +161,7 @@ describe("quality-required-checks", () => {
         externalId,
       );
       expect(claim).toMatch(
-        /^refs\/tags\/buildproven-dispatch-claim\/[0-9a-f]{64}$/,
+        /^refs\/tags\/buildproven-dispatch-claim-v3\/[0-9a-f]{64}$/,
       );
       expect(() =>
         claimRemoteDispatchNonce(
@@ -167,6 +173,55 @@ describe("quality-required-checks", () => {
       ).toThrow(/already been claimed remotely/);
     } finally {
       process.env.PATH = originalPath;
+    }
+  });
+
+  it("cleans expired metadata and quarantines legacy claim refs", () => {
+    const originalPath = process.env.PATH;
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "quality-claim-cleanup-"),
+    );
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    const oldSuffix = "a".repeat(64);
+    const legacySuffix = "b".repeat(64);
+    const issuedAtSeconds = "1577836800";
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *matching-refs*) printf '%s\\n' '${JSON.stringify([
+    [
+      {
+        ref: `refs/tags/buildproven-dispatch-claim-v3-meta/${oldSuffix}/${issuedAtSeconds}`,
+        object: { type: "commit", sha: "e".repeat(40) },
+      },
+      {
+        ref: `refs/tags/buildproven-dispatch-claim/${legacySuffix}`,
+        object: { type: "commit", sha: "f".repeat(40) },
+      },
+    ],
+  ])}' ;;
+  *DELETE*refs/tags/refs/tags/*) echo "unexpected duplicated ref prefix" >&2; exit 1 ;;
+  *DELETE*buildproven-dispatch-claim-v3/${oldSuffix}*) printf '%s\\n' '{}' ;;
+  *DELETE*repos/owner/repo/git/refs/tags/buildproven-dispatch-claim-v3-meta/${oldSuffix}/${issuedAtSeconds}*) printf '%s\\n' '{}' ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath}`;
+    try {
+      expect(
+        cleanupRemoteDispatchClaims("owner/repo", {
+          retentionMs: 1_000,
+          now: Date.parse("2020-01-02T00:00:00Z"),
+        }),
+      ).toEqual({ deleted: 1, metadataDeleted: 1, retained: 0, skipped: 1 });
+    } finally {
+      process.env.PATH = originalPath;
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 

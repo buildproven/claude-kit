@@ -111,6 +111,26 @@ diagnosis reports repository gates, provider checkpoint, merge-authority state,
 and GitHub CI separately; it does not flatten quota, parser, billing/auth,
 code-finding, and CI failures into one generic merge message.
 
+### Remote dispatch claim retention
+
+Protected-check dispatch claims use lightweight Git refs under the versioned
+`buildproven-dispatch-claim-v3/` and `buildproven-dispatch-claim-v3-meta/`
+namespaces. The deterministic claim ref remains the atomic cross-host nonce
+claim; the separate timestamped metadata ref records the issue time. Creating
+metadata before the claim means a losing race leaves no unreferenced Git
+object. Prune
+expired claims with the bounded operator command (default retention: 24 hours):
+
+```bash
+node scripts/quality-required-checks.js cleanup-claims --repo owner/name
+```
+
+The cleanup command deletes only expired annotated claim refs. It retains
+claims with missing or invalid metadata and never deletes legacy lightweight
+claim refs in the original `buildproven-dispatch-claim/` or v2 namespaces.
+Those legacy refs are quarantined and do not suppress v3 claims. Run cleanup from a
+scheduled maintenance process, not from every quality invocation.
+
 ## Regression History
 
 - **2026-05-11**: target resolution ignored PR/branch args in favor of
