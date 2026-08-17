@@ -590,7 +590,7 @@ fi
   if [ "$1" = "api" ]; then
   if [ "$2" = "graphql" ]; then
     if [ "\${QUALITY_TEST_GRAPHQL_RULES:-}" = strict ]; then
-      printf '%s\\n' '{"data":{"repository":{"branchProtectionRules":{"pageInfo":{"hasNextPage":false},"nodes":[{"requiresStrictStatusChecks":true,"matchingRefs":{"pageInfo":{"hasNextPage":false},"nodes":[{"name":"main"}]}}]}}}}'
+      printf '%s\\n' '{"data":{"repository":{"branchProtectionRules":{"pageInfo":{"hasNextPage":false},"nodes":[{"requiresStrictStatusChecks":true,"isAdminEnforced":false,"matchingRefs":{"pageInfo":{"hasNextPage":false},"nodes":[{"name":"main"}]}}]}}}}'
     else
       printf '%s\\n' '{"data":{"repository":{"branchProtectionRules":{"nodes":[]}}}}'
     fi

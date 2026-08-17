@@ -250,6 +250,8 @@ describe("quality merge gates", () => {
     expect(AUTHORIZE).toMatch(/matchingRefs\(first:100\)/);
     expect(AUTHORIZE).toMatch(/pageInfo\{hasNextPage\}/);
     expect(AUTHORIZE).toMatch(/hasNextPage == false/);
+    expect(AUTHORIZE).toMatch(/isAdminEnforced/);
+    expect(AUTHORIZE).toMatch(/ADMIN_BASE_FRESHNESS/);
   });
 
   it("uses one manifest-bound operation for composed CI billing capability checks", () => {

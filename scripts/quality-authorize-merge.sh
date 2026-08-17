@@ -202,10 +202,16 @@ git merge-base --is-ancestor "$EXPECTED_BASE_OID" "$EXPECTED_HEAD" || {
 }
 REPOSITORY="$EXPECTED_REPOSITORY"
 ATOMIC_BASE_FRESHNESS=false
+ADMIN_BASE_FRESHNESS=false
 ENCODED_BASE_NAME="$(jq -rn --arg value "$ACTUAL_BASE_NAME" '$value | @uri')" || exit 1
 if [ "$(gh api "repos/$REPOSITORY/branches/$ENCODED_BASE_NAME/protection/required_status_checks" \
   --jq '.strict' 2>/dev/null || true)" = true ]; then
   ATOMIC_BASE_FRESHNESS=true
+fi
+if [ "${CI_BILLING_WAIVED:-false}" = true ] &&
+  [ "$(gh api "repos/$REPOSITORY/branches/$ENCODED_BASE_NAME/protection" \
+    --jq '.enforce_admins.enabled' 2>/dev/null || true)" = true ]; then
+  ADMIN_BASE_FRESHNESS=true
 fi
 # Repos whose plan cannot enforce strict checks (private, no GitHub Pro) can
 # never satisfy the check above, so --merge is unsatisfiable there and operators
@@ -254,7 +260,7 @@ if [ "$ATOMIC_BASE_FRESHNESS" != true ]; then
   GRAPHQL_OWNER="${REPOSITORY%%/*}"
   GRAPHQL_NAME="${REPOSITORY#*/}"
   GRAPHQL_RULES="$(gh api graphql \
-    -f 'query=query($owner:String!,$name:String!){repository(owner:$owner,name:$name){branchProtectionRules(first:100){pageInfo{hasNextPage} nodes{requiresStrictStatusChecks matchingRefs(first:100){pageInfo{hasNextPage} nodes{name}}}}}}' \
+    -f 'query=query($owner:String!,$name:String!){repository(owner:$owner,name:$name){branchProtectionRules(first:100){pageInfo{hasNextPage} nodes{requiresStrictStatusChecks isAdminEnforced matchingRefs(first:100){pageInfo{hasNextPage} nodes{name}}}}}}' \
     -F "owner=$GRAPHQL_OWNER" -F "name=$GRAPHQL_NAME" 2>/dev/null || true)"
   if printf '%s' "$GRAPHQL_RULES" |
     jq -e --arg branch "$ACTUAL_BASE_NAME" '
@@ -266,6 +272,19 @@ if [ "$ATOMIC_BASE_FRESHNESS" != true ]; then
         | length == 1 and .[0].requiresStrictStatusChecks == true)
     ' >/dev/null 2>&1; then
     ATOMIC_BASE_FRESHNESS=true
+  fi
+  if [ "${CI_BILLING_WAIVED:-false}" = true ] &&
+    printf '%s' "$GRAPHQL_RULES" |
+      jq -e --arg branch "$ACTUAL_BASE_NAME" '
+        (.data.repository.branchProtectionRules.pageInfo.hasNextPage == false)
+        and
+        ([.data.repository.branchProtectionRules.nodes[]?
+          | select(.matchingRefs.pageInfo.hasNextPage == false)
+          | select(any(.matchingRefs.nodes[]?.name; . == $branch))]
+          | length == 1 and .[0].requiresStrictStatusChecks == true
+          and .[0].isAdminEnforced == true)
+      ' >/dev/null 2>&1; then
+    ADMIN_BASE_FRESHNESS=true
   fi
 fi
 # Last resort, and only after BOTH classic protection and effective rulesets have
@@ -358,6 +377,13 @@ if [ -n "${CI_BILLING_WAIVER_ARTIFACT:-}" ] &&
   echo "   Refusing an admin merge that could bypass required reviews, status checks, or strict base freshness." >&2
   echo "   To authorize: BREAK_GLASS_APPROVED=true BREAK_GLASS_APPROVER=<you> \\" >&2
   echo "     node quality-wrapper.js approve --pr $PR --head <exact-head-sha> --override-ci-billing" >&2
+  exit 1
+fi
+if [ -n "${CI_BILLING_WAIVER_ARTIFACT:-}" ] &&
+  [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ] &&
+  [ "$ADMIN_BASE_FRESHNESS" != true ]; then
+  echo "❌ MERGE BLOCKED: CI billing waiver admin merge requires server-enforced administrator checks." >&2
+  echo "   The base rule is strict, but GitHub did not prove that administrators are subject to it." >&2
   exit 1
 fi
 TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"
@@ -481,6 +507,10 @@ FINAL_BASE_OID="$(printf '%s' "$FINAL_BASE_LS" | awk 'NR==1 {print $1}')"
 LEASE_ADMIN=false
 if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
   if [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ]; then
+    [ "$ADMIN_BASE_FRESHNESS" = true ] || {
+      echo "❌ MERGE BLOCKED: CI billing waiver admin merge requires server-enforced administrator checks." >&2
+      exit 1
+    }
     # Revalidate the operator scope immediately before --admin, same
     # discipline as the artifact revalidation below: the earlier check
     # authorizes skipping the green-check query, this one authorizes the
