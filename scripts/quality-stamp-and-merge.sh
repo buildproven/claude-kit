@@ -30,13 +30,8 @@ LOCAL_HEAD="$(git rev-parse HEAD)"
 # review is also incomplete, that condition is composed into the same signed
 # operator-quality capability; neither condition authorizes the other.
 CI_BUDGET_MODE=""
-if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
-  --scope operator-ci-billing-override >/dev/null 2>&1 || {
-  node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
-    --scope operator-quality-override >/dev/null 2>&1 &&
-    node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" \
-      approval.acceptedConditions | jq -e 'index("ci:failed") != null' >/dev/null 2>&1
-}; then
+if node "$SCRIPT_DIR/quality-invocation.js" ci-billing-capability "$MANIFEST" \
+  >/dev/null 2>&1; then
   CI_BUDGET_MODE="local-exact-head"
 fi
 CI_BUDGET_ARGS=()

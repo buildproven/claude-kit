@@ -44,14 +44,8 @@ NODE
 # the signed artifact still binds both the review decision and the exact CI
 # outage evidence to this manifest and HEAD.
 has_ci_billing_capability() {
-  if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
-    --scope operator-ci-billing-override >/dev/null 2>&1; then
-    return 0
-  fi
-  node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
-    --scope operator-quality-override >/dev/null 2>&1 || return 1
-  node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" \
-    approval.acceptedConditions | jq -e 'index("ci:failed") != null' >/dev/null 2>&1
+  node "$SCRIPT_DIR/quality-invocation.js" ci-billing-capability "$MANIFEST" \
+    >/dev/null 2>&1
 }
 
 node "$SCRIPT_DIR/quality-invocation.js" review-authorization "$MANIFEST" >/dev/null || exit 1
@@ -264,10 +258,9 @@ if [ "$ATOMIC_BASE_FRESHNESS" != true ]; then
     -F "owner=$GRAPHQL_OWNER" -F "name=$GRAPHQL_NAME" 2>/dev/null || true)"
   if printf '%s' "$GRAPHQL_RULES" |
     jq -e --arg branch "$ACTUAL_BASE_NAME" '
-      .data.repository.branchProtectionRules.nodes[]?
-      | select(.requiresStrictStatusChecks == true)
-      | .matchingRefs.nodes[]?.name
-      | select(. == $branch)
+      [.data.repository.branchProtectionRules.nodes[]?
+        | select(any(.matchingRefs.nodes[]?.name; . == $branch))]
+      | length == 1 and .[0].requiresStrictStatusChecks == true
     ' >/dev/null 2>&1; then
     ATOMIC_BASE_FRESHNESS=true
   fi

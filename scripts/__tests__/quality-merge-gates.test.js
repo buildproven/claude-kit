@@ -246,6 +246,23 @@ describe("quality merge gates", () => {
     expect(AUTHORIZE).not.toMatch(/rulesets\?includes_parents/);
     expect(AUTHORIZE).not.toMatch(/conditions\.ref_name/);
     expect(AUTHORIZE).toMatch(/strict_required_status_checks_policy == true/);
+    expect(AUTHORIZE).toMatch(/gh api graphql/);
+    expect(AUTHORIZE).toMatch(/matchingRefs\(first:100\)/);
+  });
+
+  it("uses one manifest-bound operation for composed CI billing capability checks", () => {
+    expect(AUTHORIZE).toMatch(
+      /quality-invocation\.js" ci-billing-capability "\$MANIFEST/,
+    );
+    expect(STAMP_AND_MERGE).toMatch(
+      /quality-invocation\.js" ci-billing-capability "\$MANIFEST/,
+    );
+    expect(VALIDATOR).toMatch(
+      /quality-invocation\.js" ci-billing-capability "\$MANIFEST/,
+    );
+    expect(AUTHORIZE).not.toMatch(
+      /field "\$MANIFEST"[\s\S]*acceptedConditions/,
+    );
   });
 
   it("requires approval only for an explicit human-required policy during preflight", () => {
