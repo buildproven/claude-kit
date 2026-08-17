@@ -202,6 +202,38 @@ esac
     }
   });
 
+  it("uses complete GraphQL branch protection when REST discovery is unavailable", () => {
+    const originalPath = process.env.PATH;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-graphql-rules-"));
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *protection/required_status_checks*|*rules/branches/main*)
+    echo '{"message":"service unavailable"}' >&2
+    exit 1
+    ;;
+  *"api graphql"*)
+    printf '%s\\n' '{"data":{"repository":{"branchProtectionRules":{"pageInfo":{"hasNextPage":false},"nodes":[{"requiredStatusCheckContexts":["quality"],"matchingRefs":{"pageInfo":{"hasNextPage":false},"nodes":[{"name":"main"}]}}]}}}}'
+    ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath}`;
+    try {
+      expect(requiredChecks("owner/repo", "main")).toEqual([
+        { context: "quality", appId: null },
+      ]);
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
   it("paginates exact-head check runs through GitHub total_count", () => {
     const originalPath = process.env.PATH;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
