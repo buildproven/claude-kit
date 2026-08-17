@@ -134,6 +134,15 @@ function dispatchClaimDirectory() {
   return fs.realpathSync(directory);
 }
 
+function fsyncDirectory(directory) {
+  const descriptor = fs.openSync(directory, "r");
+  try {
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
 function claimDispatchNonce({ repository, eventType, head, base, nonce }) {
   const fields = {
     schemaVersion: 1,
@@ -150,7 +159,8 @@ function claimDispatchNonce({ repository, eventType, head, base, nonce }) {
     .createHash("sha256")
     .update(`${repository}\u0000${externalId}`)
     .digest("hex");
-  const claimPath = path.join(dispatchClaimDirectory(), `${claimName}.json`);
+  const directory = dispatchClaimDirectory();
+  const claimPath = path.join(directory, `${claimName}.json`);
   let descriptor;
   try {
     descriptor = fs.openSync(claimPath, "wx", 0o600);
@@ -178,6 +188,7 @@ function claimDispatchNonce({ repository, eventType, head, base, nonce }) {
   } finally {
     fs.closeSync(descriptor);
   }
+  fsyncDirectory(directory);
   return { externalId, claimPath };
 }
 
