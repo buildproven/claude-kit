@@ -465,6 +465,79 @@ esac
     expect(fs.existsSync(dispatch)).toBe(false);
   });
 
+  it("refreshes a protected scan when the base advances during preparation", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
+    const bin = path.join(root, "bin");
+    const dispatch = path.join(root, "dispatch");
+    const baseReads = path.join(root, "base-reads");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *protection/required_status_checks*) printf '%s\\n' '{"checks":[{"context":"secret-history-scan","app_id":15368}]}' ;;
+  *rules/branches/main*) printf '%s\\n' '[]' ;;
+  *git/ref/heads/main*)
+    reads=0
+    [ -f '${baseReads}' ] && reads="$(cat '${baseReads}')"
+    reads=$((reads + 1))
+    printf '%s' "$reads" > '${baseReads}'
+    if [ "$reads" -eq 1 ]; then
+      printf '%s\\n' '{"object":{"sha":"cccccccccccccccccccccccccccccccccccccccc"}}'
+    else
+      printf '%s\\n' '{"object":{"sha":"dddddddddddddddddddddddddddddddddddddddd"}}'
+    fi
+    ;;
+  *commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/check-runs*) printf '%s\\n' '{"check_runs":[{"id":1,"name":"secret-history-scan","status":"completed","conclusion":"success","app":{"id":15368},"details_url":"https://github.com/o/r/actions/runs/123"}]}' ;;
+  *commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs*)
+    if [ -f '${dispatch}' ]; then
+      nonce="$(sed -n 's/.*"nonce":"\\([0-9a-f]*\\)".*/\\1/p' '${dispatch}')"
+      printf '%s\\n' '{"check_runs":[{"id":3,"name":"secret-history-scan","status":"completed","conclusion":"success","app":{"id":15368},"external_id":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:dddddddddddddddddddddddddddddddddddddddd:'"$nonce"'","details_url":"https://github.com/o/r/actions/runs/125"}]}'
+    else
+      printf '%s\\n' '{"check_runs":[{"id":2,"name":"secret-history-scan","status":"completed","conclusion":"success","app":{"id":15368},"external_id":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:cccccccccccccccccccccccccccccccccccccccc:0123456789abcdef0123456789abcdef","details_url":"https://github.com/o/r/actions/runs/124"}]}'
+    fi
+    ;;
+  *actions/runs/123*) printf '%s\\n' '{"workflow_id":77}' ;;
+  *actions/runs/124*) printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","head_sha":"cccccccccccccccccccccccccccccccccccccccc","path":".github/workflows/secret-history-scan.yml","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:cccccccccccccccccccccccccccccccccccccccc:0123456789abcdef0123456789abcdef","status":"completed","conclusion":"success"}' ;;
+  *actions/runs/125*)
+    nonce="$(sed -n 's/.*"nonce":"\\([0-9a-f]*\\)".*/\\1/p' '${dispatch}')"
+    printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","head_sha":"dddddddddddddddddddddddddddddddddddddddd","path":".github/workflows/secret-history-scan.yml","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:dddddddddddddddddddddddddddddddddddddddd:'"$nonce"'","status":"completed","conclusion":"success"}'
+    ;;
+  *dispatches*) cat > '${dispatch}';;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    const result = run(
+      root,
+      [
+        "ensure",
+        "--repo",
+        "owner/repo",
+        "--base",
+        "main",
+        "--source-head",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--head",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "--head-ref",
+        "feature/fix",
+        "--registration-timeout",
+        "0",
+      ],
+      { bin },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).dispatched).toEqual([
+      { context: "secret-history-scan", workflowId: 77 },
+    ]);
+    expect(fs.readFileSync(dispatch, "utf8")).toContain(
+      '"base_sha":"dddddddddddddddddddddddddddddddddddddddd"',
+    );
+  });
+
   it("dispatches the reviewed-head workflow when an empty stamp has no check", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
     const sourceRuns = [

@@ -469,6 +469,7 @@ function ensureChecks({
   headRef,
   registrationSeconds = 30,
   registrationIntervalSeconds = 2,
+  baseRevisionRetry = false,
 }) {
   const requirements = requiredChecks(repository, base);
   const sourceRuns = checkRuns(repository, sourceHead);
@@ -631,6 +632,26 @@ function ensureChecks({
         workflowId: entry.workflowId,
         runId: run.id,
         status: run.status,
+      });
+    }
+  }
+  if (protectedSecretRequired) {
+    const currentBaseHead = branchHeadSha(repository, base);
+    if (currentBaseHead !== baseHead) {
+      if (baseRevisionRetry) {
+        throw new Error(
+          `protected scan base branch '${base}' changed during preparation from ${baseHead} to ${currentBaseHead}; retry after the base settles`,
+        );
+      }
+      return ensureChecks({
+        repository,
+        base,
+        sourceHead,
+        targetHead,
+        headRef,
+        registrationSeconds,
+        registrationIntervalSeconds,
+        baseRevisionRetry: true,
       });
     }
   }
