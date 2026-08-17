@@ -233,8 +233,16 @@ done < <(
 # behavioral test has a chance to prove the revert. This is only an ordering
 # optimization: every candidate remains eligible and the red-capable proof
 # still requires baseline pass plus controlled-revert failure.
+is_recursive_mutation_target() {
+  case "$1" in
+    */quality-mutation-check.sh) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 candidate_has_sibling_test() {
   local candidate="$1" directory stem sibling
+  is_recursive_mutation_target "$candidate" && return 1
   directory="$(dirname "$candidate")"
   stem="$(basename "$candidate")"
   stem="${stem%.*}"
@@ -250,6 +258,7 @@ candidate_has_sibling_test() {
 
 candidate_has_planned_sibling_test() {
   local candidate="$1" directory stem sibling
+  is_recursive_mutation_target "$candidate" && return 1
   directory="$(dirname "$candidate")"
   stem="$(basename "$candidate")"
   stem="${stem%.*}"
@@ -267,6 +276,7 @@ candidate_has_planned_sibling_test() {
 
 candidate_has_mapped_test() {
   local candidate="$1"
+  is_recursive_mutation_target "$candidate" && return 1
   [ -f "$ROOT/.buildproven/test-impact.json" ] || return 1
   jq -e --arg candidate "$candidate" \
     '.mappings[]? | select((.paths // []) | index($candidate)) | .commands[]? | (.args // []) | any(.[]; test("(^|/)(test|tests|spec|__tests__)/|\\.(test|spec)\\.(js|ts|jsx|tsx)$"))' \
