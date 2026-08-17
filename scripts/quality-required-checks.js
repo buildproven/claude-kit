@@ -254,11 +254,30 @@ function matchingRuns(runs, requirement) {
 function checkState(runs, requirement) {
   const latest = matchingRuns(runs, requirement)[0];
   if (!latest) return { state: "missing", run: null };
+  return checkRunState(latest);
+}
+
+function checkRunState(latest) {
   if (latest.status !== "completed") return { state: "pending", run: latest };
   return {
     state: ACCEPTED_CONCLUSIONS.has(latest.conclusion) ? "success" : "failed",
     run: latest,
   };
+}
+
+function trustedSecretCheckState(repository, runs, requirement, workflowId) {
+  const latest = matchingRuns(runs, requirement)[0];
+  if (!latest || typeof latest.details_url !== "string") {
+    return { state: "missing", run: null };
+  }
+  let actualWorkflowId;
+  try {
+    actualWorkflowId = workflowIdForRun(repository, latest);
+  } catch {
+    return { state: "missing", run: null };
+  }
+  if (actualWorkflowId !== workflowId) return { state: "missing", run: null };
+  return checkRunState(latest);
 }
 
 function workflowIdForRun(repository, run) {
@@ -418,8 +437,11 @@ function ensureChecks({
   const dispatchedRequirements = [];
   const dispatchedWorkflowIds = new Set();
   for (const requirement of requirements) {
-    const target = checkState(targetRuns, requirement);
-    if (["pending", "success"].includes(target.state)) continue;
+    const protectedSecret = requirement.context === "secret-history-scan";
+    if (!protectedSecret) {
+      const target = checkState(targetRuns, requirement);
+      if (["pending", "success"].includes(target.state)) continue;
+    }
     const source = sourceRunForRequirement(
       repository,
       sourceHead,
@@ -432,7 +454,14 @@ function ensureChecks({
       );
     }
     const workflowId = workflowIdForRun(repository, source);
-    const protectedSecret = requirement.context === "secret-history-scan";
+    if (
+      protectedSecret &&
+      ["pending", "success"].includes(
+        trustedSecretCheckState(repository, targetRuns, requirement, workflowId)
+          .state,
+      )
+    )
+      continue;
     const dispatchKey = `${workflowId}:${protectedSecret ? "repository_dispatch" : "workflow_dispatch"}`;
     let dispatchedRequirement = requirement;
     if (!dispatchedWorkflowIds.has(dispatchKey)) {
@@ -474,9 +503,18 @@ function ensureChecks({
       timeoutSeconds: registrationSeconds,
       intervalSeconds: registrationIntervalSeconds,
     });
-    const missing = dispatchedRequirements.filter(
-      (entry) => checkState(targetRuns, entry.requirement).state === "missing",
-    );
+    const missing = dispatchedRequirements.filter((entry) => {
+      const state =
+        entry.requirement.context === "secret-history-scan"
+          ? trustedSecretCheckState(
+              repository,
+              targetRuns,
+              entry.requirement,
+              entry.workflowId,
+            )
+          : checkState(targetRuns, entry.requirement);
+      return state.state === "missing";
+    });
     const normalWorkflowIds = new Set(
       missing
         .filter((entry) => entry.requirement.context !== "secret-history-scan")
