@@ -61,10 +61,11 @@ function validateRef(value, name) {
   return value;
 }
 
-function runGh(args) {
+function runGh(args, input = undefined) {
   const result = spawnSync("gh", args, {
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
+    input,
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {
@@ -323,16 +324,17 @@ function dispatchRepositoryEvent(repository, eventType, payload) {
   let failure = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      runGh([
-        "api",
-        "--method",
-        "POST",
-        `repos/${repository}/dispatches`,
-        "-f",
-        `event_type=${eventType}`,
-        "-f",
-        `client_payload=${JSON.stringify(payload)}`,
-      ]);
+      runGh(
+        [
+          "api",
+          "--method",
+          "POST",
+          `repos/${repository}/dispatches`,
+          "--input",
+          "-",
+        ],
+        JSON.stringify({ event_type: eventType, client_payload: payload }),
+      );
       return;
     } catch (error) {
       failure = error;
@@ -363,8 +365,8 @@ function dispatchedRunsForHead(
     }
     for (const run of response.workflow_runs) {
       if (
-        (event === "repository_dispatch" ||
-          (run.head_sha === targetHead && run.head_branch === headRef)) &&
+        run.head_sha === targetHead &&
+        run.head_branch === headRef &&
         run.event === event &&
         workflowIds.has(run.workflow_id) &&
         !matching.has(run.workflow_id)

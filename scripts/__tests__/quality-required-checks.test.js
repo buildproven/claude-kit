@@ -43,7 +43,14 @@ case "$*" in
     fi
     ;;
   *actions/runs/123*) printf '%s\\n' '{"workflow_id":77}' ;;
-  *repos/owner/repo/dispatches*) printf '%s\\n' "$*" >> '${log}' ;;
+  *repos/owner/repo/dispatches*)
+    body="$(cat)"
+    if printf '%s' "$body" | grep -q '"client_payload":"'; then
+      echo 'client_payload must be an object' >&2
+      exit 2
+    fi
+    printf '%s %s\\n' "$*" "$body" >> '${log}'
+    ;;
   *actions/workflows/77/dispatches*) printf '%s\\n' "$*" >> '${log}' ;;
   *actions/runs*) printf '%s\\n' '{"total_count":0,"workflow_runs":[]}' ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
@@ -363,7 +370,7 @@ esac
     );
     expect(result.status, result.stderr).toBe(0);
     expect(fs.readFileSync(fixture.log, "utf8")).toContain(
-      'repos/owner/repo/dispatches -f event_type=secret-history-scan -f client_payload={"head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}',
+      'repos/owner/repo/dispatches --input - {"event_type":"secret-history-scan","client_payload":{"head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}',
     );
   });
 
