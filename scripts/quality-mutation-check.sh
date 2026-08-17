@@ -227,6 +227,43 @@ done < <(
     '
 )
 
+# Prefer candidates with a conventional sibling test. A source file without
+# one falls back to the repository test command, which can be a full suite;
+# trying it first can consume the entire mutation budget before a nearby
+# behavioral test has a chance to prove the revert. This is only an ordering
+# optimization: every candidate remains eligible and the red-capable proof
+# still requires baseline pass plus controlled-revert failure.
+candidate_has_sibling_test() {
+  local candidate="$1" directory stem sibling
+  directory="$(dirname "$candidate")"
+  stem="$(basename "$candidate")"
+  stem="${stem%.*}"
+  for sibling in \
+    "$directory/__tests__/$stem.test.js" \
+    "$directory/__tests__/$stem.test.ts" \
+    "$directory/$stem.test.js" \
+    "$directory/$stem.test.ts"; do
+    [ -f "$ROOT/$sibling" ] && return 0
+  done
+  return 1
+}
+
+if [ "${#CANDIDATES[@]}" -gt 1 ]; then
+  ORDERED_CANDIDATES=()
+  for PRIORITY in sibling fallback; do
+    for CANDIDATE in "${CANDIDATES[@]}"; do
+      HAS_SIBLING=false
+      candidate_has_sibling_test "$CANDIDATE" && HAS_SIBLING=true
+      if [ "$PRIORITY" = sibling ] && [ "$HAS_SIBLING" = true ]; then
+        ORDERED_CANDIDATES+=("$CANDIDATE")
+      elif [ "$PRIORITY" = fallback ] && [ "$HAS_SIBLING" = false ]; then
+        ORDERED_CANDIDATES+=("$CANDIDATE")
+      fi
+    done
+  done
+  CANDIDATES=("${ORDERED_CANDIDATES[@]}")
+fi
+
 if [ "${#CANDIDATES[@]}" -eq 0 ]; then
   DIFF_RAW="$(git -C "$ROOT" diff --raw --diff-filter=AM "$BASE..$HEAD" --)"
   # `grep -c .` exits 1 on zero matches; `|| true` keeps an empty $DIFF_RAW
