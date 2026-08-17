@@ -578,6 +578,19 @@ if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
   LEASE_ADMIN=true
   echo "⚠️  [quality] using admin merge only for verified GitHub Actions billing preallocation failures." >&2
 fi
+if [ "${CI_BILLING_WAIVED:-false}" = true ] &&
+  [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ] &&
+  [ "${BS_QUALITY_PROTECTION_RECHECK:-0}" != 1 ]; then
+  # Re-read the same server-owned protection source immediately before the
+  # lease performs the administrator merge. The guard prevents the preflight
+  # child from recursing while preserving the final source/equality checks.
+  BS_QUALITY_PROTECTION_RECHECK=1 \
+    bash "$SCRIPT_DIR/quality-authorize-merge.sh" --manifest "$MANIFEST" --preflight \
+    >/dev/null || {
+    echo "❌ MERGE BLOCKED: administrator protection changed or could not be revalidated immediately before merge." >&2
+    exit 1
+  }
+fi
 if node "$SCRIPT_DIR/quality-repo-lease.js" merge \
   --manifest "$MANIFEST" \
   --expected-head "$ACTUAL_HEAD" \

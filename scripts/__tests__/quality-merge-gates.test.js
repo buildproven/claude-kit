@@ -256,6 +256,7 @@ describe("quality merge gates", () => {
     expect(AUTHORIZE).toMatch(/ADMIN_BASE_SOURCE/);
     expect(AUTHORIZE).toMatch(/ruleset_id/);
     expect(AUTHORIZE).toMatch(/bypass_actors/);
+    expect(AUTHORIZE).toMatch(/BS_QUALITY_PROTECTION_RECHECK/);
   });
 
   it("uses one manifest-bound operation for composed CI billing capability checks", () => {
