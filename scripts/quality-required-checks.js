@@ -473,13 +473,11 @@ function ensureChecks({
   const dispatchedWorkflowIds = new Set();
   for (const requirement of requirements) {
     const protectedSecret = requirement.context === "secret-history-scan";
-    let source = null;
-    let workflowId = null;
     if (!protectedSecret) {
       const target = checkState(targetRuns, requirement);
       if (["pending", "success"].includes(target.state)) continue;
     }
-    source = sourceRunForRequirement(
+    const source = sourceRunForRequirement(
       repository,
       sourceHead,
       sourceRuns,
@@ -490,7 +488,7 @@ function ensureChecks({
         `cannot map required check '${requirement.context}' to a workflow from the reviewed head or its first-parent history`,
       );
     }
-    workflowId = workflowIdForRun(repository, source);
+    const workflowId = workflowIdForRun(repository, source);
     if (protectedSecret) {
       const target = trustedSecretCheckState(
         repository,
