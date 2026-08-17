@@ -28,6 +28,16 @@ const V2_FIELDS = [
   "diffSha256",
   "evidenceSha256",
 ];
+const DISPATCH_FIELDS = [
+  "schemaVersion",
+  "repository",
+  "eventType",
+  "head",
+  "base",
+  "nonce",
+  "issuedAt",
+  "expiresAt",
+];
 const TIERS = new Set(["low", "medium", "high", "critical"]);
 const REVIEWERS = new Set([
   "claude",
@@ -324,10 +334,94 @@ function verifyEvidence(fields, encoded, publicKeyBase64) {
   return payload;
 }
 
+function dispatchPayload(fields) {
+  for (const field of DISPATCH_FIELDS) {
+    if (!(field in (fields || {})))
+      throw new Error(`missing dispatch authorization ${field}`);
+  }
+  if (fields.schemaVersion !== 1)
+    throw new Error("dispatch authorization schemaVersion is invalid");
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fields.repository))
+    throw new Error("dispatch authorization repository is invalid");
+  if (!["secret-history-scan", "harness-summary"].includes(fields.eventType))
+    throw new Error("dispatch authorization eventType is invalid");
+  assertSha(fields.head, "dispatch authorization head");
+  assertSha(fields.base, "dispatch authorization base");
+  if (!/^[0-9a-f]{32}$/.test(fields.nonce))
+    throw new Error("dispatch authorization nonce is invalid");
+  const issuedAt = Date.parse(fields.issuedAt);
+  const expiresAt = Date.parse(fields.expiresAt);
+  if (Number.isNaN(issuedAt) || Number.isNaN(expiresAt))
+    throw new Error("dispatch authorization timestamps are invalid");
+  if (expiresAt <= issuedAt || expiresAt - issuedAt > 15 * 60 * 1000)
+    throw new Error("dispatch authorization expiry is invalid");
+  return {
+    schemaVersion: 1,
+    repository: fields.repository,
+    eventType: fields.eventType,
+    head: fields.head.toLowerCase(),
+    base: fields.base.toLowerCase(),
+    nonce: fields.nonce,
+    issuedAt: new Date(issuedAt).toISOString(),
+    expiresAt: new Date(expiresAt).toISOString(),
+  };
+}
+
+function signDispatchAuthorization(fields, privateKeyBase64) {
+  const payload = dispatchPayload(fields);
+  const privateKey = crypto.createPrivateKey({
+    key: decodeKey(privateKeyBase64, "private"),
+    format: "der",
+    type: "pkcs8",
+  });
+  const signature = crypto
+    .sign(null, Buffer.from(JSON.stringify(canonicalJson(payload))), privateKey)
+    .toString("base64url");
+  return Buffer.from(JSON.stringify({ payload, signature })).toString(
+    "base64url",
+  );
+}
+
+function verifyDispatchAuthorization(fields, encoded, publicKeyBase64) {
+  let envelope;
+  try {
+    envelope = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("dispatch authorization is not valid base64url JSON");
+  }
+  const payload = dispatchPayload(envelope.payload);
+  if (typeof envelope.signature !== "string" || envelope.signature === "")
+    throw new Error("dispatch authorization signature is required");
+  const publicKey = crypto.createPublicKey({
+    key: decodeKey(publicKeyBase64, "public"),
+    format: "der",
+    type: "spki",
+  });
+  if (
+    !crypto.verify(
+      null,
+      Buffer.from(JSON.stringify(canonicalJson(payload))),
+      publicKey,
+      Buffer.from(envelope.signature, "base64url"),
+    )
+  )
+    throw new Error("dispatch authorization signature is invalid");
+  for (const field of ["repository", "eventType", "head", "base", "nonce"]) {
+    if (payload[field] !== fields[field])
+      throw new Error(`dispatch authorization ${field} does not match input`);
+  }
+  if (Date.parse(payload.expiresAt) <= Date.now())
+    throw new Error("dispatch authorization has expired");
+  return payload;
+}
+
 module.exports = {
   canonicalJson,
+  dispatchPayload,
   evidencePayload,
+  signDispatchAuthorization,
   signEvidence,
+  verifyDispatchAuthorization,
   verifyEvidence,
   signingKeyFromEnvironment,
   publicKeyFromPrivate,
@@ -341,7 +435,11 @@ function cliFields(argv) {
     if (!key?.startsWith("--") || value === undefined) {
       throw new Error("review-evidence arguments must be --name value pairs");
     }
-    fields[key.slice(2)] = ["--findings", "--leads"].includes(key)
+    fields[key.slice(2)] = [
+      "--findings",
+      "--leads",
+      "--schemaVersion",
+    ].includes(key)
       ? Number(value)
       : value;
   }
@@ -361,6 +459,11 @@ if (require.main === module) {
       process.stdout.write(
         `${signEvidence(fields, signingKeyFromEnvironment())}\n`,
       );
+    } else if (command === "sign-dispatch") {
+      const fields = cliFields(argv);
+      process.stdout.write(
+        `${signDispatchAuthorization(fields, signingKeyFromEnvironment())}\n`,
+      );
     } else if (command === "verify") {
       const fields = cliFields(argv);
       const signature = fields.signature;
@@ -370,9 +473,18 @@ if (require.main === module) {
         signature,
         process.env.QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY,
       );
+    } else if (command === "verify-dispatch") {
+      const fields = cliFields(argv);
+      const signature = fields.signature;
+      delete fields.signature;
+      verifyDispatchAuthorization(
+        fields,
+        signature,
+        process.env.QUALITY_REVIEW_EVIDENCE_PUBLIC_KEY,
+      );
     } else {
       throw new Error(
-        "usage: quality-review-evidence.js public-key | sign|verify --head <sha> --base <sha> --tier <tier> --findings <count> --reviewer <name> --primary <name> --fallback <name> [v2 policy-binding fields] [--signature <value>]",
+        "usage: quality-review-evidence.js public-key | sign|verify | sign-dispatch|verify-dispatch ...",
       );
     }
   } catch (error) {

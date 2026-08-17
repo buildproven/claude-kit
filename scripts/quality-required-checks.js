@@ -3,6 +3,10 @@
 
 const { spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
+const {
+  signDispatchAuthorization,
+  signingKeyFromEnvironment,
+} = require("./quality-review-evidence.js");
 
 const ACCEPTED_CONCLUSIONS = new Set(["success"]);
 const PROTECTED_CHECKS = Object.freeze({
@@ -406,6 +410,21 @@ function dispatchWorkflow(repository, workflowId, ref) {
 }
 
 function dispatchRepositoryEvent(repository, eventType, payload) {
+  const issuedAt = new Date();
+  const authorization = signDispatchAuthorization(
+    {
+      schemaVersion: 1,
+      repository,
+      eventType,
+      head: payload.head_sha,
+      base: payload.base_sha,
+      nonce: payload.nonce,
+      issuedAt: issuedAt.toISOString(),
+      expiresAt: new Date(issuedAt.getTime() + 10 * 60 * 1000).toISOString(),
+    },
+    signingKeyFromEnvironment(),
+  );
+  const authorizedPayload = { ...payload, authorization };
   let failure = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
@@ -418,7 +437,10 @@ function dispatchRepositoryEvent(repository, eventType, payload) {
           "--input",
           "-",
         ],
-        JSON.stringify({ event_type: eventType, client_payload: payload }),
+        JSON.stringify({
+          event_type: eventType,
+          client_payload: authorizedPayload,
+        }),
       );
       return;
     } catch (error) {

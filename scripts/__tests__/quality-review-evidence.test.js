@@ -3,7 +3,9 @@ const fs = require("fs");
 const path = require("path");
 const {
   publicKeyFromPrivate,
+  signDispatchAuthorization,
   signEvidence,
+  verifyDispatchAuthorization,
   verifyEvidence,
 } = require("../quality-review-evidence");
 
@@ -35,6 +37,66 @@ function keyPair() {
 }
 
 describe("quality review evidence signatures", () => {
+  it("verifies a dispatch authorization bound to repository and event", () => {
+    const keys = keyPair();
+    const authorization = signDispatchAuthorization(
+      {
+        schemaVersion: 1,
+        repository: "owner/repo",
+        eventType: "harness-summary",
+        head: "a".repeat(40),
+        base: "b".repeat(40),
+        nonce: "c".repeat(32),
+        issuedAt: "2027-01-01T00:00:00.000Z",
+        expiresAt: "2027-01-01T00:10:00.000Z",
+      },
+      keys.privateKey,
+    );
+    expect(
+      verifyDispatchAuthorization(
+        {
+          repository: "owner/repo",
+          eventType: "harness-summary",
+          head: "a".repeat(40),
+          base: "b".repeat(40),
+          nonce: "c".repeat(32),
+        },
+        authorization,
+        keys.publicKey,
+      ),
+    ).toMatchObject({ repository: "owner/repo", eventType: "harness-summary" });
+  });
+
+  it("rejects a dispatch authorization replayed for another event", () => {
+    const keys = keyPair();
+    const authorization = signDispatchAuthorization(
+      {
+        schemaVersion: 1,
+        repository: "owner/repo",
+        eventType: "harness-summary",
+        head: "a".repeat(40),
+        base: "b".repeat(40),
+        nonce: "c".repeat(32),
+        issuedAt: "2027-01-01T00:00:00.000Z",
+        expiresAt: "2027-01-01T00:10:00.000Z",
+      },
+      keys.privateKey,
+    );
+    expect(() =>
+      verifyDispatchAuthorization(
+        {
+          repository: "owner/repo",
+          eventType: "secret-history-scan",
+          head: "a".repeat(40),
+          base: "b".repeat(40),
+          nonce: "c".repeat(32),
+        },
+        authorization,
+        keys.publicKey,
+      ),
+    ).toThrow(/eventType does not match/);
+  });
+
   it("verifies an exact canonical review tuple", () => {
     const keys = keyPair();
     const signature = signEvidence(fields, keys.privateKey);
