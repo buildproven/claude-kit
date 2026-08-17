@@ -271,6 +271,9 @@ describe("quality merge gates", () => {
     expect(AUTHORIZE).toMatch(
       /REPOSITORY_ADMIN_PERMISSION" = true[\s\S]*ADMIN_BASE_SOURCE=graphql/,
     );
+    expect(AUTHORIZE).toMatch(
+      /PREFLIGHT[\s\S]*BS_QUALITY_PROTECTION_RECHECK[\s\S]*reserved for the internal preflight/,
+    );
   });
 
   it("uses one manifest-bound operation for composed CI billing capability checks", () => {

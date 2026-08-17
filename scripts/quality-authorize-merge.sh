@@ -17,6 +17,11 @@ done
   echo "quality-authorize-merge: --manifest is required" >&2
   exit 1
 }
+if [ "$PREFLIGHT" != true ] &&
+  [ "${BS_QUALITY_PROTECTION_RECHECK:-0}" = 1 ]; then
+  echo "❌ MERGE BLOCKED: the protection recheck sentinel is reserved for the internal preflight." >&2
+  exit 1
+fi
 source "$SCRIPT_DIR/quality-repo-lease-pin.sh" || exit 1
 quality_pin_repository_lease "$MANIFEST" || exit 1
 
