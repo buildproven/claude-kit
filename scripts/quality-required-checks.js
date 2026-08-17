@@ -5,8 +5,22 @@ const { spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
 
 const ACCEPTED_CONCLUSIONS = new Set(["success"]);
-const SECRET_SCAN_RUN_PREFIX = "secret-history-scan:";
-const SECRET_SCAN_WORKFLOW_PATH = ".github/workflows/secret-history-scan.yml";
+const PROTECTED_CHECKS = Object.freeze({
+  "secret-history-scan": Object.freeze({
+    runPrefix: "secret-history-scan:",
+    workflowPath: ".github/workflows/secret-history-scan.yml",
+    eventType: "secret-history-scan",
+  }),
+  "harness-summary": Object.freeze({
+    runPrefix: "harness-summary:",
+    workflowPath: ".github/workflows/harness-gate.yml",
+    eventType: "harness-summary",
+  }),
+});
+
+function protectedCheckConfig(requirement) {
+  return PROTECTED_CHECKS[requirement.context] || null;
+}
 
 class GhCommandError extends Error {
   constructor(message, result) {
@@ -276,6 +290,8 @@ function trustedSecretCheckState({
   targetHead,
   baseHead,
 }) {
+  const protectedConfig = protectedCheckConfig(requirement);
+  if (!protectedConfig) return { state: "missing", run: null };
   const latest = matchingRuns(runs, requirement)[0];
   if (!latest || typeof latest.details_url !== "string") {
     return { state: "missing", run: null };
@@ -286,7 +302,7 @@ function trustedSecretCheckState({
   } catch {
     return { state: "missing", run: null };
   }
-  const noncePrefix = `${SECRET_SCAN_RUN_PREFIX}${targetHead}:${baseHead}:`;
+  const noncePrefix = `${protectedConfig.runPrefix}${targetHead}:${baseHead}:`;
   const externalId = String(requirement.externalId || latest.external_id || "");
   if (!externalId.startsWith(noncePrefix)) {
     return { state: "missing", run: null };
@@ -301,7 +317,7 @@ function trustedSecretCheckState({
     workflowRun.event !== "repository_dispatch" ||
     workflowRun.head_branch !== base ||
     workflowRun.head_sha !== baseHead ||
-    workflowRun.path !== SECRET_SCAN_WORKFLOW_PATH ||
+    workflowRun.path !== protectedConfig.workflowPath ||
     workflowRun.display_title !== expectedRunName ||
     !["queued", "in_progress", "completed"].includes(workflowRun.status)
   )
@@ -474,10 +490,8 @@ function ensureChecks({
   const requirements = requiredChecks(repository, base);
   const sourceRuns = checkRuns(repository, sourceHead);
   let targetRuns = checkRuns(repository, targetHead);
-  const protectedSecretRequired = requirements.some(
-    (requirement) => requirement.context === "secret-history-scan",
-  );
-  const baseHead = protectedSecretRequired
+  const protectedCheckRequired = requirements.some(protectedCheckConfig);
+  const baseHead = protectedCheckRequired
     ? branchHeadSha(repository, base)
     : null;
   targetRuns = waitForRegistration({
@@ -492,8 +506,8 @@ function ensureChecks({
   const dispatchedRequirements = [];
   const dispatchedWorkflowIds = new Set();
   for (const requirement of requirements) {
-    const protectedSecret = requirement.context === "secret-history-scan";
-    if (!protectedSecret) {
+    const protectedConfig = protectedCheckConfig(requirement);
+    if (!protectedConfig) {
       const target = checkState(targetRuns, requirement);
       if (["pending", "success"].includes(target.state)) continue;
     }
@@ -509,7 +523,7 @@ function ensureChecks({
       );
     }
     const workflowId = workflowIdForRun(repository, source);
-    if (protectedSecret) {
+    if (protectedConfig) {
       const target = trustedSecretCheckState({
         repository,
         runs: targetRuns,
@@ -521,27 +535,27 @@ function ensureChecks({
       });
       if (["pending", "success"].includes(target.state)) continue;
     }
-    const dispatchKey = `${workflowId}:${protectedSecret ? "repository_dispatch" : "workflow_dispatch"}`;
+    const dispatchKey = `${workflowId}:${protectedConfig ? "repository_dispatch" : "workflow_dispatch"}`;
     let dispatchedRequirement = requirement;
     if (!dispatchedWorkflowIds.has(dispatchKey)) {
       try {
-        if (protectedSecret) {
+        if (protectedConfig) {
           const nonce = crypto.randomBytes(16).toString("hex");
-          dispatchRepositoryEvent(repository, "secret-history-scan", {
+          dispatchRepositoryEvent(repository, protectedConfig.eventType, {
             head_sha: targetHead,
             base_sha: baseHead,
             nonce,
           });
           dispatchedRequirement = {
             ...requirement,
-            externalId: `secret-history-scan:${targetHead}:${baseHead}:${nonce}`,
+            externalId: `${protectedConfig.runPrefix}${targetHead}:${baseHead}:${nonce}`,
           };
         } else {
           dispatchWorkflow(repository, workflowId, headRef);
         }
       } catch (error) {
         targetRuns = checkRuns(repository, targetHead);
-        const refreshed = protectedSecret
+        const refreshed = protectedConfig
           ? { state: "missing" }
           : checkState(targetRuns, requirement);
         if (!["pending", "success"].includes(refreshed.state)) throw error;
@@ -566,23 +580,22 @@ function ensureChecks({
       intervalSeconds: registrationIntervalSeconds,
     });
     const missing = dispatchedRequirements.filter((entry) => {
-      const state =
-        entry.requirement.context === "secret-history-scan"
-          ? trustedSecretCheckState({
-              repository,
-              runs: targetRuns,
-              requirement: entry.requirement,
-              workflowId: entry.workflowId,
-              base,
-              targetHead,
-              baseHead,
-            })
-          : checkState(targetRuns, entry.requirement);
+      const state = protectedCheckConfig(entry.requirement)
+        ? trustedSecretCheckState({
+            repository,
+            runs: targetRuns,
+            requirement: entry.requirement,
+            workflowId: entry.workflowId,
+            base,
+            targetHead,
+            baseHead,
+          })
+        : checkState(targetRuns, entry.requirement);
       return state.state === "missing";
     });
     const normalWorkflowIds = new Set(
       missing
-        .filter((entry) => entry.requirement.context !== "secret-history-scan")
+        .filter((entry) => !protectedCheckConfig(entry.requirement))
         .map((entry) => entry.workflowId),
     );
     const workflowRuns = normalWorkflowIds.size
@@ -594,7 +607,7 @@ function ensureChecks({
         )
       : new Map();
     const unregistered = missing.filter((entry) => {
-      if (entry.requirement.context === "secret-history-scan") {
+      if (protectedCheckConfig(entry.requirement)) {
         // Repository-dispatch runs use the default branch metadata. The
         // target check is the only safe correlation signal; do not accept an
         // unrelated or merely active dispatch run as registration evidence.
@@ -635,7 +648,7 @@ function ensureChecks({
       });
     }
   }
-  if (protectedSecretRequired) {
+  if (protectedCheckRequired) {
     const currentBaseHead = branchHeadSha(repository, base);
     if (currentBaseHead !== baseHead) {
       if (baseRevisionRetry) {
@@ -661,14 +674,12 @@ function ensureChecks({
 function inspectChecks(repository, base, head) {
   const requirements = requiredChecks(repository, base);
   const runs = checkRuns(repository, head);
-  const baseHead = requirements.some(
-    (requirement) => requirement.context === "secret-history-scan",
-  )
+  const baseHead = requirements.some(protectedCheckConfig)
     ? branchHeadSha(repository, base)
     : null;
   return requirements.map((requirement) => ({
     ...requirement,
-    ...(requirement.context === "secret-history-scan"
+    ...(protectedCheckConfig(requirement)
       ? trustedSecretCheckState({
           repository,
           runs,
