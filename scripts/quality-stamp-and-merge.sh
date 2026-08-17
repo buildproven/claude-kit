@@ -25,11 +25,18 @@ EXPECTED_HEAD_REPOSITORY="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MAN
 LOCAL_HEAD="$(git rev-parse HEAD)"
 
 # A fleet operator may install a private Actions-minute policy. The public kit
-# remains standalone when none exists. At a hard limit, only the existing
-# signed exact-head billing override may select the time-bounded local path.
+# remains standalone when none exists. At a hard limit, only a signed
+# exact-head billing condition may select the time-bounded local path. When
+# review is also incomplete, that condition is composed into the same signed
+# operator-quality capability; neither condition authorizes the other.
 CI_BUDGET_MODE=""
 if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
-  --scope operator-ci-billing-override >/dev/null 2>&1; then
+  --scope operator-ci-billing-override >/dev/null 2>&1 || {
+  node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
+    --scope operator-quality-override >/dev/null 2>&1 &&
+    node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" \
+      approval.acceptedConditions | jq -e 'index("ci:failed") != null' >/dev/null 2>&1
+}; then
   CI_BUDGET_MODE="local-exact-head"
 fi
 CI_BUDGET_ARGS=()
@@ -188,8 +195,7 @@ else
   # and never rewrites or force-pushes the PR branch. GitHub's check-run API
   # requires an App token; during a verified Actions billing outage the signed
   # operator capability is the explicit local evidence transport instead.
-  if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
-    --scope operator-ci-billing-override >/dev/null 2>&1; then
+  if [ "$CI_BUDGET_MODE" = local-exact-head ]; then
     prepare_local_review_evidence
     LOCAL_REVIEW_EVIDENCE=true
     echo "⚠️  [quality] skipping GitHub review check publication under the exact-head CI billing override; final authorization will validate the local signed review checkpoint." >&2
@@ -199,7 +205,7 @@ else
       LOCAL_REVIEW_EVIDENCE=true
       echo "⚠️  [quality] using signed exact-head local review evidence because required CI is already green and custom check publication is unavailable." >&2
     else
-      echo "❌ MERGE BLOCKED: local review evidence requires green required CI or a signed operator-ci-billing-override capability." >&2
+      echo "❌ MERGE BLOCKED: local review evidence requires green required CI or a signed exact-head CI billing condition." >&2
       exit 1
     fi
   else

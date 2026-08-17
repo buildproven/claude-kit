@@ -2992,10 +2992,22 @@ function assertApprovalPayloadShape(manifest, payload) {
       "operator override capability is missing accepted condition ids",
     );
   }
-  if (payload.scope === "operator-ci-billing-override") {
+  const hasCiBillingCondition =
+    Array.isArray(payload.acceptedConditions) &&
+    payload.acceptedConditions.includes("ci:failed");
+  if (hasCiBillingCondition) {
     if (
-      !/^ci:failed$/.test(payload.acceptedConditions[0]) ||
-      payload.acceptedConditions.length !== 1
+      payload.scope !== "operator-ci-billing-override" &&
+      payload.scope !== "operator-quality-override"
+    ) {
+      throw new Error(
+        "CI billing condition requires an operator override scope",
+      );
+    }
+    if (
+      payload.scope === "operator-ci-billing-override" &&
+      (payload.acceptedConditions.length !== 1 ||
+        payload.acceptedConditions[0] !== "ci:failed")
     ) {
       throw new Error(
         "CI billing override capability must accept exactly ci:failed",

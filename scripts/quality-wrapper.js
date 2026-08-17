@@ -89,7 +89,10 @@ function assertOuterApprovalContext() {
 // Each flag maps to exactly one signed capability scope. A capability is
 // narrow by construction: it can only ever carry the single scope named on
 // the command line, never a caller-supplied string, so an operator cannot
-// mint a scope the wrapper does not know about.
+// mint a scope the wrapper does not know about. A quality override may also
+// accept ci:failed when the same exact candidate has independently verified
+// billing-outage evidence; this composes two named conditions in one signed
+// capability rather than allowing either condition to authorize the other.
 //
 // `override` is the ticket-required standalone verb
 // (`/bs:quality override --pr <n> --head <sha> --reason <text> --accept
@@ -253,21 +256,24 @@ function assertCiBillingConditions(
   diagnosed,
   accepted,
 ) {
-  if (scope !== "operator-ci-billing-override") return;
+  const compositeQualityOverride =
+    scope === "operator-quality-override" && accepted.includes("ci:failed");
+  if (scope !== "operator-ci-billing-override" && !compositeQualityOverride)
+    return;
   const expected = `ci:${ciFailureReason}`;
   const nonCiDiagnosed = diagnosed.filter(
     (condition) => !condition.id.startsWith("ci:"),
   );
-  const nonCiAccepted = accepted.filter(
-    (condition) => !condition.startsWith("ci:"),
-  );
-  if (nonCiDiagnosed.length > 0 || nonCiAccepted.length > 0) {
+  if (scope === "operator-ci-billing-override" && nonCiDiagnosed.length > 0) {
     throw new Error(
       "CI billing override cannot accept non-CI conditions; resolve local gates, mutation, and review first",
     );
   }
-  if (accepted.length !== 1 || accepted[0] !== expected) {
+  if (ciFailureReason !== "failed" || !accepted.includes(expected)) {
     throw new Error(`CI billing override must accept exactly ${expected}`);
+  }
+  if (scope === "operator-ci-billing-override" && accepted.length !== 1) {
+    throw new Error("CI billing override must accept exactly ci:failed");
   }
 }
 
@@ -503,10 +509,9 @@ function issueApprovalCapability(
         expectedIdentity,
       )
     : [];
-  const ciBillingEvidenceSha256 =
-    scope === "operator-ci-billing-override"
-      ? ensureCiBillingEvidence(manifest)
-      : null;
+  const ciBillingEvidenceSha256 = acceptedConditions.includes("ci:failed")
+    ? ensureCiBillingEvidence(manifest)
+    : null;
   const payload = {
     schemaVersion: 1,
     repoKey: manifest.repo.key,

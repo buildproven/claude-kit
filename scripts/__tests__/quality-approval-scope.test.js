@@ -87,6 +87,30 @@ describe("quality approve command scope parsing", () => {
     expect(parsed.argv).not.toContain("--override-ci-billing");
   });
 
+  it("allows a quality override to compose an exact CI failure", () => {
+    const parsed = parseApprovalCommand([
+      "approve",
+      "--pr",
+      "676",
+      "--head",
+      head,
+      "--override-quality",
+      "--reason",
+      "provider review is exhausted and Actions runners are unavailable",
+      "--ci-failure",
+      "failed",
+      "--accept",
+      "review:provider-exhaustion,ci:failed",
+      "--i-understand-missing-review",
+      "--i-understand-missing-ci",
+    ]);
+    expect(parsed).toMatchObject({
+      scope: "operator-quality-override",
+      ciFailureReason: "failed",
+      acceptedConditions: ["review:provider-exhaustion", "ci:failed"],
+    });
+  });
+
   it("requires a classified CI failure for the billing override", () => {
     expect(() =>
       parseApprovalCommand([

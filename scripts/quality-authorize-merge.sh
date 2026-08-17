@@ -38,6 +38,22 @@ if (!evidenceDigestValid(evidence) || evidence.evidenceSha256 !== expected) {
 NODE
 }
 
+# A billing waiver is usable only with a signed CI capability, or with a
+# signed quality override that explicitly accepted ci:failed alongside its
+# other diagnosed conditions. The latter is the only safe composition point:
+# the signed artifact still binds both the review decision and the exact CI
+# outage evidence to this manifest and HEAD.
+has_ci_billing_capability() {
+  if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
+    --scope operator-ci-billing-override >/dev/null 2>&1; then
+    return 0
+  fi
+  node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
+    --scope operator-quality-override >/dev/null 2>&1 || return 1
+  node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" \
+    approval.acceptedConditions | jq -e 'index("ci:failed") != null' >/dev/null 2>&1
+}
+
 node "$SCRIPT_DIR/quality-invocation.js" review-authorization "$MANIFEST" >/dev/null || exit 1
 MERGE_REQUESTED="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" options.merge)"
 [ "$MERGE_REQUESTED" = true ] || {
@@ -176,8 +192,7 @@ else
       echo "❌ MERGE BLOCKED: CI billing waiver no longer matches live exact-HEAD evidence." >&2
       exit 1
     }
-    if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
-      --scope operator-ci-billing-override >/dev/null 2>&1; then
+    if has_ci_billing_capability; then
       SIGNED_WAIVER_DIGEST="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" approval.ciBillingEvidenceSha256)"
       verify_ci_billing_digest "$CI_BILLING_WAIVER_ARTIFACT" "$SIGNED_WAIVER_DIGEST" || {
         echo "❌ MERGE BLOCKED: live CI billing evidence differs from the signed operator diagnosis." >&2
@@ -314,8 +329,7 @@ fi
 OPERATOR_CI_BILLING_APPROVED=false
 if [ -n "${CI_BILLING_WAIVER_ARTIFACT:-}" ] &&
   [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ] &&
-  node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
-    --scope operator-ci-billing-override >/dev/null 2>&1; then
+  has_ci_billing_capability; then
   OPERATOR_CI_BILLING_APPROVED=true
   echo "⚠️  [quality] operator-signed CI billing override accepted on a server-enforceable base." >&2
 fi
@@ -454,8 +468,7 @@ if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
     # discipline as the artifact revalidation below: the earlier check
     # authorizes skipping the green-check query, this one authorizes the
     # actual admin merge, and neither trusts a variable computed earlier.
-    node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
-      --scope operator-ci-billing-override >/dev/null 2>&1 || {
+    has_ci_billing_capability || {
       echo "❌ MERGE BLOCKED: CI billing waiver admin merge on a server-enforceable base requires a" >&2
       echo "   currently-valid operator-ci-billing-override capability; none is present immediately before merge." >&2
       exit 1
