@@ -248,6 +248,8 @@ describe("quality merge gates", () => {
     expect(AUTHORIZE).toMatch(/strict_required_status_checks_policy == true/);
     expect(AUTHORIZE).toMatch(/gh api graphql/);
     expect(AUTHORIZE).toMatch(/matchingRefs\(first:100\)/);
+    expect(AUTHORIZE).toMatch(/pageInfo\{hasNextPage\}/);
+    expect(AUTHORIZE).toMatch(/hasNextPage == false/);
   });
 
   it("uses one manifest-bound operation for composed CI billing capability checks", () => {

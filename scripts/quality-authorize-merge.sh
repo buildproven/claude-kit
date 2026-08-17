@@ -254,13 +254,16 @@ if [ "$ATOMIC_BASE_FRESHNESS" != true ]; then
   GRAPHQL_OWNER="${REPOSITORY%%/*}"
   GRAPHQL_NAME="${REPOSITORY#*/}"
   GRAPHQL_RULES="$(gh api graphql \
-    -f 'query=query($owner:String!,$name:String!){repository(owner:$owner,name:$name){branchProtectionRules(first:100){nodes{requiresStrictStatusChecks matchingRefs(first:100){nodes{name}}}}}}' \
+    -f 'query=query($owner:String!,$name:String!){repository(owner:$owner,name:$name){branchProtectionRules(first:100){pageInfo{hasNextPage} nodes{requiresStrictStatusChecks matchingRefs(first:100){pageInfo{hasNextPage} nodes{name}}}}}}' \
     -F "owner=$GRAPHQL_OWNER" -F "name=$GRAPHQL_NAME" 2>/dev/null || true)"
   if printf '%s' "$GRAPHQL_RULES" |
     jq -e --arg branch "$ACTUAL_BASE_NAME" '
-      [.data.repository.branchProtectionRules.nodes[]?
+      (.data.repository.branchProtectionRules.pageInfo.hasNextPage == false)
+      and
+      ([.data.repository.branchProtectionRules.nodes[]?
+        | select(.matchingRefs.pageInfo.hasNextPage == false)
         | select(any(.matchingRefs.nodes[]?.name; . == $branch))]
-      | length == 1 and .[0].requiresStrictStatusChecks == true
+        | length == 1 and .[0].requiresStrictStatusChecks == true)
     ' >/dev/null 2>&1; then
     ATOMIC_BASE_FRESHNESS=true
   fi
