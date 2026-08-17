@@ -2,8 +2,11 @@
 "use strict";
 
 const { spawnSync } = require("node:child_process");
+const crypto = require("node:crypto");
 
 const ACCEPTED_CONCLUSIONS = new Set(["success"]);
+const SECRET_SCAN_RUN_PREFIX = "secret-history-scan:";
+const SECRET_SCAN_WORKFLOW_PATH = ".github/workflows/secret-history-scan.yml";
 
 class GhCommandError extends Error {
   constructor(message, result) {
@@ -61,10 +64,11 @@ function validateRef(value, name) {
   return value;
 }
 
-function runGh(args) {
+function runGh(args, input = undefined) {
   const result = spawnSync("gh", args, {
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
+    input,
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {
@@ -243,7 +247,8 @@ function matchingRuns(runs, requirement) {
     .filter(
       (run) =>
         run.name === requirement.context &&
-        (requirement.appId === null || run.app?.id === requirement.appId),
+        (requirement.appId === null || run.app?.id === requirement.appId) &&
+        (!requirement.externalId || run.external_id === requirement.externalId),
     )
     .sort((left, right) => Number(right.id || 0) - Number(left.id || 0));
 }
@@ -251,6 +256,10 @@ function matchingRuns(runs, requirement) {
 function checkState(runs, requirement) {
   const latest = matchingRuns(runs, requirement)[0];
   if (!latest) return { state: "missing", run: null };
+  return checkRunState(latest);
+}
+
+function checkRunState(latest) {
   if (latest.status !== "completed") return { state: "pending", run: latest };
   return {
     state: ACCEPTED_CONCLUSIONS.has(latest.conclusion) ? "success" : "failed",
@@ -258,7 +267,55 @@ function checkState(runs, requirement) {
   };
 }
 
+function trustedSecretCheckState(
+  repository,
+  runs,
+  requirement,
+  workflowId,
+  base,
+  targetHead,
+) {
+  const latest = matchingRuns(runs, requirement)[0];
+  if (!latest || typeof latest.details_url !== "string") {
+    return { state: "missing", run: null };
+  }
+  let workflowRun;
+  try {
+    workflowRun = workflowRunForCheck(repository, latest);
+  } catch {
+    return { state: "missing", run: null };
+  }
+  const noncePrefix = `${SECRET_SCAN_RUN_PREFIX}${targetHead}:`;
+  const externalId = String(requirement.externalId || "");
+  if (!externalId.startsWith(noncePrefix)) {
+    return { state: "missing", run: null };
+  }
+  const nonce = externalId.slice(noncePrefix.length);
+  if (!/^[0-9a-f]{32}$/.test(nonce)) {
+    return { state: "missing", run: null };
+  }
+  const expectedRunName = `${noncePrefix}${nonce}`;
+  if (
+    (workflowId !== null && workflowRun.workflow_id !== workflowId) ||
+    workflowRun.event !== "repository_dispatch" ||
+    workflowRun.head_branch !== base ||
+    workflowRun.path !== SECRET_SCAN_WORKFLOW_PATH ||
+    workflowRun.display_title !== expectedRunName ||
+    !["queued", "in_progress", "completed"].includes(workflowRun.status)
+  )
+    return { state: "missing", run: null };
+  if (workflowRun.status !== "completed")
+    return { state: "pending", run: latest };
+  if (workflowRun.conclusion !== "success")
+    return { state: "failed", run: latest };
+  return checkRunState(latest);
+}
+
 function workflowIdForRun(repository, run) {
+  return workflowRunForCheck(repository, run).workflow_id;
+}
+
+function workflowRunForCheck(repository, run) {
   const match = String(run.details_url || "").match(/\/actions\/runs\/(\d+)/);
   if (!match) {
     throw new Error(`required check '${run.name}' has no Actions run identity`);
@@ -267,7 +324,7 @@ function workflowIdForRun(repository, run) {
   if (!Number.isInteger(workflowRun.workflow_id)) {
     throw new Error(`required check '${run.name}' has no workflow identity`);
   }
-  return workflowRun.workflow_id;
+  return workflowRun;
 }
 
 function sourceRunForRequirement(
@@ -298,11 +355,7 @@ function sourceRunForRequirement(
   return null;
 }
 
-function dispatchWorkflow(repository, workflowId, ref, inputs = {}) {
-  const inputArgs = Object.entries(inputs).flatMap(([name, value]) => [
-    "-f",
-    `${name}=${value}`,
-  ]);
+function dispatchWorkflow(repository, workflowId, ref) {
   let failure = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
@@ -313,7 +366,6 @@ function dispatchWorkflow(repository, workflowId, ref, inputs = {}) {
         `repos/${repository}/actions/workflows/${workflowId}/dispatches`,
         "-f",
         `ref=${ref}`,
-        ...inputArgs,
       ]);
       return;
     } catch (error) {
@@ -324,30 +376,35 @@ function dispatchWorkflow(repository, workflowId, ref, inputs = {}) {
   throw failure;
 }
 
-function workflowDispatchInputs(requirement, targetHead) {
-  // Secret-history is coordinator-dispatched rather than PR-triggered. Bind
-  // the hosted scan to the exact head that passed local admission; the
-  // workflow fails closed when GitHub resolves a different ref tip.
-  if (requirement.context === "secret-history-scan") {
-    return { head_sha: targetHead };
+function dispatchRepositoryEvent(repository, eventType, payload) {
+  let failure = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      runGh(
+        [
+          "api",
+          "--method",
+          "POST",
+          `repos/${repository}/dispatches`,
+          "--input",
+          "-",
+        ],
+        JSON.stringify({ event_type: eventType, client_payload: payload }),
+      );
+      return;
+    } catch (error) {
+      failure = error;
+      if (attempt < 3) sleep(attempt * 1000);
+    }
   }
-  return {};
-}
-
-function workflowDispatchRef(requirement, base, headRef) {
-  // The secret scanner must execute from the protected default branch. The
-  // reviewed SHA is passed as data and becomes the exact-head check target;
-  // dispatching the PR ref would let the PR control its own scanner.
-  if (requirement.context === "secret-history-scan") return base;
-  return headRef;
+  throw failure;
 }
 
 function dispatchedRunsForHead(repository, headRef, targetHead, workflowIds) {
   const matching = new Map();
-  const encodedRef = encodeURIComponent(headRef);
   for (let page = 1; page <= 100; page += 1) {
     const response = apiJson(
-      `repos/${repository}/actions/runs?branch=${encodedRef}&event=workflow_dispatch&per_page=100&page=${page}`,
+      `repos/${repository}/actions/runs?branch=${encodeURIComponent(headRef)}&event=workflow_dispatch&per_page=100&page=${page}`,
     );
     if (!Array.isArray(response.workflow_runs)) {
       throw new Error("GitHub workflow-runs response is invalid");
@@ -415,8 +472,11 @@ function ensureChecks({
   const dispatchedRequirements = [];
   const dispatchedWorkflowIds = new Set();
   for (const requirement of requirements) {
-    const target = checkState(targetRuns, requirement);
-    if (["pending", "success"].includes(target.state)) continue;
+    const protectedSecret = requirement.context === "secret-history-scan";
+    if (!protectedSecret) {
+      const target = checkState(targetRuns, requirement);
+      if (["pending", "success"].includes(target.state)) continue;
+    }
     const source = sourceRunForRequirement(
       repository,
       sourceHead,
@@ -429,23 +489,37 @@ function ensureChecks({
       );
     }
     const workflowId = workflowIdForRun(repository, source);
-    if (!dispatchedWorkflowIds.has(workflowId)) {
+    const dispatchKey = `${workflowId}:${protectedSecret ? "repository_dispatch" : "workflow_dispatch"}`;
+    let dispatchedRequirement = requirement;
+    if (!dispatchedWorkflowIds.has(dispatchKey)) {
       try {
-        dispatchWorkflow(
-          repository,
-          workflowId,
-          workflowDispatchRef(requirement, base, headRef),
-          workflowDispatchInputs(requirement, targetHead),
-        );
+        if (protectedSecret) {
+          const nonce = crypto.randomBytes(16).toString("hex");
+          dispatchRepositoryEvent(repository, "secret-history-scan", {
+            head_sha: targetHead,
+            nonce,
+          });
+          dispatchedRequirement = {
+            ...requirement,
+            externalId: `secret-history-scan:${targetHead}:${nonce}`,
+          };
+        } else {
+          dispatchWorkflow(repository, workflowId, headRef);
+        }
       } catch (error) {
         targetRuns = checkRuns(repository, targetHead);
-        const refreshed = checkState(targetRuns, requirement);
+        const refreshed = protectedSecret
+          ? { state: "missing" }
+          : checkState(targetRuns, requirement);
         if (!["pending", "success"].includes(refreshed.state)) throw error;
       }
-      dispatchedWorkflowIds.add(workflowId);
+      dispatchedWorkflowIds.add(dispatchKey);
     }
     dispatched.push({ context: requirement.context, workflowId });
-    dispatchedRequirements.push({ requirement, workflowId });
+    dispatchedRequirements.push({
+      requirement: dispatchedRequirement,
+      workflowId,
+    });
   }
   const deferred = [];
   if (dispatched.length > 0) {
@@ -458,17 +532,42 @@ function ensureChecks({
       timeoutSeconds: registrationSeconds,
       intervalSeconds: registrationIntervalSeconds,
     });
-    const missing = dispatchedRequirements.filter(
-      (entry) => checkState(targetRuns, entry.requirement).state === "missing",
+    const missing = dispatchedRequirements.filter((entry) => {
+      const state =
+        entry.requirement.context === "secret-history-scan"
+          ? trustedSecretCheckState(
+              repository,
+              targetRuns,
+              entry.requirement,
+              entry.workflowId,
+              base,
+              targetHead,
+            )
+          : checkState(targetRuns, entry.requirement);
+      return state.state === "missing";
+    });
+    const normalWorkflowIds = new Set(
+      missing
+        .filter((entry) => entry.requirement.context !== "secret-history-scan")
+        .map((entry) => entry.workflowId),
     );
-    const workflowIds = new Set(missing.map((entry) => entry.workflowId));
-    const workflowRuns =
-      workflowIds.size > 0
-        ? dispatchedRunsForHead(repository, headRef, targetHead, workflowIds)
-        : new Map();
-    const unregistered = missing.filter(
-      (entry) => !workflowRuns.has(entry.workflowId),
-    );
+    const workflowRuns = normalWorkflowIds.size
+      ? dispatchedRunsForHead(
+          repository,
+          headRef,
+          targetHead,
+          normalWorkflowIds,
+        )
+      : new Map();
+    const unregistered = missing.filter((entry) => {
+      if (entry.requirement.context === "secret-history-scan") {
+        // Repository-dispatch runs use the default branch metadata. The
+        // target check is the only safe correlation signal; do not accept an
+        // unrelated or merely active dispatch run as registration evidence.
+        return true;
+      }
+      return !workflowRuns.has(entry.workflowId);
+    });
     if (unregistered.length > 0) {
       throw new Error(
         `required checks or their exact-head workflows did not register on stamp ${targetHead} after workflow dispatch: ${unregistered
@@ -510,7 +609,9 @@ function inspectChecks(repository, base, head) {
   const runs = checkRuns(repository, head);
   return requirements.map((requirement) => ({
     ...requirement,
-    ...checkState(runs, requirement),
+    ...(requirement.context === "secret-history-scan"
+      ? trustedSecretCheckState(repository, runs, requirement, null, base, head)
+      : checkState(runs, requirement)),
   }));
 }
 
@@ -658,8 +759,8 @@ module.exports = {
   checkState,
   dispatchedRunsForHead,
   ensureChecks,
-  workflowDispatchRef,
   matchingRuns,
   requiredChecks,
+  trustedSecretCheckState,
   waitForChecks,
 };
