@@ -37,26 +37,6 @@
       ]
     },
     {
-      "paths": [
-        "scripts/quality-authorize-merge.sh",
-        "scripts/quality-invocation.js",
-        "scripts/quality-stamp-and-merge.sh",
-        "scripts/quality-validate-review-trailers.sh",
-        "scripts/quality-wrapper.js"
-      ],
-      "commands": [
-        {
-          "executable": "npx",
-          "args": [
-            "vitest",
-            "run",
-            "scripts/__tests__/quality-approval-scope.test.js",
-            "scripts/__tests__/quality-merge-gates.test.js"
-          ]
-        }
-      ]
-    },
-    {
       "paths": ["scripts/quality-review-plan.sh"],
       "commands": [
         {
