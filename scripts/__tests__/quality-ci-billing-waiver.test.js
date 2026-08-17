@@ -111,6 +111,41 @@ describe("quality CI billing waiver", () => {
     expect(evidence.jobsById[35]).toBeUndefined();
   });
 
+  it("can restrict synthesized evidence to the quality workflow identity", () => {
+    const evidence = synthesizeWorkflowDispatchEvidence(
+      repository,
+      head,
+      [
+        {
+          id: 12,
+          name: "Quality Checks",
+          workflow_id: 77,
+          event: "workflow_dispatch",
+          head_sha: head,
+          status: "completed",
+          conclusion: "failure",
+        },
+        {
+          id: 14,
+          name: "Unrelated manual workflow",
+          workflow_id: 88,
+          event: "workflow_dispatch",
+          head_sha: head,
+          status: "completed",
+          conclusion: "failure",
+        },
+      ],
+      {
+        12: [{ ...job, id: 34, name: "lint-and-format" }],
+        14: [{ ...job, id: 36, name: "lint-and-format" }],
+      },
+      77,
+    );
+    expect(evidence.checks).toHaveLength(1);
+    expect(evidence.checks[0].link).toContain("/runs/12/job/34");
+    expect(evidence.jobsById[36]).toBeUndefined();
+  });
+
   it("rejects evidence tampering that retains the original digest", () => {
     const evidence = classify();
     expect(evidenceDigestValid(evidence)).toBe(true);

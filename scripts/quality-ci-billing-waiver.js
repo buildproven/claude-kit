@@ -14,6 +14,7 @@ const TERMINAL_STATES = new Set([
   "CANCELLED",
   "NEUTRAL",
 ]);
+const DEFAULT_QUALITY_WORKFLOW_PATH = ".github/workflows/quality.yml";
 
 function parseJson(raw, label) {
   try {
@@ -96,6 +97,7 @@ function synthesizeWorkflowDispatchEvidence(
   expectedHead,
   runs,
   jobsByRunId,
+  expectedWorkflowId = null,
 ) {
   const checks = [];
   const jobsById = {};
@@ -103,6 +105,8 @@ function synthesizeWorkflowDispatchEvidence(
     if (
       run?.head_sha !== expectedHead ||
       run?.event !== "workflow_dispatch" ||
+      (expectedWorkflowId !== null &&
+        Number(run?.workflow_id) !== expectedWorkflowId) ||
       run?.status !== "completed" ||
       run?.conclusion !== "failure"
     )
@@ -123,6 +127,32 @@ function synthesizeWorkflowDispatchEvidence(
     }
   }
   return { checks, jobsById };
+}
+
+function configuredQualityWorkflowPath() {
+  const workflowPath =
+    process.env.QUALITY_CI_BILLING_WORKFLOW_PATH ||
+    DEFAULT_QUALITY_WORKFLOW_PATH;
+  if (
+    !workflowPath.startsWith(".github/workflows/") ||
+    workflowPath.endsWith("/")
+  ) {
+    throw new Error(
+      `quality workflow path must be under .github/workflows: ${workflowPath}`,
+    );
+  }
+  return workflowPath;
+}
+
+function configuredQualityWorkflowId() {
+  const raw = process.env.QUALITY_CI_BILLING_WORKFLOW_ID;
+  if (raw === undefined || raw === "") return null;
+  if (!/^[1-9][0-9]*$/.test(raw)) {
+    throw new Error(
+      `QUALITY_CI_BILLING_WORKFLOW_ID must be a positive integer: ${raw}`,
+    );
+  }
+  return Number(raw);
 }
 
 function configuredWaiverUntil() {
@@ -239,20 +269,64 @@ function runGh(args, { allowFailure = false } = {}) {
   return result.stdout;
 }
 
-function listWorkflowDispatchRuns(repository, expectedHead) {
+function qualityWorkflowId(repository) {
+  const configuredId = configuredQualityWorkflowId();
+  if (configuredId !== null) return configuredId;
+  const workflowPath = configuredQualityWorkflowPath();
+  const matches = [];
+  for (let page = 1; page <= 100; page += 1) {
+    const response = parseJson(
+      runGh([
+        "api",
+        `repos/${repository}/actions/workflows?per_page=100&page=${page}`,
+      ]),
+      "GitHub Actions workflows response",
+    );
+    if (!Array.isArray(response.workflows)) {
+      throw new Error("GitHub Actions workflows response is invalid");
+    }
+    matches.push(
+      ...response.workflows.filter(
+        (workflow) => workflow?.path === workflowPath,
+      ),
+    );
+    if (response.workflows.length < 100) break;
+    if (page === 100) {
+      throw new Error("GitHub Actions workflows pagination exceeded 100 pages");
+    }
+  }
+  if (matches.length !== 1 || !Number.isInteger(matches[0]?.id)) {
+    throw new Error(
+      `cannot identify one quality workflow at ${workflowPath}; found ${matches.length}`,
+    );
+  }
+  return matches[0].id;
+}
+
+function listWorkflowDispatchRuns(
+  repository,
+  expectedHead,
+  workflowId = qualityWorkflowId(repository),
+) {
   const runs = [];
   for (let page = 1; page <= 100; page += 1) {
     const response = parseJson(
       runGh([
         "api",
-        `repos/${repository}/actions/runs?head_sha=${expectedHead}&event=workflow_dispatch&per_page=100&page=${page}`,
+        `repos/${repository}/actions/workflows/${workflowId}/runs?head_sha=${expectedHead}&event=workflow_dispatch&per_page=100&page=${page}`,
       ]),
-      "GitHub workflow dispatch runs response",
+      `GitHub quality workflow ${workflowId} dispatch runs response`,
     );
     if (!Array.isArray(response.workflow_runs)) {
-      throw new Error("GitHub workflow dispatch runs response is invalid");
+      throw new Error(
+        `GitHub quality workflow ${workflowId} dispatch runs response is invalid`,
+      );
     }
-    runs.push(...response.workflow_runs);
+    runs.push(
+      ...response.workflow_runs.filter(
+        (run) => Number(run?.workflow_id) === workflowId,
+      ),
+    );
     if (response.workflow_runs.length < 100) return runs;
   }
   throw new Error(
@@ -282,7 +356,8 @@ function listRunJobs(repository, runId) {
 }
 
 function loadWorkflowDispatchEvidence(repository, expectedHead) {
-  const runs = listWorkflowDispatchRuns(repository, expectedHead);
+  const workflowId = qualityWorkflowId(repository);
+  const runs = listWorkflowDispatchRuns(repository, expectedHead, workflowId);
   const jobsByRunId = {};
   for (const run of runs) {
     if (
@@ -299,6 +374,7 @@ function loadWorkflowDispatchEvidence(repository, expectedHead) {
     expectedHead,
     runs,
     jobsByRunId,
+    workflowId,
   );
 }
 
@@ -390,10 +466,12 @@ if (require.main === module) {
 
 module.exports = {
   classifyBillingWaiver,
+  configuredQualityWorkflowPath,
   configuredWaiverUntil,
   evidenceDigestValid,
   evidenceSha256,
   jobIsPreallocationBillingFailure,
   synthesizeWorkflowDispatchEvidence,
   parseJobId,
+  qualityWorkflowId,
 };
