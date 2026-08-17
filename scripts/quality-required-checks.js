@@ -319,21 +319,53 @@ function dispatchWorkflow(repository, workflowId, ref) {
   throw failure;
 }
 
-function dispatchedRunsForHead(repository, headRef, targetHead, workflowIds) {
+function dispatchRepositoryEvent(repository, eventType, payload) {
+  let failure = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      runGh([
+        "api",
+        "--method",
+        "POST",
+        `repos/${repository}/dispatches`,
+        "-f",
+        `event_type=${eventType}`,
+        "-f",
+        `client_payload=${JSON.stringify(payload)}`,
+      ]);
+      return;
+    } catch (error) {
+      failure = error;
+      if (attempt < 3) sleep(attempt * 1000);
+    }
+  }
+  throw failure;
+}
+
+function dispatchedRunsForHead(
+  repository,
+  headRef,
+  targetHead,
+  workflowIds,
+  event = "workflow_dispatch",
+) {
   const matching = new Map();
-  const encodedRef = encodeURIComponent(headRef);
+  const branchQuery =
+    event === "workflow_dispatch"
+      ? `&branch=${encodeURIComponent(headRef)}`
+      : "";
   for (let page = 1; page <= 100; page += 1) {
     const response = apiJson(
-      `repos/${repository}/actions/runs?branch=${encodedRef}&event=workflow_dispatch&per_page=100&page=${page}`,
+      `repos/${repository}/actions/runs?event=${event}${branchQuery}&per_page=100&page=${page}`,
     );
     if (!Array.isArray(response.workflow_runs)) {
       throw new Error("GitHub workflow-runs response is invalid");
     }
     for (const run of response.workflow_runs) {
       if (
-        run.head_sha === targetHead &&
-        run.head_branch === headRef &&
-        run.event === "workflow_dispatch" &&
+        (event === "repository_dispatch" ||
+          (run.head_sha === targetHead && run.head_branch === headRef)) &&
+        run.event === event &&
         workflowIds.has(run.workflow_id) &&
         !matching.has(run.workflow_id)
       ) {
@@ -391,6 +423,7 @@ function ensureChecks({
   const dispatched = [];
   const dispatchedRequirements = [];
   const dispatchedWorkflowIds = new Set();
+  const dispatchEvents = new Map();
   for (const requirement of requirements) {
     const target = checkState(targetRuns, requirement);
     if (["pending", "success"].includes(target.state)) continue;
@@ -408,7 +441,15 @@ function ensureChecks({
     const workflowId = workflowIdForRun(repository, source);
     if (!dispatchedWorkflowIds.has(workflowId)) {
       try {
-        dispatchWorkflow(repository, workflowId, headRef);
+        if (requirement.context === "secret-history-scan") {
+          dispatchRepositoryEvent(repository, "secret-history-scan", {
+            head_sha: targetHead,
+          });
+          dispatchEvents.set(workflowId, "repository_dispatch");
+        } else {
+          dispatchWorkflow(repository, workflowId, headRef);
+          dispatchEvents.set(workflowId, "workflow_dispatch");
+        }
       } catch (error) {
         targetRuns = checkRuns(repository, targetHead);
         const refreshed = checkState(targetRuns, requirement);
@@ -434,10 +475,28 @@ function ensureChecks({
       (entry) => checkState(targetRuns, entry.requirement).state === "missing",
     );
     const workflowIds = new Set(missing.map((entry) => entry.workflowId));
-    const workflowRuns =
-      workflowIds.size > 0
-        ? dispatchedRunsForHead(repository, headRef, targetHead, workflowIds)
-        : new Map();
+    const workflowRuns = new Map();
+    for (const event of new Set(
+      [...workflowIds].map(
+        (workflowId) => dispatchEvents.get(workflowId) || "workflow_dispatch",
+      ),
+    )) {
+      const eventWorkflowIds = new Set(
+        [...workflowIds].filter(
+          (workflowId) =>
+            (dispatchEvents.get(workflowId) || "workflow_dispatch") === event,
+        ),
+      );
+      for (const [workflowId, run] of dispatchedRunsForHead(
+        repository,
+        headRef,
+        targetHead,
+        eventWorkflowIds,
+        event,
+      )) {
+        workflowRuns.set(workflowId, run);
+      }
+    }
     const unregistered = missing.filter(
       (entry) => !workflowRuns.has(entry.workflowId),
     );
