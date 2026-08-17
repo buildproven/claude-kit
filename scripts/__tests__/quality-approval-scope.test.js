@@ -3,8 +3,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
-const { parseApprovalCommand } = require(
+const { assertCiBillingConditions, parseApprovalCommand } = require(
   path.resolve(import.meta.dirname, "..", "quality-wrapper.js"),
+);
+const { assertApprovalPayloadShape } = require(
+  path.resolve(import.meta.dirname, "..", "quality-invocation.js"),
 );
 
 const head = "a".repeat(40);
@@ -85,6 +88,70 @@ describe("quality approve command scope parsing", () => {
       acceptedConditions: ["ci:failed"],
     });
     expect(parsed.argv).not.toContain("--override-ci-billing");
+  });
+
+  it("allows a quality override to compose an exact CI failure", () => {
+    const parsed = parseApprovalCommand([
+      "approve",
+      "--pr",
+      "676",
+      "--head",
+      head,
+      "--override-quality",
+      "--reason",
+      "provider review is exhausted and Actions runners are unavailable",
+      "--ci-failure",
+      "failed",
+      "--accept",
+      "review:provider-exhaustion,ci:failed",
+      "--i-understand-missing-review",
+      "--i-understand-missing-ci",
+    ]);
+    expect(parsed).toMatchObject({
+      scope: "operator-quality-override",
+      ciFailureReason: "failed",
+      acceptedConditions: ["review:provider-exhaustion", "ci:failed"],
+    });
+  });
+
+  it("validates the CI condition inside a composed quality override", () => {
+    const diagnosed = [
+      { id: "review:provider-exhaustion" },
+      { id: "ci:failed" },
+    ];
+    expect(() =>
+      assertCiBillingConditions(
+        "operator-quality-override",
+        "failed",
+        diagnosed,
+        ["review:provider-exhaustion", "ci:failed"],
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertCiBillingConditions(
+        "operator-quality-override",
+        "unavailable",
+        diagnosed,
+        ["review:provider-exhaustion", "ci:failed"],
+      ),
+    ).toThrow(/ci:unavailable/);
+  });
+
+  it("rejects a billing override that omits the CI condition", () => {
+    expect(() =>
+      assertApprovalPayloadShape(
+        {
+          stateRoot: "/tmp/quality-test-state",
+          repo: { githubRepository: "owner/repo" },
+          revisions: { currentHead: head },
+        },
+        {
+          scope: "operator-ci-billing-override",
+          reason: "Actions billing outage",
+          acceptedConditions: ["review:provider-exhaustion"],
+        },
+      ),
+    ).toThrow(/exactly ci:failed/);
   });
 
   it("requires a classified CI failure for the billing override", () => {

@@ -17,6 +17,11 @@ done
   echo "quality-authorize-merge: --manifest is required" >&2
   exit 1
 }
+if [ "$PREFLIGHT" != true ] &&
+  [ "${BS_QUALITY_PROTECTION_RECHECK:-0}" = 1 ]; then
+  echo "❌ MERGE BLOCKED: the protection recheck sentinel is reserved for the internal preflight." >&2
+  exit 1
+fi
 source "$SCRIPT_DIR/quality-repo-lease-pin.sh" || exit 1
 quality_pin_repository_lease "$MANIFEST" || exit 1
 
@@ -36,6 +41,16 @@ if (!evidenceDigestValid(evidence) || evidence.evidenceSha256 !== expected) {
   process.exit(1);
 }
 NODE
+}
+
+# A billing waiver is usable only with a signed CI capability, or with a
+# signed quality override that explicitly accepted ci:failed alongside its
+# other diagnosed conditions. The latter is the only safe composition point:
+# the signed artifact still binds both the review decision and the exact CI
+# outage evidence to this manifest and HEAD.
+has_ci_billing_capability() {
+  node "$SCRIPT_DIR/quality-invocation.js" ci-billing-capability "$MANIFEST" \
+    >/dev/null 2>&1
 }
 
 node "$SCRIPT_DIR/quality-invocation.js" review-authorization "$MANIFEST" >/dev/null || exit 1
@@ -176,8 +191,7 @@ else
       echo "❌ MERGE BLOCKED: CI billing waiver no longer matches live exact-HEAD evidence." >&2
       exit 1
     }
-    if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
-      --scope operator-ci-billing-override >/dev/null 2>&1; then
+    if has_ci_billing_capability; then
       SIGNED_WAIVER_DIGEST="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" approval.ciBillingEvidenceSha256)"
       verify_ci_billing_digest "$CI_BILLING_WAIVER_ARTIFACT" "$SIGNED_WAIVER_DIGEST" || {
         echo "❌ MERGE BLOCKED: live CI billing evidence differs from the signed operator diagnosis." >&2
@@ -193,10 +207,34 @@ git merge-base --is-ancestor "$EXPECTED_BASE_OID" "$EXPECTED_HEAD" || {
 }
 REPOSITORY="$EXPECTED_REPOSITORY"
 ATOMIC_BASE_FRESHNESS=false
+ADMIN_BASE_FRESHNESS=false
+ATOMIC_BASE_SOURCE=""
+ADMIN_BASE_SOURCE=""
+REPOSITORY_ADMIN_PERMISSION=false
+CURRENT_USER_ID=""
+CURRENT_USER_LOGIN=""
+ORGANIZATION_ADMIN_PERMISSION=false
 ENCODED_BASE_NAME="$(jq -rn --arg value "$ACTUAL_BASE_NAME" '$value | @uri')" || exit 1
+if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
+  REPOSITORY_ADMIN_PERMISSION="$(gh api "repos/$REPOSITORY" \
+    --jq '.permissions.admin' 2>/dev/null || true)"
+  CURRENT_USER_ID="$(gh api user --jq '.id' 2>/dev/null || true)"
+  CURRENT_USER_LOGIN="$(gh api user --jq '.login' 2>/dev/null || true)"
+  ORGANIZATION_ADMIN_PERMISSION="$(gh api \
+    "orgs/${REPOSITORY%%/*}/memberships/$CURRENT_USER_LOGIN" \
+    --jq '.role == "admin"' 2>/dev/null || true)"
+fi
 if [ "$(gh api "repos/$REPOSITORY/branches/$ENCODED_BASE_NAME/protection/required_status_checks" \
   --jq '.strict' 2>/dev/null || true)" = true ]; then
   ATOMIC_BASE_FRESHNESS=true
+  ATOMIC_BASE_SOURCE=classic
+fi
+if [ "${CI_BILLING_WAIVED:-false}" = true ] &&
+  [ "$(gh api "repos/$REPOSITORY/branches/$ENCODED_BASE_NAME/protection" \
+    --jq '.enforce_admins.enabled' 2>/dev/null || true)" = false ] &&
+  [ "$REPOSITORY_ADMIN_PERMISSION" = true ]; then
+  ADMIN_BASE_FRESHNESS=true
+  ADMIN_BASE_SOURCE=classic
 fi
 # Repos whose plan cannot enforce strict checks (private, no GitHub Pro) can
 # never satisfy the check above, so --merge is unsatisfiable there and operators
@@ -234,6 +272,129 @@ if EFFECTIVE_RULES="$(gh api \
       )
     ' >/dev/null; then
     ATOMIC_BASE_FRESHNESS=true
+    ATOMIC_BASE_SOURCE=ruleset
+  fi
+fi
+if [ "${CI_BILLING_WAIVED:-false}" = true ] &&
+  [ "$ATOMIC_BASE_SOURCE" = ruleset ]; then
+  # The effective-rules response identifies the strict status-check rulesets
+  # that supply freshness for this concrete branch. Fetch each complete
+  # ruleset before allowing an admin merge and require a bypass actor that
+  # matches the authenticated operator. Unrelated rulesets do not authorize
+  # or deny this specific status-check bypass. An absent or hidden
+  # bypass_actors field is not authorization.
+  RULESET_ADMIN_FRESHNESS=true
+  RULESET_IDS="$(printf '%s' "$EFFECTIVE_RULES" |
+    jq -r '
+      .[]?
+      | select(.type == "required_status_checks")
+      | select(.parameters.strict_required_status_checks_policy == true)
+      | .ruleset_id // empty
+    ' | sort -u)"
+  [ -n "$RULESET_IDS" ] || RULESET_ADMIN_FRESHNESS=false
+  while IFS= read -r RULESET_ID; do
+    [ -n "$RULESET_ID" ] || continue
+    RULESET_DETAIL="$(gh api \
+      "repos/$REPOSITORY/rulesets/$RULESET_ID?includes_parents=true" \
+      2>/dev/null || true)"
+    AUTHORIZED_TEAM_ACTOR_IDS_JSON='[]'
+    TEAM_ACTOR_IDS="$(printf '%s' "$RULESET_DETAIL" |
+      jq -r '.bypass_actors[]? | select(.actor_type == "Team") | .actor_id | tostring' |
+      sort -u)"
+    if [ -n "$TEAM_ACTOR_IDS" ] && [ -n "$CURRENT_USER_LOGIN" ]; then
+      ORGANIZATION="${REPOSITORY%%/*}"
+      TEAM_INDEX="$(gh api --paginate \
+        "orgs/$ORGANIZATION/teams?per_page=100" \
+        --jq '.[] | [(.id | tostring), .slug] | @tsv' 2>/dev/null || true)"
+      while IFS= read -r TEAM_ACTOR_ID; do
+        [ -n "$TEAM_ACTOR_ID" ] || continue
+        TEAM_SLUG="$(printf '%s\n' "$TEAM_INDEX" |
+          awk -F '\t' -v actor_id "$TEAM_ACTOR_ID" '$1 == actor_id { print $2; exit }')"
+        [ -n "$TEAM_SLUG" ] || continue
+        if [ "$(gh api \
+          "orgs/$ORGANIZATION/teams/$TEAM_SLUG/memberships/$CURRENT_USER_LOGIN" \
+          --jq '.state == "active"' 2>/dev/null || true)" = true ]; then
+          AUTHORIZED_TEAM_ACTOR_IDS_JSON="$(printf '%s' "$AUTHORIZED_TEAM_ACTOR_IDS_JSON" |
+            jq -c --arg actor_id "$TEAM_ACTOR_ID" '. + [$actor_id]')"
+        fi
+      done <<EOF
+$TEAM_ACTOR_IDS
+EOF
+    fi
+    if ! printf '%s' "$EFFECTIVE_RULES" |
+      jq -e --arg ruleset_id "$RULESET_ID" '
+        any(.[]?;
+          (.ruleset_id | tostring) == $ruleset_id and
+          .type == "required_status_checks" and
+          .parameters.strict_required_status_checks_policy == true
+        )
+      ' >/dev/null 2>&1 || ! printf '%s' "$RULESET_DETAIL" |
+      jq -e \
+        --arg user_id "$CURRENT_USER_ID" \
+        --arg admin "$REPOSITORY_ADMIN_PERMISSION" \
+        --arg org_admin "$ORGANIZATION_ADMIN_PERMISSION" \
+        --argjson authorized_team_actor_ids "$AUTHORIZED_TEAM_ACTOR_IDS_JSON" '
+        .enforcement == "active" and
+        (.bypass_actors | type == "array") and
+        any(.bypass_actors[]?;
+          (.bypass_mode == "always" or .bypass_mode == "pull_request" or .bypass_mode == "exempt") and
+          ((.actor_type == "OrganizationAdmin" and $org_admin == "true") or
+           (.actor_type == "RepositoryRole" and (.actor_id | tostring) == "5" and $admin == "true") or
+           (.actor_type == "User" and (.actor_id | tostring) == $user_id) or
+           (.actor_type == "Team" and
+             ((.actor_id | tostring) as $actor_id |
+               any($authorized_team_actor_ids[]?; tostring == $actor_id))))
+        )
+      ' >/dev/null 2>&1; then
+      RULESET_ADMIN_FRESHNESS=false
+      break
+    fi
+  done <<EOF
+$RULESET_IDS
+EOF
+  if [ "$RULESET_ADMIN_FRESHNESS" = true ]; then
+    ADMIN_BASE_FRESHNESS=true
+    ADMIN_BASE_SOURCE=ruleset
+  fi
+fi
+# GitHub's classic protection and effective-rules REST endpoints can be
+# unavailable while the GraphQL branch-protection view remains healthy. Use
+# that independent, server-owned view as a read-only confirmation of strict
+# freshness. The branch is accepted only when the rule itself reports strict
+# checks and GitHub says it matches this concrete base ref.
+if [ "$ATOMIC_BASE_FRESHNESS" != true ]; then
+  GRAPHQL_OWNER="${REPOSITORY%%/*}"
+  GRAPHQL_NAME="${REPOSITORY#*/}"
+  GRAPHQL_RULES="$(gh api graphql \
+    -f 'query=query($owner:String!,$name:String!){repository(owner:$owner,name:$name){branchProtectionRules(first:100){pageInfo{hasNextPage} nodes{requiresStrictStatusChecks isAdminEnforced matchingRefs(first:100){pageInfo{hasNextPage} nodes{name}}}}}}' \
+    -F "owner=$GRAPHQL_OWNER" -F "name=$GRAPHQL_NAME" 2>/dev/null || true)"
+  if printf '%s' "$GRAPHQL_RULES" |
+    jq -e --arg branch "$ACTUAL_BASE_NAME" '
+      (.data.repository.branchProtectionRules.pageInfo.hasNextPage == false)
+      and
+      ([.data.repository.branchProtectionRules.nodes[]?
+        | select(.matchingRefs.pageInfo.hasNextPage == false)
+        | select(any(.matchingRefs.nodes[]?.name; . == $branch))]
+        | length == 1 and .[0].requiresStrictStatusChecks == true)
+    ' >/dev/null 2>&1; then
+    ATOMIC_BASE_FRESHNESS=true
+    ATOMIC_BASE_SOURCE=graphql
+  fi
+  if [ "${CI_BILLING_WAIVED:-false}" = true ] &&
+    printf '%s' "$GRAPHQL_RULES" |
+      jq -e --arg branch "$ACTUAL_BASE_NAME" '
+        (.data.repository.branchProtectionRules.pageInfo.hasNextPage == false)
+        and
+        ([.data.repository.branchProtectionRules.nodes[]?
+          | select(.matchingRefs.pageInfo.hasNextPage == false)
+          | select(any(.matchingRefs.nodes[]?.name; . == $branch))]
+          | length == 1 and .[0].requiresStrictStatusChecks == true
+          and .[0].isAdminEnforced == false)
+      ' >/dev/null 2>&1; then
+    if [ "$REPOSITORY_ADMIN_PERMISSION" = true ]; then
+      ADMIN_BASE_FRESHNESS=true
+      ADMIN_BASE_SOURCE=graphql
+    fi
   fi
 fi
 # Last resort, and only after BOTH classic protection and effective rulesets have
@@ -314,8 +475,7 @@ fi
 OPERATOR_CI_BILLING_APPROVED=false
 if [ -n "${CI_BILLING_WAIVER_ARTIFACT:-}" ] &&
   [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ] &&
-  node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
-    --scope operator-ci-billing-override >/dev/null 2>&1; then
+  has_ci_billing_capability; then
   OPERATOR_CI_BILLING_APPROVED=true
   echo "⚠️  [quality] operator-signed CI billing override accepted on a server-enforceable base." >&2
 fi
@@ -327,6 +487,15 @@ if [ -n "${CI_BILLING_WAIVER_ARTIFACT:-}" ] &&
   echo "   Refusing an admin merge that could bypass required reviews, status checks, or strict base freshness." >&2
   echo "   To authorize: BREAK_GLASS_APPROVED=true BREAK_GLASS_APPROVER=<you> \\" >&2
   echo "     node quality-wrapper.js approve --pr $PR --head <exact-head-sha> --override-ci-billing" >&2
+  exit 1
+fi
+if [ -n "${CI_BILLING_WAIVER_ARTIFACT:-}" ] &&
+  [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ] &&
+  { [ "$ADMIN_BASE_FRESHNESS" != true ] ||
+    [ -z "$ATOMIC_BASE_SOURCE" ] ||
+    [ "$ADMIN_BASE_SOURCE" != "$ATOMIC_BASE_SOURCE" ]; }; then
+  echo "❌ MERGE BLOCKED: CI billing waiver admin merge requires a current authorized bypass actor." >&2
+  echo "   GitHub did not prove that this authenticated operator can bypass the selected strict rule." >&2
   exit 1
 fi
 TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"
@@ -450,12 +619,17 @@ FINAL_BASE_OID="$(printf '%s' "$FINAL_BASE_LS" | awk 'NR==1 {print $1}')"
 LEASE_ADMIN=false
 if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
   if [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ]; then
+    { [ "$ADMIN_BASE_FRESHNESS" = true ] &&
+      [ -n "$ATOMIC_BASE_SOURCE" ] &&
+      [ "$ADMIN_BASE_SOURCE" = "$ATOMIC_BASE_SOURCE" ]; } || {
+      echo "❌ MERGE BLOCKED: CI billing waiver admin merge requires a current authorized bypass actor." >&2
+      exit 1
+    }
     # Revalidate the operator scope immediately before --admin, same
     # discipline as the artifact revalidation below: the earlier check
     # authorizes skipping the green-check query, this one authorizes the
     # actual admin merge, and neither trusts a variable computed earlier.
-    node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
-      --scope operator-ci-billing-override >/dev/null 2>&1 || {
+    has_ci_billing_capability || {
       echo "❌ MERGE BLOCKED: CI billing waiver admin merge on a server-enforceable base requires a" >&2
       echo "   currently-valid operator-ci-billing-override capability; none is present immediately before merge." >&2
       exit 1
@@ -477,6 +651,19 @@ if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
   fi
   LEASE_ADMIN=true
   echo "⚠️  [quality] using admin merge only for verified GitHub Actions billing preallocation failures." >&2
+fi
+if [ "${CI_BILLING_WAIVED:-false}" = true ] &&
+  [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ] &&
+  [ "${BS_QUALITY_PROTECTION_RECHECK:-0}" != 1 ]; then
+  # Re-read the same server-owned protection source immediately before the
+  # lease performs the administrator merge. The guard prevents the preflight
+  # child from recursing while preserving the final source/equality checks.
+  BS_QUALITY_PROTECTION_RECHECK=1 \
+    bash "$SCRIPT_DIR/quality-authorize-merge.sh" --manifest "$MANIFEST" --preflight \
+    >/dev/null || {
+    echo "❌ MERGE BLOCKED: administrator protection changed or could not be revalidated immediately before merge." >&2
+    exit 1
+  }
 fi
 if node "$SCRIPT_DIR/quality-repo-lease.js" merge \
   --manifest "$MANIFEST" \

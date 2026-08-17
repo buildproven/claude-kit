@@ -202,6 +202,71 @@ esac
     }
   });
 
+  it("uses complete GraphQL branch protection when REST discovery is unavailable", () => {
+    const originalPath = process.env.PATH;
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "quality-graphql-rules-"),
+    );
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *protection/required_status_checks*)
+    echo '{"message":"service unavailable"}' >&2
+    exit 1
+    ;;
+  *rules/branches/main*) printf '%s\\n' '[]' ;;
+  *graphql*)
+    printf '%s\\n' '{"data":{"repository":{"branchProtectionRules":{"pageInfo":{"hasNextPage":false},"nodes":[{"requiredStatusChecks":[{"context":"quality","app":{"databaseId":15368}}],"matchingRefs":{"pageInfo":{"hasNextPage":false},"nodes":[{"name":"main"}]}}]}}}}'
+    ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath}`;
+    try {
+      expect(requiredChecks("owner/repo", "main")).toEqual([
+        { context: "quality", appId: 15368 },
+      ]);
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it("keeps effective ruleset checks when GraphQL proves no classic rule", () => {
+    const originalPath = process.env.PATH;
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "quality-graphql-empty-"),
+    );
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *protection/required_status_checks*) exit 1 ;;
+  *rules/branches/main*) printf '%s\\n' '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"security","integration_id":15368}]}}]' ;;
+  *graphql*) printf '%s\\n' '{"data":{"repository":{"branchProtectionRules":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}' ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath}`;
+    try {
+      expect(requiredChecks("owner/repo", "main")).toEqual([
+        { context: "security", appId: 15368 },
+      ]);
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
   it("paginates exact-head check runs through GitHub total_count", () => {
     const originalPath = process.env.PATH;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));

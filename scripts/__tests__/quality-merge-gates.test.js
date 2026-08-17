@@ -246,6 +246,49 @@ describe("quality merge gates", () => {
     expect(AUTHORIZE).not.toMatch(/rulesets\?includes_parents/);
     expect(AUTHORIZE).not.toMatch(/conditions\.ref_name/);
     expect(AUTHORIZE).toMatch(/strict_required_status_checks_policy == true/);
+    expect(AUTHORIZE).toMatch(/gh api graphql/);
+    expect(AUTHORIZE).toMatch(/matchingRefs\(first:100\)/);
+    expect(AUTHORIZE).toMatch(/pageInfo\{hasNextPage\}/);
+    expect(AUTHORIZE).toMatch(/hasNextPage == false/);
+    expect(AUTHORIZE).toMatch(/isAdminEnforced/);
+    expect(AUTHORIZE).toMatch(/ADMIN_BASE_FRESHNESS/);
+    expect(AUTHORIZE).toMatch(/ATOMIC_BASE_SOURCE/);
+    expect(AUTHORIZE).toMatch(/ADMIN_BASE_SOURCE/);
+    expect(AUTHORIZE).toMatch(/ruleset_id/);
+    expect(AUTHORIZE).toMatch(/bypass_actors/);
+    expect(AUTHORIZE).toMatch(/BS_QUALITY_PROTECTION_RECHECK/);
+    expect(AUTHORIZE).toMatch(/REPOSITORY_ADMIN_PERMISSION/);
+    expect(AUTHORIZE).toMatch(/CURRENT_USER_ID/);
+    expect(AUTHORIZE).toMatch(/ORGANIZATION_ADMIN_PERMISSION/);
+    expect(AUTHORIZE).toMatch(/RepositoryRole/);
+    expect(AUTHORIZE).toMatch(/actor_type == "Team"/);
+    expect(AUTHORIZE).toMatch(/orgs\/\$ORGANIZATION\/teams/);
+    expect(AUTHORIZE).toMatch(/memberships\/\$CURRENT_USER_LOGIN/);
+    expect(AUTHORIZE).toMatch(/AUTHORIZED_TEAM_ACTOR_IDS_JSON/);
+    expect(AUTHORIZE).toMatch(
+      /select\(\.type == "required_status_checks"\)[\s\S]*strict_required_status_checks_policy/,
+    );
+    expect(AUTHORIZE).toMatch(
+      /REPOSITORY_ADMIN_PERMISSION" = true[\s\S]*ADMIN_BASE_SOURCE=graphql/,
+    );
+    expect(AUTHORIZE).toMatch(
+      /PREFLIGHT[\s\S]*BS_QUALITY_PROTECTION_RECHECK[\s\S]*reserved for the internal preflight/,
+    );
+  });
+
+  it("uses one manifest-bound operation for composed CI billing capability checks", () => {
+    expect(AUTHORIZE).toMatch(
+      /quality-invocation\.js" ci-billing-capability "\$MANIFEST/,
+    );
+    expect(STAMP_AND_MERGE).toMatch(
+      /quality-invocation\.js" ci-billing-capability "\$MANIFEST/,
+    );
+    expect(VALIDATOR).toMatch(
+      /quality-invocation\.js" ci-billing-capability "\$MANIFEST/,
+    );
+    expect(AUTHORIZE).not.toMatch(
+      /field "\$MANIFEST"[\s\S]*acceptedConditions/,
+    );
   });
 
   it("requires approval only for an explicit human-required policy during preflight", () => {

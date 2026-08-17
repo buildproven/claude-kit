@@ -2841,6 +2841,19 @@ function approvalValid(manifest) {
   }
 }
 
+function ciBillingCapabilityValid(manifest) {
+  if (!approvalValid(manifest)) return false;
+  const scope = manifest.approval?.scope;
+  const conditions = manifest.approval?.acceptedConditions;
+  if (!Array.isArray(conditions)) return false;
+  if (scope === "operator-ci-billing-override") {
+    return conditions.length === 1 && conditions[0] === "ci:failed";
+  }
+  return (
+    scope === "operator-quality-override" && conditions.includes("ci:failed")
+  );
+}
+
 function validateApprovalPayload(payload) {
   const issuedAt = Date.parse(payload?.issuedAt);
   const expiresAt = Date.parse(payload?.expiresAt);
@@ -2992,15 +3005,24 @@ function assertApprovalPayloadShape(manifest, payload) {
       "operator override capability is missing accepted condition ids",
     );
   }
+  const hasCiBillingCondition =
+    payload.acceptedConditions.includes("ci:failed");
   if (payload.scope === "operator-ci-billing-override") {
     if (
-      !/^ci:failed$/.test(payload.acceptedConditions[0]) ||
-      payload.acceptedConditions.length !== 1
+      payload.acceptedConditions.length !== 1 ||
+      payload.acceptedConditions[0] !== "ci:failed"
     ) {
       throw new Error(
         "CI billing override capability must accept exactly ci:failed",
       );
     }
+  } else if (
+    hasCiBillingCondition &&
+    payload.scope !== "operator-quality-override"
+  ) {
+    throw new Error("CI billing condition requires an operator override scope");
+  }
+  if (hasCiBillingCondition) {
     if (!/^[a-f0-9]{64}$/.test(payload.ciBillingEvidenceSha256 || "")) {
       throw new Error(
         "CI billing override capability is missing evidence binding",
@@ -5908,6 +5930,9 @@ const COMMANDS = {
   "approval-valid": ({ manifest }) => {
     process.exitCode = approvalValid(manifest, manifest.repo.realpath) ? 0 : 1;
   },
+  "ci-billing-capability": ({ manifest }) => {
+    process.exitCode = ciBillingCapabilityValid(manifest) ? 0 : 1;
+  },
   // Scope is intentionally checked separately from validity: a capability
   // signed for one scope (e.g. operator-quality-override) must never satisfy
   // a check gated on a different scope (e.g. operator-ci-billing-override),
@@ -6285,7 +6310,9 @@ function main() {
 module.exports = {
   SCHEMA_VERSION,
   advanceHead,
+  assertApprovalPayloadShape,
   approvalValid,
+  ciBillingCapabilityValid,
   armApprovalChallenge,
   attachApproval,
   authorizeMutationAttempt,

@@ -227,6 +227,96 @@ done < <(
     '
 )
 
+# Prefer candidates with a conventional sibling test. A source file without
+# one falls back to the repository test command, which can be a full suite;
+# trying it first can consume the entire mutation budget before a nearby
+# behavioral test has a chance to prove the revert. This is only an ordering
+# optimization: every candidate remains eligible and the red-capable proof
+# still requires baseline pass plus controlled-revert failure.
+is_recursive_mutation_target() {
+  case "$1" in
+    */quality-mutation-check.sh) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+candidate_has_sibling_test() {
+  local candidate="$1" directory stem sibling
+  is_recursive_mutation_target "$candidate" && return 1
+  directory="$(dirname "$candidate")"
+  stem="$(basename "$candidate")"
+  stem="${stem%.*}"
+  for sibling in \
+    "$directory/__tests__/$stem.test.js" \
+    "$directory/__tests__/$stem.test.ts" \
+    "$directory/$stem.test.js" \
+    "$directory/$stem.test.ts"; do
+    [ -f "$ROOT/$sibling" ] && return 0
+  done
+  return 1
+}
+
+candidate_has_planned_sibling_test() {
+  local candidate="$1" directory stem sibling
+  is_recursive_mutation_target "$candidate" && return 1
+  directory="$(dirname "$candidate")"
+  stem="$(basename "$candidate")"
+  stem="${stem%.*}"
+  for sibling in \
+    "$directory/__tests__/$stem.test.js" \
+    "$directory/__tests__/$stem.test.ts" \
+    "$directory/$stem.test.js" \
+    "$directory/$stem.test.ts"; do
+    [ -f "$ROOT/$sibling" ] || continue
+    printf '%s' "$TEST_PLAN" | jq -e --arg sibling "$sibling" \
+      '[.commands[]?.args[]?] | index($sibling) != null' >/dev/null 2>&1 && return 0
+  done
+  return 1
+}
+
+candidate_has_mapped_test() {
+  local candidate="$1"
+  is_recursive_mutation_target "$candidate" && return 1
+  [ -f "$ROOT/.buildproven/test-impact.json" ] || return 1
+  jq -e --arg candidate "$candidate" \
+    '.mappings[]? | select((.paths // []) | index($candidate)) | .commands[]? | (.args // []) | any(.[]; test("(^|/)(test|tests|spec|__tests__)/|\\.(test|spec)\\.(js|ts|jsx|tsx)$"))' \
+    "$ROOT/.buildproven/test-impact.json" >/dev/null 2>&1
+}
+
+FILTERED_CANDIDATES=()
+for CANDIDATE in "${CANDIDATES[@]}"; do
+  is_recursive_mutation_target "$CANDIDATE" ||
+    FILTERED_CANDIDATES+=("$CANDIDATE")
+done
+CANDIDATES=("${FILTERED_CANDIDATES[@]}")
+
+if [ "${#CANDIDATES[@]}" -gt 1 ]; then
+  ORDERED_CANDIDATES=()
+  for PRIORITY in mapped-test planned-sibling sibling fallback; do
+    for CANDIDATE in "${CANDIDATES[@]}"; do
+      HAS_SIBLING=false
+      candidate_has_sibling_test "$CANDIDATE" && HAS_SIBLING=true
+      HAS_PLANNED_SIBLING=false
+      candidate_has_planned_sibling_test "$CANDIDATE" && HAS_PLANNED_SIBLING=true
+      HAS_MAPPED_TEST=false
+      candidate_has_mapped_test "$CANDIDATE" && HAS_MAPPED_TEST=true
+      if [ "$PRIORITY" = mapped-test ] && [ "$HAS_MAPPED_TEST" = true ]; then
+        ORDERED_CANDIDATES+=("$CANDIDATE")
+      elif [ "$PRIORITY" = planned-sibling ] && [ "$HAS_PLANNED_SIBLING" = true ] &&
+        [ "$HAS_MAPPED_TEST" = false ]; then
+        ORDERED_CANDIDATES+=("$CANDIDATE")
+      elif [ "$PRIORITY" = sibling ] && [ "$HAS_SIBLING" = true ] &&
+        [ "$HAS_PLANNED_SIBLING" = false ] && [ "$HAS_MAPPED_TEST" = false ]; then
+        ORDERED_CANDIDATES+=("$CANDIDATE")
+      elif [ "$PRIORITY" = fallback ] && [ "$HAS_SIBLING" = false ] &&
+        [ "$HAS_PLANNED_SIBLING" = false ] && [ "$HAS_MAPPED_TEST" = false ]; then
+        ORDERED_CANDIDATES+=("$CANDIDATE")
+      fi
+    done
+  done
+  CANDIDATES=("${ORDERED_CANDIDATES[@]}")
+fi
+
 if [ "${#CANDIDATES[@]}" -eq 0 ]; then
   DIFF_RAW="$(git -C "$ROOT" diff --raw --diff-filter=AM "$BASE..$HEAD" --)"
   # `grep -c .` exits 1 on zero matches; `|| true` keeps an empty $DIFF_RAW

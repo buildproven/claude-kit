@@ -49,8 +49,8 @@ if [ -z "$QUALITY_TRAILER" ]; then
   if [ -n "$MANIFEST" ]; then
     if { [ "${QUALITY_LOCAL_REVIEW:-false}" = true ] ||
       { [ "${QUALITY_CI_BILLING_LOCAL_REVIEW:-false}" = true ] &&
-        node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
-          --scope operator-ci-billing-override >/dev/null 2>&1; }; }; then
+        node "$SCRIPT_DIR/quality-invocation.js" ci-billing-capability "$MANIFEST" \
+          >/dev/null 2>&1; }; }; then
       LOCAL_ARTIFACT="${QUALITY_LOCAL_REVIEW_ARTIFACT:-}"
       [ -n "$LOCAL_ARTIFACT" ] || {
         echo "signed local review evidence artifact is required" >&2

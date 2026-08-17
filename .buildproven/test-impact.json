@@ -37,6 +37,19 @@
       ]
     },
     {
+      "paths": ["scripts/quality-required-checks.js"],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/quality-required-checks.test.js"
+          ]
+        }
+      ]
+    },
+    {
       "paths": ["scripts/quality-review-plan.sh"],
       "commands": [
         {
@@ -63,6 +76,19 @@
             "run",
             "scripts/__tests__/quality-merge-gates.test.js",
             "scripts/__tests__/quality-review-check.test.js"
+          ]
+        }
+      ]
+    },
+    {
+      "paths": ["scripts/quality-wrapper.js"],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/quality-approval-scope.test.js"
           ]
         }
       ]

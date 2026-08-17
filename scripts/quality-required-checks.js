@@ -319,6 +319,70 @@ function rulesetRequirements(effectiveRules) {
   return requirements;
 }
 
+function graphqlRequirements(repository, base) {
+  const separator = repository.indexOf("/");
+  const owner = repository.slice(0, separator);
+  const name = repository.slice(separator + 1);
+  const query =
+    "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){" +
+    "branchProtectionRules(first:100){pageInfo{hasNextPage}nodes{" +
+    "requiredStatusChecks{context app{databaseId}} matchingRefs(first:100){pageInfo{hasNextPage}" +
+    "nodes{name}}}}}}";
+  let response;
+  try {
+    response = JSON.parse(
+      runGh([
+        "api",
+        "graphql",
+        "-f",
+        `query=${query}`,
+        "-F",
+        `owner=${owner}`,
+        "-F",
+        `name=${name}`,
+      ]),
+    );
+  } catch (error) {
+    throw new Error("GitHub GraphQL required-check discovery failed", {
+      cause: error,
+    });
+  }
+  const protection = response?.data?.repository?.branchProtectionRules;
+  if (!protection || protection.pageInfo?.hasNextPage !== false) {
+    throw new Error(
+      "GitHub GraphQL required-check discovery was incomplete or unavailable",
+    );
+  }
+  const matching = (protection.nodes || []).filter(
+    (rule) =>
+      rule?.matchingRefs?.pageInfo?.hasNextPage === false &&
+      Array.isArray(rule.matchingRefs.nodes) &&
+      rule.matchingRefs.nodes.some((ref) => ref?.name === base),
+  );
+  if (matching.length > 1) {
+    throw new Error(
+      "GitHub GraphQL required-check discovery found multiple matching branch rules",
+    );
+  }
+  if (matching.length === 0) return [];
+  const checks = matching[0].requiredStatusChecks;
+  if (!Array.isArray(checks)) {
+    throw new Error(
+      "GitHub GraphQL required-check discovery returned invalid check contexts",
+    );
+  }
+  const requirements = [];
+  for (const check of checks) {
+    if (typeof check?.context !== "string" || !check.context) {
+      throw new Error(
+        "GitHub GraphQL required-check discovery returned an invalid check",
+      );
+    }
+    addRequirement(requirements, check.context, check.app?.databaseId ?? null);
+  }
+  return requirements;
+}
+
 function paginatedArray(path, label) {
   const values = [];
   const separator = path.includes("?") ? "&" : "?";
@@ -335,19 +399,53 @@ function paginatedArray(path, label) {
 
 function requiredChecks(repository, base) {
   const encodedBase = encodeURIComponent(base);
-  const protection = optionalApiJson(
-    `repos/${repository}/branches/${encodedBase}/protection/required_status_checks`,
-  );
-  const effectiveRules = paginatedArray(
-    `repos/${repository}/rules/branches/${encodedBase}`,
-    "effective-rules",
-  );
+  let protection = null;
+  let protectionError = null;
+  try {
+    protection = optionalApiJson(
+      `repos/${repository}/branches/${encodedBase}/protection/required_status_checks`,
+    );
+  } catch (error) {
+    protectionError = error;
+  }
+  let effectiveRules = null;
+  let effectiveRulesError = null;
+  try {
+    effectiveRules = paginatedArray(
+      `repos/${repository}/rules/branches/${encodedBase}`,
+      "effective-rules",
+    );
+  } catch (error) {
+    effectiveRulesError = error;
+  }
   const requirements = classicRequirements(protection);
   for (const requirement of rulesetRequirements(effectiveRules)) {
     addRequirement(requirements, requirement.context, requirement.appId);
   }
+  if (effectiveRulesError) {
+    throw effectiveRulesError;
+  }
+  if (protectionError || (requirements.length === 0 && protection === null)) {
+    let graphql;
+    try {
+      graphql = graphqlRequirements(repository, base);
+    } catch (error) {
+      // Preserve the first authoritative REST failure when the independent
+      // fallback is also unavailable. Callers need the original status (for
+      // example, rate limiting or a provider outage) to choose a safe retry.
+      throw protectionError || effectiveRulesError || error;
+    }
+    for (const requirement of graphql) {
+      addRequirement(requirements, requirement.context, requirement.appId);
+    }
+    if (graphql.length === 0 && protectionError && requirements.length === 0) {
+      throw protectionError || effectiveRulesError;
+    }
+  }
   if (requirements.length === 0) {
-    throw new Error("protected base has no required status checks");
+    throw new Error(
+      "protected base has no required status checks or its protection could not be read",
+    );
   }
   return requirements;
 }
@@ -1000,6 +1098,7 @@ module.exports = {
   ensureChecks,
   matchingRuns,
   requiredChecks,
+  graphqlRequirements,
   trustedSecretCheckState,
   waitForChecks,
 };
