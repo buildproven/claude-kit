@@ -134,14 +134,6 @@ function dispatchClaimDirectory() {
   return fs.realpathSync(directory);
 }
 
-function parseApiJson(raw, label) {
-  try {
-    return JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`${label} is not valid JSON`, { cause: error });
-  }
-}
-
 function fsyncDirectory(directory) {
   const descriptor = fs.openSync(directory, "r");
   try {
@@ -201,34 +193,41 @@ function claimDispatchNonce({ repository, eventType, head, base, nonce }) {
 }
 
 function claimRemoteDispatchNonce(repository, eventType, head, externalId) {
-  const claimName = `dispatch-authorization:${eventType}`;
-  const existing = checkRuns(repository, head).find(
-    (run) => run.name === claimName && run.external_id === externalId,
-  );
-  if (existing)
-    throw new Error(
-      `dispatch authorization nonce has already been claimed remotely: ${externalId}`,
-    );
-  const response = parseApiJson(
+  // GitHub's Git-ref creation is the durable conditional-create primitive:
+  // the first caller creates this immutable tag, and a concurrent or later
+  // caller receives HTTP 422 because the ref already exists. A list-then-
+  // create check-run marker would leave a cross-host race.
+  const claimRef = `refs/tags/buildproven-dispatch-claim/${crypto
+    .createHash("sha256")
+    .update(`${eventType}\u0000${externalId}`)
+    .digest("hex")}`;
+  try {
     runGh([
       "api",
       "--method",
       "POST",
-      `repos/${repository}/check-runs`,
+      `repos/${repository}/git/refs`,
       "-f",
-      `name=${claimName}`,
+      `ref=${claimRef}`,
       "-f",
-      `head_sha=${head}`,
-      "-f",
-      "status=in_progress",
-      "-f",
-      `external_id=${externalId}`,
-    ]),
-    "GitHub dispatch claim response",
-  );
-  if (!Number.isInteger(response.id))
-    throw new Error("GitHub dispatch claim response has no check-run ID");
-  return response.id;
+      `sha=${head}`,
+    ]);
+  } catch (error) {
+    if (
+      /HTTP 422|already exists|Reference already exists/i.test(
+        `${error.message}\n${error.stderr || ""}`,
+      )
+    )
+      throw new Error(
+        `dispatch authorization nonce has already been claimed remotely: ${externalId}`,
+        { cause: error },
+      );
+    throw new Error(
+      `could not create durable dispatch nonce claim ref ${claimRef}`,
+      { cause: error },
+    );
+  }
+  return claimRef;
 }
 
 function apiJson(path) {

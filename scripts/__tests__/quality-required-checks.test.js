@@ -21,6 +21,7 @@ const {
   checkRuns,
   checkState,
   claimDispatchNonce,
+  claimRemoteDispatchNonce,
   ensureChecks,
   matchingRuns,
   requiredChecks,
@@ -121,6 +122,52 @@ describe("quality-required-checks", () => {
       claim.externalId,
     );
     expect(() => claimDispatchNonce(fields)).toThrow(/already been claimed/);
+  });
+
+  it("uses an atomic Git ref as the cross-host dispatch claim", () => {
+    const originalPath = process.env.PATH;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-ref-claim-"));
+    const bin = path.join(root, "bin");
+    const calls = path.join(root, "calls");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      [
+        "#!/usr/bin/env bash",
+        "set -eu",
+        `if [ -f '${calls}' ]; then`,
+        "  echo 'gh: Reference already exists (HTTP 422)' >&2",
+        "  exit 1",
+        "fi",
+        `: > '${calls}'`,
+        "printf '%s\\n' '{}'",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath}`;
+    try {
+      const externalId = `secret-history-scan:${"b".repeat(40)}`;
+      const claim = claimRemoteDispatchNonce(
+        "owner/repo",
+        "secret-history-scan",
+        "b".repeat(40),
+        externalId,
+      );
+      expect(claim).toMatch(
+        /^refs\/tags\/buildproven-dispatch-claim\/[0-9a-f]{64}$/,
+      );
+      expect(() =>
+        claimRemoteDispatchNonce(
+          "owner/repo",
+          "secret-history-scan",
+          "b".repeat(40),
+          externalId,
+        ),
+      ).toThrow(/already been claimed remotely/);
+    } finally {
+      process.env.PATH = originalPath;
+    }
   });
 
   it("paginates effective rules before deriving required checks", () => {
