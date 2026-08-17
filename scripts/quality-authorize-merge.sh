@@ -207,11 +207,17 @@ ATOMIC_BASE_SOURCE=""
 ADMIN_BASE_SOURCE=""
 REPOSITORY_ADMIN_PERMISSION=false
 CURRENT_USER_ID=""
+CURRENT_USER_LOGIN=""
+ORGANIZATION_ADMIN_PERMISSION=false
 ENCODED_BASE_NAME="$(jq -rn --arg value "$ACTUAL_BASE_NAME" '$value | @uri')" || exit 1
 if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
   REPOSITORY_ADMIN_PERMISSION="$(gh api "repos/$REPOSITORY" \
     --jq '.permissions.admin' 2>/dev/null || true)"
   CURRENT_USER_ID="$(gh api user --jq '.id' 2>/dev/null || true)"
+  CURRENT_USER_LOGIN="$(gh api user --jq '.login' 2>/dev/null || true)"
+  ORGANIZATION_ADMIN_PERMISSION="$(gh api \
+    "orgs/${REPOSITORY%%/*}/memberships/$CURRENT_USER_LOGIN" \
+    --jq '.role == "admin"' 2>/dev/null || true)"
 fi
 if [ "$(gh api "repos/$REPOSITORY/branches/$ENCODED_BASE_NAME/protection/required_status_checks" \
   --jq '.strict' 2>/dev/null || true)" = true ]; then
@@ -287,12 +293,16 @@ if [ "${CI_BILLING_WAIVED:-false}" = true ] &&
           .parameters.strict_required_status_checks_policy == true
         )
       ' >/dev/null 2>&1 || ! printf '%s' "$RULESET_DETAIL" |
-      jq -e --arg user_id "$CURRENT_USER_ID" --arg admin "$REPOSITORY_ADMIN_PERMISSION" '
+      jq -e \
+        --arg user_id "$CURRENT_USER_ID" \
+        --arg admin "$REPOSITORY_ADMIN_PERMISSION" \
+        --arg org_admin "$ORGANIZATION_ADMIN_PERMISSION" '
         .enforcement == "active" and
         (.bypass_actors | type == "array") and
         any(.bypass_actors[]?;
           (.bypass_mode == "always" or .bypass_mode == "pull_request" or .bypass_mode == "exempt") and
-          ((.actor_type == "OrganizationAdmin" and $admin == "true") or
+          ((.actor_type == "OrganizationAdmin" and $org_admin == "true") or
+           (.actor_type == "RepositoryRole" and (.actor_id | tostring) == "5" and $admin == "true") or
            (.actor_type == "User" and (.actor_id | tostring) == $user_id))
         )
       ' >/dev/null 2>&1; then
