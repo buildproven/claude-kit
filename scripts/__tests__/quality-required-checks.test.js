@@ -362,7 +362,7 @@ esac
     );
     expect(result.status, result.stderr).toBe(0);
     expect(fs.readFileSync(fixture.log, "utf8")).toContain(
-      "actions/workflows/77/dispatches -f ref=feature/fix -f head_sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "actions/workflows/77/dispatches -f ref=main -f head_sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     );
   });
 
