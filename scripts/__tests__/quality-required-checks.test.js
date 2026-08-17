@@ -181,7 +181,7 @@ describe("quality-required-checks", () => {
     }));
     fs.writeFileSync(
       path.join(bin, "gh"),
-      `#!/usr/bin/env bash
+    `#!/usr/bin/env bash
 set -eu
 case "$*" in
   *protection/required_status_checks*) printf '%s\\n' '{"contexts":[],"checks":[]}' ;;
@@ -212,12 +212,13 @@ esac
       `#!/usr/bin/env bash
 set -eu
 case "$*" in
-  *protection/required_status_checks*|*rules/branches/main*)
+  *protection/required_status_checks*)
     echo '{"message":"service unavailable"}' >&2
     exit 1
     ;;
-  *"api graphql"*)
-    printf '%s\\n' '{"data":{"repository":{"branchProtectionRules":{"pageInfo":{"hasNextPage":false},"nodes":[{"requiredStatusCheckContexts":["quality"],"matchingRefs":{"pageInfo":{"hasNextPage":false},"nodes":[{"name":"main"}]}}]}}}}'
+  *rules/branches/main*) printf '%s\\n' '[]' ;;
+  *graphql*)
+    printf '%s\\n' '{"data":{"repository":{"branchProtectionRules":{"pageInfo":{"hasNextPage":false},"nodes":[{"requiredStatusChecks":[{"context":"quality","app":{"databaseId":15368}}],"matchingRefs":{"pageInfo":{"hasNextPage":false},"nodes":[{"name":"main"}]}}]}}}}'
     ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
@@ -227,7 +228,7 @@ esac
     process.env.PATH = `${bin}:${originalPath}`;
     try {
       expect(requiredChecks("owner/repo", "main")).toEqual([
-        { context: "quality", appId: null },
+        { context: "quality", appId: 15368 },
       ]);
     } finally {
       process.env.PATH = originalPath;

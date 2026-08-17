@@ -203,15 +203,19 @@ git merge-base --is-ancestor "$EXPECTED_BASE_OID" "$EXPECTED_HEAD" || {
 REPOSITORY="$EXPECTED_REPOSITORY"
 ATOMIC_BASE_FRESHNESS=false
 ADMIN_BASE_FRESHNESS=false
+ATOMIC_BASE_SOURCE=""
+ADMIN_BASE_SOURCE=""
 ENCODED_BASE_NAME="$(jq -rn --arg value "$ACTUAL_BASE_NAME" '$value | @uri')" || exit 1
 if [ "$(gh api "repos/$REPOSITORY/branches/$ENCODED_BASE_NAME/protection/required_status_checks" \
   --jq '.strict' 2>/dev/null || true)" = true ]; then
   ATOMIC_BASE_FRESHNESS=true
+  ATOMIC_BASE_SOURCE=classic
 fi
 if [ "${CI_BILLING_WAIVED:-false}" = true ] &&
   [ "$(gh api "repos/$REPOSITORY/branches/$ENCODED_BASE_NAME/protection" \
     --jq '.enforce_admins.enabled' 2>/dev/null || true)" = true ]; then
   ADMIN_BASE_FRESHNESS=true
+  ADMIN_BASE_SOURCE=classic
 fi
 # Repos whose plan cannot enforce strict checks (private, no GitHub Pro) can
 # never satisfy the check above, so --merge is unsatisfiable there and operators
@@ -249,6 +253,7 @@ if EFFECTIVE_RULES="$(gh api \
       )
     ' >/dev/null; then
     ATOMIC_BASE_FRESHNESS=true
+    ATOMIC_BASE_SOURCE=ruleset
   fi
 fi
 # GitHub's classic protection and effective-rules REST endpoints can be
@@ -272,6 +277,7 @@ if [ "$ATOMIC_BASE_FRESHNESS" != true ]; then
         | length == 1 and .[0].requiresStrictStatusChecks == true)
     ' >/dev/null 2>&1; then
     ATOMIC_BASE_FRESHNESS=true
+    ATOMIC_BASE_SOURCE=graphql
   fi
   if [ "${CI_BILLING_WAIVED:-false}" = true ] &&
     printf '%s' "$GRAPHQL_RULES" |
@@ -285,6 +291,7 @@ if [ "$ATOMIC_BASE_FRESHNESS" != true ]; then
           and .[0].isAdminEnforced == true)
       ' >/dev/null 2>&1; then
     ADMIN_BASE_FRESHNESS=true
+    ADMIN_BASE_SOURCE=graphql
   fi
 fi
 # Last resort, and only after BOTH classic protection and effective rulesets have
@@ -381,9 +388,11 @@ if [ -n "${CI_BILLING_WAIVER_ARTIFACT:-}" ] &&
 fi
 if [ -n "${CI_BILLING_WAIVER_ARTIFACT:-}" ] &&
   [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ] &&
-  [ "$ADMIN_BASE_FRESHNESS" != true ]; then
+  { [ "$ADMIN_BASE_FRESHNESS" != true ] ||
+    [ -z "$ATOMIC_BASE_SOURCE" ] ||
+    [ "$ADMIN_BASE_SOURCE" != "$ATOMIC_BASE_SOURCE" ]; }; then
   echo "❌ MERGE BLOCKED: CI billing waiver admin merge requires server-enforced administrator checks." >&2
-  echo "   The base rule is strict, but GitHub did not prove that administrators are subject to it." >&2
+  echo "   GitHub did not prove that administrators are subject to the same strict rule." >&2
   exit 1
 fi
 TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"
@@ -507,7 +516,9 @@ FINAL_BASE_OID="$(printf '%s' "$FINAL_BASE_LS" | awk 'NR==1 {print $1}')"
 LEASE_ADMIN=false
 if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
   if [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ]; then
-    [ "$ADMIN_BASE_FRESHNESS" = true ] || {
+    { [ "$ADMIN_BASE_FRESHNESS" = true ] &&
+      [ -n "$ATOMIC_BASE_SOURCE" ] &&
+      [ "$ADMIN_BASE_SOURCE" = "$ATOMIC_BASE_SOURCE" ]; } || {
       echo "❌ MERGE BLOCKED: CI billing waiver admin merge requires server-enforced administrator checks." >&2
       exit 1
     }

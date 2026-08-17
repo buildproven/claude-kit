@@ -326,7 +326,7 @@ function graphqlRequirements(repository, base) {
   const query =
     "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){" +
     "branchProtectionRules(first:100){pageInfo{hasNextPage}nodes{" +
-    "requiredStatusCheckContexts matchingRefs(first:100){pageInfo{hasNextPage}" +
+    "requiredStatusChecks{context app{databaseId}} matchingRefs(first:100){pageInfo{hasNextPage}" +
     "nodes{name}}}}}}";
   let response;
   try {
@@ -364,14 +364,21 @@ function graphqlRequirements(repository, base) {
       "GitHub GraphQL required-check discovery found no unique effective branch rule",
     );
   }
-  const contexts = matching[0].requiredStatusCheckContexts;
-  if (!Array.isArray(contexts)) {
+  const checks = matching[0].requiredStatusChecks;
+  if (!Array.isArray(checks)) {
     throw new Error(
       "GitHub GraphQL required-check discovery returned invalid check contexts",
     );
   }
   const requirements = [];
-  for (const context of contexts) addRequirement(requirements, context, null);
+  for (const check of checks) {
+    if (typeof check?.context !== "string" || !check.context) {
+      throw new Error(
+        "GitHub GraphQL required-check discovery returned an invalid check",
+      );
+    }
+    addRequirement(requirements, check.context, check.app?.databaseId ?? null);
+  }
   return requirements;
 }
 
@@ -414,11 +421,10 @@ function requiredChecks(repository, base) {
   for (const requirement of rulesetRequirements(effectiveRules)) {
     addRequirement(requirements, requirement.context, requirement.appId);
   }
-  if (
-    protectionError ||
-    effectiveRulesError ||
-    (requirements.length === 0 && protection === null)
-  ) {
+  if (effectiveRulesError) {
+    throw effectiveRulesError;
+  }
+  if (protectionError || (requirements.length === 0 && protection === null)) {
     let graphql;
     try {
       graphql = graphqlRequirements(repository, base);
@@ -431,10 +437,7 @@ function requiredChecks(repository, base) {
     for (const requirement of graphql) {
       addRequirement(requirements, requirement.context, requirement.appId);
     }
-    if (
-      graphql.length === 0 &&
-      (protectionError || effectiveRulesError)
-    ) {
+    if (graphql.length === 0 && protectionError) {
       throw protectionError || effectiveRulesError;
     }
   }
