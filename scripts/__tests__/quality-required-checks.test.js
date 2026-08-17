@@ -137,8 +137,8 @@ describe("quality-required-checks", () => {
         "#!/usr/bin/env bash",
         "set -eu",
         'case "$*" in',
-        "  *git/tags*) printf '%s\\n' '{\"sha\":\"dddddddddddddddddddddddddddddddddddddddd\"}' ;;",
-        "  *git/refs*)",
+        "  *buildproven-dispatch-claim-v3-meta*) printf '%s\\n' '{}' ;;",
+        "  *buildproven-dispatch-claim-v3*)",
         `    if [ -f '${calls}' ]; then`,
         "      echo 'gh: Reference already exists (HTTP 422)' >&2",
         "      exit 1",
@@ -161,7 +161,7 @@ describe("quality-required-checks", () => {
         externalId,
       );
       expect(claim).toMatch(
-        /^refs\/tags\/buildproven-dispatch-claim-v2\/[0-9a-f]{64}$/,
+        /^refs\/tags\/buildproven-dispatch-claim-v3\/[0-9a-f]{64}$/,
       );
       expect(() =>
         claimRemoteDispatchNonce(
@@ -176,7 +176,7 @@ describe("quality-required-checks", () => {
     }
   });
 
-  it("cleans only expired annotated dispatch claim refs", () => {
+  it("cleans expired metadata and quarantines legacy claim refs", () => {
     const originalPath = process.env.PATH;
     const root = fs.mkdtempSync(
       path.join(os.tmpdir(), "quality-claim-cleanup-"),
@@ -185,7 +185,7 @@ describe("quality-required-checks", () => {
     fs.mkdirSync(bin);
     const oldSuffix = "a".repeat(64);
     const legacySuffix = "b".repeat(64);
-    const tagSha = "e".repeat(40);
+    const issuedAtSeconds = "1577836800";
     fs.writeFileSync(
       path.join(bin, "gh"),
       `#!/usr/bin/env bash
@@ -194,8 +194,8 @@ case "$*" in
   *matching-refs*) printf '%s\\n' '${JSON.stringify([
     [
       {
-        ref: `refs/tags/buildproven-dispatch-claim-v2/${oldSuffix}`,
-        object: { type: "tag", sha: tagSha },
+        ref: `refs/tags/buildproven-dispatch-claim-v3-meta/${oldSuffix}/${issuedAtSeconds}`,
+        object: { type: "commit", sha: "e".repeat(40) },
       },
       {
         ref: `refs/tags/buildproven-dispatch-claim/${legacySuffix}`,
@@ -203,8 +203,8 @@ case "$*" in
       },
     ],
   ])}' ;;
-  *git/tags/${tagSha}*) printf '%s\\n' '{"tagger":{"date":"2020-01-01T00:00:00Z"}}' ;;
-  *DELETE*buildproven-dispatch-claim-v2/${oldSuffix}*) printf '%s\\n' '{}' ;;
+  *DELETE*buildproven-dispatch-claim-v3/${oldSuffix}*) printf '%s\\n' '{}' ;;
+  *DELETE*buildproven-dispatch-claim-v3-meta/${oldSuffix}/${issuedAtSeconds}*) printf '%s\\n' '{}' ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
 `,
@@ -217,7 +217,7 @@ esac
           retentionMs: 1_000,
           now: Date.parse("2020-01-02T00:00:00Z"),
         }),
-      ).toEqual({ deleted: 1, retained: 0, skipped: 1 });
+      ).toEqual({ deleted: 1, metadataDeleted: 1, retained: 0, skipped: 1 });
     } finally {
       process.env.PATH = originalPath;
       fs.rmSync(root, { recursive: true, force: true });

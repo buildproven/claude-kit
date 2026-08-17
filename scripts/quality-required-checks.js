@@ -25,7 +25,9 @@ const PROTECTED_CHECKS = Object.freeze({
     eventType: "harness-summary",
   }),
 });
-const REMOTE_DISPATCH_CLAIM_PREFIX = "buildproven-dispatch-claim-v2";
+const REMOTE_DISPATCH_CLAIM_PREFIX = "buildproven-dispatch-claim-v3";
+const REMOTE_DISPATCH_CLAIM_METADATA_PREFIX =
+  "buildproven-dispatch-claim-v3-meta";
 
 function protectedCheckConfig(requirement) {
   return PROTECTED_CHECKS[requirement.context] || null;
@@ -201,52 +203,44 @@ function claimRemoteDispatchNonce(
   issuedAt = new Date().toISOString(),
 ) {
   // GitHub's Git-ref creation is the durable conditional-create primitive:
-  // the first caller creates this immutable tag, and a concurrent or later
-  // caller receives HTTP 422 because the ref already exists. A list-then-
-  // create check-run marker would leave a cross-host race. The ref points to
-  // an annotated tag object so its creation time is retained for safe cleanup.
-  const claimRef = `refs/tags/${REMOTE_DISPATCH_CLAIM_PREFIX}/${crypto
+  // the first caller creates this immutable claim, and a concurrent or later
+  // caller receives HTTP 422 because the ref already exists. The separate
+  // lightweight metadata ref is created first, so a losing caller cannot
+  // orphan a Git object.
+  const claimHash = crypto
     .createHash("sha256")
     .update(`${eventType}\u0000${externalId}`)
-    .digest("hex")}`;
+    .digest("hex");
+  const claimRef = `refs/tags/${REMOTE_DISPATCH_CLAIM_PREFIX}/${claimHash}`;
   if (!Number.isFinite(Date.parse(issuedAt))) {
     throw new Error("dispatch claim issuedAt must be an ISO date");
   }
-  let tagObject;
+  const issuedAtSeconds = Math.floor(Date.parse(issuedAt) / 1000);
+  const metadataRef = `refs/tags/${REMOTE_DISPATCH_CLAIM_METADATA_PREFIX}/${claimHash}/${issuedAtSeconds}`;
   try {
-    tagObject = JSON.parse(
-      runGh(
-        [
-          "api",
-          "--method",
-          "POST",
-          `repos/${repository}/git/tags`,
-          "--input",
-          "-",
-        ],
-        JSON.stringify({
-          tag: claimRef.slice("refs/tags/".length),
-          message: `BuildProven dispatch claim ${externalId}`,
-          object: head,
-          type: "commit",
-          tagger: {
-            name: "BuildProven Quality",
-            email: "quality@buildproven.dev",
-            date: issuedAt,
-          },
-        }),
-      ),
-    );
+    runGh([
+      "api",
+      "--method",
+      "POST",
+      `repos/${repository}/git/refs`,
+      "-f",
+      `ref=${metadataRef}`,
+      "-f",
+      `sha=${head}`,
+    ]);
   } catch (error) {
-    throw new Error(
-      `could not create dispatch nonce tag object for ${claimRef}`,
-      { cause: error },
-    );
-  }
-  if (!/^[0-9a-f]{40}$/.test(tagObject?.sha || "")) {
-    throw new Error(
-      `GitHub returned an invalid dispatch nonce tag object for ${claimRef}`,
-    );
+    if (
+      !/HTTP 422|already exists|Reference already exists/i.test(
+        `${error.message}\n${error.stderr || ""}`,
+      )
+    ) {
+      throw new Error(
+        `could not create dispatch claim metadata ref ${metadataRef}`,
+        {
+          cause: error,
+        },
+      );
+    }
   }
   try {
     runGh([
@@ -257,7 +251,7 @@ function claimRemoteDispatchNonce(
       "-f",
       `ref=${claimRef}`,
       "-f",
-      `sha=${tagObject.sha}`,
+      `sha=${head}`,
     ]);
   } catch (error) {
     if (
@@ -277,15 +271,15 @@ function claimRemoteDispatchNonce(
   return claimRef;
 }
 
-function remoteDispatchClaimRefs(repository) {
-  const prefix = `refs/tags/${REMOTE_DISPATCH_CLAIM_PREFIX}/`;
+function remoteDispatchClaimMetadataRefs(repository) {
+  const prefix = `refs/tags/${REMOTE_DISPATCH_CLAIM_METADATA_PREFIX}/`;
   try {
     const pages = JSON.parse(
       runGh([
         "api",
         "--paginate",
         "--slurp",
-        `repos/${repository}/git/matching-refs/tags/${REMOTE_DISPATCH_CLAIM_PREFIX}/`,
+        `repos/${repository}/git/matching-refs/tags/${REMOTE_DISPATCH_CLAIM_METADATA_PREFIX}/`,
       ]),
     );
     if (!Array.isArray(pages)) {
@@ -295,22 +289,7 @@ function remoteDispatchClaimRefs(repository) {
       Array.isArray(page) ? page : [page],
     );
     const claims = entries
-      .map((entry) => {
-        const ref = entry?.ref;
-        const suffix =
-          typeof ref === "string" && ref.startsWith(prefix)
-            ? ref.slice(prefix.length)
-            : null;
-        const tagSha = entry?.object?.sha;
-        if (
-          !/^[0-9a-f]{64}$/.test(suffix || "") ||
-          entry?.object?.type !== "tag" ||
-          !/^[0-9a-f]{40}$/.test(tagSha || "")
-        ) {
-          return null;
-        }
-        return { ref, suffix, tagSha };
-      })
+      .map((entry) => parseRemoteDispatchMetadataEntry(entry, prefix))
       .filter(Boolean);
     return { claims, skipped: entries.length - claims.length };
   } catch (error) {
@@ -321,33 +300,75 @@ function remoteDispatchClaimRefs(repository) {
   }
 }
 
-function remoteDispatchClaimIssuedAt(repository, claim) {
-  try {
-    const tag = apiJson(`repos/${repository}/git/tags/${claim.tagSha}`);
-    return Date.parse(tag?.tagger?.date || "");
-  } catch (error) {
-    throw new Error(`could not inspect remote dispatch claim ${claim.ref}`, {
-      cause: error,
-    });
+function parseRemoteDispatchMetadataEntry(entry, prefix) {
+  const ref = entry?.ref;
+  const suffix =
+    typeof ref === "string" && ref.startsWith(prefix)
+      ? ref.slice(prefix.length)
+      : null;
+  const [claimHash, issuedAtSeconds] = (suffix || "").split("/");
+  const valid = [
+    /^[0-9a-f]{64}$/.test(claimHash || ""),
+    /^[0-9]{1,12}$/.test(issuedAtSeconds || ""),
+    entry?.object?.type === "commit",
+    /^[0-9a-f]{40}$/.test(entry?.object?.sha || ""),
+  ].every(Boolean);
+  if (!valid) {
+    return null;
   }
+  return { ref, claimHash, issuedAt: Number(issuedAtSeconds) * 1000 };
 }
 
-function deleteRemoteDispatchClaim(repository, claim) {
+function deleteRemoteDispatchRef(repository, ref) {
   try {
     runGh([
       "api",
       "--method",
       "DELETE",
-      `repos/${repository}/git/refs/tags/${REMOTE_DISPATCH_CLAIM_PREFIX}/${claim.suffix}`,
+      `repos/${repository}/git/refs/tags/${ref}`,
     ]);
+    return true;
   } catch (error) {
-    throw new Error(
-      `could not delete expired remote dispatch claim ${claim.ref}`,
-      {
-        cause: error,
-      },
-    );
+    if (/HTTP 404|Not Found/i.test(`${error.message}\n${error.stderr || ""}`)) {
+      return false;
+    }
+    throw new Error(`could not delete expired remote dispatch ref ${ref}`, {
+      cause: error,
+    });
   }
+}
+
+function cleanupRemoteDispatchClaimGroup(
+  repository,
+  claimHash,
+  group,
+  now,
+  retentionMs,
+) {
+  const fresh = group.filter((claim) => now - claim.issuedAt <= retentionMs);
+  const expired = group.filter((claim) => now - claim.issuedAt > retentionMs);
+  const result = { deleted: 0, metadataDeleted: 0, retained: 0 };
+  if (fresh.length > 0) {
+    result.retained = 1;
+    for (const claim of expired) {
+      if (deleteRemoteDispatchRef(repository, claim.ref))
+        result.metadataDeleted += 1;
+    }
+    return result;
+  }
+  if (
+    deleteRemoteDispatchRef(
+      repository,
+      `${REMOTE_DISPATCH_CLAIM_PREFIX}/${claimHash}`,
+    )
+  ) {
+    result.deleted = 1;
+  }
+  for (const claim of expired) {
+    if (deleteRemoteDispatchRef(repository, claim.ref))
+      result.metadataDeleted += 1;
+  }
+  return result;
 }
 
 function cleanupRemoteDispatchClaims(
@@ -360,16 +381,25 @@ function cleanupRemoteDispatchClaims(
   if (!Number.isFinite(now)) {
     throw new Error("dispatch claim cleanup time must be finite");
   }
-  const { claims, skipped } = remoteDispatchClaimRefs(repository);
-  const result = { deleted: 0, retained: 0, skipped };
+  const { claims, skipped } = remoteDispatchClaimMetadataRefs(repository);
+  const result = { deleted: 0, metadataDeleted: 0, retained: 0, skipped };
+  const groups = new Map();
   for (const claim of claims) {
-    const issuedAt = remoteDispatchClaimIssuedAt(repository, claim);
-    if (!Number.isFinite(issuedAt) || now - issuedAt <= retentionMs) {
-      result[Number.isFinite(issuedAt) ? "retained" : "skipped"] += 1;
-      continue;
-    }
-    deleteRemoteDispatchClaim(repository, claim);
-    result.deleted += 1;
+    const group = groups.get(claim.claimHash) || [];
+    group.push(claim);
+    groups.set(claim.claimHash, group);
+  }
+  for (const [claimHash, group] of groups) {
+    const groupResult = cleanupRemoteDispatchClaimGroup(
+      repository,
+      claimHash,
+      group,
+      now,
+      retentionMs,
+    );
+    result.deleted += groupResult.deleted;
+    result.metadataDeleted += groupResult.metadataDeleted;
+    result.retained += groupResult.retained;
   }
   return result;
 }
