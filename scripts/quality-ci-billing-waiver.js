@@ -97,8 +97,8 @@ function synthesizeWorkflowDispatchEvidence(
   runs,
   jobsByRunId,
 ) {
-  const checks = []
-  const jobsById = {}
+  const checks = [];
+  const jobsById = {};
   for (const run of Array.isArray(runs) ? runs : []) {
     if (
       run?.head_sha !== expectedHead ||
@@ -106,12 +106,12 @@ function synthesizeWorkflowDispatchEvidence(
       run?.status !== "completed" ||
       run?.conclusion !== "failure"
     )
-      continue
-    const jobs = jobsByRunId?.[String(run.id)]
-    if (!Array.isArray(jobs) || jobs.length === 0) continue
+      continue;
+    const jobs = jobsByRunId?.[String(run.id)];
+    if (!Array.isArray(jobs) || jobs.length === 0) continue;
     for (const job of jobs) {
-      if (!job || !Number.isInteger(job.id)) continue
-      jobsById[job.id] = job
+      if (!job || !Number.isInteger(job.id)) continue;
+      jobsById[job.id] = job;
       checks.push({
         name: `${run.name || run.workflow_id || "workflow"}/${job.name || job.id}`,
         state:
@@ -119,10 +119,10 @@ function synthesizeWorkflowDispatchEvidence(
             ? String(job.conclusion || "").toUpperCase()
             : "IN_PROGRESS",
         link: `https://github.com/${repository}/actions/runs/${run.id}/job/${job.id}`,
-      })
+      });
     }
   }
-  return { checks, jobsById }
+  return { checks, jobsById };
 }
 
 function configuredWaiverUntil() {
@@ -255,7 +255,9 @@ function listWorkflowDispatchRuns(repository, expectedHead) {
     runs.push(...response.workflow_runs);
     if (response.workflow_runs.length < 100) return runs;
   }
-  throw new Error("GitHub workflow dispatch runs pagination exceeded 100 pages");
+  throw new Error(
+    "GitHub workflow dispatch runs pagination exceeded 100 pages",
+  );
 }
 
 function listRunJobs(repository, runId) {
@@ -274,7 +276,9 @@ function listRunJobs(repository, runId) {
     jobs.push(...response.jobs);
     if (response.jobs.length < 100) return jobs;
   }
-  throw new Error(`GitHub Actions run ${runId} jobs pagination exceeded 100 pages`);
+  throw new Error(
+    `GitHub Actions run ${runId} jobs pagination exceeded 100 pages`,
+  );
 }
 
 function loadWorkflowDispatchEvidence(repository, expectedHead) {
