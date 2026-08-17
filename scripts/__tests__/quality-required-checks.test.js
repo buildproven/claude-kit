@@ -4,7 +4,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
 const dispatchKey = generateKeyPairSync("ed25519")
@@ -20,11 +20,30 @@ const SCRIPT = path.resolve(
 const {
   checkRuns,
   checkState,
+  claimDispatchNonce,
   ensureChecks,
   matchingRuns,
   requiredChecks,
   trustedSecretCheckState,
 } = require("../quality-required-checks.js");
+
+let originalClaimDirectory;
+let activeClaimDirectory;
+
+beforeEach(() => {
+  originalClaimDirectory = process.env.QUALITY_REVIEW_DISPATCH_CLAIM_DIR;
+  activeClaimDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "quality-dispatch-claims-"),
+  );
+  process.env.QUALITY_REVIEW_DISPATCH_CLAIM_DIR = activeClaimDirectory;
+});
+
+afterEach(() => {
+  if (originalClaimDirectory === undefined)
+    delete process.env.QUALITY_REVIEW_DISPATCH_CLAIM_DIR;
+  else process.env.QUALITY_REVIEW_DISPATCH_CLAIM_DIR = originalClaimDirectory;
+  fs.rmSync(activeClaimDirectory, { recursive: true, force: true });
+});
 
 function fakeGh(
   root,
@@ -83,6 +102,21 @@ function run(root, args, fixture) {
 }
 
 describe("quality-required-checks", () => {
+  it("claims each repository dispatch nonce durably before sending it", () => {
+    const fields = {
+      repository: "owner/repo",
+      eventType: "secret-history-scan",
+      head: "b".repeat(40),
+      base: "c".repeat(40),
+      nonce: "0".repeat(32),
+    };
+    const claim = claimDispatchNonce(fields);
+    expect(fs.readFileSync(claim.claimPath, "utf8")).toContain(
+      claim.externalId,
+    );
+    expect(() => claimDispatchNonce(fields)).toThrow(/already been claimed/);
+  });
+
   it("paginates effective rules before deriving required checks", () => {
     const originalPath = process.env.PATH;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-rules-"));

@@ -3,7 +3,11 @@
 
 const { spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const {
+  assertDispatchNonceAvailable,
   signDispatchAuthorization,
   signingKeyFromEnvironment,
 } = require("./quality-review-evidence.js");
@@ -110,6 +114,71 @@ function runGit(args) {
     );
   }
   return result.stdout;
+}
+
+function dispatchClaimDirectory() {
+  const configured = process.env.QUALITY_REVIEW_DISPATCH_CLAIM_DIR;
+  const stateHome =
+    process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state");
+  const directory =
+    configured || path.join(stateHome, "claude-kit", "dispatch-claims");
+  if (!path.isAbsolute(directory))
+    throw new Error("dispatch claim directory must be an absolute path");
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const stat = fs.lstatSync(directory);
+  if (stat.isSymbolicLink() || !stat.isDirectory())
+    throw new Error("dispatch claim directory must be a real directory");
+  if (typeof process.geteuid === "function" && stat.uid !== process.geteuid())
+    throw new Error("dispatch claim directory has the wrong owner");
+  fs.chmodSync(directory, 0o700);
+  return fs.realpathSync(directory);
+}
+
+function claimDispatchNonce({ repository, eventType, head, base, nonce }) {
+  const fields = {
+    schemaVersion: 1,
+    repository,
+    eventType,
+    head,
+    base,
+    nonce,
+    issuedAt: new Date(0).toISOString(),
+    expiresAt: new Date(15 * 60 * 1000).toISOString(),
+  };
+  const externalId = assertDispatchNonceAvailable(fields, []);
+  const claimName = crypto
+    .createHash("sha256")
+    .update(`${repository}\u0000${externalId}`)
+    .digest("hex");
+  const claimPath = path.join(dispatchClaimDirectory(), `${claimName}.json`);
+  let descriptor;
+  try {
+    descriptor = fs.openSync(claimPath, "wx", 0o600);
+  } catch (error) {
+    if (error.code === "EEXIST")
+      throw new Error(
+        `dispatch authorization nonce has already been claimed: ${externalId}`,
+        { cause: error },
+      );
+    throw error;
+  }
+  try {
+    const record = {
+      schemaVersion: 1,
+      repository,
+      eventType,
+      head: head.toLowerCase(),
+      base: base.toLowerCase(),
+      nonce,
+      externalId,
+      claimedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(descriptor, `${JSON.stringify(record)}\n`, "utf8");
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  return { externalId, claimPath };
 }
 
 function apiJson(path) {
@@ -425,6 +494,18 @@ function dispatchRepositoryEvent(repository, eventType, payload) {
     signingKeyFromEnvironment(),
   );
   const authorizedPayload = { ...payload, authorization };
+  const claim = claimDispatchNonce({
+    repository,
+    eventType,
+    head: payload.head_sha,
+    base: payload.base_sha,
+    nonce: payload.nonce,
+  });
+  if (
+    claim.externalId !==
+    `${eventType}:${payload.head_sha}:${payload.base_sha}:${payload.nonce}`
+  )
+    throw new Error("dispatch claim identity mismatch");
   let failure = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
@@ -445,7 +526,9 @@ function dispatchRepositoryEvent(repository, eventType, payload) {
       return;
     } catch (error) {
       failure = error;
-      if (attempt < 3) sleep(attempt * 1000);
+      // The durable claim makes the nonce one-use. Retrying the same signed
+      // request after an ambiguous API failure could create a duplicate run.
+      break;
     }
   }
   throw failure;
@@ -857,6 +940,7 @@ module.exports = {
   assertChecks,
   checkRuns,
   checkState,
+  claimDispatchNonce,
   dispatchedRunsForHead,
   ensureChecks,
   matchingRuns,
