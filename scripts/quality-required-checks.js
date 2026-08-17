@@ -5,6 +5,7 @@ const { spawnSync } = require("node:child_process");
 const crypto = require("node:crypto");
 
 const ACCEPTED_CONCLUSIONS = new Set(["success"]);
+const SECRET_SCAN_RUN_PREFIX = "secret-history-scan:";
 
 class GhCommandError extends Error {
   constructor(message, result) {
@@ -271,6 +272,7 @@ function trustedSecretCheckState(
   requirement,
   workflowId,
   base,
+  targetHead,
 ) {
   const latest = matchingRuns(runs, requirement)[0];
   if (!latest || typeof latest.details_url !== "string") {
@@ -282,10 +284,23 @@ function trustedSecretCheckState(
   } catch {
     return { state: "missing", run: null };
   }
+  const noncePrefix = `${SECRET_SCAN_RUN_PREFIX}${targetHead}:`;
+  const externalId = String(requirement.externalId || "");
+  if (!externalId.startsWith(noncePrefix)) {
+    return { state: "missing", run: null };
+  }
+  const nonce = externalId.slice(noncePrefix.length);
+  if (!/^[0-9a-f]{32}$/.test(nonce)) {
+    return { state: "missing", run: null };
+  }
+  const expectedRunName = `${noncePrefix}${nonce}`;
   if (
     workflowRun.workflow_id !== workflowId ||
     workflowRun.event !== "repository_dispatch" ||
-    workflowRun.head_branch !== base
+    workflowRun.head_branch !== base ||
+    workflowRun.display_title !== expectedRunName ||
+    workflowRun.status !== "completed" ||
+    workflowRun.conclusion !== "success"
   )
     return { state: "missing", run: null };
   return checkRunState(latest);
@@ -521,6 +536,7 @@ function ensureChecks({
               entry.requirement,
               entry.workflowId,
               base,
+              targetHead,
             )
           : checkState(targetRuns, entry.requirement);
       return state.state === "missing";
@@ -738,5 +754,6 @@ module.exports = {
   ensureChecks,
   matchingRuns,
   requiredChecks,
+  trustedSecretCheckState,
   waitForChecks,
 };

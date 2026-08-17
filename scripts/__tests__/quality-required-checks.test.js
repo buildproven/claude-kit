@@ -16,6 +16,7 @@ const {
   ensureChecks,
   matchingRuns,
   requiredChecks,
+  trustedSecretCheckState,
 } = require("../quality-required-checks.js");
 
 function fakeGh(
@@ -266,6 +267,102 @@ esac
       4, 3,
     ]);
     expect(checkState(runs, requirement)).toMatchObject({ state: "failed" });
+  });
+
+  it("accepts only a successful protected run bound to the exact nonce", () => {
+    const originalPath = process.env.PATH;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *actions/runs/124*) printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef","status":"completed","conclusion":"success"}' ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath}`;
+    try {
+      expect(
+        trustedSecretCheckState(
+          "owner/repo",
+          [
+            {
+              id: 2,
+              name: "secret-history-scan",
+              status: "completed",
+              conclusion: "success",
+              app: { id: 15368 },
+              external_id:
+                "secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef",
+              details_url: "https://github.com/o/r/actions/runs/124",
+            },
+          ],
+          {
+            context: "secret-history-scan",
+            appId: 15368,
+            externalId:
+              "secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef",
+          },
+          77,
+          "main",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ),
+      ).toMatchObject({ state: "success" });
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it("rejects a forged success when the protected workflow failed", () => {
+    const originalPath = process.env.PATH;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *actions/runs/124*) printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef","status":"completed","conclusion":"failure"}' ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath}`;
+    try {
+      expect(
+        trustedSecretCheckState(
+          "owner/repo",
+          [
+            {
+              id: 2,
+              name: "secret-history-scan",
+              status: "completed",
+              conclusion: "success",
+              app: { id: 15368 },
+              details_url: "https://github.com/o/r/actions/runs/124",
+            },
+          ],
+          {
+            context: "secret-history-scan",
+            appId: 15368,
+            externalId:
+              "secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef",
+          },
+          77,
+          "main",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ),
+      ).toMatchObject({ state: "missing" });
+    } finally {
+      process.env.PATH = originalPath;
+    }
   });
 
   it("dispatches the reviewed-head workflow when an empty stamp has no check", () => {
