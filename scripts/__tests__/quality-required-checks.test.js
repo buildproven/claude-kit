@@ -18,14 +18,21 @@ const {
   requiredChecks,
 } = require("../quality-required-checks.js");
 
-function fakeGh(root, sourceRuns, targetRuns, registeredRuns = targetRuns) {
+function fakeGh(
+  root,
+  sourceRuns,
+  targetRuns,
+  registeredRuns = targetRuns,
+  context = "quality",
+) {
   const bin = path.join(root, "bin");
   fs.mkdirSync(bin);
   const log = path.join(root, "dispatch.log");
+  const contextJson = JSON.stringify(context);
   const script = `#!/usr/bin/env bash
 set -eu
 case "$*" in
-  *protection/required_status_checks*) printf '%s\\n' '{"strict":true,"contexts":["quality"],"checks":[{"context":"quality","app_id":15368}]}' ;;
+  *protection/required_status_checks*) printf '%s\\n' '{"strict":true,"contexts":[${contextJson}],"checks":[{"context":${contextJson},"app_id":15368}]}' ;;
   *rules/branches/main*) printf '%s\\n' '[]' ;;
   *commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/check-runs*) printf '%s\\n' '${JSON.stringify({ check_runs: sourceRuns })}' ;;
   *commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs*)
@@ -304,6 +311,58 @@ esac
     ]);
     expect(fs.readFileSync(fixture.log, "utf8")).toContain(
       "actions/workflows/77/dispatches -f ref=feature/fix",
+    );
+  });
+
+  it("binds the coordinator secret-history dispatch to the exact reviewed head", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
+    const sourceRuns = [
+      {
+        id: 1,
+        name: "secret-history-scan",
+        status: "completed",
+        conclusion: "success",
+        app: { id: 15368 },
+        details_url: "https://github.com/o/r/actions/runs/123/job/456",
+      },
+    ];
+    const fixture = fakeGh(
+      root,
+      sourceRuns,
+      [],
+      [
+        {
+          id: 2,
+          name: "secret-history-scan",
+          status: "queued",
+          conclusion: null,
+          app: { id: 15368 },
+        },
+      ],
+      "secret-history-scan",
+    );
+    const result = run(
+      root,
+      [
+        "ensure",
+        "--repo",
+        "owner/repo",
+        "--base",
+        "main",
+        "--source-head",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--head",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "--head-ref",
+        "feature/fix",
+        "--registration-timeout",
+        "0",
+      ],
+      fixture,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(fs.readFileSync(fixture.log, "utf8")).toContain(
+      "actions/workflows/77/dispatches -f ref=feature/fix -f head_sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     );
   });
 

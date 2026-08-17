@@ -298,7 +298,11 @@ function sourceRunForRequirement(
   return null;
 }
 
-function dispatchWorkflow(repository, workflowId, ref) {
+function dispatchWorkflow(repository, workflowId, ref, inputs = {}) {
+  const inputArgs = Object.entries(inputs).flatMap(([name, value]) => [
+    "-f",
+    `${name}=${value}`,
+  ]);
   let failure = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
@@ -309,6 +313,7 @@ function dispatchWorkflow(repository, workflowId, ref) {
         `repos/${repository}/actions/workflows/${workflowId}/dispatches`,
         "-f",
         `ref=${ref}`,
+        ...inputArgs,
       ]);
       return;
     } catch (error) {
@@ -317,6 +322,16 @@ function dispatchWorkflow(repository, workflowId, ref) {
     }
   }
   throw failure;
+}
+
+function workflowDispatchInputs(requirement, targetHead) {
+  // Secret-history is coordinator-dispatched rather than PR-triggered. Bind
+  // the hosted scan to the exact head that passed local admission; the
+  // workflow fails closed when GitHub resolves a different ref tip.
+  if (requirement.context === "secret-history-scan") {
+    return { head_sha: targetHead };
+  }
+  return {};
 }
 
 function dispatchedRunsForHead(repository, headRef, targetHead, workflowIds) {
@@ -408,7 +423,12 @@ function ensureChecks({
     const workflowId = workflowIdForRun(repository, source);
     if (!dispatchedWorkflowIds.has(workflowId)) {
       try {
-        dispatchWorkflow(repository, workflowId, headRef);
+        dispatchWorkflow(
+          repository,
+          workflowId,
+          headRef,
+          workflowDispatchInputs(requirement, targetHead),
+        );
       } catch (error) {
         targetRuns = checkRuns(repository, targetHead);
         const refreshed = checkState(targetRuns, requirement);
