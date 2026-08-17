@@ -279,7 +279,7 @@ esac
       `#!/usr/bin/env bash
 set -eu
 case "$*" in
-  *actions/runs/124*) printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef","status":"completed","conclusion":"success"}' ;;
+  *actions/runs/124*) printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","path":".github/workflows/secret-history-scan.yml","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef","status":"completed","conclusion":"success"}' ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
 `,
@@ -328,7 +328,7 @@ esac
       `#!/usr/bin/env bash
 set -eu
 case "$*" in
-  *actions/runs/124*) printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef","status":"completed","conclusion":"failure"}' ;;
+  *actions/runs/124*) printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","path":".github/workflows/secret-history-scan.yml","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef","status":"completed","conclusion":"failure"}' ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
 `,
@@ -346,6 +346,8 @@ esac
               status: "completed",
               conclusion: "success",
               app: { id: 15368 },
+              external_id:
+                "secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef",
               details_url: "https://github.com/o/r/actions/runs/124",
             },
           ],
@@ -359,7 +361,56 @@ esac
           "main",
           "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         ),
-      ).toMatchObject({ state: "missing" });
+      ).toMatchObject({ state: "failed" });
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it("keeps a correlated in-progress protected run pending", () => {
+    const originalPath = process.env.PATH;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *actions/runs/124*) printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","path":".github/workflows/secret-history-scan.yml","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef","status":"in_progress","conclusion":null}' ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath}`;
+    try {
+      expect(
+        trustedSecretCheckState(
+          "owner/repo",
+          [
+            {
+              id: 2,
+              name: "secret-history-scan",
+              status: "queued",
+              conclusion: null,
+              app: { id: 15368 },
+              external_id:
+                "secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef",
+              details_url: "https://github.com/o/r/actions/runs/124",
+            },
+          ],
+          {
+            context: "secret-history-scan",
+            appId: 15368,
+            externalId:
+              "secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:0123456789abcdef0123456789abcdef",
+          },
+          77,
+          "main",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ),
+      ).toMatchObject({ state: "pending" });
     } finally {
       process.env.PATH = originalPath;
     }

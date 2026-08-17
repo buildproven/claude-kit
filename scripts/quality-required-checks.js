@@ -6,6 +6,7 @@ const crypto = require("node:crypto");
 
 const ACCEPTED_CONCLUSIONS = new Set(["success"]);
 const SECRET_SCAN_RUN_PREFIX = "secret-history-scan:";
+const SECRET_SCAN_WORKFLOW_PATH = ".github/workflows/secret-history-scan.yml";
 
 class GhCommandError extends Error {
   constructor(message, result) {
@@ -295,14 +296,18 @@ function trustedSecretCheckState(
   }
   const expectedRunName = `${noncePrefix}${nonce}`;
   if (
-    workflowRun.workflow_id !== workflowId ||
+    (workflowId !== null && workflowRun.workflow_id !== workflowId) ||
     workflowRun.event !== "repository_dispatch" ||
     workflowRun.head_branch !== base ||
+    workflowRun.path !== SECRET_SCAN_WORKFLOW_PATH ||
     workflowRun.display_title !== expectedRunName ||
-    workflowRun.status !== "completed" ||
-    workflowRun.conclusion !== "success"
+    !["queued", "in_progress", "completed"].includes(workflowRun.status)
   )
     return { state: "missing", run: null };
+  if (workflowRun.status !== "completed")
+    return { state: "pending", run: latest };
+  if (workflowRun.conclusion !== "success")
+    return { state: "failed", run: latest };
   return checkRunState(latest);
 }
 
@@ -604,7 +609,9 @@ function inspectChecks(repository, base, head) {
   const runs = checkRuns(repository, head);
   return requirements.map((requirement) => ({
     ...requirement,
-    ...checkState(runs, requirement),
+    ...(requirement.context === "secret-history-scan"
+      ? trustedSecretCheckState(repository, runs, requirement, null, base, head)
+      : checkState(runs, requirement)),
   }));
 }
 
