@@ -22,6 +22,7 @@ const {
   checkState,
   claimDispatchNonce,
   claimRemoteDispatchNonce,
+  cleanupRemoteDispatchClaims,
   ensureChecks,
   matchingRuns,
   requiredChecks,
@@ -135,12 +136,17 @@ describe("quality-required-checks", () => {
       [
         "#!/usr/bin/env bash",
         "set -eu",
-        `if [ -f '${calls}' ]; then`,
-        "  echo 'gh: Reference already exists (HTTP 422)' >&2",
-        "  exit 1",
-        "fi",
-        `: > '${calls}'`,
-        "printf '%s\\n' '{}'",
+        'case "$*" in',
+        "  *git/tags*) printf '%s\\n' '{\"sha\":\"dddddddddddddddddddddddddddddddddddddddd\"}' ;;",
+        "  *git/refs*)",
+        `    if [ -f '${calls}' ]; then`,
+        "      echo 'gh: Reference already exists (HTTP 422)' >&2",
+        "      exit 1",
+        "    fi",
+        `    : > '${calls}'`,
+        "    printf '%s\\n' '{}' ;;",
+        '  *) echo "unexpected gh call: $*" >&2; exit 1 ;;',
+        "esac",
         "",
       ].join("\n"),
       { mode: 0o755 },
@@ -167,6 +173,54 @@ describe("quality-required-checks", () => {
       ).toThrow(/already been claimed remotely/);
     } finally {
       process.env.PATH = originalPath;
+    }
+  });
+
+  it("cleans only expired annotated dispatch claim refs", () => {
+    const originalPath = process.env.PATH;
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), "quality-claim-cleanup-"),
+    );
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    const oldSuffix = "a".repeat(64);
+    const legacySuffix = "b".repeat(64);
+    const tagSha = "e".repeat(40);
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *matching-refs*) printf '%s\\n' '${JSON.stringify([
+    [
+      {
+        ref: `refs/tags/buildproven-dispatch-claim/${oldSuffix}`,
+        object: { type: "tag", sha: tagSha },
+      },
+      {
+        ref: `refs/tags/buildproven-dispatch-claim/${legacySuffix}`,
+        object: { type: "commit", sha: "f".repeat(40) },
+      },
+    ],
+  ])}' ;;
+  *git/tags/${tagSha}*) printf '%s\\n' '{"tagger":{"date":"2020-01-01T00:00:00Z"}}' ;;
+  *DELETE*buildproven-dispatch-claim/${oldSuffix}*) printf '%s\\n' '{}' ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath}`;
+    try {
+      expect(
+        cleanupRemoteDispatchClaims("owner/repo", {
+          retentionMs: 1_000,
+          now: Date.parse("2020-01-02T00:00:00Z"),
+        }),
+      ).toEqual({ deleted: 1, retained: 0, skipped: 1 });
+    } finally {
+      process.env.PATH = originalPath;
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 

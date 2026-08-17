@@ -192,15 +192,61 @@ function claimDispatchNonce({ repository, eventType, head, base, nonce }) {
   return { externalId, claimPath };
 }
 
-function claimRemoteDispatchNonce(repository, eventType, head, externalId) {
+function claimRemoteDispatchNonce(
+  repository,
+  eventType,
+  head,
+  externalId,
+  issuedAt = new Date().toISOString(),
+) {
   // GitHub's Git-ref creation is the durable conditional-create primitive:
   // the first caller creates this immutable tag, and a concurrent or later
   // caller receives HTTP 422 because the ref already exists. A list-then-
-  // create check-run marker would leave a cross-host race.
+  // create check-run marker would leave a cross-host race. The ref points to
+  // an annotated tag object so its creation time is retained for safe cleanup.
   const claimRef = `refs/tags/buildproven-dispatch-claim/${crypto
     .createHash("sha256")
     .update(`${eventType}\u0000${externalId}`)
     .digest("hex")}`;
+  if (!Number.isFinite(Date.parse(issuedAt))) {
+    throw new Error("dispatch claim issuedAt must be an ISO date");
+  }
+  let tagObject;
+  try {
+    tagObject = JSON.parse(
+      runGh(
+        [
+          "api",
+          "--method",
+          "POST",
+          `repos/${repository}/git/tags`,
+          "--input",
+          "-",
+        ],
+        JSON.stringify({
+          tag: claimRef.slice("refs/tags/".length),
+          message: `BuildProven dispatch claim ${externalId}`,
+          object: head,
+          type: "commit",
+          tagger: {
+            name: "BuildProven Quality",
+            email: "quality@buildproven.dev",
+            date: issuedAt,
+          },
+        }),
+      ),
+    );
+  } catch (error) {
+    throw new Error(
+      `could not create dispatch nonce tag object for ${claimRef}`,
+      { cause: error },
+    );
+  }
+  if (!/^[0-9a-f]{40}$/.test(tagObject?.sha || "")) {
+    throw new Error(
+      `GitHub returned an invalid dispatch nonce tag object for ${claimRef}`,
+    );
+  }
   try {
     runGh([
       "api",
@@ -210,7 +256,7 @@ function claimRemoteDispatchNonce(repository, eventType, head, externalId) {
       "-f",
       `ref=${claimRef}`,
       "-f",
-      `sha=${head}`,
+      `sha=${tagObject.sha}`,
     ]);
   } catch (error) {
     if (
@@ -228,6 +274,82 @@ function claimRemoteDispatchNonce(repository, eventType, head, externalId) {
     );
   }
   return claimRef;
+}
+
+function cleanupRemoteDispatchClaims(
+  repository,
+  { retentionMs = 24 * 60 * 60 * 1000, now = Date.now() } = {},
+) {
+  if (!Number.isInteger(retentionMs) || retentionMs <= 0) {
+    throw new Error("dispatch claim retention must be a positive integer");
+  }
+  if (!Number.isFinite(now)) {
+    throw new Error("dispatch claim cleanup time must be finite");
+  }
+  const prefix = "refs/tags/buildproven-dispatch-claim/";
+  let pages;
+  try {
+    pages = JSON.parse(
+      runGh([
+        "api",
+        "--paginate",
+        "--slurp",
+        `repos/${repository}/git/matching-refs/tags/buildproven-dispatch-claim/`,
+      ]),
+    );
+  } catch (error) {
+    throw new Error(
+      `could not list remote dispatch nonce claims for ${repository}`,
+      { cause: error },
+    );
+  }
+  if (!Array.isArray(pages)) {
+    throw new Error("GitHub returned an invalid dispatch claim ref list");
+  }
+  const refs = pages.flatMap((page) => (Array.isArray(page) ? page : [page]));
+  const result = { deleted: 0, retained: 0, skipped: 0 };
+  for (const entry of refs) {
+    const ref = entry?.ref;
+    const suffix =
+      typeof ref === "string" && ref.startsWith(prefix)
+        ? ref.slice(prefix.length)
+        : null;
+    if (
+      !/^[0-9a-f]{64}$/.test(suffix || "") ||
+      entry?.object?.type !== "tag" ||
+      !/^[0-9a-f]{40}$/.test(entry?.object?.sha || "")
+    ) {
+      result.skipped += 1;
+      continue;
+    }
+    let tag;
+    try {
+      tag = apiJson(`repos/${repository}/git/tags/${entry.object.sha}`);
+    } catch (error) {
+      throw new Error(`could not inspect remote dispatch claim ${ref}`, {
+        cause: error,
+      });
+    }
+    const issuedAt = Date.parse(tag?.tagger?.date || "");
+    if (!Number.isFinite(issuedAt) || now - issuedAt <= retentionMs) {
+      result[Number.isFinite(issuedAt) ? "retained" : "skipped"] += 1;
+      continue;
+    }
+    try {
+      runGh([
+        "api",
+        "--method",
+        "DELETE",
+        `repos/${repository}/git/refs/tags/buildproven-dispatch-claim/${suffix}`,
+      ]);
+    } catch (error) {
+      throw new Error(`could not delete expired remote dispatch claim ${ref}`, {
+        cause: error,
+      });
+    }
+    result.deleted += 1;
+  }
+  return result;
 }
 
 function apiJson(path) {
@@ -659,6 +781,7 @@ function dispatchRepositoryEvent(repository, eventType, payload) {
       eventType,
       payload.head_sha,
       claim.externalId,
+      issuedAt.toISOString(),
     );
   }
   try {
@@ -1076,7 +1199,23 @@ function main() {
     );
     return;
   }
-  throw new Error("usage: quality-required-checks.js <ensure|wait|assert> ...");
+  if (command === "cleanup-claims") {
+    const repository = validateRepository(requiredOption(options, "repo"));
+    const retentionMs = Number.parseInt(
+      options["retention-ms"] || String(24 * 60 * 60 * 1000),
+      10,
+    );
+    if (!Number.isInteger(retentionMs) || retentionMs <= 0) {
+      throw new Error("--retention-ms must be a positive integer");
+    }
+    process.stdout.write(
+      `${JSON.stringify(cleanupRemoteDispatchClaims(repository, { retentionMs }))}\n`,
+    );
+    return;
+  }
+  throw new Error(
+    "usage: quality-required-checks.js <ensure|wait|assert|cleanup-claims> ...",
+  );
 }
 
 if (require.main === module) {
@@ -1094,6 +1233,7 @@ module.exports = {
   checkState,
   claimDispatchNonce,
   claimRemoteDispatchNonce,
+  cleanupRemoteDispatchClaims,
   dispatchedRunsForHead,
   ensureChecks,
   matchingRuns,
