@@ -265,22 +265,37 @@ function checkRunState(latest) {
   };
 }
 
-function trustedSecretCheckState(repository, runs, requirement, workflowId) {
+function trustedSecretCheckState(
+  repository,
+  runs,
+  requirement,
+  workflowId,
+  base,
+) {
   const latest = matchingRuns(runs, requirement)[0];
   if (!latest || typeof latest.details_url !== "string") {
     return { state: "missing", run: null };
   }
-  let actualWorkflowId;
+  let workflowRun;
   try {
-    actualWorkflowId = workflowIdForRun(repository, latest);
+    workflowRun = workflowRunForCheck(repository, latest);
   } catch {
     return { state: "missing", run: null };
   }
-  if (actualWorkflowId !== workflowId) return { state: "missing", run: null };
+  if (
+    workflowRun.workflow_id !== workflowId ||
+    workflowRun.event !== "repository_dispatch" ||
+    workflowRun.head_branch !== base
+  )
+    return { state: "missing", run: null };
   return checkRunState(latest);
 }
 
 function workflowIdForRun(repository, run) {
+  return workflowRunForCheck(repository, run).workflow_id;
+}
+
+function workflowRunForCheck(repository, run) {
   const match = String(run.details_url || "").match(/\/actions\/runs\/(\d+)/);
   if (!match) {
     throw new Error(`required check '${run.name}' has no Actions run identity`);
@@ -289,7 +304,7 @@ function workflowIdForRun(repository, run) {
   if (!Number.isInteger(workflowRun.workflow_id)) {
     throw new Error(`required check '${run.name}' has no workflow identity`);
   }
-  return workflowRun.workflow_id;
+  return workflowRun;
 }
 
 function sourceRunForRequirement(
@@ -454,14 +469,6 @@ function ensureChecks({
       );
     }
     const workflowId = workflowIdForRun(repository, source);
-    if (
-      protectedSecret &&
-      ["pending", "success"].includes(
-        trustedSecretCheckState(repository, targetRuns, requirement, workflowId)
-          .state,
-      )
-    )
-      continue;
     const dispatchKey = `${workflowId}:${protectedSecret ? "repository_dispatch" : "workflow_dispatch"}`;
     let dispatchedRequirement = requirement;
     if (!dispatchedWorkflowIds.has(dispatchKey)) {
@@ -481,7 +488,9 @@ function ensureChecks({
         }
       } catch (error) {
         targetRuns = checkRuns(repository, targetHead);
-        const refreshed = checkState(targetRuns, requirement);
+        const refreshed = protectedSecret
+          ? { state: "missing" }
+          : checkState(targetRuns, requirement);
         if (!["pending", "success"].includes(refreshed.state)) throw error;
       }
       dispatchedWorkflowIds.add(dispatchKey);
@@ -511,6 +520,7 @@ function ensureChecks({
               targetRuns,
               entry.requirement,
               entry.workflowId,
+              base,
             )
           : checkState(targetRuns, entry.requirement);
       return state.state === "missing";
