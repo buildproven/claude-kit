@@ -774,6 +774,7 @@ function main() {
 }
 
 module.exports = {
+  assertCiBillingConditions,
   parseApprovalCommand,
   parseRequest,
   prepareDescendantAdvanceAuthorization,

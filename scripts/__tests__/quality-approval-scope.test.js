@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
-const { parseApprovalCommand } = require(
+const { assertCiBillingConditions, parseApprovalCommand } = require(
   path.resolve(import.meta.dirname, "..", "quality-wrapper.js"),
 );
 
@@ -109,6 +109,29 @@ describe("quality approve command scope parsing", () => {
       ciFailureReason: "failed",
       acceptedConditions: ["review:provider-exhaustion", "ci:failed"],
     });
+  });
+
+  it("validates the CI condition inside a composed quality override", () => {
+    const diagnosed = [
+      { id: "review:provider-exhaustion" },
+      { id: "ci:failed" },
+    ];
+    expect(() =>
+      assertCiBillingConditions(
+        "operator-quality-override",
+        "failed",
+        diagnosed,
+        ["review:provider-exhaustion", "ci:failed"],
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertCiBillingConditions(
+        "operator-quality-override",
+        "unavailable",
+        diagnosed,
+        ["review:provider-exhaustion", "ci:failed"],
+      ),
+    ).toThrow(/ci:unavailable/);
   });
 
   it("requires a classified CI failure for the billing override", () => {
