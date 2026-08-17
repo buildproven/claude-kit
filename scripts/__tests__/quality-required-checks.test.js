@@ -235,6 +235,34 @@ esac
     }
   });
 
+  it("keeps effective ruleset checks when GraphQL proves no classic rule", () => {
+    const originalPath = process.env.PATH;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-graphql-empty-"));
+    const bin = path.join(root, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *protection/required_status_checks*) exit 1 ;;
+  *rules/branches/main*) printf '%s\\n' '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"security","integration_id":15368}]}}]' ;;
+  *graphql*) printf '%s\\n' '{"data":{"repository":{"branchProtectionRules":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}' ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath}`;
+    try {
+      expect(requiredChecks("owner/repo", "main")).toEqual([
+        { context: "security", appId: 15368 },
+      ]);
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
   it("paginates exact-head check runs through GitHub total_count", () => {
     const originalPath = process.env.PATH;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));

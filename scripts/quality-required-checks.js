@@ -359,11 +359,12 @@ function graphqlRequirements(repository, base) {
       Array.isArray(rule.matchingRefs.nodes) &&
       rule.matchingRefs.nodes.some((ref) => ref?.name === base),
   );
-  if (matching.length !== 1) {
+  if (matching.length > 1) {
     throw new Error(
-      "GitHub GraphQL required-check discovery found no unique effective branch rule",
+      "GitHub GraphQL required-check discovery found multiple matching branch rules",
     );
   }
+  if (matching.length === 0) return [];
   const checks = matching[0].requiredStatusChecks;
   if (!Array.isArray(checks)) {
     throw new Error(
@@ -437,7 +438,7 @@ function requiredChecks(repository, base) {
     for (const requirement of graphql) {
       addRequirement(requirements, requirement.context, requirement.appId);
     }
-    if (graphql.length === 0 && protectionError) {
+    if (graphql.length === 0 && protectionError && requirements.length === 0) {
       throw protectionError || effectiveRulesError;
     }
   }

@@ -256,6 +256,35 @@ if EFFECTIVE_RULES="$(gh api \
     ATOMIC_BASE_SOURCE=ruleset
   fi
 fi
+if [ "${CI_BILLING_WAIVED:-false}" = true ] &&
+  [ "$ATOMIC_BASE_SOURCE" = ruleset ]; then
+  # The effective-rules response identifies every ruleset that supplies a
+  # rule for this concrete branch. Fetch each complete ruleset before allowing
+  # an admin merge; an absent or hidden bypass_actors field is not proof that
+  # administrators are bound by the ruleset.
+  RULESET_ADMIN_FRESHNESS=true
+  RULESET_IDS="$(printf '%s' "$EFFECTIVE_RULES" |
+    jq -r '.[]? | .ruleset_id // empty' | sort -u)"
+  [ -n "$RULESET_IDS" ] || RULESET_ADMIN_FRESHNESS=false
+  while IFS= read -r RULESET_ID; do
+    [ -n "$RULESET_ID" ] || continue
+    RULESET_DETAIL="$(gh api \
+      "repos/$REPOSITORY/rulesets/$RULESET_ID?includes_parents=true" \
+      2>/dev/null || true)"
+    if ! printf '%s' "$RULESET_DETAIL" |
+      jq -e '.enforcement == "active" and (.bypass_actors | type == "array" and length == 0)' \
+      >/dev/null 2>&1; then
+      RULESET_ADMIN_FRESHNESS=false
+      break
+    fi
+  done <<EOF
+$RULESET_IDS
+EOF
+  if [ "$RULESET_ADMIN_FRESHNESS" = true ]; then
+    ADMIN_BASE_FRESHNESS=true
+    ADMIN_BASE_SOURCE=ruleset
+  fi
+fi
 # GitHub's classic protection and effective-rules REST endpoints can be
 # unavailable while the GraphQL branch-protection view remains healthy. Use
 # that independent, server-owned view as a read-only confirmation of strict
