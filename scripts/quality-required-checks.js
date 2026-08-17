@@ -267,17 +267,15 @@ function checkRunState(latest) {
   };
 }
 
-function trustedSecretCheckState(
-  {
-    repository,
-    runs,
-    requirement,
-    workflowId,
-    base,
-    targetHead,
-    baseHead,
-  },
-) {
+function trustedSecretCheckState({
+  repository,
+  runs,
+  requirement,
+  workflowId,
+  base,
+  targetHead,
+  baseHead,
+}) {
   const latest = matchingRuns(runs, requirement)[0];
   if (!latest || typeof latest.details_url !== "string") {
     return { state: "missing", run: null };
@@ -511,17 +509,15 @@ function ensureChecks({
     }
     const workflowId = workflowIdForRun(repository, source);
     if (protectedSecret) {
-      const target = trustedSecretCheckState(
-        {
-          repository,
-          runs: targetRuns,
-          requirement,
-          workflowId,
-          base,
-          targetHead,
-          baseHead,
-        },
-      );
+      const target = trustedSecretCheckState({
+        repository,
+        runs: targetRuns,
+        requirement,
+        workflowId,
+        base,
+        targetHead,
+        baseHead,
+      });
       if (["pending", "success"].includes(target.state)) continue;
     }
     const dispatchKey = `${workflowId}:${protectedSecret ? "repository_dispatch" : "workflow_dispatch"}`;
@@ -571,17 +567,15 @@ function ensureChecks({
     const missing = dispatchedRequirements.filter((entry) => {
       const state =
         entry.requirement.context === "secret-history-scan"
-          ? trustedSecretCheckState(
-              {
-                repository,
-                runs: targetRuns,
-                requirement: entry.requirement,
-                workflowId: entry.workflowId,
-                base,
-                targetHead,
-                baseHead,
-              },
-            )
+          ? trustedSecretCheckState({
+              repository,
+              runs: targetRuns,
+              requirement: entry.requirement,
+              workflowId: entry.workflowId,
+              base,
+              targetHead,
+              baseHead,
+            })
           : checkState(targetRuns, entry.requirement);
       return state.state === "missing";
     });
