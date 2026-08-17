@@ -134,6 +134,14 @@ function dispatchClaimDirectory() {
   return fs.realpathSync(directory);
 }
 
+function parseApiJson(raw, label) {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`${label} is not valid JSON`, { cause: error });
+  }
+}
+
 function fsyncDirectory(directory) {
   const descriptor = fs.openSync(directory, "r");
   try {
@@ -190,6 +198,37 @@ function claimDispatchNonce({ repository, eventType, head, base, nonce }) {
   }
   fsyncDirectory(directory);
   return { externalId, claimPath };
+}
+
+function claimRemoteDispatchNonce(repository, eventType, head, externalId) {
+  const claimName = `dispatch-authorization:${eventType}`;
+  const existing = checkRuns(repository, head).find(
+    (run) => run.name === claimName && run.external_id === externalId,
+  );
+  if (existing)
+    throw new Error(
+      `dispatch authorization nonce has already been claimed remotely: ${externalId}`,
+    );
+  const response = parseApiJson(
+    runGh([
+      "api",
+      "--method",
+      "POST",
+      `repos/${repository}/check-runs`,
+      "-f",
+      `name=${claimName}`,
+      "-f",
+      `head_sha=${head}`,
+      "-f",
+      "status=in_progress",
+      "-f",
+      `external_id=${externalId}`,
+    ]),
+    "GitHub dispatch claim response",
+  );
+  if (!Number.isInteger(response.id))
+    throw new Error("GitHub dispatch claim response has no check-run ID");
+  return response.id;
 }
 
 function apiJson(path) {
@@ -517,32 +556,37 @@ function dispatchRepositoryEvent(repository, eventType, payload) {
     `${eventType}:${payload.head_sha}:${payload.base_sha}:${payload.nonce}`
   )
     throw new Error("dispatch claim identity mismatch");
-  let failure = null;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    try {
-      runGh(
-        [
-          "api",
-          "--method",
-          "POST",
-          `repos/${repository}/dispatches`,
-          "--input",
-          "-",
-        ],
-        JSON.stringify({
-          event_type: eventType,
-          client_payload: authorizedPayload,
-        }),
-      );
-      return;
-    } catch (error) {
-      failure = error;
-      // The durable claim makes the nonce one-use. Retrying the same signed
-      // request after an ambiguous API failure could create a duplicate run.
-      break;
-    }
+  if (process.env.QUALITY_REVIEW_DISPATCH_REMOTE_CLAIM !== "false") {
+    claimRemoteDispatchNonce(
+      repository,
+      eventType,
+      payload.head_sha,
+      claim.externalId,
+    );
   }
-  throw failure;
+  try {
+    runGh(
+      [
+        "api",
+        "--method",
+        "POST",
+        `repos/${repository}/dispatches`,
+        "--input",
+        "-",
+      ],
+      JSON.stringify({
+        event_type: eventType,
+        client_payload: authorizedPayload,
+      }),
+    );
+  } catch (error) {
+    // The local and GitHub-backed claims are one-use. Retrying the same
+    // signed request after an ambiguous API failure could create a duplicate.
+    throw new Error(
+      `repository dispatch failed after nonce claim: ${error.message}`,
+      { cause: error },
+    );
+  }
 }
 
 function dispatchedRunsForHead(repository, headRef, targetHead, workflowIds) {
@@ -952,6 +996,7 @@ module.exports = {
   checkRuns,
   checkState,
   claimDispatchNonce,
+  claimRemoteDispatchNonce,
   dispatchedRunsForHead,
   ensureChecks,
   matchingRuns,

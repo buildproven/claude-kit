@@ -28,20 +28,26 @@ const {
 } = require("../quality-required-checks.js");
 
 let originalClaimDirectory;
+let originalRemoteClaim;
 let activeClaimDirectory;
 
 beforeEach(() => {
   originalClaimDirectory = process.env.QUALITY_REVIEW_DISPATCH_CLAIM_DIR;
+  originalRemoteClaim = process.env.QUALITY_REVIEW_DISPATCH_REMOTE_CLAIM;
   activeClaimDirectory = fs.mkdtempSync(
     path.join(os.tmpdir(), "quality-dispatch-claims-"),
   );
   process.env.QUALITY_REVIEW_DISPATCH_CLAIM_DIR = activeClaimDirectory;
+  process.env.QUALITY_REVIEW_DISPATCH_REMOTE_CLAIM = "false";
 });
 
 afterEach(() => {
   if (originalClaimDirectory === undefined)
     delete process.env.QUALITY_REVIEW_DISPATCH_CLAIM_DIR;
   else process.env.QUALITY_REVIEW_DISPATCH_CLAIM_DIR = originalClaimDirectory;
+  if (originalRemoteClaim === undefined)
+    delete process.env.QUALITY_REVIEW_DISPATCH_REMOTE_CLAIM;
+  else process.env.QUALITY_REVIEW_DISPATCH_REMOTE_CLAIM = originalRemoteClaim;
   fs.rmSync(activeClaimDirectory, { recursive: true, force: true });
 });
 
