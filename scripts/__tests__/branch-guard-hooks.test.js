@@ -187,6 +187,23 @@ describe("block-push-main.sh", () => {
     expect(runHook(PUSH_HOOK, "git push origin feat/x").code).toBe(0);
   });
 
+  it.each([
+    ["git push origin main", "protected"],
+    ["git push origin feat/x", "unprotected"],
+    ["git push origin main\\", "unknown"],
+  ])(
+    "classifies a push target for the CI-budget guard: %s",
+    (command, expected) => {
+      const payload = JSON.stringify({ tool_input: { command } });
+      const output = execFileSync("bash", [PUSH_HOOK, "--classify-only"], {
+        input: payload,
+        cwd: repo,
+        encoding: "utf8",
+      });
+      expect(output.trim()).toBe(expected);
+    },
+  );
+
   it("allows a non-git command", () => {
     expect(runHook(PUSH_HOOK, "ls -la").code).toBe(0);
   });
