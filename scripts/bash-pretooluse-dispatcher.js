@@ -106,11 +106,10 @@ for (const name of guards) {
 // regex that could drift from the guard that already ran.
 if (hasPush) {
   const classifier = resolveGuard("block-push-main.sh");
-  const classification = spawnSync(
-    "bash",
-    [classifier, "--classify-only"],
-    { input: rawInput, encoding: "utf8" },
-  );
+  const classification = spawnSync("bash", [classifier, "--classify-only"], {
+    input: rawInput,
+    encoding: "utf8",
+  });
   // "unknown" (unparseable command) and any execution failure fail closed —
   // budget admission still runs, same as before this change, rather than
   // silently exempting a push whose target this dispatcher could not verify.
