@@ -7,12 +7,14 @@ const os = require("node:os");
 const path = require("node:path");
 
 const WAIVABLE_STATE = "FAILURE";
+const WAIVABLE_ACTION_REQUIRED_STATE = "ACTION_REQUIRED";
 const TERMINAL_STATES = new Set([
   "SUCCESS",
   "FAILURE",
   "SKIPPED",
   "CANCELLED",
   "NEUTRAL",
+  WAIVABLE_ACTION_REQUIRED_STATE,
 ]);
 const DEFAULT_QUALITY_WORKFLOW_PATH = ".github/workflows/quality.yml";
 
@@ -38,7 +40,11 @@ function canonicalJson(value) {
 
 function canonicalEvidence(value) {
   const normalized = { ...value };
-  for (const field of ["failedJobs", "successfulOrSkippedChecks"]) {
+  for (const field of [
+    "failedJobs",
+    "failedRuns",
+    "successfulOrSkippedChecks",
+  ]) {
     if (Array.isArray(normalized[field])) {
       normalized[field] = [...normalized[field]].sort((left, right) =>
         JSON.stringify(canonicalJson(left)).localeCompare(
@@ -92,6 +98,22 @@ function jobIsPreallocationBillingFailure(job) {
   );
 }
 
+function runIsPreallocationBillingActionRequired(run, jobs) {
+  const created = Date.parse(run?.created_at);
+  const updated = Date.parse(run?.updated_at);
+  return (
+    run?.event === "pull_request" &&
+    run?.status === "completed" &&
+    run?.conclusion === "action_required" &&
+    Array.isArray(jobs) &&
+    jobs.length === 0 &&
+    Number.isFinite(created) &&
+    Number.isFinite(updated) &&
+    updated >= created &&
+    updated - created <= 30_000
+  );
+}
+
 function synthesizeWorkflowDispatchEvidence(
   repository,
   expectedHead,
@@ -127,6 +149,38 @@ function synthesizeWorkflowDispatchEvidence(
     }
   }
   return { checks, jobsById };
+}
+
+function synthesizePullRequestActionRequiredEvidence(
+  repository,
+  expectedHead,
+  runs,
+  jobsByRunId,
+  expectedWorkflowId,
+) {
+  const checks = [];
+  const runsById = {};
+  for (const run of Array.isArray(runs) ? runs : []) {
+    if (
+      run?.head_sha !== expectedHead ||
+      run?.event !== "pull_request" ||
+      Number(run?.workflow_id) !== expectedWorkflowId ||
+      !runIsPreallocationBillingActionRequired(
+        run,
+        jobsByRunId?.[String(run.id)],
+      )
+    )
+      continue;
+    runsById[run.id] = run;
+    checks.push({
+      name: `${run.name || run.workflow_id || "workflow"}/billing-preallocation`,
+      state: WAIVABLE_ACTION_REQUIRED_STATE,
+      link: `https://github.com/${repository}/actions/runs/${run.id}`,
+      runId: run.id,
+      billingPreallocation: true,
+    });
+  }
+  return { checks, runsById };
 }
 
 function configuredQualityWorkflowPath() {
@@ -204,7 +258,12 @@ function classifyBillingWaiver({
     throw new Error("CI still has pending or unknown checks");
   }
   const failures = checks.filter((check) => check.state === WAIVABLE_STATE);
-  if (failures.length === 0) {
+  const actionRequiredRuns = checks.filter(
+    (check) =>
+      check.state === WAIVABLE_ACTION_REQUIRED_STATE &&
+      check.billingPreallocation === true,
+  );
+  if (failures.length === 0 && actionRequiredRuns.length === 0) {
     throw new Error("CI has no billing-signature failures to waive");
   }
   const nonwaivableTerminal = checks.filter((check) =>
@@ -233,6 +292,10 @@ function classifyBillingWaiver({
       completedAt: job.completed_at,
     };
   });
+  const waivedRuns = actionRequiredRuns.map((check) => ({
+    check: check.name,
+    runId: String(check.runId),
+  }));
   // Keep the waiver digest stable across the two validations performed by a
   // merge: classify once, then revalidate the exact same live job evidence.
   // Wall-clock `classifiedAt` made an otherwise unchanged billing diagnosis
@@ -249,8 +312,14 @@ function classifyBillingWaiver({
     waiverUntil: new Date(expiry).toISOString(),
     classifiedAt: new Date(classifiedAt || now).toISOString(),
     failedJobs: waivedJobs,
+    failedRuns: waivedRuns,
     successfulOrSkippedChecks: checks
-      .filter((check) => check.state !== WAIVABLE_STATE)
+      .filter(
+        (check) =>
+          ![WAIVABLE_STATE, WAIVABLE_ACTION_REQUIRED_STATE].includes(
+            check.state,
+          ),
+      )
       .map((check) => ({ name: check.name, state: check.state })),
   };
   return {
@@ -334,6 +403,33 @@ function listWorkflowDispatchRuns(
   );
 }
 
+function listPullRequestRuns(repository, expectedHead, workflowId) {
+  const runs = [];
+  for (let page = 1; page <= 100; page += 1) {
+    const response = parseJson(
+      runGh([
+        "api",
+        `repos/${repository}/actions/workflows/${workflowId}/runs?head_sha=${expectedHead}&event=pull_request&per_page=100&page=${page}`,
+      ]),
+      `GitHub quality workflow ${workflowId} pull request runs response`,
+    );
+    if (!Array.isArray(response.workflow_runs)) {
+      throw new Error(
+        `GitHub quality workflow ${workflowId} pull request runs response is invalid`,
+      );
+    }
+    runs.push(
+      ...response.workflow_runs.filter(
+        (run) => Number(run?.workflow_id) === workflowId,
+      ),
+    );
+    if (response.workflow_runs.length < 100) return runs;
+  }
+  throw new Error(
+    "GitHub pull request workflow runs pagination exceeded 100 pages",
+  );
+}
+
 function listRunJobs(repository, runId) {
   const jobs = [];
   for (let page = 1; page <= 100; page += 1) {
@@ -408,6 +504,27 @@ function loadLiveEvidence(repository, pr, expectedHead) {
       `GitHub Actions job ${jobId}`,
     );
   }
+  const workflowId = qualityWorkflowId(repository);
+  const pullRequestRuns = listPullRequestRuns(
+    repository,
+    expectedHead,
+    workflowId,
+  );
+  const jobsByRunId = {};
+  for (const run of pullRequestRuns) {
+    if (run?.head_sha === expectedHead && run?.event === "pull_request") {
+      jobsByRunId[String(run.id)] = listRunJobs(repository, run.id);
+    }
+  }
+  checks.push(
+    ...synthesizePullRequestActionRequiredEvidence(
+      repository,
+      expectedHead,
+      pullRequestRuns,
+      jobsByRunId,
+      workflowId,
+    ).checks,
+  );
   if (checks.length === 0) {
     const dispatchEvidence = loadWorkflowDispatchEvidence(
       repository,
@@ -471,6 +588,8 @@ module.exports = {
   evidenceDigestValid,
   evidenceSha256,
   jobIsPreallocationBillingFailure,
+  runIsPreallocationBillingActionRequired,
+  synthesizePullRequestActionRequiredEvidence,
   synthesizeWorkflowDispatchEvidence,
   parseJobId,
   qualityWorkflowId,

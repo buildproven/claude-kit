@@ -955,7 +955,10 @@ exit 1
         "--i-understand-security-risk",
         "--i-understand-test-risk",
       ],
-      env: { BS_QUALITY_OVERRIDE_APPROVAL_TTL_SECONDS: "1" },
+      // The complete suite can spend more than a second setting up this
+      // fixture. Keep the expiry test short while leaving enough time for the
+      // capability to be minted before its deliberate expiry check.
+      env: { BS_QUALITY_OVERRIDE_APPROVAL_TTL_SECONDS: "5" },
     });
     expect(result.status, result.stderr).toBe(0);
     const manifest = manifestPathFromStdout(result.stdout);
@@ -963,10 +966,10 @@ exit 1
     expect(
       Date.parse(parsed.approval.expiresAt) -
         Date.parse(parsed.approval.issuedAt),
-    ).toBeLessThanOrEqual(1000);
+    ).toBeLessThanOrEqual(5000);
 
     // Sleep past expiry, then confirm approvalValid() reports false.
-    const deadline = Date.now() + 1500;
+    const deadline = Date.now() + 5500;
     while (Date.now() < deadline) {
       /* busy-wait a fraction of a second: TTL=1s is intentionally tiny */
     }
