@@ -11,8 +11,6 @@ const {
   evidenceDigestValid,
   jobIsPreallocationBillingFailure,
   parseJobId,
-  runIsPreallocationBillingActionRequired,
-  synthesizePullRequestActionRequiredEvidence,
   synthesizeWorkflowDispatchEvidence,
 } = require(
   path.resolve(import.meta.dirname, "..", "quality-ci-billing-waiver.js"),
@@ -113,70 +111,35 @@ describe("quality CI billing waiver", () => {
     expect(evidence.jobsById[35]).toBeUndefined();
   });
 
-  it("synthesizes an exact-head no-job pull-request billing block", () => {
-    const run = {
-      id: 12,
-      name: "Quality Checks",
-      workflow_id: 77,
-      event: "pull_request",
-      head_sha: head,
-      status: "completed",
-      conclusion: "action_required",
-      created_at: "2026-07-20T01:00:00Z",
-      updated_at: "2026-07-20T01:00:03Z",
-    };
-    const evidence = synthesizePullRequestActionRequiredEvidence(
-      repository,
-      head,
-      [run],
-      { 12: [] },
-      77,
-    );
-    expect(evidence.checks).toEqual([
-      {
-        name: "Quality Checks/billing-preallocation",
-        state: "ACTION_REQUIRED",
-        link: "https://github.com/owner/repo/actions/runs/12",
-        runId: 12,
-        completedAt: "2026-07-20T01:00:03Z",
-        billingPreallocation: true,
-      },
-    ]);
-    expect(runIsPreallocationBillingActionRequired(run, [])).toBe(true);
-    expect(
-      classify({
-        checks: evidence.checks,
-        jobsById: {},
-      }).failedRuns,
-    ).toEqual([
-      {
-        check: "Quality Checks/billing-preallocation",
-        runId: "12",
-        completedAt: "2026-07-20T01:00:03Z",
-      },
-    ]);
-    const first = classify({ checks: evidence.checks, jobsById: {}, now: 1 });
-    const second = classify({
-      checks: evidence.checks,
-      jobsById: {},
-      now: 2,
-    });
-    expect(second.evidenceSha256).toBe(first.evidenceSha256);
-  });
-
-  it("does not waive unverified action-required checks", () => {
+  it("does not infer billing provenance from action-required checks", () => {
     expect(() =>
       classify({
         checks: [
           {
-            name: "unrelated",
+            name: "approval-required",
             state: "ACTION_REQUIRED",
-            link: "https://example.com/check/12",
+            link: "https://github.com/owner/repo/actions/runs/12",
+            billingPreallocation: true,
           },
         ],
         jobsById: {},
       }),
-    ).toThrow(/no billing-signature failures/);
+    ).toThrow(/pending or unknown/);
+  });
+
+  it("rejects a mixed verified failure and action-required check", () => {
+    expect(() =>
+      classify({
+        checks: [
+          check,
+          {
+            name: "approval-required",
+            state: "ACTION_REQUIRED",
+            link: "https://github.com/owner/repo/actions/runs/12",
+          },
+        ],
+      }),
+    ).toThrow(/pending or unknown/);
   });
 
   it("can restrict synthesized evidence to the quality workflow identity", () => {
