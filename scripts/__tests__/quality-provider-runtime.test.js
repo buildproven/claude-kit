@@ -125,7 +125,7 @@ describe("provider review runtime", () => {
           "--",
           "/bin/bash",
           "-c",
-          'python3 -c \'import os,signal,sys,time; os.setsid(); signal.signal(signal.SIGTERM, signal.SIG_IGN); open(sys.argv[1], "w").write(str(os.getpid())); time.sleep(20)\' "$1" & sleep 1; exit 0',
+          'python3 -c \'import os,signal,sys,time; os.setsid(); signal.signal(signal.SIGTERM, signal.SIG_IGN); open(sys.argv[1], "w").write(str(os.getpid())); time.sleep(20)\' "$1" & for _ in $(seq 1 100); do [ -s "$1" ] && exit 0; sleep 0.05; done; exit 1',
           "provider",
           pidFile,
         ],
@@ -331,8 +331,11 @@ while [ ! -s "$2" ]; do sleep 0.05; done
 child=$(cat "$2")
 kill -TERM "$wrapper"
 wait "$wrapper" 2>/dev/null || true
-sleep 0.2
-if kill -0 "$child" 2>/dev/null; then exit 99; fi
+for _ in $(seq 1 40); do
+  if ! kill -0 "$child" 2>/dev/null; then exit 0; fi
+  sleep 0.05
+done
+exit 99
 `;
     const result = spawnSync(
       "bash",
