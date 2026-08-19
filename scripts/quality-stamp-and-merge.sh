@@ -66,7 +66,8 @@ if printf '%s' "$CHECKS_FOR_ADMISSION_JSON" | jq -e \
   CI_ALREADY_GREEN=true
 fi
 if [ "$CI_ALREADY_GREEN" != true ]; then
-  node "$SCRIPT_DIR/ci-budget-admission.js" "${CI_BUDGET_ARGS[@]}" >/dev/null || {
+  node "$SCRIPT_DIR/ci-budget-admission.js" \
+    ${CI_BUDGET_ARGS[@]+"${CI_BUDGET_ARGS[@]}"} >/dev/null || {
     echo "❌ MERGE BLOCKED: GitHub Actions minute policy denied this candidate." >&2
     exit 1
   }

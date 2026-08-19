@@ -4594,6 +4594,7 @@ exit 1
       },
     );
     expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).not.toContain("unbound variable");
     expect(git(root, ["rev-parse", "HEAD"])).toBe(reviewedHead);
     expect(
       JSON.parse(readFileSync(manifest, "utf8")).merge.stampHead,
