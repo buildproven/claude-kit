@@ -292,11 +292,11 @@ current_topic_push() {
     esac
   done
 
-  # `git push` and `git push <remote>` use the current branch's configured
-  # upstream. Explicit pushes must contain one refspec that preserves the
-  # current branch name. Multi-ref and cross-branch pushes are ambiguous here.
+  # Only an explicit refspec proves the destination. Bare and remote-only
+  # pushes depend on push.default, upstream, and remote push configuration;
+  # treat them like multi-ref and cross-branch pushes: unknown and admitted.
   [ "${#refspecs[@]}" -le 1 ] || return 1
-  [ "${#refspecs[@]}" -eq 1 ] || return 0
+  [ "${#refspecs[@]}" -eq 1 ] || return 1
   token="${refspecs[0]}"
   while [[ "$token" == +* ]]; do token="${token:1}"; done
   if [[ "$token" == *:* ]]; then

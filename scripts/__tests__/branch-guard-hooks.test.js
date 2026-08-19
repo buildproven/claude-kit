@@ -229,6 +229,8 @@ describe("block-push-main.sh", () => {
       }),
     ).toBe("ci-trigger");
     expect(classify("git push origin feat/other")).toBe("unknown");
+    expect(classify("git push")).toBe("unknown");
+    expect(classify("git push origin")).toBe("unknown");
     expect(classify("git push origin feat/budget", { GH_FAIL: "1" })).toBe(
       "unknown",
     );
