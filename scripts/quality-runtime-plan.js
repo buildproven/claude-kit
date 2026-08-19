@@ -46,10 +46,10 @@ const WORKLOAD_BANDS = [
     checkSeconds: 180,
     reviewReserveSeconds: 120,
     // The kit's bounded integration suite performs real Git/npm work. Give a
-    // small change a seven-and-a-half-minute overrun reserve. Release
-    // metadata requires the complete suite, whose measured fixed cost can
-    // exceed the prior nine-minute total while it remains bounded.
-    checkReserveSeconds: 450,
+    // Small release metadata changes require the complete suite. Its measured
+    // fixed cost can exceed the prior ten-and-a-half-minute total, so retain
+    // a bounded ten-minute reserve for a thirteen-minute maximum gate.
+    checkReserveSeconds: 600,
   },
   {
     name: "medium",
