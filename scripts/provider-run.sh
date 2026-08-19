@@ -246,14 +246,27 @@ run_one() {
       : > "$last_message_file"
       [ -z "$GOVERNED_MODEL" ] || CODEX_PLAN_ARGS+=(--model "$GOVERNED_MODEL")
       [ -z "$GOVERNED_EFFORT" ] || CODEX_PLAN_ARGS+=(-c "model_reasoning_effort=\"$GOVERNED_EFFORT\"")
-      if python3 "$DEADLINE" --timeout-seconds "$TIMEOUT_SECONDS" -- \
-        codex exec --ephemeral -C "$TARGET_DIR" -s "$SANDBOX" --json \
-        "${CODEX_PLAN_ARGS[@]}" \
-        -o "$last_message_file" - \
-        < "$PROMPT_FILE" > "$events_file" 2> "$stderr_file"; then
-        rc=0
+      if [ ${#CODEX_PLAN_ARGS[@]} -gt 0 ]; then
+        if python3 "$DEADLINE" --timeout-seconds "$TIMEOUT_SECONDS" -- \
+          codex exec --ephemeral -C "$TARGET_DIR" -s "$SANDBOX" --json \
+          "${CODEX_PLAN_ARGS[@]}" \
+          -o "$last_message_file" - \
+          < "$PROMPT_FILE" > "$events_file" 2> "$stderr_file"; then
+          rc=0
+        else
+          rc=$?
+        fi
       else
-        rc=$?
+        # Bash 3.2 treats an empty-array expansion as an unbound variable
+        # under `set -u`. Keep the no-override path explicit for macOS.
+        if python3 "$DEADLINE" --timeout-seconds "$TIMEOUT_SECONDS" -- \
+          codex exec --ephemeral -C "$TARGET_DIR" -s "$SANDBOX" --json \
+          -o "$last_message_file" - \
+          < "$PROMPT_FILE" > "$events_file" 2> "$stderr_file"; then
+          rc=0
+        else
+          rc=$?
+        fi
       fi
       cp "$last_message_file" "$stdout_file"
       [ "$rc" -eq 0 ] && return 0
@@ -278,9 +291,18 @@ run_one() {
         cd "$TARGET_DIR"
         [ -z "$GOVERNED_MODEL" ] || CLAUDE_MODEL_ARGS+=(--model "$GOVERNED_MODEL")
         [ -z "$GOVERNED_EFFORT" ] || CLAUDE_MODEL_ARGS+=(--effort "$GOVERNED_EFFORT")
-        python3 "$DEADLINE" --timeout-seconds "$TIMEOUT_SECONDS" -- \
-          claude -p "$(cat "$PROMPT_FILE")" --no-session-persistence \
-            --dangerously-skip-permissions --output-format json "${CLAUDE_MODEL_ARGS[@]}"
+        if [ ${#CLAUDE_MODEL_ARGS[@]} -gt 0 ]; then
+          python3 "$DEADLINE" --timeout-seconds "$TIMEOUT_SECONDS" -- \
+            claude -p "$(cat "$PROMPT_FILE")" --no-session-persistence \
+              --dangerously-skip-permissions --output-format json "${CLAUDE_MODEL_ARGS[@]}"
+        else
+          # Bash 3.2 treats an empty-array expansion as an unbound variable
+          # under `set -u`. Keep the no-override path explicit so the default
+          # Claude model works on macOS as well as newer Bash versions.
+          python3 "$DEADLINE" --timeout-seconds "$TIMEOUT_SECONDS" -- \
+            claude -p "$(cat "$PROMPT_FILE")" --no-session-persistence \
+              --dangerously-skip-permissions --output-format json
+        fi
       ) > "$stdout_file" 2> "$stderr_file"; then
         rc=0
       else
