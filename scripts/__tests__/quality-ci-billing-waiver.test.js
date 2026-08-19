@@ -11,6 +11,8 @@ const {
   evidenceDigestValid,
   jobIsPreallocationBillingFailure,
   parseJobId,
+  runIsPreallocationBillingActionRequired,
+  synthesizePullRequestActionRequiredEvidence,
   synthesizeWorkflowDispatchEvidence,
 } = require(
   path.resolve(import.meta.dirname, "..", "quality-ci-billing-waiver.js"),
@@ -109,6 +111,47 @@ describe("quality CI billing waiver", () => {
       steps: [],
     });
     expect(evidence.jobsById[35]).toBeUndefined();
+  });
+
+  it("synthesizes an exact-head no-job pull-request billing block", () => {
+    const run = {
+      id: 12,
+      name: "Quality Checks",
+      workflow_id: 77,
+      event: "pull_request",
+      head_sha: head,
+      status: "completed",
+      conclusion: "action_required",
+      created_at: "2026-07-20T01:00:00Z",
+      updated_at: "2026-07-20T01:00:03Z",
+    };
+    const evidence = synthesizePullRequestActionRequiredEvidence(
+      repository,
+      head,
+      [run],
+      { 12: [] },
+      77,
+    );
+    expect(evidence.checks).toEqual([
+      {
+        name: "Quality Checks/billing-preallocation",
+        state: "ACTION_REQUIRED",
+        link: "https://github.com/owner/repo/actions/runs/12",
+        runId: 12,
+      },
+    ]);
+    expect(runIsPreallocationBillingActionRequired(run, [])).toBe(true);
+    expect(
+      classify({
+        checks: evidence.checks,
+        jobsById: {},
+      }).failedRuns,
+    ).toEqual([
+      {
+        check: "Quality Checks/billing-preallocation",
+        runId: "12",
+      },
+    ]);
   });
 
   it("can restrict synthesized evidence to the quality workflow identity", () => {
