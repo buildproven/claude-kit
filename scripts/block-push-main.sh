@@ -285,6 +285,7 @@ current_topic_push() {
       *)
         if [ "$remote_seen" = false ]; then
           remote_seen=true
+          PUSH_REMOTE="$token"
         else
           refspecs+=("$token")
         fi
@@ -312,6 +313,33 @@ current_topic_push() {
   [ "$destination" = "$CURRENT_BRANCH" ]
 }
 
+github_repository_for_push_remote() {
+  local remote_url host repository
+  remote_url=$("${GIT_ARGS[@]}" remote get-url --push "$PUSH_REMOTE" 2>/dev/null) || return 1
+  case "$remote_url" in
+    https://*/*/*)
+      host="${remote_url#https://}"
+      host="${host%%/*}"
+      repository="${remote_url#https://*/}"
+      ;;
+    ssh://git@*/*/*)
+      host="${remote_url#ssh://git@}"
+      host="${host%%/*}"
+      repository="${remote_url#ssh://git@*/}"
+      ;;
+    git@*:*/*)
+      host="${remote_url#git@}"
+      host="${host%%:*}"
+      repository="${remote_url#*:}"
+      ;;
+    *) return 1 ;;
+  esac
+  repository="${repository%.git}"
+  [[ "$host" =~ ^[A-Za-z0-9.-]+$ ]] || return 1
+  [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1
+  PUSH_REPOSITORY="$host/$repository"
+}
+
 if [ "$CI_BUDGET_CLASSIFY" = true ]; then
   if pushes_protected_branch; then
     echo "ci-trigger"
@@ -321,12 +349,17 @@ if [ "$CI_BUDGET_CLASSIFY" = true ]; then
     echo "unknown"
     exit 0
   fi
+  if ! github_repository_for_push_remote; then
+    echo "unknown"
+    exit 0
+  fi
   command -v gh >/dev/null 2>&1 || { echo "unknown"; exit 0; }
   REPOSITORY_ROOT=$("${GIT_ARGS[@]}" rev-parse --show-toplevel 2>/dev/null) || {
     echo "unknown"
     exit 0
   }
-  OPEN_PRS=$(cd "$REPOSITORY_ROOT" && gh pr list --head "$CURRENT_BRANCH" \
+  OPEN_PRS=$(cd "$REPOSITORY_ROOT" && gh pr list --repo "$PUSH_REPOSITORY" \
+    --head "$CURRENT_BRANCH" \
     --state open --limit 1 --json number 2>/dev/null) || {
     echo "unknown"
     exit 0

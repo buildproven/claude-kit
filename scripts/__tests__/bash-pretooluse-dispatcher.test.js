@@ -36,6 +36,7 @@ beforeAll(() => {
   git(["init", "--initial-branch=main"]);
   git(["config", "user.email", "test@example.com"]);
   git(["config", "user.name", "Test"]);
+  git(["remote", "add", "origin", "git@github.com:example/repo.git"]);
   writeFileSync(path.join(repo, "seed.txt"), "seed\n");
   git(["add", "."]);
   git(["commit", "-m", "seed"]);

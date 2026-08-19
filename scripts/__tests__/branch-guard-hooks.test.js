@@ -49,6 +49,7 @@ beforeAll(() => {
   git(["init", "--initial-branch=main"]);
   git(["config", "user.email", "test@example.com"]);
   git(["config", "user.name", "Test"]);
+  git(["remote", "add", "origin", "git@github.com:example/repo.git"]);
   writeFileSync(path.join(repo, "file.txt"), "seed\n");
   git(["add", "."]);
   git(["commit", "-m", "seed"]);
@@ -235,6 +236,32 @@ describe("block-push-main.sh", () => {
       "unknown",
     );
     expect(classify("git push origin main")).toBe("ci-trigger");
+  });
+
+  it("binds the open-PR lookup to the pushed GitHub remote", () => {
+    git(["remote", "add", "upstream", "https://github.com/upstream/repo.git"]);
+    git(["remote", "add", "other", "https://gitlab.com/other/repo.git"]);
+    const bin = mkdtempSync(path.join(tmpdir(), "branch-guard-remote-gh-"));
+    writeFileSync(
+      path.join(bin, "gh"),
+      '#!/bin/sh\ncase " $* " in\n  *" --repo github.com/upstream/repo "*) printf \'[{"number":395}]\\n\' ;;\n  *" --repo gitlab.com/"*) exit 1 ;;\n  *) printf \'[]\\n\' ;;\nesac\n',
+      { mode: 0o755 },
+    );
+    const classify = (remote) => {
+      const payload = JSON.stringify({
+        tool_input: { command: `git push ${remote} feat/budget` },
+      });
+      return execFileSync("bash", [PUSH_HOOK, "--ci-budget-classify"], {
+        input: payload,
+        cwd: repo,
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      }).trim();
+    };
+
+    expect(classify("origin")).toBe("no-ci");
+    expect(classify("upstream")).toBe("ci-trigger");
+    expect(classify("other")).toBe("unknown");
   });
 
   it("allows a non-git command", () => {
