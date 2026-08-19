@@ -167,17 +167,24 @@ function installPnpmWorkspace(root, options) {
       "exports.location = require('zod').location;\n",
     );
   }
-  execFileSync(
-    "corepack",
-    [
+  try {
+    execFileSync(
       "pnpm",
-      "install",
-      "--offline",
-      "--frozen-lockfile=false",
-      "--ignore-scripts",
-    ],
-    { cwd: root, stdio: "ignore" },
-  );
+      [
+        "--config.manage-package-manager-versions=false",
+        "--config.pm-on-fail=ignore",
+        "install",
+        "--offline",
+        "--frozen-lockfile=false",
+        "--ignore-scripts",
+      ],
+      { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    );
+  } catch (error) {
+    throw new Error(error.stderr?.toString() || error.message, {
+      cause: error,
+    });
+  }
 }
 
 function installPackageManagerShim(root, options) {
