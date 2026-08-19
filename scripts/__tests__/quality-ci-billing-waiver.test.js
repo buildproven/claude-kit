@@ -138,6 +138,7 @@ describe("quality CI billing waiver", () => {
         state: "ACTION_REQUIRED",
         link: "https://github.com/owner/repo/actions/runs/12",
         runId: 12,
+        completedAt: "2026-07-20T01:00:03Z",
         billingPreallocation: true,
       },
     ]);
@@ -151,8 +152,16 @@ describe("quality CI billing waiver", () => {
       {
         check: "Quality Checks/billing-preallocation",
         runId: "12",
+        completedAt: "2026-07-20T01:00:03Z",
       },
     ]);
+    const first = classify({ checks: evidence.checks, jobsById: {}, now: 1 });
+    const second = classify({
+      checks: evidence.checks,
+      jobsById: {},
+      now: 2,
+    });
+    expect(second.evidenceSha256).toBe(first.evidenceSha256);
   });
 
   it("does not waive unverified action-required checks", () => {
