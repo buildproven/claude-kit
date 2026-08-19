@@ -354,7 +354,7 @@ describe("provider-native platform", () => {
     expect(result.stderr).toContain("claude exhausted");
   });
 
-  it("does not classify a successful claude status-0 envelope as exhausted (BUI-325)", () => {
+  it("runs Claude without model overrides on Bash 3.2 (BUI-777)", () => {
     const dir = makeTempDir("provider-native-claude-ok-");
     const bin = path.join(dir, "bin");
     const output = path.join(makeTempDir("provider-output-"), "output");
@@ -388,6 +388,7 @@ describe("provider-native platform", () => {
     );
 
     expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("unbound variable");
     expect(result.stderr).not.toContain("exhausted");
     expect(result.stdout).toContain("claude completed cleanly");
     expect(readFileSync(path.join(output, "provider"), "utf8").trim()).toBe(
