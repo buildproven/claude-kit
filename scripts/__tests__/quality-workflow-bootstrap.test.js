@@ -22,9 +22,13 @@ describe("quality workflow bootstrap", () => {
     expect(installStep).toBeDefined();
     expect(installStep).toContain("timeout-minutes: 3");
     expect(installStep).toContain("command -v zsh");
-    expect(installStep).toContain("timeout 90s sudo apt-get update");
+    expect(installStep).toContain("timeout 30s sudo apt-get update");
     expect(installStep).toContain(
-      "timeout 60s sudo env DEBIAN_FRONTEND=noninteractive apt-get install --yes zsh",
+      "timeout 150s sudo env DEBIAN_FRONTEND=noninteractive apt-get",
     );
+    expect(installStep).toContain("-o Acquire::http::Timeout=15");
+    expect(installStep).toContain("-o Acquire::https::Timeout=15");
+    expect(installStep).toContain("-o Acquire::Retries=3");
+    expect(installStep).toContain("install --yes zsh");
   });
 });
