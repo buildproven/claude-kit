@@ -358,6 +358,24 @@ describe("cross-language test impact", () => {
     });
   });
 
+  it("maps the Codex skill-profile setup script to its behavioral contract", () => {
+    expect(
+      plan(["scripts/setup-codex-skill-profile.sh"], loadPolicy(ROOT)),
+    ).toMatchObject({
+      mode: "focused",
+      commands: [
+        {
+          executable: "npx",
+          args: [
+            "vitest",
+            "run",
+            "scripts/__tests__/setup-codex-skill-profile.test.js",
+          ],
+        },
+      ],
+    });
+  });
+
   it("treats a trailing-slash path as an explicit directory prefix", () => {
     expect(
       plan([".github/workflows/quality.yml"], {

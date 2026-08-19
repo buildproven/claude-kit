@@ -246,12 +246,26 @@ function parseWorktrees(output) {
 }
 
 function registeredWorktrees(repoRoot) {
-  return parseWorktrees(
+  const records = parseWorktrees(
     git(repoRoot, ["worktree", "list", "--porcelain", "-z"]).stdout.replaceAll(
       "\0",
       "\n",
     ),
   );
+  // For an embedded submodule's primary checkout, git reports the submodule's
+  // gitdir (.git/modules/<name>) as the `worktree` path instead of the actual
+  // working tree — the inverse of a normal repo, where core.worktree points
+  // OUT of the gitdir rather than the gitdir being nested under it. Left
+  // uncorrected, every caller that treats this path as a real directory (e.g.
+  // `create()` reusing a registered worktree for a branch) resolves to a bare
+  // gitdir with no files, silently.
+  const common = commonDir(repoRoot);
+  for (const record of records) {
+    if (record.path === common && !record.bare) {
+      record.path = primaryRoot(repoRoot);
+    }
+  }
+  return records;
 }
 
 function linkedWorktrees(repoRoot) {

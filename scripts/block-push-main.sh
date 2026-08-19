@@ -1,8 +1,20 @@
 #!/usr/bin/env bash
 # PreToolUse hook for Bash — blocks direct pushes to main/master
 # Exit codes: 0 = allow, 2 = deny with message
+#
+# --classify-only: skip the allow/deny decision and instead print whether the
+# push targets a protected branch (main/master), for callers that need that
+# signal without duplicating this file's shell-injection-safe tokenizer.
+# Prints "protected" or "unprotected" and always exits 0 (parse failure prints
+# "unknown" and exits 0, so a caller can fail closed on the ambiguous case
+# without this classification query itself being treated as a denial).
 
 set -euo pipefail
+
+CLASSIFY_ONLY=false
+if [ "${1:-}" = "--classify-only" ]; then
+  CLASSIFY_ONLY=true
+fi
 
 # Read hook JSON from stdin
 INPUT=$(cat)
@@ -113,6 +125,10 @@ tokenize_command() {
 # A malformed shell command cannot be classified safely. Fail closed before
 # any partially parsed tokens can reach the branch/refspec checks.
 if ! tokenize_command; then
+  if [ "$CLASSIFY_ONLY" = true ]; then
+    echo "unknown"
+    exit 0
+  fi
   echo "Blocked: could not parse the push command safely." >&2
   exit 2
 fi
@@ -189,6 +205,10 @@ if push_argument_start; then
 else
   PUSH_PARSE_STATUS=$?
   if [ "$PUSH_PARSE_STATUS" -eq 2 ]; then
+    if [ "$CLASSIFY_ONLY" = true ]; then
+      echo "unknown"
+      exit 0
+    fi
     echo "Blocked: could not classify the git command safely." >&2
     exit 2
   fi
@@ -223,6 +243,39 @@ pushes_protected_branch() {
   return 1
 }
 
+# Block bare "git push" when on main/master (no explicit branch arg). Use the
+# same parsed tokens as protected-ref detection so quoted paths and trailing
+# whitespace cannot make this branch diverge from the actual command.
+bare_push() {
+  local index
+  [ -n "$PUSH_ARGUMENT_START" ] || return 1
+  index="$PUSH_ARGUMENT_START"
+  [ "$index" -eq "$PUSH_ARGUMENT_END" ]
+}
+
+if [ "$CLASSIFY_ONLY" = true ]; then
+  # Same protected-branch determination as the allow/deny path below, minus
+  # the force/delete override carve-out: a caller asking "will this push
+  # reach main/master" (e.g. deciding whether to run a CI-minute budget
+  # check) wants the target branch, not whether an unrelated flag would have
+  # let a direct push through. This query path must never fall into the
+  # real allow/deny logic below — printing a classification is its only
+  # side effect.
+  if pushes_protected_branch; then
+    echo "protected"
+    exit 0
+  fi
+  if bare_push; then
+    CURRENT_BRANCH=$("${GIT_ARGS[@]}" branch --show-current 2>/dev/null || echo "")
+    if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ]; then
+      echo "protected"
+      exit 0
+    fi
+  fi
+  echo "unprotected"
+  exit 0
+fi
+
 if pushes_protected_branch; then
   # Allow exact force/delete flags (already gated by permissions.ask). Check
   # tokens, not raw substrings: a path such as `/tmp/-final` or an unrelated
@@ -250,15 +303,6 @@ if pushes_protected_branch; then
   exit 2
 fi
 
-# Block bare "git push" when on main/master (no explicit branch arg). Use the
-# same parsed tokens as protected-ref detection so quoted paths and trailing
-# whitespace cannot make this branch diverge from the actual command.
-bare_push() {
-  local index
-  [ -n "$PUSH_ARGUMENT_START" ] || return 1
-  index="$PUSH_ARGUMENT_START"
-  [ "$index" -eq "$PUSH_ARGUMENT_END" ]
-}
 if bare_push; then
   CURRENT_BRANCH=$("${GIT_ARGS[@]}" branch --show-current 2>/dev/null || echo "")
   if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ]; then

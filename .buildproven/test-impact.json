@@ -37,6 +37,19 @@
       ]
     },
     {
+      "paths": ["scripts/setup-codex-skill-profile.sh"],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/setup-codex-skill-profile.test.js"
+          ]
+        }
+      ]
+    },
+    {
       "paths": ["scripts/quality-required-checks.js"],
       "commands": [
         {

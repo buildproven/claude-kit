@@ -92,17 +92,42 @@ for (const name of guards) {
 // preserves the actionable root cause while still refusing an allowed direct
 // push before it can create another Actions run. Quality's signed exact-head
 // path invokes its own nested push after proving the local candidate.
+//
+// The budget check itself is scoped to pushes that can plausibly consume
+// Actions minutes: this repo's (and every repo installed from this kit's)
+// workflows trigger on `push: branches: [main]` and on `pull_request`, never
+// on an arbitrary branch push. Pushing a brand-new topic branch to open a PR
+// costs zero minutes by itself — gating it here made the FIRST push of any
+// branch impossible once the budget is exhausted, with no sanctioned bypass:
+// quality's own break-glass push only fires at merge time, against an
+// already-open PR, so there was no way to create that PR in the first place.
+// Reuse block-push-main.sh's classifier (already-parsed, shell-injection-safe
+// tokenizer) rather than re-deriving "is this main/master" with a second
+// regex that could drift from the guard that already ran.
 if (hasPush) {
-  const admission = resolveGuard("ci-budget-admission.js");
-  if (fs.existsSync(admission)) {
-    const result = spawnSync(process.execPath, [admission], {
-      encoding: "utf8",
-    });
-    if (result.status !== 0) {
-      if (result.stderr) process.stderr.write(result.stderr);
-      deny(
-        "GitHub Actions minute policy denied this push; use the signed exact-head quality path.",
-      );
+  const classifier = resolveGuard("block-push-main.sh");
+  const classification = spawnSync("bash", [classifier, "--classify-only"], {
+    input: rawInput,
+    encoding: "utf8",
+  });
+  // "unknown" (unparseable command) and any execution failure fail closed —
+  // budget admission still runs, same as before this change, rather than
+  // silently exempting a push whose target this dispatcher could not verify.
+  const isUnprotected =
+    classification.status === 0 &&
+    classification.stdout.trim() === "unprotected";
+  if (!isUnprotected) {
+    const admission = resolveGuard("ci-budget-admission.js");
+    if (fs.existsSync(admission)) {
+      const result = spawnSync(process.execPath, [admission], {
+        encoding: "utf8",
+      });
+      if (result.status !== 0) {
+        if (result.stderr) process.stderr.write(result.stderr);
+        deny(
+          "GitHub Actions minute policy denied this push; use the signed exact-head quality path.",
+        );
+      }
     }
   }
 }

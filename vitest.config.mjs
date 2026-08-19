@@ -12,9 +12,9 @@ export default {
     testTimeout: 60_000,
     hookTimeout: 60_000,
     // These integration suites create Git repositories, worktrees, and npm
-    // subprocesses. A four-worker cap preserves parallel feedback without
-    // starving those child processes on a developer machine.
-    maxWorkers: 4,
+    // subprocesses. Eight workers keep the complete suite inside the quality
+    // gate's bounded execution allowance without changing test scope.
+    maxWorkers: 8,
     include: [
       "scripts/__tests__/**/*.test.js",
       "eslint-plugin-defensive/__tests__/**/*.test.js",
