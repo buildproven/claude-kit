@@ -177,6 +177,7 @@ function synthesizePullRequestActionRequiredEvidence(
       state: WAIVABLE_ACTION_REQUIRED_STATE,
       link: `https://github.com/${repository}/actions/runs/${run.id}`,
       runId: run.id,
+      billingPreallocation: true,
     });
   }
   return { checks, runsById };
@@ -258,7 +259,9 @@ function classifyBillingWaiver({
   }
   const failures = checks.filter((check) => check.state === WAIVABLE_STATE);
   const actionRequiredRuns = checks.filter(
-    (check) => check.state === WAIVABLE_ACTION_REQUIRED_STATE,
+    (check) =>
+      check.state === WAIVABLE_ACTION_REQUIRED_STATE &&
+      check.billingPreallocation === true,
   );
   if (failures.length === 0 && actionRequiredRuns.length === 0) {
     throw new Error("CI has no billing-signature failures to waive");
@@ -501,6 +504,27 @@ function loadLiveEvidence(repository, pr, expectedHead) {
       `GitHub Actions job ${jobId}`,
     );
   }
+  const workflowId = qualityWorkflowId(repository);
+  const pullRequestRuns = listPullRequestRuns(
+    repository,
+    expectedHead,
+    workflowId,
+  );
+  const jobsByRunId = {};
+  for (const run of pullRequestRuns) {
+    if (run?.head_sha === expectedHead && run?.event === "pull_request") {
+      jobsByRunId[String(run.id)] = listRunJobs(repository, run.id);
+    }
+  }
+  checks.push(
+    ...synthesizePullRequestActionRequiredEvidence(
+      repository,
+      expectedHead,
+      pullRequestRuns,
+      jobsByRunId,
+      workflowId,
+    ).checks,
+  );
   if (checks.length === 0) {
     const dispatchEvidence = loadWorkflowDispatchEvidence(
       repository,
@@ -508,23 +532,6 @@ function loadLiveEvidence(repository, pr, expectedHead) {
     );
     checks = dispatchEvidence.checks;
     Object.assign(jobsById, dispatchEvidence.jobsById);
-  }
-  if (checks.length === 0) {
-    const workflowId = qualityWorkflowId(repository);
-    const runs = listPullRequestRuns(repository, expectedHead, workflowId);
-    const jobsByRunId = {};
-    for (const run of runs) {
-      if (run?.head_sha === expectedHead && run?.event === "pull_request") {
-        jobsByRunId[String(run.id)] = listRunJobs(repository, run.id);
-      }
-    }
-    checks = synthesizePullRequestActionRequiredEvidence(
-      repository,
-      expectedHead,
-      runs,
-      jobsByRunId,
-      workflowId,
-    ).checks;
   }
   return { actualHead, checks, jobsById, expectedHead, repository };
 }

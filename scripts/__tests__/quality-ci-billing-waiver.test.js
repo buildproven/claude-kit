@@ -138,6 +138,7 @@ describe("quality CI billing waiver", () => {
         state: "ACTION_REQUIRED",
         link: "https://github.com/owner/repo/actions/runs/12",
         runId: 12,
+        billingPreallocation: true,
       },
     ]);
     expect(runIsPreallocationBillingActionRequired(run, [])).toBe(true);
@@ -152,6 +153,21 @@ describe("quality CI billing waiver", () => {
         runId: "12",
       },
     ]);
+  });
+
+  it("does not waive unverified action-required checks", () => {
+    expect(() =>
+      classify({
+        checks: [
+          {
+            name: "unrelated",
+            state: "ACTION_REQUIRED",
+            link: "https://example.com/check/12",
+          },
+        ],
+        jobsById: {},
+      }),
+    ).toThrow(/no billing-signature failures/);
   });
 
   it("can restrict synthesized evidence to the quality workflow identity", () => {
