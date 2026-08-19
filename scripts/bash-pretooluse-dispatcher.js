@@ -94,29 +94,28 @@ for (const name of guards) {
 // path invokes its own nested push after proving the local candidate.
 //
 // The budget check itself is scoped to pushes that can plausibly consume
-// Actions minutes: this repo's (and every repo installed from this kit's)
-// workflows trigger on `push: branches: [main]` and on `pull_request`, never
-// on an arbitrary branch push. Pushing a brand-new topic branch to open a PR
-// costs zero minutes by itself — gating it here made the FIRST push of any
-// branch impossible once the budget is exhausted, with no sanctioned bypass:
-// quality's own break-glass push only fires at merge time, against an
-// already-open PR, so there was no way to create that PR in the first place.
+// Actions minutes. A current-topic push with no open PR costs zero minutes;
+// after the PR opens, the same push triggers pull_request:synchronize and must
+// be admitted. Gating the first push made PR creation impossible at the hard
+// limit, while exempting every topic push allowed later CI-triggering updates.
 // Reuse block-push-main.sh's classifier (already-parsed, shell-injection-safe
 // tokenizer) rather than re-deriving "is this main/master" with a second
 // regex that could drift from the guard that already ran.
 if (hasPush) {
   const classifier = resolveGuard("block-push-main.sh");
-  const classification = spawnSync("bash", [classifier, "--classify-only"], {
-    input: rawInput,
-    encoding: "utf8",
-  });
-  // "unknown" (unparseable command) and any execution failure fail closed —
-  // budget admission still runs, same as before this change, rather than
-  // silently exempting a push whose target this dispatcher could not verify.
-  const isUnprotected =
-    classification.status === 0 &&
-    classification.stdout.trim() === "unprotected";
-  if (!isUnprotected) {
+  const classification = spawnSync(
+    "bash",
+    [classifier, "--ci-budget-classify"],
+    {
+      input: rawInput,
+      encoding: "utf8",
+    },
+  );
+  // Only a proved no-CI push is exempt. Protected, cross-branch, unparseable,
+  // and GitHub-unavailable cases all retain normal fail-closed admission.
+  const cannotTriggerCi =
+    classification.status === 0 && classification.stdout.trim() === "no-ci";
+  if (!cannotTriggerCi) {
     const admission = resolveGuard("ci-budget-admission.js");
     if (fs.existsSync(admission)) {
       const result = spawnSync(process.execPath, [admission], {

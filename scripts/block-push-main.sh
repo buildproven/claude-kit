@@ -12,9 +12,11 @@
 set -euo pipefail
 
 CLASSIFY_ONLY=false
-if [ "${1:-}" = "--classify-only" ]; then
-  CLASSIFY_ONLY=true
-fi
+CI_BUDGET_CLASSIFY=false
+case "${1:-}" in
+  --classify-only) CLASSIFY_ONLY=true ;;
+  --ci-budget-classify) CI_BUDGET_CLASSIFY=true ;;
+esac
 
 # Read hook JSON from stdin
 INPUT=$(cat)
@@ -125,7 +127,7 @@ tokenize_command() {
 # A malformed shell command cannot be classified safely. Fail closed before
 # any partially parsed tokens can reach the branch/refspec checks.
 if ! tokenize_command; then
-  if [ "$CLASSIFY_ONLY" = true ]; then
+  if [ "$CLASSIFY_ONLY" = true ] || [ "$CI_BUDGET_CLASSIFY" = true ]; then
     echo "unknown"
     exit 0
   fi
@@ -205,7 +207,7 @@ if push_argument_start; then
 else
   PUSH_PARSE_STATUS=$?
   if [ "$PUSH_PARSE_STATUS" -eq 2 ]; then
-    if [ "$CLASSIFY_ONLY" = true ]; then
+    if [ "$CLASSIFY_ONLY" = true ] || [ "$CI_BUDGET_CLASSIFY" = true ]; then
       echo "unknown"
       exit 0
     fi
@@ -252,6 +254,125 @@ bare_push() {
   index="$PUSH_ARGUMENT_START"
   [ "$index" -eq "$PUSH_ARGUMENT_END" ]
 }
+
+# Prove the only topic-branch case that cannot trigger Actions: this command
+# pushes the current branch and GitHub reports no open PR for it. Any different
+# refspec, parser ambiguity, missing CLI, or API failure stays "unknown" so the
+# caller runs budget admission. This preserves the first-push path needed to
+# open a PR without exempting later pull_request:synchronize pushes.
+current_topic_push() {
+  local index token remote_seen=false source destination
+  local -a refspecs=()
+  CURRENT_BRANCH=$("${GIT_ARGS[@]}" branch --show-current 2>/dev/null || true)
+  [ -n "$CURRENT_BRANCH" ] || return 1
+  [ "$CURRENT_BRANCH" != main ] && [ "$CURRENT_BRANCH" != master ] || return 1
+
+  index="$PUSH_ARGUMENT_START"
+  for ((; index < PUSH_ARGUMENT_END; index += 1)); do
+    token="${COMMAND_TOKENS[$index]}"
+    case "$token" in
+      -u|--set-upstream|--force|--force-with-lease|--atomic|--dry-run|--porcelain|--no-verify|--quiet|--verbose)
+        ;;
+      -o|--push-option|--receive-pack|--exec)
+        index=$((index + 1))
+        [ "$index" -lt "$PUSH_ARGUMENT_END" ] || return 1
+        ;;
+      --push-option=*|--receive-pack=*|--exec=*|--force-with-lease=*|--signed|--signed=*|--no-signed)
+        ;;
+      --all|--mirror|--tags|--delete|--prune|--follow-tags) return 1 ;;
+      --) ;;
+      -*) return 1 ;;
+      *)
+        if [ "$remote_seen" = false ]; then
+          remote_seen=true
+          PUSH_REMOTE="$token"
+        else
+          refspecs+=("$token")
+        fi
+        ;;
+    esac
+  done
+
+  # Only an explicit refspec proves the destination. Bare and remote-only
+  # pushes depend on push.default, upstream, and remote push configuration;
+  # treat them like multi-ref and cross-branch pushes: unknown and admitted.
+  [ "${#refspecs[@]}" -le 1 ] || return 1
+  [ "${#refspecs[@]}" -eq 1 ] || return 1
+  token="${refspecs[0]}"
+  while [[ "$token" == +* ]]; do token="${token:1}"; done
+  if [[ "$token" == *:* ]]; then
+    source="${token%%:*}"
+    destination="${token##*:}"
+  else
+    source="$token"
+    destination="$token"
+  fi
+  source="${source#refs/heads/}"
+  destination="${destination#refs/heads/}"
+  [ "$source" = HEAD ] || [ "$source" = "$CURRENT_BRANCH" ] || return 1
+  [ "$destination" = "$CURRENT_BRANCH" ]
+}
+
+github_repository_for_push_remote() {
+  local remote_url host repository
+  remote_url=$("${GIT_ARGS[@]}" remote get-url --push "$PUSH_REMOTE" 2>/dev/null) || return 1
+  case "$remote_url" in
+    https://*/*/*)
+      host="${remote_url#https://}"
+      host="${host%%/*}"
+      repository="${remote_url#https://*/}"
+      ;;
+    ssh://git@*/*/*)
+      host="${remote_url#ssh://git@}"
+      host="${host%%/*}"
+      repository="${remote_url#ssh://git@*/}"
+      ;;
+    git@*:*/*)
+      host="${remote_url#git@}"
+      host="${host%%:*}"
+      repository="${remote_url#*:}"
+      ;;
+    *) return 1 ;;
+  esac
+  repository="${repository%.git}"
+  [[ "$host" =~ ^[A-Za-z0-9.-]+$ ]] || return 1
+  [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1
+  PUSH_REPOSITORY="$host/$repository"
+}
+
+if [ "$CI_BUDGET_CLASSIFY" = true ]; then
+  if pushes_protected_branch; then
+    echo "ci-trigger"
+    exit 0
+  fi
+  if ! current_topic_push; then
+    echo "unknown"
+    exit 0
+  fi
+  if ! github_repository_for_push_remote; then
+    echo "unknown"
+    exit 0
+  fi
+  command -v gh >/dev/null 2>&1 || { echo "unknown"; exit 0; }
+  REPOSITORY_ROOT=$("${GIT_ARGS[@]}" rev-parse --show-toplevel 2>/dev/null) || {
+    echo "unknown"
+    exit 0
+  }
+  OPEN_PRS=$(cd "$REPOSITORY_ROOT" && gh pr list --repo "$PUSH_REPOSITORY" \
+    --head "$CURRENT_BRANCH" \
+    --state open --limit 1 --json number 2>/dev/null) || {
+    echo "unknown"
+    exit 0
+  }
+  if ! printf '%s' "$OPEN_PRS" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    echo "unknown"
+  elif printf '%s' "$OPEN_PRS" | jq -e 'length > 0' >/dev/null 2>&1; then
+    echo "ci-trigger"
+  else
+    echo "no-ci"
+  fi
+  exit 0
+fi
 
 if [ "$CLASSIFY_ONLY" = true ]; then
   # Same protected-branch determination as the allow/deny path below, minus

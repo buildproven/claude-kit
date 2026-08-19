@@ -1,5 +1,5 @@
 const { execFileSync, spawnSync } = require("node:child_process");
-const { mkdtempSync, rmSync, writeFileSync } = require("node:fs");
+const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const path = require("node:path");
 
@@ -36,6 +36,7 @@ beforeAll(() => {
   git(["init", "--initial-branch=main"]);
   git(["config", "user.email", "test@example.com"]);
   git(["config", "user.name", "Test"]);
+  git(["remote", "add", "origin", "git@github.com:example/repo.git"]);
   writeFileSync(path.join(repo, "seed.txt"), "seed\n");
   git(["add", "."]);
   git(["commit", "-m", "seed"]);
@@ -84,5 +85,52 @@ describe("bash-pretooluse-dispatcher.js", () => {
     expect(
       run("git status", { env: { SESSION_ID: "dispatcher-status" } }).code,
     ).toBe(0);
+  });
+
+  it("admits the first topic push but budgets later open-PR pushes", () => {
+    git(["checkout", "-q", "-b", "feat/budget"]);
+    const fixture = mkdtempSync(path.join(tmpdir(), "dispatcher-budget-"));
+    const bin = path.join(fixture, "bin");
+    const policy = path.join(fixture, "policy.json");
+    const snapshot = path.join(fixture, "snapshot.json");
+    mkdirSync(bin);
+    writeFileSync(
+      path.join(bin, "gh"),
+      '#!/bin/sh\nprintf "%s\\n" "${OPEN_PRS_JSON:-[]}"\n',
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      policy,
+      JSON.stringify({
+        accountType: "organization",
+        account: "example",
+        includedMinutes: 100,
+        softLimitPercent: 75,
+        hardLimitPercent: 90,
+        cacheHours: 6,
+        staleHours: 24,
+      }),
+    );
+    writeFileSync(
+      snapshot,
+      JSON.stringify({
+        fetchedAt: new Date().toISOString(),
+        usedMinutes: 100,
+        includedMinutes: 100,
+      }),
+    );
+    const env = {
+      PATH: `${bin}:${process.env.PATH}`,
+      CI_BUDGET_POLICY: policy,
+      CI_BUDGET_SNAPSHOT: snapshot,
+      SESSION_ID: "dispatcher-budget",
+    };
+
+    expect(run("git push -u origin feat/budget", { env }).code).toBe(0);
+    const synchronized = run("git push -u origin feat/budget", {
+      env: { ...env, OPEN_PRS_JSON: '[{"number":394}]' },
+    });
+    expect(synchronized.code).toBe(2);
+    expect(synchronized.output).toMatch(/minute policy denied/i);
   });
 });
