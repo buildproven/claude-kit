@@ -472,8 +472,10 @@ function ensureCiBillingEvidence(manifest) {
     evidence.repository !== manifest.repo.githubRepository ||
     evidence.head !== manifest.revisions.currentHead ||
     evidence.category !== "github-actions-billing-preallocation" ||
-    !Array.isArray(evidence.failedJobs) ||
-    evidence.failedJobs.length === 0 ||
+    ((!Array.isArray(evidence.failedJobs) ||
+      evidence.failedJobs.length === 0) &&
+      (!Array.isArray(evidence.failedRuns) ||
+        evidence.failedRuns.length === 0)) ||
     !evidenceDigestValid(evidence)
   ) {
     throw new Error(
