@@ -204,6 +204,37 @@ describe("block-push-main.sh", () => {
     },
   );
 
+  it("classifies topic pushes by open-PR CI impact", () => {
+    git(["checkout", "-q", "-b", "feat/budget"]);
+    const bin = mkdtempSync(path.join(tmpdir(), "branch-guard-gh-"));
+    writeFileSync(
+      path.join(bin, "gh"),
+      '#!/bin/sh\n[ "${GH_FAIL:-0}" = 1 ] && exit 1\nprintf "%s\\n" "${OPEN_PRS_JSON:-[]}"\n',
+      { mode: 0o755 },
+    );
+    const classify = (command, env = {}) => {
+      const payload = JSON.stringify({ tool_input: { command } });
+      return execFileSync("bash", [PUSH_HOOK, "--ci-budget-classify"], {
+        input: payload,
+        cwd: repo,
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, ...env },
+      }).trim();
+    };
+
+    expect(classify("git push -u origin feat/budget")).toBe("no-ci");
+    expect(
+      classify("git push -u origin feat/budget", {
+        OPEN_PRS_JSON: '[{"number":394}]',
+      }),
+    ).toBe("ci-trigger");
+    expect(classify("git push origin feat/other")).toBe("unknown");
+    expect(classify("git push origin feat/budget", { GH_FAIL: "1" })).toBe(
+      "unknown",
+    );
+    expect(classify("git push origin main")).toBe("ci-trigger");
+  });
+
   it("allows a non-git command", () => {
     expect(runHook(PUSH_HOOK, "ls -la").code).toBe(0);
   });
