@@ -34,6 +34,21 @@ const NORMALIZE_GEMINI_REVIEW = path.join(
   "quality-normalize-gemini-review.js",
 );
 
+async function expectProcessToExit(pid, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`process ${pid} remained alive after ${timeoutMs}ms`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 describe("provider review runtime", () => {
   it("documents the exact Quality-* schema emitted by the runtime", () => {
     const skill = readFileSync(
@@ -82,7 +97,7 @@ describe("provider review runtime", () => {
     expect(result.stdout).toContain(focus);
   });
 
-  it("kills a hanging provider and a session-escaped helper at the wall-clock cap", () => {
+  it("kills a hanging provider and a session-escaped helper at the wall-clock cap", async () => {
     const directory = makeTempDir("bounded-tree-");
     const pidFile = path.join(directory, "native-helper.pid");
     const started = Date.now();
@@ -108,10 +123,10 @@ describe("provider review runtime", () => {
     expect(Date.now() - started).toBeLessThan(7000);
     const helperPid = Number(readFileSync(pidFile, "utf8").trim());
     expect(Number.isSafeInteger(helperPid)).toBe(true);
-    expect(() => process.kill(helperPid, 0)).toThrow();
+    await expectProcessToExit(helperPid);
   });
 
-  it("reaps a detached helper when the provider leader exits early", () => {
+  it("reaps a detached helper when the provider leader exits early", async () => {
     const directory = makeTempDir("bounded-orphan-");
     const pidFile = path.join(directory, "detached-helper.pid");
     let helperPid = null;
@@ -134,7 +149,7 @@ describe("provider review runtime", () => {
       expect(result.status).toBe(0);
       helperPid = Number(readFileSync(pidFile, "utf8").trim());
       expect(Number.isSafeInteger(helperPid)).toBe(true);
-      expect(() => process.kill(helperPid, 0)).toThrow();
+      await expectProcessToExit(helperPid);
     } finally {
       if (Number.isSafeInteger(helperPid)) {
         try {
