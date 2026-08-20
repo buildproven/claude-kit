@@ -360,7 +360,13 @@ wait "$wrapper" 2>/dev/null || true
       },
     );
     expect(result.status).toBe(0);
-    await expectProcessToStop(Number(readFileSync(pidFile, "utf8").trim()));
+    // Cancellation must wait for the wrapper's TERM/KILL escalation and the
+    // runner's process reaper. A child that survives is an infinite loop, so
+    // this remains a hard liveness bound rather than a timing exemption.
+    await expectProcessToStop(
+      Number(readFileSync(pidFile, "utf8").trim()),
+      10000,
+    );
   });
 
   it("does not name active state by Claude or Codex session IDs", () => {
