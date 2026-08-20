@@ -20,7 +20,22 @@ describe("quality workflow bootstrap", () => {
     )?.[1];
 
     expect(installStep).toBeDefined();
-    expect(installStep).toContain("timeout-minutes: 3");
+    const stepTimeoutMinutes = Number(
+      installStep.match(/timeout-minutes:\s*(\d+)/)?.[1],
+    );
+    const updateTimeoutSeconds = Number(
+      installStep.match(/timeout\s+(\d+)s\s+sudo apt-get update/)?.[1],
+    );
+    const installTimeoutSeconds = Number(
+      installStep.match(/timeout\s+(\d+)s\s+sudo env/)?.[1],
+    );
+
+    expect(stepTimeoutMinutes).toBeGreaterThan(0);
+    expect(updateTimeoutSeconds).toBeGreaterThan(0);
+    expect(installTimeoutSeconds).toBeGreaterThan(0);
+    expect(stepTimeoutMinutes * 60).toBeGreaterThan(
+      updateTimeoutSeconds + installTimeoutSeconds,
+    );
     expect(installStep).toContain("command -v zsh");
     expect(installStep).toContain("timeout 30s sudo apt-get update");
     expect(installStep).toContain(

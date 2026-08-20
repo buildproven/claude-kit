@@ -44,7 +44,9 @@ jobs:
           python-version: "3.12"
 
       - name: Install zsh for shell-isolation regressions
-        timeout-minutes: 3
+        # Leave runner-level headroom for sudo and apt cleanup after the
+        # command-level timeouts below have expired.
+        timeout-minutes: 4
         run: |
           if command -v zsh >/dev/null 2>&1; then
             zsh --version
