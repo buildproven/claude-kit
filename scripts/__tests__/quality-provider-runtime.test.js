@@ -34,12 +34,16 @@ const NORMALIZE_GEMINI_REVIEW = path.join(
   "quality-normalize-gemini-review.js",
 );
 
-async function expectProcessToExit(pid, timeoutMs = 2000) {
+async function expectProcessToStop(pid, timeoutMs = 2000) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    try {
-      process.kill(pid, 0);
-    } catch {
+    const probe = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], {
+      encoding: "utf8",
+    });
+    const state = probe.stdout.trim();
+    // An exited detached child can remain a zombie until the runner's init
+    // process reaps it. It cannot execute or survive the bounded cleanup.
+    if (!state || state.startsWith("Z")) {
       return;
     }
     if (Date.now() >= deadline) {
@@ -123,7 +127,7 @@ describe("provider review runtime", () => {
     expect(Date.now() - started).toBeLessThan(7000);
     const helperPid = Number(readFileSync(pidFile, "utf8").trim());
     expect(Number.isSafeInteger(helperPid)).toBe(true);
-    await expectProcessToExit(helperPid);
+    await expectProcessToStop(helperPid);
   });
 
   it("reaps a detached helper when the provider leader exits early", async () => {
@@ -149,7 +153,7 @@ describe("provider review runtime", () => {
       expect(result.status).toBe(0);
       helperPid = Number(readFileSync(pidFile, "utf8").trim());
       expect(Number.isSafeInteger(helperPid)).toBe(true);
-      await expectProcessToExit(helperPid);
+      await expectProcessToStop(helperPid);
     } finally {
       if (Number.isSafeInteger(helperPid)) {
         try {
