@@ -165,7 +165,10 @@ watchdog() {
     [ -z "$sleeper" ] || wait "$sleeper" 2>/dev/null || true
     exit 0
   }
-  trap stop_watchdog INT TERM HUP
+  # A cancelled wrapper can die before its signal trap completes. Its
+  # watchdog receives HUP as the orphaned job and must own provider cleanup.
+  trap 'terminate_provider; exit 0' HUP
+  trap stop_watchdog INT TERM
   sleep "$TIMEOUT" &
   sleeper=$!
   wait "$sleeper" || exit 0
