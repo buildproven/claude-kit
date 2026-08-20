@@ -34,7 +34,14 @@ const NORMALIZE_GEMINI_REVIEW = path.join(
   "quality-normalize-gemini-review.js",
 );
 
+function processStart(pid) {
+  return spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+    encoding: "utf8",
+  }).stdout.trim();
+}
+
 async function expectProcessToStop(pid, timeoutMs = 2000) {
+  const expectedStart = processStart(pid);
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const probe = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], {
@@ -43,7 +50,11 @@ async function expectProcessToStop(pid, timeoutMs = 2000) {
     const state = probe.stdout.trim();
     // An exited detached child can remain a zombie until the runner's init
     // process reaps it. It cannot execute or survive the bounded cleanup.
-    if (!state || state.startsWith("Z")) {
+    if (
+      !state ||
+      state.startsWith("Z") ||
+      processStart(pid) !== expectedStart
+    ) {
       return;
     }
     if (Date.now() >= deadline) {
