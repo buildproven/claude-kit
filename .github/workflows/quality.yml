@@ -44,7 +44,20 @@ jobs:
           python-version: "3.12"
 
       - name: Install zsh for shell-isolation regressions
-        run: sudo apt-get update && sudo apt-get install --yes zsh
+        # Leave runner-level headroom for sudo and apt cleanup after the
+        # command-level timeouts below have expired.
+        timeout-minutes: 4
+        run: |
+          if command -v zsh >/dev/null 2>&1; then
+            zsh --version
+            exit 0
+          fi
+          timeout 30s sudo apt-get update
+          timeout 150s sudo env DEBIAN_FRONTEND=noninteractive apt-get \
+            -o Acquire::http::Timeout=15 \
+            -o Acquire::https::Timeout=15 \
+            -o Acquire::Retries=3 \
+            install --yes zsh
       - run: npm ci
       - name: Install Semgrep
         run: python -m pip install semgrep==1.168.0
