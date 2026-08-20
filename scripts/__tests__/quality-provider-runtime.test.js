@@ -340,7 +340,7 @@ describe("provider review runtime", () => {
     expect(runner).not.toMatch(/REVIEW_PROVIDER[^\n]*!= claude/);
   });
 
-  it("kills the provider tree when the wrapper itself is cancelled", () => {
+  it("kills the provider tree when the wrapper itself is cancelled", async () => {
     const dir = makeTempDir("bounded-cancel-");
     const pidFile = path.join(dir, "child.pid");
     const script = `
@@ -350,11 +350,6 @@ while [ ! -s "$2" ]; do sleep 0.05; done
 child=$(cat "$2")
 kill -TERM "$wrapper"
 wait "$wrapper" 2>/dev/null || true
-for _ in $(seq 1 40); do
-  if ! kill -0 "$child" 2>/dev/null; then exit 0; fi
-  sleep 0.05
-done
-exit 99
 `;
     const result = spawnSync(
       "bash",
@@ -365,6 +360,7 @@ exit 99
       },
     );
     expect(result.status).toBe(0);
+    await expectProcessToStop(Number(readFileSync(pidFile, "utf8").trim()));
   });
 
   it("does not name active state by Claude or Codex session IDs", () => {
