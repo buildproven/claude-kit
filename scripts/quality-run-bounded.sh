@@ -71,6 +71,13 @@ record_snapshot() {
     printf '%s\t%s\n' "$snapshot_pid" "$snapshot_start"
   done
 }
+snapshot_provider_tree() {
+  local snapshot
+  snapshot="$(process_tree_postorder "$CHILD_PID")"
+  record_snapshot <<EOF >> "$TRACKED_PIDS_FILE"
+$snapshot
+EOF
+}
 track_provider_tree() {
   # A provider can exit while a native helper it spawned is still alive. Once
   # the leader exits that helper is reparented, so a one-shot pgrep at cleanup
@@ -98,6 +105,10 @@ $snapshot
 EOF
   }
 }
+# The tracker runs asynchronously so it can follow later forks, but its first
+# snapshot must happen before the provider can exit and reparent an escaped
+# helper. Under CI load a background shell can otherwise lose that race.
+snapshot_provider_tree
 track_provider_tree &
 TRACKER_PID=$!
 stop_tracker() {

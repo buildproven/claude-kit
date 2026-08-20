@@ -34,7 +34,7 @@ const NORMALIZE_GEMINI_REVIEW = path.join(
   "quality-normalize-gemini-review.js",
 );
 
-async function expectProcessToStop(pid, timeoutMs = 10000) {
+async function expectProcessToStop(pid, timeoutMs = 2000) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const probe = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], {
