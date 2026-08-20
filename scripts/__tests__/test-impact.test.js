@@ -340,6 +340,27 @@ describe("cross-language test impact", () => {
     });
   });
 
+  it("uses the workflow bootstrap contract for a quality-workflow mutation", () => {
+    expect(
+      plan([".github/workflows/quality.yml"], loadPolicy(ROOT), {
+        preferExplicitMappings: true,
+      }),
+    ).toMatchObject({
+      mode: "focused",
+      reason: "explicit-mutation-mapping",
+      commands: [
+        {
+          executable: "npx",
+          args: [
+            "vitest",
+            "run",
+            "scripts/__tests__/quality-workflow-bootstrap.test.js",
+          ],
+        },
+      ],
+    });
+  });
+
   it("maps the protected-push guard to its behavioral contract", () => {
     expect(
       plan(["scripts/block-push-main.sh"], loadPolicy(ROOT)),
