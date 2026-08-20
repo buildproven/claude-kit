@@ -42,9 +42,9 @@ rm -f "$MARKER"
 TRACKED_PIDS_FILE="$(mktemp "${TMPDIR:-/tmp}/quality-provider-pids.XXXXXX")"
 rm -f "$TRACKED_PIDS_FILE"
 set -m
-"$@" &
-CHILD_PID=$!
-set +m
+CHILD_PID=""
+TRACKER_PID=""
+WATCHDOG_PID=""
 process_start() {
   ps -o lstart= -p "$1" 2>/dev/null | sed 's/[[:space:]]*$//' || true
 }
@@ -105,19 +105,15 @@ $snapshot
 EOF
   }
 }
-# The tracker runs asynchronously so it can follow later forks, but its first
-# snapshot must happen before the provider can exit and reparent an escaped
-# helper. Under CI load a background shell can otherwise lose that race.
-snapshot_provider_tree
-track_provider_tree &
-TRACKER_PID=$!
 stop_tracker() {
+  [ -n "$TRACKER_PID" ] || return 0
   kill -TERM "$TRACKER_PID" 2>/dev/null || true
   wait "$TRACKER_PID" 2>/dev/null || true
 }
 terminate_provider() {
   local targets tracked current_snapshot current_pid current_start recorded_pid recorded_start
   local child_start self_group child_group
+  [ -n "$CHILD_PID" ] || return 0
   tracked="$(cat "$TRACKED_PIDS_FILE" 2>/dev/null || true)"
   current_snapshot="$(process_tree_postorder "$CHILD_PID")"
   targets=""
@@ -175,11 +171,9 @@ watchdog() {
   : > "$MARKER"
   terminate_provider
 }
-watchdog &
-WATCHDOG_PID=$!
-set +m
 stop_watchdog() {
   local targets
+  [ -n "$WATCHDOG_PID" ] || return 0
   # The timeout marker is written before terminate_provider's one-second TERM
   # grace period. Once it exists, the watchdog owns escalation; stopping it
   # here would cancel the required SIGKILL after the leader exits and leave a
@@ -201,7 +195,7 @@ cleanup_provider() {
   stop_tracker
   terminate_provider
   stop_watchdog
-  wait "$CHILD_PID" 2>/dev/null || true
+  [ -z "$CHILD_PID" ] || wait "$CHILD_PID" 2>/dev/null || true
   rm -f "$MARKER"
   rm -f "$TRACKED_PIDS_FILE"
   exit "$status"
@@ -210,6 +204,20 @@ trap 'cleanup_provider 130' INT
 trap 'cleanup_provider 143' TERM
 trap 'cleanup_provider 129' HUP
 trap 'cleanup_provider $?' EXIT
+set -m
+"$@" &
+CHILD_PID=$!
+set +m
+# The tracker runs asynchronously so it can follow later forks, but its first
+# snapshot must happen before the provider can exit and reparent an escaped
+# helper. Under CI load a background shell can otherwise lose that race.
+snapshot_provider_tree
+track_provider_tree &
+TRACKER_PID=$!
+set -m
+watchdog &
+WATCHDOG_PID=$!
+set +m
 wait "$CHILD_PID"; RC=$?
 stop_tracker
 stop_watchdog
