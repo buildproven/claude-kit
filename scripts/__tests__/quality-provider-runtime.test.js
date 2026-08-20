@@ -40,8 +40,11 @@ function processStart(pid) {
   }).stdout.trim();
 }
 
-async function expectProcessToStop(pid, timeoutMs = 2000) {
-  const expectedStart = processStart(pid);
+async function expectProcessToStop(
+  pid,
+  timeoutMs = 2000,
+  expectedStart = processStart(pid),
+) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const probe = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], {
@@ -354,17 +357,19 @@ describe("provider review runtime", () => {
   it("kills the provider tree when the wrapper itself is cancelled", async () => {
     const dir = makeTempDir("bounded-cancel-");
     const pidFile = path.join(dir, "child.pid");
+    const startFile = path.join(dir, "child.start");
     const script = `
 "$1" --timeout 20 -- bash -c 'trap "" TERM; echo $$ > "$1"; while :; do sleep 1; done' child "$2" &
 wrapper=$!
 while [ ! -s "$2" ]; do sleep 0.05; done
 child=$(cat "$2")
+ps -o lstart= -p "$child" | sed 's/[[:space:]]*$//' > "$3"
 kill -TERM "$wrapper"
 wait "$wrapper" 2>/dev/null || true
 `;
     const result = spawnSync(
       "bash",
-      ["-c", script, "cancel", BOUNDED, pidFile],
+      ["-c", script, "cancel", BOUNDED, pidFile, startFile],
       {
         encoding: "utf8",
         timeout: 5000,
@@ -377,6 +382,7 @@ wait "$wrapper" 2>/dev/null || true
     await expectProcessToStop(
       Number(readFileSync(pidFile, "utf8").trim()),
       10000,
+      readFileSync(startFile, "utf8").trim(),
     );
   });
 
