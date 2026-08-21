@@ -12,6 +12,34 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.7.4](https://github.com/buildproven/claude-kit/compare/v4.7.3...v4.7.4) (2026-08-21)
+
+
+### Bug Fixes
+
+* authorize protected dispatches ([#388](https://github.com/buildproven/claude-kit/issues/388)) ([9fc8cc1](https://github.com/buildproven/claude-kit/commit/9fc8cc1a9298f3417e185a18244c2ad3247ef6ba))
+* avoid secret scanner false positive ([#416](https://github.com/buildproven/claude-kit/issues/416)) ([c2043a1](https://github.com/buildproven/claude-kit/commit/c2043a1e89cd456e1e59f7462612b524514c05e5))
+* bind dispatched secret scans to reviewed heads ([#382](https://github.com/buildproven/claude-kit/issues/382)) ([ce1e2fb](https://github.com/buildproven/claude-kit/commit/ce1e2fb5200efc8945cbc07c4ca1b4dd06f56033))
+* bound zsh setup in quality CI ([#410](https://github.com/buildproven/claude-kit/issues/410)) ([d5c0b1a](https://github.com/buildproven/claude-kit/commit/d5c0b1a640686b8def1ca472cfa2d07fe31e2839))
+* budget complete release audits ([#393](https://github.com/buildproven/claude-kit/issues/393)) ([4102246](https://github.com/buildproven/claude-kit/commit/41022461325dcfb58d135156580865be10cb92b1))
+* budget pushes that update open pull requests ([#395](https://github.com/buildproven/claude-kit/issues/395)) ([875f661](https://github.com/buildproven/claude-kit/commit/875f661a87d4c7acce6fa7d5cae6d9c3bab542e3))
+* classify action-required CI billing blocks ([#401](https://github.com/buildproven/claude-kit/issues/401)) ([94155ca](https://github.com/buildproven/claude-kit/commit/94155cad290247ecd8a149afed3110906d6bc647))
+* classify dispatch-only billing failures ([#389](https://github.com/buildproven/claude-kit/issues/389)) ([9d6422f](https://github.com/buildproven/claude-kit/commit/9d6422f628c0c868eb44439bb25209f657297236))
+* compose quality and CI billing overrides ([#390](https://github.com/buildproven/claude-kit/issues/390)) ([c9e2b68](https://github.com/buildproven/claude-kit/commit/c9e2b68d47af307b34998b25d1c74ec36968a5fd))
+* dispatch secret scans from protected branch ([#383](https://github.com/buildproven/claude-kit/issues/383)) ([1a85b82](https://github.com/buildproven/claude-kit/commit/1a85b82656ad0760c7b995f7021617c06f98adf8))
+* dispatch secret scans from protected default ([#385](https://github.com/buildproven/claude-kit/issues/385)) ([696873e](https://github.com/buildproven/claude-kit/commit/696873e64061066cc931b7626b512a0248257338))
+* installer crash, submodule worktree paths, CI-budget push scoping ([#392](https://github.com/buildproven/claude-kit/issues/392)) ([8588950](https://github.com/buildproven/claude-kit/commit/8588950d2e7d8b3bf02fd7e15107233f35cf9bf5))
+* protect harness required checks ([#387](https://github.com/buildproven/claude-kit/issues/387)) ([c74543e](https://github.com/buildproven/claude-kit/commit/c74543e2bfc87607d98873d7bb25084a92282318))
+* reject ambiguous CI billing evidence ([#408](https://github.com/buildproven/claude-kit/issues/408)) ([ac67a58](https://github.com/buildproven/claude-kit/commit/ac67a58b96e96c75f53ccde4586d80d8a65b65d3))
+* report swap cleanup result honestly ([#412](https://github.com/buildproven/claude-kit/issues/412)) ([2b8ae2c](https://github.com/buildproven/claude-kit/commit/2b8ae2c7e7916ebbeb8c512a87569c836a20f710))
+* require CI billing waiver provenance ([#402](https://github.com/buildproven/claude-kit/issues/402)) ([97e2189](https://github.com/buildproven/claude-kit/commit/97e2189abae288724bb44ea2218396681a594413))
+* retain complete release audit headroom ([#396](https://github.com/buildproven/claude-kit/issues/396)) ([4dd55fb](https://github.com/buildproven/claude-kit/commit/4dd55fb5d6fccc2f3e187a17213861bfd6de3fd1))
+* retain dispatch claim expiry metadata ([#391](https://github.com/buildproven/claude-kit/issues/391)) ([57e2dae](https://github.com/buildproven/claude-kit/commit/57e2dae477cf07d8ec49967f1d306305495932b0))
+* reuse trusted protected scan results ([#386](https://github.com/buildproven/claude-kit/issues/386)) ([d5bac37](https://github.com/buildproven/claude-kit/commit/d5bac3729bbe84d82740c9dc9a86908a8bb361bb))
+* stabilize no-job billing waiver evidence ([#405](https://github.com/buildproven/claude-kit/issues/405)) ([0e04b7f](https://github.com/buildproven/claude-kit/commit/0e04b7fccfd26da856190c55ad6910166be0a13d))
+* support current mutation runtimes ([#409](https://github.com/buildproven/claude-kit/issues/409)) ([3bc5521](https://github.com/buildproven/claude-kit/commit/3bc5521d2bf81a9bb5dfdf825e660366dfe63848))
+* support empty provider and quality arguments ([#394](https://github.com/buildproven/claude-kit/issues/394)) ([1b7d1d5](https://github.com/buildproven/claude-kit/commit/1b7d1d5073207fe7b15d2b50c3467389fd9d5eaa))
+
 ## [4.7.3](https://github.com/buildproven/claude-kit/compare/v4.7.2...v4.7.3) (2026-08-16)
 
 
