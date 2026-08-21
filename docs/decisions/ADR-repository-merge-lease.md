@@ -8,9 +8,10 @@ found no unresolved correctness defect.
 The BUI-709 recovery amendment below is accepted after an independent
 high-reasoning architecture review found no unresolved correctness defect.
 
-The protected non-strict amendment below is proposed. It is not accepted until
-an independent cross-provider architecture review finds no unresolved
-correctness defect.
+The protected non-strict amendment below is accepted. A final independent
+Claude Opus 5 high-reasoning review of exact implementation head
+`7a0d712c038397d6713ba8f03c2157daf7e5fff7` found no unresolved material
+authorization, recovery, or race defect after all review findings were fixed.
 
 ## Context
 
