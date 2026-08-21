@@ -1199,14 +1199,7 @@ function releaseVerifiedOutcome(manifestPath, presentedToken, outcome) {
   });
 }
 
-function performMerge(manifestPath, presentedToken, options = {}) {
-  verify(manifestPath, presentedToken);
-  const loaded = loadManifest(manifestPath);
-  const { manifest } = loaded;
-  const repository = repositoryIdentity(manifest);
-  const expectedRepository = manifest.repo.githubRepository;
-  const pr = String(manifest.repo.pr);
-  const head = mergeHead(manifest);
+function assertMergeMode(manifest, options, head) {
   if (options.expectedHead !== head) {
     throw new Error(
       `validated PR head ${options.expectedHead || "missing"} does not match manifest merge head ${head}`,
@@ -1220,20 +1213,22 @@ function performMerge(manifestPath, presentedToken, options = {}) {
   ) {
     throw new Error(`unsupported merge mode '${mode}'`);
   }
-  if (mode === "protected-nonstrict-outage-ref-cas") {
-    if (
-      options.admin !== true ||
+  if (
+    mode === "protected-nonstrict-outage-ref-cas" &&
+    (options.admin !== true ||
       manifest.merge?.stampHead ||
-      !/^[a-f0-9]{64}$/.test(options.protectionDigest || "")
-    ) {
-      throw new Error(
-        "protected non-strict ref-CAS requires administrator mode, immutable reviewed HEAD, and a protection digest",
-      );
-    }
+      !/^[a-f0-9]{64}$/.test(options.protectionDigest || ""))
+  ) {
+    throw new Error(
+      "protected non-strict ref-CAS requires administrator mode, immutable reviewed HEAD, and a protection digest",
+    );
   }
-  acquireMergeGuard(manifestPath, presentedToken, options);
+  return mode;
+}
+
+function withNotStartedCleanup(manifestPath, presentedToken, operation) {
   try {
-    assertBase(manifestPath, presentedToken);
+    return operation();
   } catch (error) {
     try {
       releaseMergeGuard(manifestPath, presentedToken, "not-started");
@@ -1246,105 +1241,135 @@ function performMerge(manifestPath, presentedToken, options = {}) {
     }
     throw error;
   }
+}
+
+function assertRefCasPreconditions(manifest, guarded, options, head) {
+  const branch = baseBranch(manifest);
+  const inspection =
+    require("./quality-protected-nonstrict.js").inspectProtectedNonstrict({
+      repository: manifest.repo.githubRepository,
+      branch,
+      pr: manifest.repo.pr,
+      cwd: manifest.repo.realpath,
+    });
+  if (
+    inspection.digest !== options.protectionDigest ||
+    guarded.protectionDigest !== options.protectionDigest ||
+    guarded.mode !== "protected-nonstrict-outage-ref-cas"
+  ) {
+    throw new Error(
+      "protected non-strict branch protection changed before the guarded ref update",
+    );
+  }
+  const preMutationPr = remotePullRequest(manifest);
+  if (
+    preMutationPr.state !== "OPEN" ||
+    preMutationPr.headRefName !== manifest.repo.headRefName ||
+    preMutationPr.headRefOid !== head ||
+    preMutationPr.baseRefName !== branch
+  ) {
+    throw new Error(
+      "exact pull request identity changed before the ref update",
+    );
+  }
+  const ancestor = spawnSync(
+    "git",
+    ["merge-base", "--is-ancestor", guarded.base, head],
+    { cwd: manifest.repo.realpath, encoding: "utf8", timeout: 30_000 },
+  );
+  if (ancestor.status !== 0) {
+    throw new Error("reviewed head is not a descendant of the exact base");
+  }
+}
+
+function performRefCasUpdate(
+  loaded,
+  presentedToken,
+  { head, mode = "protected-nonstrict-outage-ref-cas" },
+) {
+  const { manifest, manifestPath } = loaded;
+  const branch = baseBranch(manifest);
+  const update = spawnSync(
+    "gh",
+    [
+      "api",
+      "--include",
+      "--method",
+      "PATCH",
+      `repos/${manifest.repo.githubRepository}/git/refs/heads/${encodeURIComponent(branch)}`,
+      "--input",
+      "-",
+    ],
+    {
+      cwd: manifest.repo.realpath,
+      encoding: "utf8",
+      timeout: 120_000,
+      input: `${JSON.stringify({ sha: head, force: false })}\n`,
+    },
+  );
+  const responseOutcome = classifyRefUpdateResponse(update, branch, head);
+  let remote = null;
+  try {
+    remote = remotePullRequest(manifest);
+  } catch {
+    // An accepted update with unavailable read-back remains quarantined.
+  }
+  if (
+    responseOutcome.kind === "accepted" &&
+    remote &&
+    refCasIntegrated(manifest, remote)
+  ) {
+    releaseVerifiedOutcome(manifestPath, presentedToken, "merged");
+    return { merged: true, remote, mode };
+  }
+  if (responseOutcome.kind === "rejected-stale-base") {
+    if (remote && refCasIntegrated(manifest, remote)) {
+      releaseVerifiedOutcome(manifestPath, presentedToken, "merged");
+      return { merged: true, remote, mode, recovered: true };
+    }
+    releaseMergeGuard(
+      manifestPath,
+      presentedToken,
+      "request-rejected-stale-base",
+    );
+    throw new Error(
+      "protected base changed before the non-force ref update; request was rejected without mutation, repository lease retained for rebase and resume",
+    );
+  }
+  throw new Error(
+    `ref-CAS outcome is ambiguous and quarantined (http ${responseOutcome.status ?? "unknown"}, gh status ${update.status ?? "timeout"})`,
+  );
+}
+
+function performMerge(manifestPath, presentedToken, options = {}) {
+  verify(manifestPath, presentedToken);
+  const loaded = loadManifest(manifestPath);
+  const { manifest } = loaded;
+  const repository = repositoryIdentity(manifest);
+  const expectedRepository = manifest.repo.githubRepository;
+  const pr = String(manifest.repo.pr);
+  const head = mergeHead(manifest);
+  const mode = assertMergeMode(manifest, options, head);
+  acquireMergeGuard(manifestPath, presentedToken, options);
+  withNotStartedCleanup(manifestPath, presentedToken, () => {
+    assertBase(manifestPath, presentedToken);
+    if (mode === "protected-nonstrict-outage-ref-cas") {
+      const paths = pathsFor(repository, manifest);
+      assertRefCasPreconditions(
+        manifest,
+        guardOwner(paths.mergeGuard),
+        options,
+        head,
+      );
+    }
+  });
   const paths = pathsFor(repository, manifest);
   const ownerFile = path.join(paths.mergeGuard, "owner.json");
   const guarded = guardOwner(paths.mergeGuard);
-  if (mode === "protected-nonstrict-outage-ref-cas") {
-    const branch = baseBranch(manifest);
-    const inspection =
-      require("./quality-protected-nonstrict.js").inspectProtectedNonstrict({
-        repository: expectedRepository,
-        branch,
-        pr: manifest.repo.pr,
-        cwd: manifest.repo.realpath,
-      });
-    if (
-      inspection.digest !== options.protectionDigest ||
-      guarded.protectionDigest !== options.protectionDigest ||
-      guarded.mode !== mode
-    ) {
-      releaseMergeGuard(manifestPath, presentedToken, "not-started");
-      throw new Error(
-        "protected non-strict branch protection changed before the guarded ref update",
-      );
-    }
-    const preMutationPr = remotePullRequest(manifest);
-    if (
-      preMutationPr.state !== "OPEN" ||
-      preMutationPr.headRefName !== manifest.repo.headRefName ||
-      preMutationPr.headRefOid !== head ||
-      preMutationPr.baseRefName !== branch
-    ) {
-      releaseMergeGuard(manifestPath, presentedToken, "not-started");
-      throw new Error(
-        "exact pull request identity changed before the ref update",
-      );
-    }
-    const ancestor = spawnSync(
-      "git",
-      ["merge-base", "--is-ancestor", guarded.base, head],
-      { cwd: manifest.repo.realpath, encoding: "utf8", timeout: 30_000 },
-    );
-    if (ancestor.status !== 0) {
-      releaseMergeGuard(manifestPath, presentedToken, "not-started");
-      throw new Error("reviewed head is not a descendant of the exact base");
-    }
-  }
   guarded.requestStartedAt = new Date().toISOString();
   atomicWrite(ownerFile, guarded);
   if (mode === "protected-nonstrict-outage-ref-cas") {
-    const branch = baseBranch(manifest);
-    const update = spawnSync(
-      "gh",
-      [
-        "api",
-        "--include",
-        "--method",
-        "PATCH",
-        `repos/${expectedRepository}/git/refs/heads/${encodeURIComponent(branch)}`,
-        "--input",
-        "-",
-      ],
-      {
-        cwd: manifest.repo.realpath,
-        encoding: "utf8",
-        timeout: 120_000,
-        input: `${JSON.stringify({ sha: head, force: false })}\n`,
-      },
-    );
-    const responseOutcome = classifyRefUpdateResponse(update, branch, head);
-    const { status } = responseOutcome;
-    let remote = null;
-    try {
-      remote = remotePullRequest(manifest);
-    } catch {
-      // An accepted update with unavailable read-back remains quarantined.
-    }
-    if (
-      responseOutcome.kind === "accepted" &&
-      remote &&
-      refCasIntegrated(manifest, remote)
-    ) {
-      releaseVerifiedOutcome(manifestPath, presentedToken, "merged");
-      return { merged: true, remote, mode };
-    }
-    if (responseOutcome.kind === "rejected-stale-base") {
-      if (remote && refCasIntegrated(manifest, remote)) {
-        releaseVerifiedOutcome(manifestPath, presentedToken, "merged");
-        return { merged: true, remote, mode, recovered: true };
-      }
-      releaseMergeGuard(
-        manifestPath,
-        presentedToken,
-        "request-rejected-stale-base",
-      );
-      throw new Error(
-        "protected base changed before the non-force ref update; request was rejected without mutation, repository lease retained for rebase and resume",
-      );
-    }
-    throw new Error(
-      `ref-CAS outcome is ambiguous and quarantined (http ${status ?? "unknown"}, gh status ${update.status ?? "timeout"})`,
-    );
+    return performRefCasUpdate(loaded, presentedToken, { head, mode });
   }
   const args = [
     "pr",

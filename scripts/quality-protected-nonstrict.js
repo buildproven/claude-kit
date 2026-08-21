@@ -287,7 +287,7 @@ function ghJson(args, label, cwd) {
   }
 }
 
-function inspectProtectedNonstrict({ repository, branch, pr, cwd }) {
+function assertInspectionIdentity(repository, branch, pr) {
   if (!/^[^/]+\/[^/]+$/.test(repository || "")) {
     throw new Error("repository identity is invalid");
   }
@@ -297,6 +297,31 @@ function inspectProtectedNonstrict({ repository, branch, pr, cwd }) {
   if (!Number.isInteger(Number(pr)) || Number(pr) < 1) {
     throw new Error("pull request identity is invalid");
   }
+}
+
+function reviewThreadsFor(repository, pr, cwd) {
+  const [owner, name] = repository.split("/");
+  const response = ghJson(
+    [
+      "api",
+      "graphql",
+      "-f",
+      "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}}}}}",
+      "-F",
+      `owner=${owner}`,
+      "-F",
+      `name=${name}`,
+      "-F",
+      `number=${Number(pr)}`,
+    ],
+    "review conversation read",
+    cwd,
+  );
+  return response?.data?.repository?.pullRequest?.reviewThreads;
+}
+
+function inspectProtectedNonstrict({ repository, branch, pr, cwd }) {
+  assertInspectionIdentity(repository, branch, pr);
   const encoded = encodeURIComponent(branch);
   const protection = ghJson(
     ["api", `repos/${repository}/branches/${encoded}/protection`],
@@ -313,28 +338,10 @@ function inspectProtectedNonstrict({ repository, branch, pr, cwd }) {
     "repository permission read",
     cwd,
   );
-  let reviewThreads = null;
-  if (protection.required_conversation_resolution?.enabled === true) {
-    const owner = repository.split("/")[0];
-    const name = repository.split("/")[1];
-    const response = ghJson(
-      [
-        "api",
-        "graphql",
-        "-f",
-        "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}}}}}",
-        "-F",
-        `owner=${owner}`,
-        "-F",
-        `name=${name}`,
-        "-F",
-        `number=${Number(pr)}`,
-      ],
-      "review conversation read",
-      cwd,
-    );
-    reviewThreads = response?.data?.repository?.pullRequest?.reviewThreads;
-  }
+  const reviewThreads =
+    protection.required_conversation_resolution?.enabled === true
+      ? reviewThreadsFor(repository, pr, cwd)
+      : null;
   return classifyProtectedNonstrict({
     protection,
     effectiveRules,
