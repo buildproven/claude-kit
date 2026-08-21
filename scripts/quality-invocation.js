@@ -2881,10 +2881,10 @@ function protectedNonstrictRefCasCapability(manifest) {
     return null;
   }
   const conditions = manifest.approval.acceptedConditions;
+  const expectedLength = conditions.includes("ci:failed") ? 3 : 2;
   if (
     !Array.isArray(conditions) ||
-    conditions.length !== 3 ||
-    !conditions.includes("ci:failed") ||
+    conditions.length !== expectedLength ||
     !conditions.includes("base:protected-nonstrict") ||
     !conditions.includes("pr:non-atomic-state")
   ) {
@@ -3063,14 +3063,14 @@ function assertApprovalPayloadShape(manifest, payload) {
     }
   } else if (payload.scope === "operator-nonstrict-refcas-override") {
     const conditions = new Set(payload.acceptedConditions);
+    const expectedLength = conditions.has("ci:failed") ? 3 : 2;
     if (
-      payload.acceptedConditions.length !== 3 ||
-      !conditions.has("ci:failed") ||
+      payload.acceptedConditions.length !== expectedLength ||
       !conditions.has("base:protected-nonstrict") ||
       !conditions.has("pr:non-atomic-state")
     ) {
       throw new Error(
-        "protected non-strict ref-CAS capability must accept exactly ci:failed, base:protected-nonstrict, and pr:non-atomic-state",
+        "protected non-strict ref-CAS capability must accept base:protected-nonstrict and pr:non-atomic-state, with optional ci:failed outage authority",
       );
     }
     if (

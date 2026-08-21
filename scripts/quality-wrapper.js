@@ -269,10 +269,11 @@ function assertCiBillingConditions(
   const compositeQualityOverride =
     scope === "operator-quality-override" && accepted.includes("ci:failed");
   const nonstrictRefCas = scope === "operator-nonstrict-refcas-override";
+  const nonstrictOutage = nonstrictRefCas && accepted.includes("ci:failed");
   if (
     scope !== "operator-ci-billing-override" &&
     !compositeQualityOverride &&
-    !nonstrictRefCas
+    !nonstrictOutage
   )
     return;
   const expected = `ci:${ciFailureReason}`;
@@ -290,15 +291,18 @@ function assertCiBillingConditions(
   if (scope === "operator-ci-billing-override" && accepted.length !== 1) {
     throw new Error("CI billing override must accept exactly ci:failed");
   }
+  const expectedNonstrictConditions = nonstrictOutage
+    ? ["ci:failed", "base:protected-nonstrict", "pr:non-atomic-state"]
+    : ["base:protected-nonstrict", "pr:non-atomic-state"];
   if (
     nonstrictRefCas &&
-    (accepted.length !== 3 ||
-      !accepted.includes("ci:failed") ||
-      !accepted.includes("base:protected-nonstrict") ||
-      !accepted.includes("pr:non-atomic-state"))
+    (accepted.length !== expectedNonstrictConditions.length ||
+      expectedNonstrictConditions.some(
+        (condition) => !accepted.includes(condition),
+      ))
   ) {
     throw new Error(
-      "protected non-strict ref-CAS override must accept exactly ci:failed, base:protected-nonstrict, and pr:non-atomic-state",
+      `protected non-strict ref-CAS override must accept exactly ${expectedNonstrictConditions.join(", ")}`,
     );
   }
 }
@@ -331,10 +335,9 @@ function parseApprovalCommand(argv) {
   const isOverride = isOperatorOverrideScope(scanned.scope);
   const acceptedConditions = taxonomy.parseAcceptList(scanned.acceptRaw);
   if (
-    [
-      "operator-ci-billing-override",
-      "operator-nonstrict-refcas-override",
-    ].includes(scanned.scope) &&
+    (scanned.scope === "operator-ci-billing-override" ||
+      (scanned.scope === "operator-nonstrict-refcas-override" &&
+        acceptedConditions.includes("ci:failed"))) &&
     scanned.ciFailureReason !== "failed"
   ) {
     throw new Error("CI billing override requires --ci-failure failed");

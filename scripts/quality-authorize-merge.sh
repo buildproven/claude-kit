@@ -400,7 +400,7 @@ if [ "$ATOMIC_BASE_FRESHNESS" != true ]; then
   fi
 fi
 # A protected strict:false base is never accepted as an ordinary merge. The
-# only supported case is the separately signed outage capability, paired with
+# only supported case is the separately signed ref-CAS capability, paired with
 # a complete deny-by-default classic-protection inspection. The inspection
 # also proves repository-admin authority and all required conversation threads.
 if [ "$ATOMIC_BASE_FRESHNESS" != true ] &&
@@ -422,7 +422,7 @@ if [ "$ATOMIC_BASE_FRESHNESS" != true ] &&
     echo "❌ MERGE BLOCKED: protected non-strict branch protection differs from the signed operator diagnosis." >&2
     exit 1
   }
-  ATOMIC_BASE_FRESHNESS=protected-nonstrict-outage-ref-cas
+  ATOMIC_BASE_FRESHNESS=protected-nonstrict-ref-cas
   ATOMIC_BASE_SOURCE=classic
 fi
 # Last resort, and only after BOTH classic protection and effective rulesets have
@@ -466,8 +466,8 @@ case "$ATOMIC_BASE_FRESHNESS" in
   true)
     MERGE_MODE=strict
     ;;
-  protected-nonstrict-outage-ref-cas)
-    MERGE_MODE=protected-nonstrict-outage-ref-cas
+  protected-nonstrict-ref-cas)
+    MERGE_MODE=protected-nonstrict-ref-cas
     ;;
   unprotectable)
     MERGE_MODE=unprotectable
@@ -487,11 +487,11 @@ if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
   NONSTRICT_REFCAS_CAPABILITY=true
 fi
 if [ "$NONSTRICT_REFCAS_CAPABILITY" = true ] &&
-  [ "$MERGE_MODE" != protected-nonstrict-outage-ref-cas ]; then
+  [ "$MERGE_MODE" != protected-nonstrict-ref-cas ]; then
   echo "❌ MERGE BLOCKED: the protected non-strict ref-CAS capability cannot authorize another merge mode." >&2
   exit 1
 fi
-if [ "$MERGE_MODE" = protected-nonstrict-outage-ref-cas ] &&
+if [ "$MERGE_MODE" = protected-nonstrict-ref-cas ] &&
   [ "$NONSTRICT_REFCAS_CAPABILITY" != true ]; then
   echo "❌ MERGE BLOCKED: protected non-strict ref-CAS requires its exact signed capability." >&2
   exit 1

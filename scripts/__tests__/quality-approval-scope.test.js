@@ -163,6 +163,28 @@ describe("quality approve command scope parsing", () => {
     expect(parsed.argv).not.toContain("--override-nonstrict-refcas");
   });
 
+  it("allows protected non-strict ref-CAS after exact-head CI passes", () => {
+    const parsed = parseApprovalCommand([
+      "approve",
+      "--pr",
+      "676",
+      "--head",
+      head,
+      "--override-nonstrict-refcas",
+      "--reason",
+      "required checks passed but strict freshness is disabled",
+      "--accept",
+      "base:protected-nonstrict,pr:non-atomic-state",
+      "--i-understand-admin-ref-mutation",
+      "--i-understand-pr-state-race",
+    ]);
+    expect(parsed).toMatchObject({
+      scope: "operator-nonstrict-refcas-override",
+      ciFailureReason: null,
+      acceptedConditions: ["base:protected-nonstrict", "pr:non-atomic-state"],
+    });
+  });
+
   it("requires the separate administrator ref-mutation acknowledgement", () => {
     expect(() =>
       parseApprovalCommand([

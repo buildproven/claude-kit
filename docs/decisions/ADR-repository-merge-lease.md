@@ -180,15 +180,16 @@ Add a repository-scoped merge lease to the public quality runtime.
     unprotectable repository has no required-context source, so it retains the
     separate all-registered-PR-check waiter and final guard.
 
-## Protected non-strict outage ref-CAS amendment
+## Protected non-strict ref-CAS amendment
 
 ### Problem
 
 Some protected repositories deliberately require exact-head status checks with
-GitHub's `strict` option disabled. The current authorizer correctly blocks a
-normal merge because GitHub supplies no atomic base boundary, but it also blocks
-the separately signed billing-outage path after the operator has explicitly
-accepted unavailable CI for one exact PR and head.
+GitHub's `strict` option disabled. The current authorizer blocks every normal
+merge because GitHub supplies no atomic base boundary. The fleet policy retains
+that setting, so green CI alone cannot complete delivery. The same problem also
+blocks the separately signed billing-outage path after the operator has accepted
+unavailable CI for one exact PR and head.
 
 A pull-request merge accepts an expected head SHA but no expected base SHA. A
 local lease and final read cannot make that operation atomic against another
@@ -224,11 +225,12 @@ protection and exact branch were deleted, and branch absence was verified.
 
 ### Decision
 
-Add `protected-nonstrict-outage-ref-cas` as an explicit outage-only merge mode.
+Add `protected-nonstrict-ref-cas` as an explicit signed merge mode.
 It uses the existing repository lease and merge-operation guard, but replaces
 the administrator pull-request merge request with one non-force Git-reference
 update to the exact reviewed head. A protected non-strict base without the exact
-signed billing capability remains blocked.
+signed ref-CAS capability remains blocked. Green CI uses the normal required-check
+gate. An outage additionally requires the signed CI condition and artifact.
 
 1. Read the complete classic branch-protection and effective-rules responses
    with separate exit status and body capture. The first implementation accepts
@@ -375,10 +377,10 @@ signed billing capability remains blocked.
 
 ### Classification decision table
 
-| Gate                  | Strict               | Protected non-strict outage ref-CAS        | Plan-unprotectable           |
+| Gate                  | Strict               | Protected non-strict ref-CAS               | Plan-unprotectable           |
 | --------------------- | -------------------- | ------------------------------------------ | ---------------------------- |
 | Exact required checks | Required             | Names and App bindings recorded            | All registered checks        |
-| Billing outage        | Signed CI capability | New signed non-strict ref-CAS capability   | Existing plan-limited policy |
+| Billing outage        | Signed CI capability | Add signed CI condition and exact evidence | Existing plan-limited policy |
 | Human merge authority | Configured policy    | Configured policy plus signed ref-CAS user | Configured policy            |
 | Base mutation         | PR merge API         | Non-force ref update to existing head      | PR merge API                 |
 | Freshness claim       | GitHub strict        | GitHub fast-forward CAS                    | Non-atomic                   |
@@ -390,22 +392,22 @@ The implementation updates both closed preflight value lists and replaces every
 negative-space protection branch in billing admission, required-check choice,
 human authority, administrator proof, protection recheck, and final mutation
 with an explicit case for each mode.
-The new preflight value is exactly
-`protected-nonstrict-outage-ref-cas`; required-check waiting is skipped only
-after that exact capability and outage artifact have already validated.
+The new preflight value is exactly `protected-nonstrict-ref-cas`; required-check
+waiting is skipped only when that capability also binds the exact outage
+condition and artifact.
 
 ### Invariants
 
 - Review, deterministic gates, mutation evidence, check names, and App bindings
-  remain bound to the exact remote head. The signed outage capability, not
-  GitHub, authorizes proceeding without successful remote checks.
+  remain bound to the exact remote head. Green CI is still enforced. Only the
+  signed outage form, not GitHub, authorizes proceeding without remote success.
 - Only a complete supported protection response can select ref-CAS; ambiguity
   or an unsupported protection blocks.
 - The ref update is never forced and can target only the manifest base ref with
   the exact manifest head.
-- A billing-outage ref-CAS remains authorized only by the new exact ref-CAS
-  capability and exact outage evidence. It is never available for a normal
-  merge, and an older CI-only capability cannot be reinterpreted.
+- A billing-outage ref-CAS remains authorized only by the exact ref-CAS
+  capability and exact outage evidence. A green-CI capability cannot waive CI,
+  and an older CI-only capability cannot be reinterpreted.
 - Revalidate the bound CI evidence artifact at the final mutation boundary.
   Missing, changed, or invalid evidence blocks the ref update even when the
   signed capability itself is otherwise valid.
@@ -423,9 +425,10 @@ after that exact capability and outage artifact have already validated.
   confirmed fleet policy that retains `strict: false`.
 - Use a merge queue: strong, but unavailable in some repositories and dependent
   on hosted CI.
-- Use ref-CAS for normal protected merges: rejected because an administrator ref
-  update would replace server-enforced checks with client assertions without an
-  explicit outage capability.
+- Use unsigned ref-CAS for normal protected merges: rejected because an
+  administrator ref update would replace the normal PR merge boundary without
+  explicit operator authority. The accepted green path keeps server check
+  verification and adds the narrow signed ref-CAS authority.
 - Push directly with Git or disable hooks: rejected. The GitHub ref API exposes
   the required non-force operation without weakening local push guards.
 
@@ -437,7 +440,7 @@ then remove the mode. Enabling strict freshness routes new campaigns to the
 existing strict path but does not rewrite an in-flight guard.
 
 Behavioral tests use the public merge CLI and independent mocked GitHub state.
-They prove signed-outage success and normal non-strict rejection; explicit
+They prove signed green-CI and outage success plus unsigned non-strict rejection; explicit
 `force: false`; exact ref, base, and head binding; ancestor rejection; base race
 conflict; indirect merge
 read-back; protection digest drift; resolved and unresolved conversation

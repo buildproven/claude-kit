@@ -397,14 +397,15 @@ accepted, narrowly-scoped trade for repos with no other option — leave it
 unset unless `quality-authorize-merge.sh` reports the base as unprotectable
 on your plan.
 
-### Protected non-strict Actions-outage ref-CAS
+### Protected non-strict ref-CAS
 
 A protected branch with non-empty required checks and GitHub `strict: false`
-is not unprotectable and remains blocked during normal operation. The separate
-signed `operator-nonstrict-refcas-override` applies only to an exact-head
-Actions billing outage. It binds `ci:failed`, `base:protected-nonstrict`, and
-`pr:non-atomic-state`; the complete classic-protection digest; required check
-names and App IDs; and the exact campaign identity.
+is not unprotectable. The separate signed
+`operator-nonstrict-refcas-override` binds `base:protected-nonstrict`,
+`pr:non-atomic-state`, the complete classic-protection digest, required check
+names and App IDs, and the exact campaign identity. Green exact-head CI remains
+mandatory. During a classified Actions billing outage, the capability also
+binds `ci:failed` and the exact outage artifact.
 
 The final repository lease reloads the signed capability, requires enough
 remaining validity for the bounded request, and rechecks the live base,

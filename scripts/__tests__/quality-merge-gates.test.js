@@ -406,7 +406,7 @@ describe("quality merge gates", () => {
     expect(AUTHORIZE).toMatch(/BS_QUALITY_ALLOW_UNPROTECTABLE_BASE:-false/);
     expect(AUTHORIZE).toMatch(/ATOMIC_BASE_FRESHNESS=unprotectable/);
     expect(AUTHORIZE).toMatch(
-      /case "\$ATOMIC_BASE_FRESHNESS" in[\s\S]*MERGE_MODE=strict[\s\S]*MERGE_MODE=protected-nonstrict-outage-ref-cas[\s\S]*MERGE_MODE=unprotectable/,
+      /case "\$ATOMIC_BASE_FRESHNESS" in[\s\S]*MERGE_MODE=strict[\s\S]*MERGE_MODE=protected-nonstrict-ref-cas[\s\S]*MERGE_MODE=unprotectable/,
     );
     expect(AUTHORIZE).toMatch(
       /\[ "\$ATOMIC_BASE_FRESHNESS" = unprotectable \]; then[\s\S]*gh pr checks "\$PR" --repo "\$EXPECTED_REPOSITORY" >\/dev\/null/,

@@ -231,10 +231,12 @@ only when repository, workflow, check, base SHA, candidate SHA/kind, source app,
 source URL, and successful conclusion all still match exactly.
 
 A protected `strict: false` base remains blocked unless the exact campaign has
-the distinct signed `operator-nonstrict-refcas-override`. In that outage-only
-mode, the merge lease uses one non-force GitHub ref update after it rechecks the
-complete protection contract, required App bindings, resolved conversations,
-base, PR, and head. Never reinterpret the ordinary CI capability as this scope.
+the distinct signed `operator-nonstrict-refcas-override`. The merge lease uses
+one non-force GitHub ref update after it rechecks the complete protection
+contract, required App bindings, resolved conversations, base, PR, and head.
+Green CI remains required unless the same capability also binds the exact
+Actions outage evidence. Never reinterpret the ordinary CI capability as this
+scope.
 
 contiguous review checkpoints are mandatory.
 

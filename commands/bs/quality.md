@@ -197,17 +197,24 @@ automatic retry for a marker-only fallback review (a separate mechanism)
 still gets its chance before an operator needs to reach for this — override
 is the final step after diagnosis, not a way to skip retrying first.
 
-A protected base with required checks and GitHub `strict: false` remains
-blocked during normal operation. During a classified Actions billing outage,
-the repository owner can authorize the separate exact-head ref-CAS path:
+A protected base with required checks and GitHub `strict: false` requires the
+repository owner to authorize the separate exact-head ref-CAS path. With green
+exact-head CI, accept only the administrator ref mutation and PR-state race:
+
+```text
+/bs:quality approve --manifest <exact-manifest-path> --pr <number> --head <exact-40-character-sha> --override-nonstrict-refcas --reason "<text>" --accept base:protected-nonstrict,pr:non-atomic-state --i-understand-admin-ref-mutation --i-understand-pr-state-race
+```
+
+During a classified Actions billing outage, also accept and bind the missing CI:
 
 ```text
 /bs:quality approve --manifest <exact-manifest-path> --pr <number> --head <exact-40-character-sha> --override-nonstrict-refcas --reason "<text>" --ci-failure failed --accept ci:failed,base:protected-nonstrict,pr:non-atomic-state --i-understand-missing-ci --i-understand-admin-ref-mutation --i-understand-pr-state-race
 ```
 
 This mints `operator-nonstrict-refcas-override`, not the general quality or CI
-scope. It binds the complete classic-protection digest and exact required-check
-App identities. The final lease rechecks protection, repository-admin
+scope. Both forms bind the complete classic-protection digest and exact
+required-check App identities. The outage form additionally binds the exact CI
+evidence. The final lease rechecks protection, repository-admin
 authority, resolved review threads, base SHA, PR identity, and head ancestry,
 then performs one GitHub ref update with `force: false`. A stale-base rejection
 keeps the campaign resumable. An ambiguous response remains quarantined.

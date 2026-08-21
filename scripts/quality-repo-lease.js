@@ -883,8 +883,8 @@ function mergeHead(manifest) {
 
 function assertMergeIntentTransition(record, nextMode) {
   if (
-    record.mergeIntent?.mode === "protected-nonstrict-outage-ref-cas" &&
-    nextMode !== "protected-nonstrict-outage-ref-cas"
+    record.mergeIntent?.mode === "protected-nonstrict-ref-cas" &&
+    nextMode !== "protected-nonstrict-ref-cas"
   ) {
     throw new Error(
       "a ref-CAS campaign cannot downgrade its persisted merge intent",
@@ -980,7 +980,7 @@ function releaseMergeGuard(
     }
     if (outcome === "request-rejected-stale-base") {
       if (
-        owner.mode !== "protected-nonstrict-outage-ref-cas" ||
+        owner.mode !== "protected-nonstrict-ref-cas" ||
         details.status !== 422 ||
         details.message !== "Update is not a fast forward"
       ) {
@@ -1224,7 +1224,7 @@ function reconcileMergeOutcome(manifestPath, presentedToken, options = {}) {
   const refCasIntent = refCasIntentMatches(credential, manifest);
   if (
     outcome === "merged" &&
-    (guard?.mode === "protected-nonstrict-outage-ref-cas" || refCasIntent) &&
+    (guard?.mode === "protected-nonstrict-ref-cas" || refCasIntent) &&
     !refCasIntegrated(manifest, remote, { repositoryScoped: true })
   ) {
     outcome = null;
@@ -1238,7 +1238,7 @@ function reconcileMergeOutcome(manifestPath, presentedToken, options = {}) {
 
 function refCasIntentMatches(credential, manifest) {
   return (
-    credential.mergeIntent?.mode === "protected-nonstrict-outage-ref-cas" &&
+    credential.mergeIntent?.mode === "protected-nonstrict-ref-cas" &&
     credential.mergeIntent?.head === mergeHead(manifest) &&
     credential.mergeIntent?.baseRef === baseBranch(manifest)
   );
@@ -1312,30 +1312,29 @@ function resolveMergeMode(manifest, options, head) {
   }
   const mode = options.mode || "strict";
   if (
-    !["strict", "unprotectable", "protected-nonstrict-outage-ref-cas"].includes(
-      mode,
-    )
+    !["strict", "unprotectable", "protected-nonstrict-ref-cas"].includes(mode)
   ) {
     throw new Error(`unsupported merge mode '${mode}'`);
   }
-  if (mode === "protected-nonstrict-outage-ref-cas") {
+  if (mode === "protected-nonstrict-ref-cas") {
     const invocation = require("./quality-invocation.js");
     const capability = invocation.protectedNonstrictRefCasCapability(manifest);
     if (
       options.admin !== true ||
       manifest.merge?.stampHead ||
       !capability ||
-      !invocation.ciBillingEvidenceBindingValid(
-        manifest,
-        capability?.ciEvidenceSha256,
-      ) ||
+      (capability.ciEvidenceSha256 &&
+        !invocation.ciBillingEvidenceBindingValid(
+          manifest,
+          capability.ciEvidenceSha256,
+        )) ||
       capability.baseSha !== manifest.revisions.baseHeadSha ||
       !/^[a-f0-9]{64}$/.test(capability.protectionDigest || "") ||
       (options.protectionDigest &&
         options.protectionDigest !== capability.protectionDigest)
     ) {
       throw new Error(
-        "protected non-strict ref-CAS requires its valid signed exact-head outage capability",
+        "protected non-strict ref-CAS requires its valid signed exact-head capability",
       );
     }
     return {
@@ -1420,7 +1419,7 @@ function assertRefCasPreconditions(manifest, guarded, options, head) {
     guarded.protectionDigest !== options.protectionDigest ||
     JSON.stringify(guarded.requiredChecks) !==
       JSON.stringify(options.requiredChecks) ||
-    guarded.mode !== "protected-nonstrict-outage-ref-cas"
+    guarded.mode !== "protected-nonstrict-ref-cas"
   ) {
     throw new Error(
       "protected non-strict branch protection changed before the guarded ref update",
@@ -1550,7 +1549,7 @@ function performMerge(manifestPath, presentedToken, options = {}) {
   withNotStartedCleanup(manifestPath, presentedToken, () => {
     assertBase(manifestPath, presentedToken);
   });
-  if (mode === "protected-nonstrict-outage-ref-cas") {
+  if (mode === "protected-nonstrict-ref-cas") {
     return performRefCasUpdate(loaded, presentedToken, resolvedOptions);
   }
   const paths = pathsFor(repository, manifest);

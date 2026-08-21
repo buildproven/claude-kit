@@ -33,6 +33,7 @@ function attachRefCasCapability(
   protectionDigest,
   requiredChecks,
   expiresInMs = 300_000,
+  includeOutage = true,
 ) {
   const { manifest } = invocation.loadManifest(manifestPath);
   const evidence = {
@@ -54,11 +55,13 @@ function attachRefCasCapability(
   };
   evidence.evidenceSha256 =
     require("../quality-ci-billing-waiver").evidenceSha256(evidence);
-  fs.writeFileSync(
-    path.join(manifest.stateRoot, "ci-billing-waiver.json"),
-    `${JSON.stringify(evidence)}\n`,
-    { mode: 0o600 },
-  );
+  if (includeOutage) {
+    fs.writeFileSync(
+      path.join(manifest.stateRoot, "ci-billing-waiver.json"),
+      `${JSON.stringify(evidence)}\n`,
+      { mode: 0o600 },
+    );
+  }
   const keys = crypto.generateKeyPairSync("ed25519");
   const payload = {
     schemaVersion: 1,
@@ -69,13 +72,13 @@ function attachRefCasCapability(
     invocationId: manifest.invocationId,
     approver: "test-operator",
     scope: "operator-nonstrict-refcas-override",
-    reason: "test Actions outage",
-    acceptedConditions: [
-      "ci:failed",
-      "base:protected-nonstrict",
-      "pr:non-atomic-state",
-    ],
-    ciBillingEvidenceSha256: evidence.evidenceSha256,
+    reason: includeOutage
+      ? "test Actions outage"
+      : "test exact-head green CI ref update",
+    acceptedConditions: includeOutage
+      ? ["ci:failed", "base:protected-nonstrict", "pr:non-atomic-state"]
+      : ["base:protected-nonstrict", "pr:non-atomic-state"],
+    ciBillingEvidenceSha256: includeOutage ? evidence.evidenceSha256 : null,
     protectedNonstrictProtectionDigest: protectionDigest,
     protectedNonstrictRequiredChecks: requiredChecks,
     protectedNonstrictBaseSha: manifest.revisions.baseHeadSha,
@@ -360,7 +363,7 @@ describe("repository merge lease", () => {
         {
           admin: true,
           expectedHead: manifest.revisions.currentHead,
-          mode: "protected-nonstrict-outage-ref-cas",
+          mode: "protected-nonstrict-ref-cas",
           protectionDigest: digest,
         },
         manifest.revisions.currentHead,
@@ -383,7 +386,7 @@ describe("repository merge lease", () => {
     const options = {
       admin: true,
       expectedHead: manifest.revisions.currentHead,
-      mode: "protected-nonstrict-outage-ref-cas",
+      mode: "protected-nonstrict-ref-cas",
       protectionDigest: digest,
       requiredChecks,
     };
@@ -1120,7 +1123,7 @@ printf '%s\n' '${JSON.stringify({
     lease.release(first.manifestPath, owner.token, "test-complete");
   });
 
-  it("uses a non-force exact ref update for protected non-strict outage mode", () => {
+  it("uses a non-force exact ref update for protected non-strict green CI mode", () => {
     const candidate = fixture("protected-nonstrict-refcas");
     const base = git(candidate.root, ["rev-parse", "HEAD"]);
     fs.writeFileSync(path.join(candidate.root, "candidate.txt"), "candidate\n");
@@ -1184,9 +1187,13 @@ exec '${realGit}' "$@"
         reviewThreads: null,
         repositoryAdmin: true,
       }).digest;
-    attachRefCasCapability(candidate.manifestPath, digest, [
-      { context: "quality", appId: 15368 },
-    ]);
+    attachRefCasCapability(
+      candidate.manifestPath,
+      digest,
+      [{ context: "quality", appId: 15368 }],
+      300_000,
+      false,
+    );
     fs.writeFileSync(
       path.join(bin, "gh"),
       `#!/bin/sh
@@ -1235,7 +1242,7 @@ esac
         lease.performMerge(candidate.manifestPath, owner.token, {
           admin: true,
           expectedHead: head,
-          mode: "protected-nonstrict-outage-ref-cas",
+          mode: "protected-nonstrict-ref-cas",
           protectionDigest: digest,
         }),
       ).toMatchObject({ merged: true });
@@ -1261,10 +1268,10 @@ esac
       lease.performMerge(candidate.manifestPath, owner.token, {
         admin: true,
         expectedHead: manifest.revisions.currentHead,
-        mode: "protected-nonstrict-outage-ref-cas",
+        mode: "protected-nonstrict-ref-cas",
         protectionDigest: "d".repeat(64),
       }),
-    ).toThrow(/valid signed exact-head outage capability/);
+    ).toThrow(/valid signed exact-head capability/);
     expect(lease.status(candidate.manifestPath).mergeGuard).toBeNull();
     lease.release(candidate.manifestPath, owner.token, "test-complete");
   });
@@ -1284,10 +1291,10 @@ esac
       lease.performMerge(candidate.manifestPath, owner.token, {
         admin: true,
         expectedHead: manifest.revisions.currentHead,
-        mode: "protected-nonstrict-outage-ref-cas",
+        mode: "protected-nonstrict-ref-cas",
         protectionDigest: "d".repeat(64),
       }),
-    ).toThrow(/valid signed exact-head outage capability/);
+    ).toThrow(/valid signed exact-head capability/);
     lease.release(candidate.manifestPath, owner.token, "test-complete");
   });
 
@@ -1303,9 +1310,9 @@ esac
       lease.performMerge(candidate.manifestPath, owner.token, {
         admin: true,
         expectedHead: manifest.revisions.currentHead,
-        mode: "protected-nonstrict-outage-ref-cas",
+        mode: "protected-nonstrict-ref-cas",
       }),
-    ).toThrow(/valid signed exact-head outage capability/);
+    ).toThrow(/valid signed exact-head capability/);
     lease.release(candidate.manifestPath, owner.token, "test-complete");
   });
 
@@ -1314,11 +1321,11 @@ esac
     const owner = lease.acquire(candidate.manifestPath);
     lease.acquireMergeGuard(candidate.manifestPath, owner.token, {
       admin: true,
-      mode: "protected-nonstrict-outage-ref-cas",
+      mode: "protected-nonstrict-ref-cas",
       protectionDigest: "d".repeat(64),
     });
     expect(lease.status(candidate.manifestPath).mergeGuard).toMatchObject({
-      mode: "protected-nonstrict-outage-ref-cas",
+      mode: "protected-nonstrict-ref-cas",
       protectionDigest: "d".repeat(64),
     });
     lease.releaseMergeGuard(
@@ -1332,7 +1339,7 @@ esac
       owned: true,
       mergeGuard: null,
       mergeIntent: {
-        mode: "protected-nonstrict-outage-ref-cas",
+        mode: "protected-nonstrict-ref-cas",
       },
       lastRefCasRejection: {
         status: 422,
