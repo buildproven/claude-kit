@@ -211,6 +211,16 @@ competing SHA. The exact probe ref was deleted and its absence verified. This
 observed contract is a required regression fixture; an unexpected response is
 ambiguous and quarantined, never normalized to success.
 
+A second probe used the exact operational shape: a temporary classic-protected
+branch with one unsatisfied GitHub Actions-bound required check, `strict: false`,
+and administrator enforcement disabled. The authenticated administrator's
+`force: false` fast-forward to
+`77284a17c5d2a2ea25ae5827a73577c3eb0e34fa` returned HTTP 200 despite the
+missing check. A divergent update to
+`5ae6f3572cd2e60f04cf28c47abe41795b287c48` returned the same exact HTTP 422
+non-fast-forward message and retained the competing SHA. The temporary
+protection and exact branch were deleted, and branch absence was verified.
+
 ### Decision
 
 Add `protected-nonstrict-outage-ref-cas` as an explicit outage-only merge mode.
