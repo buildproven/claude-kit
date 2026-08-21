@@ -32,9 +32,11 @@ function attachRefCasCapability(
   manifestPath,
   protectionDigest,
   requiredChecks,
-  expiresInMs = 300_000,
-  includeOutage = true,
-  includeMissingReview = false,
+  {
+    expiresInMs = 300_000,
+    includeOutage = true,
+    includeMissingReview = false,
+  } = {},
 ) {
   const { manifest } = invocation.loadManifest(manifestPath);
   const evidence = {
@@ -365,7 +367,7 @@ describe("repository merge lease", () => {
       candidate.manifestPath,
       digest,
       [{ context: "quality", appId: 15368 }],
-      60_000,
+      { expiresInMs: 60_000 },
     );
     expect(() =>
       lease._resolveRefCasAtMutation(
@@ -386,12 +388,9 @@ describe("repository merge lease", () => {
     const { manifest } = invocation.loadManifest(candidate.manifestPath);
     const digest = "c".repeat(64);
     const requiredChecks = [{ context: "quality", appId: 15368 }];
-    attachRefCasCapability(
-      candidate.manifestPath,
-      digest,
-      requiredChecks,
-      60_000,
-    );
+    attachRefCasCapability(candidate.manifestPath, digest, requiredChecks, {
+      expiresInMs: 60_000,
+    });
     const owner = lease.acquire(candidate.manifestPath);
     const options = {
       admin: true,
@@ -1201,9 +1200,7 @@ exec '${realGit}' "$@"
       candidate.manifestPath,
       digest,
       [{ context: "quality", appId: 15368 }],
-      300_000,
-      false,
-      true,
+      { includeOutage: false, includeMissingReview: true },
     );
     fs.writeFileSync(
       path.join(bin, "gh"),
