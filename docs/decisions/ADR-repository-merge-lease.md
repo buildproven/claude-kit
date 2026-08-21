@@ -179,88 +179,119 @@ Add a repository-scoped merge lease to the public quality runtime.
     unprotectable repository has no required-context source, so it retains the
     separate all-registered-PR-check waiter and final guard.
 
-## Protected non-strict amendment
+## Protected non-strict ref-CAS amendment
 
 ### Problem
 
 Some protected repositories deliberately require exact-head status checks with
 GitHub's `strict` option disabled. The current authorizer treats that state like
-an unprotected branch. It therefore blocks every normal quality merge and also
-blocks the signed GitHub Actions billing-outage path, even when the repository
-lease, exact-head review, deterministic gates, and required-check identities
-are valid.
+an unprotected branch and blocks all normal and signed billing-outage merges.
 
-GitHub does not provide a base-SHA precondition for pull-request merge. A local
-lease and a final base read cannot recreate strict server-side freshness because
-a human or another host can advance the base after that read. The runtime must
-not describe the weaker mode as atomic.
+A pull-request merge accepts an expected head SHA but no expected base SHA. A
+local lease and final read cannot make that operation atomic against another
+host. GitHub's Git-reference API does provide the missing server primitive: a
+non-force update succeeds only when it is a fast-forward. The exact reviewed
+head already exists on the remote and must descend from the manifest's exact
+base. Updating the base ref to that head with `force: false` therefore acts as a
+server-side compare-and-swap. Any intervening divergent base advance returns a
+conflict. GitHub documents both the
+[non-force update contract](https://docs.github.com/en/rest/git/refs#update-a-reference)
+and that a pull request is marked merged when its head becomes reachable from
+its base through an
+[indirect merge](https://docs.github.com/en/pull-requests/reference/pull-request-merges#indirect-merges).
 
 ### Decision
 
-Add `protected-nonstrict` as an explicit base-protection classification in the
-existing merge authorizer.
+Add `protected-nonstrict-ref-cas` as an explicit merge mode. It uses the existing
+repository lease and merge-operation guard, but replaces the pull-request merge
+request with one non-force Git-reference update to the exact reviewed head.
 
-1. Classify a base as `protected-nonstrict` only from a complete server-owned
-   classic-protection or effective-ruleset response that has at least one
-   required status check and explicitly reports strict freshness as `false`.
-   Missing fields, empty check sets, pagination, API errors, multiple
-   contradictory rules, unprotected branches, and unknown responses remain
-   blocked.
-2. Normal merges still require every configured exact-head check with its
-   expected GitHub App identity. The repository merge lease serializes quality
-   campaigns, and the final authorizer re-reads both the PR head and base SHA
-   immediately before merge. The runtime reports this as lease-guarded,
-   non-atomic freshness.
-3. A GitHub Actions billing waiver on this mode additionally requires the
-   existing signed `operator-ci-billing-override`, exact failed-job evidence
-   proving no runner and no steps, a current administrator who can bypass the
-   same selected protection source, exact-head local review evidence, and a
-   second protection recheck immediately before the administrator merge. The
-   waiver accepts CI unavailability only; it does not mark CI green.
-4. Persist `protected-nonstrict` and the selected protection source in the
-   repository merge-operation guard and terminal merge evidence. Recovery and
-   read-back must therefore retain the weaker guarantee instead of flattening it
-   into an ordinary protected merge.
-5. Do not add an environment-only escape hatch. Candidate code, caller input,
-   or a signed capability for another scope cannot select this classification.
+1. Read the complete classic branch-protection and effective-rules responses
+   with separate exit status and body capture. The first implementation accepts
+   only one complete classic rule with non-empty required checks, explicit
+   `strict: false`, no effective rulesets, unlocked base, no required commit
+   signatures, no push restrictions, and no required human approval. A
+   zero-approval review object is allowed. Missing fields, empty checks, API
+   errors, pagination, rulesets, or unsupported protections remain blocked.
+2. Require the authenticated actor to be a repository administrator and require
+   classic administrator enforcement to be explicitly disabled. Candidate
+   files, environment variables, and capabilities for another scope cannot
+   select this mode.
+3. Require the remote pull request to be open and to match the manifest's
+   repository, number, base ref, head ref, base SHA, and head SHA. Prove with
+   `git merge-base --is-ancestor` that the exact head is a descendant of the
+   exact base. Re-read the complete protection contract and compare its digest
+   immediately before mutation.
+4. In normal operation, verify all required exact-head contexts and GitHub App
+   bindings before the ref update. During a billing outage, require instead the
+   existing exact `operator-ci-billing-override`, signed exact-head local review
+   evidence, and failed-job evidence proving no runner and no steps. CI remains
+   unavailable, never green.
+5. While holding the merge-operation guard, call GitHub's update-reference API
+   for the exact base ref, exact head SHA, and `force: false`. Do not force-push,
+   disable hooks, synthesize a commit, or use a caller-selected ref. A conflict
+   is a stale-base block. An ambiguous response remains quarantined until remote
+   read-back proves the exact head reachable from the base and the PR merged, or
+   proves that it did not merge.
+6. Persist merge mode, protection digest, base SHA, head SHA, administrator mode,
+   and billing-waiver reason in the merge-operation guard. Terminal evidence and
+   recovery retain those values. Exact merged-branch cleanup remains separate
+   because indirect merge behavior need not apply repository branch-deletion
+   settings.
+
+### Classification decision table
+
+| Gate                  | Strict               | Protected non-strict ref-CAS | Plan-unprotectable           |
+| --------------------- | -------------------- | ---------------------------- | ---------------------------- |
+| Exact required checks | Required             | Required                     | All registered checks        |
+| Billing outage        | Signed CI capability | Signed CI capability         | Existing plan-limited policy |
+| Human merge authority | Existing policy      | Existing policy              | Existing policy              |
+| Base mutation         | PR merge API         | Non-force ref update         | PR merge API                 |
+| Freshness claim       | GitHub strict        | GitHub fast-forward CAS      | Non-atomic                   |
+| Admin bypass proof    | Billing outage only  | Always                       | Existing policy              |
+
+Both the authorizer and stamp preflight explicitly allowlist all three modes.
+No `!= unprotectable` test may stand in for a decision in this table.
 
 ### Invariants
 
-- The PR repository, number, base ref, head ref, base SHA, and head SHA match the
-  immutable campaign manifest at final authorization.
-- Review, deterministic gates, mutation evidence, required-check names, and App
-  bindings remain exact-head requirements.
-- Only an explicit server response with non-empty required checks can select
-  `protected-nonstrict`; ambiguity fails closed.
-- A billing-outage merge remains an administrator merge authorized only by the
-  exact CI capability and exact outage evidence.
-- The runtime never claims atomic base freshness in this mode.
+- Review, deterministic gates, mutation evidence, check names, and App bindings
+  remain bound to the exact remote head.
+- Only a complete supported protection response can select ref-CAS; ambiguity
+  or an unsupported protection blocks.
+- The ref update is never forced and can target only the manifest base ref with
+  the exact manifest head.
+- A billing-outage ref-CAS remains authorized only by the exact CI capability
+  and exact outage evidence.
+- Successful read-back proves both base reachability and GitHub's merged PR
+  state before the lease is released.
 
 ### Alternatives
 
-- Enable GitHub strict freshness everywhere: preserves the strongest guarantee
-  but conflicts with the confirmed fleet policy that retains `strict: false`.
-- Use a merge queue: preserves a server-owned base boundary but is not available
-  in every repository and still depends on hosted CI during the current outage.
-- Use a direct administrator merge: rejected because it bypasses the quality
-  authorizer and loses the repository-lease audit trail.
-- Treat every protected non-strict merge as plan-unprotectable: rejected because
-  it confuses an explicit protection choice with a GitHub plan limitation and
-  would weaken the classifier.
+- Accept a client-only non-atomic merge: rejected after Claude review identified
+  authority, downgrade, evidence-binding, and recheck defects.
+- Add a base-freshness CI job: improves server evidence but is still non-atomic
+  at merge and cannot run during the hosted-CI outage.
+- Enable GitHub strict freshness everywhere: strong, but conflicts with the
+  confirmed fleet policy that retains `strict: false`.
+- Use a merge queue: strong, but unavailable in some repositories and dependent
+  on hosted CI.
+- Push directly with Git or disable hooks: rejected. The GitHub ref API exposes
+  the required non-force operation without weakening local push guards.
 
 ### Rollback and verification
 
-Rollback is configuration-first: enabling strict freshness makes the existing
-atomic path win without removing this code. Code rollback removes the
-`protected-nonstrict` classifier after all affected repositories use strict
-freshness or a merge queue.
+Stop admission of new ref-CAS operations, reconcile or drain every persisted
+ref-CAS merge guard, then remove the mode. Enabling strict freshness routes new
+campaigns to the existing strict path but does not rewrite an in-flight guard.
 
-Behavioral tests must prove classification and final authorization through the
-public merge CLI. They cover normal required-check success, signed billing
-outage success, empty or malformed protection responses, wrong App bindings,
-missing or stale capabilities, base or head movement, protection-source drift,
-and merge-operation receipt retention. The complete quality suite and an
-independent provider review remain required before release.
+Behavioral tests use the public merge CLI and independent mocked GitHub state.
+They prove normal and signed-outage success; explicit `force: false`; exact ref,
+base, and head binding; ancestor rejection; base race conflict; indirect merge
+read-back; protection digest drift; empty, malformed, failed, paginated, or
+ruleset responses; unsupported protections; wrong App binding; stale or wrong
+capability; and merge-guard recovery. The complete suite and a second clean
+Claude architecture review are required before implementation is accepted.
 
 ## Lease record
 
