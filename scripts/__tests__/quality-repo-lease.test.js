@@ -1187,6 +1187,9 @@ esac
         message: "Update is not a fast forward",
       },
     });
+    expect(() =>
+      lease.acquireMergeGuard(candidate.manifestPath, owner.token),
+    ).toThrow(/cannot downgrade/);
     expect(
       invocation.loadManifest(candidate.manifestPath).manifest.terminalState,
     ).toBeNull();

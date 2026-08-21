@@ -339,7 +339,12 @@ signed billing capability remains blocked.
    no-mutation outcome for only that operation attempt. It releases the short
    operation guard only when the guard is a ref-CAS guard and the release call
    atomically records the exact HTTP 422 status and message in the lease. A
-   generic or caller-asserted release remains quarantined. It never releases the campaign lease, closes the pull
+   generic or caller-asserted release remains quarantined. After this release,
+   a new guard may refresh the ref-CAS head and base but cannot downgrade the
+   persisted campaign intent to a generic merge mode. Guard acquire and release
+   are internal mutation operations, not public CLI commands. The `not-started`
+   release is valid only while the guard still proves no request started. It
+   never releases the campaign lease, closes the pull
    request, or writes a non-reenterable manifest terminal state.
 10. Add a ref-CAS-specific administrator proof alongside, not instead of, the
     strict proof. It requires the selected classic protection digest, explicit

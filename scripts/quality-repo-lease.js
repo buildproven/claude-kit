@@ -880,6 +880,17 @@ function mergeHead(manifest) {
   return manifest.merge?.stampHead ?? manifest.revisions.currentHead;
 }
 
+function assertMergeIntentTransition(record, nextMode) {
+  if (
+    record.mergeIntent?.mode === "protected-nonstrict-outage-ref-cas" &&
+    nextMode !== "protected-nonstrict-outage-ref-cas"
+  ) {
+    throw new Error(
+      "a ref-CAS campaign cannot downgrade its persisted merge intent",
+    );
+  }
+}
+
 function acquireMergeGuard(manifestPath, presentedToken, options = {}) {
   const loaded = loadManifest(manifestPath);
   const tuple = ownerTuple(loaded.manifest, loaded.manifestPath, {
@@ -899,6 +910,8 @@ function acquireMergeGuard(manifestPath, presentedToken, options = {}) {
         "repository merge lease credential is stale before merge guard acquisition",
       );
     }
+    const nextMode = options.mode || "strict";
+    assertMergeIntentTransition(record, nextMode);
     acquireGuard(paths.mergeGuard, 1, { recoverDead: false });
     const ownerFile = path.join(paths.mergeGuard, "owner.json");
     atomicWrite(ownerFile, {
@@ -912,7 +925,7 @@ function acquireMergeGuard(manifestPath, presentedToken, options = {}) {
       token: presentedToken,
       admin: options.admin === true,
       adminReason: options.admin === true ? "ci-billing-waiver" : null,
-      mode: options.mode || "strict",
+      mode: nextMode,
       protectionDigest: options.protectionDigest || null,
       requiredChecks: options.requiredChecks || null,
       ciEvidenceSha256: options.ciEvidenceSha256 || null,
@@ -920,7 +933,7 @@ function acquireMergeGuard(manifestPath, presentedToken, options = {}) {
       requestStartedAt: null,
     });
     record.mergeIntent = {
-      mode: options.mode || "strict",
+      mode: nextMode,
       head: mergeHead(loaded.manifest),
       baseRef: baseBranch(loaded.manifest),
       baseSha:
@@ -956,15 +969,13 @@ function releaseMergeGuard(
     ) {
       throw new Error("merge operation guard owner changed");
     }
-    if (
-      ![
-        "merged",
-        "closed-unmerged",
-        "not-started",
-        "request-rejected-stale-base",
-      ].includes(outcome)
-    ) {
+    if (!["not-started", "request-rejected-stale-base"].includes(outcome)) {
       throw new Error("ambiguous merge operation remains quarantined");
+    }
+    if (outcome === "not-started" && owner.requestStartedAt !== null) {
+      throw new Error(
+        "a started merge request cannot use the not-started release path",
+      );
     }
     if (outcome === "request-rejected-stale-base") {
       if (
@@ -1566,9 +1577,6 @@ function commandHandlers(manifest, options) {
     },
     release: () => release(manifest, presentedToken(), options.reason),
     status: () => status(manifest),
-    "merge-guard-acquire": () => acquireMergeGuard(manifest, presentedToken()),
-    "merge-guard-release": () =>
-      releaseMergeGuard(manifest, presentedToken(), options.outcome),
     "assert-base": () => assertBase(manifest, presentedToken()),
     merge: () =>
       performMerge(manifest, presentedToken(), {
