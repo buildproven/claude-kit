@@ -18,6 +18,10 @@ const WRAPPER = readFileSync(
   path.join(ROOT, "scripts/quality-wrapper.js"),
   "utf8",
 );
+const INVOCATION = readFileSync(
+  path.join(ROOT, "scripts/quality-invocation.js"),
+  "utf8",
+);
 const RUN_REVIEW = readFileSync(
   path.join(ROOT, "scripts/quality-run-review.sh"),
   "utf8",
@@ -121,6 +125,9 @@ describe("quality merge gates", () => {
     );
     expect(WRAPPER).toMatch(
       /function prepareDescendantAdvanceAuthorization[\s\S]*operator-quality-override[\s\S]*operator-nonstrict-refcas-override[\s\S]*includes\(scope\)/,
+    );
+    expect(INVOCATION).toMatch(
+      /function validateDescendantAdvanceAuthorization[\s\S]*operator-quality-override[\s\S]*operator-nonstrict-refcas-override[\s\S]*includes\(payload\?\.scope\)/,
     );
   });
   it("keeps deterministic failures blocking while AI leads stay advisory", () => {

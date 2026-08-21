@@ -624,9 +624,9 @@ exit 1
             BS_QUALITY_APPROVAL_ONLY: "1",
             BS_QUALITY_APPROVAL_EXPECTED_PR: "23",
             BS_QUALITY_APPROVAL_EXPECTED_HEAD: descendantHead,
-            BS_QUALITY_APPROVAL_SCOPE: "operator-quality-override",
+            BS_QUALITY_APPROVAL_SCOPE: "operator-nonstrict-refcas-override",
             BS_QUALITY_APPROVAL_ACCEPTED_CONDITIONS:
-              "review:provider-exhaustion",
+              "review:provider-exhaustion,base:protected-nonstrict,pr:non-atomic-state",
             CLAUDE_SETUP_ROOT: ROOT,
             PATH: `${bin}:${process.env.PATH}`,
           }),
@@ -649,9 +649,13 @@ exit 1
         {
           expectedHead: descendantHead,
           expectedPr: 23,
-          scope: "operator-quality-override",
+          scope: "operator-nonstrict-refcas-override",
           reason: "provider review exhausted before the privacy fix",
-          acceptedConditions: ["review:provider-exhaustion"],
+          acceptedConditions: [
+            "review:provider-exhaustion",
+            "base:protected-nonstrict",
+            "pr:non-atomic-state",
+          ],
         },
         { challenge, keyPair, publicKey },
       );
@@ -662,8 +666,9 @@ exit 1
           BS_QUALITY_APPROVAL_ONLY: "1",
           BS_QUALITY_APPROVAL_EXPECTED_PR: "23",
           BS_QUALITY_APPROVAL_EXPECTED_HEAD: descendantHead,
-          BS_QUALITY_APPROVAL_SCOPE: "operator-quality-override",
-          BS_QUALITY_APPROVAL_ACCEPTED_CONDITIONS: "review:provider-exhaustion",
+          BS_QUALITY_APPROVAL_SCOPE: "operator-nonstrict-refcas-override",
+          BS_QUALITY_APPROVAL_ACCEPTED_CONDITIONS:
+            "review:provider-exhaustion,base:protected-nonstrict,pr:non-atomic-state",
           BS_QUALITY_ADVANCE_AUTHORIZATION_ARTIFACT: advanceAuthorization,
           CLAUDE_SETUP_ROOT: ROOT,
           PATH: `${bin}:${process.env.PATH}`,
@@ -685,7 +690,11 @@ exit 1
           advanceAuthorization,
           {
             head: descendantHead,
-            acceptedConditions: ["review:provider-exhaustion"],
+            acceptedConditions: [
+              "review:provider-exhaustion",
+              "base:protected-nonstrict",
+              "pr:non-atomic-state",
+            ],
           },
         ),
       ).toThrow(/identity or conditions do not match/);

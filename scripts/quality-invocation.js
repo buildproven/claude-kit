@@ -2983,7 +2983,10 @@ function validateDescendantAdvanceAuthorization(
     payload?.baseSha !== manifest.revisions.baseSha ||
     payload?.fromHead !== manifest.revisions.currentHead ||
     payload?.head !== head ||
-    payload?.scope !== "operator-quality-override" ||
+    ![
+      "operator-quality-override",
+      "operator-nonstrict-refcas-override",
+    ].includes(payload?.scope) ||
     JSON.stringify(payloadConditions) !== JSON.stringify(expectedConditions)
   ) {
     throw new Error(
@@ -6353,10 +6356,15 @@ function runCommand(command, rawArgs) {
       "inventory",
     ].includes(command)
   ) {
+    const advanceDecisionConditions = String(
+      process.env.BS_QUALITY_ADVANCE_DECISION,
+    )
+      .split(",")
+      .map((condition) => condition.trim());
     const exhaustedReviewAdvance =
       command === "advance" &&
       rawArgs.includes("--allow-exhausted-review") &&
-      process.env.BS_QUALITY_ADVANCE_DECISION === "review:provider-exhaustion";
+      advanceDecisionConditions.includes("review:provider-exhaustion");
     if (!exhaustedReviewAdvance) {
       throw new Error(
         `quality campaign is terminal (${manifest.terminalState.state}); start a fresh invocation`,
