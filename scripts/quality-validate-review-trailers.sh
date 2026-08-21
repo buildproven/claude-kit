@@ -236,8 +236,8 @@ if [ "$REQUIRE_SIGNATURE" = true ]; then
 fi
 
 if [ "$STAMP_PROVIDER" = "operator-quality-override" ]; then
-  printf '%s\n' "$PARSED" | grep -Fxq \
-    'Quality-Override: operator-quality-override' || {
+  [ "$(printf '%s\n' "$PARSED" |
+    grep -Ec '^Quality-Override: operator-(quality-override|nonstrict-refcas-override)$')" -eq 1 ] || {
     echo "operator override evidence is missing its override trailer" >&2
     exit 1
   }

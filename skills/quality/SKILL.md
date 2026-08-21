@@ -235,8 +235,9 @@ the distinct signed `operator-nonstrict-refcas-override`. The merge lease uses
 one non-force GitHub ref update after it rechecks the complete protection
 contract, required App bindings, resolved conversations, base, PR, and head.
 Green CI remains required unless the same capability also binds the exact
-Actions outage evidence. Never reinterpret the ordinary CI capability as this
-scope.
+Actions outage evidence. A provider-exhaustion decision must also be included
+in this same capability when both conditions apply. Never reinterpret the
+ordinary CI capability as this scope.
 
 contiguous review checkpoints are mandatory.
 

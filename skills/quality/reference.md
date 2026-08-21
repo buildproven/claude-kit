@@ -405,7 +405,10 @@ is not unprotectable. The separate signed
 `pr:non-atomic-state`, the complete classic-protection digest, required check
 names and App IDs, and the exact campaign identity. Green exact-head CI remains
 mandatory. During a classified Actions billing outage, the capability also
-binds `ci:failed` and the exact outage artifact.
+binds `ci:failed` and the exact outage artifact. If provider discovery is
+exhausted, the same capability can also bind `review:provider-exhaustion`.
+Every included condition requires its category-specific acknowledgement; two
+separate capabilities cannot be composed after signing.
 
 The final repository lease reloads the signed capability, requires enough
 remaining validity for the bounded request, and rechecks the live base,

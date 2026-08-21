@@ -231,6 +231,8 @@ the administrator pull-request merge request with one non-force Git-reference
 update to the exact reviewed head. A protected non-strict base without the exact
 signed ref-CAS capability remains blocked. Green CI uses the normal required-check
 gate. An outage additionally requires the signed CI condition and artifact.
+Provider exhaustion can be composed into the same signed capability; separate
+single-scope capabilities cannot overwrite each other safely.
 
 1. Read the complete classic branch-protection and effective-rules responses
    with separate exit status and body capture. The first implementation accepts

@@ -2861,12 +2861,7 @@ function ciBillingCapabilityValid(manifest) {
     return conditions.length === 1 && conditions[0] === "ci:failed";
   }
   if (scope === "operator-nonstrict-refcas-override") {
-    return (
-      conditions.length === 3 &&
-      conditions.includes("ci:failed") &&
-      conditions.includes("base:protected-nonstrict") &&
-      conditions.includes("pr:non-atomic-state")
-    );
+    return conditions.includes("ci:failed");
   }
   return (
     scope === "operator-quality-override" && conditions.includes("ci:failed")
@@ -2881,7 +2876,10 @@ function protectedNonstrictRefCasCapability(manifest) {
     return null;
   }
   const conditions = manifest.approval.acceptedConditions;
-  const expectedLength = conditions.includes("ci:failed") ? 3 : 2;
+  const expectedLength =
+    2 +
+    Number(conditions.includes("ci:failed")) +
+    Number(conditions.includes("review:provider-exhaustion"));
   if (
     !Array.isArray(conditions) ||
     conditions.length !== expectedLength ||
@@ -3063,14 +3061,17 @@ function assertApprovalPayloadShape(manifest, payload) {
     }
   } else if (payload.scope === "operator-nonstrict-refcas-override") {
     const conditions = new Set(payload.acceptedConditions);
-    const expectedLength = conditions.has("ci:failed") ? 3 : 2;
+    const expectedLength =
+      2 +
+      Number(conditions.has("ci:failed")) +
+      Number(conditions.has("review:provider-exhaustion"));
     if (
       payload.acceptedConditions.length !== expectedLength ||
       !conditions.has("base:protected-nonstrict") ||
       !conditions.has("pr:non-atomic-state")
     ) {
       throw new Error(
-        "protected non-strict ref-CAS capability must accept base:protected-nonstrict and pr:non-atomic-state, with optional ci:failed outage authority",
+        "protected non-strict ref-CAS capability must accept base:protected-nonstrict and pr:non-atomic-state, with only optional ci:failed and review:provider-exhaustion authority",
       );
     }
     if (
@@ -5536,7 +5537,7 @@ function reviewTrailers(manifest) {
     // and its artifacts (BUI-575 requirement 6).
     ...(authorization.operatorOverride
       ? [
-          "Quality-Override: operator-quality-override",
+          `Quality-Override: ${authorization.override.scope}`,
           `Quality-Override-Reason: ${singleLineTrailerValue(authorization.overrideReason || "")}`,
           `Quality-Override-Accepted: ${(authorization.overrideAcceptedConditions || []).join(",")}`,
           `Quality-Override-Approver: ${singleLineTrailerValue(authorization.overrideApprover || "")}`,
@@ -5608,9 +5609,12 @@ function operatorOverrideAuthorization(manifest) {
 }
 
 function isOperatorOverrideActive(manifest) {
+  const accepted = manifest.approval?.acceptedConditions || [];
   return (
     approvalValid(manifest, manifest.repo.realpath) &&
-    manifest.approval?.scope === "operator-quality-override"
+    (manifest.approval?.scope === "operator-quality-override" ||
+      (manifest.approval?.scope === "operator-nonstrict-refcas-override" &&
+        accepted.includes("review:provider-exhaustion")))
   );
 }
 

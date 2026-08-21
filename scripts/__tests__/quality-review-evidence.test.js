@@ -226,6 +226,22 @@ describe("quality review evidence signatures", () => {
     expect(() =>
       signEvidence({ ...override, override: undefined }, keys.privateKey),
     ).toThrow(/operator override evidence is required/);
+    const composite = {
+      ...override,
+      override: {
+        ...override.override,
+        scope: "operator-nonstrict-refcas-override",
+        acceptedConditions: [
+          "review:provider-exhaustion",
+          "base:protected-nonstrict",
+          "pr:non-atomic-state",
+        ],
+      },
+    };
+    const compositeSignature = signEvidence(composite, keys.privateKey);
+    expect(
+      verifyEvidence(composite, compositeSignature, keys.publicKey),
+    ).toMatchObject(composite);
   });
 
   it("rejects policy-exempt as a configured fallback reviewer", () => {

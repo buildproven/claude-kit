@@ -185,6 +185,29 @@ describe("quality approve command scope parsing", () => {
     });
   });
 
+  it("composes missing review with green protected non-strict ref-CAS", () => {
+    const parsed = parseApprovalCommand([
+      "approve",
+      "--pr",
+      "676",
+      "--head",
+      head,
+      "--override-nonstrict-refcas",
+      "--reason",
+      "Claude is exhausted and exact-head required checks passed",
+      "--accept",
+      "review:provider-exhaustion,base:protected-nonstrict,pr:non-atomic-state",
+      "--i-understand-missing-review",
+      "--i-understand-admin-ref-mutation",
+      "--i-understand-pr-state-race",
+    ]);
+    expect(parsed.acceptedConditions).toEqual([
+      "review:provider-exhaustion",
+      "base:protected-nonstrict",
+      "pr:non-atomic-state",
+    ]);
+  });
+
   it("requires the separate administrator ref-mutation acknowledgement", () => {
     expect(() =>
       parseApprovalCommand([

@@ -291,9 +291,14 @@ function assertCiBillingConditions(
   if (scope === "operator-ci-billing-override" && accepted.length !== 1) {
     throw new Error("CI billing override must accept exactly ci:failed");
   }
-  const expectedNonstrictConditions = nonstrictOutage
-    ? ["ci:failed", "base:protected-nonstrict", "pr:non-atomic-state"]
-    : ["base:protected-nonstrict", "pr:non-atomic-state"];
+  const expectedNonstrictConditions = [
+    ...(nonstrictOutage ? ["ci:failed"] : []),
+    ...(accepted.includes("review:provider-exhaustion")
+      ? ["review:provider-exhaustion"]
+      : []),
+    "base:protected-nonstrict",
+    "pr:non-atomic-state",
+  ];
   if (
     nonstrictRefCas &&
     (accepted.length !== expectedNonstrictConditions.length ||

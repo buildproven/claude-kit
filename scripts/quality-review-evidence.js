@@ -48,13 +48,17 @@ const REVIEWERS = new Set([
   "review-incomplete",
 ]);
 const OPERATOR_OVERRIDE_REVIEWER = "operator-quality-override";
+const OPERATOR_OVERRIDE_SCOPES = new Set([
+  "operator-quality-override",
+  "operator-nonstrict-refcas-override",
+]);
 const UNAVAILABLE_REVIEWER = "unavailable";
 
 function validateOverrideEvidence(override) {
   if (!override || typeof override !== "object" || Array.isArray(override)) {
     throw new Error("operator override evidence is required");
   }
-  if (override.scope !== OPERATOR_OVERRIDE_REVIEWER) {
+  if (!OPERATOR_OVERRIDE_SCOPES.has(override.scope)) {
     throw new Error("operator override evidence scope is invalid");
   }
   for (const field of ["reason", "approver", "issuedAt", "expiresAt"]) {
@@ -72,6 +76,14 @@ function validateOverrideEvidence(override) {
     )
   ) {
     throw new Error("operator override evidence conditions are invalid");
+  }
+  if (
+    override.scope === "operator-nonstrict-refcas-override" &&
+    !override.acceptedConditions.includes("review:provider-exhaustion")
+  ) {
+    throw new Error(
+      "non-strict ref-CAS review evidence requires review:provider-exhaustion",
+    );
   }
   if (!/^[0-9a-f]{64}$/i.test(String(override.artifactSha256 || ""))) {
     throw new Error("operator override evidence artifact hash is invalid");

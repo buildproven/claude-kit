@@ -205,7 +205,13 @@ exact-head CI, accept only the administrator ref mutation and PR-state race:
 /bs:quality approve --manifest <exact-manifest-path> --pr <number> --head <exact-40-character-sha> --override-nonstrict-refcas --reason "<text>" --accept base:protected-nonstrict,pr:non-atomic-state --i-understand-admin-ref-mutation --i-understand-pr-state-race
 ```
 
-During a classified Actions billing outage, also accept and bind the missing CI:
+If the bounded provider review is also exhausted, add
+`review:provider-exhaustion` to `--accept` and add
+`--i-understand-missing-review` to the same command. Do not mint a second
+capability; the one signed artifact must contain every accepted condition.
+
+During a classified Actions billing outage, also accept and bind the missing CI.
+The provider condition and acknowledgement can be added to this same command:
 
 ```text
 /bs:quality approve --manifest <exact-manifest-path> --pr <number> --head <exact-40-character-sha> --override-nonstrict-refcas --reason "<text>" --ci-failure failed --accept ci:failed,base:protected-nonstrict,pr:non-atomic-state --i-understand-missing-ci --i-understand-admin-ref-mutation --i-understand-pr-state-race

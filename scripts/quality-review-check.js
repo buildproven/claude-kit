@@ -246,7 +246,12 @@ function validateStandaloneEvidence(record, currentBase, repository) {
   const signedOperatorOverride =
     record.evidence.reviewStatus === "incomplete" &&
     record.evidence.reviewer === "operator-quality-override" &&
-    record.evidence.override?.scope === "operator-quality-override";
+    (record.evidence.override?.scope === "operator-quality-override" ||
+      (record.evidence.override?.scope ===
+        "operator-nonstrict-refcas-override" &&
+        record.evidence.override?.acceptedConditions?.includes(
+          "review:provider-exhaustion",
+        )));
   if (
     !["complete", "policy-exempt"].includes(record.evidence.reviewStatus) &&
     !signedOperatorOverride

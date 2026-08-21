@@ -34,6 +34,7 @@ function attachRefCasCapability(
   requiredChecks,
   expiresInMs = 300_000,
   includeOutage = true,
+  includeMissingReview = false,
 ) {
   const { manifest } = invocation.loadManifest(manifestPath);
   const evidence = {
@@ -76,8 +77,17 @@ function attachRefCasCapability(
       ? "test Actions outage"
       : "test exact-head green CI ref update",
     acceptedConditions: includeOutage
-      ? ["ci:failed", "base:protected-nonstrict", "pr:non-atomic-state"]
-      : ["base:protected-nonstrict", "pr:non-atomic-state"],
+      ? [
+          "ci:failed",
+          ...(includeMissingReview ? ["review:provider-exhaustion"] : []),
+          "base:protected-nonstrict",
+          "pr:non-atomic-state",
+        ]
+      : [
+          ...(includeMissingReview ? ["review:provider-exhaustion"] : []),
+          "base:protected-nonstrict",
+          "pr:non-atomic-state",
+        ],
     ciBillingEvidenceSha256: includeOutage ? evidence.evidenceSha256 : null,
     protectedNonstrictProtectionDigest: protectionDigest,
     protectedNonstrictRequiredChecks: requiredChecks,
@@ -1193,6 +1203,7 @@ exec '${realGit}' "$@"
       [{ context: "quality", appId: 15368 }],
       300_000,
       false,
+      true,
     );
     fs.writeFileSync(
       path.join(bin, "gh"),
