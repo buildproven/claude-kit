@@ -784,6 +784,15 @@ function readRequestFromStdin() {
   return parseApprovalCommand(parseRequest(fs.readFileSync(0, "utf8")));
 }
 
+function needsDescendantAdvanceAuthorization(request) {
+  return (
+    request.explicit &&
+    request.exactManifest &&
+    isOperatorOverrideScope(request.scope) &&
+    request.acceptedConditions.includes("review:provider-exhaustion")
+  );
+}
+
 function main() {
   const bootstrap = process.argv[2];
   if (!bootstrap) throw new Error("bootstrap path is required");
@@ -795,11 +804,7 @@ function main() {
   const { challenge, keyPair, publicKey } = approvalMaterial(wantsApproval);
   const environment = childEnvironment();
   let advanceAuthorizationArtifact = null;
-  if (
-    request.explicit &&
-    request.exactManifest &&
-    request.scope === "operator-quality-override"
-  ) {
+  if (needsDescendantAdvanceAuthorization(request)) {
     advanceAuthorizationArtifact = prepareDescendantAdvanceAuthorization(
       request.exactManifest,
       {
