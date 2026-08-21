@@ -202,6 +202,15 @@ and that a pull request is marked merged when its head becomes reachable from
 its base through an
 [indirect merge](https://docs.github.com/en/pull-requests/reference/pull-request-merges#indirect-merges).
 
+An empirical conformance probe on 2026-08-21 created one temporary branch at
+`122419a3c76f1c5f4eb28e5ec7998ccbd64ae9fa`, fast-forwarded it to competing
+commit `77284a17c5d2a2ea25ae5827a73577c3eb0e34fa`, then requested a divergent
+update to `5ae6f3572cd2e60f04cf28c47abe41795b287c48` with `force: false`. GitHub
+returned HTTP 422 with `Update is not a fast forward`; read-back retained the
+competing SHA. The exact probe ref was deleted and its absence verified. This
+observed contract is a required regression fixture; an unexpected response is
+ambiguous and quarantined, never normalized to success.
+
 ### Decision
 
 Add `protected-nonstrict-outage-ref-cas` as an explicit outage-only merge mode.
@@ -217,9 +226,12 @@ signed billing capability remains blocked.
    signatures, no push restrictions, no required conversation resolution, and
    no required human approval. Required linear history is allowed because the
    base moves directly to its descendant head without a merge commit. A
-   zero-approval review object is allowed. Validate every known protection field
-   from a closed schema; an unknown field, missing field, empty check set, API
-   error, pagination, ruleset, or unsupported protection remains blocked.
+   zero-approval review object is allowed. `allow_force_pushes`,
+   `allow_deletions`, and `block_creations` must be explicitly disabled;
+   `allow_fork_syncing` must be absent or explicitly disabled. Validate every
+   known protection field from a closed schema; an unknown field, missing field,
+   empty check set, API error, pagination, ruleset, or unsupported protection
+   remains blocked.
 2. Require the authenticated actor to be a repository administrator and require
    classic administrator enforcement to be explicitly disabled. Candidate
    files, environment variables, and capabilities for another scope cannot
@@ -231,8 +243,13 @@ signed billing capability remains blocked.
    immediately before mutation.
 4. Require the existing exact `operator-ci-billing-override`, signed exact-head
    local review evidence, and failed-job evidence proving no runner and no
-   steps. The operator capability explicitly accepts that GitHub cannot enforce
-   the required checks for this mutation. The authorizer still resolves and
+   steps. This capability already authorizes an administrator merge in the
+   strict outage path. In this mode its signed scope explicitly accepts the same
+   exact-head administrator bypass, including the fact that GitHub cannot
+   enforce branch protection for that actor. It does not accept a present
+   signature, review, conversation, restriction, lock, or other non-CI
+   requirement; the closed classifier must prove those requirements absent.
+   The authorizer still resolves and
    records the configured required-check names and App bindings so the exception
    cannot silently widen to another check contract. CI remains unavailable,
    never green. Without that capability, this mode is unreachable.
@@ -241,9 +258,11 @@ signed billing capability remains blocked.
    disable hooks, synthesize a commit, or use a caller-selected ref. A conflict
    is a stale-base block. An ambiguous response remains quarantined until remote
    read-back proves the exact head reachable from the base and the PR merged, or
-   proves that it did not merge. Exact base-ref equality with the expected head
-   is the mutation receipt. GitHub's indirect `merged` state is lifecycle
-   evidence only; it is not independent protection evidence.
+   proves that it did not merge. Successful or recovered integration requires
+   both that the exact head is reachable from the live base and that GitHub marks
+   the exact PR and head merged. This proves the reviewed change landed; it does
+   not attribute the write to this process. GitHub's indirect `merged` state is
+   lifecycle evidence only; it is not independent protection evidence.
 6. Persist merge mode, protection digest, base SHA, head SHA, administrator mode,
    and billing-waiver reason in the merge-operation guard. Terminal evidence and
    recovery retain those values. Exact merged-branch cleanup remains separate
@@ -259,7 +278,15 @@ signed billing capability remains blocked.
    infrastructure changes; GitHub exposes no protection-version CAS. A tighter
    rule can make the ref update fail. A looser rule cannot widen the signed
    outage capability, manifest identity, required-check contract, or non-force
-   base update. Record this residual race rather than claiming it is fenced.
+   base update. The exact signed administrator-bypass capability accepts this
+   residual protection race for this one outage merge. Record it rather than
+   claiming it is fenced.
+9. Ref-CAS recovery has its own explicit release case. It requires the persisted
+   mode and identity, live base reachability from the exact head, and GitHub's
+   merged state for that exact PR/head. It records `integrated-exact-head`, not
+   that this process performed the write. A manual integration of the same exact
+   reviewed head is therefore reconciled honestly; any different head, closed
+   unmerged PR, or unreachable head remains a distinct terminal outcome.
 
 ### Classification decision table
 
@@ -290,9 +317,9 @@ with an explicit case for each mode.
   the exact manifest head.
 - A billing-outage ref-CAS remains authorized only by the exact CI capability
   and exact outage evidence. It is never available for a normal merge.
-- Successful read-back proves the base ref equals the exact head. GitHub's
-  merged PR state is required for lifecycle completion but is not counted as a
-  second protection proof.
+- Successful read-back proves the exact head is reachable from the live base.
+  GitHub's merged PR state is required for lifecycle completion but is not
+  counted as a second protection proof or proof of the performing actor.
 
 ### Alternatives
 
