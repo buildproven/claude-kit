@@ -261,7 +261,7 @@ bare_push() {
 # caller runs budget admission. This preserves the first-push path needed to
 # open a PR without exempting later pull_request:synchronize pushes.
 current_topic_push() {
-  local index token remote_seen=false source destination
+  local index token refspec remote_seen=false source destination
   local -a refspecs=()
   CURRENT_BRANCH=$("${GIT_ARGS[@]}" branch --show-current 2>/dev/null || true)
   [ -n "$CURRENT_BRANCH" ] || return 1
@@ -298,14 +298,14 @@ current_topic_push() {
   # treat them like multi-ref and cross-branch pushes: unknown and admitted.
   [ "${#refspecs[@]}" -le 1 ] || return 1
   [ "${#refspecs[@]}" -eq 1 ] || return 1
-  token="${refspecs[0]}"
-  while [[ "$token" == +* ]]; do token="${token:1}"; done
-  if [[ "$token" == *:* ]]; then
-    source="${token%%:*}"
-    destination="${token##*:}"
+  refspec="${refspecs[0]}"
+  while [[ "$refspec" == +* ]]; do refspec="${refspec:1}"; done
+  if [[ "$refspec" == *:* ]]; then
+    source="${refspec%%:*}"
+    destination="${refspec##*:}"
   else
-    source="$token"
-    destination="$token"
+    source="$refspec"
+    destination="$refspec"
   fi
   source="${source#refs/heads/}"
   destination="${destination#refs/heads/}"
