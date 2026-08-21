@@ -119,6 +119,9 @@ describe("quality merge gates", () => {
     expect(WRAPPER).toContain(
       "if (needsDescendantAdvanceAuthorization(request))",
     );
+    expect(WRAPPER).toMatch(
+      /function prepareDescendantAdvanceAuthorization[\s\S]*operator-quality-override[\s\S]*operator-nonstrict-refcas-override[\s\S]*includes\(scope\)/,
+    );
   });
   it("keeps deterministic failures blocking while AI leads stay advisory", () => {
     expect(SKILL).toMatch(/zero deterministic findings/);

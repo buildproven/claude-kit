@@ -669,7 +669,10 @@ function prepareDescendantAdvanceAuthorization(
     "quality manifest",
   );
   if (
-    scope !== "operator-quality-override" ||
+    ![
+      "operator-quality-override",
+      "operator-nonstrict-refcas-override",
+    ].includes(scope) ||
     manifest.repo.pr !== expectedPr ||
     manifest.revisions.currentHead === expectedHead
   ) {
