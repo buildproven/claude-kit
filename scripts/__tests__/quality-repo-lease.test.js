@@ -122,6 +122,42 @@ function fixture(name, overrides = {}) {
 }
 
 describe("repository merge lease", () => {
+  it("parses included GitHub responses with CRLF and rejects malformed output", () => {
+    expect(
+      lease._parseIncludedGhResponse(
+        'HTTP/2 422\r\ncontent-type: application/json\r\n\r\n{"message":"Update is not a fast forward"}\r\n',
+      ),
+    ).toEqual({
+      status: 422,
+      body: { message: "Update is not a fast forward" },
+    });
+    expect(lease._parseIncludedGhResponse("not an HTTP response")).toEqual({
+      status: null,
+      body: null,
+    });
+  });
+
+  it("recognizes only the exact non-fast-forward response as a safe rejection", () => {
+    const included = (message) => ({
+      status: 1,
+      stdout: `HTTP/2 422 Unprocessable Entity\r\ncontent-type: application/json\r\n\r\n${JSON.stringify({ message })}\r\n`,
+    });
+    expect(
+      lease._classifyRefUpdateResponse(
+        included("Update is not a fast forward"),
+        "main",
+        "a".repeat(40),
+      ).kind,
+    ).toBe("rejected-stale-base");
+    expect(
+      lease._classifyRefUpdateResponse(
+        included("Validation Failed"),
+        "main",
+        "a".repeat(40),
+      ).kind,
+    ).toBe("ambiguous");
+  });
+
   it("acquires idempotently for the exact owner and ignores TMPDIR changes", () => {
     const { manifestPath } = fixture("idempotent");
     const first = lease.acquire(manifestPath);
@@ -835,5 +871,163 @@ printf '%s\n' '${JSON.stringify({
     );
     lease.releaseMergeGuard(first.manifestPath, owner.token, "not-started");
     lease.release(first.manifestPath, owner.token, "test-complete");
+  });
+
+  it("uses a non-force exact ref update for protected non-strict outage mode", () => {
+    const candidate = fixture("protected-nonstrict-refcas");
+    const base = git(candidate.root, ["rev-parse", "HEAD"]);
+    fs.writeFileSync(path.join(candidate.root, "candidate.txt"), "candidate\n");
+    git(candidate.root, ["add", "candidate.txt"]);
+    git(candidate.root, ["commit", "-q", "-m", "fix: candidate"]);
+    const head = git(candidate.root, ["rev-parse", "HEAD"]);
+    invocation.withManifestLockRaw(candidate.manifestPath, (manifest) => {
+      manifest.revisions.baseSha = base;
+      manifest.revisions.baseHeadSha = base;
+      manifest.revisions.initialHead = head;
+      manifest.revisions.currentHead = head;
+    });
+    const { manifest } = invocation.loadManifest(candidate.manifestPath);
+    const owner = lease.acquire(candidate.manifestPath);
+    const bin = path.join(sandbox, "protected-nonstrict-refcas-bin");
+    const calls = path.join(bin, "calls.log");
+    const mutated = path.join(bin, "mutated");
+    fs.mkdirSync(bin);
+    const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    fs.writeFileSync(
+      path.join(bin, "git"),
+      `#!/bin/sh
+if [ "$1" = "ls-remote" ]; then
+  printf '%s refs/heads/main\\n' '${base}'
+  exit 0
+fi
+if [ "$1" = "merge-base" ]; then exit 0; fi
+exec '${realGit}' "$@"
+`,
+      { mode: 0o700 },
+    );
+    const protection = {
+      url: "https://api.github.test/protection",
+      required_status_checks: {
+        url: "https://api.github.test/checks",
+        strict: false,
+        contexts: ["quality"],
+        contexts_url: "https://api.github.test/contexts",
+        checks: [{ context: "quality", app_id: 15368 }],
+      },
+      required_signatures: {
+        url: "https://api.github.test/signatures",
+        enabled: false,
+      },
+      enforce_admins: {
+        url: "https://api.github.test/admins",
+        enabled: false,
+      },
+      required_linear_history: { enabled: true },
+      allow_force_pushes: { enabled: false },
+      allow_deletions: { enabled: false },
+      block_creations: { enabled: false },
+      required_conversation_resolution: { enabled: false },
+      lock_branch: { enabled: false },
+      allow_fork_syncing: { enabled: false },
+    };
+    const digest =
+      require("../quality-protected-nonstrict").classifyProtectedNonstrict({
+        protection,
+        effectiveRules: [],
+        reviewThreads: null,
+        repositoryAdmin: true,
+      }).digest;
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> '${calls}'
+case "$*" in
+  *"branches/main/protection"*) printf '%s\\n' '${JSON.stringify(protection)}' ;;
+  *"rules/branches/main"*) printf '%s\\n' '[]' ;;
+  *"--method PATCH"*"git/refs/heads/main"*)
+    body="$(cat)"
+    printf '%s\\n' "$body" >> '${calls}'
+    printf 'HTTP/2 200 OK\\ncontent-type: application/json\\n\\n%s\\n' '{"ref":"refs/heads/main","object":{"sha":"${head}"}}'
+    : > '${mutated}' ;;
+  *"pr view"*)
+    if [ -f '${mutated}' ]; then
+      printf '%s\\n' '${JSON.stringify({
+        state: "MERGED",
+        mergedAt: "2026-08-21T12:00:00Z",
+        mergeCommit: { oid: head },
+        headRefName: manifest.repo.headRefName,
+        headRefOid: head,
+        baseRefName: "main",
+      })}'
+    else
+      printf '%s\\n' '${JSON.stringify({
+        state: "OPEN",
+        mergedAt: null,
+        mergeCommit: null,
+        headRefName: manifest.repo.headRefName,
+        headRefOid: head,
+        baseRefName: "main",
+      })}'
+    fi ;;
+  *"git/ref/heads/main"*) printf '%s\\n' '{"object":{"sha":"${head}"}}' ;;
+  *"compare/${head}...${head}"*) printf '%s\\n' '{"status":"identical"}' ;;
+  *"api repos/${FIXTURE_REPOSITORY}"*) printf '%s\\n' '{"permissions":{"admin":true}}' ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+`,
+      { mode: 0o700 },
+    );
+    const priorPath = process.env.PATH;
+    process.env.PATH = `${bin}:${priorPath}`;
+    try {
+      expect(
+        lease.performMerge(candidate.manifestPath, owner.token, {
+          admin: true,
+          expectedHead: head,
+          mode: "protected-nonstrict-outage-ref-cas",
+          protectionDigest: digest,
+        }),
+      ).toMatchObject({ merged: true });
+      const log = fs.readFileSync(calls, "utf8");
+      expect(log).toContain("--method PATCH");
+      expect(log).toContain(`"sha":"${head}"`);
+      expect(log).toContain('"force":false');
+      expect(log).not.toContain("pr merge");
+      expect(lease.status(candidate.manifestPath)).toEqual({
+        required: true,
+        state: "missing",
+      });
+    } finally {
+      process.env.PATH = priorPath;
+    }
+  });
+
+  it("keeps the campaign lease resumable after an authoritative stale-base rejection", () => {
+    const candidate = fixture("refcas-stale-base-rejection");
+    const owner = lease.acquire(candidate.manifestPath);
+    lease.acquireMergeGuard(candidate.manifestPath, owner.token, {
+      admin: true,
+      mode: "protected-nonstrict-outage-ref-cas",
+      protectionDigest: "d".repeat(64),
+    });
+    expect(lease.status(candidate.manifestPath).mergeGuard).toMatchObject({
+      mode: "protected-nonstrict-outage-ref-cas",
+      protectionDigest: "d".repeat(64),
+    });
+    lease.releaseMergeGuard(
+      candidate.manifestPath,
+      owner.token,
+      "request-rejected-stale-base",
+    );
+    expect(lease.status(candidate.manifestPath)).toMatchObject({
+      state: "active",
+      owned: true,
+      mergeGuard: null,
+    });
+    expect(
+      invocation.loadManifest(candidate.manifestPath).manifest.terminalState,
+    ).toBeNull();
+    lease.release(candidate.manifestPath, owner.token, "test-complete");
   });
 });

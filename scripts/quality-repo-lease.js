@@ -796,6 +796,8 @@ function status(manifestPath) {
         requestStartedAt: guard.requestStartedAt,
         admin: guard.admin === true,
         adminReason: guard.adminReason ?? null,
+        mode: guard.mode ?? "strict",
+        protectionDigest: guard.protectionDigest ?? null,
       };
     }
     return {
@@ -825,15 +827,7 @@ function status(manifestPath) {
 }
 
 function liveBase(manifest) {
-  const baseRef = manifest.revisions.baseRef;
-  const branch = String(baseRef || "")
-    .replace(/^refs\/heads\//, "")
-    .replace(/^origin\//, "");
-  if (!branch || branch.includes("..") || branch.startsWith("-")) {
-    throw new Error(
-      `repository lease cannot resolve protected base '${baseRef}'`,
-    );
-  }
+  const branch = baseBranch(manifest);
   const output = execFileSync(
     "git",
     ["ls-remote", "origin", `refs/heads/${branch}`],
@@ -848,6 +842,19 @@ function liveBase(manifest) {
     throw new Error(`repository lease could not refresh origin/${branch}`);
   }
   return sha;
+}
+
+function baseBranch(manifest) {
+  const baseRef = manifest.revisions.baseRef;
+  const branch = String(baseRef || "")
+    .replace(/^refs\/heads\//, "")
+    .replace(/^origin\//, "");
+  if (!branch || branch.includes("..") || branch.startsWith("-")) {
+    throw new Error(
+      `repository lease cannot resolve protected base '${baseRef}'`,
+    );
+  }
+  return branch;
 }
 
 function assertBase(manifestPath, presentedToken) {
@@ -903,6 +910,9 @@ function acquireMergeGuard(manifestPath, presentedToken, options = {}) {
       token: presentedToken,
       admin: options.admin === true,
       adminReason: options.admin === true ? "ci-billing-waiver" : null,
+      mode: options.mode || "strict",
+      protectionDigest: options.protectionDigest || null,
+      baseRef: baseBranch(loaded.manifest),
       requestStartedAt: null,
     });
     record.renewedAt = new Date().toISOString();
@@ -926,7 +936,14 @@ function releaseMergeGuard(manifestPath, presentedToken, outcome) {
     ) {
       throw new Error("merge operation guard owner changed");
     }
-    if (!["merged", "closed-unmerged", "not-started"].includes(outcome)) {
+    if (
+      ![
+        "merged",
+        "closed-unmerged",
+        "not-started",
+        "request-rejected-stale-base",
+      ].includes(outcome)
+    ) {
       throw new Error("ambiguous merge operation remains quarantined");
     }
     const released = tombstone(paths.mergeGuard);
@@ -944,7 +961,7 @@ function remotePullRequest(manifest, options = {}) {
       "--repo",
       manifest.repo.githubRepository,
       "--json",
-      "state,mergedAt,mergeCommit,headRefName,headRefOid",
+      "state,mergedAt,mergeCommit,headRefName,headRefOid,baseRefName",
     ],
     {
       cwd: options.repositoryScoped
@@ -964,6 +981,89 @@ function remotePullRequest(manifest, options = {}) {
   } catch (error) {
     throw new Error("GitHub merge state was not valid JSON", { cause: error });
   }
+}
+
+function ghJson(manifest, args, label, options = {}) {
+  const result = spawnSync("gh", args, {
+    cwd: options.repositoryScoped ? manifest.stateRoot : manifest.repo.realpath,
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  if (result.status !== 0) {
+    throw new Error(`${label} failed: ${result.stderr || "gh failed"}`.trim());
+  }
+  try {
+    return JSON.parse(result.stdout);
+  } catch (error) {
+    throw new Error(`${label} returned malformed JSON`, { cause: error });
+  }
+}
+
+function parseIncludedGhResponse(stdout) {
+  const raw = String(stdout || "");
+  const statusCodes = raw
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("HTTP/"))
+    .map((line) => Number(line.trim().split(/\s+/)[1]))
+    .filter((value) => Number.isInteger(value) && value >= 100 && value <= 599);
+  const separators = [...raw.matchAll(/\r?\n\r?\n/g)];
+  if (statusCodes.length === 0 || separators.length === 0) {
+    return { status: null, body: null };
+  }
+  const separator = separators.at(-1);
+  try {
+    return {
+      status: statusCodes.at(-1),
+      body: JSON.parse(raw.slice(separator.index + separator[0].length).trim()),
+    };
+  } catch {
+    return { status: statusCodes.at(-1), body: null };
+  }
+}
+
+function classifyRefUpdateResponse(update, branch, head) {
+  const { status, body } = parseIncludedGhResponse(update?.stdout);
+  if (
+    update?.status === 0 &&
+    status === 200 &&
+    body?.ref === `refs/heads/${branch}` &&
+    body?.object?.sha === head
+  ) {
+    return { kind: "accepted", status, body };
+  }
+  if (status === 422 && body?.message === "Update is not a fast forward") {
+    return { kind: "rejected-stale-base", status, body };
+  }
+  return { kind: "ambiguous", status, body };
+}
+
+function refCasIntegrated(manifest, remote, options = {}) {
+  if (exactRemoteOutcome(manifest, remote) !== "merged") return false;
+  const branch = baseBranch(manifest);
+  const ref = ghJson(
+    manifest,
+    [
+      "api",
+      `repos/${manifest.repo.githubRepository}/git/ref/heads/${encodeURIComponent(branch)}`,
+    ],
+    "protected base ref read",
+    options,
+  );
+  const live = ref?.object?.sha;
+  if (!/^[0-9a-f]{40}$/.test(live || "")) {
+    throw new Error("protected base ref read omitted its exact SHA");
+  }
+  const head = mergeHead(manifest);
+  const comparison = ghJson(
+    manifest,
+    [
+      "api",
+      `repos/${manifest.repo.githubRepository}/compare/${head}...${live}`,
+    ],
+    "exact-head integration comparison",
+    options,
+  );
+  return comparison?.status === "ahead" || comparison?.status === "identical";
 }
 
 function exactRemoteOutcome(manifest, remote) {
@@ -1020,7 +1120,18 @@ function reconcileMergeOutcome(manifestPath, presentedToken, options = {}) {
   );
   const { manifest } = loadManifest(manifestPath);
   const remote = remotePullRequest(manifest, { repositoryScoped: true });
-  const outcome = exactRemoteOutcome(manifest, remote);
+  const paths = pathsFor(repositoryIdentity(manifest), manifest);
+  const guard = fs.existsSync(paths.mergeGuard)
+    ? guardOwner(paths.mergeGuard)
+    : null;
+  let outcome = exactRemoteOutcome(manifest, remote);
+  if (
+    outcome === "merged" &&
+    guard?.mode === "protected-nonstrict-outage-ref-cas" &&
+    !refCasIntegrated(manifest, remote, { repositoryScoped: true })
+  ) {
+    outcome = null;
+  }
   if (!outcome || (options.mergedOnly && outcome !== "merged")) {
     return { reconciled: false, outcome: null, remote };
   }
@@ -1101,6 +1212,25 @@ function performMerge(manifestPath, presentedToken, options = {}) {
       `validated PR head ${options.expectedHead || "missing"} does not match manifest merge head ${head}`,
     );
   }
+  const mode = options.mode || "strict";
+  if (
+    !["strict", "unprotectable", "protected-nonstrict-outage-ref-cas"].includes(
+      mode,
+    )
+  ) {
+    throw new Error(`unsupported merge mode '${mode}'`);
+  }
+  if (mode === "protected-nonstrict-outage-ref-cas") {
+    if (
+      options.admin !== true ||
+      manifest.merge?.stampHead ||
+      !/^[a-f0-9]{64}$/.test(options.protectionDigest || "")
+    ) {
+      throw new Error(
+        "protected non-strict ref-CAS requires administrator mode, immutable reviewed HEAD, and a protection digest",
+      );
+    }
+  }
   acquireMergeGuard(manifestPath, presentedToken, options);
   try {
     assertBase(manifestPath, presentedToken);
@@ -1119,8 +1249,103 @@ function performMerge(manifestPath, presentedToken, options = {}) {
   const paths = pathsFor(repository, manifest);
   const ownerFile = path.join(paths.mergeGuard, "owner.json");
   const guarded = guardOwner(paths.mergeGuard);
+  if (mode === "protected-nonstrict-outage-ref-cas") {
+    const branch = baseBranch(manifest);
+    const inspection =
+      require("./quality-protected-nonstrict.js").inspectProtectedNonstrict({
+        repository: expectedRepository,
+        branch,
+        pr: manifest.repo.pr,
+        cwd: manifest.repo.realpath,
+      });
+    if (
+      inspection.digest !== options.protectionDigest ||
+      guarded.protectionDigest !== options.protectionDigest ||
+      guarded.mode !== mode
+    ) {
+      releaseMergeGuard(manifestPath, presentedToken, "not-started");
+      throw new Error(
+        "protected non-strict branch protection changed before the guarded ref update",
+      );
+    }
+    const preMutationPr = remotePullRequest(manifest);
+    if (
+      preMutationPr.state !== "OPEN" ||
+      preMutationPr.headRefName !== manifest.repo.headRefName ||
+      preMutationPr.headRefOid !== head ||
+      preMutationPr.baseRefName !== branch
+    ) {
+      releaseMergeGuard(manifestPath, presentedToken, "not-started");
+      throw new Error(
+        "exact pull request identity changed before the ref update",
+      );
+    }
+    const ancestor = spawnSync(
+      "git",
+      ["merge-base", "--is-ancestor", guarded.base, head],
+      { cwd: manifest.repo.realpath, encoding: "utf8", timeout: 30_000 },
+    );
+    if (ancestor.status !== 0) {
+      releaseMergeGuard(manifestPath, presentedToken, "not-started");
+      throw new Error("reviewed head is not a descendant of the exact base");
+    }
+  }
   guarded.requestStartedAt = new Date().toISOString();
   atomicWrite(ownerFile, guarded);
+  if (mode === "protected-nonstrict-outage-ref-cas") {
+    const branch = baseBranch(manifest);
+    const update = spawnSync(
+      "gh",
+      [
+        "api",
+        "--include",
+        "--method",
+        "PATCH",
+        `repos/${expectedRepository}/git/refs/heads/${encodeURIComponent(branch)}`,
+        "--input",
+        "-",
+      ],
+      {
+        cwd: manifest.repo.realpath,
+        encoding: "utf8",
+        timeout: 120_000,
+        input: `${JSON.stringify({ sha: head, force: false })}\n`,
+      },
+    );
+    const responseOutcome = classifyRefUpdateResponse(update, branch, head);
+    const { status } = responseOutcome;
+    let remote = null;
+    try {
+      remote = remotePullRequest(manifest);
+    } catch {
+      // An accepted update with unavailable read-back remains quarantined.
+    }
+    if (
+      responseOutcome.kind === "accepted" &&
+      remote &&
+      refCasIntegrated(manifest, remote)
+    ) {
+      releaseVerifiedOutcome(manifestPath, presentedToken, "merged");
+      return { merged: true, remote, mode };
+    }
+    if (responseOutcome.kind === "rejected-stale-base") {
+      if (remote && refCasIntegrated(manifest, remote)) {
+        releaseVerifiedOutcome(manifestPath, presentedToken, "merged");
+        return { merged: true, remote, mode, recovered: true };
+      }
+      releaseMergeGuard(
+        manifestPath,
+        presentedToken,
+        "request-rejected-stale-base",
+      );
+      throw new Error(
+        "protected base changed before the non-force ref update; request was rejected without mutation, repository lease retained for rebase and resume",
+      );
+    }
+    throw new Error(
+      `ref-CAS outcome is ambiguous and quarantined (http ${status ?? "unknown"}, gh status ${update.status ?? "timeout"})`,
+    );
+  }
   const args = [
     "pr",
     "merge",
@@ -1247,6 +1472,8 @@ function commandHandlers(manifest, options) {
       performMerge(manifest, presentedToken(), {
         admin: options.admin === "true",
         expectedHead: options["expected-head"],
+        mode: options.mode,
+        protectionDigest: options["protection-digest"],
       }),
     "release-if-merged": () => releaseIfMerged(manifest, presentedToken()),
     "reconcile-merge": () =>
@@ -1303,4 +1530,6 @@ module.exports = {
   _atomicWrite: atomicWrite,
   _recoverDeadGuard: recoverDeadGuard,
   _pathsFor: pathsFor,
+  _classifyRefUpdateResponse: classifyRefUpdateResponse,
+  _parseIncludedGhResponse: parseIncludedGhResponse,
 };

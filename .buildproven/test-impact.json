@@ -120,6 +120,28 @@
       ]
     },
     {
+      "paths": [
+        "scripts/quality-authorize-merge.sh",
+        "scripts/quality-invocation.js",
+        "scripts/quality-protected-nonstrict.js",
+        "scripts/quality-repo-lease.js"
+      ],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/quality-approval-scope.test.js",
+            "scripts/__tests__/quality-invocation.test.js",
+            "scripts/__tests__/quality-merge-gates.test.js",
+            "scripts/__tests__/quality-protected-nonstrict.test.js",
+            "scripts/__tests__/quality-repo-lease.test.js"
+          ]
+        }
+      ]
+    },
+    {
       "paths": ["README.md", "commands/**/*.md"],
       "commands": [
         {

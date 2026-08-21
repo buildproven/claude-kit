@@ -90,6 +90,50 @@ describe("quality approve command scope parsing", () => {
     expect(parsed.argv).not.toContain("--override-ci-billing");
   });
 
+  it("maps the protected non-strict ref-CAS override to its distinct scope", () => {
+    const parsed = parseApprovalCommand([
+      "approve",
+      "--pr",
+      "676",
+      "--head",
+      head,
+      "--override-nonstrict-refcas",
+      "--reason",
+      "Actions cannot allocate a runner",
+      "--ci-failure",
+      "failed",
+      "--accept",
+      "ci:failed,base:protected-nonstrict",
+      "--i-understand-missing-ci",
+      "--i-understand-admin-ref-mutation",
+    ]);
+    expect(parsed).toMatchObject({
+      scope: "operator-nonstrict-refcas-override",
+      acceptedConditions: ["ci:failed", "base:protected-nonstrict"],
+    });
+    expect(parsed.argv).not.toContain("--override-nonstrict-refcas");
+  });
+
+  it("requires the separate administrator ref-mutation acknowledgement", () => {
+    expect(() =>
+      parseApprovalCommand([
+        "approve",
+        "--pr",
+        "676",
+        "--head",
+        head,
+        "--override-nonstrict-refcas",
+        "--reason",
+        "Actions cannot allocate a runner",
+        "--ci-failure",
+        "failed",
+        "--accept",
+        "ci:failed,base:protected-nonstrict",
+        "--i-understand-missing-ci",
+      ]),
+    ).toThrow(/--i-understand-admin-ref-mutation/);
+  });
+
   it("allows a quality override to compose an exact CI failure", () => {
     const parsed = parseApprovalCommand([
       "approve",
@@ -152,6 +196,24 @@ describe("quality approve command scope parsing", () => {
         },
       ),
     ).toThrow(/exactly ci:failed/);
+  });
+
+  it("rejects a protected non-strict capability without a protection digest", () => {
+    expect(() =>
+      assertApprovalPayloadShape(
+        {
+          stateRoot: "/tmp/quality-test-state",
+          repo: { githubRepository: "owner/repo" },
+          revisions: { currentHead: head },
+        },
+        {
+          scope: "operator-nonstrict-refcas-override",
+          reason: "Actions outage",
+          acceptedConditions: ["ci:failed", "base:protected-nonstrict"],
+          ciBillingEvidenceSha256: "b".repeat(64),
+        },
+      ),
+    ).toThrow(/missing protection binding/);
   });
 
   it("requires a classified CI failure for the billing override", () => {

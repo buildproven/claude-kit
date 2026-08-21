@@ -397,6 +397,23 @@ accepted, narrowly-scoped trade for repos with no other option — leave it
 unset unless `quality-authorize-merge.sh` reports the base as unprotectable
 on your plan.
 
+### Protected non-strict Actions-outage ref-CAS
+
+A protected branch with non-empty required checks and GitHub `strict: false`
+is not unprotectable and remains blocked during normal operation. The separate
+signed `operator-nonstrict-refcas-override` applies only to an exact-head
+Actions billing outage. It binds `ci:failed` and
+`base:protected-nonstrict`, the complete classic-protection digest, required
+check names and App IDs, and the exact campaign identity.
+
+The final repository lease rechecks the live base, protection digest,
+administrator permission, PR identity, head ancestry, and every required
+review conversation. It then updates only the exact base ref to the exact
+reviewed head through GitHub's ref API with `force: false`. A verified
+non-fast-forward rejection releases only the short operation guard and keeps
+the campaign lease resumable. Any other uncertain response stays quarantined
+until exact integration or exact closed-without-merge state is proven.
+
 ### Run Governor (runaway-loop guardrails)
 
 Two PRs run in one night (#529: 128min/6 commits, #532: 167min/13 commits)

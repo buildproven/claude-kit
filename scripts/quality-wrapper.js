@@ -19,6 +19,10 @@ const HIGH_RISK_ACK_FLAGS = [
   { prefix: "gate:security", flag: "--i-understand-security-risk" },
   { prefix: "gate:test", flag: "--i-understand-test-risk" },
   { prefix: "ci:", flag: "--i-understand-missing-ci" },
+  {
+    prefix: "base:protected-nonstrict",
+    flag: "--i-understand-admin-ref-mutation",
+  },
   { prefix: "review:finding:", flag: "--i-understand-code-finding" },
   {
     prefix: "review:provider-exhaustion",
@@ -104,10 +108,12 @@ function assertOuterApprovalContext() {
 const APPROVAL_SCOPE_FLAGS = {
   "--override-quality": "operator-quality-override",
   "--override-ci-billing": "operator-ci-billing-override",
+  "--override-nonstrict-refcas": "operator-nonstrict-refcas-override",
 };
 const OPERATOR_OVERRIDE_SCOPES = new Set([
   "operator-quality-override",
   "operator-ci-billing-override",
+  "operator-nonstrict-refcas-override",
 ]);
 
 function isOperatorOverrideScope(scope) {
@@ -258,7 +264,12 @@ function assertCiBillingConditions(
 ) {
   const compositeQualityOverride =
     scope === "operator-quality-override" && accepted.includes("ci:failed");
-  if (scope !== "operator-ci-billing-override" && !compositeQualityOverride)
+  const nonstrictRefCas = scope === "operator-nonstrict-refcas-override";
+  if (
+    scope !== "operator-ci-billing-override" &&
+    !compositeQualityOverride &&
+    !nonstrictRefCas
+  )
     return;
   const expected = `ci:${ciFailureReason}`;
   const nonCiDiagnosed = diagnosed.filter(
@@ -274,6 +285,16 @@ function assertCiBillingConditions(
   }
   if (scope === "operator-ci-billing-override" && accepted.length !== 1) {
     throw new Error("CI billing override must accept exactly ci:failed");
+  }
+  if (
+    nonstrictRefCas &&
+    (accepted.length !== 2 ||
+      !accepted.includes("ci:failed") ||
+      !accepted.includes("base:protected-nonstrict"))
+  ) {
+    throw new Error(
+      "protected non-strict ref-CAS override must accept exactly ci:failed and base:protected-nonstrict",
+    );
   }
 }
 
@@ -305,7 +326,10 @@ function parseApprovalCommand(argv) {
   const isOverride = isOperatorOverrideScope(scanned.scope);
   const acceptedConditions = taxonomy.parseAcceptList(scanned.acceptRaw);
   if (
-    scanned.scope === "operator-ci-billing-override" &&
+    [
+      "operator-ci-billing-override",
+      "operator-nonstrict-refcas-override",
+    ].includes(scanned.scope) &&
     scanned.ciFailureReason !== "failed"
   ) {
     throw new Error("CI billing override requires --ci-failure failed");
@@ -429,6 +453,28 @@ function resolveOverrideAcceptedConditions(
   const diagnosed = taxonomy.diagnoseConditions(manifest, {
     ciFailureReason: expectedIdentity.ciFailureReason,
   });
+  let protectedNonstrictProtectionDigest = null;
+  if (expectedIdentity.scope === "operator-nonstrict-refcas-override") {
+    const branch = String(manifest.revisions.baseRef || "").replace(
+      /^origin\//,
+      "",
+    );
+    const inspection =
+      require("./quality-protected-nonstrict.js").inspectProtectedNonstrict({
+        repository: manifest.repo.githubRepository,
+        branch,
+        pr: manifest.repo.pr,
+        cwd: manifest.repo.realpath,
+      });
+    diagnosed.push({
+      id: "base:protected-nonstrict",
+      description:
+        "protected base uses non-strict required checks and requires an administrator non-force ref update",
+      highRisk: true,
+      protectionDigest: inspection.digest,
+    });
+    protectedNonstrictProtectionDigest = inspection.digest;
+  }
   printOverrideDiagnosis(manifestPath, manifest, diagnosed);
   assertCiBillingConditions(
     expectedIdentity.scope,
@@ -437,7 +483,10 @@ function resolveOverrideAcceptedConditions(
     requestedAccept,
   );
   taxonomy.assertAcceptListComplete(diagnosed, requestedAccept);
-  return requestedAccept;
+  return {
+    acceptedConditions: requestedAccept,
+    protectedNonstrictProtectionDigest,
+  };
 }
 
 function ensureCiBillingEvidence(manifest) {
@@ -502,13 +551,18 @@ function issueApprovalCapability(
   const ttl = resolveApprovalTtlSeconds(isOverride);
   const issuedAt = new Date();
   assertExpectedIdentityMatches(manifest, expectedIdentity);
-  const acceptedConditions = isOverride
+  const overrideResolution = isOverride
     ? resolveOverrideAcceptedConditions(
         manifestPath,
         manifest,
         expectedIdentity,
       )
-    : [];
+    : {
+        acceptedConditions: [],
+        protectedNonstrictProtectionDigest: null,
+      };
+  const { acceptedConditions, protectedNonstrictProtectionDigest } =
+    overrideResolution;
   const ciBillingEvidenceSha256 = acceptedConditions.includes("ci:failed")
     ? ensureCiBillingEvidence(manifest)
     : null;
@@ -524,6 +578,11 @@ function issueApprovalCapability(
     reason: isOverride ? expectedIdentity.reason : null,
     acceptedConditions,
     ciBillingEvidenceSha256,
+    protectedNonstrictProtectionDigest,
+    protectedNonstrictBaseSha:
+      scope === "operator-nonstrict-refcas-override"
+        ? manifest.revisions.baseHeadSha
+        : null,
     issuedAt: issuedAt.toISOString(),
     expiresAt: new Date(issuedAt.getTime() + ttl * 1000).toISOString(),
     nonce: crypto.randomUUID(),

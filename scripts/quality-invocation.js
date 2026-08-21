@@ -2730,9 +2730,12 @@ function bindPrRepositoryIdentity(manifest, options) {
 // fresh, explicit override decision rather than silently carrying forward.
 function approvalBaseMatches(manifest, approval) {
   return (
-    !["operator-quality-override", "operator-ci-billing-override"].includes(
-      approval?.scope,
-    ) || approval?.baseSha === manifest.revisions.baseSha
+    ![
+      "operator-quality-override",
+      "operator-ci-billing-override",
+      "operator-nonstrict-refcas-override",
+    ].includes(approval?.scope) ||
+    approval?.baseSha === manifest.revisions.baseSha
   );
 }
 
@@ -2848,6 +2851,13 @@ function ciBillingCapabilityValid(manifest) {
   if (!Array.isArray(conditions)) return false;
   if (scope === "operator-ci-billing-override") {
     return conditions.length === 1 && conditions[0] === "ci:failed";
+  }
+  if (scope === "operator-nonstrict-refcas-override") {
+    return (
+      conditions.length === 2 &&
+      conditions.includes("ci:failed") &&
+      conditions.includes("base:protected-nonstrict")
+    );
   }
   return (
     scope === "operator-quality-override" && conditions.includes("ci:failed")
@@ -2989,7 +2999,8 @@ function assertApprovalRequiredIdentityMatches(payload, requiredIdentity) {
 function assertApprovalPayloadShape(manifest, payload) {
   if (
     payload?.scope !== "operator-quality-override" &&
-    payload?.scope !== "operator-ci-billing-override"
+    payload?.scope !== "operator-ci-billing-override" &&
+    payload?.scope !== "operator-nonstrict-refcas-override"
   ) {
     return;
   }
@@ -3014,6 +3025,32 @@ function assertApprovalPayloadShape(manifest, payload) {
     ) {
       throw new Error(
         "CI billing override capability must accept exactly ci:failed",
+      );
+    }
+  } else if (payload.scope === "operator-nonstrict-refcas-override") {
+    const conditions = new Set(payload.acceptedConditions);
+    if (
+      payload.acceptedConditions.length !== 2 ||
+      !conditions.has("ci:failed") ||
+      !conditions.has("base:protected-nonstrict")
+    ) {
+      throw new Error(
+        "protected non-strict ref-CAS capability must accept exactly ci:failed and base:protected-nonstrict",
+      );
+    }
+    if (
+      !/^[a-f0-9]{64}$/.test(payload.protectedNonstrictProtectionDigest || "")
+    ) {
+      throw new Error(
+        "protected non-strict ref-CAS capability is missing protection binding",
+      );
+    }
+    if (
+      payload.protectedNonstrictBaseSha !== manifest.revisions.baseHeadSha ||
+      !/^[a-f0-9]{40}$/.test(payload.protectedNonstrictBaseSha || "")
+    ) {
+      throw new Error(
+        "protected non-strict ref-CAS capability does not bind the exact base",
       );
     }
   } else if (
@@ -3098,6 +3135,9 @@ function attachApproval(manifest, options) {
       ? payload.acceptedConditions
       : [],
     ciBillingEvidenceSha256: payload.ciBillingEvidenceSha256 || null,
+    protectedNonstrictProtectionDigest:
+      payload.protectedNonstrictProtectionDigest || null,
+    protectedNonstrictBaseSha: payload.protectedNonstrictBaseSha || null,
     artifactPath,
     artifactSha256: sha256File(artifactPath),
     // Patch-id of the reviewed diff at approval time, cached so a later

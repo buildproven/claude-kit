@@ -138,6 +138,8 @@ contract so the branch stays green.
 - Post-edit linting hooks
 - Stop validation hooks
 - CI quality gates on pull requests
+- Signed outage recovery for exact-head, protected `strict: false` merges; the
+  lease uses a non-force ref update and keeps rejected campaigns resumable
 
 ## Command quick reference
 

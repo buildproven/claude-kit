@@ -197,6 +197,21 @@ automatic retry for a marker-only fallback review (a separate mechanism)
 still gets its chance before an operator needs to reach for this — override
 is the final step after diagnosis, not a way to skip retrying first.
 
+A protected base with required checks and GitHub `strict: false` remains
+blocked during normal operation. During a classified Actions billing outage,
+the repository owner can authorize the separate exact-head ref-CAS path:
+
+```text
+/bs:quality approve --manifest <exact-manifest-path> --pr <number> --head <exact-40-character-sha> --override-nonstrict-refcas --reason "<text>" --ci-failure failed --accept ci:failed,base:protected-nonstrict --i-understand-missing-ci --i-understand-admin-ref-mutation
+```
+
+This mints `operator-nonstrict-refcas-override`, not the general quality or CI
+scope. It binds the complete classic-protection digest and exact required-check
+App identities. The final lease rechecks protection, repository-admin
+authority, resolved review threads, base SHA, PR identity, and head ancestry,
+then performs one GitHub ref update with `force: false`. A stale-base rejection
+keeps the campaign resumable. An ambiguous response remains quarantined.
+
 Capture the exact `BS_QUALITY_MANIFEST=` path from bootstrap output. Invoke the
 `quality` skill exactly once with only:
 

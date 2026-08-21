@@ -233,8 +233,12 @@ signed billing capability remains blocked.
    with separate exit status and body capture. The first implementation accepts
    only one complete classic rule with non-empty required checks, explicit
    `strict: false`, no effective rulesets, unlocked base, no required commit
-   signatures, no push restrictions, no required conversation resolution, and
-   no required human approval. Required linear history is allowed because the
+   signatures, no push restrictions, and no required human approval. Required
+   conversation resolution is allowed only when a complete, unpaginated
+   GraphQL read of the exact pull request proves every review thread resolved
+   immediately before the guarded mutation. A missing connection, pagination,
+   query error, or unresolved thread blocks. Required linear history is allowed
+   because the
    base moves directly to its descendant head without a merge commit. A review
    object is allowed only when `required_approving_review_count` is zero,
    `require_code_owner_reviews` and `require_last_push_approval` are false,
@@ -263,9 +267,11 @@ signed billing capability remains blocked.
    the administrator ref mutation, the exact PR/head/base/invocation identity,
    and failed-job evidence proving no runner and no steps. An existing
    `operator-ci-billing-override` cannot satisfy this scope. The new scope does
-   not accept a present signature, review, conversation, restriction, lock, or
-   other non-CI requirement; the closed classifier must prove those
-   requirements absent. The authorizer still resolves and
+   not accept a present signature, human review, restriction, lock, or other
+   non-CI requirement; the closed classifier must prove those requirements
+   absent. A required-conversation rule is satisfied only by the separate
+   complete live thread proof above; the capability never stands in for it. The
+   authorizer still resolves and
    records the configured required-check names and App bindings so the exception
    cannot silently widen to another check contract. CI remains unavailable,
    never green. Without that capability, this mode is unreachable.
@@ -396,7 +402,8 @@ Behavioral tests use the public merge CLI and independent mocked GitHub state.
 They prove signed-outage success and normal non-strict rejection; explicit
 `force: false`; exact ref, base, and head binding; ancestor rejection; base race
 conflict; indirect merge
-read-back; protection digest drift; empty, malformed, failed, paginated, or
+read-back; protection digest drift; resolved and unresolved conversation
+requirements; empty, malformed, failed, paginated, or
 ruleset responses; unsupported protections; wrong App binding; stale or wrong
 capability; and merge-guard recovery. The complete suite and a second clean
 Claude architecture review are required before implementation is accepted.

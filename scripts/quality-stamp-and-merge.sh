@@ -124,7 +124,7 @@ PREFLIGHT_PR_HEAD="$(printf '%s\n' "$PREFLIGHT_OUTPUT" |
 PREFLIGHT_BASE_PROTECTION="$(printf '%s\n' "$PREFLIGHT_OUTPUT" |
   sed -n 's/^BS_QUALITY_BASE_PROTECTION=//p')"
 case "$PREFLIGHT_BASE_PROTECTION" in
-  true | unprotectable) ;;
+  true | protected-nonstrict-outage-ref-cas | unprotectable) ;;
   *)
     echo "❌ MERGE BLOCKED: authorization preflight omitted base-protection classification." >&2
     exit 1

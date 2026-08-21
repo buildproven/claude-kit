@@ -210,6 +210,8 @@ ATOMIC_BASE_FRESHNESS=false
 ADMIN_BASE_FRESHNESS=false
 ATOMIC_BASE_SOURCE=""
 ADMIN_BASE_SOURCE=""
+MERGE_MODE=""
+PROTECTED_NONSTRICT_DIGEST=""
 REPOSITORY_ADMIN_PERMISSION=false
 CURRENT_USER_ID=""
 CURRENT_USER_LOGIN=""
@@ -397,12 +399,38 @@ if [ "$ATOMIC_BASE_FRESHNESS" != true ]; then
     fi
   fi
 fi
+# A protected strict:false base is never accepted as an ordinary merge. The
+# only supported case is the separately signed outage capability, paired with
+# a complete deny-by-default classic-protection inspection. The inspection
+# also proves repository-admin authority and all required conversation threads.
+if [ "$ATOMIC_BASE_FRESHNESS" != true ] &&
+  node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
+    --scope operator-nonstrict-refcas-override >/dev/null 2>&1; then
+  PROTECTED_NONSTRICT_INSPECTION="$(node \
+    "$SCRIPT_DIR/quality-protected-nonstrict.js" inspect \
+    --repo "$REPOSITORY" --branch "$ACTUAL_BASE_NAME" --pr "$PR")" || {
+    echo "❌ MERGE BLOCKED: protected non-strict ref-CAS classification failed." >&2
+    exit 1
+  }
+  PROTECTED_NONSTRICT_DIGEST="$(printf '%s' "$PROTECTED_NONSTRICT_INSPECTION" |
+    jq -r '.digest // empty')"
+  SIGNED_PROTECTED_NONSTRICT_DIGEST="$(node \
+    "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" \
+    approval.protectedNonstrictProtectionDigest)"
+  [ -n "$PROTECTED_NONSTRICT_DIGEST" ] &&
+    [ "$PROTECTED_NONSTRICT_DIGEST" = "$SIGNED_PROTECTED_NONSTRICT_DIGEST" ] || {
+    echo "❌ MERGE BLOCKED: protected non-strict branch protection differs from the signed operator diagnosis." >&2
+    exit 1
+  }
+  ATOMIC_BASE_FRESHNESS=protected-nonstrict-outage-ref-cas
+  ATOMIC_BASE_SOURCE=classic
+fi
 # Last resort, and only after BOTH classic protection and effective rulesets have
 # had their chance to authorize: a ruleset can supply strict freshness on a repo
 # with no classic protection, so running this earlier would reject a properly
 # protected base.
 UNPROTECTABLE_MERGE_POLICY="${BS_QUALITY_ALLOW_UNPROTECTABLE_BASE:-false}"
-if [ "$ATOMIC_BASE_FRESHNESS" != true ] && [ "$UNPROTECTABLE_MERGE_POLICY" = true ]; then
+if [ "$ATOMIC_BASE_FRESHNESS" = false ] && [ "$UNPROTECTABLE_MERGE_POLICY" = true ]; then
   # Classification lives in quality-base-protectability.sh so it is executable
   # in tests; it fails closed on anything short of a proven plan limit.
   #
@@ -435,7 +463,15 @@ if [ "$ATOMIC_BASE_FRESHNESS" != true ] && [ "$UNPROTECTABLE_MERGE_POLICY" = tru
   rm -f "$PROTECTION_BODY_FILE"
 fi
 case "$ATOMIC_BASE_FRESHNESS" in
-  true | unprotectable) ;;
+  true)
+    MERGE_MODE=strict
+    ;;
+  protected-nonstrict-outage-ref-cas)
+    MERGE_MODE=protected-nonstrict-outage-ref-cas
+    ;;
+  unprotectable)
+    MERGE_MODE=unprotectable
+    ;;
   *)
     echo "❌ MERGE BLOCKED: the PR base lacks server-enforced strict freshness." >&2
     echo "   Enable strict required-status checks or use a supported merge queue." >&2
@@ -445,6 +481,21 @@ case "$ATOMIC_BASE_FRESHNESS" in
     exit 1
     ;;
 esac
+NONSTRICT_REFCAS_CAPABILITY=false
+if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
+  --scope operator-nonstrict-refcas-override >/dev/null 2>&1; then
+  NONSTRICT_REFCAS_CAPABILITY=true
+fi
+if [ "$NONSTRICT_REFCAS_CAPABILITY" = true ] &&
+  [ "$MERGE_MODE" != protected-nonstrict-outage-ref-cas ]; then
+  echo "❌ MERGE BLOCKED: the protected non-strict ref-CAS capability cannot authorize another merge mode." >&2
+  exit 1
+fi
+if [ "$MERGE_MODE" = protected-nonstrict-outage-ref-cas ] &&
+  [ "$NONSTRICT_REFCAS_CAPABILITY" != true ]; then
+  echo "❌ MERGE BLOCKED: protected non-strict ref-CAS requires its exact signed capability." >&2
+  exit 1
+fi
 if [ "$PREFLIGHT" = false ] && [ "${CI_BILLING_WAIVED:-false}" = false ]; then
   if [ "$ATOMIC_BASE_FRESHNESS" = unprotectable ]; then
     # This plan cannot define required checks, so the stamp waiter and final
@@ -477,7 +528,7 @@ if [ -n "${CI_BILLING_WAIVER_ARTIFACT:-}" ] &&
   [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ] &&
   has_ci_billing_capability; then
   OPERATOR_CI_BILLING_APPROVED=true
-  echo "⚠️  [quality] operator-signed CI billing override accepted on a server-enforceable base." >&2
+  echo "⚠️  [quality] operator-signed CI outage capability accepted on a server-enforceable base." >&2
 fi
 if [ -n "${CI_BILLING_WAIVER_ARTIFACT:-}" ] &&
   [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ] &&
@@ -668,6 +719,8 @@ fi
 if node "$SCRIPT_DIR/quality-repo-lease.js" merge \
   --manifest "$MANIFEST" \
   --expected-head "$ACTUAL_HEAD" \
+  --mode "$MERGE_MODE" \
+  --protection-digest "$PROTECTED_NONSTRICT_DIGEST" \
   --admin "$LEASE_ADMIN" >/dev/null; then
   echo "[quality] merged exact reviewed revision $ACTUAL_HEAD"
   exit 0
