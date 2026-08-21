@@ -668,6 +668,10 @@ FINAL_BASE_OID="$(printf '%s' "$FINAL_BASE_LS" | awk 'NR==1 {print $1}')"
     exit 1
   }
 LEASE_ADMIN=false
+if [ "$MERGE_MODE" = protected-nonstrict-ref-cas ]; then
+  LEASE_ADMIN=true
+  echo "⚠️  [quality] administrator non-force ref update authorized by the signed protected non-strict ref-CAS capability." >&2
+fi
 if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
   if [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ]; then
     { [ "$ADMIN_BASE_FRESHNESS" = true ] &&
@@ -703,8 +707,9 @@ if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
   LEASE_ADMIN=true
   echo "⚠️  [quality] using admin merge only for verified GitHub Actions billing preallocation failures." >&2
 fi
-if [ "${CI_BILLING_WAIVED:-false}" = true ] &&
-  [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ] &&
+if { [ "$MERGE_MODE" = protected-nonstrict-ref-cas ] ||
+  { [ "${CI_BILLING_WAIVED:-false}" = true ] &&
+    [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ]; }; } &&
   [ "${BS_QUALITY_PROTECTION_RECHECK:-0}" != 1 ]; then
   # Re-read the same server-owned protection source immediately before the
   # lease performs the administrator merge. The guard prevents the preflight

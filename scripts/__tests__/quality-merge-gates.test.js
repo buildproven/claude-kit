@@ -130,6 +130,14 @@ describe("quality merge gates", () => {
       /function validateDescendantAdvanceAuthorization[\s\S]*operator-quality-override[\s\S]*operator-nonstrict-refcas-override[\s\S]*includes\(payload\?\.scope\)/,
     );
   });
+  it("passes administrator authority to the protected non-strict ref-CAS lease", () => {
+    expect(AUTHORIZE).toMatch(
+      /MERGE_MODE" = protected-nonstrict-ref-cas[\s\S]*LEASE_ADMIN=true[\s\S]*administrator non-force ref update authorized/,
+    );
+    expect(AUTHORIZE).toMatch(
+      /MERGE_MODE" = protected-nonstrict-ref-cas[\s\S]*BS_QUALITY_PROTECTION_RECHECK[\s\S]*quality-repo-lease\.js" merge[\s\S]*--admin "\$LEASE_ADMIN"/,
+    );
+  });
   it("keeps deterministic failures blocking while AI leads stay advisory", () => {
     expect(SKILL).toMatch(/zero deterministic findings/);
     expect(SKILL).toMatch(/AI leads and completion status are advisory/);
@@ -402,7 +410,7 @@ describe("quality merge gates", () => {
     const finalWaiverValidation = AUTHORIZE.lastIndexOf(
       'node "$SCRIPT_DIR/quality-ci-billing-waiver.js"',
     );
-    const adminMerge = AUTHORIZE.indexOf("LEASE_ADMIN=true");
+    const adminMerge = AUTHORIZE.lastIndexOf("LEASE_ADMIN=true");
     expect(firstWaiverValidation).toBeGreaterThan(-1);
     expect(requiredChecks).toBeGreaterThan(firstWaiverValidation);
     expect(finalWaiverValidation).toBeGreaterThan(requiredChecks);
