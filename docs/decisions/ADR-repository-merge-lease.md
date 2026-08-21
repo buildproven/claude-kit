@@ -241,22 +241,24 @@ signed billing capability remains blocked.
    `git merge-base --is-ancestor` that the exact head is a descendant of the
    exact base. Re-read the complete protection contract and compare its digest
    immediately before mutation.
-4. Require the existing exact `operator-ci-billing-override`, signed exact-head
-   local review evidence, and failed-job evidence proving no runner and no
-   steps. This capability already authorizes an administrator merge in the
-   strict outage path. In this mode its signed scope explicitly accepts the same
-   exact-head administrator bypass, including the fact that GitHub cannot
-   enforce branch protection for that actor. It does not accept a present
-   signature, review, conversation, restriction, lock, or other non-CI
-   requirement; the closed classifier must prove those requirements absent.
-   The authorizer still resolves and
+4. Add a distinct signed `operator-nonstrict-refcas-override` capability. The
+   wrapper flag requires the exact accepted conditions `ci:failed` and
+   `base:protected-nonstrict`, separate acknowledgements for unavailable CI and
+   the administrator ref mutation, the exact PR/head/base/invocation identity,
+   and failed-job evidence proving no runner and no steps. An existing
+   `operator-ci-billing-override` cannot satisfy this scope. The new scope does
+   not accept a present signature, review, conversation, restriction, lock, or
+   other non-CI requirement; the closed classifier must prove those
+   requirements absent. The authorizer still resolves and
    records the configured required-check names and App bindings so the exception
    cannot silently widen to another check contract. CI remains unavailable,
    never green. Without that capability, this mode is unreachable.
 5. While holding the merge-operation guard, call GitHub's update-reference API
    for the exact base ref, exact head SHA, and `force: false`. Do not force-push,
    disable hooks, synthesize a commit, or use a caller-selected ref. A conflict
-   is a stale-base block. An ambiguous response remains quarantined until remote
+   is a terminal not-started stale-base result: release the operation guard
+   without entering ambiguous recovery, and never attach this campaign's
+   authority to another actor's integration. An ambiguous response remains quarantined until remote
    read-back proves the exact head reachable from the base and the PR merged, or
    proves that it did not merge. Successful or recovered integration requires
    both that the exact head is reachable from the live base and that GitHub marks
@@ -278,26 +280,35 @@ signed billing capability remains blocked.
    infrastructure changes; GitHub exposes no protection-version CAS. A tighter
    rule can make the ref update fail. A looser rule cannot widen the signed
    outage capability, manifest identity, required-check contract, or non-force
-   base update. The exact signed administrator-bypass capability accepts this
-   residual protection race for this one outage merge. Record it rather than
-   claiming it is fenced.
+   base update. Any observed unknown field or digest drift before request blocks;
+   it is never merely recorded. The exact signed administrator-bypass capability
+   accepts the residual post-read race for this one outage merge. Record it
+   rather than claiming it is fenced.
 9. Ref-CAS recovery has its own explicit release case. It requires the persisted
    mode and identity, live base reachability from the exact head, and GitHub's
    merged state for that exact PR/head. It records `integrated-exact-head`, not
    that this process performed the write. A manual integration of the same exact
    reviewed head is therefore reconciled honestly; any different head, closed
    unmerged PR, or unreachable head remains a distinct terminal outcome.
+10. Add a ref-CAS-specific administrator proof alongside, not instead of, the
+    strict proof. It requires the selected classic protection digest, explicit
+    `strict: false`, explicit `enforce_admins: false`, repository administrator
+    permission, and the new capability scope. The strict path retains its
+    existing `ADMIN_BASE_SOURCE == ATOMIC_BASE_SOURCE` equality unchanged.
+11. Branch deletion is forbidden until the operation guard records an
+    authoritative terminal outcome. Cleanup then rechecks that the exact head is
+    reachable from the live base before deleting only the exact PR head ref.
 
 ### Classification decision table
 
-| Gate                  | Strict               | Protected non-strict outage ref-CAS       | Plan-unprotectable           |
-| --------------------- | -------------------- | ----------------------------------------- | ---------------------------- |
-| Exact required checks | Required             | Names and App bindings recorded           | All registered checks        |
-| Billing outage        | Signed CI capability | Exact signed CI capability required       | Existing plan-limited policy |
-| Human merge authority | Configured policy    | Configured policy plus signed outage user | Configured policy            |
-| Base mutation         | PR merge API         | Non-force ref update to existing head     | PR merge API                 |
-| Freshness claim       | GitHub strict        | GitHub fast-forward CAS                   | Non-atomic                   |
-| Admin bypass proof    | Billing outage only  | Exact classic admin bypass                | Existing policy              |
+| Gate                  | Strict               | Protected non-strict outage ref-CAS        | Plan-unprotectable           |
+| --------------------- | -------------------- | ------------------------------------------ | ---------------------------- |
+| Exact required checks | Required             | Names and App bindings recorded            | All registered checks        |
+| Billing outage        | Signed CI capability | New signed non-strict ref-CAS capability   | Existing plan-limited policy |
+| Human merge authority | Configured policy    | Configured policy plus signed ref-CAS user | Configured policy            |
+| Base mutation         | PR merge API         | Non-force ref update to existing head      | PR merge API                 |
+| Freshness claim       | GitHub strict        | GitHub fast-forward CAS                    | Non-atomic                   |
+| Admin bypass proof    | Billing outage only  | Exact classic admin bypass                 | Existing policy              |
 
 Both the authorizer and stamp preflight explicitly allowlist all three modes.
 No `!= unprotectable` test may stand in for a decision in this table.
@@ -305,6 +316,9 @@ The implementation updates both closed preflight value lists and replaces every
 negative-space protection branch in billing admission, required-check choice,
 human authority, administrator proof, protection recheck, and final mutation
 with an explicit case for each mode.
+The new preflight value is exactly
+`protected-nonstrict-outage-ref-cas`; required-check waiting is skipped only
+after that exact capability and outage artifact have already validated.
 
 ### Invariants
 
@@ -315,8 +329,9 @@ with an explicit case for each mode.
   or an unsupported protection blocks.
 - The ref update is never forced and can target only the manifest base ref with
   the exact manifest head.
-- A billing-outage ref-CAS remains authorized only by the exact CI capability
-  and exact outage evidence. It is never available for a normal merge.
+- A billing-outage ref-CAS remains authorized only by the new exact ref-CAS
+  capability and exact outage evidence. It is never available for a normal
+  merge, and an older CI-only capability cannot be reinterpreted.
 - Successful read-back proves the exact head is reachable from the live base.
   GitHub's merged PR state is required for lifecycle completion but is not
   counted as a second protection proof or proof of the performing actor.
