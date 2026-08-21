@@ -225,8 +225,12 @@ signed billing capability remains blocked.
    `strict: false`, no effective rulesets, unlocked base, no required commit
    signatures, no push restrictions, no required conversation resolution, and
    no required human approval. Required linear history is allowed because the
-   base moves directly to its descendant head without a merge commit. A
-   zero-approval review object is allowed. `allow_force_pushes`,
+   base moves directly to its descendant head without a merge commit. A review
+   object is allowed only when `required_approving_review_count` is zero,
+   `require_code_owner_reviews` and `require_last_push_approval` are false,
+   dismissal restrictions and bypass allowances are absent or empty, and every
+   remaining subfield has a recognized inert value. `dismiss_stale_reviews` can
+   be either boolean because no approval exists to dismiss. `allow_force_pushes`,
    `allow_deletions`, and `block_creations` must be explicitly disabled;
    `allow_fork_syncing` must be absent or explicitly disabled. Validate every
    known protection field from a closed schema; an unknown field, missing field,
@@ -239,8 +243,10 @@ signed billing capability remains blocked.
 3. Require the remote pull request to be open and to match the manifest's
    repository, number, base ref, head ref, base SHA, and head SHA. Prove with
    `git merge-base --is-ancestor` that the exact head is a descendant of the
-   exact base. Re-read the complete protection contract and compare its digest
-   immediately before mutation.
+   exact base. After acquiring the merge-operation guard, re-read the live base
+   ref and require exact equality with the manifest base immediately before the
+   update call. Re-read the complete protection contract and compare its digest
+   in that same guarded pre-request phase.
 4. Add a distinct signed `operator-nonstrict-refcas-override` capability. The
    wrapper flag requires the exact accepted conditions `ci:failed` and
    `base:protected-nonstrict`, separate acknowledgements for unavailable CI and
@@ -256,9 +262,12 @@ signed billing capability remains blocked.
 5. While holding the merge-operation guard, call GitHub's update-reference API
    for the exact base ref, exact head SHA, and `force: false`. Do not force-push,
    disable hooks, synthesize a commit, or use a caller-selected ref. A conflict
-   is a terminal not-started stale-base result: release the operation guard
+   is a terminal not-started stale-base result only when GitHub returns the exact
+   observed HTTP 422 JSON message `Update is not a fast forward`: release the operation guard
    without entering ambiguous recovery, and never attach this campaign's
-   authority to another actor's integration. An ambiguous response remains quarantined until remote
+   authority to another actor's integration. HTTP 409, every other 422 body,
+   malformed output, timeout, and transport or server failure remain
+   quarantined until remote
    read-back proves the exact head reachable from the base and the PR merged, or
    proves that it did not merge. Successful or recovered integration requires
    both that the exact head is reachable from the live base and that GitHub marks
