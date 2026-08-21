@@ -34,6 +34,39 @@ const NORMALIZE_GEMINI_REVIEW = path.join(
   "quality-normalize-gemini-review.js",
 );
 
+function processStart(pid) {
+  return spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+    encoding: "utf8",
+  }).stdout.trim();
+}
+
+async function expectProcessToStop(
+  pid,
+  timeoutMs = 2000,
+  expectedStart = processStart(pid),
+) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const probe = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], {
+      encoding: "utf8",
+    });
+    const state = probe.stdout.trim();
+    // An exited detached child can remain a zombie until the runner's init
+    // process reaps it. It cannot execute or survive the bounded cleanup.
+    if (
+      !state ||
+      state.startsWith("Z") ||
+      processStart(pid) !== expectedStart
+    ) {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`process ${pid} remained alive after ${timeoutMs}ms`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 describe("provider review runtime", () => {
   it("documents the exact Quality-* schema emitted by the runtime", () => {
     const skill = readFileSync(
@@ -82,7 +115,7 @@ describe("provider review runtime", () => {
     expect(result.stdout).toContain(focus);
   });
 
-  it("kills a hanging provider and a session-escaped helper at the wall-clock cap", () => {
+  it("kills a hanging provider and a session-escaped helper at the wall-clock cap", async () => {
     const directory = makeTempDir("bounded-tree-");
     const pidFile = path.join(directory, "native-helper.pid");
     const started = Date.now();
@@ -108,10 +141,10 @@ describe("provider review runtime", () => {
     expect(Date.now() - started).toBeLessThan(7000);
     const helperPid = Number(readFileSync(pidFile, "utf8").trim());
     expect(Number.isSafeInteger(helperPid)).toBe(true);
-    expect(() => process.kill(helperPid, 0)).toThrow();
+    await expectProcessToStop(helperPid);
   });
 
-  it("reaps a detached helper when the provider leader exits early", () => {
+  it("reaps a detached helper when the provider leader exits early", async () => {
     const directory = makeTempDir("bounded-orphan-");
     const pidFile = path.join(directory, "detached-helper.pid");
     let helperPid = null;
@@ -134,7 +167,7 @@ describe("provider review runtime", () => {
       expect(result.status).toBe(0);
       helperPid = Number(readFileSync(pidFile, "utf8").trim());
       expect(Number.isSafeInteger(helperPid)).toBe(true);
-      expect(() => process.kill(helperPid, 0)).toThrow();
+      await expectProcessToStop(helperPid);
     } finally {
       if (Number.isSafeInteger(helperPid)) {
         try {
@@ -321,31 +354,36 @@ describe("provider review runtime", () => {
     expect(runner).not.toMatch(/REVIEW_PROVIDER[^\n]*!= claude/);
   });
 
-  it("kills the provider tree when the wrapper itself is cancelled", () => {
+  it("kills the provider tree when the wrapper itself is cancelled", async () => {
     const dir = makeTempDir("bounded-cancel-");
     const pidFile = path.join(dir, "child.pid");
+    const startFile = path.join(dir, "child.start");
     const script = `
 "$1" --timeout 20 -- bash -c 'trap "" TERM; echo $$ > "$1"; while :; do sleep 1; done' child "$2" &
 wrapper=$!
 while [ ! -s "$2" ]; do sleep 0.05; done
 child=$(cat "$2")
+ps -o lstart= -p "$child" | sed 's/[[:space:]]*$//' > "$3"
 kill -TERM "$wrapper"
 wait "$wrapper" 2>/dev/null || true
-for _ in $(seq 1 40); do
-  if ! kill -0 "$child" 2>/dev/null; then exit 0; fi
-  sleep 0.05
-done
-exit 99
 `;
     const result = spawnSync(
       "bash",
-      ["-c", script, "cancel", BOUNDED, pidFile],
+      ["-c", script, "cancel", BOUNDED, pidFile, startFile],
       {
         encoding: "utf8",
         timeout: 5000,
       },
     );
     expect(result.status).toBe(0);
+    // Cancellation must wait for the wrapper's TERM/KILL escalation and the
+    // runner's process reaper. A child that survives is an infinite loop, so
+    // this remains a hard liveness bound rather than a timing exemption.
+    await expectProcessToStop(
+      Number(readFileSync(pidFile, "utf8").trim()),
+      10000,
+      readFileSync(startFile, "utf8").trim(),
+    );
   });
 
   it("does not name active state by Claude or Codex session IDs", () => {

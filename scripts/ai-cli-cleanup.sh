@@ -44,6 +44,7 @@ log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[DONE]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_delete() { echo -e "${RED}[DELETE]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
 
 get_size() {
     local path="$1"
@@ -342,18 +343,32 @@ if $CLEAR_SWAP; then
         fi
 
         if $PROCEED; then
-            log_info "Clearing swap (this may take a moment)..."
-            # Disable and re-enable swap to clear it
-            sudo launchctl unload /System/Library/LaunchDaemons/com.apple.dynamic_pager.plist 2>/dev/null || true
-            sleep 2
-            sudo launchctl load /System/Library/LaunchDaemons/com.apple.dynamic_pager.plist 2>/dev/null || true
+            if ! sudo -n true 2>/dev/null; then
+                log_warn "Requesting sudo (needed to purge memory)..."
+                if ! sudo -v; then
+                    log_error "Sudo authentication failed — swap NOT cleared"
+                    exit 1
+                fi
+            fi
 
-            # Alternative: purge memory (doesn't require disabling swap)
-            sudo purge 2>/dev/null || true
+            BEFORE_USED=$(sysctl -n vm.swapusage | sed -E 's/.*used = ([0-9.]+)M.*/\1/')
 
-            log_success "Swap cleared"
+            log_info "Purging memory (this may take a moment)..."
+            if ! sudo purge; then
+                log_error "sudo purge failed — swap NOT cleared"
+                exit 1
+            fi
+
+            AFTER_USED=$(sysctl -n vm.swapusage | sed -E 's/.*used = ([0-9.]+)M.*/\1/')
+
             echo ""
-            sysctl vm.swapusage 2>/dev/null || true
+            sysctl vm.swapusage
+            echo ""
+            if awk -v b="$BEFORE_USED" -v a="$AFTER_USED" 'BEGIN{exit !(a<b)}'; then
+                log_success "Swap usage reduced: ${BEFORE_USED}M -> ${AFTER_USED}M"
+            else
+                log_warn "sudo purge ran but swap usage did not decrease (${BEFORE_USED}M -> ${AFTER_USED}M). macOS reclaims swap lazily; this is often expected, not a failure."
+            fi
         fi
     fi
 fi
