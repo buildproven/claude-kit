@@ -75,7 +75,7 @@ TEST_ARGS=()
 while IFS= read -r ARGUMENT; do
   TEST_ARGS+=("$ARGUMENT")
 done < <(printf '%s' "$TEST_PLAN" | jq -r '.args[]')
-MUTATION_TEST_ARGS=("${TEST_ARGS[@]}")
+MUTATION_TEST_ARGS=("${TEST_ARGS[@]+"${TEST_ARGS[@]}"}")
 REPO_TEST_SCRIPT="$(git -C "$ROOT" show "$HEAD:package.json" 2>/dev/null | jq -r '.scripts.test // ""' || true)"
 
 run_conventional_sibling_test() {
@@ -137,7 +137,7 @@ run_candidate_tests() {
     fi
   fi
   bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
-    "$TEST_EXECUTABLE" "${MUTATION_TEST_ARGS[@]}" >> "$log" 2>&1
+    "$TEST_EXECUTABLE" "${MUTATION_TEST_ARGS[@]+"${MUTATION_TEST_ARGS[@]}"}" >> "$log" 2>&1
 }
 
 # Mutation evidence needs one observed failure, not a complete failure report.
@@ -191,13 +191,13 @@ if [ "$PYTEST_COMMAND" = true ]; then
   PYTEST_MUTATION_ARGS=()
   PYTEST_FAIL_FAST_INSERTED=false
   PYTEST_XDIST_ACTIVE=false
-  for ARGUMENT in "${MUTATION_TEST_ARGS[@]}"; do
+  for ARGUMENT in "${MUTATION_TEST_ARGS[@]+"${MUTATION_TEST_ARGS[@]}"}"; do
     [ "$ARGUMENT" = -- ] && break
     case "$ARGUMENT" in
       -n|--numprocesses|-n?*|--numprocesses=*) PYTEST_XDIST_ACTIVE=true ;;
     esac
   done
-  for ARGUMENT in "${MUTATION_TEST_ARGS[@]}"; do
+  for ARGUMENT in "${MUTATION_TEST_ARGS[@]+"${MUTATION_TEST_ARGS[@]}"}"; do
     if [ "$PYTEST_FAIL_FAST_INSERTED" = false ] && [ "$ARGUMENT" = -- ]; then
       if [ "$PYTEST_XDIST_ACTIVE" = true ]; then
         PYTEST_MUTATION_ARGS+=(-n 0)
@@ -213,7 +213,7 @@ if [ "$PYTEST_COMMAND" = true ]; then
     fi
     PYTEST_MUTATION_ARGS+=(-x)
   fi
-  MUTATION_TEST_ARGS=("${PYTEST_MUTATION_ARGS[@]}")
+  MUTATION_TEST_ARGS=("${PYTEST_MUTATION_ARGS[@]+"${PYTEST_MUTATION_ARGS[@]}"}")
 fi
 
 CANDIDATES=()
@@ -284,16 +284,16 @@ candidate_has_mapped_test() {
 }
 
 FILTERED_CANDIDATES=()
-for CANDIDATE in "${CANDIDATES[@]}"; do
+for CANDIDATE in "${CANDIDATES[@]+"${CANDIDATES[@]}"}"; do
   is_recursive_mutation_target "$CANDIDATE" ||
     FILTERED_CANDIDATES+=("$CANDIDATE")
 done
-CANDIDATES=("${FILTERED_CANDIDATES[@]}")
+CANDIDATES=("${FILTERED_CANDIDATES[@]+"${FILTERED_CANDIDATES[@]}"}")
 
 if [ "${#CANDIDATES[@]}" -gt 1 ]; then
   ORDERED_CANDIDATES=()
   for PRIORITY in mapped-test planned-sibling sibling fallback; do
-    for CANDIDATE in "${CANDIDATES[@]}"; do
+    for CANDIDATE in "${CANDIDATES[@]+"${CANDIDATES[@]}"}"; do
       HAS_SIBLING=false
       candidate_has_sibling_test "$CANDIDATE" && HAS_SIBLING=true
       HAS_PLANNED_SIBLING=false
@@ -314,7 +314,7 @@ if [ "${#CANDIDATES[@]}" -gt 1 ]; then
       fi
     done
   done
-  CANDIDATES=("${ORDERED_CANDIDATES[@]}")
+  CANDIDATES=("${ORDERED_CANDIDATES[@]+"${ORDERED_CANDIDATES[@]}"}")
 fi
 
 if [ "${#CANDIDATES[@]}" -eq 0 ]; then
@@ -383,7 +383,7 @@ if [ "${#CANDIDATES[@]}" -eq 0 ]; then
     if [ "${#CANDIDATES[@]}" -gt 1 ]; then
       ORDERED_CANDIDATES=()
       SELECTOR_CANDIDATE=""
-      for CONFIG_CANDIDATE in "${CANDIDATES[@]}"; do
+      for CONFIG_CANDIDATE in "${CANDIDATES[@]+"${CANDIDATES[@]}"}"; do
         if [ "$CONFIG_CANDIDATE" = ".buildproven/test-impact.json" ]; then
           SELECTOR_CANDIDATE="$CONFIG_CANDIDATE"
         else
@@ -391,7 +391,7 @@ if [ "${#CANDIDATES[@]}" -eq 0 ]; then
         fi
       done
       [ -z "$SELECTOR_CANDIDATE" ] || ORDERED_CANDIDATES+=("$SELECTOR_CANDIDATE")
-      CANDIDATES=("${ORDERED_CANDIDATES[@]}")
+      CANDIDATES=("${ORDERED_CANDIDATES[@]+"${ORDERED_CANDIDATES[@]}"}")
     fi
   fi
 
@@ -483,11 +483,11 @@ prepare_mutation_dependencies() {
     workspace_manifest=true
   fi
   dependency_count="$(jq '[.dependencies, .devDependencies, .optionalDependencies] | map(. // {} | length) | add' "$SANDBOX/package.json")"
+  if [ -n "$manager" ] && ! command -v "$manager" >/dev/null 2>&1; then
+    echo "quality-mutation-check: declared package manager '$manager' is unavailable; install it before mutation checking" >> "$log"
+    return 1
+  fi
   if [ "$dependency_count" -eq 0 ] && [ "$workspace_manifest" = false ]; then
-    if [ -n "$manager" ] && ! command -v "$manager" >/dev/null 2>&1; then
-      echo "quality-mutation-check: declared package manager '$manager' is unavailable; enable its Corepack shim before mutation checking" >> "$log"
-      return 1
-    fi
     mkdir -p "$SANDBOX/node_modules"
     return 0
   fi
@@ -504,7 +504,7 @@ prepare_mutation_dependencies() {
         return 1
       }
       bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
-        env CI=true COREPACK_ENABLE_NETWORK=0 corepack pnpm install --offline --frozen-lockfile --ignore-scripts >> "$log" 2>&1
+        env CI=true pnpm --config.manage-package-manager-versions=false --config.pm-on-fail=ignore install --offline --frozen-lockfile --ignore-scripts >> "$log" 2>&1
       ;;
     npm)
       [ -f "$SANDBOX/package-lock.json" ] || [ -f "$SANDBOX/npm-shrinkwrap.json" ] || {
@@ -521,10 +521,10 @@ prepare_mutation_dependencies() {
       }
       if [ -f "$SANDBOX/.yarnrc.yml" ]; then
         bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
-          env CI=true COREPACK_ENABLE_NETWORK=0 YARN_ENABLE_NETWORK=0 corepack yarn install --immutable --immutable-cache --mode=skip-builds >> "$log" 2>&1
+          env CI=true YARN_ENABLE_NETWORK=0 yarn install --immutable --immutable-cache --mode=skip-builds >> "$log" 2>&1
       else
         bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
-          env CI=true COREPACK_ENABLE_NETWORK=0 corepack yarn install --offline --frozen-lockfile --non-interactive --ignore-scripts >> "$log" 2>&1
+          env CI=true yarn install --offline --frozen-lockfile --non-interactive --ignore-scripts >> "$log" 2>&1
       fi
       ;;
     bun)
@@ -598,7 +598,7 @@ if [ "${#CANDIDATES[@]}" -eq 0 ]; then
   exit 1
 fi
 
-for CANDIDATE in "${CANDIDATES[@]}"; do
+for CANDIDATE in "${CANDIDATES[@]+"${CANDIDATES[@]}"}"; do
   [ "${#ATTEMPTED_PATHS[@]}" -lt "$MAX_ATTEMPTS" ] || break
   REMAINING=$(( DEADLINE - $(date +%s) ))
   if [ "$REMAINING" -le 0 ]; then
