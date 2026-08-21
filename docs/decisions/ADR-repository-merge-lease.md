@@ -273,14 +273,18 @@ signed billing capability remains blocked.
    for the exact base ref, exact head SHA, and `force: false`. Do not force-push,
    disable hooks, synthesize a commit, or use a caller-selected ref. When GitHub
    returns the exact observed HTTP 422 JSON message
-   `Update is not a fast forward`, perform authoritative read-back before
-   classification. If the exact head is already integrated, record that outcome;
-   if it is not reachable and the PR remains open, record terminal not-started
-   stale-base. Unavailable or contradictory read-back remains quarantined. HTTP
+   `Update is not a fast forward`, treat that server response as authoritative
+   proof that this ref-update request was rejected without mutation. Read back
+   the exact PR and ref to detect a concurrent integration of the same head. If
+   the exact head is already integrated, record that outcome. Otherwise record
+   `request-rejected-stale-base`, release only the merge-operation guard, and
+   retain the repository lease and resumable campaign for base refresh and
+   revalidation. This is not a manifest terminal state, and a negative
+   reachability observation is not used as terminal proof. HTTP
    409, every other 422 body, malformed output, timeout, and transport or server
-   failure also remain quarantined until remote
-   read-back proves the exact head reachable from the base and the PR merged, or
-   proves that it did not merge. Successful or recovered integration requires
+   failure remain quarantined until remote read-back proves the exact head
+   reachable from the base and the PR merged, or the operator recovery flow
+   closes the exact PR without merge. Successful or recovered integration requires
    both that the exact head is reachable from the live base and that GitHub marks
    the exact PR and head merged. This proves the reviewed change landed; it does
    not attribute the write to this process. GitHub's indirect `merged` state is
@@ -313,7 +317,11 @@ signed billing capability remains blocked.
    records `integrated-exact-head`, not
    that this process performed the write. A manual integration of the same exact
    reviewed head is therefore reconciled honestly; any different head, closed
-   unmerged PR, or unreachable head remains a distinct terminal outcome.
+   unmerged PR, or unreachable head remains a distinct terminal outcome. The
+   exact observed non-fast-forward rejection is a separate authoritative
+   no-mutation outcome for only that operation attempt. It releases the short
+   operation guard but never releases the campaign lease, closes the pull
+   request, or writes a non-reenterable manifest terminal state.
 10. Add a ref-CAS-specific administrator proof alongside, not instead of, the
     strict proof. It requires the selected classic protection digest, explicit
     `strict: false`, explicit `enforce_admins: false`, repository administrator
@@ -445,9 +453,13 @@ Parent death alone is insufficient: ambiguous recovery reconciles the exact
 PR/head and protected-base state. A deadline, safety margin, or stable negative
 observation is never treated as proof that an accepted request cannot complete. The
 guard is released only after GitHub exposes an authoritative terminal fact:
-either the exact head is merged, or the PR is closed without merge by the
+either the exact head is merged, the PR is closed without merge by the
 operator recovery flow, which server-side prevents that request from later
-merging. Any open-PR ambiguity, inconsistent, changing, or unavailable remote
+merging, or the ref API returns the amendment's exact observed
+`Update is not a fast forward` rejection. That exact rejection proves only
+that the synchronous ref-update attempt did not mutate the base; it releases
+the short operation guard while the repository lease and resumable campaign
+remain active. Any other open-PR ambiguity, inconsistent, changing, or unavailable remote
 state remains quarantined and blocks repository merges for operator resolution.
 Status names the quarantined exact head and whether the remote request began;
 the merge failure prints the explicit authoritative-reconciliation command.
