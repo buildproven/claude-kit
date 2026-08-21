@@ -3209,6 +3209,7 @@ function attachApproval(manifest, options) {
 function armApprovalChallenge(manifest, options) {
   const challenge = options.challenge;
   const publicKey = options.publicKey;
+  const supersedingHead = options.supersedingHead || null;
   if (!/^[0-9a-f]{64}$/.test(challenge || "")) {
     throw new Error("approval challenge must be a SHA-256 digest");
   }
@@ -3221,7 +3222,13 @@ function armApprovalChallenge(manifest, options) {
   } catch {
     throw new Error("approval trust key is invalid");
   }
-  if (approvalValid(manifest, manifest.repo.realpath)) {
+  const isExactDescendantSupersession =
+    /^[0-9a-f]{40}$/.test(supersedingHead || "") &&
+    manifest.approval?.head !== supersedingHead;
+  if (
+    approvalValid(manifest, manifest.repo.realpath) &&
+    !isExactDescendantSupersession
+  ) {
     throw new Error("cannot replace a currently valid approval capability");
   }
   manifest.approvalChallengeSha256 = challenge;

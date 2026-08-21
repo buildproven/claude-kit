@@ -723,6 +723,7 @@ function prepareDescendantAdvanceAuthorization(
       invocation.armApprovalChallenge(locked, {
         challenge: crypto.createHash("sha256").update(challenge).digest("hex"),
         publicKey,
+        supersedingHead: expectedHead,
       });
     }),
   );

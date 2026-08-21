@@ -2285,6 +2285,27 @@ wait
       }).status,
     ).toBe(0);
 
+    expect(() =>
+      invocation.withManifestLock(manifest, (locked) =>
+        invocation.armApprovalChallenge(locked, {
+          challenge: "b".repeat(64),
+          publicKey: approvedState.approvalTrust.publicKey,
+        }),
+      ),
+    ).toThrow(/cannot replace a currently valid approval/);
+    invocation.withManifestLock(manifest, (locked) =>
+      invocation.armApprovalChallenge(locked, {
+        challenge: "c".repeat(64),
+        publicKey: approvedState.approvalTrust.publicKey,
+        supersedingHead: "d".repeat(40),
+      }),
+    );
+    expect(
+      spawnSync("node", [INVOCATION, "approval-valid", manifest], {
+        cwd: root,
+      }).status,
+    ).toBe(0);
+
     writeFileSync(path.join(root, "later.js"), "export const later = true;\n");
     git(root, ["add", "."]);
     git(root, ["commit", "-q", "-m", "fix"]);
