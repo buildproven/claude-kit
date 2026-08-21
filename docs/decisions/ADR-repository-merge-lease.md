@@ -8,6 +8,10 @@ found no unresolved correctness defect.
 The BUI-709 recovery amendment below is accepted after an independent
 high-reasoning architecture review found no unresolved correctness defect.
 
+The protected non-strict amendment below is proposed. It is not accepted until
+an independent cross-provider architecture review finds no unresolved
+correctness defect.
+
 ## Context
 
 BuildProven protects `main` with strict required status checks. That is the
@@ -174,6 +178,89 @@ Add a repository-scoped merge lease to the public quality runtime.
     observation cannot silently shrink the required set. A plan-proven
     unprotectable repository has no required-context source, so it retains the
     separate all-registered-PR-check waiter and final guard.
+
+## Protected non-strict amendment
+
+### Problem
+
+Some protected repositories deliberately require exact-head status checks with
+GitHub's `strict` option disabled. The current authorizer treats that state like
+an unprotected branch. It therefore blocks every normal quality merge and also
+blocks the signed GitHub Actions billing-outage path, even when the repository
+lease, exact-head review, deterministic gates, and required-check identities
+are valid.
+
+GitHub does not provide a base-SHA precondition for pull-request merge. A local
+lease and a final base read cannot recreate strict server-side freshness because
+a human or another host can advance the base after that read. The runtime must
+not describe the weaker mode as atomic.
+
+### Decision
+
+Add `protected-nonstrict` as an explicit base-protection classification in the
+existing merge authorizer.
+
+1. Classify a base as `protected-nonstrict` only from a complete server-owned
+   classic-protection or effective-ruleset response that has at least one
+   required status check and explicitly reports strict freshness as `false`.
+   Missing fields, empty check sets, pagination, API errors, multiple
+   contradictory rules, unprotected branches, and unknown responses remain
+   blocked.
+2. Normal merges still require every configured exact-head check with its
+   expected GitHub App identity. The repository merge lease serializes quality
+   campaigns, and the final authorizer re-reads both the PR head and base SHA
+   immediately before merge. The runtime reports this as lease-guarded,
+   non-atomic freshness.
+3. A GitHub Actions billing waiver on this mode additionally requires the
+   existing signed `operator-ci-billing-override`, exact failed-job evidence
+   proving no runner and no steps, a current administrator who can bypass the
+   same selected protection source, exact-head local review evidence, and a
+   second protection recheck immediately before the administrator merge. The
+   waiver accepts CI unavailability only; it does not mark CI green.
+4. Persist `protected-nonstrict` and the selected protection source in the
+   repository merge-operation guard and terminal merge evidence. Recovery and
+   read-back must therefore retain the weaker guarantee instead of flattening it
+   into an ordinary protected merge.
+5. Do not add an environment-only escape hatch. Candidate code, caller input,
+   or a signed capability for another scope cannot select this classification.
+
+### Invariants
+
+- The PR repository, number, base ref, head ref, base SHA, and head SHA match the
+  immutable campaign manifest at final authorization.
+- Review, deterministic gates, mutation evidence, required-check names, and App
+  bindings remain exact-head requirements.
+- Only an explicit server response with non-empty required checks can select
+  `protected-nonstrict`; ambiguity fails closed.
+- A billing-outage merge remains an administrator merge authorized only by the
+  exact CI capability and exact outage evidence.
+- The runtime never claims atomic base freshness in this mode.
+
+### Alternatives
+
+- Enable GitHub strict freshness everywhere: preserves the strongest guarantee
+  but conflicts with the confirmed fleet policy that retains `strict: false`.
+- Use a merge queue: preserves a server-owned base boundary but is not available
+  in every repository and still depends on hosted CI during the current outage.
+- Use a direct administrator merge: rejected because it bypasses the quality
+  authorizer and loses the repository-lease audit trail.
+- Treat every protected non-strict merge as plan-unprotectable: rejected because
+  it confuses an explicit protection choice with a GitHub plan limitation and
+  would weaken the classifier.
+
+### Rollback and verification
+
+Rollback is configuration-first: enabling strict freshness makes the existing
+atomic path win without removing this code. Code rollback removes the
+`protected-nonstrict` classifier after all affected repositories use strict
+freshness or a merge queue.
+
+Behavioral tests must prove classification and final authorization through the
+public merge CLI. They cover normal required-check success, signed billing
+outage success, empty or malformed protection responses, wrong App bindings,
+missing or stale capabilities, base or head movement, protection-source drift,
+and merge-operation receipt retention. The complete quality suite and an
+independent provider review remain required before release.
 
 ## Lease record
 
