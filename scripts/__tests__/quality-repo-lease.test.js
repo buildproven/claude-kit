@@ -267,6 +267,57 @@ describe("repository merge lease", () => {
         "a".repeat(40),
       ).kind,
     ).toBe("ambiguous");
+    expect(
+      lease._classifyRefUpdateResponse(
+        {
+          status: 1,
+          stdout:
+            'HTTP/2 200 OK\r\ncontent-type: application/json\r\n\r\n{"ref":"refs/heads/main","object":{"sha":"' +
+            "a".repeat(40) +
+            '"}}\r\nHTTP/2 422 Unprocessable Entity\r\ncontent-type: application/json\r\n\r\n{"message":"Update is not a fast forward"}\r\n',
+        },
+        "main",
+        "a".repeat(40),
+      ).kind,
+    ).toBe("ambiguous");
+    expect(
+      lease._classifyRefUpdateResponse(
+        {
+          status: 0,
+          stdout:
+            'HTTP/2 422 Unprocessable Entity\r\ncontent-type: application/json\r\n\r\n{"message":"Update is not a fast forward"}\r\n',
+        },
+        "main",
+        "a".repeat(40),
+      ).kind,
+    ).toBe("ambiguous");
+  });
+
+  it("requires exact open PR read-back before releasing a rejected ref-CAS", () => {
+    const { manifestPath } = fixture("refcas-rejection-readback");
+    const { manifest } = invocation.loadManifest(manifestPath);
+    const exact = {
+      state: "OPEN",
+      mergedAt: null,
+      mergeCommit: null,
+      headRefName: manifest.repo.headRefName,
+      headRefOid: manifest.revisions.currentHead,
+      baseRefName: "main",
+    };
+    expect(lease._exactOpenRemoteOutcome(manifest, exact)).toBe(true);
+    expect(lease._exactOpenRemoteOutcome(manifest, null)).toBe(false);
+    expect(
+      lease._exactOpenRemoteOutcome(manifest, {
+        ...exact,
+        baseRefName: "another-base",
+      }),
+    ).toBe(false);
+    expect(
+      lease._exactOpenRemoteOutcome(manifest, {
+        ...exact,
+        state: "CLOSED",
+      }),
+    ).toBe(false);
   });
 
   it("acquires idempotently for the exact owner and ignores TMPDIR changes", () => {

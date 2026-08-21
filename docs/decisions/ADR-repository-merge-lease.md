@@ -302,6 +302,12 @@ signed billing capability remains blocked.
    the exact PR and head merged. This proves the reviewed change landed; it does
    not attribute the write to this process. GitHub's indirect `merged` state is
    lifecycle evidence only; it is not independent protection evidence.
+   The response classifier accepts exactly one complete HTTP response block.
+   Multiple response blocks, including a `200` followed by a `422`, are
+   ambiguous. The safe 422 classification also requires a non-zero synchronous
+   client exit. Before releasing the short guard, read-back must succeed and
+   prove the same exact PR remains open on the same head and base; unavailable,
+   retargeted, closed, or otherwise changed read-back remains quarantined.
 6. Persist merge mode, protection digest, required check/App bindings, CI
    evidence digest, base SHA, head SHA, administrator mode, and billing-waiver
    reason in the merge-operation guard. Persist the ref-CAS campaign intent in

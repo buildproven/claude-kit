@@ -1052,39 +1052,69 @@ function ghJson(manifest, args, label, options = {}) {
   }
 }
 
-function parseIncludedGhResponse(stdout) {
+function parseIncludedGhResponses(stdout) {
   const raw = String(stdout || "");
-  const statusCodes = raw
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith("HTTP/"))
-    .map((line) => Number(line.trim().split(/\s+/)[1]))
-    .filter((value) => Number.isInteger(value) && value >= 100 && value <= 599);
-  const separators = [...raw.matchAll(/\r?\n\r?\n/g)];
-  if (statusCodes.length === 0 || separators.length === 0) {
-    return { status: null, body: null };
-  }
-  const separator = separators.at(-1);
-  try {
-    return {
-      status: statusCodes.at(-1),
-      body: JSON.parse(raw.slice(separator.index + separator[0].length).trim()),
-    };
-  } catch {
-    return { status: statusCodes.at(-1), body: null };
-  }
+  const starts = [...raw.matchAll(/^HTTP\/[^\r\n]*$/gm)].map(
+    (match) => match.index,
+  );
+  return starts.map((start, index) => {
+    const block = raw.slice(start, starts[index + 1] ?? raw.length);
+    const status = Number(block.split(/\r?\n/, 1)[0].trim().split(/\s+/)[1]);
+    const separator = block.match(/\r?\n\r?\n/);
+    if (
+      !Number.isInteger(status) ||
+      status < 100 ||
+      status > 599 ||
+      !separator
+    ) {
+      return { status: null, body: null };
+    }
+    try {
+      return {
+        status,
+        body: JSON.parse(
+          block.slice(separator.index + separator[0].length).trim(),
+        ),
+      };
+    } catch {
+      return { status, body: null };
+    }
+  });
 }
 
-function classifyRefUpdateResponse(update, branch, head) {
-  const { status, body } = parseIncludedGhResponse(update?.stdout);
-  if (
+function parseIncludedGhResponse(stdout) {
+  const responses = parseIncludedGhResponses(stdout);
+  return responses.length === 1 ? responses[0] : { status: null, body: null };
+}
+
+function refUpdateAccepted(update, status, body, branch, head) {
+  return (
     update?.status === 0 &&
     status === 200 &&
     body?.ref === `refs/heads/${branch}` &&
     body?.object?.sha === head
-  ) {
+  );
+}
+
+function staleRefUpdateRejected(update, status, body) {
+  return (
+    Number.isInteger(update?.status) &&
+    update.status !== 0 &&
+    status === 422 &&
+    body?.message === "Update is not a fast forward"
+  );
+}
+
+function classifyRefUpdateResponse(update, branch, head) {
+  const responses = parseIncludedGhResponses(update?.stdout);
+  if (responses.length !== 1) {
+    return { kind: "ambiguous", status: null, body: null };
+  }
+  const { status, body } = responses[0];
+  if (refUpdateAccepted(update, status, body, branch, head)) {
     return { kind: "accepted", status, body };
   }
-  if (status === 422 && body?.message === "Update is not a fast forward") {
+  if (staleRefUpdateRejected(update, status, body)) {
     return { kind: "rejected-stale-base", status, body };
   }
   return { kind: "ambiguous", status, body };
@@ -1142,6 +1172,17 @@ function exactRemoteOutcome(manifest, remote) {
     return "closed-unmerged";
   }
   return null;
+}
+
+function exactOpenRemoteOutcome(manifest, remote) {
+  return Boolean(
+    remote?.state === "OPEN" &&
+    !remote.mergedAt &&
+    !remote.mergeCommit?.oid &&
+    remote.headRefName === manifest.repo.headRefName &&
+    remote.headRefOid === mergeHead(manifest) &&
+    remote.baseRefName === baseBranch(manifest),
+  );
 }
 
 function reconciliationCredential(manifestPath, presentedToken, options = {}) {
@@ -1410,6 +1451,11 @@ function performRefCasUpdate(
       releaseVerifiedOutcome(manifestPath, presentedToken, "merged");
       return { merged: true, remote, mode, recovered: true };
     }
+    if (!exactOpenRemoteOutcome(manifest, remote)) {
+      throw new Error(
+        "ref-CAS rejection read-back is unavailable or changed; outcome remains ambiguous and quarantined",
+      );
+    }
     releaseMergeGuard(
       manifestPath,
       presentedToken,
@@ -1641,5 +1687,6 @@ module.exports = {
   _recoverDeadGuard: recoverDeadGuard,
   _pathsFor: pathsFor,
   _classifyRefUpdateResponse: classifyRefUpdateResponse,
+  _exactOpenRemoteOutcome: exactOpenRemoteOutcome,
   _parseIncludedGhResponse: parseIncludedGhResponse,
 };
