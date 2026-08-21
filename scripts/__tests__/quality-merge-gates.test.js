@@ -10,6 +10,10 @@ const VALIDATOR = readFileSync(
   path.join(ROOT, "scripts/quality-validate-review-trailers.sh"),
   "utf8",
 );
+const BOOTSTRAP = readFileSync(
+  path.join(ROOT, "scripts/quality-bootstrap.sh"),
+  "utf8",
+);
 const RUN_REVIEW = readFileSync(
   path.join(ROOT, "scripts/quality-run-review.sh"),
   "utf8",
@@ -99,6 +103,11 @@ describe("quality merge gates", () => {
     );
     expect(VALIDATOR).toMatch(
       /operatorOverride == true[\s\S]*override\.acceptedConditions[\s\S]*startswith\("review:"\)/,
+    );
+  });
+  it("lets the composed ref-CAS capability advance an exhausted review", () => {
+    expect(BOOTSTRAP).toMatch(
+      /operator-quality-override[\s\S]*operator-nonstrict-refcas-override[\s\S]*review:provider-exhaustion/,
     );
   });
   it("keeps deterministic failures blocking while AI leads stay advisory", () => {

@@ -191,7 +191,8 @@ if [ -n "$MANIFEST_ARG" ]; then
       exit 1
     fi
     if [ "$RESUME_RECORDED_HEAD" != "$BS_QUALITY_APPROVAL_EXPECTED_HEAD" ]; then
-      if [ "${BS_QUALITY_APPROVAL_SCOPE:-standard}" != "operator-quality-override" ] || \
+      if { [ "${BS_QUALITY_APPROVAL_SCOPE:-standard}" != "operator-quality-override" ] && \
+        [ "${BS_QUALITY_APPROVAL_SCOPE:-standard}" != "operator-nonstrict-refcas-override" ]; } || \
         ! printf '%s' "${BS_QUALITY_APPROVAL_ACCEPTED_CONDITIONS:-}" | \
           tr ',' '\n' | grep -Fxq 'review:provider-exhaustion'; then
         echo "❌ descendant approval requires the explicit review:provider-exhaustion operator decision" >&2
