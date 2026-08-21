@@ -271,13 +271,14 @@ signed billing capability remains blocked.
    never green. Without that capability, this mode is unreachable.
 5. While holding the merge-operation guard, call GitHub's update-reference API
    for the exact base ref, exact head SHA, and `force: false`. Do not force-push,
-   disable hooks, synthesize a commit, or use a caller-selected ref. A conflict
-   is a terminal not-started stale-base result only when GitHub returns the exact
-   observed HTTP 422 JSON message `Update is not a fast forward`: release the operation guard
-   without entering ambiguous recovery, and never attach this campaign's
-   authority to another actor's integration. HTTP 409, every other 422 body,
-   malformed output, timeout, and transport or server failure remain
-   quarantined until remote
+   disable hooks, synthesize a commit, or use a caller-selected ref. When GitHub
+   returns the exact observed HTTP 422 JSON message
+   `Update is not a fast forward`, perform authoritative read-back before
+   classification. If the exact head is already integrated, record that outcome;
+   if it is not reachable and the PR remains open, record terminal not-started
+   stale-base. Unavailable or contradictory read-back remains quarantined. HTTP
+   409, every other 422 body, malformed output, timeout, and transport or server
+   failure also remain quarantined until remote
    read-back proves the exact head reachable from the base and the PR merged, or
    proves that it did not merge. Successful or recovered integration requires
    both that the exact head is reachable from the live base and that GitHub marks
@@ -304,8 +305,12 @@ signed billing capability remains blocked.
    accepts the residual post-read race for this one outage merge. Record it
    rather than claiming it is fenced.
 9. Ref-CAS recovery has its own explicit release case. It requires the persisted
-   mode and identity, live base reachability from the exact head, and GitHub's
-   merged state for that exact PR/head. It records `integrated-exact-head`, not
+   mode and identity, proof that the exact head is an ancestor of or equal to the
+   live base, and GitHub's merged state for that exact PR/head. The ancestry
+   proof uses GitHub's compare API with the exact head as the comparison base and
+   the live base SHA as the comparison head; only `ahead` or `identical` is
+   accepted. It never depends on a local object store or linked worktree. It
+   records `integrated-exact-head`, not
    that this process performed the write. A manual integration of the same exact
    reviewed head is therefore reconciled honestly; any different head, closed
    unmerged PR, or unreachable head remains a distinct terminal outcome.
@@ -316,7 +321,8 @@ signed billing capability remains blocked.
     existing `ADMIN_BASE_SOURCE == ATOMIC_BASE_SOURCE` equality unchanged.
 11. Branch deletion is forbidden until the operation guard records an
     authoritative terminal outcome. Cleanup then rechecks that the exact head is
-    reachable from the live base before deleting only the exact PR head ref.
+    an ancestor of or equal to the live base through the same server compare
+    before deleting only the exact PR head ref.
 
 ### Classification decision table
 
