@@ -60,6 +60,27 @@ function assertBooleanRule(protection, field, expected) {
   }
 }
 
+function assertBooleanRuleShape(protection, field) {
+  const rule = assertClosedObject(
+    protection[field],
+    new Set(["enabled"]),
+    field,
+  );
+  if (typeof rule.enabled !== "boolean") {
+    throw new Error(`${field}.enabled must be boolean`);
+  }
+}
+
+function normalizeProtectedBranch(baseRef) {
+  const branch = String(baseRef || "")
+    .replace(/^refs\/heads\//, "")
+    .replace(/^origin\//, "");
+  if (!branch || branch.includes("..") || branch.startsWith("-")) {
+    throw new Error(`protected base '${baseRef || ""}' is invalid`);
+  }
+  return branch;
+}
+
 function assertUrlBooleanRule(protection, field, expected) {
   const rule = assertClosedObject(
     protection[field],
@@ -236,14 +257,9 @@ function classifyProtectedNonstrict({
   assertReviewRule(closed);
   assertUrlBooleanRule(closed, "required_signatures", false);
   assertUrlBooleanRule(closed, "enforce_admins", false);
-  assertBooleanRule(
-    closed,
-    "required_linear_history",
-    closed.required_linear_history?.enabled,
-  );
-  if (typeof closed.required_linear_history.enabled !== "boolean") {
-    throw new Error("required_linear_history.enabled is missing");
-  }
+  // Both values are safe: ref-CAS creates no merge commit and moves the base
+  // directly to an existing descendant. Require an explicit boolean shape.
+  assertBooleanRuleShape(closed, "required_linear_history");
   assertBooleanRule(closed, "allow_force_pushes", false);
   assertBooleanRule(closed, "allow_deletions", false);
   assertBooleanRule(closed, "block_creations", false);
@@ -294,7 +310,7 @@ function assertInspectionIdentity(repository, branch, pr) {
   if (!/^[^/]+\/[^/]+$/.test(repository || "")) {
     throw new Error("repository identity is invalid");
   }
-  if (!branch || branch.includes("..") || branch.startsWith("-")) {
+  if (normalizeProtectedBranch(branch) !== branch) {
     throw new Error("base branch identity is invalid");
   }
   if (!Number.isInteger(Number(pr)) || Number(pr) < 1) {
@@ -384,4 +400,5 @@ module.exports = {
   GITHUB_ACTIONS_APP_ID,
   classifyProtectedNonstrict,
   inspectProtectedNonstrict,
+  normalizeProtectedBranch,
 };

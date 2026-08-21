@@ -309,6 +309,10 @@ signed billing capability remains blocked.
    client exit. Before releasing the short guard, read-back must succeed and
    prove the same exact PR remains open on the same head and base; unavailable,
    retargeted, closed, or otherwise changed read-back remains quarantined.
+   After an accepted update, poll bounded exact PR and ref read-back because
+   GitHub can expose the indirect merged state after the ref update response.
+   Release the lease only when that bounded read-back proves integration. If it
+   does not converge, retain the ambiguous quarantine for reconciliation.
 6. Persist merge mode, protection digest, required check/App bindings, CI
    evidence digest, base SHA, head SHA, administrator mode, and billing-waiver
    reason in the merge-operation guard. Persist the ref-CAS campaign intent in
@@ -396,6 +400,9 @@ after that exact capability and outage artifact have already validated.
 - A billing-outage ref-CAS remains authorized only by the new exact ref-CAS
   capability and exact outage evidence. It is never available for a normal
   merge, and an older CI-only capability cannot be reinterpreted.
+- Revalidate the bound CI evidence artifact at the final mutation boundary.
+  Missing, changed, or invalid evidence blocks the ref update even when the
+  signed capability itself is otherwise valid.
 - Successful read-back proves the exact head is reachable from the live base.
   GitHub's merged PR state is required for lifecycle completion but is not
   counted as a second protection proof or proof of the performing actor.

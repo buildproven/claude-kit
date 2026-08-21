@@ -6,6 +6,9 @@ const require = createRequire(import.meta.url);
 const { classifyProtectedNonstrict } = require(
   path.resolve(import.meta.dirname, "..", "quality-protected-nonstrict.js"),
 );
+const { normalizeProtectedBranch } = require(
+  path.resolve(import.meta.dirname, "..", "quality-protected-nonstrict.js"),
+);
 
 function fixture(overrides = {}) {
   return {
@@ -116,5 +119,20 @@ describe("protected non-strict outage classifier", () => {
       required_approving_review_count: 0,
     };
     expect(classifyProtectedNonstrict(input).eligible).toBe(true);
+  });
+
+  it("accepts either explicit linear-history boolean", () => {
+    const input = fixture();
+    input.protection.required_linear_history.enabled = false;
+    expect(classifyProtectedNonstrict(input).eligible).toBe(true);
+  });
+
+  it("normalizes supported protected branch prefixes once", () => {
+    expect(normalizeProtectedBranch("origin/release/2026")).toBe(
+      "release/2026",
+    );
+    expect(normalizeProtectedBranch("refs/heads/release/2026")).toBe(
+      "release/2026",
+    );
   });
 });

@@ -320,6 +320,25 @@ describe("repository merge lease", () => {
     ).toBe(false);
   });
 
+  it("retries accepted ref-CAS read-back until indirect merge state converges", () => {
+    const { manifestPath } = fixture("refcas-lagging-readback");
+    const { manifest } = invocation.loadManifest(manifestPath);
+    let reads = 0;
+    const remote = lease._waitForRefCasIntegration(manifest, {
+      attempts: 4,
+      intervalMs: 0,
+      readRemote() {
+        reads += 1;
+        if (reads < 3) throw new Error("transient read failure");
+        return { state: "MERGED" };
+      },
+      integrated: (_candidate, value) => value.state === "MERGED",
+      wait() {},
+    });
+    expect(remote).toEqual({ state: "MERGED" });
+    expect(reads).toBe(3);
+  });
+
   it("acquires idempotently for the exact owner and ignores TMPDIR changes", () => {
     const { manifestPath } = fixture("idempotent");
     const first = lease.acquire(manifestPath);
@@ -1203,6 +1222,24 @@ esac
         expectedHead: manifest.revisions.currentHead,
         mode: "protected-nonstrict-outage-ref-cas",
         protectionDigest: "d".repeat(64),
+      }),
+    ).toThrow(/valid signed exact-head outage capability/);
+    lease.release(candidate.manifestPath, owner.token, "test-complete");
+  });
+
+  it("rejects ref-CAS when signed CI outage evidence is removed", () => {
+    const candidate = fixture("refcas-missing-ci-evidence");
+    const { manifest } = invocation.loadManifest(candidate.manifestPath);
+    attachRefCasCapability(candidate.manifestPath, "c".repeat(64), [
+      { context: "quality", appId: 15368 },
+    ]);
+    fs.unlinkSync(path.join(manifest.stateRoot, "ci-billing-waiver.json"));
+    const owner = lease.acquire(candidate.manifestPath);
+    expect(() =>
+      lease.performMerge(candidate.manifestPath, owner.token, {
+        admin: true,
+        expectedHead: manifest.revisions.currentHead,
+        mode: "protected-nonstrict-outage-ref-cas",
       }),
     ).toThrow(/valid signed exact-head outage capability/);
     lease.release(candidate.manifestPath, owner.token, "test-complete");

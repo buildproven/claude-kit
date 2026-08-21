@@ -456,10 +456,10 @@ function resolveOverrideAcceptedConditions(
   let protectedNonstrictProtectionDigest = null;
   let protectedNonstrictRequiredChecks = null;
   if (expectedIdentity.scope === "operator-nonstrict-refcas-override") {
-    const branch = String(manifest.revisions.baseRef || "").replace(
-      /^origin\//,
-      "",
-    );
+    const branch =
+      require("./quality-protected-nonstrict.js").normalizeProtectedBranch(
+        manifest.revisions.baseRef,
+      );
     const inspection =
       require("./quality-protected-nonstrict.js").inspectProtectedNonstrict({
         repository: manifest.repo.githubRepository,

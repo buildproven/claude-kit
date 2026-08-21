@@ -3114,32 +3114,35 @@ function assertApprovalPayloadShape(manifest, payload) {
         "CI billing override capability is missing evidence binding",
       );
     }
-    const artifactPath = path.join(
-      manifest.stateRoot,
-      "ci-billing-waiver.json",
-    );
-    let evidence;
-    try {
-      evidence = parseJson(
-        fs.readFileSync(artifactPath, "utf8"),
-        "CI billing waiver evidence",
-      );
-    } catch (error) {
-      throw new Error("CI billing waiver evidence is missing", {
-        cause: error,
-      });
-    }
     if (
-      evidence.repository !== manifest.repo.githubRepository ||
-      evidence.head !== manifest.revisions.currentHead ||
-      evidence.category !== "github-actions-billing-preallocation" ||
-      !Array.isArray(evidence.failedJobs) ||
-      evidence.failedJobs.length === 0 ||
-      !evidenceDigestValid(evidence) ||
-      evidence.evidenceSha256 !== payload.ciBillingEvidenceSha256
+      !ciBillingEvidenceBindingValid(manifest, payload.ciBillingEvidenceSha256)
     ) {
       throw new Error("CI billing waiver evidence binding is invalid");
     }
+  }
+}
+
+function ciBillingEvidenceBindingValid(manifest, expectedDigest) {
+  if (!/^[a-f0-9]{64}$/.test(expectedDigest || "")) return false;
+  try {
+    const evidence = parseJson(
+      fs.readFileSync(
+        path.join(manifest.stateRoot, "ci-billing-waiver.json"),
+        "utf8",
+      ),
+      "CI billing waiver evidence",
+    );
+    return (
+      evidence.repository === manifest.repo.githubRepository &&
+      evidence.head === manifest.revisions.currentHead &&
+      evidence.category === "github-actions-billing-preallocation" &&
+      Array.isArray(evidence.failedJobs) &&
+      evidence.failedJobs.length > 0 &&
+      evidenceDigestValid(evidence) &&
+      evidence.evidenceSha256 === expectedDigest
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -6404,6 +6407,7 @@ module.exports = {
   assertApprovalPayloadShape,
   approvalValid,
   ciBillingCapabilityValid,
+  ciBillingEvidenceBindingValid,
   protectedNonstrictRefCasCapability,
   armApprovalChallenge,
   attachApproval,

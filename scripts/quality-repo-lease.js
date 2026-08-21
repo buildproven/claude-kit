@@ -848,15 +848,16 @@ function liveBase(manifest) {
 
 function baseBranch(manifest) {
   const baseRef = manifest.revisions.baseRef;
-  const branch = String(baseRef || "")
-    .replace(/^refs\/heads\//, "")
-    .replace(/^origin\//, "");
-  if (!branch || branch.includes("..") || branch.startsWith("-")) {
+  try {
+    return require("./quality-protected-nonstrict.js").normalizeProtectedBranch(
+      baseRef,
+    );
+  } catch (error) {
     throw new Error(
       `repository lease cannot resolve protected base '${baseRef}'`,
+      { cause: error },
     );
   }
-  return branch;
 }
 
 function assertBase(manifestPath, presentedToken) {
@@ -1318,14 +1319,16 @@ function resolveMergeMode(manifest, options, head) {
     throw new Error(`unsupported merge mode '${mode}'`);
   }
   if (mode === "protected-nonstrict-outage-ref-cas") {
-    const capability =
-      require("./quality-invocation.js").protectedNonstrictRefCasCapability(
-        manifest,
-      );
+    const invocation = require("./quality-invocation.js");
+    const capability = invocation.protectedNonstrictRefCasCapability(manifest);
     if (
       options.admin !== true ||
       manifest.merge?.stampHead ||
       !capability ||
+      !invocation.ciBillingEvidenceBindingValid(
+        manifest,
+        capability?.ciEvidenceSha256,
+      ) ||
       capability.baseSha !== manifest.revisions.baseHeadSha ||
       !/^[a-f0-9]{64}$/.test(capability.protectionDigest || "") ||
       (options.protectionDigest &&
@@ -1344,6 +1347,33 @@ function resolveMergeMode(manifest, options, head) {
     };
   }
   return { ...options, mode };
+}
+
+function waitMilliseconds(milliseconds) {
+  Atomics.wait(
+    new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)),
+    0,
+    0,
+    milliseconds,
+  );
+}
+
+function waitForRefCasIntegration(manifest, options = {}) {
+  const attempts = options.attempts ?? 30;
+  const intervalMs = options.intervalMs ?? 1_000;
+  const readRemote = options.readRemote ?? remotePullRequest;
+  const integrated = options.integrated ?? refCasIntegrated;
+  const wait = options.wait ?? waitMilliseconds;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const remote = readRemote(manifest);
+      if (integrated(manifest, remote)) return remote;
+    } catch {
+      // GitHub read-back can lag or fail briefly after an accepted update.
+    }
+    if (attempt + 1 < attempts) wait(intervalMs);
+  }
+  return null;
 }
 
 function withNotStartedCleanup(manifestPath, presentedToken, operation) {
@@ -1432,21 +1462,23 @@ function performRefCasUpdate(
     },
   );
   const responseOutcome = classifyRefUpdateResponse(update, branch, head);
-  let remote = null;
-  try {
-    remote = remotePullRequest(manifest);
-  } catch {
-    // An accepted update with unavailable read-back remains quarantined.
-  }
-  if (
-    responseOutcome.kind === "accepted" &&
-    remote &&
-    refCasIntegrated(manifest, remote)
-  ) {
-    releaseVerifiedOutcome(manifestPath, presentedToken, "merged");
-    return { merged: true, remote, mode };
+  if (responseOutcome.kind === "accepted") {
+    const remote = waitForRefCasIntegration(manifest);
+    if (remote) {
+      releaseVerifiedOutcome(manifestPath, presentedToken, "merged");
+      return { merged: true, remote, mode };
+    }
+    throw new Error(
+      `ref-CAS outcome is ambiguous and quarantined (http ${responseOutcome.status ?? "unknown"}, gh status ${update.status ?? "timeout"})`,
+    );
   }
   if (responseOutcome.kind === "rejected-stale-base") {
+    let remote = null;
+    try {
+      remote = remotePullRequest(manifest);
+    } catch {
+      // A rejected update still needs exact synchronous read-back.
+    }
     if (remote && refCasIntegrated(manifest, remote)) {
       releaseVerifiedOutcome(manifestPath, presentedToken, "merged");
       return { merged: true, remote, mode, recovered: true };
@@ -1689,4 +1721,5 @@ module.exports = {
   _classifyRefUpdateResponse: classifyRefUpdateResponse,
   _exactOpenRemoteOutcome: exactOpenRemoteOutcome,
   _parseIncludedGhResponse: parseIncludedGhResponse,
+  _waitForRefCasIntegration: waitForRefCasIntegration,
 };
