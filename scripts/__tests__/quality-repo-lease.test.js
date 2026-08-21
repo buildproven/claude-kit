@@ -368,6 +368,41 @@ describe("repository merge lease", () => {
     ).toThrow(/remain valid through the bounded ref update/);
   });
 
+  it("releases a not-started guard when final capability validation fails", () => {
+    const candidate = fixture("refcas-final-validation-cleanup");
+    const { manifest } = invocation.loadManifest(candidate.manifestPath);
+    const digest = "c".repeat(64);
+    const requiredChecks = [{ context: "quality", appId: 15368 }];
+    attachRefCasCapability(
+      candidate.manifestPath,
+      digest,
+      requiredChecks,
+      60_000,
+    );
+    const owner = lease.acquire(candidate.manifestPath);
+    const options = {
+      admin: true,
+      expectedHead: manifest.revisions.currentHead,
+      mode: "protected-nonstrict-outage-ref-cas",
+      protectionDigest: digest,
+      requiredChecks,
+    };
+    lease.acquireMergeGuard(candidate.manifestPath, owner.token, options);
+
+    expect(() =>
+      lease._performRefCasUpdate(
+        invocation.loadManifest(candidate.manifestPath),
+        owner.token,
+        options,
+      ),
+    ).toThrow(/remain valid through the bounded ref update/);
+    expect(lease.status(candidate.manifestPath)).toMatchObject({
+      state: "active",
+      mergeGuard: null,
+    });
+    lease.release(candidate.manifestPath, owner.token, "test-complete");
+  });
+
   it("acquires idempotently for the exact owner and ignores TMPDIR changes", () => {
     const { manifestPath } = fixture("idempotent");
     const first = lease.acquire(manifestPath);

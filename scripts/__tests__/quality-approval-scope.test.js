@@ -3,9 +3,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
-const { assertCiBillingConditions, parseApprovalCommand } = require(
-  path.resolve(import.meta.dirname, "..", "quality-wrapper.js"),
-);
+const {
+  assertCiBillingConditions,
+  parseApprovalCommand,
+  resolveApprovalTtlSeconds,
+} = require(path.resolve(import.meta.dirname, "..", "quality-wrapper.js"));
 const { assertApprovalPayloadShape, approvalPayloadIdentityMatches } = require(
   path.resolve(import.meta.dirname, "..", "quality-invocation.js"),
 );
@@ -13,6 +15,20 @@ const { assertApprovalPayloadShape, approvalPayloadIdentityMatches } = require(
 const head = "a".repeat(40);
 
 describe("quality approve command scope parsing", () => {
+  it("rejects a ref-CAS capability TTL shorter than its request reserve", () => {
+    const prior = process.env.BS_QUALITY_OVERRIDE_APPROVAL_TTL_SECONDS;
+    process.env.BS_QUALITY_OVERRIDE_APPROVAL_TTL_SECONDS = "119";
+    try {
+      expect(() =>
+        resolveApprovalTtlSeconds("operator-nonstrict-refcas-override"),
+      ).toThrow(/between 120 and 86400/);
+    } finally {
+      if (prior === undefined)
+        delete process.env.BS_QUALITY_OVERRIDE_APPROVAL_TTL_SECONDS;
+      else process.env.BS_QUALITY_OVERRIDE_APPROVAL_TTL_SECONDS = prior;
+    }
+  });
+
   it("keeps pre-upgrade approval projections valid when optional bindings are absent", () => {
     const manifest = {
       repo: { key: "repo-key", pr: 676 },

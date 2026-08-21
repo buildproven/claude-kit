@@ -420,15 +420,17 @@ function printOverrideDiagnosis(manifestPath, manifest, conditions) {
 // BS_QUALITY_APPROVAL_TTL_SECONDS still governs standard approvals;
 // BS_QUALITY_OVERRIDE_APPROVAL_TTL_SECONDS is the override-specific knob,
 // read only when this capability's scope is operator-quality-override.
-function resolveApprovalTtlSeconds(isOverride) {
+function resolveApprovalTtlSeconds(scope) {
+  const isOverride = isOperatorOverrideScope(scope);
   const ttlEnvVar = isOverride
     ? "BS_QUALITY_OVERRIDE_APPROVAL_TTL_SECONDS"
     : "BS_QUALITY_APPROVAL_TTL_SECONDS";
   const ttlDefault = isOverride ? "900" : "3600";
   const ttl = Number(process.env[ttlEnvVar] || ttlDefault);
-  if (!Number.isInteger(ttl) || ttl < 1 || ttl > 86400) {
+  const minimum = scope === "operator-nonstrict-refcas-override" ? 120 : 1;
+  if (!Number.isInteger(ttl) || ttl < minimum || ttl > 86400) {
     throw new Error(
-      "approval TTL must be an integer between 1 and 86400 seconds",
+      `approval TTL must be an integer between ${minimum} and 86400 seconds`,
     );
   }
   return ttl;
@@ -562,7 +564,7 @@ function issueApprovalCapability(
   );
   const scope = expectedIdentity?.scope || "standard";
   const isOverride = isOperatorOverrideScope(scope);
-  const ttl = resolveApprovalTtlSeconds(isOverride);
+  const ttl = resolveApprovalTtlSeconds(scope);
   const issuedAt = new Date();
   assertExpectedIdentityMatches(manifest, expectedIdentity);
   const overrideResolution = isOverride
@@ -856,6 +858,7 @@ module.exports = {
   parseApprovalCommand,
   parseRequest,
   prepareDescendantAdvanceAuthorization,
+  resolveApprovalTtlSeconds,
 };
 
 if (require.main === module) {

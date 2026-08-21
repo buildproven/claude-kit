@@ -286,7 +286,8 @@ signed billing capability remains blocked.
    for the bounded request, scope, exact PR/head/base/invocation,
    CI evidence digest, protection digest, and check/App binding. Caller-provided
    merge-mode flags cannot select ref-CAS by themselves. CI remains unavailable,
-   never green. Without that capability, this mode is unreachable.
+   never green. Capability issuance rejects a TTL shorter than the bounded ref
+   request reserve. Without that capability, this mode is unreachable.
 5. While holding the merge-operation guard, call GitHub's update-reference API
    for the exact base ref, exact head SHA, and `force: false`. Do not force-push,
    disable hooks, synthesize a commit, or use a caller-selected ref. When GitHub

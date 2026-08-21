@@ -1449,23 +1449,30 @@ function assertRefCasPreconditions(manifest, guarded, options, head) {
 
 function performRefCasUpdate(loaded, presentedToken, options) {
   const { manifestPath } = loaded;
-  const refreshed = loadManifest(manifestPath);
-  const manifest = refreshed.manifest;
-  const head = mergeHead(manifest);
-  const finalOptions = resolveRefCasAtMutation(manifest, options, head);
-  const mode = finalOptions.mode;
-  const branch = baseBranch(manifest);
-  const paths = pathsFor(repositoryIdentity(manifest), manifest);
-  assertRefCasPreconditions(
-    manifest,
-    guardOwner(paths.mergeGuard),
-    finalOptions,
-    head,
-  );
-  const ownerFile = path.join(paths.mergeGuard, "owner.json");
-  const guarded = guardOwner(paths.mergeGuard);
-  guarded.requestStartedAt = new Date().toISOString();
-  atomicWrite(ownerFile, guarded);
+  const prepared = withNotStartedCleanup(manifestPath, presentedToken, () => {
+    const refreshed = loadManifest(manifestPath);
+    const manifest = refreshed.manifest;
+    const head = mergeHead(manifest);
+    const finalOptions = resolveRefCasAtMutation(manifest, options, head);
+    const paths = pathsFor(repositoryIdentity(manifest), manifest);
+    assertRefCasPreconditions(
+      manifest,
+      guardOwner(paths.mergeGuard),
+      finalOptions,
+      head,
+    );
+    const ownerFile = path.join(paths.mergeGuard, "owner.json");
+    const guarded = guardOwner(paths.mergeGuard);
+    guarded.requestStartedAt = new Date().toISOString();
+    atomicWrite(ownerFile, guarded);
+    return {
+      manifest,
+      head,
+      mode: finalOptions.mode,
+      branch: baseBranch(manifest),
+    };
+  });
+  const { manifest, head, mode, branch } = prepared;
   const update = spawnSync(
     "gh",
     [
@@ -1542,15 +1549,6 @@ function performMerge(manifestPath, presentedToken, options = {}) {
   acquireMergeGuard(manifestPath, presentedToken, resolvedOptions);
   withNotStartedCleanup(manifestPath, presentedToken, () => {
     assertBase(manifestPath, presentedToken);
-    if (mode === "protected-nonstrict-outage-ref-cas") {
-      const paths = pathsFor(repository, manifest);
-      assertRefCasPreconditions(
-        manifest,
-        guardOwner(paths.mergeGuard),
-        resolvedOptions,
-        head,
-      );
-    }
   });
   if (mode === "protected-nonstrict-outage-ref-cas") {
     return performRefCasUpdate(loaded, presentedToken, resolvedOptions);
@@ -1743,6 +1741,7 @@ module.exports = {
   _pathsFor: pathsFor,
   _classifyRefUpdateResponse: classifyRefUpdateResponse,
   _exactOpenRemoteOutcome: exactOpenRemoteOutcome,
+  _performRefCasUpdate: performRefCasUpdate,
   _parseIncludedGhResponse: parseIncludedGhResponse,
   _resolveRefCasAtMutation: resolveRefCasAtMutation,
   _waitForRefCasIntegration: waitForRefCasIntegration,
