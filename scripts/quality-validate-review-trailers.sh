@@ -71,6 +71,12 @@ if [ -z "$QUALITY_TRAILER" ]; then
       AUTH_TIER="$(printf '%s' "$AUTHORIZATION" | jq -r '.tier')"
       AUTH_FINDINGS="$(printf '%s' "$AUTHORIZATION" | jq -r '.blockingCount')"
       AUTH_STATUS="$(printf '%s' "$AUTHORIZATION" | jq -r '.reviewStatus // empty')"
+      AUTH_REVIEW_OVERRIDE="$(printf '%s' "$AUTHORIZATION" | jq -r '
+        .operatorOverride == true and
+        ([.override.acceptedConditions[]? |
+          select(startswith("review:") and
+            (startswith("review:finding:") | not))] | length > 0)
+      ')"
       CURRENT_HEAD="$(git rev-parse HEAD)"
       CURRENT_BASE="$(git merge-base HEAD "$BASE_REF")" || exit 1
       [ "$AUTH_HEAD" = "$CURRENT_HEAD" ] || {
@@ -85,7 +91,10 @@ if [ -z "$QUALITY_TRAILER" ]; then
         echo "local review evidence contains blocking findings" >&2
         exit 1
       }
-      { [ "$AUTH_STATUS" = complete ] || [ "$AUTH_STATUS" = policy-exempt ]; } || {
+      { [ "$AUTH_STATUS" = complete ] ||
+        [ "$AUTH_STATUS" = policy-exempt ] ||
+        { [ "$AUTH_STATUS" = incomplete ] &&
+          [ "$AUTH_REVIEW_OVERRIDE" = true ]; }; } || {
         echo "local review evidence is not complete" >&2
         exit 1
       }
