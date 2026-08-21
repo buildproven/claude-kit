@@ -2821,7 +2821,15 @@ function approvalPayloadScopeAndConditionsMatch(approval, payload) {
 function approvalPayloadIdentityMatches(manifest, approval, payload) {
   return (
     approvalPayloadCoreIdentityMatches(manifest, approval, payload) &&
-    approvalPayloadScopeAndConditionsMatch(approval, payload)
+    approvalPayloadScopeAndConditionsMatch(approval, payload) &&
+    approval.ciBillingEvidenceSha256 ===
+      (payload.ciBillingEvidenceSha256 || null) &&
+    approval.protectedNonstrictProtectionDigest ===
+      (payload.protectedNonstrictProtectionDigest || null) &&
+    approval.protectedNonstrictBaseSha ===
+      (payload.protectedNonstrictBaseSha || null) &&
+    JSON.stringify(approval.protectedNonstrictRequiredChecks || null) ===
+      JSON.stringify(payload.protectedNonstrictRequiredChecks || null)
   );
 }
 
@@ -2862,6 +2870,30 @@ function ciBillingCapabilityValid(manifest) {
   return (
     scope === "operator-quality-override" && conditions.includes("ci:failed")
   );
+}
+
+function protectedNonstrictRefCasCapability(manifest) {
+  if (
+    !approvalValid(manifest) ||
+    manifest.approval?.scope !== "operator-nonstrict-refcas-override"
+  ) {
+    return null;
+  }
+  const conditions = manifest.approval.acceptedConditions;
+  if (
+    !Array.isArray(conditions) ||
+    conditions.length !== 2 ||
+    !conditions.includes("ci:failed") ||
+    !conditions.includes("base:protected-nonstrict")
+  ) {
+    return null;
+  }
+  return {
+    protectionDigest: manifest.approval.protectedNonstrictProtectionDigest,
+    baseSha: manifest.approval.protectedNonstrictBaseSha,
+    requiredChecks: manifest.approval.protectedNonstrictRequiredChecks,
+    ciEvidenceSha256: manifest.approval.ciBillingEvidenceSha256,
+  };
 }
 
 function validateApprovalPayload(payload) {
@@ -3045,6 +3077,23 @@ function assertApprovalPayloadShape(manifest, payload) {
         "protected non-strict ref-CAS capability is missing protection binding",
       );
     }
+    const actionsAppId =
+      require("./quality-protected-nonstrict.js").GITHUB_ACTIONS_APP_ID;
+    if (
+      !Array.isArray(payload.protectedNonstrictRequiredChecks) ||
+      payload.protectedNonstrictRequiredChecks.length === 0 ||
+      payload.protectedNonstrictRequiredChecks.some(
+        (check) =>
+          !check ||
+          typeof check.context !== "string" ||
+          check.context.length === 0 ||
+          check.appId !== actionsAppId,
+      )
+    ) {
+      throw new Error(
+        "protected non-strict ref-CAS capability is missing GitHub Actions check/App bindings",
+      );
+    }
     if (
       payload.protectedNonstrictBaseSha !== manifest.revisions.baseHeadSha ||
       !/^[a-f0-9]{40}$/.test(payload.protectedNonstrictBaseSha || "")
@@ -3138,6 +3187,8 @@ function attachApproval(manifest, options) {
     protectedNonstrictProtectionDigest:
       payload.protectedNonstrictProtectionDigest || null,
     protectedNonstrictBaseSha: payload.protectedNonstrictBaseSha || null,
+    protectedNonstrictRequiredChecks:
+      payload.protectedNonstrictRequiredChecks || null,
     artifactPath,
     artifactSha256: sha256File(artifactPath),
     // Patch-id of the reviewed diff at approval time, cached so a later
@@ -6353,6 +6404,7 @@ module.exports = {
   assertApprovalPayloadShape,
   approvalValid,
   ciBillingCapabilityValid,
+  protectedNonstrictRefCasCapability,
   armApprovalChallenge,
   attachApproval,
   authorizeMutationAttempt,

@@ -19,6 +19,7 @@ const TOP_LEVEL_FIELDS = new Set([
   "lock_branch",
   "allow_fork_syncing",
 ]);
+const GITHUB_ACTIONS_APP_ID = 15368;
 
 function canonicalJson(value) {
   if (Array.isArray(value)) return value.map(canonicalJson);
@@ -124,9 +125,11 @@ function requiredChecks(protection) {
     if (
       !contexts.includes(closed.context) ||
       !Number.isInteger(closed.app_id) ||
-      closed.app_id <= 0
+      closed.app_id !== GITHUB_ACTIONS_APP_ID
     ) {
-      throw new Error("required status check context/App binding is invalid");
+      throw new Error(
+        "every waived required status check must be bound to the GitHub Actions App",
+      );
     }
     return { context: closed.context, appId: closed.app_id };
   });
@@ -378,6 +381,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  GITHUB_ACTIONS_APP_ID,
   classifyProtectedNonstrict,
   inspectProtectedNonstrict,
 };

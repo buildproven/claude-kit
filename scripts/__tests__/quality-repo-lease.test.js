@@ -16,6 +16,117 @@ function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicalJson(value[key])]),
+    );
+  }
+  return value;
+}
+
+function attachRefCasCapability(
+  manifestPath,
+  protectionDigest,
+  requiredChecks,
+) {
+  const { manifest } = invocation.loadManifest(manifestPath);
+  const evidence = {
+    schemaVersion: 1,
+    category: "github-actions-billing-preallocation",
+    repository: manifest.repo.githubRepository,
+    head: manifest.revisions.currentHead,
+    waiverUntil: "2099-01-01T00:00:00.000Z",
+    classifiedAt: "2026-08-21T12:00:00.000Z",
+    failedJobs: [
+      {
+        check: "Quality Checks/quality",
+        jobId: "1",
+        startedAt: "2026-08-21T12:00:00.000Z",
+        completedAt: "2026-08-21T12:00:01.000Z",
+      },
+    ],
+    successfulOrSkippedChecks: [],
+  };
+  evidence.evidenceSha256 =
+    require("../quality-ci-billing-waiver").evidenceSha256(evidence);
+  fs.writeFileSync(
+    path.join(manifest.stateRoot, "ci-billing-waiver.json"),
+    `${JSON.stringify(evidence)}\n`,
+    { mode: 0o600 },
+  );
+  const keys = crypto.generateKeyPairSync("ed25519");
+  const payload = {
+    schemaVersion: 1,
+    repoKey: manifest.repo.key,
+    pr: manifest.repo.pr,
+    head: manifest.revisions.currentHead,
+    baseSha: manifest.revisions.baseSha,
+    invocationId: manifest.invocationId,
+    approver: "test-operator",
+    scope: "operator-nonstrict-refcas-override",
+    reason: "test Actions outage",
+    acceptedConditions: ["ci:failed", "base:protected-nonstrict"],
+    ciBillingEvidenceSha256: evidence.evidenceSha256,
+    protectedNonstrictProtectionDigest: protectionDigest,
+    protectedNonstrictRequiredChecks: requiredChecks,
+    protectedNonstrictBaseSha: manifest.revisions.baseHeadSha,
+    issuedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    nonce: crypto.randomUUID(),
+    challenge: "test-challenge",
+  };
+  const artifact = {
+    schemaVersion: 1,
+    payload,
+    signature: crypto
+      .sign(
+        null,
+        Buffer.from(JSON.stringify(canonicalJson(payload))),
+        keys.privateKey,
+      )
+      .toString("base64"),
+  };
+  const artifactPath = path.join(manifest.stateRoot, "approval.json");
+  fs.writeFileSync(artifactPath, `${JSON.stringify(artifact)}\n`, {
+    mode: 0o600,
+  });
+  invocation.withManifestLockRaw(manifestPath, (locked) => {
+    locked.approvalTrust = {
+      publicKey: keys.publicKey
+        .export({ type: "spki", format: "der" })
+        .toString("base64"),
+    };
+    locked.approval = {
+      approved: true,
+      repoKey: payload.repoKey,
+      pr: payload.pr,
+      head: payload.head,
+      baseSha: payload.baseSha,
+      invocationId: payload.invocationId,
+      approver: payload.approver,
+      issuedAt: payload.issuedAt,
+      expiresAt: payload.expiresAt,
+      source: "outer-wrapper-capability",
+      scope: payload.scope,
+      reason: payload.reason,
+      acceptedConditions: payload.acceptedConditions,
+      ciBillingEvidenceSha256: payload.ciBillingEvidenceSha256,
+      protectedNonstrictProtectionDigest: protectionDigest,
+      protectedNonstrictRequiredChecks: requiredChecks,
+      protectedNonstrictBaseSha: payload.protectedNonstrictBaseSha,
+      artifactPath,
+      artifactSha256: crypto
+        .createHash("sha256")
+        .update(fs.readFileSync(artifactPath))
+        .digest("hex"),
+    };
+  });
+}
+
 beforeAll(() => {
   originalTmpdir = process.env.TMPDIR;
   sandbox = fs.realpathSync(
@@ -673,6 +784,7 @@ printf '%s\\n' '${JSON.stringify({
         mergeCommit: { oid: "a".repeat(40) },
         headRefName: manifest.repo.headRefName,
         headRefOid: manifest.revisions.currentHead,
+        baseRefName: "main",
       })}'
 `,
       { mode: 0o700 },
@@ -751,6 +863,7 @@ printf '%s\n' '${JSON.stringify({
         mergeCommit: { oid: "b".repeat(40) },
         headRefName: manifest.repo.headRefName,
         headRefOid: manifest.revisions.currentHead,
+        baseRefName: "main",
       })}'
 `,
       { mode: 0o700 },
@@ -937,6 +1050,9 @@ exec '${realGit}' "$@"
         reviewThreads: null,
         repositoryAdmin: true,
       }).digest;
+    attachRefCasCapability(candidate.manifestPath, digest, [
+      { context: "quality", appId: 15368 },
+    ]);
     fs.writeFileSync(
       path.join(bin, "gh"),
       `#!/bin/sh
@@ -1003,6 +1119,44 @@ esac
     }
   });
 
+  it("rejects direct ref-CAS selection without the signed outage capability", () => {
+    const candidate = fixture("refcas-without-capability");
+    const { manifest } = invocation.loadManifest(candidate.manifestPath);
+    const owner = lease.acquire(candidate.manifestPath);
+    expect(() =>
+      lease.performMerge(candidate.manifestPath, owner.token, {
+        admin: true,
+        expectedHead: manifest.revisions.currentHead,
+        mode: "protected-nonstrict-outage-ref-cas",
+        protectionDigest: "d".repeat(64),
+      }),
+    ).toThrow(/valid signed exact-head outage capability/);
+    expect(lease.status(candidate.manifestPath).mergeGuard).toBeNull();
+    lease.release(candidate.manifestPath, owner.token, "test-complete");
+  });
+
+  it("rejects a manifest binding that differs from the signed capability", () => {
+    const candidate = fixture("refcas-tampered-capability");
+    const { manifest } = invocation.loadManifest(candidate.manifestPath);
+    const signedDigest = "c".repeat(64);
+    attachRefCasCapability(candidate.manifestPath, signedDigest, [
+      { context: "quality", appId: 15368 },
+    ]);
+    invocation.withManifestLockRaw(candidate.manifestPath, (locked) => {
+      locked.approval.protectedNonstrictProtectionDigest = "d".repeat(64);
+    });
+    const owner = lease.acquire(candidate.manifestPath);
+    expect(() =>
+      lease.performMerge(candidate.manifestPath, owner.token, {
+        admin: true,
+        expectedHead: manifest.revisions.currentHead,
+        mode: "protected-nonstrict-outage-ref-cas",
+        protectionDigest: "d".repeat(64),
+      }),
+    ).toThrow(/valid signed exact-head outage capability/);
+    lease.release(candidate.manifestPath, owner.token, "test-complete");
+  });
+
   it("keeps the campaign lease resumable after an authoritative stale-base rejection", () => {
     const candidate = fixture("refcas-stale-base-rejection");
     const owner = lease.acquire(candidate.manifestPath);
@@ -1019,11 +1173,19 @@ esac
       candidate.manifestPath,
       owner.token,
       "request-rejected-stale-base",
+      { status: 422, message: "Update is not a fast forward" },
     );
     expect(lease.status(candidate.manifestPath)).toMatchObject({
       state: "active",
       owned: true,
       mergeGuard: null,
+      mergeIntent: {
+        mode: "protected-nonstrict-outage-ref-cas",
+      },
+      lastRefCasRejection: {
+        status: 422,
+        message: "Update is not a fast forward",
+      },
     });
     expect(
       invocation.loadManifest(candidate.manifestPath).manifest.terminalState,

@@ -216,6 +216,29 @@ describe("quality approve command scope parsing", () => {
     ).toThrow(/missing protection binding/);
   });
 
+  it("rejects a protected non-strict capability without Actions check bindings", () => {
+    expect(() =>
+      assertApprovalPayloadShape(
+        {
+          stateRoot: "/tmp/quality-test-state",
+          repo: { githubRepository: "owner/repo" },
+          revisions: {
+            currentHead: head,
+            baseHeadSha: "a".repeat(40),
+          },
+        },
+        {
+          scope: "operator-nonstrict-refcas-override",
+          reason: "Actions outage",
+          acceptedConditions: ["ci:failed", "base:protected-nonstrict"],
+          protectedNonstrictProtectionDigest: "c".repeat(64),
+          protectedNonstrictBaseSha: "a".repeat(40),
+          ciBillingEvidenceSha256: "b".repeat(64),
+        },
+      ),
+    ).toThrow(/check.App bindings/);
+  });
+
   it("requires a classified CI failure for the billing override", () => {
     expect(() =>
       parseApprovalCommand([

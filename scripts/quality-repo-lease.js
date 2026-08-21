@@ -818,6 +818,8 @@ function status(manifestPath) {
       ),
       stale,
       mergeGuard,
+      mergeIntent: record.mergeIntent ?? null,
+      lastRefCasRejection: record.lastRefCasRejection ?? null,
       recoveryCommand: stale
         ? `node quality-repo-lease.js recover --manifest ${loaded.manifestPath} ` +
           `--confirm-owner-invocation-id ${record.invocationId} --confirm-owner-pr ${record.pr}`
@@ -912,16 +914,34 @@ function acquireMergeGuard(manifestPath, presentedToken, options = {}) {
       adminReason: options.admin === true ? "ci-billing-waiver" : null,
       mode: options.mode || "strict",
       protectionDigest: options.protectionDigest || null,
+      requiredChecks: options.requiredChecks || null,
+      ciEvidenceSha256: options.ciEvidenceSha256 || null,
       baseRef: baseBranch(loaded.manifest),
       requestStartedAt: null,
     });
+    record.mergeIntent = {
+      mode: options.mode || "strict",
+      head: mergeHead(loaded.manifest),
+      baseRef: baseBranch(loaded.manifest),
+      baseSha:
+        loaded.manifest.revisions.baseRebaseCarry?.baseSha ??
+        loaded.manifest.revisions.baseHeadSha,
+      protectionDigest: options.protectionDigest || null,
+      requiredChecks: options.requiredChecks || null,
+      ciEvidenceSha256: options.ciEvidenceSha256 || null,
+    };
     record.renewedAt = new Date().toISOString();
     atomicWrite(path.join(paths.lease, "owner.json"), record);
     return paths.mergeGuard;
   });
 }
 
-function releaseMergeGuard(manifestPath, presentedToken, outcome) {
+function releaseMergeGuard(
+  manifestPath,
+  presentedToken,
+  outcome,
+  details = {},
+) {
   const loaded = loadManifest(manifestPath);
   ownerTuple(loaded.manifest, loaded.manifestPath, {
     requireWorktree: true,
@@ -945,6 +965,28 @@ function releaseMergeGuard(manifestPath, presentedToken, outcome) {
       ].includes(outcome)
     ) {
       throw new Error("ambiguous merge operation remains quarantined");
+    }
+    if (outcome === "request-rejected-stale-base") {
+      if (
+        owner.mode !== "protected-nonstrict-outage-ref-cas" ||
+        details.status !== 422 ||
+        details.message !== "Update is not a fast forward"
+      ) {
+        throw new Error(
+          "stale-base release requires an exact ref-CAS 422 rejection",
+        );
+      }
+      const record = leaseRecord(paths.lease);
+      record.lastRefCasRejection = {
+        mode: owner.mode,
+        head: owner.head,
+        base: owner.base,
+        status: details.status,
+        message: details.message,
+        recordedAt: new Date().toISOString(),
+      };
+      record.renewedAt = new Date().toISOString();
+      atomicWrite(path.join(paths.lease, "owner.json"), record);
     }
     const released = tombstone(paths.mergeGuard);
     exactCleanup(released);
@@ -1070,7 +1112,8 @@ function exactRemoteOutcome(manifest, remote) {
   if (!remote || typeof remote !== "object") return null;
   const exactHead =
     remote.headRefName === manifest.repo.headRefName &&
-    remote.headRefOid === mergeHead(manifest);
+    remote.headRefOid === mergeHead(manifest) &&
+    remote.baseRefName === baseBranch(manifest);
   if (
     exactHead &&
     remote.state === "MERGED" &&
@@ -1125,9 +1168,10 @@ function reconcileMergeOutcome(manifestPath, presentedToken, options = {}) {
     ? guardOwner(paths.mergeGuard)
     : null;
   let outcome = exactRemoteOutcome(manifest, remote);
+  const refCasIntent = refCasIntentMatches(credential, manifest);
   if (
     outcome === "merged" &&
-    guard?.mode === "protected-nonstrict-outage-ref-cas" &&
+    (guard?.mode === "protected-nonstrict-outage-ref-cas" || refCasIntent) &&
     !refCasIntegrated(manifest, remote, { repositoryScoped: true })
   ) {
     outcome = null;
@@ -1137,6 +1181,14 @@ function reconcileMergeOutcome(manifestPath, presentedToken, options = {}) {
   }
   releaseVerifiedOutcome(manifestPath, credential.token, outcome);
   return { reconciled: true, outcome, remote };
+}
+
+function refCasIntentMatches(credential, manifest) {
+  return (
+    credential.mergeIntent?.mode === "protected-nonstrict-outage-ref-cas" &&
+    credential.mergeIntent?.head === mergeHead(manifest) &&
+    credential.mergeIntent?.baseRef === baseBranch(manifest)
+  );
 }
 
 function recordMergedTerminalRaw(manifestPath) {
@@ -1199,7 +1251,7 @@ function releaseVerifiedOutcome(manifestPath, presentedToken, outcome) {
   });
 }
 
-function assertMergeMode(manifest, options, head) {
+function resolveMergeMode(manifest, options, head) {
   if (options.expectedHead !== head) {
     throw new Error(
       `validated PR head ${options.expectedHead || "missing"} does not match manifest merge head ${head}`,
@@ -1213,17 +1265,33 @@ function assertMergeMode(manifest, options, head) {
   ) {
     throw new Error(`unsupported merge mode '${mode}'`);
   }
-  if (
-    mode === "protected-nonstrict-outage-ref-cas" &&
-    (options.admin !== true ||
+  if (mode === "protected-nonstrict-outage-ref-cas") {
+    const capability =
+      require("./quality-invocation.js").protectedNonstrictRefCasCapability(
+        manifest,
+      );
+    if (
+      options.admin !== true ||
       manifest.merge?.stampHead ||
-      !/^[a-f0-9]{64}$/.test(options.protectionDigest || ""))
-  ) {
-    throw new Error(
-      "protected non-strict ref-CAS requires administrator mode, immutable reviewed HEAD, and a protection digest",
-    );
+      !capability ||
+      capability.baseSha !== manifest.revisions.baseHeadSha ||
+      !/^[a-f0-9]{64}$/.test(capability.protectionDigest || "") ||
+      (options.protectionDigest &&
+        options.protectionDigest !== capability.protectionDigest)
+    ) {
+      throw new Error(
+        "protected non-strict ref-CAS requires its valid signed exact-head outage capability",
+      );
+    }
+    return {
+      ...options,
+      mode,
+      protectionDigest: capability.protectionDigest,
+      requiredChecks: capability.requiredChecks,
+      ciEvidenceSha256: capability.ciEvidenceSha256,
+    };
   }
-  return mode;
+  return { ...options, mode };
 }
 
 function withNotStartedCleanup(manifestPath, presentedToken, operation) {
@@ -1254,7 +1322,11 @@ function assertRefCasPreconditions(manifest, guarded, options, head) {
     });
   if (
     inspection.digest !== options.protectionDigest ||
+    JSON.stringify(inspection.requiredChecks) !==
+      JSON.stringify(options.requiredChecks) ||
     guarded.protectionDigest !== options.protectionDigest ||
+    JSON.stringify(guarded.requiredChecks) !==
+      JSON.stringify(options.requiredChecks) ||
     guarded.mode !== "protected-nonstrict-outage-ref-cas"
   ) {
     throw new Error(
@@ -1331,6 +1403,10 @@ function performRefCasUpdate(
       manifestPath,
       presentedToken,
       "request-rejected-stale-base",
+      {
+        status: responseOutcome.status,
+        message: responseOutcome.body?.message,
+      },
     );
     throw new Error(
       "protected base changed before the non-force ref update; request was rejected without mutation, repository lease retained for rebase and resume",
@@ -1349,8 +1425,9 @@ function performMerge(manifestPath, presentedToken, options = {}) {
   const expectedRepository = manifest.repo.githubRepository;
   const pr = String(manifest.repo.pr);
   const head = mergeHead(manifest);
-  const mode = assertMergeMode(manifest, options, head);
-  acquireMergeGuard(manifestPath, presentedToken, options);
+  const resolvedOptions = resolveMergeMode(manifest, options, head);
+  const mode = resolvedOptions.mode;
+  acquireMergeGuard(manifestPath, presentedToken, resolvedOptions);
   withNotStartedCleanup(manifestPath, presentedToken, () => {
     assertBase(manifestPath, presentedToken);
     if (mode === "protected-nonstrict-outage-ref-cas") {
@@ -1358,7 +1435,7 @@ function performMerge(manifestPath, presentedToken, options = {}) {
       assertRefCasPreconditions(
         manifest,
         guardOwner(paths.mergeGuard),
-        options,
+        resolvedOptions,
         head,
       );
     }

@@ -454,6 +454,7 @@ function resolveOverrideAcceptedConditions(
     ciFailureReason: expectedIdentity.ciFailureReason,
   });
   let protectedNonstrictProtectionDigest = null;
+  let protectedNonstrictRequiredChecks = null;
   if (expectedIdentity.scope === "operator-nonstrict-refcas-override") {
     const branch = String(manifest.revisions.baseRef || "").replace(
       /^origin\//,
@@ -474,6 +475,7 @@ function resolveOverrideAcceptedConditions(
       protectionDigest: inspection.digest,
     });
     protectedNonstrictProtectionDigest = inspection.digest;
+    protectedNonstrictRequiredChecks = inspection.requiredChecks;
   }
   printOverrideDiagnosis(manifestPath, manifest, diagnosed);
   assertCiBillingConditions(
@@ -486,6 +488,7 @@ function resolveOverrideAcceptedConditions(
   return {
     acceptedConditions: requestedAccept,
     protectedNonstrictProtectionDigest,
+    protectedNonstrictRequiredChecks,
   };
 }
 
@@ -560,9 +563,13 @@ function issueApprovalCapability(
     : {
         acceptedConditions: [],
         protectedNonstrictProtectionDigest: null,
+        protectedNonstrictRequiredChecks: null,
       };
-  const { acceptedConditions, protectedNonstrictProtectionDigest } =
-    overrideResolution;
+  const {
+    acceptedConditions,
+    protectedNonstrictProtectionDigest,
+    protectedNonstrictRequiredChecks,
+  } = overrideResolution;
   const ciBillingEvidenceSha256 = acceptedConditions.includes("ci:failed")
     ? ensureCiBillingEvidence(manifest)
     : null;
@@ -579,6 +586,7 @@ function issueApprovalCapability(
     acceptedConditions,
     ciBillingEvidenceSha256,
     protectedNonstrictProtectionDigest,
+    protectedNonstrictRequiredChecks,
     protectedNonstrictBaseSha:
       scope === "operator-nonstrict-refcas-override"
         ? manifest.revisions.baseHeadSha

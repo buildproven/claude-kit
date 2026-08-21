@@ -54,6 +54,12 @@ describe("protected non-strict outage classifier", () => {
     expect(result.digest).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it("rejects a required check owned by a non-Actions GitHub App", () => {
+    const input = fixture();
+    input.protection.required_status_checks.checks[0].app_id = 99999;
+    expect(() => classifyProtectedNonstrict(input)).toThrow(/GitHub Actions/);
+  });
+
   it.each([
     [
       "strict status checks",

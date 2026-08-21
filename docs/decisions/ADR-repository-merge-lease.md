@@ -273,7 +273,13 @@ signed billing capability remains blocked.
    complete live thread proof above; the capability never stands in for it. The
    authorizer still resolves and
    records the configured required-check names and App bindings so the exception
-   cannot silently widen to another check contract. CI remains unavailable,
+   cannot silently widen to another check contract. Every waived required check
+   must be bound to the GitHub Actions App; a check owned by another App blocks
+   the outage path. The signed capability carries the complete ordered
+   check/App binding. The final repository mutation boundary independently
+   revalidates the capability signature, scope, exact PR/head/base/invocation,
+   CI evidence digest, protection digest, and check/App binding. Caller-provided
+   merge-mode flags cannot select ref-CAS by themselves. CI remains unavailable,
    never green. Without that capability, this mode is unreachable.
 5. While holding the merge-operation guard, call GitHub's update-reference API
    for the exact base ref, exact head SHA, and `force: false`. Do not force-push,
@@ -283,7 +289,8 @@ signed billing capability remains blocked.
    proof that this ref-update request was rejected without mutation. Read back
    the exact PR and ref to detect a concurrent integration of the same head. If
    the exact head is already integrated, record that outcome. Otherwise record
-   `request-rejected-stale-base`, release only the merge-operation guard, and
+   `request-rejected-stale-base` with the exact HTTP status and message in the
+   repository lease, release only the merge-operation guard, and
    retain the repository lease and resumable campaign for base refresh and
    revalidation. This is not a manifest terminal state, and a negative
    reachability observation is not used as terminal proof. HTTP
@@ -295,9 +302,13 @@ signed billing capability remains blocked.
    the exact PR and head merged. This proves the reviewed change landed; it does
    not attribute the write to this process. GitHub's indirect `merged` state is
    lifecycle evidence only; it is not independent protection evidence.
-6. Persist merge mode, protection digest, base SHA, head SHA, administrator mode,
-   and billing-waiver reason in the merge-operation guard. Terminal evidence and
-   recovery retain those values. Exact merged-branch cleanup remains separate
+6. Persist merge mode, protection digest, required check/App bindings, CI
+   evidence digest, base SHA, head SHA, administrator mode, and billing-waiver
+   reason in the merge-operation guard. Persist the ref-CAS campaign intent in
+   the longer-lived repository lease before the operation starts, so releasing
+   the short guard after an authoritative rejection does not downgrade later
+   reconciliation to generic PR state. Terminal evidence and recovery retain
+   those values. Exact merged-branch cleanup remains separate
    because indirect merge behavior need not apply repository branch-deletion
    settings.
 7. Ref-CAS deliberately lands the reviewed branch history instead of creating a
@@ -326,7 +337,9 @@ signed billing capability remains blocked.
    unmerged PR, or unreachable head remains a distinct terminal outcome. The
    exact observed non-fast-forward rejection is a separate authoritative
    no-mutation outcome for only that operation attempt. It releases the short
-   operation guard but never releases the campaign lease, closes the pull
+   operation guard only when the guard is a ref-CAS guard and the release call
+   atomically records the exact HTTP 422 status and message in the lease. A
+   generic or caller-asserted release remains quarantined. It never releases the campaign lease, closes the pull
    request, or writes a non-reenterable manifest terminal state.
 10. Add a ref-CAS-specific administrator proof alongside, not instead of, the
     strict proof. It requires the selected classic protection digest, explicit
