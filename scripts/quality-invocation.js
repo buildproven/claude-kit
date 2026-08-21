@@ -2822,11 +2822,11 @@ function approvalPayloadIdentityMatches(manifest, approval, payload) {
   return (
     approvalPayloadCoreIdentityMatches(manifest, approval, payload) &&
     approvalPayloadScopeAndConditionsMatch(approval, payload) &&
-    approval.ciBillingEvidenceSha256 ===
+    (approval.ciBillingEvidenceSha256 ?? null) ===
       (payload.ciBillingEvidenceSha256 || null) &&
-    approval.protectedNonstrictProtectionDigest ===
+    (approval.protectedNonstrictProtectionDigest ?? null) ===
       (payload.protectedNonstrictProtectionDigest || null) &&
-    approval.protectedNonstrictBaseSha ===
+    (approval.protectedNonstrictBaseSha ?? null) ===
       (payload.protectedNonstrictBaseSha || null) &&
     JSON.stringify(approval.protectedNonstrictRequiredChecks || null) ===
       JSON.stringify(payload.protectedNonstrictRequiredChecks || null)
@@ -2862,9 +2862,10 @@ function ciBillingCapabilityValid(manifest) {
   }
   if (scope === "operator-nonstrict-refcas-override") {
     return (
-      conditions.length === 2 &&
+      conditions.length === 3 &&
       conditions.includes("ci:failed") &&
-      conditions.includes("base:protected-nonstrict")
+      conditions.includes("base:protected-nonstrict") &&
+      conditions.includes("pr:non-atomic-state")
     );
   }
   return (
@@ -2882,9 +2883,10 @@ function protectedNonstrictRefCasCapability(manifest) {
   const conditions = manifest.approval.acceptedConditions;
   if (
     !Array.isArray(conditions) ||
-    conditions.length !== 2 ||
+    conditions.length !== 3 ||
     !conditions.includes("ci:failed") ||
-    !conditions.includes("base:protected-nonstrict")
+    !conditions.includes("base:protected-nonstrict") ||
+    !conditions.includes("pr:non-atomic-state")
   ) {
     return null;
   }
@@ -3062,12 +3064,13 @@ function assertApprovalPayloadShape(manifest, payload) {
   } else if (payload.scope === "operator-nonstrict-refcas-override") {
     const conditions = new Set(payload.acceptedConditions);
     if (
-      payload.acceptedConditions.length !== 2 ||
+      payload.acceptedConditions.length !== 3 ||
       !conditions.has("ci:failed") ||
-      !conditions.has("base:protected-nonstrict")
+      !conditions.has("base:protected-nonstrict") ||
+      !conditions.has("pr:non-atomic-state")
     ) {
       throw new Error(
-        "protected non-strict ref-CAS capability must accept exactly ci:failed and base:protected-nonstrict",
+        "protected non-strict ref-CAS capability must accept exactly ci:failed, base:protected-nonstrict, and pr:non-atomic-state",
       );
     }
     if (
@@ -6404,6 +6407,7 @@ function main() {
 module.exports = {
   SCHEMA_VERSION,
   advanceHead,
+  approvalPayloadIdentityMatches,
   assertApprovalPayloadShape,
   approvalValid,
   ciBillingCapabilityValid,

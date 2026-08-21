@@ -32,6 +32,7 @@ function attachRefCasCapability(
   manifestPath,
   protectionDigest,
   requiredChecks,
+  expiresInMs = 300_000,
 ) {
   const { manifest } = invocation.loadManifest(manifestPath);
   const evidence = {
@@ -69,13 +70,17 @@ function attachRefCasCapability(
     approver: "test-operator",
     scope: "operator-nonstrict-refcas-override",
     reason: "test Actions outage",
-    acceptedConditions: ["ci:failed", "base:protected-nonstrict"],
+    acceptedConditions: [
+      "ci:failed",
+      "base:protected-nonstrict",
+      "pr:non-atomic-state",
+    ],
     ciBillingEvidenceSha256: evidence.evidenceSha256,
     protectedNonstrictProtectionDigest: protectionDigest,
     protectedNonstrictRequiredChecks: requiredChecks,
     protectedNonstrictBaseSha: manifest.revisions.baseHeadSha,
     issuedAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    expiresAt: new Date(Date.now() + expiresInMs).toISOString(),
     nonce: crypto.randomUUID(),
     challenge: "test-challenge",
   };
@@ -337,6 +342,30 @@ describe("repository merge lease", () => {
     });
     expect(remote).toEqual({ state: "MERGED" });
     expect(reads).toBe(3);
+  });
+
+  it("requires capability validity through the bounded ref update", () => {
+    const candidate = fixture("refcas-expiry-reserve");
+    const { manifest } = invocation.loadManifest(candidate.manifestPath);
+    const digest = "c".repeat(64);
+    attachRefCasCapability(
+      candidate.manifestPath,
+      digest,
+      [{ context: "quality", appId: 15368 }],
+      60_000,
+    );
+    expect(() =>
+      lease._resolveRefCasAtMutation(
+        invocation.loadManifest(candidate.manifestPath).manifest,
+        {
+          admin: true,
+          expectedHead: manifest.revisions.currentHead,
+          mode: "protected-nonstrict-outage-ref-cas",
+          protectionDigest: digest,
+        },
+        manifest.revisions.currentHead,
+      ),
+    ).toThrow(/remain valid through the bounded ref update/);
   });
 
   it("acquires idempotently for the exact owner and ignores TMPDIR changes", () => {

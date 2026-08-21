@@ -1349,6 +1349,17 @@ function resolveMergeMode(manifest, options, head) {
   return { ...options, mode };
 }
 
+function resolveRefCasAtMutation(manifest, options, head) {
+  const resolved = resolveMergeMode(manifest, options, head);
+  const expiresAt = Date.parse(manifest.approval?.expiresAt || "");
+  if (!Number.isFinite(expiresAt) || expiresAt - Date.now() < 120_000) {
+    throw new Error(
+      "protected non-strict ref-CAS capability must remain valid through the bounded ref update",
+    );
+  }
+  return resolved;
+}
+
 function waitMilliseconds(milliseconds) {
   Atomics.wait(
     new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)),
@@ -1436,13 +1447,25 @@ function assertRefCasPreconditions(manifest, guarded, options, head) {
   }
 }
 
-function performRefCasUpdate(
-  loaded,
-  presentedToken,
-  { head, mode = "protected-nonstrict-outage-ref-cas" },
-) {
-  const { manifest, manifestPath } = loaded;
+function performRefCasUpdate(loaded, presentedToken, options) {
+  const { manifestPath } = loaded;
+  const refreshed = loadManifest(manifestPath);
+  const manifest = refreshed.manifest;
+  const head = mergeHead(manifest);
+  const finalOptions = resolveRefCasAtMutation(manifest, options, head);
+  const mode = finalOptions.mode;
   const branch = baseBranch(manifest);
+  const paths = pathsFor(repositoryIdentity(manifest), manifest);
+  assertRefCasPreconditions(
+    manifest,
+    guardOwner(paths.mergeGuard),
+    finalOptions,
+    head,
+  );
+  const ownerFile = path.join(paths.mergeGuard, "owner.json");
+  const guarded = guardOwner(paths.mergeGuard);
+  guarded.requestStartedAt = new Date().toISOString();
+  atomicWrite(ownerFile, guarded);
   const update = spawnSync(
     "gh",
     [
@@ -1529,14 +1552,14 @@ function performMerge(manifestPath, presentedToken, options = {}) {
       );
     }
   });
+  if (mode === "protected-nonstrict-outage-ref-cas") {
+    return performRefCasUpdate(loaded, presentedToken, resolvedOptions);
+  }
   const paths = pathsFor(repository, manifest);
   const ownerFile = path.join(paths.mergeGuard, "owner.json");
   const guarded = guardOwner(paths.mergeGuard);
   guarded.requestStartedAt = new Date().toISOString();
   atomicWrite(ownerFile, guarded);
-  if (mode === "protected-nonstrict-outage-ref-cas") {
-    return performRefCasUpdate(loaded, presentedToken, { head, mode });
-  }
   const args = [
     "pr",
     "merge",
@@ -1721,5 +1744,6 @@ module.exports = {
   _classifyRefUpdateResponse: classifyRefUpdateResponse,
   _exactOpenRemoteOutcome: exactOpenRemoteOutcome,
   _parseIncludedGhResponse: parseIncludedGhResponse,
+  _resolveRefCasAtMutation: resolveRefCasAtMutation,
   _waitForRefCasIntegration: waitForRefCasIntegration,
 };

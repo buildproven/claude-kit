@@ -263,9 +263,10 @@ signed billing capability remains blocked.
    update call. Re-read the complete protection contract and compare its digest
    in that same guarded pre-request phase.
 4. Add a distinct signed `operator-nonstrict-refcas-override` capability. The
-   wrapper flag requires the exact accepted conditions `ci:failed` and
-   `base:protected-nonstrict`, separate acknowledgements for unavailable CI and
-   the administrator ref mutation, the exact PR/head/base/invocation identity,
+   wrapper flag requires the exact accepted conditions `ci:failed`,
+   `base:protected-nonstrict`, and `pr:non-atomic-state`; separate
+   acknowledgements for unavailable CI, the administrator ref mutation, and
+   the close/retarget race; the exact PR/head/base/invocation identity,
    and failed-job evidence proving no runner and no steps. An existing
    `operator-ci-billing-override` cannot satisfy this scope. The new scope does
    not accept a present signature, human review, restriction, lock, or other
@@ -277,8 +278,12 @@ signed billing capability remains blocked.
    cannot silently widen to another check contract. Every waived required check
    must be bound to the GitHub Actions App; a check owned by another App blocks
    the outage path. The signed capability carries the complete ordered
-   check/App binding. The final repository mutation boundary independently
-   revalidates the capability signature, scope, exact PR/head/base/invocation,
+   check/App binding. This is signed authority for direct immutable-head
+   integration. The immediate open-PR check reduces accidental use but is not
+   an atomic promise that a concurrent close or retarget can cancel the ref
+   update. The final repository mutation boundary independently
+   reloads and revalidates the capability signature, expiry with enough time
+   for the bounded request, scope, exact PR/head/base/invocation,
    CI evidence digest, protection digest, and check/App binding. Caller-provided
    merge-mode flags cannot select ref-CAS by themselves. CI remains unavailable,
    never green. Without that capability, this mode is unreachable.

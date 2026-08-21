@@ -28,7 +28,9 @@ through an exact-new-HEAD operator override that names
 During a classified Actions billing outage, `/bs:quality approve
 --override-nonstrict-refcas` is the separate signed path for an exact-head
 protected `strict: false` merge. It requires both missing-CI and administrator
-ref-mutation acknowledgements and never applies to normal merges.
+ref-mutation acknowledgements, plus explicit acceptance that concurrent PR
+close or retarget state cannot atomically cancel the update. It never applies
+to normal merges.
 
 **Arguments received:** $ARGUMENTS
 

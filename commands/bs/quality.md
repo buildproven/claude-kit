@@ -202,7 +202,7 @@ blocked during normal operation. During a classified Actions billing outage,
 the repository owner can authorize the separate exact-head ref-CAS path:
 
 ```text
-/bs:quality approve --manifest <exact-manifest-path> --pr <number> --head <exact-40-character-sha> --override-nonstrict-refcas --reason "<text>" --ci-failure failed --accept ci:failed,base:protected-nonstrict --i-understand-missing-ci --i-understand-admin-ref-mutation
+/bs:quality approve --manifest <exact-manifest-path> --pr <number> --head <exact-40-character-sha> --override-nonstrict-refcas --reason "<text>" --ci-failure failed --accept ci:failed,base:protected-nonstrict,pr:non-atomic-state --i-understand-missing-ci --i-understand-admin-ref-mutation --i-understand-pr-state-race
 ```
 
 This mints `operator-nonstrict-refcas-override`, not the general quality or CI

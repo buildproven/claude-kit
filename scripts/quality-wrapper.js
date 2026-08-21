@@ -23,6 +23,10 @@ const HIGH_RISK_ACK_FLAGS = [
     prefix: "base:protected-nonstrict",
     flag: "--i-understand-admin-ref-mutation",
   },
+  {
+    prefix: "pr:non-atomic-state",
+    flag: "--i-understand-pr-state-race",
+  },
   { prefix: "review:finding:", flag: "--i-understand-code-finding" },
   {
     prefix: "review:provider-exhaustion",
@@ -288,12 +292,13 @@ function assertCiBillingConditions(
   }
   if (
     nonstrictRefCas &&
-    (accepted.length !== 2 ||
+    (accepted.length !== 3 ||
       !accepted.includes("ci:failed") ||
-      !accepted.includes("base:protected-nonstrict"))
+      !accepted.includes("base:protected-nonstrict") ||
+      !accepted.includes("pr:non-atomic-state"))
   ) {
     throw new Error(
-      "protected non-strict ref-CAS override must accept exactly ci:failed and base:protected-nonstrict",
+      "protected non-strict ref-CAS override must accept exactly ci:failed, base:protected-nonstrict, and pr:non-atomic-state",
     );
   }
 }
@@ -473,6 +478,12 @@ function resolveOverrideAcceptedConditions(
         "protected base uses non-strict required checks and requires an administrator non-force ref update",
       highRisk: true,
       protectionDigest: inspection.digest,
+    });
+    diagnosed.push({
+      id: "pr:non-atomic-state",
+      description:
+        "the direct immutable-head integration cannot atomically bind the ref update to concurrent PR close or retarget state",
+      highRisk: true,
     });
     protectedNonstrictProtectionDigest = inspection.digest;
     protectedNonstrictRequiredChecks = inspection.requiredChecks;

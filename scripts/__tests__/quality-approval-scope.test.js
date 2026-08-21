@@ -6,13 +6,41 @@ const require = createRequire(import.meta.url);
 const { assertCiBillingConditions, parseApprovalCommand } = require(
   path.resolve(import.meta.dirname, "..", "quality-wrapper.js"),
 );
-const { assertApprovalPayloadShape } = require(
+const { assertApprovalPayloadShape, approvalPayloadIdentityMatches } = require(
   path.resolve(import.meta.dirname, "..", "quality-invocation.js"),
 );
 
 const head = "a".repeat(40);
 
 describe("quality approve command scope parsing", () => {
+  it("keeps pre-upgrade approval projections valid when optional bindings are absent", () => {
+    const manifest = {
+      repo: { key: "repo-key", pr: 676 },
+      invocationId: "invocation-id",
+    };
+    const approval = {
+      head,
+      approver: "operator",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      scope: "standard",
+      acceptedConditions: [],
+    };
+    const payload = {
+      repoKey: "repo-key",
+      pr: 676,
+      head,
+      invocationId: "invocation-id",
+      approver: "operator",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      scope: "standard",
+      acceptedConditions: [],
+    };
+
+    expect(approvalPayloadIdentityMatches(manifest, approval, payload)).toBe(
+      true,
+    );
+  });
+
   it("defaults to standard scope for a non-approve command", () => {
     expect(parseApprovalCommand(["status", "--manifest", "x"])).toMatchObject({
       explicit: false,
@@ -103,13 +131,18 @@ describe("quality approve command scope parsing", () => {
       "--ci-failure",
       "failed",
       "--accept",
-      "ci:failed,base:protected-nonstrict",
+      "ci:failed,base:protected-nonstrict,pr:non-atomic-state",
       "--i-understand-missing-ci",
       "--i-understand-admin-ref-mutation",
+      "--i-understand-pr-state-race",
     ]);
     expect(parsed).toMatchObject({
       scope: "operator-nonstrict-refcas-override",
-      acceptedConditions: ["ci:failed", "base:protected-nonstrict"],
+      acceptedConditions: [
+        "ci:failed",
+        "base:protected-nonstrict",
+        "pr:non-atomic-state",
+      ],
     });
     expect(parsed.argv).not.toContain("--override-nonstrict-refcas");
   });
@@ -128,10 +161,31 @@ describe("quality approve command scope parsing", () => {
         "--ci-failure",
         "failed",
         "--accept",
-        "ci:failed,base:protected-nonstrict",
+        "ci:failed,base:protected-nonstrict,pr:non-atomic-state",
         "--i-understand-missing-ci",
       ]),
     ).toThrow(/--i-understand-admin-ref-mutation/);
+  });
+
+  it("requires acknowledgement of the non-atomic PR-state race", () => {
+    expect(() =>
+      parseApprovalCommand([
+        "approve",
+        "--pr",
+        "676",
+        "--head",
+        head,
+        "--override-nonstrict-refcas",
+        "--reason",
+        "Actions cannot allocate a runner",
+        "--ci-failure",
+        "failed",
+        "--accept",
+        "ci:failed,base:protected-nonstrict,pr:non-atomic-state",
+        "--i-understand-missing-ci",
+        "--i-understand-admin-ref-mutation",
+      ]),
+    ).toThrow(/--i-understand-pr-state-race/);
   });
 
   it("allows a quality override to compose an exact CI failure", () => {
@@ -209,7 +263,11 @@ describe("quality approve command scope parsing", () => {
         {
           scope: "operator-nonstrict-refcas-override",
           reason: "Actions outage",
-          acceptedConditions: ["ci:failed", "base:protected-nonstrict"],
+          acceptedConditions: [
+            "ci:failed",
+            "base:protected-nonstrict",
+            "pr:non-atomic-state",
+          ],
           ciBillingEvidenceSha256: "b".repeat(64),
         },
       ),
@@ -230,7 +288,11 @@ describe("quality approve command scope parsing", () => {
         {
           scope: "operator-nonstrict-refcas-override",
           reason: "Actions outage",
-          acceptedConditions: ["ci:failed", "base:protected-nonstrict"],
+          acceptedConditions: [
+            "ci:failed",
+            "base:protected-nonstrict",
+            "pr:non-atomic-state",
+          ],
           protectedNonstrictProtectionDigest: "c".repeat(64),
           protectedNonstrictBaseSha: "a".repeat(40),
           ciBillingEvidenceSha256: "b".repeat(64),
