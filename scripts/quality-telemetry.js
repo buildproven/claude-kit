@@ -64,6 +64,16 @@ const TELEMETRY_TERMINAL_STATES = new Set([
   "provider-contract-failed",
 ]);
 
+function parseJson(raw, label) {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`${label} is not valid JSON: ${error.message}`, {
+      cause: error,
+    });
+  }
+}
+
 /**
  * Read a finished invocation manifest for summarization.
  *
@@ -467,7 +477,7 @@ function findingDispositionFields(manifest, leadCount) {
     ) {
       return empty;
     }
-    const artifact = JSON.parse(raw.toString("utf8"));
+    const artifact = parseJson(raw.toString("utf8"), "judge artifact");
     if (
       artifact.invocationId !== manifest.invocationId ||
       artifact.head !== manifest.revisions?.currentHead ||
