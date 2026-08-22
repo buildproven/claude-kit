@@ -10,6 +10,7 @@ const FIXTURE_REPOSITORY = `vitest/${"a".repeat(16)}`;
 
 let sandbox;
 let originalTmpdir;
+let originalTelemetryFile;
 const stateRoots = [];
 
 function git(cwd, args) {
@@ -149,10 +150,15 @@ function attachRefCasCapability(
 
 beforeAll(() => {
   originalTmpdir = process.env.TMPDIR;
+  originalTelemetryFile = process.env.BS_QUALITY_TELEMETRY_FILE;
   sandbox = fs.realpathSync(
     fs.mkdtempSync(path.join(os.tmpdir(), "quality-repo-lease-test-")),
   );
   process.env.TMPDIR = sandbox;
+  process.env.BS_QUALITY_TELEMETRY_FILE = path.join(
+    sandbox,
+    "quality-telemetry.jsonl",
+  );
 });
 
 afterAll(() => {
@@ -162,6 +168,9 @@ afterAll(() => {
   fs.rmSync(sandbox, { recursive: true, force: true });
   if (originalTmpdir === undefined) delete process.env.TMPDIR;
   else process.env.TMPDIR = originalTmpdir;
+  if (originalTelemetryFile === undefined)
+    delete process.env.BS_QUALITY_TELEMETRY_FILE;
+  else process.env.BS_QUALITY_TELEMETRY_FILE = originalTelemetryFile;
 });
 
 function fixture(name, overrides = {}) {
@@ -910,6 +919,14 @@ describe("repository merge lease", () => {
     const { manifestPath } = fixture("merge-reconcile");
     const owner = lease.acquire(manifestPath);
     lease.acquireMergeGuard(manifestPath, owner.token, { admin: true });
+    invocation.withManifestLockRaw(manifestPath, (locked) => {
+      locked.terminalState = {
+        state: "verified-unmerged",
+        detail: "awaiting operator merge authority",
+        head: locked.revisions.currentHead,
+        recordedAt: "2026-08-05T11:00:00Z",
+      };
+    });
     expect(() =>
       lease.release(manifestPath, owner.token, "provider-incomplete"),
     ).toThrow(/quarantined/);
@@ -973,6 +990,18 @@ printf '%s\\n' '${JSON.stringify({
       ).toMatchObject({
         state: "merged",
         head: manifest.revisions.currentHead,
+      });
+      const telemetry = fs
+        .readFileSync(process.env.BS_QUALITY_TELEMETRY_FILE, "utf8")
+        .trim()
+        .split("\n")
+        .map(JSON.parse)
+        .filter((record) => record.invocationId === manifest.invocationId);
+      expect(telemetry).toHaveLength(1);
+      expect(telemetry[0]).toMatchObject({
+        terminalState: "merged",
+        githubRepository: FIXTURE_REPOSITORY,
+        recordClass: "fixture",
       });
       expect(
         fs.existsSync(lease._pathsFor(FIXTURE_REPOSITORY, manifest).mergeGuard),

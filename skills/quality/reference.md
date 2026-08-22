@@ -10,6 +10,17 @@ repository realpath, PR, base SHA, and expected HEAD before reading or writing
 state. There is no session sentinel, active-state glob, mtime lookup, or
 `latest` pointer.
 
+`scripts/quality-run.js --manifest <exact-path>` is the public phase runner.
+It persists versioned orchestration progress under the same manifest lock and
+reuses exact-head gate, mutation, and review evidence on resume. Its JSON result
+is `complete`, `terminal`, or `action-required`. Exit 3 is reserved for a named
+external capability or branch-governance action. Gate, stale-head,
+provider-contract, CI, and signal
+failures retain their typed terminal state and one idempotent telemetry record.
+An exhausted incomplete review cannot become `verified-unmerged`; it records
+`provider-incomplete`. Merge success requires exact-head `merged` terminal
+evidence from the protected merge transaction, not only process exit zero.
+
 Risk resolution also records a deterministic task type from the branch commit
 range and, when commit intent is unavailable, an all-specialized path set:
 `docs`, `ci`, `build`, `chore`, `feature`, `bugfix`, `performance`, or
@@ -488,18 +499,18 @@ At the terminal step (SKILL.md Step 6), the public `quality-invocation.js
 terminal-state` command automatically asks `scripts/quality-telemetry.js` to
 append one JSON line per finished campaign, summarizing the invocation manifest
 — no model judgment. Fields: invocation id, repo/PR/branch, base/head SHAs,
-resolved risk tier + score, duration (from `governor.startedAtEpoch`), successful
-review rounds, agents run, AI review status and lead count, deterministic
-finding count, merge-requested flag, a derived verdict (`authorized` / `passed`
-/ `blocked` / `incomplete`), and the covered file list (`baseSha..head`).
-Recording is **idempotent on invocation id** (a run that
-both merges and reports records once) and **fail-soft on write** (a bad log path
-warns but never blocks the campaign's real outcome). A missing/unreadable
-manifest is a hard failure. The log feeds the fleet escaped-defect tagger and the
-monthly quality-value report (escaped-defect rate, heuristic capture-rate
-proxy, cost per deterministic failure) — see the overlay's
-`weekly-improve.sh`. The proxy is not statistical precision: its numerator and
-denominator do not record false positives.
+resolved risk tier + score, wall and active duration, exact provider-reported
+token usage when available, separately labeled artifact estimates, successful
+review rounds, agents run, review status, signed per-finding dispositions,
+deterministic failure count, merge-requested flag, exact merged terminal receipt,
+a derived verdict, and the covered file list (`baseSha..head`). Recording is
+idempotent for each invocation and terminal state. A later verified merge may
+append one stronger `merged` receipt; readers select the latest record for that
+invocation. Writes are fail-soft and never block the campaign outcome. Reports
+exclude preflight, `vitest/*`, and missing-repository records by default; use
+`--include-fixtures` only for explicit diagnostics. Missing usage and finding
+settlements remain visible sample gaps, never inferred as zero or relabeled from
+artifact estimates.
 
 ### Exact-head review evidence
 
@@ -540,8 +551,11 @@ When `harness-config.json` exists in the repo root, the skill reads the resolved
 | `critical` | release-veto review        | 540s           |
 
 Workload can raise these limits, but the complete default campaign remains
-bounded at 5–15 minutes. Provider fallback has an independent bounded window
-inside the same remaining campaign deadline; it never doubles the total cap.
+bounded at 5–15 minutes of active execution. Gates, mutation, primary review,
+fallback, retry, and verification spend one shared cap. Phase limits and
+reserves prevent fallback or earlier gates from doubling or consuming later
+required capacity. Approval, CI wait, and other idle lifecycle time do not
+spend the active cap.
 
 ### Level 95 (Ship-Ready, no tier classification)
 

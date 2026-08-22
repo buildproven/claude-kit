@@ -112,6 +112,16 @@ function repositoryLeaseStatus(manifestPath, manifest) {
   }
 }
 
+function activeBudgetStatus(manifest) {
+  const governor = manifest.governor || {};
+  const used = governor.activeSecondsUsed;
+  const limit = governor.activeSecondsLimit;
+  if (!Number.isFinite(used) || !Number.isFinite(limit)) {
+    return "unavailable";
+  }
+  return `${used}s used / ${limit}s shared active limit; lifecycle idle time excluded`;
+}
+
 function buildDiagnosis(manifestPath, manifest, failure = {}) {
   const gates = (manifest.requiredGates || [])
     .map(
@@ -129,6 +139,7 @@ function buildDiagnosis(manifestPath, manifest, failure = {}) {
     "QUALITY TERMINAL DIAGNOSIS",
     `Repository gates: ${gates || "none discovered"}`,
     `Provider review/checkpoint: ${providerStatus(manifest, failure)}`,
+    `Active execution: ${activeBudgetStatus(manifest)}`,
     `Break-glass: ${breakGlassStatus(manifest)}`,
     `Worktree lock: ${worktreeLockStatus(manifest)}`,
     `Repository merge lease: ${repositoryLeaseStatus(manifestPath, manifest)}`,
@@ -174,6 +185,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  activeBudgetStatus,
   buildDiagnosis,
   currentGateStatus,
   parseArgs,

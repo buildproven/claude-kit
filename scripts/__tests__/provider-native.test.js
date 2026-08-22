@@ -1354,6 +1354,15 @@ describe("provider-native platform", () => {
         '  if [ "${shift_next:-0}" = 1 ]; then last_message="$arg"; shift_next=0; fi',
         "done",
         'echo "governed codex completed" > "$last_message"',
+        `echo '${JSON.stringify({
+          type: "turn.completed",
+          usage: {
+            input_tokens: 120,
+            cached_input_tokens: 80,
+            output_tokens: 30,
+            reasoning_output_tokens: 10,
+          },
+        })}'`,
         "exit 0",
       ].join("\n"),
     );
@@ -1393,7 +1402,15 @@ describe("provider-native platform", () => {
       },
       outcome: { status: "passed" },
       attempts: 1,
-      usage: null,
+      usage: {
+        schemaVersion: 1,
+        source: "codex-cli",
+        inputTokens: 120,
+        cachedInputTokens: 80,
+        outputTokens: 30,
+        reasoningOutputTokens: 10,
+        totalTokens: 150,
+      },
     });
   });
 

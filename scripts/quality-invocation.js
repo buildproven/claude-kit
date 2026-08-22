@@ -316,6 +316,9 @@ function normalizeGovernor(manifest) {
     manifest.governor.providerWindowSeconds +
     manifest.governor.remediationSeconds +
     manifest.governor.reReviewReserveSeconds;
+  manifest.governor.activeSecondsLimit ??= manifest.governor.campaignSeconds;
+  manifest.governor.activeSecondsUsed ??=
+    manifest.governor.gateSecondsUsed + manifest.governor.providerSecondsUsed;
 }
 
 function normalizeManifestCollections(manifest) {
@@ -1236,6 +1239,8 @@ function buildGovernor(head) {
     providerSecondsLimitExplicit:
       process.env.BS_QUALITY_MAX_TOTAL_PROVIDER_SECONDS !== undefined,
     providerSecondsUsed: 0,
+    activeSecondsLimit: providerDeadlineSeconds,
+    activeSecondsUsed: 0,
     activeExecution: null,
     maxFixCommits: Math.min(
       1,
@@ -2524,6 +2529,7 @@ function applyRuntimeGovernor(manifest, options, runtime) {
         runtime.reviewReserveSeconds * 2);
   }
   governor.campaignSeconds = runtime.campaignSeconds;
+  governor.activeSecondsLimit = runtime.campaignSeconds;
 }
 
 function parseMergeAuthority(value) {
@@ -3241,6 +3247,48 @@ function armApprovalChallenge(manifest, options) {
   };
 }
 
+function sharedExecutionRemaining(manifest) {
+  const governor = manifest.governor;
+  const limit = governor.activeSecondsLimit;
+  const used = governor.activeSecondsUsed;
+  if (!Number.isInteger(limit) || limit < 1 || !Number.isFinite(used)) {
+    throw new Error("shared active execution budget is missing or invalid");
+  }
+  return Math.max(0, limit - used);
+}
+
+function providerReserveForGate(manifest) {
+  const runtime = manifest.risk?.runtime;
+  if (
+    !runtime ||
+    runtime.workload === "unknown" ||
+    manifest.risk?.agentTarget === 0
+  ) {
+    return 0;
+  }
+  // reviewSeconds is the provider watchdog ceiling, not capacity that must
+  // remain idle before gates run. Reserving that whole ceiling can make a
+  // healthy fixed-cost suite impossible inside the shared campaign cap (for
+  // example, 540s of critical review plus 120s of verification left only
+  // 240s for this repository's 5-minute suite). Keep the explicit bounded
+  // review reserve plus the complete verification allowance. Discovery may
+  // use any additional shared capacity that the gates do not consume.
+  const reviewReserveSeconds = Number.isFinite(runtime.reviewReserveSeconds)
+    ? runtime.reviewReserveSeconds
+    : 0;
+  const verificationSeconds = Number.isFinite(runtime.verificationSeconds)
+    ? runtime.verificationSeconds
+    : 0;
+  const completed = completedReviews(manifest);
+  if (completed.length === 0) {
+    return reviewReserveSeconds + verificationSeconds;
+  }
+  const reviewedHead = completed.at(-1)?.to;
+  return reviewedHead && reviewedHead !== manifest.revisions.currentHead
+    ? verificationSeconds
+    : 0;
+}
+
 function executionRemaining(manifest, kind) {
   const governor = manifest.governor;
   const limit =
@@ -3250,7 +3298,9 @@ function executionRemaining(manifest, kind) {
   if (!Number.isInteger(limit) || limit < 1 || !Number.isFinite(used)) {
     throw new Error(`${kind} execution budget is missing or invalid`);
   }
-  return Math.max(0, limit - used);
+  const sharedRemaining = sharedExecutionRemaining(manifest);
+  const reserve = kind === "gate" ? providerReserveForGate(manifest) : 0;
+  return Math.max(0, Math.min(limit - used, sharedRemaining - reserve));
 }
 
 function completeActiveExecution(
@@ -3278,6 +3328,7 @@ function completeActiveExecution(
   } else {
     manifest.governor.providerSecondsUsed += elapsed;
   }
+  manifest.governor.activeSecondsUsed += elapsed;
   manifest.governor.activeExecution = null;
   manifest.governor.lastActivityAt = new Date(now).toISOString();
   return elapsed;
@@ -3478,6 +3529,12 @@ function authorizeProviderAttempt(manifest, options, manifestPath) {
   );
   const timeoutSeconds = Math.min(requestedTimeout, remaining);
   if (timeoutSeconds < 1) {
+    if (sharedExecutionRemaining(manifest) < 1) {
+      throw new Error("shared active execution budget is exhausted");
+    }
+    if (governor.providerSecondsUsed >= governor.providerSecondsLimit) {
+      throw new Error("total provider execution budget is exhausted");
+    }
     throw new Error("total provider execution budget is exhausted");
   }
   const attempt = {
@@ -3574,7 +3631,17 @@ function authorizeMutationAttempt(manifest, options, manifestPath) {
   );
   const timeoutSeconds = Math.min(requestedTimeout, remaining);
   if (timeoutSeconds < 1) {
-    throw new Error("total gate execution budget is exhausted");
+    if (sharedExecutionRemaining(manifest) < 1) {
+      throw new Error("shared active execution budget is exhausted");
+    }
+    if (
+      manifest.governor.gateSecondsUsed >= manifest.governor.gateSecondsLimit
+    ) {
+      throw new Error("total gate execution budget is exhausted");
+    }
+    throw new Error(
+      "gate execution cannot start without consuming the reserved provider capacity",
+    );
   }
   const startedAt = new Date().toISOString();
   manifest.governor.activeExecution = {
@@ -3787,6 +3854,19 @@ function recordJudge(manifest, options) {
     ) {
       throw new Error("WARNING and SUPPRESSED judge findings require a reason");
     }
+    const allowedResolutions = {
+      BLOCKING: ["confirmed-unresolved"],
+      WARNING: ["confirmed-nonblocking", "accepted-risk"],
+      SUPPRESSED: ["fixed", "refuted", "duplicate", "non-actionable"],
+    };
+    if (
+      finding.resolution !== undefined &&
+      !allowedResolutions[finding.disposition].includes(finding.resolution)
+    ) {
+      throw new Error(
+        `judge finding ${finding.id} resolution is incompatible with ${finding.disposition}`,
+      );
+    }
   }
   const expectedIds = context.findings.map((finding) => finding.id).sort();
   const actualIds = input.findings.map((finding) => finding.id).sort();
@@ -3797,6 +3877,7 @@ function recordJudge(manifest, options) {
     const immutable = { ...finding };
     delete immutable.disposition;
     delete immutable.reason;
+    delete immutable.resolution;
     return immutable;
   };
   const expectedById = new Map(
@@ -5211,8 +5292,20 @@ function executeGate(manifest, required, name, log, manifestPath) {
   }
   const gateRemaining = executionRemaining(manifest, "gate");
   if (gateRemaining <= 0) {
+    if (sharedExecutionRemaining(manifest) <= 0) {
+      throw new Error(
+        `shared active execution budget is exhausted before '${name}'`,
+      );
+    }
+    if (
+      manifest.governor.gateSecondsUsed >= manifest.governor.gateSecondsLimit
+    ) {
+      throw new Error(
+        `total gate execution budget is exhausted before '${name}'`,
+      );
+    }
     throw new Error(
-      `total gate execution budget is exhausted before '${name}'`,
+      `gate '${name}' cannot start without consuming the reserved provider capacity`,
     );
   }
   const timeoutSeconds = Math.min(
@@ -6467,6 +6560,8 @@ module.exports = {
   repoKey,
   reviewDiffBuffer,
   reviewInfo,
+  reviewCoverage,
+  incompleteRetryStatus,
   reserveIncompleteRetry,
   reviewIdentity,
   reviewTrailers,
