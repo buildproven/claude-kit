@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { validUsage } = require("./quality-provider-usage");
 
 const ROUTES = [
   "economy-micro",
@@ -568,7 +569,7 @@ function outcomeValid(outcome) {
 }
 
 function usageValid(usage) {
-  return usage === null;
+  return validUsage(usage) || validUsage(usage, { aggregate: true });
 }
 
 function validateRunRecord(record) {
@@ -626,7 +627,7 @@ function validateRunRecord(record) {
   );
   if (!usageValid(record.usage)) {
     throw new Error(
-      "compute-governor: usage must remain null until a redacted schema is defined",
+      "compute-governor: usage must be null or match the redacted exact-token schema",
     );
   }
   return record;

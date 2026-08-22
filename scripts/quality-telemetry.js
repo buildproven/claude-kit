@@ -24,8 +24,9 @@
  * worktree must leave it clean. Committed, fleet-visible history remains
  * opt-in via $BS_QUALITY_TELEMETRY_FILE.
  *
- * IDEMPOTENT: keyed on invocationId. A campaign that records twice (a merge
- * path plus a terminal-report path, or a resumed run) appends exactly once.
+ * IDEMPOTENT: keyed on invocationId plus terminal state. A campaign records
+ * each terminal transition once, so a verified-unmerged receipt can later be
+ * followed by one exact merged receipt without duplicate merge rows.
  * Absence of a manifest, or an unreadable one, is a hard failure — telemetry
  * that silently no-ops would report "quality is cheap" by recording nothing.
  * But a telemetry WRITE failure must NOT fail the campaign: measuring the run
@@ -40,14 +41,16 @@
 "use strict";
 
 const fs = require("fs");
+const crypto = require("node:crypto");
 const os = require("os");
 const path = require("path");
 const {
   authorizationReviews,
   coveredReviews,
 } = require("./quality-review-history");
+const { reviewUsage, validUsage } = require("./quality-provider-usage");
 
-const TELEMETRY_SCHEMA_VERSION = 7;
+const TELEMETRY_SCHEMA_VERSION = 8;
 const REVIEW_TOKEN_CHARS_PER_TOKEN = 4;
 const TELEMETRY_TERMINAL_STATES = new Set([
   "merged",
@@ -60,6 +63,16 @@ const TELEMETRY_TERMINAL_STATES = new Set([
   "provider-incomplete",
   "provider-contract-failed",
 ]);
+
+function parseJson(raw, label) {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`${label} is not valid JSON: ${error.message}`, {
+      cause: error,
+    });
+  }
+}
 
 /**
  * Read a finished invocation manifest for summarization.
@@ -345,6 +358,13 @@ function identityFields(manifest) {
   const risk = manifest.risk || {};
   const resolved = risk.resolved === true;
   return {
+    recordClass:
+      typeof repo.githubRepository !== "string" || !repo.githubRepository
+        ? "unattributed"
+        : repo.githubRepository.startsWith("vitest/") ||
+            repo.githubRepository === "owner/repo"
+          ? "fixture"
+          : "production",
     repoKey: orNull(repo.key),
     githubRepository: orNull(repo.githubRepository),
     pr: orNull(repo.pr),
@@ -387,6 +407,8 @@ function reviewFields(manifest) {
       : manifest.risk?.tier === "low"
         ? "gpt-5.6-luna"
         : "gpt-5.6-terra";
+  const exact = reviewUsage(manifest);
+  const usage = exact.usage;
   return {
     // Older manifests predate the experiment and remain reportable as null.
     // All newly-created manifests persist one of these arms at creation time.
@@ -401,11 +423,15 @@ function reviewFields(manifest) {
       provider.reviewer !== provider.primary,
     ),
     reviewEffort: provider.effort ?? null,
-    // Provider CLIs do not expose a stable cross-provider token counter yet.
-    // Preserve the absence explicitly; the separate proxy fields below are
-    // measured from exact prompt/output artifacts and never masquerade as
-    // provider-reported usage.
-    reviewTokens: null,
+    reviewTokens: usage?.totalTokens ?? null,
+    reviewInputTokens: usage?.inputTokens ?? null,
+    reviewCachedInputTokens: usage?.cachedInputTokens ?? null,
+    reviewCacheWriteInputTokens: usage?.cacheWriteInputTokens ?? null,
+    reviewOutputTokens: usage?.outputTokens ?? null,
+    reviewReasoningOutputTokens: usage?.reasoningOutputTokens ?? null,
+    reviewTokenUsageSource: usage?.source ?? null,
+    reviewTokenUsageSamples: usage?.samples ?? 0,
+    reviewUsageMissingReviews: exact.reviewCount - exact.reviewsWithUsage,
     ...reviewTokenProxy(manifest),
     reviewStatus: incomplete
       ? "incomplete"
@@ -420,6 +446,81 @@ function reviewFields(manifest) {
       0,
     ),
   };
+}
+
+function findingDispositionFields(manifest, leadCount) {
+  const empty = {
+    findingDispositions: [],
+    findingDispositionMissingCount: leadCount,
+    findingResolutionMissingCount: 0,
+    judgeArtifactSha256: null,
+  };
+  const judge = manifest.judge;
+  if (
+    !judge?.artifactPath ||
+    typeof judge.artifactSha256 !== "string" ||
+    !judge.artifactSha256
+  ) {
+    return empty;
+  }
+  let descriptor;
+  try {
+    descriptor = fs.openSync(
+      judge.artifactPath,
+      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0),
+    );
+    if (!fs.fstatSync(descriptor).isFile()) return empty;
+    const raw = fs.readFileSync(descriptor);
+    if (
+      crypto.createHash("sha256").update(raw).digest("hex") !==
+      judge.artifactSha256
+    ) {
+      return empty;
+    }
+    const artifact = parseJson(raw.toString("utf8"), "judge artifact");
+    if (
+      artifact.invocationId !== manifest.invocationId ||
+      artifact.head !== manifest.revisions?.currentHead ||
+      !Array.isArray(artifact.findings)
+    ) {
+      return empty;
+    }
+    const rows = artifact.findings.flatMap((finding) => {
+      if (
+        typeof finding.id !== "string" ||
+        !finding.id ||
+        !["BLOCKING", "WARNING", "SUPPRESSED"].includes(finding.disposition)
+      ) {
+        return [];
+      }
+      return [
+        {
+          id: finding.id,
+          disposition: finding.disposition,
+          provider:
+            typeof finding.provider === "string" ? finding.provider : null,
+          source: typeof finding.source === "string" ? finding.source : null,
+          resolution:
+            typeof finding.resolution === "string" && finding.resolution
+              ? finding.resolution
+              : null,
+        },
+      ];
+    });
+    if (new Set(rows.map((row) => row.id)).size !== rows.length) return empty;
+    return {
+      findingDispositions: rows,
+      findingDispositionMissingCount: Math.max(0, leadCount - rows.length),
+      findingResolutionMissingCount: rows.filter(
+        (row) => row.resolution === null,
+      ).length,
+      judgeArtifactSha256: judge.artifactSha256,
+    };
+  } catch {
+    return empty;
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
 }
 
 function deterministicBlockingCount(manifest) {
@@ -469,6 +570,43 @@ function validateRecord(record) {
   const validTerminalState =
     record.terminalState === null ||
     TELEMETRY_TERMINAL_STATES.has(record.terminalState);
+  const validExactUsage =
+    record.reviewTokens === null
+      ? [
+          record.reviewInputTokens,
+          record.reviewCachedInputTokens,
+          record.reviewCacheWriteInputTokens,
+          record.reviewOutputTokens,
+          record.reviewReasoningOutputTokens,
+          record.reviewTokenUsageSource,
+        ].every((value) => value === null) &&
+        record.reviewTokenUsageSamples === 0
+      : validUsage(
+          {
+            schemaVersion: 1,
+            source: record.reviewTokenUsageSource,
+            inputTokens: record.reviewInputTokens,
+            cachedInputTokens: record.reviewCachedInputTokens,
+            cacheWriteInputTokens: record.reviewCacheWriteInputTokens,
+            outputTokens: record.reviewOutputTokens,
+            reasoningOutputTokens: record.reviewReasoningOutputTokens,
+            totalTokens: record.reviewTokens,
+            samples: record.reviewTokenUsageSamples,
+          },
+          { aggregate: true },
+        );
+  const validDispositions =
+    Array.isArray(record.findingDispositions) &&
+    record.findingDispositions.every(
+      (finding) =>
+        typeof finding.id === "string" &&
+        ["BLOCKING", "WARNING", "SUPPRESSED"].includes(finding.disposition) &&
+        (finding.provider === null || typeof finding.provider === "string") &&
+        (finding.source === null || typeof finding.source === "string") &&
+        (finding.resolution === null || typeof finding.resolution === "string"),
+    ) &&
+    new Set(record.findingDispositions.map((finding) => finding.id)).size ===
+      record.findingDispositions.length;
   return Boolean(
     record.telemetrySchemaVersion === TELEMETRY_SCHEMA_VERSION &&
     typeof record.invocationId === "string" &&
@@ -479,10 +617,13 @@ function validateRecord(record) {
     (record.reviewEffort === null || typeof record.reviewEffort === "string") &&
     (record.reviewModel === null || typeof record.reviewModel === "string") &&
     validTokens &&
+    validExactUsage &&
     validProviderDuration &&
+    validProxyMetric(record.activeDurationSeconds) &&
     validProxyMetric(record.gateDurationSeconds) &&
     validProxyMetric(record.fixCommitCount) &&
     validProxyMetric(record.evidenceReusedCount) &&
+    validProxyMetric(record.deterministicFailureCount) &&
     Array.isArray(record.providersAttempted) &&
     record.providersAttempted.every(
       (provider) => typeof provider === "string",
@@ -493,6 +634,18 @@ function validateRecord(record) {
     validProxyMetric(record.reviewOutputChars) &&
     validProxyMetric(record.reviewOutputTokensEstimated) &&
     validProxySource &&
+    ["production", "fixture", "unattributed", "preflight"].includes(
+      record.recordClass,
+    ) &&
+    Number.isInteger(record.reviewUsageMissingReviews) &&
+    record.reviewUsageMissingReviews >= 0 &&
+    validDispositions &&
+    Number.isInteger(record.findingDispositionMissingCount) &&
+    record.findingDispositionMissingCount >= 0 &&
+    Number.isInteger(record.findingResolutionMissingCount) &&
+    record.findingResolutionMissingCount >= 0 &&
+    (record.judgeArtifactSha256 === null ||
+      typeof record.judgeArtifactSha256 === "string") &&
     validTerminalState &&
     [null, "none", "focused", "audit", "complete", "unmapped"].includes(
       record.testSelectionMode,
@@ -528,12 +681,14 @@ function fixCommitCount(manifest, execFileSync) {
  */
 function buildRecord(manifest, { execFileSync, nowIso }) {
   const judge = manifest.judge || {};
+  const review = reviewFields(manifest);
   const record = {
     telemetrySchemaVersion: TELEMETRY_SCHEMA_VERSION,
     invocationId: manifest.invocationId,
     recordedAt: nowIso,
     ...identityFields(manifest),
-    ...reviewFields(manifest),
+    ...review,
+    ...findingDispositionFields(manifest, review.leadCount),
     durationSeconds: campaignDuration(manifest, nowIso),
     providerDurationSeconds: Number.isInteger(
       manifest.governor?.providerSecondsUsed,
@@ -543,6 +698,15 @@ function buildRecord(manifest, { execFileSync, nowIso }) {
     gateDurationSeconds: Number.isInteger(manifest.governor?.gateSecondsUsed)
       ? manifest.governor.gateSecondsUsed
       : null,
+    activeDurationSeconds: Number.isInteger(
+      manifest.governor?.activeSecondsUsed,
+    )
+      ? manifest.governor.activeSecondsUsed
+      : Number.isInteger(manifest.governor?.gateSecondsUsed) &&
+          Number.isInteger(manifest.governor?.providerSecondsUsed)
+        ? manifest.governor.gateSecondsUsed +
+          manifest.governor.providerSecondsUsed
+        : null,
     fixCommitCount: fixCommitCount(manifest, execFileSync),
     evidenceReusedCount: (manifest.gates || []).filter(
       (gate) =>
@@ -552,12 +716,10 @@ function buildRecord(manifest, { execFileSync, nowIso }) {
     terminalState: manifest.terminalState?.state ?? null,
     reviewRounds: successfulReviewCount(manifest),
     agentsRun: Array.isArray(manifest.agents) ? manifest.agents.length : 0,
-    blockingCount:
-      (manifest.reviewContractVersion || 1) >= 2
-        ? deterministicBlockingCount(manifest)
-        : Number.isFinite(judge.blockingCount)
-          ? judge.blockingCount
-          : null,
+    blockingCount: Number.isFinite(judge.blockingCount)
+      ? judge.blockingCount
+      : null,
+    deterministicFailureCount: deterministicBlockingCount(manifest),
     mergeRequested: manifest.options?.merge === true,
     verdict: deriveVerdict(manifest),
     coveredFiles: coveredFiles(manifest, execFileSync),
@@ -573,7 +735,7 @@ function buildRecord(manifest, { execFileSync, nowIso }) {
  * Read-tolerant: a missing file is "not present"; a malformed line is skipped
  * (a single corrupt line must not resurrect a duplicate append nor throw).
  */
-function alreadyRecorded(logPath, invocationId) {
+function alreadyRecorded(logPath, invocationId, terminalState) {
   let raw;
   try {
     raw = fs.readFileSync(logPath, "utf8");
@@ -584,7 +746,13 @@ function alreadyRecorded(logPath, invocationId) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     try {
-      if (JSON.parse(trimmed).invocationId === invocationId) return true;
+      const record = JSON.parse(trimmed);
+      if (
+        record.invocationId === invocationId &&
+        (terminalState === undefined || record.terminalState === terminalState)
+      ) {
+        return true;
+      }
     } catch {
       // skip corrupt line
     }
@@ -617,7 +785,16 @@ function recordCampaign(manifestPath, deps = {}) {
     return 1;
   }
   const logPath = resolveTelemetryFile(manifest);
-  if (alreadyRecorded(logPath, manifest.invocationId)) {
+  let record;
+  try {
+    record = buildRecord(manifest, { execFileSync, nowIso });
+  } catch (error) {
+    process.stderr.write(
+      `[quality] telemetry: campaign ${manifest.invocationId} could not be summarized — ${error.message} (campaign outcome unaffected).\n`,
+    );
+    return 0;
+  }
+  if (alreadyRecorded(logPath, manifest.invocationId, record.terminalState)) {
     if (!quiet) {
       process.stdout.write(
         `[quality] telemetry: campaign ${manifest.invocationId} already recorded — skipping.\n`,
@@ -625,7 +802,6 @@ function recordCampaign(manifestPath, deps = {}) {
     }
     return 0;
   }
-  const record = buildRecord(manifest, { execFileSync, nowIso });
   try {
     appendRecord(logPath, record);
   } catch (error) {

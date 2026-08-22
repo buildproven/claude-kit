@@ -171,11 +171,13 @@ GOVERNED_STARTED_AT_MS=""
 [ -z "$EXECUTION_PLAN" ] || GOVERNED_STARTED_AT_MS=$(python3 -c 'import time; print(time.time_ns() // 1000000)')
 
 write_governed_record() {
-  local status="$1" effective_provider="$2" exit_code="$3" failure_category="$4" finished_at_ms record_temp
+  local status="$1" effective_provider="$2" exit_code="$3" failure_category="$4" finished_at_ms record_temp usage_json
   [ -n "$EXECUTION_PLAN" ] || return 0
   finished_at_ms=$(python3 -c 'import time; print(time.time_ns() // 1000000)')
   record_temp=$(mktemp "$OUTPUT_DIR/.run-record.XXXXXX") \
     || { echo "provider-run: cannot allocate run record" >&2; return 1; }
+  usage_json=$(node "$SCRIPT_DIR/quality-provider-usage.js" extract \
+    "$effective_provider" "$OUTPUT_DIR") || usage_json=null
   jq -n \
     --argjson plan "$(cat "$EXECUTION_PLAN")" \
     --arg status "$status" \
@@ -184,7 +186,8 @@ write_governed_record() {
     --argjson exitCode "$exit_code" \
     --argjson startedAt "$GOVERNED_STARTED_AT_MS" \
     --argjson finishedAt "$finished_at_ms" \
-    '{schemaVersion:1, plan:$plan, requested:{provider:$plan.provider,model:$plan.model,effort:$plan.effort}, effective:{provider:$provider,model:$plan.model,effort:$plan.effort}, attempts:1, timing:{startedAtEpochMs:$startedAt,finishedAtEpochMs:$finishedAt}, outcome:{status:$status,exitCode:$exitCode,providerFailureCategory:(if $failureCategory == "" then null else $failureCategory end)}, usage:null}' \
+    --argjson usage "$usage_json" \
+    '{schemaVersion:1, plan:$plan, requested:{provider:$plan.provider,model:$plan.model,effort:$plan.effort}, effective:{provider:$provider,model:$plan.model,effort:$plan.effort}, attempts:1, timing:{startedAtEpochMs:$startedAt,finishedAtEpochMs:$finishedAt}, outcome:{status:$status,exitCode:$exitCode,providerFailureCategory:(if $failureCategory == "" then null else $failureCategory end)}, usage:$usage}' \
     > "$record_temp"
   if ! node "$SCRIPT_DIR/compute-governor.js" validate-run-record "$record_temp" >/dev/null; then
     rm -f "$record_temp"
@@ -308,6 +311,7 @@ run_one() {
       else
         rc=$?
       fi
+      cp "$stdout_file" "$OUTPUT_DIR/$provider.result.json"
       # The CLI's JSON envelope is authoritative even when the process exits
       # 0 (some provider CLIs report is_error inside a status-0 envelope);
       # classify it before trusting rc alone.

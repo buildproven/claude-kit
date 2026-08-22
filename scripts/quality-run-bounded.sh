@@ -41,6 +41,7 @@ MARKER="$(mktemp "${TMPDIR:-/tmp}/quality-timeout.XXXXXX")"
 rm -f "$MARKER"
 TRACKED_PIDS_FILE="$(mktemp "${TMPDIR:-/tmp}/quality-provider-pids.XXXXXX")"
 rm -f "$TRACKED_PIDS_FILE"
+PROCESS_OWNER_ID="$(basename "$TRACKED_PIDS_FILE").$$"
 set -m
 CHILD_PID=""
 TRACKER_PID=""
@@ -105,53 +106,88 @@ $snapshot
 EOF
   }
 }
+owned_provider_processes() {
+  local owned environment_file pid
+  # Process-tree polling cannot close the fork -> setsid -> reparent race. The
+  # provider receives a unique, non-secret ownership marker that descendants
+  # retain across fork, exec, setsid, and reparenting. Search without printing
+  # process environments, then combine these PIDs with the sampled tree.
+  if [ "$(uname -s)" = Linux ] && [ -d /proc ]; then
+    owned=""
+    for environment_file in /proc/[0-9]*/environ; do
+      [ -r "$environment_file" ] || continue
+      tr '\0' '\n' < "$environment_file" 2>/dev/null |
+        grep -Fqx "BS_QUALITY_PROCESS_OWNER=$PROCESS_OWNER_ID" || continue
+      pid="${environment_file#/proc/}"
+      pid="${pid%/environ}"
+      owned="${owned}${owned:+$'\n'}${pid}"
+    done
+  else
+    owned="$(ps eww -axo pid=,command= 2>/dev/null |
+      awk -v marker="BS_QUALITY_PROCESS_OWNER=$PROCESS_OWNER_ID" \
+        'index($0, marker) { print $1 }')"
+  fi
+  record_snapshot <<EOF
+$owned
+EOF
+}
+signal_processes() {
+  local signal="$1" processes="$2" pid recorded_start current_start
+  while IFS=$'\t' read -r pid recorded_start; do
+    [ -n "$pid" ] || continue
+    current_start="$(process_start "$pid")"
+    [ -n "$current_start" ] && [ "$current_start" = "$recorded_start" ] || continue
+    kill "-$signal" "$pid" 2>/dev/null || true
+  done <<EOF
+$processes
+EOF
+}
+unique_process_records() {
+  awk -F '\t' 'NF >= 2 && !seen[$1]++'
+}
 stop_tracker() {
   [ -n "$TRACKER_PID" ] || return 0
   kill -TERM "$TRACKER_PID" 2>/dev/null || true
   wait "$TRACKER_PID" 2>/dev/null || true
 }
 terminate_provider() {
-  local targets tracked current_snapshot current_pid current_start recorded_pid recorded_start
+  local targets tracked current_snapshot current_targets owned_targets remaining_targets
   local child_start self_group child_group
   [ -n "$CHILD_PID" ] || return 0
   tracked="$(cat "$TRACKED_PIDS_FILE" 2>/dev/null || true)"
   current_snapshot="$(process_tree_postorder "$CHILD_PID")"
-  targets=""
-  while IFS=$'\t' read -r recorded_pid recorded_start; do
-    [ -n "$recorded_pid" ] || continue
-    current_start="$(process_start "$recorded_pid")"
-    [ -n "$current_start" ] && [ "$current_start" = "$recorded_start" ] || continue
-    case $'\n'"$targets"$'\n' in
-      *$'\n'"$recorded_pid"$'\n'*) ;;
-      *) targets="${targets}${targets:+$'\n'}${recorded_pid}" ;;
-    esac
-  done <<EOF
-$tracked
-EOF
-  while IFS= read -r current_pid; do
-    [ -n "$current_pid" ] || continue
-    case $'\n'"$targets"$'\n' in
-      *$'\n'"$current_pid"$'\n'*) ;;
-      *) targets="${targets}${targets:+$'\n'}${current_pid}" ;;
-    esac
-  done <<EOF
+  current_targets="$(record_snapshot <<EOF
 $current_snapshot
 EOF
-  # Descendants first, then the provider leader. This ordering preserves the
-  # PID list long enough to kill escaped session leaders as well.
-  [ -z "$targets" ] || kill -TERM $targets 2>/dev/null || true
-  sleep 1
-  [ -z "$targets" ] || kill -KILL $targets 2>/dev/null || true
-  # A normal descendant created after the snapshot remains in this group.
+)"
+  owned_targets="$(owned_provider_processes)"
+  targets="$(unique_process_records <<EOF
+$current_targets
+$owned_targets
+$tracked
+EOF
+)"
   child_start="$(process_start "$CHILD_PID")"
   self_group="$(process_group "$$")"
   child_group="$(process_group "$CHILD_PID")"
+  # Signal the intact group as one unit. A waiting shell can resume between
+  # separate child/parent signals and run one more command before its TERM.
   if [ -n "$child_start" ] &&
      [ "$(process_start "$CHILD_PID")" = "$child_start" ] &&
      [ -n "$child_group" ] && [ "$child_group" != "$self_group" ]; then
-    kill -TERM "-${CHILD_PID}" 2>/dev/null || true
-    kill -KILL "-${CHILD_PID}" 2>/dev/null || true
+    kill -TERM "-$child_group" 2>/dev/null || true
   fi
+  # Descendants first, then the provider leader. This ordering preserves the
+  # PID list long enough to kill escaped session leaders as well.
+  signal_processes TERM "$targets"
+  sleep 1
+  remaining_targets="$(owned_provider_processes)"
+  targets="$(unique_process_records <<EOF
+$remaining_targets
+$targets
+EOF
+)"
+  signal_processes KILL "$targets"
 }
 set -m
 watchdog() {
@@ -186,7 +222,11 @@ stop_watchdog() {
   # queues its trap until that sleep ends on macOS Bash, turning every fast
   # command into a full timeout wait. Terminate its descendants first.
   targets="$(process_tree_postorder "$WATCHDOG_PID")"
-  [ -z "$targets" ] || kill -TERM $targets 2>/dev/null || true
+  targets="$(record_snapshot <<EOF
+$targets
+EOF
+)"
+  signal_processes TERM "$targets"
   wait "$WATCHDOG_PID" 2>/dev/null || true
 }
 cleanup_provider() {
@@ -205,7 +245,7 @@ trap 'cleanup_provider 143' TERM
 trap 'cleanup_provider 129' HUP
 trap 'cleanup_provider $?' EXIT
 set -m
-"$@" &
+BS_QUALITY_PROCESS_OWNER="$PROCESS_OWNER_ID" "$@" &
 CHILD_PID=$!
 set +m
 # The tracker runs asynchronously so it can follow later forks, but its first

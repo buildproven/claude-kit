@@ -239,15 +239,33 @@ function loadState(sentinelPath) {
     if (parsed.schemaVersion === 1 && parsed.governor) {
       const governor = parsed.governor;
       if (governor.executionBudgetVersion !== 1) return null;
+      const activeSecondsLimit =
+        governor.activeSecondsLimit ??
+        governor.campaignSeconds ??
+        governor.providerSecondsLimit;
+      const activeSecondsUsed =
+        governor.activeSecondsUsed ??
+        (governor.gateSecondsUsed ?? 0) + governor.providerSecondsUsed;
+      const providerRemaining = Math.max(
+        0,
+        governor.providerSecondsLimit - governor.providerSecondsUsed,
+      );
+      const activeRemaining = Math.max(
+        0,
+        activeSecondsLimit - activeSecondsUsed,
+      );
+      const executionSecondsUsed = Math.max(1, activeSecondsUsed);
+      const executableSecondsLimit =
+        executionSecondsUsed + Math.min(providerRemaining, activeRemaining);
       return {
-        // Review governance meters active provider execution. Idle lifecycle
-        // time is governed separately by the manifest TTL and revalidation.
+        // Review governance sees the remaining shared active execution cap.
+        // Idle lifecycle time is governed by manifest TTL and revalidation.
         start_epoch: 0,
-        deadline_epoch: governor.providerSecondsLimit,
+        deadline_epoch: executableSecondsLimit,
         start_commit_sha: governor.startCommitSha,
         max_fix_commits: governor.maxFixCommits,
-        max_wall_seconds: governor.providerSecondsLimit,
-        execution_seconds_used: governor.providerSecondsUsed,
+        max_wall_seconds: executableSecondsLimit,
+        execution_seconds_used: executionSecondsUsed,
         max_rereview_reserve_seconds: governor.reReviewReserveSeconds,
         max_review_rounds: governor.maxReviewRounds,
         rounds_used: governor.roundsUsed,
@@ -573,9 +591,15 @@ function mandatoryValidationHasReservedBudget(
 }
 
 function providerBudgetIsActive(manifest) {
-  const used = manifest.governor.providerSecondsUsed;
-  const limit = manifest.governor.providerSecondsLimit;
-  return Number.isFinite(used) && Number.isFinite(limit) && used < limit;
+  const governor = manifest.governor;
+  return (
+    Number.isFinite(governor.providerSecondsUsed) &&
+    Number.isFinite(governor.providerSecondsLimit) &&
+    Number.isFinite(governor.activeSecondsUsed) &&
+    Number.isFinite(governor.activeSecondsLimit) &&
+    governor.providerSecondsUsed < governor.providerSecondsLimit &&
+    governor.activeSecondsUsed < governor.activeSecondsLimit
+  );
 }
 
 function loadReconciledState(sentinelPath) {

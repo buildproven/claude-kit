@@ -147,6 +147,7 @@ describe("provider review runtime", () => {
   it("reaps a detached helper when the provider leader exits early", async () => {
     const directory = makeTempDir("bounded-orphan-");
     const pidFile = path.join(directory, "detached-helper.pid");
+    const unrelated = spawn("sleep", ["20"], { stdio: "ignore" });
     let helperPid = null;
     try {
       const result = spawnSync(
@@ -158,7 +159,7 @@ describe("provider review runtime", () => {
           "--",
           "/bin/bash",
           "-c",
-          'python3 -c \'import os,signal,sys,time; os.setsid(); signal.signal(signal.SIGTERM, signal.SIG_IGN); open(sys.argv[1], "w").write(str(os.getpid())); time.sleep(20)\' "$1" & for _ in $(seq 1 100); do [ -s "$1" ] && exit 0; sleep 0.05; done; exit 1',
+          '( sleep 0.05; python3 -c \'import os,signal,sys,time; os.setsid(); signal.signal(signal.SIGTERM, signal.SIG_IGN); open(sys.argv[1], "w").write(str(os.getpid())); time.sleep(20)\' "$1" </dev/null >/dev/null 2>&1 & ) & for _ in $(seq 1 100); do [ -s "$1" ] && exit 0; sleep 0.01; done; exit 1',
           "provider",
           pidFile,
         ],
@@ -168,6 +169,7 @@ describe("provider review runtime", () => {
       helperPid = Number(readFileSync(pidFile, "utf8").trim());
       expect(Number.isSafeInteger(helperPid)).toBe(true);
       await expectProcessToStop(helperPid);
+      expect(() => process.kill(unrelated.pid, 0)).not.toThrow();
     } finally {
       if (Number.isSafeInteger(helperPid)) {
         try {
@@ -176,6 +178,7 @@ describe("provider review runtime", () => {
           // The assertion above is the contract; cleanup is best effort.
         }
       }
+      unrelated.kill("SIGKILL");
     }
   });
 

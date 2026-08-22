@@ -148,10 +148,11 @@ node "$QUALITY_SCRIPTS_DIR/quality-format.js" --manifest "<exact-manifest-path>"
 
 ## 3. Bounded independent review
 
-Increment the persisted round, then run the selected provider policy. Provider
-and gate execution budgets are separate from idle lifecycle time; each attempt
-still has a strict timeout. Review artifacts must bind repository, PR, base,
-HEAD, invocation, diff hash, and round.
+Increment the persisted round, then run the selected provider policy. Provider,
+gate, and mutation work spend one shared active-execution budget; phase limits
+and reserves prevent one phase from taking later required capacity. Idle
+lifecycle time is separate, and each attempt still has a strict timeout. Review
+artifacts must bind repository, PR, base, HEAD, invocation, diff hash, and round.
 
 ```bash
 QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
@@ -194,6 +195,14 @@ and verify their identity. Settle each lead by reading the cited path and using
 deterministic repository evidence. Do not ask another model to vote, promote a
 finding because multiple agents repeated it, or treat a model clean verdict as
 proof.
+
+The signed judge row for every lead must retain its immutable `id`, provider,
+and source, then add one disposition and one compatible resolution:
+`BLOCKING/confirmed-unresolved`; `WARNING/confirmed-nonblocking` or
+`WARNING/accepted-risk`; or `SUPPRESSED/fixed`, `SUPPRESSED/refuted`,
+`SUPPRESSED/duplicate`, or `SUPPRESSED/non-actionable`. The reason explains the
+deterministic evidence. These fields are the economics producer; never infer a
+caught bug from a failed gate or from a lead count alone.
 
 A lead becomes merge-blocking only when converted into an allowlisted failing
 gate, regression test, or executable static rule. Batch confirmed repairs into
@@ -284,9 +293,11 @@ non-Actions failures.
 
 ## 6. Telemetry — always terminal
 
-On every exit path (merge, no-merge report, blocked, incomplete), record exactly
-one idempotent manifest-derived telemetry line. A recorder failure warns without
-changing the quality outcome; a missing/unreadable manifest remains a hard error.
+On every exit path (merge, no-merge report, blocked, incomplete), record one
+idempotent manifest-derived telemetry line for that terminal state. A verified
+merge records one stronger `merged` receipt even if the campaign previously
+recorded a non-merged state. A recorder failure warns without changing the
+quality outcome; a missing/unreadable manifest remains a hard error.
 The public `terminal-state` command performs that fail-soft telemetry write
 automatically after it persists the write-once terminal state. Do not depend on
 a separate agent-authored recorder step.
@@ -309,14 +320,16 @@ complete-suite rates:
 ```bash
 node "$QUALITY_SCRIPTS_DIR/quality-telemetry-report.js" \
   --input "$HOME/.local/state/claude-kit/quality-telemetry" \
-  --ci-snapshot /path/to/ci-budget-snapshot.json \
-  --dispositions /path/to/finding-dispositions.json
+  --ci-snapshot /path/to/ci-budget-snapshot.json
 ```
 
-The optional evidence files are schema-versioned JSON. A CI snapshot requires
+The report derives finding dispositions from signed judge artifacts embedded in
+v8 telemetry. `--dispositions` remains a labeled legacy input only; it is not
+the producer for current campaigns. The optional evidence files are
+schema-versioned JSON. A CI snapshot requires
 `schemaVersion`, `usedMinutes`, `includedMinutes`, and `fetchedAt`; a finding
 ledger requires `schemaVersion`, `confirmed`, `refuted`, `escaped`, `source`,
 and `asOf`.
-Unavailable, historical, malformed, or unsupported data is labeled in the
-report's `completeness` section, never inferred as zero. Use the quality-value
-report for escaped-defect attribution and cost per deterministic failure.
+Unavailable, historical, malformed, fixture, unattributed, or unsupported data
+is labeled in the report's `population` and `completeness` sections, never
+inferred as zero. Exact token counts and artifact estimates remain separate.
