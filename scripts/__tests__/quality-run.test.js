@@ -142,6 +142,9 @@ if (step === "quality-stamp-and-merge.sh") {
     process.exit(1);
   }
   if (!manifest.behavior?.mergeWithoutTerminal) {
+    if (manifest.behavior?.rewriteMergedHead) {
+      manifest.revisions.currentHead = "rewritten999";
+    }
     manifest.terminalState = { state: "merged", head: manifest.revisions.currentHead };
     manifest.telemetryWrites = (manifest.telemetryWrites || 0) + 1;
   }
@@ -392,6 +395,19 @@ describe("quality-run public orchestration", () => {
     expect(JSON.parse(result.output)).toMatchObject({
       status: "terminal",
       state: "blocked",
+      message:
+        "merge process exited successfully without exact-head merged terminal evidence",
+    });
+  });
+
+  it("binds merged terminal evidence to the immutable pre-merge head", () => {
+    const result = run(
+      fixture({ rewriteMergedHead: true }, { merge: true, tier: "medium" }),
+    );
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "contract-failed",
+      observedTerminalState: "merged",
       message:
         "merge process exited successfully without exact-head merged terminal evidence",
     });

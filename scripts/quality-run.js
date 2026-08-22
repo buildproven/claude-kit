@@ -300,6 +300,7 @@ async function finishWithMerge(context, manifestPath, manifest, review) {
   }
   updateOrchestration(manifestPath, "merge", "running");
   context.runtime.assertNotInterrupted({ signal: null });
+  const expectedHead = manifest.revisions.currentHead;
   const merge = await context.execute(
     "bash",
     [script("quality-stamp-and-merge.sh"), "--manifest", manifestPath],
@@ -313,10 +314,14 @@ async function finishWithMerge(context, manifestPath, manifest, review) {
     const merged = manifestAt(manifestPath);
     if (
       merged.terminalState?.state !== "merged" ||
-      merged.terminalState.head !== merged.revisions.currentHead
+      merged.terminalState.head !== expectedHead ||
+      merged.revisions.currentHead !== expectedHead
     ) {
-      throw new Error(
-        "merge process exited successfully without exact-head merged terminal evidence",
+      throw Object.assign(
+        new Error(
+          "merge process exited successfully without exact-head merged terminal evidence",
+        ),
+        { terminalContractFailure: true },
       );
     }
     return {
@@ -353,6 +358,14 @@ async function recordFailure(context, manifestPath, error) {
     manifest = manifestAt(manifestPath);
   } catch {
     throw error;
+  }
+  if (error.terminalContractFailure && manifest.terminalState) {
+    return {
+      status: "contract-failed",
+      observedTerminalState: manifest.terminalState.state,
+      message: error.message,
+      head: manifest.revisions.currentHead,
+    };
   }
   if (!manifest.terminalState) {
     const stale =
@@ -441,8 +454,10 @@ async function main() {
     emit(result);
     if (result.status === "action-required") {
       process.exitCode = ACTION_REQUIRED_EXIT;
+    } else if (result.status === "complete") {
+      process.exitCode = 0;
     } else if (
-      result.status === "terminal" &&
+      result.status !== "terminal" ||
       !["merged", "verified-unmerged"].includes(result.state)
     ) {
       process.exitCode = 1;
