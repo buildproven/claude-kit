@@ -187,11 +187,14 @@ function fixture(behavior = {}, { merge = false, tier = "low" } = {}) {
 }
 
 function run(entry) {
+  const env = { ...process.env };
+  delete env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
   const result = spawnSync(
     process.execPath,
     [entry.runner, "--manifest", entry.manifestPath],
     {
       encoding: "utf8",
+      env,
       timeout: 10000,
     },
   );
