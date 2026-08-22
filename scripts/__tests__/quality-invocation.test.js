@@ -849,6 +849,8 @@ describe("quality invocation manifest", () => {
       gateSecondsUsed: 0,
       providerSecondsLimit: 900,
       providerSecondsUsed: 0,
+      activeSecondsLimit: 3600,
+      activeSecondsUsed: 0,
       activeExecution: null,
     });
     expect(manifest.governor).not.toHaveProperty("campaignDeadlineEpoch");
@@ -2891,6 +2893,156 @@ exec "${realGit}" "$@"
     );
   });
 
+  it("refuses every phase after gate and provider work consume the shared campaign budget", () => {
+    const root = repo("shared-active-campaign-cap");
+    const manifestPath = createLegacyProviderFixture(root);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.governor.activeSecondsLimit = 900;
+    manifest.governor.activeSecondsUsed = 899;
+    manifest.governor.gateSecondsLimit = 1800;
+    manifest.governor.gateSecondsUsed = 500;
+    manifest.governor.providerSecondsLimit = 1800;
+    manifest.governor.providerSecondsUsed = 399;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const attempt = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          INVOCATION,
+          "provider-attempt",
+          manifestPath,
+          "--provider",
+          "codex",
+          "--requested-timeout",
+          "30",
+        ],
+        { cwd: root, encoding: "utf8" },
+      ),
+    );
+    expect(attempt.remainingSeconds).toBe(1);
+    execFileSync(
+      "node",
+      [
+        INVOCATION,
+        "provider-complete",
+        manifestPath,
+        "--provider",
+        "codex",
+        "--elapsed-seconds",
+        "1",
+      ],
+      { cwd: root },
+    );
+
+    const provider = spawnSync(
+      "node",
+      [INVOCATION, "provider-attempt", manifestPath, "--provider", "claude"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(provider.status).not.toBe(0);
+    expect(provider.stderr).toMatch(
+      /shared active execution budget is exhausted/,
+    );
+
+    const gate = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "lint"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(gate.status).not.toBe(0);
+    expect(gate.stderr).toMatch(
+      /shared active execution budget is exhausted before 'lint'/,
+    );
+    const final = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(final.governor.activeSecondsUsed).toBe(900);
+    expect(final.governor.activeExecution).toBeNull();
+  });
+
+  it("reserves discovery and verification capacity before starting another gate", () => {
+    const root = repo("shared-active-provider-reserve");
+    const manifestPath = create(root, ["--level", "medium"]);
+    execFileSync("bash", [RISK, "--manifest", manifestPath], { cwd: root });
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const providerReserve =
+      manifest.risk.runtime.reviewSeconds +
+      manifest.risk.runtime.verificationSeconds;
+    manifest.governor.activeSecondsUsed =
+      manifest.governor.activeSecondsLimit - providerReserve;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const gate = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "lint"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(gate.status).not.toBe(0);
+    expect(gate.stderr).toMatch(
+      /cannot start without consuming the reserved provider capacity/,
+    );
+    const final = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(final.governor.activeSecondsUsed).toBe(
+      final.governor.activeSecondsLimit - providerReserve,
+    );
+    expect(final.governor.activeExecution).toBeNull();
+  });
+
+  it("retains the provider reserve after an incomplete review attempt", () => {
+    const root = repo("shared-active-incomplete-review-reserve");
+    const manifestPath = create(root, ["--level", "medium"]);
+    execFileSync("bash", [RISK, "--manifest", manifestPath], { cwd: root });
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const providerReserve =
+      manifest.risk.runtime.reviewSeconds +
+      manifest.risk.runtime.verificationSeconds;
+    manifest.reviews.push({
+      status: "incomplete",
+      provider: "review-incomplete",
+      from: manifest.revisions.baseSha,
+      to: manifest.revisions.currentHead,
+    });
+    manifest.governor.activeSecondsUsed =
+      manifest.governor.activeSecondsLimit - providerReserve;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const gate = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "lint"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(gate.status).not.toBe(0);
+    expect(gate.stderr).toMatch(
+      /cannot start without consuming the reserved provider capacity/,
+    );
+  });
+
+  it("does not reserve provider capacity for a zero-review campaign", () => {
+    const root = repo("shared-active-zero-review");
+    git(root, ["reset", "--hard", "-q", "origin/main"]);
+    writeFileSync(path.join(root, "README.md"), "# Documentation\n");
+    git(root, ["add", "README.md"]);
+    git(root, ["commit", "-q", "-m", "docs: update readme"]);
+    const manifestPath = create(root);
+    execFileSync("bash", [RISK, "--manifest", manifestPath], { cwd: root });
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifest.risk.agentTarget).toBe(0);
+    manifest.governor.activeSecondsUsed =
+      manifest.governor.activeSecondsLimit - 1;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const gate = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "lint"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(gate.status, gate.stderr).toBe(0);
+    const final = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(final.governor.activeSecondsUsed).toBe(
+      final.governor.activeSecondsLimit,
+    );
+    expect(final.governor.activeExecution).toBeNull();
+  });
+
   it("fails closed before consuming capacity for an unbound v2 review contract", () => {
     const root = repo("unbound-v2-provider-attempt");
     const manifestPath = create(root, ["--level", "high"]);
@@ -4187,11 +4339,14 @@ exit 99
       gateCount: 3,
       gateReserveSeconds: 360,
     });
-    // Both the initial and remediation heads are funded for their complete
-    // required-gate suite (360s) and mutation watchdog (600s) before review;
-    // advancing does not mint more time.
+    // Phase ledgers retain their bounded allowances, but all execution also
+    // spends from one immutable campaign cap. Advancing does not mint time.
     expect(validationState.governor.gateSecondsLimit).toBe(1920);
     expect(validationState.governor.providerSecondsLimit).toBe(1080);
+    expect(validationState.governor.activeSecondsLimit).toBe(
+      validationState.risk.runtime.campaignSeconds,
+    );
+    expect(validationState.governor.activeSecondsUsed).toBe(0);
     execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
     expect(
       JSON.parse(readFileSync(manifest, "utf8")).governor.providerSecondsUsed,
@@ -4461,6 +4616,9 @@ exit 99
       gateReserveSeconds: 360,
     });
     expect(state.governor.gateSecondsLimit).toBe(720);
+    expect(state.governor.activeSecondsLimit).toBe(
+      state.risk.runtime.campaignSeconds,
+    );
   });
 
   it("rejects a runtime reserve that disagrees with the required gates", () => {

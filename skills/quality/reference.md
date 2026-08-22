@@ -540,8 +540,11 @@ When `harness-config.json` exists in the repo root, the skill reads the resolved
 | `critical` | release-veto review        | 540s           |
 
 Workload can raise these limits, but the complete default campaign remains
-bounded at 5–15 minutes. Provider fallback has an independent bounded window
-inside the same remaining campaign deadline; it never doubles the total cap.
+bounded at 5–15 minutes of active execution. Gates, mutation, primary review,
+fallback, retry, and verification spend one shared cap. Phase limits and
+reserves prevent fallback or earlier gates from doubling or consuming later
+required capacity. Approval, CI wait, and other idle lifecycle time do not
+spend the active cap.
 
 ### Level 95 (Ship-Ready, no tier classification)
 

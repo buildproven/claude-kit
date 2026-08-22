@@ -146,10 +146,11 @@ node "$QUALITY_SCRIPTS_DIR/quality-format.js" --manifest "<exact-manifest-path>"
 
 ## 3. Bounded independent review
 
-Increment the persisted round, then run the selected provider policy. Provider
-and gate execution budgets are separate from idle lifecycle time; each attempt
-still has a strict timeout. Review artifacts must bind repository, PR, base,
-HEAD, invocation, diff hash, and round.
+Increment the persisted round, then run the selected provider policy. Provider,
+gate, and mutation work spend one shared active-execution budget; phase limits
+and reserves prevent one phase from taking later required capacity. Idle
+lifecycle time is separate, and each attempt still has a strict timeout. Review
+artifacts must bind repository, PR, base, HEAD, invocation, diff hash, and round.
 
 ```bash
 QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
