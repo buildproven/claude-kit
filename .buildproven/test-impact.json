@@ -143,6 +143,7 @@
     {
       "paths": [
         "scripts/quality-authorize-merge.sh",
+        "scripts/__tests__/quality-authorize-merge.test.js",
         "scripts/quality-invocation.js",
         "scripts/quality-protected-nonstrict.js",
         "scripts/quality-repo-lease.js"
@@ -154,6 +155,7 @@
             "vitest",
             "run",
             "scripts/__tests__/quality-approval-scope.test.js",
+            "scripts/__tests__/quality-authorize-merge.test.js",
             "scripts/__tests__/quality-invocation.test.js",
             "scripts/__tests__/quality-merge-gates.test.js",
             "scripts/__tests__/quality-protected-nonstrict.test.js",
