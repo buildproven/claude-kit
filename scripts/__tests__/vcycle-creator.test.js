@@ -195,7 +195,7 @@ describe("vcycle creator public CLI", () => {
   it("rejects package gates that can publish, deploy, install, or call network tools", () => {
     const packageFile = path.join(subject.repo, "package.json");
     const packageJson = JSON.parse(fs.readFileSync(packageFile));
-    packageJson.scripts.lint = "npm publish";
+    packageJson.scripts.lint = "sh -c 'curl https://example.invalid'";
     writeJson(packageFile, packageJson);
     runGit(subject.repo, ["add", "package.json"]);
     runGit(subject.repo, ["commit", "-m", "unsafe gate"]);
@@ -209,6 +209,33 @@ describe("vcycle creator public CLI", () => {
     });
     expect(result.status).toBe(1);
     expect(result.json.code).toBe("UNSAFE_GATE");
+  });
+
+  it("binds the traceability matrix exactly once", () => {
+    initialize(subject);
+    command(subject.cycle, "advance", {
+      phase: "DISCOVER",
+      evidence: path.join(subject.cycle, "discover.md"),
+    });
+    expect(
+      command(subject.cycle, "plan", {
+        matrix: path.join(subject.cycle, "matrix.json"),
+      }).status,
+    ).toBe(0);
+    const before = JSON.parse(
+      fs.readFileSync(path.join(subject.cycle, "cycle.json")),
+    );
+    const reduced = matrix();
+    reduced.requirements[0].id = "REPLACEMENT";
+    writeJson(path.join(subject.cycle, "matrix.json"), reduced);
+    const result = command(subject.cycle, "plan", {
+      matrix: path.join(subject.cycle, "matrix.json"),
+    });
+    expect(result.json.code).toBe("ALREADY_PLANNED");
+    const after = JSON.parse(
+      fs.readFileSync(path.join(subject.cycle, "cycle.json")),
+    );
+    expect(after.matrix.sha256).toBe(before.matrix.sha256);
   });
 
   it("stores an immutable matrix snapshot and rejects undeclared evidence", () => {
@@ -265,8 +292,39 @@ describe("vcycle creator public CLI", () => {
     );
     runGit(subject.repo, ["restore", "product.js"]);
     commitBuild(subject);
+    expect(
+      command(subject.cycle, "advance", {
+        phase: "BUILD",
+        evidence: path.join(subject.cycle, "brief.md"),
+      }).json.code,
+    ).toBe("INVALID_ARGUMENT");
     const advanced = recordAndAdvanceBuild(subject);
     expect(advanced.status).toBe(0);
+    expect(advanced.json.phase).toBe("UNIT_VERIFY");
+    expect(advanced.json.candidateHead).toBe(
+      runGit(subject.repo, ["rev-parse", "HEAD"]),
+    );
+  });
+
+  it("recovers a clean descendant commit made during verification", () => {
+    reachBuild(subject);
+    commitBuild(subject);
+    recordAndAdvanceBuild(subject);
+    fs.appendFileSync(
+      path.join(subject.repo, "product.js"),
+      "module.exports.rework = true\n",
+    );
+    runGit(subject.repo, ["add", "product.js"]);
+    runGit(subject.repo, ["commit", "-m", "early rework"]);
+    const status = command(subject.cycle, "status");
+    expect(status.json).toMatchObject({
+      phase: "UNIT_VERIFY",
+      nextAction: "record-build",
+      repository: { candidateDiverged: true, dirty: false },
+    });
+    const recorded = command(subject.cycle, "record-build");
+    expect(recorded.json.phase).toBe("BUILD");
+    const advanced = command(subject.cycle, "advance", { phase: "BUILD" });
     expect(advanced.json.phase).toBe("UNIT_VERIFY");
     expect(advanced.json.candidateHead).toBe(
       runGit(subject.repo, ["rev-parse", "HEAD"]),

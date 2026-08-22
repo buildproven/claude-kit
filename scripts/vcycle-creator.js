@@ -423,7 +423,7 @@ function packageGateContract(repo) {
     const script = scripts[name];
     if (
       typeof script !== "string" ||
-      /(^|[;&|]\s*|\s)(gh|curl|wget|ssh|scp)(\s|$)|\b(deploy|publish)\b|\b(npm|pnpm|yarn)\s+(i|install|add|publish)\b/i.test(
+      /\b(gh|curl|wget|ssh|scp)\b|\b(deploy|publish)\b|\b(npm|pnpm|yarn)\s+(i|install|add|publish)\b/i.test(
         script,
       )
     ) {
@@ -451,6 +451,9 @@ function plan(options) {
     const state = readState(directory);
     if (state.phase !== "REQUIREMENTS")
       fail("plan requires REQUIREMENTS phase", "OUT_OF_ORDER");
+    if (state.matrix) {
+      fail("traceability matrix is already bound", "ALREADY_PLANNED");
+    }
     assertCandidate(state);
     const raw = readRegularFile(
       requireOption(options, "matrix"),
@@ -509,8 +512,13 @@ function recordBuild(options) {
   const directory = path.resolve(requireOption(options, "cycle"));
   return withLock(directory, () => {
     const state = readState(directory);
-    if (state.phase !== "BUILD")
-      fail("record-build requires BUILD phase", "OUT_OF_ORDER");
+    if (state.phase !== "BUILD" && !VERIFY_PHASES.includes(state.phase)) {
+      fail(
+        "record-build requires BUILD or a verification phase",
+        "OUT_OF_ORDER",
+      );
+    }
+    const from = state.phase;
     assertClean(state.repo.realpath);
     const postBuildHead = head(state.repo.realpath);
     if (postBuildHead === state.candidateHead)
@@ -532,7 +540,9 @@ function recordBuild(options) {
     };
     receipt.digest = receiptDigest(receipt);
     state.receipts.build = receipt;
+    if (VERIFY_PHASES.includes(from)) state.phase = "BUILD";
     history(state, "build-recorded", { postBuildHead });
+    if (from !== "BUILD") history(state, "rework-started", { from });
     writeAtomic(statePath(directory), state);
     return {
       cycleId: state.cycleId,
@@ -746,6 +756,9 @@ function advance(options) {
     const state = readState(directory);
     if ([TERMINAL_PHASE, "REPLAN_REQUIRED"].includes(state.phase))
       fail("cycle cannot advance in its current phase", "OUT_OF_ORDER");
+    if (!LEFT_PHASES.includes(state.phase) && options.evidence !== undefined) {
+      fail("--evidence applies only to left-side phases", "INVALID_ARGUMENT");
+    }
     if (state.phase === "BUILD") assertClean(state.repo.realpath);
     else assertCandidate(state);
     const from = state.phase;
@@ -784,9 +797,47 @@ function replan(options) {
   });
 }
 
+function liveRepositoryState(state) {
+  const liveHead = head(state.repo.realpath);
+  const dirty = Boolean(
+    git(state.repo.realpath, [
+      "status",
+      "--porcelain=v1",
+      "--untracked-files=all",
+    ]),
+  );
+  return {
+    liveHead,
+    dirty,
+    candidateDiverged: liveHead !== state.candidateHead,
+  };
+}
+
+function nextAction(state, repository) {
+  if (repository.candidateDiverged) {
+    if (repository.dirty) return "clean-and-commit";
+    if (VERIFY_PHASES.includes(state.phase) || state.phase === "BUILD") {
+      return "record-build";
+    }
+    return "restore-candidate";
+  }
+  return {
+    DISCOVER: "advance",
+    REQUIREMENTS: state.matrix ? "advance" : "plan",
+    ARCHITECTURE: "advance",
+    BUILD: "record-build",
+    UNIT_VERIFY: "verify",
+    SYSTEM_VERIFY: "verify",
+    RELEASE_VERIFY: "verify",
+    REPLAN_REQUIRED: "replan",
+    COMPLETE: null,
+  }[state.phase];
+}
+
 function status(options) {
   assertOptions(options, ["cycle"]);
   const state = readState(path.resolve(requireOption(options, "cycle")));
+  const repository = liveRepositoryState(state);
   const obligations = state.matrix?.obligations || [];
   const incomplete = obligations
     .filter((item) => {
@@ -800,17 +851,8 @@ function status(options) {
     cycleId: state.cycleId,
     phase: state.phase,
     candidateHead: state.candidateHead,
-    nextAction: {
-      DISCOVER: "advance",
-      REQUIREMENTS: state.matrix ? "advance" : "plan",
-      ARCHITECTURE: "advance",
-      BUILD: "record-build",
-      UNIT_VERIFY: "verify",
-      SYSTEM_VERIFY: "verify",
-      RELEASE_VERIFY: "verify",
-      REPLAN_REQUIRED: "replan",
-      COMPLETE: null,
-    }[state.phase],
+    nextAction: nextAction(state, repository),
+    repository,
     incompleteObligations: incomplete,
   };
 }

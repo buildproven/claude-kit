@@ -190,4 +190,6 @@ vcycle-creator.js status --cycle <dir>
 
 `--evidence` applies only to left-side phases. Build and verification advances
 resolve creator-owned receipts from cycle state and accept no receipt path or
-caller-provided result.
+caller-provided result. `plan` binds the matrix exactly once. If a clean
+descendant commit appears during verification, `status` routes recovery through
+`record-build`; dirty or unrelated revisions remain blocked.
