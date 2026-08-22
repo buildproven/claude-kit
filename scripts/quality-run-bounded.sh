@@ -130,6 +130,9 @@ signal_processes() {
 $processes
 EOF
 }
+unique_process_records() {
+  awk -F '\t' 'NF >= 2 && !seen[$1]++'
+}
 stop_tracker() {
   [ -n "$TRACKER_PID" ] || return 0
   kill -TERM "$TRACKER_PID" 2>/dev/null || true
@@ -146,24 +149,33 @@ $current_snapshot
 EOF
 )"
   owned_targets="$(owned_provider_processes)"
-  targets="${tracked}${tracked:+$'\n'}${current_targets}${current_targets:+$'\n'}${owned_targets}"
+  targets="$(unique_process_records <<EOF
+$current_targets
+$owned_targets
+$tracked
+EOF
+)"
+  child_start="$(process_start "$CHILD_PID")"
+  self_group="$(process_group "$$")"
+  child_group="$(process_group "$CHILD_PID")"
+  # Signal the intact group as one unit. A waiting shell can resume between
+  # separate child/parent signals and run one more command before its TERM.
+  if [ -n "$child_start" ] &&
+     [ "$(process_start "$CHILD_PID")" = "$child_start" ] &&
+     [ -n "$child_group" ] && [ "$child_group" != "$self_group" ]; then
+    kill -TERM "-$child_group" 2>/dev/null || true
+  fi
   # Descendants first, then the provider leader. This ordering preserves the
   # PID list long enough to kill escaped session leaders as well.
   signal_processes TERM "$targets"
   sleep 1
   remaining_targets="$(owned_provider_processes)"
-  [ -z "$remaining_targets" ] || targets="${targets}${targets:+$'\n'}${remaining_targets}"
+  targets="$(unique_process_records <<EOF
+$remaining_targets
+$targets
+EOF
+)"
   signal_processes KILL "$targets"
-  # A normal descendant created after the snapshot remains in this group.
-  child_start="$(process_start "$CHILD_PID")"
-  self_group="$(process_group "$$")"
-  child_group="$(process_group "$CHILD_PID")"
-  if [ -n "$child_start" ] &&
-     [ "$(process_start "$CHILD_PID")" = "$child_start" ] &&
-     [ -n "$child_group" ] && [ "$child_group" != "$self_group" ]; then
-    kill -TERM "-${CHILD_PID}" 2>/dev/null || true
-    kill -KILL "-${CHILD_PID}" 2>/dev/null || true
-  fi
 }
 set -m
 watchdog() {
