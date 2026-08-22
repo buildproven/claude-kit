@@ -20,6 +20,19 @@ function manifestAt(manifestPath) {
   return quality.loadManifest(manifestPath).manifest;
 }
 
+function pinRepositoryLease(manifest) {
+  if (manifest.options?.merge !== true) return;
+  const token = manifest.merge?.repositoryLease?.token;
+  if (typeof token !== "string" || token.length === 0) {
+    throw new Error("merge campaign has no repository lease credential");
+  }
+  const presented = process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
+  if (presented && presented !== token) {
+    throw new Error("repository lease credential does not match the manifest");
+  }
+  process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = token;
+}
+
 function updateOrchestration(manifestPath, phase, status, detail = null) {
   quality.withManifestLock(manifestPath, (manifest) => {
     quality.validateIdentity(manifest, manifest.repo.realpath);
@@ -91,15 +104,25 @@ function script(name) {
 }
 
 function currentReview(manifest) {
-  return manifest.reviews.some(
-    (review) => review.to === manifest.revisions.currentHead,
-  );
+  if (quality.incompleteRetryStatus(manifest).state === "pending") return false;
+  try {
+    quality.reviewCoverage(manifest);
+    return true;
+  } catch (error) {
+    if (
+      [
+        "no review coverage",
+        "final HEAD has not been covered by review evidence",
+      ].includes(error.message)
+    ) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 function reviewSummary(manifest) {
-  const reviews = manifest.reviews.filter(
-    (review) => review.to === manifest.revisions.currentHead,
-  );
+  const reviews = manifest.reviews;
   return {
     status: reviews.some((review) => review.status === "incomplete")
       ? "incomplete"
@@ -201,13 +224,14 @@ async function runDeterministicPhases(manifestPath, invoke) {
 
 async function ensureReview(manifestPath, invoke) {
   const manifest = manifestAt(manifestPath);
-  if (currentReview(manifest)) {
-    if (quality.incompleteRetryStatus(manifest).state !== "pending") return;
+  if (quality.incompleteRetryStatus(manifest).state === "pending") {
     await invoke("review-retry-reserve", process.execPath, [
       script("quality-invocation.js"),
       "reserve-incomplete-retry",
       manifestPath,
     ]);
+  } else if (currentReview(manifest)) {
+    return;
   }
   await invoke("review-authorize", "bash", [
     script("quality-authorize-review-round.sh"),
@@ -278,16 +302,6 @@ async function finishWithMerge(context, manifestPath, manifest, review) {
       head: afterMerge.revisions.currentHead,
     };
   }
-  const message = `${merge.stderr || ""}\n${merge.stdout || ""}`.trim();
-  if (likelyExternalRequirement(message)) {
-    return actionRequired(
-      manifestPath,
-      "merge",
-      message || `merge admission failed with exit ${merge.code}`,
-      manifest,
-      review,
-    );
-  }
   throw new Error(`merge admission failed with exit ${merge.code}`);
 }
 
@@ -318,8 +332,9 @@ async function recordFailure(context, manifestPath, error) {
       },
     );
     if (result.code !== 0) {
-      process.stderr.write(
-        `[quality] terminal state could not be recorded after ${error.message}\n`,
+      throw new Error(
+        `terminal state recording failed after: ${error.message}`,
+        { cause: error },
       );
     }
   }
@@ -357,6 +372,7 @@ async function runManifest(manifestPath, dependencies = {}) {
   for (const signal of signals) process.on(signal, runtime.onSignal);
   try {
     const manifest = manifestAt(manifestPath);
+    pinRepositoryLease(manifest);
     quality.validateIdentity(manifest, manifest.repo.realpath);
     if (manifest.terminalState) {
       return {
@@ -396,6 +412,7 @@ module.exports = {
   ACTION_REQUIRED_EXIT,
   ORCHESTRATION_SCHEMA_VERSION,
   parseArgs,
+  pinRepositoryLease,
   reviewSummary,
   runManifest,
 };

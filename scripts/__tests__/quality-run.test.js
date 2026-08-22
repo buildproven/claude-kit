@@ -19,6 +19,10 @@ function write(file, value) { fs.writeFileSync(file, JSON.stringify(value)); }
 function loadManifest(file) { return { manifest: read(file), manifestPath: file }; }
 function withManifestLock(file, mutation) {
   const manifest = read(file);
+  if (manifest.options?.merge === true &&
+      process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN !== manifest.merge?.repositoryLease?.token) {
+    throw new Error("repository lease credential is required for manifest mutation");
+  }
   mutation(manifest, file);
   manifest.manifestRevision = (manifest.manifestRevision || 0) + 1;
   write(file, manifest);
@@ -33,7 +37,11 @@ function incompleteRetryStatus(manifest) {
   return { state: manifest.behavior?.retryPending && incomplete.length === 1 ? "pending" : "none" };
 }
 function reviewCoverage(manifest) {
-  if (!manifest.reviews.some((review) => review.to === manifest.revisions.currentHead)) {
+  const exact = manifest.reviews.some((review) => review.to === manifest.revisions.currentHead);
+  const carried = manifest.revisions.reviewRebaseCarries?.some((carry) =>
+    carry.head === manifest.revisions.currentHead &&
+    manifest.reviews.some((review) => review.to === carry.reviewedHead));
+  if (!exact && !carried) {
     throw new Error("final HEAD has not been covered by review evidence");
   }
   if (manifest.gates.some((gate) => gate.status !== "success")) {
@@ -65,6 +73,7 @@ if (require.main === module) {
     process.exit(0);
   }
   if (command !== "terminal-state") process.exit(2);
+  if (read(file).behavior?.terminalRecorderFail) process.exit(7);
   const state = args[args.indexOf("--state") + 1];
   const detail = args[args.indexOf("--detail") + 1];
   const inForce = recordTerminalState(file, state, detail);
@@ -88,6 +97,10 @@ const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
 manifest.calls ||= [];
 manifest.calls.push(step);
 if (step === "quality-risk-resolve.sh") manifest.risk.resolved = true;
+if (step === "quality-risk-resolve.sh" && manifest.behavior?.failRisk) {
+  fs.writeFileSync(file, JSON.stringify(manifest));
+  process.exit(5);
+}
 if (step === "quality-select-agents.sh") manifest.panel = { rule: "fixture" };
 if (step === "quality-run-gate.sh") {
   const name = args[args.indexOf("--name") + 1];
@@ -116,6 +129,9 @@ if (step === "quality-run-review.sh") manifest.reviews.push({
 if (step === "quality-stamp-and-merge.sh") {
   if (manifest.behavior?.failMerge) {
     fs.writeFileSync(file, JSON.stringify(manifest));
+    if (manifest.behavior.mergeWarning) {
+      process.stderr.write(manifest.behavior.mergeWarning + "\\n");
+    }
     process.stderr.write("required CI failed on exact candidate\\n");
     process.exit(1);
   }
@@ -157,6 +173,9 @@ function fixture(behavior = {}, { merge = false, tier = "low" } = {}) {
       repo: { realpath: root },
       revisions: { currentHead: "abc123", baseSha: "base123" },
       options: { merge },
+      ...(merge
+        ? { merge: { repositoryLease: { token: "fixture-token" } } }
+        : {}),
       risk: { resolved: false, tier },
       requiredGates: ["lint", "test", "security"].map((name) => ({ name })),
       gates: [],
@@ -285,6 +304,27 @@ describe("quality-run public orchestration", () => {
     expect(result.manifest.telemetryWrites).toBe(1);
   });
 
+  it("reuses rebase-carried review coverage without relabeling it as policy-exempt", () => {
+    const entry = fixture({}, { tier: "medium" });
+    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    manifest.revisions.currentHead = "rebased456";
+    manifest.revisions.reviewRebaseCarries = [
+      { reviewedHead: "abc123", head: "rebased456" },
+    ];
+    manifest.reviews = [{ to: "abc123", status: "complete", leadCount: 3 }];
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+
+    const result = run(entry);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.output)).toMatchObject({
+      review: { status: "complete", leads: 3 },
+    });
+    expect(result.manifest.calls).not.toContain(
+      "quality-authorize-review-round.sh",
+    );
+    expect(result.manifest.calls).not.toContain("quality-run-review.sh");
+  });
+
   it("pauses a merge only for a typed external capability requirement", () => {
     const result = run(
       fixture(
@@ -316,7 +356,10 @@ describe("quality-run public orchestration", () => {
 
   it("records a CI merge-admission failure as blocked, not action-required", () => {
     const result = run(
-      fixture({ failMerge: true }, { merge: true, tier: "medium" }),
+      fixture(
+        { failMerge: true, mergeWarning: "using signed exact-head evidence" },
+        { merge: true, tier: "medium" },
+      ),
     );
     expect(result.status).toBe(1);
     expect(JSON.parse(result.output)).toMatchObject({
@@ -324,5 +367,14 @@ describe("quality-run public orchestration", () => {
       state: "blocked",
     });
     expect(result.manifest.telemetryWrites).toBe(1);
+  });
+
+  it("preserves the phase failure when terminal recording also fails", () => {
+    const result = run(fixture({ failRisk: true, terminalRecorderFail: true }));
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain(
+      "terminal state recording failed after: risk failed with exit 5",
+    );
+    expect(result.stderr).not.toContain("Cannot read properties of undefined");
   });
 });
