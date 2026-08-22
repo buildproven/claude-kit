@@ -77,6 +77,10 @@ review, break-glass, CI) without waiting for a failure:
 /bs:quality status --manifest <exact-manifest-path>
 ```
 
+The quality command hands that exact manifest to one deterministic runner. It
+reuses completed exact-head evidence and reports any required operator
+capability as a typed pause.
+
 When invoking from a forked agent context (e.g. a parallel agent whose `cwd` is a harness scratch directory rather than the worktree), pass `--target-dir <path>`:
 
 ```bash

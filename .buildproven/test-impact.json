@@ -121,6 +121,27 @@
     },
     {
       "paths": [
+        "scripts/quality-run.js",
+        "scripts/__tests__/quality-run.test.js",
+        "docs/quality-run-orchestrator.md",
+        "skills/quality/SKILL.md",
+        "skills/quality/reference.md"
+      ],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/quality-run.test.js",
+            "scripts/__tests__/quality-invocation.test.js",
+            "scripts/__tests__/quality-merge-gates.test.js"
+          ]
+        }
+      ]
+    },
+    {
+      "paths": [
         "scripts/quality-authorize-merge.sh",
         "scripts/quality-invocation.js",
         "scripts/quality-protected-nonstrict.js",

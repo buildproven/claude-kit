@@ -6,6 +6,12 @@ All notable changes to claude-kit are documented here.
 
 ### Added
 
+- A public deterministic quality runner now executes one exact manifest through
+  risk selection, gates, bounded review, optional protected merge, and terminal
+  telemetry. It resumes exact-head evidence and returns a typed external
+  capability pause instead of asking the model to sequence phase scripts
+  (BUI-791).
+
 - The revision-bound quality engine now supports opt-in Gemini review as a
   bounded, read-only primary or fallback provider. Gemini responses use the
   same strict structured-review schema, provider circuit, attempt governor,

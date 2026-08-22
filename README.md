@@ -129,6 +129,11 @@ Fresh headless provider runs can use the [Compute Governor](docs/compute-governo
 to resolve and persist an explicit least-cost model/effort plan without changing
 the interactive builder session.
 
+Quality campaigns use the [deterministic quality runner](scripts/quality-run.js)
+after bootstrap. One exact manifest drives gates, bounded review, resume,
+optional protected merge, and terminal telemetry without model-sequenced phase
+calls.
+
 </details>
 
 ## Core commands

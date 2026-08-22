@@ -1,0 +1,403 @@
+#!/usr/bin/env node
+"use strict";
+
+const path = require("node:path");
+const { spawn } = require("node:child_process");
+const quality = require("./quality-invocation");
+
+const ORCHESTRATION_SCHEMA_VERSION = 1;
+const ACTION_REQUIRED_EXIT = 3;
+const SCRIPT_DIR = __dirname;
+
+function parseArgs(argv) {
+  if (argv.length !== 2 || argv[0] !== "--manifest" || !argv[1]) {
+    throw new Error("usage: quality-run.js --manifest <exact-path>");
+  }
+  return path.resolve(argv[1]);
+}
+
+function manifestAt(manifestPath) {
+  return quality.loadManifest(manifestPath).manifest;
+}
+
+function updateOrchestration(manifestPath, phase, status, detail = null) {
+  quality.withManifestLock(manifestPath, (manifest) => {
+    quality.validateIdentity(manifest, manifest.repo.realpath);
+    const now = new Date().toISOString();
+    const prior = manifest.orchestration;
+    if (prior && prior.schemaVersion !== ORCHESTRATION_SCHEMA_VERSION) {
+      throw new Error(
+        `unsupported quality orchestration schema ${prior.schemaVersion}`,
+      );
+    }
+    if (!prior || prior.head !== manifest.revisions.currentHead) {
+      manifest.orchestration = {
+        schemaVersion: ORCHESTRATION_SCHEMA_VERSION,
+        head: manifest.revisions.currentHead,
+        phase: "ready",
+        status: "running",
+        startedAt: now,
+        updatedAt: now,
+        steps: {},
+      };
+    }
+    const orchestration = manifest.orchestration;
+    orchestration.phase = phase;
+    orchestration.status = status;
+    orchestration.updatedAt = now;
+    orchestration.steps[phase] = {
+      status,
+      detail,
+      updatedAt: now,
+      attempts:
+        (orchestration.steps[phase]?.attempts || 0) +
+        (status === "running" ? 1 : 0),
+    };
+  });
+}
+
+function emit(result) {
+  process.stdout.write(`${JSON.stringify({ schemaVersion: 1, ...result })}\n`);
+}
+
+function runProcess(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: process.env,
+      stdio: ["inherit", "pipe", "pipe"],
+    });
+    options.onChild?.(child);
+    child.stdout.on("data", (chunk) => {
+      process.stdout.write(chunk);
+      stdout = `${stdout}${chunk}`.slice(-32768);
+    });
+    child.stderr.on("data", (chunk) => {
+      process.stderr.write(chunk);
+      stderr = `${stderr}${chunk}`.slice(-32768);
+    });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      options.onChild?.(null);
+      resolve({ code: code ?? 1, signal, stdout, stderr });
+    });
+  });
+}
+
+function script(name) {
+  return path.join(SCRIPT_DIR, name);
+}
+
+function currentReview(manifest) {
+  return manifest.reviews.some(
+    (review) => review.to === manifest.revisions.currentHead,
+  );
+}
+
+function reviewSummary(manifest) {
+  const reviews = manifest.reviews.filter(
+    (review) => review.to === manifest.revisions.currentHead,
+  );
+  return {
+    status: reviews.some((review) => review.status === "incomplete")
+      ? "incomplete"
+      : reviews.every((review) => review.status === "exempt")
+        ? "policy-exempt"
+        : "complete",
+    leads: manifest.reviews.reduce(
+      (sum, review) => sum + (review.leadCount || 0),
+      0,
+    ),
+  };
+}
+
+function likelyExternalRequirement(message) {
+  return /(?:signed|capability|approval|operator|override|human-required)/i.test(
+    message,
+  );
+}
+
+function actionRequired(manifestPath, phase, message, manifest, review) {
+  updateOrchestration(manifestPath, phase, "action-required", message);
+  return {
+    status: "action-required",
+    kind: "external-capability",
+    phase,
+    message,
+    head: manifest.revisions.currentHead,
+    review,
+  };
+}
+
+function invocationRuntime(manifestPath, execute) {
+  let activeChild = null;
+  let interruptedSignal = null;
+  const onChild = (child) => {
+    activeChild = child;
+  };
+  const onSignal = (signal) => {
+    interruptedSignal ||= signal;
+    if (activeChild && !activeChild.killed) activeChild.kill(signal);
+  };
+  const assertNotInterrupted = (result) => {
+    if (!interruptedSignal && !result.signal) return;
+    throw Object.assign(new Error("quality run interrupted"), {
+      terminalState: "interrupted",
+    });
+  };
+  const invoke = async (phase, command, args) => {
+    updateOrchestration(manifestPath, phase, "running");
+    const result = await execute(command, args, {
+      cwd: manifestAt(manifestPath).repo.realpath,
+      onChild,
+    });
+    assertNotInterrupted(result);
+    if (result.code !== 0) {
+      throw Object.assign(
+        new Error(`${phase} failed with exit ${result.code}`),
+        { phase },
+      );
+    }
+    updateOrchestration(manifestPath, phase, "success");
+    return result;
+  };
+  return { assertNotInterrupted, invoke, onChild, onSignal };
+}
+
+async function runDeterministicPhases(manifestPath, invoke) {
+  await invoke("risk", "bash", [
+    script("quality-risk-resolve.sh"),
+    "--manifest",
+    manifestPath,
+  ]);
+  await invoke("panel", "bash", [
+    script("quality-select-agents.sh"),
+    "--manifest",
+    manifestPath,
+  ]);
+  for (const gate of manifestAt(manifestPath).requiredGates) {
+    await invoke(`gate:${gate.name}`, "bash", [
+      script("quality-run-gate.sh"),
+      "--manifest",
+      manifestPath,
+      "--name",
+      gate.name,
+    ]);
+  }
+  const gated = manifestAt(manifestPath);
+  if (
+    ["high", "critical"].includes(gated.risk.tier) &&
+    !quality.mutationEvidenceValid(gated)
+  ) {
+    await invoke("mutation", "bash", [
+      script("quality-mutation-check.sh"),
+      "--manifest",
+      manifestPath,
+    ]);
+  }
+}
+
+async function ensureReview(manifestPath, invoke) {
+  const manifest = manifestAt(manifestPath);
+  if (currentReview(manifest)) {
+    if (quality.incompleteRetryStatus(manifest).state !== "pending") return;
+    await invoke("review-retry-reserve", process.execPath, [
+      script("quality-invocation.js"),
+      "reserve-incomplete-retry",
+      manifestPath,
+    ]);
+  }
+  await invoke("review-authorize", "bash", [
+    script("quality-authorize-review-round.sh"),
+    manifestPath,
+  ]);
+  await invoke("review", "bash", [
+    script("quality-run-review.sh"),
+    "--manifest",
+    manifestPath,
+  ]);
+}
+
+async function finishWithoutMerge(manifestPath, invoke, manifest, review) {
+  await invoke("terminal", process.execPath, [
+    script("quality-invocation.js"),
+    "terminal-state",
+    manifestPath,
+    "--state",
+    "verified-unmerged",
+    "--detail",
+    `review:${review.status};leads:${review.leads}`,
+  ]);
+  return {
+    status: "complete",
+    state: "verified-unmerged",
+    head: manifest.revisions.currentHead,
+    review,
+  };
+}
+
+async function finishWithMerge(context, manifestPath, manifest, review) {
+  try {
+    quality.reviewAuthorization(manifest);
+  } catch (error) {
+    if (!likelyExternalRequirement(error.message)) throw error;
+    return actionRequired(
+      manifestPath,
+      "authorization",
+      error.message,
+      manifest,
+      review,
+    );
+  }
+  updateOrchestration(manifestPath, "merge", "running");
+  const merge = await context.execute(
+    "bash",
+    [script("quality-stamp-and-merge.sh"), "--manifest", manifestPath],
+    {
+      cwd: manifest.repo.realpath,
+      onChild: context.runtime.onChild,
+    },
+  );
+  context.runtime.assertNotInterrupted(merge);
+  if (merge.code === 0) {
+    const merged = manifestAt(manifestPath);
+    return {
+      status: "complete",
+      state: merged.terminalState?.state || "merged",
+      head: merged.revisions.currentHead,
+      review,
+    };
+  }
+  const afterMerge = manifestAt(manifestPath);
+  if (afterMerge.terminalState) {
+    return {
+      status: "terminal",
+      state: afterMerge.terminalState.state,
+      head: afterMerge.revisions.currentHead,
+    };
+  }
+  const message = `${merge.stderr || ""}\n${merge.stdout || ""}`.trim();
+  if (likelyExternalRequirement(message)) {
+    return actionRequired(
+      manifestPath,
+      "merge",
+      message || `merge admission failed with exit ${merge.code}`,
+      manifest,
+      review,
+    );
+  }
+  throw new Error(`merge admission failed with exit ${merge.code}`);
+}
+
+async function recordFailure(context, manifestPath, error) {
+  let manifest;
+  try {
+    manifest = manifestAt(manifestPath);
+  } catch {
+    throw error;
+  }
+  if (!manifest.terminalState) {
+    const stale = /HEAD|identity|stale|supersed/i.test(error.message);
+    const state = error.terminalState || (stale ? "superseded" : "blocked");
+    const result = await context.execute(
+      process.execPath,
+      [
+        script("quality-invocation.js"),
+        "terminal-state",
+        manifestPath,
+        "--state",
+        state,
+        "--detail",
+        error.message,
+      ],
+      {
+        cwd: manifest.repo.realpath,
+        onChild: context.runtime.onChild,
+      },
+    );
+    if (result.code !== 0) {
+      process.stderr.write(
+        `[quality] terminal state could not be recorded after ${error.message}\n`,
+      );
+    }
+  }
+  const terminal = manifestAt(manifestPath).terminalState;
+  return {
+    status: "terminal",
+    state: terminal.state,
+    message: error.message,
+    head: manifest.revisions.currentHead,
+  };
+}
+
+async function runOpenCampaign(context, manifestPath, manifest) {
+  updateOrchestration(manifestPath, "validate", "success");
+  await runDeterministicPhases(manifestPath, context.runtime.invoke);
+  await ensureReview(manifestPath, context.runtime.invoke);
+  manifest = manifestAt(manifestPath);
+  quality.reviewCoverage(manifest);
+  const review = reviewSummary(manifest);
+  return manifest.options?.merge === true
+    ? finishWithMerge(context, manifestPath, manifest, review)
+    : finishWithoutMerge(
+        manifestPath,
+        context.runtime.invoke,
+        manifest,
+        review,
+      );
+}
+
+async function runManifest(manifestPath, dependencies = {}) {
+  const execute = dependencies.runProcess || runProcess;
+  const runtime = invocationRuntime(manifestPath, execute);
+  const context = { execute, runtime };
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
+  for (const signal of signals) process.on(signal, runtime.onSignal);
+  try {
+    const manifest = manifestAt(manifestPath);
+    quality.validateIdentity(manifest, manifest.repo.realpath);
+    if (manifest.terminalState) {
+      return {
+        status: "terminal",
+        state: manifest.terminalState.state,
+        head: manifest.revisions.currentHead,
+      };
+    }
+    return await runOpenCampaign(context, manifestPath, manifest);
+  } catch (error) {
+    return await recordFailure(context, manifestPath, error);
+  } finally {
+    for (const signal of signals) process.off(signal, runtime.onSignal);
+  }
+}
+
+async function main() {
+  try {
+    const manifestPath = parseArgs(process.argv.slice(2));
+    const result = await runManifest(manifestPath);
+    emit(result);
+    if (result.status === "action-required") {
+      process.exitCode = ACTION_REQUIRED_EXIT;
+    } else if (
+      result.status === "terminal" &&
+      !["merged", "verified-unmerged"].includes(result.state)
+    ) {
+      process.exitCode = 1;
+    }
+  } catch (error) {
+    process.stderr.write(`quality-run: ${error.message}\n`);
+    process.exitCode = 2;
+  }
+}
+
+module.exports = {
+  ACTION_REQUIRED_EXIT,
+  ORCHESTRATION_SCHEMA_VERSION,
+  parseArgs,
+  reviewSummary,
+  runManifest,
+};
+
+if (require.main === module) main();

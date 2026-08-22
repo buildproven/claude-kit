@@ -8,9 +8,9 @@ review dispatch, authorization, merge, cleanup, and terminal telemetry. A
 model is used only where judgment is the product: classifying identity-checked
 findings and choosing a remediation patch.
 
-This is a migration design for BUI-405. It deliberately does not replace the
-current runtime in one change: the existing manifest and individual scripts
-remain the compatibility boundary while the runner is introduced and tested.
+This design is implemented by `scripts/quality-run.js` for BUI-791. The
+existing manifest and individual scripts remain the compatibility boundary;
+the public runner now owns their order, resume rules, and typed outcome.
 
 ## Contract
 
@@ -50,10 +50,10 @@ required finding disposition.
 
 ## Migration plan
 
-1. Extract a `quality-run` command that invokes the existing bootstrap,
+1. **Complete:** extract a `quality-run` command that invokes the existing bootstrap,
    selection, gate, review, stamp/merge, and telemetry scripts in this order.
    It writes phase transitions to the existing invocation manifest.
-2. Make the quality skill a short handoff: create/resume the manifest, invoke
+2. **Complete:** make the quality skill a short handoff: create/resume the manifest, invoke
    the runner, and present the judge/remediation request only when the runner
    explicitly pauses at that phase.
 3. Add end-to-end fixtures for success, invalid governor state, stale review,

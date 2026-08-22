@@ -10,6 +10,13 @@ repository realpath, PR, base SHA, and expected HEAD before reading or writing
 state. There is no session sentinel, active-state glob, mtime lookup, or
 `latest` pointer.
 
+`scripts/quality-run.js --manifest <exact-path>` is the public phase runner.
+It persists versioned orchestration progress under the same manifest lock and
+reuses exact-head gate, mutation, and review evidence on resume. Its JSON result
+is `complete`, `terminal`, or `action-required`. Exit 3 is reserved for a named
+external capability. Gate, stale-head, provider-contract, CI, and signal
+failures retain their typed terminal state and one idempotent telemetry record.
+
 Risk resolution also records a deterministic task type from the branch commit
 range and, when commit intent is unavailable, an all-specialized path set:
 `docs`, `ci`, `build`, `chore`, `feature`, `bugfix`, `performance`, or

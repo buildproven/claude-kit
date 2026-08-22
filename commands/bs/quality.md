@@ -63,6 +63,10 @@ node "$WRAPPER" "$BOOTSTRAP" <<'BS_QUALITY_REQUEST'
 BS_QUALITY_REQUEST
 ```
 
+The forked quality skill passes the returned exact manifest to
+`scripts/quality-run.js`. The model does not sequence gate, review, or merge
+scripts. A runner exit of 3 names the external capability needed to resume.
+
 Construct the JSON array directly from the parsed slash-command arguments; do
 not interpolate the raw argument string into shell. JSON escaping preserves
 spaces, quotes, and metacharacters as inert argument data.

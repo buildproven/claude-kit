@@ -143,6 +143,9 @@ Invoked naturally — Claude Code or Codex picks the right skill from context.
 
 ### Quality Commands (Replaced by /bs:quality)
 
+`/bs:quality` uses one exact-manifest deterministic runner for gates, bounded
+review, resume, optional protected merge, and terminal telemetry.
+
 | Old Command           | Replacement                      |
 | --------------------- | -------------------------------- |
 | `/bs:ready`           | `/bs:quality` (default is 95%)   |

@@ -43,18 +43,20 @@ bash "$QUALITY_SCRIPTS_DIR/quality-status.sh" --manifest "<exact-manifest-path>"
 
 ## 1. Bootstrap, risk, and contracts
 
-Load the rooted repository, then persist risk and select agents before any gate
-or provider call. Fetch only the manifest fields a command needs.
+Hand the exact manifest to the deterministic runner. It owns risk and panel
+selection, immutable gates, mutation evidence, bounded review, optional merge,
+cleanup, terminal state, and telemetry. Do not sequence its phase scripts in
+the model session. Exit 3 is a typed pause for a named external capability;
+other non-zero exits are terminal evidence, not a prompt to improvise a retry.
 
 ```bash
 QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] && [ -f "$d/scripts/quality-runtime-dir.sh" ] && bash "$d/scripts/quality-runtime-dir.sh" 2>/dev/null && break; done)"
 [ -n "$QUALITY_SCRIPTS_DIR" ] || { echo "quality runtime not found" >&2; exit 1; }
-bash "$QUALITY_SCRIPTS_DIR/quality-load-root.sh" --manifest "<exact-manifest-path>"
-GIT_ROOT="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" field "<exact-manifest-path>" repo.realpath)"
-cd "$GIT_ROOT"
-bash "$QUALITY_SCRIPTS_DIR/quality-risk-resolve.sh" --manifest "<exact-manifest-path>"
-bash "$QUALITY_SCRIPTS_DIR/quality-select-agents.sh" --manifest "<exact-manifest-path>"
+node "$QUALITY_SCRIPTS_DIR/quality-run.js" --manifest "<exact-manifest-path>"
 ```
+
+The sections below define the contracts enforced by that runner. They are not
+a second, model-driven execution path.
 
 Path/security floors always win. The initial task type is bound to the campaign;
 a remediation commit cannot change task context or reset budget. Bug-fix and

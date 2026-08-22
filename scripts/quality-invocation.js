@@ -6467,6 +6467,8 @@ module.exports = {
   repoKey,
   reviewDiffBuffer,
   reviewInfo,
+  reviewCoverage,
+  incompleteRetryStatus,
   reserveIncompleteRetry,
   reviewIdentity,
   reviewTrailers,
