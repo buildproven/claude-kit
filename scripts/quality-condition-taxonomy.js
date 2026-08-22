@@ -126,6 +126,14 @@ function inferredReviewFailureReason(manifest, suppliedReason) {
   );
   if (
     !hasCurrentCoverage &&
+    Number.isFinite(governor?.activeSecondsUsed) &&
+    Number.isFinite(governor?.activeSecondsLimit) &&
+    governor.activeSecondsUsed >= governor.activeSecondsLimit
+  ) {
+    return "provider-exhaustion";
+  }
+  if (
+    !hasCurrentCoverage &&
     Number.isFinite(governor?.providerSecondsUsed) &&
     Number.isFinite(governor?.providerSecondsLimit) &&
     governor.providerSecondsUsed >= governor.providerSecondsLimit

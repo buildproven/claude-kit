@@ -7,8 +7,8 @@
  * Risk controls depth. Workload controls time. Keeping those dimensions
  * separate prevents a one-line security edit from receiving a huge-change
  * allowance, while still giving a broad low-risk diff enough time to be read.
- * `campaignSeconds` remains compatibility planning metadata; execution is
- * metered only by the manifest's gate and provider ledgers.
+ * `campaignSeconds` is the authoritative shared active-execution limit.
+ * Phase allowances reserve work inside that limit; they never expand it.
  */
 
 const {
