@@ -107,14 +107,26 @@ EOF
   }
 }
 owned_provider_processes() {
-  local owned
+  local owned environment_file pid
   # Process-tree polling cannot close the fork -> setsid -> reparent race. The
   # provider receives a unique, non-secret ownership marker that descendants
   # retain across fork, exec, setsid, and reparenting. Search without printing
   # process environments, then combine these PIDs with the sampled tree.
-  owned="$(ps eww -axo pid=,command= 2>/dev/null |
-    awk -v marker="BS_QUALITY_PROCESS_OWNER=$PROCESS_OWNER_ID" \
-      'index($0, marker) { print $1 }')"
+  if [ "$(uname -s)" = Linux ] && [ -d /proc ]; then
+    owned=""
+    for environment_file in /proc/[0-9]*/environ; do
+      [ -r "$environment_file" ] || continue
+      tr '\0' '\n' < "$environment_file" 2>/dev/null |
+        grep -Fqx "BS_QUALITY_PROCESS_OWNER=$PROCESS_OWNER_ID" || continue
+      pid="${environment_file#/proc/}"
+      pid="${pid%/environ}"
+      owned="${owned}${owned:+$'\n'}${pid}"
+    done
+  else
+    owned="$(ps eww -axo pid=,command= 2>/dev/null |
+      awk -v marker="BS_QUALITY_PROCESS_OWNER=$PROCESS_OWNER_ID" \
+        'index($0, marker) { print $1 }')"
+  fi
   record_snapshot <<EOF
 $owned
 EOF
