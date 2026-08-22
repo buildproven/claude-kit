@@ -21,6 +21,49 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.8.0](https://github.com/buildproven/claude-kit/compare/v4.7.4...v4.8.0) (2026-08-22)
+
+
+### Features
+
+* add deterministic quality runner ([cc205e8](https://github.com/buildproven/claude-kit/commit/cc205e8245ebf8f0ad5e143141992f71bf61e754))
+* add deterministic V-cycle creator ([1094c08](https://github.com/buildproven/claude-kit/commit/1094c08b94ce3c70bf3ca9187757a7f60e5446a8))
+* support signed non-strict outage merges ([e52871c](https://github.com/buildproven/claude-kit/commit/e52871c2b759f5cdd7903035b16c26d4d739cfda))
+
+
+### Bug Fixes
+
+* authorize ref CAS descendant advance ([f8fb275](https://github.com/buildproven/claude-kit/commit/f8fb27560a3186aac6e79102f0a63148b574097a))
+* bind merge evidence to candidate head ([bab304e](https://github.com/buildproven/claude-kit/commit/bab304e2a2c2be4156d54cce595c907dbfaca6ed))
+* bind outage ref CAS at mutation boundary ([32138f1](https://github.com/buildproven/claude-kit/commit/32138f17f79b8e6dc152c081bc9e029d809d8beb))
+* budget gates from review reserve ([ecce4ac](https://github.com/buildproven/claude-kit/commit/ecce4ac6361ca6d553ed2f2d935a5d332d26403e))
+* compose ref CAS descendant authority ([7191229](https://github.com/buildproven/claude-kit/commit/7191229ea767a5da43735c876febf570a880f7a6))
+* compose ref CAS review authority ([c4b4390](https://github.com/buildproven/claude-kit/commit/c4b439026e33132397797f3623211b63c612213a))
+* discover owned provider processes through procfs ([aa8ec1d](https://github.com/buildproven/claude-kit/commit/aa8ec1d82e04fc6579c545ae86fcac9cddddbdaf))
+* enforce quality runner terminal evidence ([e1947cc](https://github.com/buildproven/claude-kit/commit/e1947cc58754d9000d57da2ab74bbbb6ad558b63))
+* enforce shared quality campaign budget ([9518080](https://github.com/buildproven/claude-kit/commit/95180802ae10f767f323f17bbc05adcebf92fb74))
+* harden ref CAS convergence ([c5ad202](https://github.com/buildproven/claude-kit/commit/c5ad20291a7925bb8a7cdd32aaa6a88e5ca554dc))
+* honor signed review exception at merge ([3ce15a3](https://github.com/buildproven/claude-kit/commit/3ce15a3a5134606f5ccdf2563bf0bbcc4778693c))
+* keep V-cycle baseline and recovery controlled ([656fab2](https://github.com/buildproven/claude-kit/commit/656fab256613a450c9dd5900d56ab97ff780d4b9))
+* make quality telemetry economically exact ([6234740](https://github.com/buildproven/claude-kit/commit/62347409c4cf2da9e37717e49ea63bae558666cb))
+* parse judge telemetry through guarded helper ([d7e787c](https://github.com/buildproven/claude-kit/commit/d7e787c51bb5b6c52424156f37a0d9899cb3504d))
+* parse V-cycle gate commands by position ([a9964c4](https://github.com/buildproven/claude-kit/commit/a9964c473464e94d4082fecd9039a81402ac708c))
+* pass ref CAS admin authority to lease ([7ca97c4](https://github.com/buildproven/claude-kit/commit/7ca97c4a6423d68d5f510cd687a6548b997587d9))
+* preserve quality runner lifecycle contracts ([2610087](https://github.com/buildproven/claude-kit/commit/2610087c87e530e6a1794871771c8d5661d83806))
+* preserve ref CAS recovery intent ([eae07b6](https://github.com/buildproven/claude-kit/commit/eae07b687886e05e4f6c1dfadd0c0c2bf2d4a047))
+* quarantine ambiguous ref responses ([7a0d712](https://github.com/buildproven/claude-kit/commit/7a0d712c038397d6713ba8f03c2157daf7e5fff7))
+* reap escaped provider helpers ([8bd81d5](https://github.com/buildproven/claude-kit/commit/8bd81d5b9f89a012dbc68f3c977538c750ddf7e9))
+* release rejected ref CAS guards ([17675c0](https://github.com/buildproven/claude-kit/commit/17675c0dc695ad0343f885a449532a6969015ab3))
+* retain budget after incomplete review ([fe670d0](https://github.com/buildproven/claude-kit/commit/fe670d010ef2a2513b49c36a24a0719f8700d206))
+* revalidate ref CAS authority at mutation ([f6d669e](https://github.com/buildproven/claude-kit/commit/f6d669edf47cedf267c160fd992b35fb3331d90f))
+* sign ref CAS descendant authority ([38b1e53](https://github.com/buildproven/claude-kit/commit/38b1e53853d0ebed0120e63ef7890eb37ce673d8))
+* signal provider group before escaped processes ([6dcb1e6](https://github.com/buildproven/claude-kit/commit/6dcb1e6f97c4ff2d49d8a65f95f03c8fb88138ba))
+* supersede stale exact-head approval ([d74cbe5](https://github.com/buildproven/claude-kit/commit/d74cbe5612dc055458ff23d120bb1337be655c34))
+* support green non-strict ref CAS ([10f40e4](https://github.com/buildproven/claude-kit/commit/10f40e465a024308115e33ed79b5816408df3fb5))
+* type quality runner action boundaries ([33d1d8d](https://github.com/buildproven/claude-kit/commit/33d1d8d66cdf3a6bf3dbffc47d03799d7768b530))
+* validate composed descendant decision ([9e13ab9](https://github.com/buildproven/claude-kit/commit/9e13ab99bf2f68ec6a0bad91c4bf0e991dd055f6))
+* validate provider process identity before signals ([84aca47](https://github.com/buildproven/claude-kit/commit/84aca4764e1f8163a000226060d053193ed239a7))
+
 ## [4.7.4](https://github.com/buildproven/claude-kit/compare/v4.7.3...v4.7.4) (2026-08-21)
 
 
