@@ -4,6 +4,18 @@
   "mappings": [
     {
       "paths": [
+        "scripts/vcycle-creator.js",
+        "docs/decisions/ADR-vcycle-creator.md"
+      ],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": ["vitest", "run", "scripts/__tests__/vcycle-creator.test.js"]
+        }
+      ]
+    },
+    {
+      "paths": [
         "config/compute-governor-policy.json",
         "scripts/compute-governor.js",
         "scripts/provider-run.sh",

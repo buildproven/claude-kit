@@ -169,6 +169,16 @@ the current directory, 8 items, and 8 hours. Run with `--dry-run` first to valid
 scope without launching Ralph. Add `--provider codex --fallback claude` (or the
 reverse) to override the shared policy for a run.
 
+For product work that needs explicit V-cycle traceability,
+[`scripts/vcycle-creator.js`](scripts/vcycle-creator.js) provides a local,
+provider-free control plane. It snapshots requirements and verification gates,
+allows only a clean committed build to move the candidate revision, executes
+non-mutating gates itself, and refuses completion without exact-candidate
+receipts. State stays in an explicit mode-0700 evidence directory outside the
+target repository. See the
+[`V-cycle creator ADR`](docs/decisions/ADR-vcycle-creator.md) for its versioned
+matrix and command contract.
+
 For ongoing maintenance, copy `config/fleet.example.json` to
 `${XDG_CONFIG_HOME:-~/.config}/buildproven/fleet.json`, set GitHub owners and local
 roots, then run `/bs:steward audit`. `fix` mode creates isolated worktrees and

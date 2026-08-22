@@ -6,6 +6,10 @@ All notable changes to claude-kit are documented here.
 
 ### Added
 
+- A deterministic, provider-free V-cycle creator now binds immutable
+  traceability, committed build candidates, creator-run verification receipts,
+  rework, and completion in external locked state (BUI-790).
+
 - The revision-bound quality engine now supports opt-in Gemini review as a
   bounded, read-only primary or fallback provider. Gemini responses use the
   same strict structured-review schema, provider circuit, attempt governor,

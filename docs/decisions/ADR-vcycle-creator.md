@@ -1,6 +1,6 @@
 # ADR: V-cycle creator control plane
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-20
 - Decision owner: claude-kit
 
@@ -168,3 +168,26 @@ and can be removed without changing the state schema.
   no provider-execution command.
 - `npm run lint`, focused Vitest tests, and the repository quality workflow
   validate the delivered change.
+
+## Implemented interface
+
+The matrix schema is version 1. It contains top-level `artifacts` entries with
+`phase` and `reference`, plus `requirements` entries with unique IDs. Each
+requirement contains `obligations` with unique IDs, a mandatory verification
+phase, and one of the `lint`, `test`, or `security` gates.
+
+The public CLI accepts only explicit paths and identities:
+
+```text
+vcycle-creator.js init --repo <root> --evidence-dir <dir> --brief <file>
+vcycle-creator.js advance --cycle <dir> --phase <phase> --evidence <file>
+vcycle-creator.js plan --cycle <dir> --matrix <file>
+vcycle-creator.js record-build --cycle <dir>
+vcycle-creator.js verify --cycle <dir> --obligation <id>
+vcycle-creator.js replan --cycle <dir>
+vcycle-creator.js status --cycle <dir>
+```
+
+`--evidence` applies only to left-side phases. Build and verification advances
+resolve creator-owned receipts from cycle state and accept no receipt path or
+caller-provided result.
