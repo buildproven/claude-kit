@@ -271,6 +271,7 @@ function init(options) {
       gateContract: null,
       receipts: {},
       failedReceipts: [],
+      supersededReceipts: [],
       phaseEvidence: {},
       history: [],
     };
@@ -396,6 +397,58 @@ function gateSources(repo) {
   return sources;
 }
 
+function unsafeGateScript(script) {
+  if (typeof script !== "string") return true;
+  const unsafeExecutables = new Set([
+    "gh",
+    "curl",
+    "wget",
+    "ssh",
+    "scp",
+    "deploy",
+    "publish",
+  ]);
+  const packageManagers = new Set(["npm", "pnpm", "yarn"]);
+  const unsafePackageActions = new Set([
+    "i",
+    "install",
+    "add",
+    "publish",
+    "deploy",
+  ]);
+  const segments = script
+    .replace(/["']/g, "")
+    .split(/&&|\|\||[;|()`]/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  for (const segment of segments) {
+    const tokens = segment.split(/\s+/);
+    while (
+      tokens[0]?.includes("=") &&
+      /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0])
+    ) {
+      tokens.shift();
+    }
+    while (["command", "env"].includes(tokens[0])) tokens.shift();
+    const executable = path.basename(tokens.shift() || "");
+    if (unsafeExecutables.has(executable)) return true;
+    if (packageManagers.has(executable)) {
+      const action = tokens[0] === "run" ? tokens[1] : tokens[0];
+      if (unsafePackageActions.has(action)) return true;
+    }
+    if (["sh", "bash", "zsh"].includes(executable)) {
+      const commandIndex = tokens.indexOf("-c");
+      if (
+        commandIndex >= 0 &&
+        unsafeGateScript(tokens.slice(commandIndex + 1).join(" "))
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function packageGateContract(repo) {
   const packageFile = path.join(repo, "package.json");
   if (!fs.existsSync(packageFile))
@@ -421,12 +474,7 @@ function packageGateContract(repo) {
   }
   for (const name of ["lint", "test", securityScript]) {
     const script = scripts[name];
-    if (
-      typeof script !== "string" ||
-      /\b(gh|curl|wget|ssh|scp)\b|\b(deploy|publish)\b|\b(npm|pnpm|yarn)\s+(i|install|add|publish)\b/i.test(
-        script,
-      )
-    ) {
+    if (unsafeGateScript(script)) {
       fail(
         `package script ${name} is not an allowed non-mutating gate`,
         "UNSAFE_GATE",
@@ -708,6 +756,11 @@ function advanceBuild(state, options) {
   ]);
   state.candidateHead = receipt.postBuildHead;
   state.candidateTree = receipt.postBuildTree;
+  state.supersededReceipts.push(
+    ...Object.values(state.receipts).filter(
+      (prior) => prior.kind === "verification",
+    ),
+  );
   state.receipts = { build: receipt };
   if (
     canonicalText(gateSources(state.repo.realpath)) !==

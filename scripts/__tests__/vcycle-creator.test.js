@@ -211,6 +211,25 @@ describe("vcycle creator public CLI", () => {
     expect(result.json.code).toBe("UNSAFE_GATE");
   });
 
+  it("does not treat unsafe command names inside ordinary paths as executables", () => {
+    const packageFile = path.join(subject.repo, "package.json");
+    const packageJson = JSON.parse(fs.readFileSync(packageFile));
+    packageJson.scripts.lint = "eslint packages/deploy-cli/src";
+    packageJson.scripts.test = "vitest run src/gh/**";
+    writeJson(packageFile, packageJson);
+    runGit(subject.repo, ["add", "package.json"]);
+    runGit(subject.repo, ["commit", "-m", "path-shaped gate names"]);
+    initialize(subject);
+    command(subject.cycle, "advance", {
+      phase: "DISCOVER",
+      evidence: path.join(subject.cycle, "discover.md"),
+    });
+    const result = command(subject.cycle, "plan", {
+      matrix: path.join(subject.cycle, "matrix.json"),
+    });
+    expect(result.status).toBe(0);
+  });
+
   it("binds the traceability matrix exactly once", () => {
     initialize(subject);
     command(subject.cycle, "advance", {
@@ -310,6 +329,12 @@ describe("vcycle creator public CLI", () => {
     reachBuild(subject);
     commitBuild(subject);
     recordAndAdvanceBuild(subject);
+    expect(
+      command(subject.cycle, "verify", { obligation: "unit-1" }).status,
+    ).toBe(0);
+    expect(
+      command(subject.cycle, "advance", { phase: "UNIT_VERIFY" }).json.phase,
+    ).toBe("SYSTEM_VERIFY");
     fs.appendFileSync(
       path.join(subject.repo, "product.js"),
       "module.exports.rework = true\n",
@@ -318,7 +343,7 @@ describe("vcycle creator public CLI", () => {
     runGit(subject.repo, ["commit", "-m", "early rework"]);
     const status = command(subject.cycle, "status");
     expect(status.json).toMatchObject({
-      phase: "UNIT_VERIFY",
+      phase: "SYSTEM_VERIFY",
       nextAction: "record-build",
       repository: { candidateDiverged: true, dirty: false },
     });
@@ -329,6 +354,12 @@ describe("vcycle creator public CLI", () => {
     expect(advanced.json.candidateHead).toBe(
       runGit(subject.repo, ["rev-parse", "HEAD"]),
     );
+    const state = JSON.parse(
+      fs.readFileSync(path.join(subject.cycle, "cycle.json")),
+    );
+    expect(state.supersededReceipts).toEqual([
+      expect.objectContaining({ obligationId: "unit-1", exitCode: 0 }),
+    ]);
   });
 
   it("rejects a committed build that is not a descendant of the candidate", () => {
