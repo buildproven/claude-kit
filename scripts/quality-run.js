@@ -122,7 +122,11 @@ function currentReview(manifest) {
 }
 
 function reviewSummary(manifest) {
-  const reviews = manifest.reviews;
+  const byRange = new Map();
+  for (const review of manifest.reviews) {
+    byRange.set(`${review.from || ""}\0${review.to || ""}`, review);
+  }
+  const reviews = [...byRange.values()];
   return {
     status: reviews.some((review) => review.status === "incomplete")
       ? "incomplete"
@@ -301,6 +305,16 @@ async function finishWithMerge(context, manifestPath, manifest, review) {
       state: afterMerge.terminalState.state,
       head: afterMerge.revisions.currentHead,
     };
+  }
+  if (merge.code === ACTION_REQUIRED_EXIT) {
+    const message = `${merge.stderr || ""}\n${merge.stdout || ""}`.trim();
+    return actionRequired(
+      manifestPath,
+      "merge",
+      message || "merge requires an external governance capability",
+      manifest,
+      review,
+    );
   }
   throw new Error(`merge admission failed with exit ${merge.code}`);
 }

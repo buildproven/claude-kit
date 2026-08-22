@@ -478,7 +478,11 @@ case "$ATOMIC_BASE_FRESHNESS" in
     echo "   If this repo's plan cannot protect branches at all, set" >&2
     echo "   BS_QUALITY_ALLOW_UNPROTECTABLE_BASE=true to accept the weaker," >&2
     echo "   non-atomic guarantee explicitly." >&2
-    exit 1
+    # Exit 3 is the quality runner's typed action-required contract. This
+    # outcome needs an external branch-governance change or the separately
+    # signed protected-nonstrict capability; it is not a deterministic code
+    # failure and must not be collapsed into terminal blocked evidence.
+    exit 3
     ;;
 esac
 NONSTRICT_REFCAS_CAPABILITY=false

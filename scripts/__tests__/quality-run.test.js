@@ -121,12 +121,18 @@ if (step === "quality-run-gate.sh") {
 }
 if (step === "quality-mutation-check.sh") manifest.mutation = true;
 if (step === "quality-run-review.sh") manifest.reviews.push({
+  from: manifest.revisions.baseSha,
   to: manifest.revisions.currentHead,
   status: manifest.behavior?.incompleteReview ? "incomplete" :
     (manifest.risk.tier === "low" ? "exempt" : "complete"),
   leadCount: manifest.behavior?.leads || 0,
 });
 if (step === "quality-stamp-and-merge.sh") {
+  if (manifest.behavior?.externalMergeRequirement) {
+    fs.writeFileSync(file, JSON.stringify(manifest));
+    process.stderr.write("protected base requires a signed capability\\n");
+    process.exit(3);
+  }
   if (manifest.behavior?.failMerge) {
     fs.writeFileSync(file, JSON.stringify(manifest));
     if (manifest.behavior.mergeWarning) {
@@ -292,6 +298,7 @@ describe("quality-run public orchestration", () => {
       status: "success",
     }));
     manifest.reviews.push({
+      from: manifest.revisions.baseSha,
       to: manifest.revisions.currentHead,
       status: "incomplete",
       leadCount: 0,
@@ -305,6 +312,24 @@ describe("quality-run public orchestration", () => {
     );
     expect(result.manifest.reviews).toHaveLength(2);
     expect(result.manifest.telemetryWrites).toBe(1);
+  });
+
+  it("reports a successful provider retry as complete", () => {
+    const entry = fixture({ retryPending: true }, { tier: "medium" });
+    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    manifest.reviews.push({
+      from: "base123",
+      to: manifest.revisions.currentHead,
+      status: "incomplete",
+      leadCount: 0,
+    });
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+
+    const result = run(entry);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.output)).toMatchObject({
+      review: { status: "complete" },
+    });
   });
 
   it("reuses rebase-carried review coverage without relabeling it as policy-exempt", () => {
@@ -355,6 +380,22 @@ describe("quality-run public orchestration", () => {
     });
     expect(result.manifest.calls.at(-1)).toBe("quality-stamp-and-merge.sh");
     expect(result.manifest.telemetryWrites).toBe(1);
+  });
+
+  it("uses the structured merge exit for an external governance capability", () => {
+    const result = run(
+      fixture(
+        { externalMergeRequirement: true },
+        { merge: true, tier: "medium" },
+      ),
+    );
+    expect(result.status).toBe(3);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "action-required",
+      kind: "external-capability",
+      phase: "merge",
+    });
+    expect(result.manifest.terminalState).toBeUndefined();
   });
 
   it("records a CI merge-admission failure as blocked, not action-required", () => {
