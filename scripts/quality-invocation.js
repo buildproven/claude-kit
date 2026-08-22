@@ -3272,10 +3272,11 @@ function providerReserveForGate(manifest) {
   const verificationSeconds = Number.isFinite(runtime.verificationSeconds)
     ? runtime.verificationSeconds
     : 0;
-  if (manifest.reviews.length === 0) {
+  const completed = completedReviews(manifest);
+  if (completed.length === 0) {
     return reviewSeconds + verificationSeconds;
   }
-  const reviewedHead = completedReviews(manifest).at(-1)?.to;
+  const reviewedHead = completed.at(-1)?.to;
   return reviewedHead && reviewedHead !== manifest.revisions.currentHead
     ? verificationSeconds
     : 0;

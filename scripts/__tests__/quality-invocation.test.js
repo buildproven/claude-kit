@@ -2978,6 +2978,35 @@ exec "${realGit}" "$@"
     expect(final.governor.activeExecution).toBeNull();
   });
 
+  it("retains the provider reserve after an incomplete review attempt", () => {
+    const root = repo("shared-active-incomplete-review-reserve");
+    const manifestPath = create(root, ["--level", "medium"]);
+    execFileSync("bash", [RISK, "--manifest", manifestPath], { cwd: root });
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const providerReserve =
+      manifest.risk.runtime.reviewSeconds +
+      manifest.risk.runtime.verificationSeconds;
+    manifest.reviews.push({
+      status: "incomplete",
+      provider: "review-incomplete",
+      from: manifest.revisions.baseSha,
+      to: manifest.revisions.currentHead,
+    });
+    manifest.governor.activeSecondsUsed =
+      manifest.governor.activeSecondsLimit - providerReserve;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const gate = spawnSync(
+      "bash",
+      [RUN_GATE, "--manifest", manifestPath, "--name", "lint"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(gate.status).not.toBe(0);
+    expect(gate.stderr).toMatch(
+      /cannot start without consuming the reserved provider capacity/,
+    );
+  });
+
   it("does not reserve provider capacity for a zero-review campaign", () => {
     const root = repo("shared-active-zero-review");
     git(root, ["reset", "--hard", "-q", "origin/main"]);
