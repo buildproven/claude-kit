@@ -141,8 +141,10 @@ if (step === "quality-stamp-and-merge.sh") {
     process.stderr.write("required CI failed on exact candidate\\n");
     process.exit(1);
   }
-  manifest.terminalState = { state: "merged", head: manifest.revisions.currentHead };
-  manifest.telemetryWrites = (manifest.telemetryWrites || 0) + 1;
+  if (!manifest.behavior?.mergeWithoutTerminal) {
+    manifest.terminalState = { state: "merged", head: manifest.revisions.currentHead };
+    manifest.telemetryWrites = (manifest.telemetryWrites || 0) + 1;
+  }
 }
 fs.writeFileSync(file, JSON.stringify(manifest));
 `;
@@ -276,10 +278,10 @@ describe("quality-run public orchestration", () => {
 
   it("keeps incomplete provider evidence honest for a no-merge audit", () => {
     const result = run(fixture({ incompleteReview: true }, { tier: "medium" }));
-    expect(result.status).toBe(0);
+    expect(result.status).toBe(1);
     expect(JSON.parse(result.output)).toMatchObject({
-      status: "complete",
-      state: "verified-unmerged",
+      status: "terminal",
+      state: "provider-incomplete",
       review: { status: "incomplete" },
     });
     expect(result.manifest.reviews[0].status).toBe("incomplete");
@@ -380,6 +382,19 @@ describe("quality-run public orchestration", () => {
     });
     expect(result.manifest.calls.at(-1)).toBe("quality-stamp-and-merge.sh");
     expect(result.manifest.telemetryWrites).toBe(1);
+  });
+
+  it("rejects merge exit zero without exact merged terminal evidence", () => {
+    const result = run(
+      fixture({ mergeWithoutTerminal: true }, { merge: true, tier: "medium" }),
+    );
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "terminal",
+      state: "blocked",
+      message:
+        "merge process exited successfully without exact-head merged terminal evidence",
+    });
   });
 
   it("uses the structured merge exit for an external governance capability", () => {

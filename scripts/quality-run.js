@@ -175,7 +175,9 @@ function invocationRuntime(manifestPath, execute) {
     });
   };
   const invoke = async (phase, command, args) => {
+    assertNotInterrupted({ signal: null });
     updateOrchestration(manifestPath, phase, "running");
+    assertNotInterrupted({ signal: null });
     const result = await execute(command, args, {
       cwd: manifestAt(manifestPath).repo.realpath,
       onChild,
@@ -249,6 +251,23 @@ async function ensureReview(manifestPath, invoke) {
 }
 
 async function finishWithoutMerge(manifestPath, invoke, manifest, review) {
+  if (review.status === "incomplete") {
+    await invoke("terminal", process.execPath, [
+      script("quality-invocation.js"),
+      "terminal-state",
+      manifestPath,
+      "--state",
+      "provider-incomplete",
+      "--detail",
+      `review:incomplete;leads:${review.leads}`,
+    ]);
+    return {
+      status: "terminal",
+      state: "provider-incomplete",
+      head: manifest.revisions.currentHead,
+      review,
+    };
+  }
   await invoke("terminal", process.execPath, [
     script("quality-invocation.js"),
     "terminal-state",
@@ -280,6 +299,7 @@ async function finishWithMerge(context, manifestPath, manifest, review) {
     );
   }
   updateOrchestration(manifestPath, "merge", "running");
+  context.runtime.assertNotInterrupted({ signal: null });
   const merge = await context.execute(
     "bash",
     [script("quality-stamp-and-merge.sh"), "--manifest", manifestPath],
@@ -291,9 +311,17 @@ async function finishWithMerge(context, manifestPath, manifest, review) {
   context.runtime.assertNotInterrupted(merge);
   if (merge.code === 0) {
     const merged = manifestAt(manifestPath);
+    if (
+      merged.terminalState?.state !== "merged" ||
+      merged.terminalState.head !== merged.revisions.currentHead
+    ) {
+      throw new Error(
+        "merge process exited successfully without exact-head merged terminal evidence",
+      );
+    }
     return {
       status: "complete",
-      state: merged.terminalState?.state || "merged",
+      state: "merged",
       head: merged.revisions.currentHead,
       review,
     };
@@ -327,7 +355,10 @@ async function recordFailure(context, manifestPath, error) {
     throw error;
   }
   if (!manifest.terminalState) {
-    const stale = /HEAD|identity|stale|supersed/i.test(error.message);
+    const stale =
+      /identity.*(?:changed|mismatch)|(?:HEAD|head).*(?:changed|moved|mismatch)|stale|supersed/i.test(
+        error.message,
+      );
     const state = error.terminalState || (stale ? "superseded" : "blocked");
     const result = await context.execute(
       process.execPath,

@@ -17,6 +17,9 @@ is `complete`, `terminal`, or `action-required`. Exit 3 is reserved for a named
 external capability or branch-governance action. Gate, stale-head,
 provider-contract, CI, and signal
 failures retain their typed terminal state and one idempotent telemetry record.
+An exhausted incomplete review cannot become `verified-unmerged`; it records
+`provider-incomplete`. Merge success requires exact-head `merged` terminal
+evidence from the protected merge transaction, not only process exit zero.
 
 Risk resolution also records a deterministic task type from the branch commit
 range and, when commit intent is unavailable, an all-specialized path set:
