@@ -534,11 +534,20 @@ function recordJudgeArtifact(root, manifest, dispositions = []) {
       encoding: "utf8",
     }),
   );
-  context.findings = context.findings.map((finding, index) => ({
-    ...finding,
-    disposition: dispositions[index] || "WARNING",
-    reason: "test classification",
-  }));
+  context.findings = context.findings.map((finding, index) => {
+    const disposition = dispositions[index] || "WARNING";
+    return {
+      ...finding,
+      disposition,
+      reason: "test classification",
+      resolution:
+        disposition === "BLOCKING"
+          ? "confirmed-unresolved"
+          : disposition === "WARNING"
+            ? "confirmed-nonblocking"
+            : "refuted",
+    };
+  });
   writeFileSync(artifact, JSON.stringify(context));
   execFileSync(
     "node",
@@ -5859,6 +5868,17 @@ exit 1
     expect(result.stderr).toMatch(/require a reason/);
 
     context.findings[0].reason = "Useful but not merge-blocking";
+    context.findings[0].resolution = "fixed";
+    writeFileSync(artifact, JSON.stringify(context));
+    result = spawnSync(
+      "node",
+      [INVOCATION, "judge", manifest, "--artifact", artifact],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/incompatible with WARNING/);
+
+    context.findings[0].resolution = "confirmed-nonblocking";
     context.findings[0].body = "mutated payload";
     writeFileSync(artifact, JSON.stringify(context));
     result = spawnSync(

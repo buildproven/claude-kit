@@ -193,6 +193,14 @@ deterministic repository evidence. Do not ask another model to vote, promote a
 finding because multiple agents repeated it, or treat a model clean verdict as
 proof.
 
+The signed judge row for every lead must retain its immutable `id`, provider,
+and source, then add one disposition and one compatible resolution:
+`BLOCKING/confirmed-unresolved`; `WARNING/confirmed-nonblocking` or
+`WARNING/accepted-risk`; or `SUPPRESSED/fixed`, `SUPPRESSED/refuted`,
+`SUPPRESSED/duplicate`, or `SUPPRESSED/non-actionable`. The reason explains the
+deterministic evidence. These fields are the economics producer; never infer a
+caught bug from a failed gate or from a lead count alone.
+
 A lead becomes merge-blocking only when converted into an allowlisted failing
 gate, regression test, or executable static rule. Batch confirmed repairs into
 at most one fix commit, rerun affected gates, then produce one incremental
@@ -282,9 +290,11 @@ non-Actions failures.
 
 ## 6. Telemetry — always terminal
 
-On every exit path (merge, no-merge report, blocked, incomplete), record exactly
-one idempotent manifest-derived telemetry line. A recorder failure warns without
-changing the quality outcome; a missing/unreadable manifest remains a hard error.
+On every exit path (merge, no-merge report, blocked, incomplete), record one
+idempotent manifest-derived telemetry line for that terminal state. A verified
+merge records one stronger `merged` receipt even if the campaign previously
+recorded a non-merged state. A recorder failure warns without changing the
+quality outcome; a missing/unreadable manifest remains a hard error.
 The public `terminal-state` command performs that fail-soft telemetry write
 automatically after it persists the write-once terminal state. Do not depend on
 a separate agent-authored recorder step.
@@ -307,14 +317,16 @@ complete-suite rates:
 ```bash
 node "$QUALITY_SCRIPTS_DIR/quality-telemetry-report.js" \
   --input "$HOME/.local/state/claude-kit/quality-telemetry" \
-  --ci-snapshot /path/to/ci-budget-snapshot.json \
-  --dispositions /path/to/finding-dispositions.json
+  --ci-snapshot /path/to/ci-budget-snapshot.json
 ```
 
-The optional evidence files are schema-versioned JSON. A CI snapshot requires
+The report derives finding dispositions from signed judge artifacts embedded in
+v8 telemetry. `--dispositions` remains a labeled legacy input only; it is not
+the producer for current campaigns. The optional evidence files are
+schema-versioned JSON. A CI snapshot requires
 `schemaVersion`, `usedMinutes`, `includedMinutes`, and `fetchedAt`; a finding
 ledger requires `schemaVersion`, `confirmed`, `refuted`, `escaped`, `source`,
 and `asOf`.
-Unavailable, historical, malformed, or unsupported data is labeled in the
-report's `completeness` section, never inferred as zero. Use the quality-value
-report for escaped-defect attribution and cost per deterministic failure.
+Unavailable, historical, malformed, fixture, unattributed, or unsupported data
+is labeled in the report's `population` and `completeness` sections, never
+inferred as zero. Exact token counts and artifact estimates remain separate.

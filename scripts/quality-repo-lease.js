@@ -1248,7 +1248,13 @@ function recordMergedTerminalRaw(manifestPath) {
   require("./quality-invocation").withManifestLockRaw(
     manifestPath,
     (manifest) => {
-      if (manifest.terminalState) return;
+      if (manifest.terminalState?.state === "merged") return;
+      if (
+        manifest.terminalState &&
+        manifest.terminalState.state !== "verified-unmerged"
+      ) {
+        return;
+      }
       manifest.terminalState = {
         state: "merged",
         detail: `pr:${manifest.repo.pr}`,
@@ -1259,10 +1265,22 @@ function recordMergedTerminalRaw(manifestPath) {
   );
 }
 
+function recordMergedTelemetry(manifestPath) {
+  try {
+    require("./quality-telemetry").recordCampaign(manifestPath, {
+      quiet: true,
+    });
+  } catch (error) {
+    process.stderr.write(
+      `[quality] telemetry: merged campaign could not be recorded — ${error.message}\n`,
+    );
+  }
+}
+
 function releaseVerifiedOutcome(manifestPath, presentedToken, outcome) {
   const loaded = loadManifest(manifestPath);
   const tuple = ownerTuple(loaded.manifest, loaded.manifestPath);
-  return withMetadataGuard(loaded.manifest, (paths) => {
+  const released = withMetadataGuard(loaded.manifest, (paths) => {
     const record = leaseRecord(paths.lease);
     if (
       record.disposition !== "active" ||
@@ -1302,6 +1320,8 @@ function releaseVerifiedOutcome(manifestPath, presentedToken, outcome) {
     exactCleanup(releasedLease);
     return true;
   });
+  if (outcome === "merged") recordMergedTelemetry(manifestPath);
+  return released;
 }
 
 function resolveMergeMode(manifest, options, head) {

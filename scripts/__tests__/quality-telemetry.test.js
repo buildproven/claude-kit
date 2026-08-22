@@ -1,4 +1,5 @@
 const fs = require("fs");
+const crypto = require("node:crypto");
 const os = require("os");
 const path = require("path");
 
@@ -138,7 +139,7 @@ describe("buildRecord", () => {
       nowIso: NOW,
     });
     expect(rec).toMatchObject({
-      telemetrySchemaVersion: 7,
+      telemetrySchemaVersion: 8,
       invocationId: "11111111-1111-4111-8111-111111111111",
       repoKey: "target-repo",
       taskType: "feature",
@@ -169,6 +170,7 @@ describe("buildRecord", () => {
       reviewRounds: 1,
       agentsRun: 2,
       blockingCount: 0,
+      deterministicFailureCount: null,
       mergeRequested: false,
       verdict: "passed",
     });
@@ -200,12 +202,24 @@ describe("buildRecord", () => {
     expect(rec.testSelectionMode).toBe("complete");
   });
 
-  it("measures provider prompt/output artifacts with an explicit estimate label", () => {
+  it("keeps exact provider usage separate from artifact estimates", () => {
     const artifactDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "qtel-artifacts-"),
     );
     fs.writeFileSync(path.join(artifactDir, "codex-1.prompt"), "12345678");
     fs.writeFileSync(path.join(artifactDir, "codex-1.normalized.json"), "1234");
+    fs.writeFileSync(
+      path.join(artifactDir, "codex-1.progress"),
+      `${JSON.stringify({
+        type: "turn.completed",
+        usage: {
+          input_tokens: 100,
+          cached_input_tokens: 60,
+          output_tokens: 20,
+          reasoning_output_tokens: 5,
+        },
+      })}\n`,
+    );
     try {
       const record = buildRecord(
         baseManifest({
@@ -228,7 +242,14 @@ describe("buildRecord", () => {
         reviewOutputChars: 4,
         reviewOutputTokensEstimated: 1,
         reviewTokenEstimateSource: "artifact-chars/4",
-        reviewTokens: null,
+        reviewTokens: 120,
+        reviewInputTokens: 100,
+        reviewCachedInputTokens: 60,
+        reviewOutputTokens: 20,
+        reviewReasoningOutputTokens: 5,
+        reviewTokenUsageSource: "codex-cli",
+        reviewTokenUsageSamples: 1,
+        reviewUsageMissingReviews: 0,
       });
       expect(
         reviewTokenProxy(
@@ -260,6 +281,67 @@ describe("buildRecord", () => {
       { execFileSync: NO_FILES, nowIso: NOW },
     );
     expect(fallback.fallbackUsed).toBe(true);
+  });
+
+  it("emits stable per-finding dispositions only from the signed judge artifact", () => {
+    const directory = fs.mkdtempSync(
+      path.join(os.tmpdir(), "qtel-judge-artifact-"),
+    );
+    const artifactPath = path.join(directory, "judge.json");
+    const artifact = {
+      schemaVersion: 1,
+      invocationId: baseManifest().invocationId,
+      repositoryKey: "target-repo",
+      head: "bbb",
+      findings: [
+        {
+          id: "finding-1",
+          disposition: "SUPPRESSED",
+          provider: "codex",
+          source: "codex:codex-1.normalized.json#0",
+          resolution: "fixed",
+        },
+      ],
+    };
+    fs.writeFileSync(artifactPath, JSON.stringify(artifact));
+    try {
+      const record = buildRecord(
+        baseManifest({
+          reviews: [
+            {
+              status: "success",
+              provider: "codex",
+              to: "bbb",
+              leadCount: 1,
+            },
+          ],
+          judge: {
+            head: "bbb",
+            blockingCount: 0,
+            artifactPath,
+            artifactSha256: crypto
+              .createHash("sha256")
+              .update(fs.readFileSync(artifactPath))
+              .digest("hex"),
+          },
+        }),
+        { execFileSync: NO_FILES, nowIso: NOW },
+      );
+      expect(record).toMatchObject({
+        findingDispositions: [
+          {
+            id: "finding-1",
+            disposition: "SUPPRESSED",
+            provider: "codex",
+            resolution: "fixed",
+          },
+        ],
+        findingDispositionMissingCount: 0,
+        findingResolutionMissingCount: 0,
+      });
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("does not follow a symlinked review artifact", () => {
@@ -304,7 +386,7 @@ describe("buildRecord", () => {
     });
     expect(record).toMatchObject({
       verdict: "passed",
-      blockingCount: 0,
+      blockingCount: null,
       reviewStatus: "incomplete",
       leadCount: 0,
     });
@@ -356,7 +438,7 @@ describe("buildRecord", () => {
     expect(record).toMatchObject({
       reviewStatus: "incomplete",
       leadCount: 3,
-      blockingCount: 0,
+      blockingCount: null,
     });
   });
 
@@ -389,7 +471,7 @@ describe("buildRecord", () => {
     expect(record).toMatchObject({
       reviewStatus: "complete",
       leadCount: 3,
-      blockingCount: 0,
+      blockingCount: null,
     });
   });
 
@@ -408,7 +490,11 @@ describe("buildRecord", () => {
       execFileSync: NO_FILES,
       nowIso: NOW,
     });
-    expect(record).toMatchObject({ verdict: "blocked", blockingCount: 2 });
+    expect(record).toMatchObject({
+      verdict: "blocked",
+      blockingCount: null,
+      deterministicFailureCount: 2,
+    });
   });
 
   it("never records the absolute repo path (no host-path leak — BUI-351)", () => {
@@ -549,6 +635,36 @@ describe("recordCampaign (idempotent append)", () => {
     expect(JSON.parse(lines[0]).invocationId).toBe(
       "22222222-2222-4222-8222-222222222222",
     );
+  });
+
+  it("appends one later merged receipt without duplicating that terminal state", () => {
+    const logPath = path.join(repoDir, "telemetry.jsonl");
+    process.env.BS_QUALITY_TELEMETRY_FILE = logPath;
+    expect(
+      recordCampaign(manifestPath, {
+        execFileSync: NO_FILES,
+        nowIso: "2026-08-22T10:00:00Z",
+      }),
+    ).toBe(0);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.terminalState = { state: "merged", detail: "pr:1" };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    const merged = {
+      execFileSync: NO_FILES,
+      nowIso: "2026-08-22T10:01:00Z",
+    };
+    expect(recordCampaign(manifestPath, merged)).toBe(0);
+    expect(recordCampaign(manifestPath, merged)).toBe(0);
+
+    const records = fs
+      .readFileSync(logPath, "utf8")
+      .trim()
+      .split("\n")
+      .map(JSON.parse);
+    expect(records).toHaveLength(2);
+    expect(
+      records.filter((record) => record.terminalState === "merged"),
+    ).toHaveLength(1);
   });
 
   it("leaves a previously clean target tree unchanged by default", () => {

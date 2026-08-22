@@ -3787,6 +3787,19 @@ function recordJudge(manifest, options) {
     ) {
       throw new Error("WARNING and SUPPRESSED judge findings require a reason");
     }
+    const allowedResolutions = {
+      BLOCKING: ["confirmed-unresolved"],
+      WARNING: ["confirmed-nonblocking", "accepted-risk"],
+      SUPPRESSED: ["fixed", "refuted", "duplicate", "non-actionable"],
+    };
+    if (
+      finding.resolution !== undefined &&
+      !allowedResolutions[finding.disposition].includes(finding.resolution)
+    ) {
+      throw new Error(
+        `judge finding ${finding.id} resolution is incompatible with ${finding.disposition}`,
+      );
+    }
   }
   const expectedIds = context.findings.map((finding) => finding.id).sort();
   const actualIds = input.findings.map((finding) => finding.id).sort();
@@ -3797,6 +3810,7 @@ function recordJudge(manifest, options) {
     const immutable = { ...finding };
     delete immutable.disposition;
     delete immutable.reason;
+    delete immutable.resolution;
     return immutable;
   };
   const expectedById = new Map(

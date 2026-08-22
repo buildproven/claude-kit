@@ -4,7 +4,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const SUPPORTED_TELEMETRY_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7]);
+const SUPPORTED_TELEMETRY_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8]);
 const FINISHED_VERDICTS = new Set(["authorized", "passed"]);
 const FULL_SELECTION_MODES = new Set(["audit", "complete"]);
 
@@ -137,14 +137,133 @@ function duplicateFullSuite(records) {
   };
 }
 
-function buildReport(loaded, { ciEvidence, dispositionEvidence, generatedAt }) {
-  const preflightRecords = loaded.records.filter(
-    (record) => record.preflight === true,
+function populationClass(record) {
+  if (record.preflight === true || record.recordClass === "preflight") {
+    return "preflight";
+  }
+  if (
+    record.recordClass === "fixture" ||
+    (typeof record.githubRepository === "string" &&
+      (record.githubRepository.startsWith("vitest/") ||
+        record.githubRepository === "owner/repo"))
+  ) {
+    return "fixture";
+  }
+  if (
+    typeof record.githubRepository !== "string" ||
+    !record.githubRepository.trim()
+  ) {
+    return "unattributed";
+  }
+  return "production";
+}
+
+function metric(values, population) {
+  return {
+    p50: percentile(values, 50),
+    p95: percentile(values, 95),
+    samples: values.length,
+    missing: population - values.length,
+    complete: values.length === population,
+  };
+}
+
+function automaticDispositions(records) {
+  const rows = records.flatMap((record) =>
+    Array.isArray(record.findingDispositions)
+      ? record.findingDispositions.map((finding) => ({
+          ...finding,
+          invocationId: record.invocationId,
+        }))
+      : [],
+  );
+  const missing = records.reduce(
+    (sum, record) =>
+      sum +
+      (Number.isInteger(record.findingDispositionMissingCount)
+        ? record.findingDispositionMissingCount
+        : Number.isInteger(record.leadCount)
+          ? record.leadCount
+          : 0),
+    0,
+  );
+  const count = (disposition) =>
+    rows.filter((row) => row.disposition === disposition).length;
+  const resolutionMissing = rows.filter(
+    (row) => typeof row.resolution !== "string" || !row.resolution,
   ).length;
-  const records = loaded.records.filter((record) => record.preflight !== true);
+  const resolutionCount = (resolution) =>
+    rows.filter((row) => row.resolution === resolution).length;
+  return {
+    blocking: count("BLOCKING"),
+    warning: count("WARNING"),
+    suppressed: count("SUPPRESSED"),
+    samples: rows.length,
+    missing,
+    resolutions: {
+      fixed: resolutionCount("fixed"),
+      confirmedUnresolved: resolutionCount("confirmed-unresolved"),
+      confirmedNonblocking: resolutionCount("confirmed-nonblocking"),
+      acceptedRisk: resolutionCount("accepted-risk"),
+      refuted: resolutionCount("refuted"),
+      duplicate: resolutionCount("duplicate"),
+      nonActionable: resolutionCount("non-actionable"),
+      missing: resolutionMissing,
+    },
+    complete: missing === 0 && resolutionMissing === 0,
+    source: "signed-judge-artifacts",
+  };
+}
+
+function includedPopulation(item, includeFixtures) {
+  return (
+    item.class === "production" || (includeFixtures && item.class === "fixture")
+  );
+}
+
+function nonnegativeFinite(value) {
+  return Number.isFinite(value) && value >= 0;
+}
+
+function nonnegativeInteger(value) {
+  return Number.isInteger(value) && value >= 0;
+}
+
+function ciMinutesMetric(ciEvidence) {
+  if (!ciEvidence.complete) return null;
+  return {
+    used: ciEvidence.value.usedMinutes,
+    included: ciEvidence.value.includedMinutes,
+    fetchedAt: ciEvidence.value.fetchedAt,
+  };
+}
+
+function ignoredFixtureCount(includeFixtures, count) {
+  return includeFixtures ? 0 : count;
+}
+
+function buildReport(
+  loaded,
+  { ciEvidence, dispositionEvidence, generatedAt, includeFixtures = false },
+) {
+  const classified = loaded.records.map((record) => ({
+    record,
+    class: populationClass(record),
+  }));
+  const countClass = (name) =>
+    classified.filter((item) => item.class === name).length;
+  const records = classified
+    .filter((item) => includedPopulation(item, includeFixtures))
+    .map((item) => item.record);
   const durations = records
     .map((record) => record.durationSeconds)
-    .filter((value) => Number.isFinite(value) && value >= 0);
+    .filter(nonnegativeFinite);
+  const activeDurations = records
+    .map((record) => record.activeDurationSeconds)
+    .filter(nonnegativeFinite);
+  const exactTokens = records
+    .map((record) => record.reviewTokens)
+    .filter(nonnegativeInteger);
   const fallbackSamples = records.filter(
     (record) => typeof record.fallbackUsed === "boolean",
   );
@@ -158,6 +277,7 @@ function buildReport(loaded, { ciEvidence, dispositionEvidence, generatedAt }) {
     FINISHED_VERDICTS.has(record.verdict),
   ).length;
   const fullSuite = duplicateFullSuite(records);
+  const dispositions = automaticDispositions(records);
   const telemetryComplete =
     records.length > 0 &&
     loaded.malformedLines === 0 &&
@@ -167,18 +287,26 @@ function buildReport(loaded, { ciEvidence, dispositionEvidence, generatedAt }) {
     generatedAt,
     population: {
       campaigns: records.length,
+      productionCampaigns: countClass("production"),
       rawRecords: loaded.rawRecordCount,
       duplicateRecordsIgnored: loaded.duplicateRecordCount,
-      preflightRecordsIgnored: preflightRecords,
+      preflightRecordsIgnored: countClass("preflight"),
+      fixtureRecordsIgnored: ignoredFixtureCount(
+        includeFixtures,
+        countClass("fixture"),
+      ),
+      unattributedRecordsIgnored: countClass("unattributed"),
+      fixturesIncluded: includeFixtures,
       malformedLines: loaded.malformedLines,
       unsupportedRecords: loaded.unsupportedRecords,
     },
     metrics: {
-      durationSeconds: {
-        p50: percentile(durations, 50),
-        p95: percentile(durations, 95),
-        samples: durations.length,
-        complete: durations.length === records.length,
+      durationSeconds: metric(durations, records.length),
+      activeDurationSeconds: metric(activeDurations, records.length),
+      exactReviewTokens: {
+        ...metric(exactTokens, records.length),
+        total: exactTokens.reduce((sum, value) => sum + value, 0),
+        source: "provider-cli",
       },
       fallbackRate: {
         value: rate(fallbacks, fallbackSamples.length),
@@ -193,28 +321,20 @@ function buildReport(loaded, { ciEvidence, dispositionEvidence, generatedAt }) {
         complete: convergenceSamples.length === records.length,
       },
       duplicateFullSuiteRate: fullSuite,
-      ciMinutes: ciEvidence.complete
-        ? {
-            used: ciEvidence.value.usedMinutes,
-            included: ciEvidence.value.includedMinutes,
-            fetchedAt: ciEvidence.value.fetchedAt,
-          }
-        : null,
-      findingDispositions: dispositionEvidence.complete
-        ? {
-            confirmed: dispositionEvidence.value.confirmed,
-            refuted: dispositionEvidence.value.refuted,
-            escaped: dispositionEvidence.value.escaped,
-            source: dispositionEvidence.value.source,
-            asOf: dispositionEvidence.value.asOf,
-          }
+      mergedCampaigns: records.filter(
+        (record) => record.terminalState === "merged",
+      ).length,
+      ciMinutes: ciMinutesMetric(ciEvidence),
+      findingDispositions: dispositions,
+      legacyFindingDispositions: dispositionEvidence.complete
+        ? dispositionEvidence.value
         : null,
     },
     completeness: {
       telemetry: telemetryComplete,
       testSelection: fullSuite.complete,
       ciMinutes: ciEvidence.complete,
-      findingDispositions: dispositionEvidence.complete,
+      findingDispositions: dispositions.complete,
       reasons: [
         records.length === 0 ? "no-telemetry-records" : null,
         loaded.malformedLines > 0 || loaded.unsupportedRecords > 0
@@ -229,23 +349,30 @@ function buildReport(loaded, { ciEvidence, dispositionEvidence, generatedAt }) {
         convergenceSamples.length !== records.length
           ? "historical-records-missing-verdict"
           : null,
+        activeDurations.length !== records.length
+          ? "historical-records-missing-active-duration"
+          : null,
+        exactTokens.length !== records.length
+          ? "provider-token-usage-missing"
+          : null,
         !fullSuite.complete
           ? "historical-records-missing-test-selection"
           : null,
         ciEvidence.reason,
-        dispositionEvidence.reason,
+        dispositions.complete ? null : "finding-dispositions-missing",
       ].filter(Boolean),
     },
   };
 }
 
 function parseArgs(argv) {
-  const result = { inputs: [] };
+  const result = { inputs: [], includeFixtures: false };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "--input") result.inputs.push(argv[++index]);
     else if (value === "--ci-snapshot") result.ciSnapshot = argv[++index];
     else if (value === "--dispositions") result.dispositions = argv[++index];
+    else if (value === "--include-fixtures") result.includeFixtures = true;
     else throw new Error(`unknown or incomplete argument: ${value}`);
   }
   if (result.inputs.length === 0)
@@ -268,6 +395,7 @@ function main(argv = process.argv.slice(2)) {
         "finding-dispositions",
       ),
       generatedAt: new Date().toISOString(),
+      includeFixtures: options.includeFixtures,
     });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     return report.completeness.telemetry ? 0 : 1;
@@ -283,6 +411,7 @@ module.exports = {
   loadTelemetry,
   main,
   percentile,
+  populationClass,
   readEvidence,
   validCiSnapshot,
   validDispositions,

@@ -488,18 +488,18 @@ At the terminal step (SKILL.md Step 6), the public `quality-invocation.js
 terminal-state` command automatically asks `scripts/quality-telemetry.js` to
 append one JSON line per finished campaign, summarizing the invocation manifest
 — no model judgment. Fields: invocation id, repo/PR/branch, base/head SHAs,
-resolved risk tier + score, duration (from `governor.startedAtEpoch`), successful
-review rounds, agents run, AI review status and lead count, deterministic
-finding count, merge-requested flag, a derived verdict (`authorized` / `passed`
-/ `blocked` / `incomplete`), and the covered file list (`baseSha..head`).
-Recording is **idempotent on invocation id** (a run that
-both merges and reports records once) and **fail-soft on write** (a bad log path
-warns but never blocks the campaign's real outcome). A missing/unreadable
-manifest is a hard failure. The log feeds the fleet escaped-defect tagger and the
-monthly quality-value report (escaped-defect rate, heuristic capture-rate
-proxy, cost per deterministic failure) — see the overlay's
-`weekly-improve.sh`. The proxy is not statistical precision: its numerator and
-denominator do not record false positives.
+resolved risk tier + score, wall and active duration, exact provider-reported
+token usage when available, separately labeled artifact estimates, successful
+review rounds, agents run, review status, signed per-finding dispositions,
+deterministic failure count, merge-requested flag, exact merged terminal receipt,
+a derived verdict, and the covered file list (`baseSha..head`). Recording is
+idempotent for each invocation and terminal state. A later verified merge may
+append one stronger `merged` receipt; readers select the latest record for that
+invocation. Writes are fail-soft and never block the campaign outcome. Reports
+exclude preflight, `vitest/*`, and missing-repository records by default; use
+`--include-fixtures` only for explicit diagnostics. Missing usage and finding
+settlements remain visible sample gaps, never inferred as zero or relabeled from
+artifact estimates.
 
 ### Exact-head review evidence
 

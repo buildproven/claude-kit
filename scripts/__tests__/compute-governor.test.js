@@ -382,8 +382,44 @@ describe("compute governor", () => {
       usage: { accessToken: "secret" },
     };
     expect(() => validateRunRecord(record)).toThrow(
-      "usage must remain null until a redacted schema is defined",
+      "usage must be null or match the redacted exact-token schema",
     );
+  });
+
+  it("accepts only redacted exact provider token usage", () => {
+    const plan = resolve(base);
+    const record = {
+      schemaVersion: 1,
+      plan,
+      requested: {
+        provider: plan.provider,
+        model: plan.model,
+        effort: plan.effort,
+      },
+      effective: {
+        provider: plan.provider,
+        model: plan.model,
+        effort: plan.effort,
+      },
+      attempts: 1,
+      timing: { startedAtEpochMs: 1, finishedAtEpochMs: 2 },
+      outcome: {
+        status: "passed",
+        exitCode: 0,
+        providerFailureCategory: null,
+      },
+      usage: {
+        schemaVersion: 1,
+        source: "codex-cli",
+        inputTokens: 100,
+        cachedInputTokens: 80,
+        cacheWriteInputTokens: 0,
+        outputTokens: 20,
+        reasoningOutputTokens: 5,
+        totalTokens: 120,
+      },
+    };
+    expect(validateRunRecord(record)).toEqual(record);
   });
 
   it("rejects unknown run-record metadata at every persisted object boundary", () => {

@@ -14,12 +14,18 @@ const {
 
 function record(overrides = {}) {
   return {
-    telemetrySchemaVersion: 7,
+    telemetrySchemaVersion: 8,
     invocationId: randomUUID(),
     recordedAt: "2026-08-13T00:00:00.000Z",
     repoKey: "sample",
+    githubRepository: "acme/sample",
     head: "abc",
     durationSeconds: 20,
+    activeDurationSeconds: 18,
+    reviewTokens: 100,
+    findingDispositions: [],
+    findingDispositionMissingCount: 0,
+    findingResolutionMissingCount: 0,
     fallbackUsed: false,
     verdict: "passed",
     testSelectionMode: "focused",
@@ -128,6 +134,14 @@ describe("quality telemetry report", () => {
       },
       ciMinutes: { used: 70, included: 3000 },
       findingDispositions: {
+        blocking: 0,
+        warning: 0,
+        suppressed: 0,
+        samples: 0,
+        missing: 0,
+        source: "signed-judge-artifacts",
+      },
+      legacyFindingDispositions: {
         confirmed: 3,
         refuted: 2,
         escaped: 1,
@@ -178,7 +192,7 @@ describe("quality telemetry report", () => {
       telemetry: false,
       testSelection: false,
       ciMinutes: false,
-      findingDispositions: false,
+      findingDispositions: true,
     });
     expect(report.completeness.reasons).toContain(
       "historical-records-missing-test-selection",
@@ -202,6 +216,8 @@ describe("quality telemetry report", () => {
       telemetrySchemaVersion: 1,
       fallbackUsed: undefined,
       testSelectionMode: undefined,
+      activeDurationSeconds: undefined,
+      reviewTokens: undefined,
     });
     const current = record({ invocationId: "current", fallbackUsed: true });
     const report = buildReport(
@@ -236,13 +252,34 @@ describe("quality telemetry report", () => {
     expect(report.completeness.reasons).toContain(
       "historical-records-missing-fallback-attribution",
     );
+    expect(report.metrics.exactReviewTokens).toMatchObject({
+      samples: 1,
+      missing: 1,
+      complete: false,
+    });
+    expect(report.completeness.reasons).toContain(
+      "provider-token-usage-missing",
+    );
   });
 
-  it("excludes telemetry preflight probes from campaign metrics", () => {
+  it("excludes preflight, fixture, and unattributed records by default", () => {
     const report = buildReport(
       {
-        records: [record({ preflight: true, durationSeconds: 999 }), record()],
-        rawRecordCount: 2,
+        records: [
+          record({ preflight: true, durationSeconds: 999 }),
+          record({
+            githubRepository: "vitest/fixture",
+            recordClass: "fixture",
+            durationSeconds: 888,
+          }),
+          record({
+            githubRepository: "owner/repo",
+            durationSeconds: 889,
+          }),
+          record({ githubRepository: null, durationSeconds: 777 }),
+          record(),
+        ],
+        rawRecordCount: 5,
         duplicateRecordCount: 0,
         malformedLines: 0,
         unsupportedRecords: 0,
@@ -264,8 +301,51 @@ describe("quality telemetry report", () => {
     expect(report.population).toMatchObject({
       campaigns: 1,
       preflightRecordsIgnored: 1,
+      fixtureRecordsIgnored: 2,
+      unattributedRecordsIgnored: 1,
     });
     expect(report.metrics.durationSeconds.p50).toBe(20);
+  });
+
+  it("includes only identified fixtures in explicit diagnostic mode", () => {
+    const report = buildReport(
+      {
+        records: [
+          record(),
+          record({
+            githubRepository: "vitest/fixture",
+            recordClass: "fixture",
+            durationSeconds: 200,
+          }),
+          record({ githubRepository: null, durationSeconds: 500 }),
+        ],
+        rawRecordCount: 3,
+        duplicateRecordCount: 0,
+        malformedLines: 0,
+        unsupportedRecords: 0,
+      },
+      {
+        ciEvidence: {
+          value: null,
+          complete: false,
+          reason: "ci-snapshot-not-provided",
+        },
+        dispositionEvidence: {
+          value: null,
+          complete: false,
+          reason: "finding-dispositions-not-provided",
+        },
+        generatedAt: "2026-08-13T01:00:00Z",
+        includeFixtures: true,
+      },
+    );
+    expect(report.population).toMatchObject({
+      campaigns: 2,
+      fixtureRecordsIgnored: 0,
+      unattributedRecordsIgnored: 1,
+      fixturesIncluded: true,
+    });
+    expect(report.metrics.durationSeconds.p95).toBe(200);
   });
 
   it("validates explicit evidence instead of inferring unavailable values", () => {
