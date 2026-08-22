@@ -2959,13 +2959,13 @@ exec "${realGit}" "$@"
     expect(final.governor.activeExecution).toBeNull();
   });
 
-  it("reserves discovery and verification capacity before starting another gate", () => {
+  it("reserves bounded discovery headroom and verification capacity before another gate", () => {
     const root = repo("shared-active-provider-reserve");
     const manifestPath = create(root, ["--level", "medium"]);
     execFileSync("bash", [RISK, "--manifest", manifestPath], { cwd: root });
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     const providerReserve =
-      manifest.risk.runtime.reviewSeconds +
+      manifest.risk.runtime.reviewReserveSeconds +
       manifest.risk.runtime.verificationSeconds;
     manifest.governor.activeSecondsUsed =
       manifest.governor.activeSecondsLimit - providerReserve;
@@ -2993,7 +2993,7 @@ exec "${realGit}" "$@"
     execFileSync("bash", [RISK, "--manifest", manifestPath], { cwd: root });
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     const providerReserve =
-      manifest.risk.runtime.reviewSeconds +
+      manifest.risk.runtime.reviewReserveSeconds +
       manifest.risk.runtime.verificationSeconds;
     manifest.reviews.push({
       status: "incomplete",
@@ -3014,6 +3014,32 @@ exec "${realGit}" "$@"
     expect(gate.stderr).toMatch(
       /cannot start without consuming the reserved provider capacity/,
     );
+  });
+
+  it("does not confuse a critical provider watchdog with idle gate capacity", () => {
+    const manifest = {
+      risk: {
+        agentTarget: 2,
+        runtime: {
+          workload: "medium",
+          reviewSeconds: 540,
+          reviewReserveSeconds: 150,
+          verificationSeconds: 120,
+        },
+      },
+      reviews: [],
+      revisions: { currentHead: "a".repeat(40) },
+      governor: {
+        activeSecondsLimit: 900,
+        activeSecondsUsed: 4,
+        gateSecondsLimit: 2700,
+        gateSecondsUsed: 4,
+        providerSecondsLimit: 2760,
+        providerSecondsUsed: 0,
+      },
+    };
+
+    expect(invocation.executionRemaining(manifest, "gate")).toBe(626);
   });
 
   it("does not reserve provider capacity for a zero-review campaign", () => {

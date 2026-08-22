@@ -3266,15 +3266,22 @@ function providerReserveForGate(manifest) {
   ) {
     return 0;
   }
-  const reviewSeconds = Number.isFinite(runtime.reviewSeconds)
-    ? runtime.reviewSeconds
+  // reviewSeconds is the provider watchdog ceiling, not capacity that must
+  // remain idle before gates run. Reserving that whole ceiling can make a
+  // healthy fixed-cost suite impossible inside the shared campaign cap (for
+  // example, 540s of critical review plus 120s of verification left only
+  // 240s for this repository's 5-minute suite). Keep the explicit bounded
+  // review reserve plus the complete verification allowance. Discovery may
+  // use any additional shared capacity that the gates do not consume.
+  const reviewReserveSeconds = Number.isFinite(runtime.reviewReserveSeconds)
+    ? runtime.reviewReserveSeconds
     : 0;
   const verificationSeconds = Number.isFinite(runtime.verificationSeconds)
     ? runtime.verificationSeconds
     : 0;
   const completed = completedReviews(manifest);
   if (completed.length === 0) {
-    return reviewSeconds + verificationSeconds;
+    return reviewReserveSeconds + verificationSeconds;
   }
   const reviewedHead = completed.at(-1)?.to;
   return reviewedHead && reviewedHead !== manifest.revisions.currentHead
