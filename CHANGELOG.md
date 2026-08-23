@@ -21,6 +21,21 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.9.0](https://github.com/buildproven/claude-kit/compare/v4.8.0...v4.9.0) (2026-08-23)
+
+
+### Features
+
+* expand phase-aware worker routing ([858f6ca](https://github.com/buildproven/claude-kit/commit/858f6ca40ccde316bc74477f68129fac17e3496c))
+
+
+### Bug Fixes
+
+* close phase routing integrity gaps ([f1e32a0](https://github.com/buildproven/claude-kit/commit/f1e32a0b2ef3f4153bd4278fbca8e3860d928fce))
+* move overnight evidence outside governed targets ([e8c786d](https://github.com/buildproven/claude-kit/commit/e8c786dda1ecf0eeacbfc24346b2e29a2d6d8dcd))
+* preserve provider defaults and protect dependencies ([ba4f7c1](https://github.com/buildproven/claude-kit/commit/ba4f7c11d98b6dab54550c24fe2ac81c8dc24dcc))
+* protect the routing control plane ([bd0c480](https://github.com/buildproven/claude-kit/commit/bd0c4807c438a01a654bb7e46017a46c3bb32694))
+
 ## [4.8.0](https://github.com/buildproven/claude-kit/compare/v4.7.4...v4.8.0) (2026-08-22)
 
 
