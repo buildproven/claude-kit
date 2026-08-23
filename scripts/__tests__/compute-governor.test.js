@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeTempDir } from "./helpers/tmp.js";
 import {
@@ -15,6 +15,7 @@ import {
   validatePhaseExecutionPlan,
   validatePhaseRunRecord,
   validatePhaseCandidate,
+  loadPolicyV2,
 } from "../compute-governor";
 
 const base = {
@@ -541,6 +542,28 @@ describe("compute governor", () => {
     }
   });
 
+  it("requires a unique policy-owned specialized exemption allowlist", () => {
+    const policy = loadPolicyV2();
+    expect(policy.specializedExemptions).toEqual([
+      "quality-panel",
+      "strategy-ensemble",
+    ]);
+    for (const specializedExemptions of [
+      [],
+      ["quality-panel", "quality-panel"],
+      ["quality-panel", "Invalid Name"],
+    ]) {
+      const file = path.join(
+        makeTempDir("governor-phase-policy-"),
+        "policy.json",
+      );
+      writeFileSync(file, JSON.stringify({ ...policy, specializedExemptions }));
+      expect(() => loadPolicyV2(file)).toThrow(
+        "unsupported phase policy schema",
+      );
+    }
+  });
+
   it("does not promote a cheaper candidate that loses acceptance quality", () => {
     const result = calibrationDecision({
       maxAcceptanceRateDrop: 0.05,
@@ -793,5 +816,60 @@ describe("compute governor", () => {
     expect(() =>
       validatePhaseCandidate(protectedPlan, protectedSubject.target, patchFile),
     ).toThrow("undeclared protected path");
+
+    const nestedSubject = phaseTarget("governor-nested-protected-path-");
+    const nestedPlan = resolvePhaseExecution(
+      request,
+      nestedSubject.prompt,
+      nestedSubject.target,
+    );
+    mkdirSync(path.join(nestedSubject.target, "src", "auth"), {
+      recursive: true,
+    });
+    writeFileSync(
+      path.join(nestedSubject.target, "src", "auth", "guard.js"),
+      "export default 1;\n",
+    );
+    execFileSync("git", ["add", "-N", "--all"], {
+      cwd: nestedSubject.target,
+    });
+    writeFileSync(
+      patchFile,
+      execFileSync("git", ["diff", "--binary", "HEAD", "--"], {
+        cwd: nestedSubject.target,
+      }),
+    );
+    expect(() =>
+      validatePhaseCandidate(nestedPlan, nestedSubject.target, patchFile),
+    ).toThrow("undeclared protected path");
+  });
+
+  it("rejects a permission-only change to a planned regular file", () => {
+    const { target, prompt } = phaseTarget("governor-mode-change-");
+    const plan = resolvePhaseExecution(
+      {
+        schemaVersion: 2,
+        caller: "interactive-ralph",
+        provider: "codex",
+        phase: "implement",
+        evidence: { ...phaseEvidence, plannedPaths: ["README.md"] },
+      },
+      prompt,
+      target,
+    );
+    chmodSync(path.join(target, "README.md"), 0o755);
+    const patchFile = path.join(
+      makeTempDir("governor-mode-patch-"),
+      "change.patch",
+    );
+    writeFileSync(
+      patchFile,
+      execFileSync("git", ["diff", "--binary", "HEAD", "--"], {
+        cwd: target,
+      }),
+    );
+    expect(() => validatePhaseCandidate(plan, target, patchFile)).toThrow(
+      "disallowed Git change kind or file mode",
+    );
   });
 });

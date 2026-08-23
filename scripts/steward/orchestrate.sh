@@ -119,7 +119,7 @@ EOF
     [ -z "$FALLBACK" ] || args+=(--fallback "$FALLBACK")
   else
     printf '%s\n' '{"schemaVersion":2,"caller":"fleet-steward","provider":"codex","phase":"implement","evidence":{"localized":false,"reversible":false,"targetedProof":false,"ambiguous":true,"changedFiles":0,"protectedSurfaces":[],"publicContract":false,"crossRepository":false,"plannedPaths":["**"]}}' > "$phase_request"
-    args=(--prompt-file "$prompt" --phase-request "$phase_request" --provider codex --fallback none --target-dir "$worktree" --timeout 3600 --output-dir "$provider_output")
+    args=(--prompt-file "$prompt" --phase-request "$phase_request" --caller fleet-steward --provider codex --fallback none --target-dir "$worktree" --timeout 3600 --output-dir "$provider_output")
   fi
   if "$KIT_ROOT/scripts/provider-run.sh" "${args[@]}" | tee "$STATE_DIR/$(basename "$repo")-$slug.result"; then
     fixed=$((fixed + 1))

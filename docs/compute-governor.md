@@ -42,6 +42,7 @@ Launch:
 bash ~/.claude/scripts/provider-run.sh \
   --prompt-file prompt.md \
   --phase-request phase-request.json \
+  --caller interactive-ralph \
   --provider codex \
   --fallback none \
   --target-dir /path/to/clean/worktree \
@@ -59,6 +60,8 @@ Caller policy and phase derive access. `scan`, `plan`, and `review` are
 read-only. `implement`, `remediate`, and `diagnose` use workspace-write in a
 detached exact-HEAD worktree. `verify` and every Claude v2 request fail closed
 before provider launch until their OS sandbox or independent verifier exists.
+Supported v2 entrypoints also pass a fixed `--caller` argument. The runner
+requires it to match the request or plan before provider launch.
 
 The Codex v2 adapter pins approval, disables ambient MCP/plugins/hooks/search,
 passes a minimal environment, and binds the execution-profile digest into the
@@ -66,11 +69,14 @@ plan and receipt. This is a target mutation-integrity boundary, not a host
 confidentiality boundary.
 
 Before write handoff, the runner freezes and hashes one binary patch. It permits
-only regular-file additions and modifications inside planned paths. Protected,
-unknown, malformed, ignored, symlink, gitlink, rename, copy, delete, type-change,
-unmerged, and out-of-plan changes stop as `replan-required`. One repository
-lease fences destination validation, exact patch application, digest
-verification, rollback, and release.
+only regular-file additions and content modifications with a stable file mode
+inside planned paths. Protected paths match at any directory depth. Protected,
+unknown, malformed, ignored, symlink, gitlink, rename, copy, delete, mode-change,
+type-change, unmerged, and out-of-plan workspace-write changes stop as
+`replan-required`. Read-only tracked changes also stop; ignored read-only cache
+files are discarded with the detached worktree and never enter a handoff. One
+repository lease fences destination validation, exact patch application,
+digest verification, rollback, and release.
 
 The v2 `run-record.json` persists only the plan, requested/effective identity,
 execution-profile digest, timing, typed outcome, and redacted exact token usage

@@ -106,6 +106,7 @@ if [ "$REVIEWER" = codex ]; then
   bash ~/.claude/scripts/provider-run.sh \
     --prompt-file "$PROMPT_FILE" \
     --phase-request "$EXECUTION_FACTS" \
+    --caller cross-review \
     --provider codex \
     --fallback none \
     --target-dir "$TARGET_DIR" \

@@ -186,7 +186,15 @@ function loadPolicyV2(file = policyV2Path()) {
       policy.callers &&
       Array.isArray(policy.protectedSurfaces) &&
       policy.protectedPromptPatterns &&
-      policy.protectedPathRules,
+      policy.protectedPathRules &&
+      Array.isArray(policy.specializedExemptions) &&
+      policy.specializedExemptions.length > 0 &&
+      policy.specializedExemptions.every(
+        (exemption) =>
+          typeof exemption === "string" && /^[a-z0-9-]+$/.test(exemption),
+      ) &&
+      new Set(policy.specializedExemptions).size ===
+        policy.specializedExemptions.length,
     "compute-governor: unsupported phase policy schema",
   );
   requireCondition(
@@ -1159,6 +1167,16 @@ function pathWithinPlan(candidate, plannedPaths) {
   );
 }
 
+function pathMatchesProtectedPrefix(candidate, prefix) {
+  const segment = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
+  return (
+    candidate === segment ||
+    candidate.startsWith(`${segment}/`) ||
+    candidate.endsWith(`/${segment}`) ||
+    candidate.includes(`/${segment}/`)
+  );
+}
+
 function validatePhaseCandidate(
   plan,
   targetDir,
@@ -1197,8 +1215,8 @@ function validatePhaseCandidate(
     const [, oldMode, newMode, status] = match;
     requireCondition(
       ["A", "M"].includes(status) &&
-        ["000000", "100644", "100755"].includes(oldMode) &&
-        ["100644", "100755"].includes(newMode),
+        ["100644", "100755"].includes(newMode) &&
+        (status === "A" ? oldMode === "000000" : oldMode === newMode),
       "compute-governor: disallowed Git change kind or file mode",
     );
     const changedPath = fields[index++];
@@ -1227,7 +1245,9 @@ function validatePhaseCandidate(
   const discovered = Object.entries(policy.protectedPathRules)
     .filter(([, prefixes]) =>
       changes.some((changedPath) =>
-        prefixes.some((prefix) => changedPath.startsWith(prefix)),
+        prefixes.some((prefix) =>
+          pathMatchesProtectedPrefix(changedPath, prefix),
+        ),
       ),
     )
     .map(([surface]) => surface)

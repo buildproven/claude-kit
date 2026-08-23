@@ -87,6 +87,7 @@ the current session model or effort:
 bash "$SCRIPT_DIR/provider-run.sh" \
   --prompt-file "$EVIDENCE_DIR/item-prompt.md" \
   --phase-request "$EVIDENCE_DIR/item-phase-request.json" \
+  --caller interactive-ralph \
   --provider codex \
   --fallback none \
   --target-dir "$TARGET_DIR" \

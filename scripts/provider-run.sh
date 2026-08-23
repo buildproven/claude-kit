@@ -18,6 +18,7 @@ EXECUTION_PLAN=""
 EXECUTION_FACTS=""
 PHASE_REQUEST=""
 SPECIALIZED_EXEMPTION=""
+CALLER_ID=""
 PHASE_MODE=0
 PHASE_ACCESS=""
 PHASE_DISABLED_REASON=""
@@ -50,7 +51,7 @@ cleanup_governed_inputs() {
 trap cleanup_governed_inputs EXIT
 
 usage() {
-  echo "usage: provider-run.sh --prompt-file file [--phase-request request.json | --execution-plan plan.json | --execution-facts facts.json | --specialized-exemption name] [--provider auto|codex|claude] [--fallback none|codex|claude] [--target-dir dir] [--timeout seconds] [--sandbox read-only|workspace-write] [--output-dir dir]" >&2
+  echo "usage: provider-run.sh --prompt-file file [--phase-request request.json --caller id | --execution-plan plan.json [--caller id] | --execution-facts facts.json | --specialized-exemption name] [--provider auto|codex|claude] [--fallback none|codex|claude] [--target-dir dir] [--timeout seconds] [--sandbox read-only|workspace-write] [--output-dir dir]" >&2
 }
 
 while [ $# -gt 0 ]; do
@@ -66,6 +67,7 @@ while [ $# -gt 0 ]; do
     --execution-facts) EXECUTION_FACTS="${2:-}"; shift 2 ;;
     --phase-request) PHASE_REQUEST="${2:-}"; shift 2 ;;
     --specialized-exemption) SPECIALIZED_EXEMPTION="${2:-}"; shift 2 ;;
+    --caller) CALLER_ID="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) usage; exit 2 ;;
   esac
@@ -83,7 +85,16 @@ for mode_value in "$EXECUTION_PLAN" "$EXECUTION_FACTS" "$PHASE_REQUEST" "$SPECIA
   [ -z "$mode_value" ] || MODE_COUNT=$((MODE_COUNT + 1))
 done
 [ "$MODE_COUNT" -eq 1 ] || { echo "provider-run: choose exactly one governed or specialized mode" >&2; exit 2; }
-[ -z "$SPECIALIZED_EXEMPTION" ] || case "$SPECIALIZED_EXEMPTION" in quality-panel|strategy-ensemble) ;; *) echo "provider-run: unknown specialized exemption" >&2; exit 2 ;; esac
+[ -z "$CALLER_ID" ] || [[ "$CALLER_ID" =~ ^[a-z0-9-]+$ ]] \
+  || { echo "provider-run: invalid caller ID" >&2; exit 2; }
+[ -z "$CALLER_ID" ] || [ -n "$PHASE_REQUEST" ] || [ -n "$EXECUTION_PLAN" ] \
+  || { echo "provider-run: caller ID requires a schema-v2 phase request or plan" >&2; exit 2; }
+if [ -n "$SPECIALIZED_EXEMPTION" ]; then
+  jq -e --arg exemption "$SPECIALIZED_EXEMPTION" \
+    '(.specializedExemptions | type == "array") and (.specializedExemptions | index($exemption) != null)' \
+    "$SCRIPT_DIR/../config/compute-governor-policy-v2.json" >/dev/null \
+    || { echo "provider-run: unknown specialized exemption" >&2; exit 2; }
+fi
 
 OUTPUT_DIR="${OUTPUT_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/provider-run.XXXXXX")}"
 if [ -n "$EXECUTION_PLAN" ] || [ -n "$EXECUTION_FACTS" ] || [ -n "$PHASE_REQUEST" ]; then
@@ -125,6 +136,9 @@ FALLBACK="${FALLBACK:-$POLICY_FALLBACK}"
 if [ -n "$PHASE_REQUEST" ]; then
   PHASE_MODE=1
   PHASE_PROVIDER=$(jq -r '.provider // empty' "$PHASE_REQUEST")
+  PHASE_CALLER=$(jq -r '.caller // empty' "$PHASE_REQUEST")
+  [ -n "$CALLER_ID" ] && [ "$CALLER_ID" = "$PHASE_CALLER" ] \
+    || { echo "provider-run: phase caller is missing or mismatched" >&2; exit 2; }
   [ "$PHASE_PROVIDER" = codex ] || { echo "provider-run: schema-v2 phase provider is disabled" >&2; exit 2; }
   if [ -n "$REQUESTED_PROVIDER" ] && [ "$REQUESTED_PROVIDER" != codex ]; then
     echo "provider-run: explicit provider conflicts with phase request" >&2
@@ -188,6 +202,9 @@ if [ -n "$EXECUTION_PLAN" ]; then
   FALLBACK=none
   if [ "$(jq -r '.schemaVersion' "$EXECUTION_PLAN")" = 2 ]; then
     PHASE_MODE=1
+    PLAN_CALLER=$(jq -r '.caller // empty' "$EXECUTION_PLAN")
+    [ -n "$CALLER_ID" ] && [ "$CALLER_ID" = "$PLAN_CALLER" ] \
+      || { echo "provider-run: phase caller is missing or mismatched" >&2; exit 2; }
     PHASE_ACCESS=$(jq -r '.accessProfile' "$EXECUTION_PLAN")
     case "$PHASE_ACCESS" in
       read-only) DERIVED_SANDBOX=read-only ;;
@@ -200,6 +217,9 @@ if [ -n "$EXECUTION_PLAN" ]; then
       exit 2
     fi
     SANDBOX="$DERIVED_SANDBOX"
+  elif [ -n "$CALLER_ID" ]; then
+    echo "provider-run: caller ID requires a schema-v2 phase request or plan" >&2
+    exit 2
   fi
 
   # Execute from a detached worktree at the exact bound HEAD. The provider can
@@ -457,18 +477,21 @@ if [ "$RC" -eq 0 ]; then
       fail_governed_handoff "provider-run: cannot allocate governed change handoff"
     }
     git -C "$TARGET_DIR" add -N --all
-    GOVERNED_IGNORED=$(git -C "$TARGET_DIR" ls-files --others --ignored --exclude-standard)
-    [ -z "$GOVERNED_IGNORED" ] || {
-      printf '%s\n' "$GOVERNED_IGNORED" > "$OUTPUT_DIR/undeliverable-ignored-files.txt"
-      fail_governed_handoff "provider-run: governed provider created ignored files that cannot be delivered safely"
-    }
     git -C "$TARGET_DIR" diff --binary "$PLAN_TARGET_HEAD" -- > "$GOVERNED_PATCH"
-    if [ "$PHASE_MODE" -eq 1 ] && [ -s "$GOVERNED_PATCH" ]; then
-      if [ "$PHASE_ACCESS" = read-only ]; then
+    if [ -s "$GOVERNED_PATCH" ] && [ "$SANDBOX" = read-only ]; then
+      if [ "$PHASE_MODE" -eq 1 ]; then
         write_governed_record replan-required "$PROVIDER" 78 read-only-produced-patch >/dev/null 2>&1 || true
-        echo "provider-run: read-only phase produced a patch" >&2
-        exit 78
       fi
+      fail_governed_handoff "provider-run: read-only governed provider created tracked changes"
+    fi
+    if [ "$SANDBOX" != read-only ]; then
+      GOVERNED_IGNORED=$(git -C "$TARGET_DIR" ls-files --others --ignored --exclude-standard)
+      [ -z "$GOVERNED_IGNORED" ] || {
+        printf '%s\n' "$GOVERNED_IGNORED" > "$OUTPUT_DIR/undeliverable-ignored-files.txt"
+        fail_governed_handoff "provider-run: governed provider created ignored files that cannot be delivered safely"
+      }
+    fi
+    if [ "$PHASE_MODE" -eq 1 ] && [ -s "$GOVERNED_PATCH" ]; then
       if ! node "$SCRIPT_DIR/compute-governor.js" validate-phase-candidate \
         "$EXECUTION_PLAN" "$TARGET_DIR" "$GOVERNED_PATCH" >/dev/null; then
         write_governed_record replan-required "$PROVIDER" 78 candidate-replan-required >/dev/null 2>&1 || true

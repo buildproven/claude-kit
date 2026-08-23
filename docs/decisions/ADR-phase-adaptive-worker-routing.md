@@ -49,19 +49,18 @@ The governor derives a phase access profile:
 - `implement`, `remediate`, and `diagnose` are `workspace-write`.
 
 The request also contains a policy-known caller ID. Policy maps each caller to
-its allowed phases and maximum access profile. A caller cannot select a phase or
-access above that map. The runner injects caller identity from its workflow
-entrypoint; it does not copy an arbitrary value from task prose. Migrated v2
-callers explicitly select Codex. `auto` and a Claude policy default are invalid
-for v2.
+its allowed phases and maximum access profile. Supported entrypoints pass a
+fixed `--caller` value separately from the request. The runner requires an exact
+match before it resolves or executes the plan, so task data cannot silently
+claim another ordinary caller. Migrated v2 callers explicitly select Codex.
+`auto` and a Claude policy default are invalid for v2.
 
-Caller identity is an integrity boundary between repository-owned workflows,
-not a security boundary against a hostile process running as the same local
-user. A same-user process that can invoke arbitrary commands can also replace
-the public kit, policy, or runner. The supported entrypoints use fixed,
-policy-known caller manifests that bind their script digest and allowed phase;
-the runner rejects an unknown, changed, or mismatched manifest. Repository
-inventory tests prove that ordinary callers use only their own manifest.
+Caller identity prevents mismatches between repository-owned workflows and
+their request data. It is not a security boundary against a hostile process
+running as the same local user: a same-user process that can invoke arbitrary
+commands can choose both request and command arguments or replace the public
+kit. Repository inventory tests prove that supported ordinary entrypoints pass
+their own fixed caller ID.
 
 `provider-run.sh` binds its sandbox to this profile and rejects a conflicting
 `--sandbox` argument. Codex runs with a runner-created isolated configuration

@@ -59,6 +59,7 @@ describe("overnight loop", () => {
       encoding: "utf8",
     });
     expect(source).toContain('--phase-request "$execution_facts_file"');
+    expect(source).toContain("--caller overnight-ralph");
     expect(source).toContain('--output-dir "$provider_output_dir"');
     expect(source).toContain('"phase":"implement"');
     expect(source).toContain('"targetedProof":false');

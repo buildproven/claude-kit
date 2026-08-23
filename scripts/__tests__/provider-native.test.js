@@ -106,6 +106,7 @@ describe("provider-native platform", () => {
     expect(skill).toContain("--fallback none");
     expect(skill).toContain("--sandbox read-only");
     expect(skill).toContain('--phase-request "$EXECUTION_FACTS"');
+    expect(skill).toContain("--caller cross-review");
     expect(skill).toContain('--execution-facts "$EXECUTION_FACTS"');
     expect(skill).toContain("provider-run.sh");
     // Must not bypass the runner: a direct CLI shell-out loses the deadline,
@@ -1530,6 +1531,135 @@ describe("provider-native platform", () => {
     expect(existsSync(path.join(dir, "bin", "generated.txt"))).toBe(false);
   });
 
+  it("discards ignored read-only cache files without treating them as a handoff", () => {
+    const dir = makeTempDir("provider-native-readonly-cache-");
+    const bin = path.join(dir, "bin");
+    const output = path.join(makeTempDir("provider-output-"), "output");
+    const prompt = path.join(dir, "prompt");
+    const facts = path.join(dir, "facts.json");
+    mkdirSync(bin);
+    writeFileSync(prompt, "review and run local checks\n");
+    writeFileSync(
+      facts,
+      JSON.stringify({
+        phase: "scan",
+        readOnly: true,
+        localized: true,
+        targetedProof: true,
+        changedFiles: 1,
+        protectedSurfaces: [],
+        sameFailureStreak: 0,
+      }),
+    );
+    initializeGovernedTarget(dir);
+    executable(
+      path.join(bin, "codex"),
+      [
+        'for arg in "$@"; do',
+        '  if [ "$arg" = "-C" ]; then target_next=1; continue; fi',
+        '  if [ "${target_next:-0}" = 1 ]; then provider_target="$arg"; target_next=0; fi',
+        '  if [ "$arg" = "-o" ]; then message_next=1; continue; fi',
+        '  if [ "${message_next:-0}" = 1 ]; then last_message="$arg"; message_next=0; fi',
+        "done",
+        'echo "provider completed" > "$last_message"',
+        'mkdir -p "$provider_target/bin"',
+        'echo "cache" > "$provider_target/bin/review-cache.txt"',
+      ].join("\n"),
+    );
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--execution-facts",
+        facts,
+        "--provider",
+        "codex",
+        "--sandbox",
+        "read-only",
+        "--target-dir",
+        dir,
+        "--output-dir",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(path.join(dir, "bin", "review-cache.txt"))).toBe(false);
+    expect(
+      existsSync(path.join(output, "undeliverable-ignored-files.txt")),
+    ).toBe(false);
+  });
+
+  it("rejects tracked changes from every governed read-only provider", () => {
+    const dir = makeTempDir("provider-native-readonly-change-");
+    const bin = path.join(dir, "bin");
+    const output = path.join(makeTempDir("provider-output-"), "output");
+    const prompt = path.join(dir, "prompt");
+    const facts = path.join(dir, "facts.json");
+    mkdirSync(bin);
+    writeFileSync(prompt, "review only\n");
+    writeFileSync(
+      facts,
+      JSON.stringify({
+        phase: "scan",
+        readOnly: true,
+        localized: true,
+        targetedProof: true,
+        changedFiles: 1,
+        protectedSurfaces: [],
+        sameFailureStreak: 0,
+      }),
+    );
+    initializeGovernedTarget(dir);
+    executable(
+      path.join(bin, "codex"),
+      [
+        'for arg in "$@"; do',
+        '  if [ "$arg" = "-C" ]; then target_next=1; continue; fi',
+        '  if [ "${target_next:-0}" = 1 ]; then provider_target="$arg"; target_next=0; fi',
+        '  if [ "$arg" = "-o" ]; then message_next=1; continue; fi',
+        '  if [ "${message_next:-0}" = 1 ]; then last_message="$arg"; message_next=0; fi',
+        "done",
+        'echo "provider completed" > "$last_message"',
+        'echo "mutated" >> "$provider_target/.gitignore"',
+      ].join("\n"),
+    );
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--execution-facts",
+        facts,
+        "--provider",
+        "codex",
+        "--sandbox",
+        "read-only",
+        "--target-dir",
+        dir,
+        "--output-dir",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+    expect(result.status, result.stderr).toBe(78);
+    expect(result.stderr).toContain(
+      "read-only governed provider created tracked changes",
+    );
+    expect(readFileSync(path.join(dir, ".gitignore"), "utf8")).not.toContain(
+      "mutated",
+    );
+  });
+
   it("raises a falsely empty protected-surface list from task evidence", () => {
     const dir = makeTempDir("provider-native-protected-binding-");
     const prompt = path.join(dir, "prompt");
@@ -2075,6 +2205,8 @@ describe("provider-native platform", () => {
         prompt,
         "--phase-request",
         request,
+        "--caller",
+        "cross-review",
         "--target-dir",
         dir,
         "--output-dir",
@@ -2096,6 +2228,76 @@ describe("provider-native platform", () => {
       plan: { phase: "review", accessProfile: "read-only", route: "standard" },
       outcome: { status: "completed", exitCode: 0 },
     });
+  });
+
+  it("rejects a missing or mismatched phase caller before provider launch", () => {
+    const dir = makeTempDir("provider-phase-caller-binding-");
+    const bin = path.join(dir, "bin");
+    const output = path.join(makeTempDir("provider-output-"), "output");
+    const prompt = path.join(dir, "prompt");
+    const request = path.join(dir, "request.json");
+    const marker = path.join(dir, "codex-started");
+    mkdirSync(bin);
+    writeFileSync(prompt, "review the local change\n");
+    writeFileSync(
+      request,
+      JSON.stringify({
+        schemaVersion: 2,
+        caller: "cross-review",
+        provider: "codex",
+        phase: "review",
+        evidence: {
+          localized: true,
+          reversible: false,
+          targetedProof: true,
+          ambiguous: false,
+          changedFiles: 1,
+          protectedSurfaces: [],
+          publicContract: false,
+          crossRepository: false,
+          plannedPaths: ["src/"],
+        },
+      }),
+    );
+    initializeGovernedTarget(dir);
+    executable(path.join(bin, "codex"), `touch '${marker}'`);
+    const baseArgs = [
+      PROVIDER_RUN,
+      "--prompt-file",
+      prompt,
+      "--phase-request",
+      request,
+      "--target-dir",
+      dir,
+      "--output-dir",
+      output,
+    ];
+    const missing = spawnSync("bash", baseArgs, {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    });
+    expect(missing.status).toBe(2);
+    expect(missing.stderr).toContain("phase caller is missing or mismatched");
+    expect(existsSync(marker)).toBe(false);
+
+    const mismatched = spawnSync(
+      "bash",
+      [
+        ...baseArgs.slice(0, -2),
+        "--caller",
+        "interactive-ralph",
+        ...baseArgs.slice(-2),
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+    expect(mismatched.status).toBe(2);
+    expect(mismatched.stderr).toContain(
+      "phase caller is missing or mismatched",
+    );
+    expect(existsSync(marker)).toBe(false);
   });
 
   it("fails verification closed with a typed receipt before Codex launch", () => {
@@ -2137,6 +2339,8 @@ describe("provider-native platform", () => {
         prompt,
         "--phase-request",
         request,
+        "--caller",
+        "interactive-ralph",
         "--target-dir",
         dir,
         "--output-dir",
@@ -2210,6 +2414,8 @@ describe("provider-native platform", () => {
         prompt,
         "--phase-request",
         request,
+        "--caller",
+        "interactive-ralph",
         "--target-dir",
         dir,
         "--output-dir",

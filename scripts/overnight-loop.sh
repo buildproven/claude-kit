@@ -279,7 +279,7 @@ main() {
       [ -z "$PROVIDER_FALLBACK" ] || provider_args+=(--fallback "$PROVIDER_FALLBACK")
     else
       printf '%s\n' '{"schemaVersion":2,"caller":"overnight-ralph","provider":"codex","phase":"implement","evidence":{"localized":false,"reversible":false,"targetedProof":false,"ambiguous":true,"changedFiles":0,"protectedSurfaces":[],"publicContract":false,"crossRepository":false,"plannedPaths":["**"]}}' > "$execution_facts_file"
-      provider_args=(--prompt-file "$prompt_file" --phase-request "$execution_facts_file" --provider codex --fallback none --target-dir "$TARGET_DIR" --timeout "$remaining" --output-dir "$provider_output_dir")
+      provider_args=(--prompt-file "$prompt_file" --phase-request "$execution_facts_file" --caller overnight-ralph --provider codex --fallback none --target-dir "$TARGET_DIR" --timeout "$remaining" --output-dir "$provider_output_dir")
     fi
     "$SCRIPT_DIR/provider-run.sh" "${provider_args[@]}" 2>&1 | tee -a "$LOG_FILE" "$iteration_log" >/dev/null
     run_rc=${PIPESTATUS[0]}
