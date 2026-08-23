@@ -67,11 +67,11 @@ function initializeGovernedTarget(dir) {
 }
 
 describe("provider-native platform", () => {
-  it("invokes codex exec without the removed -a/--ask-for-approval flag", () => {
+  it("keeps legacy codex execution on its existing sandbox contract", () => {
     const source = readFileSync(PROVIDER_RUN, "utf8");
     const invocation = source
       .split("\n")
-      .find((line) => line.includes("codex exec --ephemeral"));
+      .find((line) => line.includes('CODEX_COMMAND[@]}" exec --ephemeral'));
     expect(invocation).toBeTruthy();
     // `codex exec` dropped -a/--ask-for-approval; approvals are governed by -s
     // <sandbox>. Passing -a makes codex exit rc=2 ("unexpected argument"),
@@ -105,6 +105,7 @@ describe("provider-native platform", () => {
     // (BUI-468, from the Codex side).
     expect(skill).toContain("--fallback none");
     expect(skill).toContain("--sandbox read-only");
+    expect(skill).toContain('--phase-request "$EXECUTION_FACTS"');
     expect(skill).toContain('--execution-facts "$EXECUTION_FACTS"');
     expect(skill).toContain("provider-run.sh");
     // Must not bypass the runner: a direct CLI shell-out loses the deadline,
@@ -135,7 +136,7 @@ describe("provider-native platform", () => {
       .split("\n")
       .map((line) => line.trim())
       .filter((line) => line.startsWith("--provider") && line.endsWith("\\"));
-    expect(invocation).toEqual(['--provider "$REVIEWER" \\']);
+    expect(invocation).toEqual(["--provider codex \\", "--provider claude \\"]);
     // The inversion must be present and explicit.
     expect(skill).toMatch(/codex\)\s+REVIEWER=claude/);
     expect(skill).toMatch(/claude\)\s+REVIEWER=codex/);
@@ -232,6 +233,8 @@ describe("provider-native platform", () => {
         PROVIDER_RUN,
         "--prompt-file",
         prompt,
+        "--specialized-exemption",
+        "strategy-ensemble",
         "--target-dir",
         dir,
         "--provider",
@@ -286,6 +289,8 @@ describe("provider-native platform", () => {
         PROVIDER_RUN,
         "--prompt-file",
         prompt,
+        "--specialized-exemption",
+        "strategy-ensemble",
         "--target-dir",
         dir,
         "--provider",
@@ -335,6 +340,8 @@ describe("provider-native platform", () => {
         PROVIDER_RUN,
         "--prompt-file",
         prompt,
+        "--specialized-exemption",
+        "strategy-ensemble",
         "--target-dir",
         dir,
         "--provider",
@@ -372,6 +379,8 @@ describe("provider-native platform", () => {
         PROVIDER_RUN,
         "--prompt-file",
         prompt,
+        "--specialized-exemption",
+        "strategy-ensemble",
         "--target-dir",
         dir,
         "--provider",
@@ -2015,6 +2024,210 @@ describe("provider-native platform", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(calls, "utf8")).toContain("--model claude-sonnet-5");
     expect(readFileSync(calls, "utf8")).toContain("--effort medium");
+  });
+
+  it("launches a schema-v2 read-only phase with isolated Codex authority", () => {
+    const dir = makeTempDir("provider-phase-readonly-");
+    const bin = path.join(dir, "bin");
+    const output = path.join(makeTempDir("provider-output-"), "output");
+    const prompt = path.join(dir, "prompt");
+    const request = path.join(dir, "request.json");
+    const calls = path.join(dir, "codex.calls");
+    mkdirSync(bin);
+    writeFileSync(prompt, "review the supplied local change\n");
+    writeFileSync(
+      request,
+      JSON.stringify({
+        schemaVersion: 2,
+        caller: "cross-review",
+        provider: "codex",
+        phase: "review",
+        evidence: {
+          localized: true,
+          reversible: false,
+          targetedProof: true,
+          ambiguous: false,
+          changedFiles: 1,
+          protectedSurfaces: [],
+          publicContract: false,
+          crossRepository: false,
+          plannedPaths: ["src/"],
+        },
+      }),
+    );
+    initializeGovernedTarget(dir);
+    executable(
+      path.join(bin, "codex"),
+      [
+        `printf '%s\\n' "$*" > '${calls}'`,
+        'for arg in "$@"; do',
+        '  if [ "$arg" = "-o" ]; then shift_next=1; continue; fi',
+        '  if [ "${shift_next:-0}" = 1 ]; then last_message="$arg"; shift_next=0; fi',
+        "done",
+        'printf "%s\\n" "CLEAN" > "$last_message"',
+      ].join("\n"),
+    );
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--phase-request",
+        request,
+        "--target-dir",
+        dir,
+        "--output-dir",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(calls, "utf8")).toContain("-s read-only");
+    expect(readFileSync(calls, "utf8")).toContain("mcp_servers={}");
+    expect(readFileSync(calls, "utf8")).toContain("-a never");
+    expect(
+      JSON.parse(readFileSync(path.join(output, "run-record.json"), "utf8")),
+    ).toMatchObject({
+      schemaVersion: 2,
+      plan: { phase: "review", accessProfile: "read-only", route: "standard" },
+      outcome: { status: "completed", exitCode: 0 },
+    });
+  });
+
+  it("fails verification closed with a typed receipt before Codex launch", () => {
+    const dir = makeTempDir("provider-phase-verify-");
+    const bin = path.join(dir, "bin");
+    const output = path.join(makeTempDir("provider-output-"), "output");
+    const prompt = path.join(dir, "prompt");
+    const request = path.join(dir, "request.json");
+    const marker = path.join(dir, "codex-started");
+    mkdirSync(bin);
+    writeFileSync(prompt, "verify the local checks\n");
+    writeFileSync(
+      request,
+      JSON.stringify({
+        schemaVersion: 2,
+        caller: "interactive-ralph",
+        provider: "codex",
+        phase: "verify",
+        evidence: {
+          localized: true,
+          reversible: false,
+          targetedProof: true,
+          ambiguous: false,
+          changedFiles: 1,
+          protectedSurfaces: [],
+          publicContract: false,
+          crossRepository: false,
+          plannedPaths: ["src/"],
+        },
+      }),
+    );
+    initializeGovernedTarget(dir);
+    executable(path.join(bin, "codex"), `touch '${marker}'`);
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--phase-request",
+        request,
+        "--target-dir",
+        dir,
+        "--output-dir",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+    expect(result.status, result.stderr).toBe(78);
+    expect(existsSync(marker)).toBe(false);
+    expect(
+      JSON.parse(readFileSync(path.join(output, "run-record.json"), "utf8"))
+        .outcome,
+    ).toMatchObject({
+      status: "capability-disabled",
+      category: "verification-disabled",
+    });
+  });
+
+  it("delivers an approved schema-v2 regular-file addition", () => {
+    const dir = makeTempDir("provider-phase-write-");
+    const bin = path.join(dir, "bin");
+    const output = path.join(makeTempDir("provider-output-"), "output");
+    const prompt = path.join(dir, "prompt");
+    const request = path.join(dir, "request.json");
+    mkdirSync(bin);
+    writeFileSync(prompt, "add the planned local feature\n");
+    writeFileSync(
+      request,
+      JSON.stringify({
+        schemaVersion: 2,
+        caller: "interactive-ralph",
+        provider: "codex",
+        phase: "implement",
+        evidence: {
+          localized: true,
+          reversible: true,
+          targetedProof: true,
+          ambiguous: false,
+          changedFiles: 1,
+          protectedSurfaces: [],
+          publicContract: false,
+          crossRepository: false,
+          plannedPaths: ["src/"],
+        },
+      }),
+    );
+    initializeGovernedTarget(dir);
+    executable(
+      path.join(bin, "codex"),
+      [
+        'for arg in "$@"; do',
+        '  if [ "$arg" = "-o" ]; then shift_next=1; continue; fi',
+        '  if [ "${shift_next:-0}" = 1 ]; then last_message="$arg"; shift_next=0; fi',
+        '  if [ "$arg" = "-C" ]; then cd_next=1; continue; fi',
+        '  if [ "${cd_next:-0}" = 1 ]; then target="$arg"; cd_next=0; fi',
+        "done",
+        'cd "$target"',
+        "mkdir -p src",
+        'printf "%s\\n" "export default 1;" > src/feature.js',
+        'printf "%s\\n" "done" > "$last_message"',
+      ].join("\n"),
+    );
+    const result = spawnSync(
+      "bash",
+      [
+        PROVIDER_RUN,
+        "--prompt-file",
+        prompt,
+        "--phase-request",
+        request,
+        "--target-dir",
+        dir,
+        "--output-dir",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(path.join(dir, "src", "feature.js"), "utf8")).toContain(
+      "export default 1",
+    );
+    expect(
+      JSON.parse(readFileSync(path.join(output, "run-record.json"), "utf8"))
+        .outcome.status,
+    ).toBe("completed");
   });
 
   it("keeps the public command surface within its budget", () => {

@@ -1,7 +1,11 @@
 // knip.config.js — Dead code detection
 // Docs: https://knip.dev/overview/configuration
 module.exports = {
-  entry: ["scripts/*.{js,mjs,cjs}", "eslint-plugin-defensive/index.js"],
+  entry: [
+    "scripts/*.{js,mjs,cjs}",
+    "scripts/bench/*.{js,mjs,cjs}",
+    "eslint-plugin-defensive/index.js",
+  ],
   project: ["scripts/**/*.{js,mjs,cjs}", "eslint-plugin-defensive/**/*.js"],
   ignoreDependencies: [
     "@typescript-eslint/eslint-plugin",
@@ -12,6 +16,7 @@ module.exports = {
     "husky",
     "license-checker-rseidelsohn",
     "lint-staged",
+    "pnpm",
     "prettier",
   ],
   ignoreBinaries: [
@@ -22,6 +27,8 @@ module.exports = {
     "license-checker-rseidelsohn",
     "prettier",
     "vitest",
+    // A shell fixture invokes awk directly while testing mutation manifests.
+    "awk",
     // Shell-boundary regression fixtures exercise both parent shells and
     // resolve the real Git binary through `which`.
     "which",

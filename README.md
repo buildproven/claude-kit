@@ -126,8 +126,10 @@ but skills land unprefixed, so they can shadow Claude Code built-ins. Prefer the
 plugin.
 
 Fresh headless provider runs can use the [Compute Governor](docs/compute-governor.md)
-to resolve and persist an explicit least-cost model/effort plan without changing
-the interactive builder session.
+to resolve and persist a phase-aware model, effort, access, and exact-HEAD plan
+without changing the interactive builder session. V2 keeps ordinary work on the
+reliable standard route, raises protected work to critical, and fails closed for
+capabilities whose sandbox or telemetry is not yet proven.
 
 Quality campaigns use the [deterministic quality runner](scripts/quality-run.js)
 after bootstrap. One exact manifest drives gates, bounded review, resume,

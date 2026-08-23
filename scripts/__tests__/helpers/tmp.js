@@ -51,12 +51,3 @@ export function makeTempDir(prefix = "kit-test-") {
   pending.add(dir);
   return dir;
 }
-
-/**
- * Track a directory this module did not create (e.g. a sibling worktree path
- * derived from a tracked root) so it is removed alongside the rest.
- */
-export function trackTempDir(dir) {
-  pending.add(dir);
-  return dir;
-}

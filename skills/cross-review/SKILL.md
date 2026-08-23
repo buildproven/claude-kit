@@ -96,19 +96,37 @@ PROMPT
 TARGET_DIR="$(git rev-parse --show-toplevel)"
 EXECUTION_FACTS="$OUT_DIR/execution-facts.json"
 CHANGED_FILES="$(git diff --name-only "$BASE"...HEAD | wc -l | tr -d ' ')"
-jq -n \
-  --argjson changedFiles "$CHANGED_FILES" \
-  '{phase:"scan",readOnly:true,localized:true,targetedProof:true,changedFiles:$changedFiles,protectedSurfaces:[],sameFailureStreak:0}' \
-  > "$EXECUTION_FACTS"
-bash ~/.claude/scripts/provider-run.sh \
-  --prompt-file "$PROMPT_FILE" \
-  --execution-facts "$EXECUTION_FACTS" \
-  --provider "$REVIEWER" \
-  --fallback none \
-  --target-dir "$TARGET_DIR" \
-  --sandbox read-only \
-  --timeout 900 \
-  --output-dir "$OUT_DIR"
+if [ "$REVIEWER" = codex ]; then
+  PLANNED_PATHS="$(git diff --name-only -z "$BASE"...HEAD | jq -Rs 'split("\u0000") | map(select(length > 0))')"
+  jq -n \
+    --argjson changedFiles "$CHANGED_FILES" \
+    --argjson plannedPaths "$PLANNED_PATHS" \
+    '{schemaVersion:2,caller:"cross-review",provider:"codex",phase:"review",evidence:{localized:true,reversible:false,targetedProof:true,ambiguous:false,changedFiles:$changedFiles,protectedSurfaces:[],publicContract:false,crossRepository:false,plannedPaths:$plannedPaths}}' \
+    > "$EXECUTION_FACTS"
+  bash ~/.claude/scripts/provider-run.sh \
+    --prompt-file "$PROMPT_FILE" \
+    --phase-request "$EXECUTION_FACTS" \
+    --provider codex \
+    --fallback none \
+    --target-dir "$TARGET_DIR" \
+    --sandbox read-only \
+    --timeout 900 \
+    --output-dir "$OUT_DIR"
+else
+  jq -n \
+    --argjson changedFiles "$CHANGED_FILES" \
+    '{phase:"scan",readOnly:true,localized:true,targetedProof:true,changedFiles:$changedFiles,protectedSurfaces:[],sameFailureStreak:0}' \
+    > "$EXECUTION_FACTS"
+  bash ~/.claude/scripts/provider-run.sh \
+    --prompt-file "$PROMPT_FILE" \
+    --execution-facts "$EXECUTION_FACTS" \
+    --provider claude \
+    --fallback none \
+    --target-dir "$TARGET_DIR" \
+    --sandbox read-only \
+    --timeout 900 \
+    --output-dir "$OUT_DIR"
+fi
 ```
 
 Use `--sandbox read-only`. A reviewer has no reason to write to the tree, and a

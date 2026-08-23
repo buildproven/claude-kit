@@ -270,13 +270,17 @@ main() {
     execution_facts_file="$LOG_DIR/overnight-loop-${current_issue}-${START_EPOCH}-${attempts}.facts.json"
     provider_output_dir="$LOG_DIR/overnight-loop-${current_issue}-${START_EPOCH}-${attempts}.provider"
     printf '%s\n' "Run the ralph workflow until exactly item:$current_issue in target directory $TARGET_DIR. Use the repository's quality merge gate and stop after this exact item is merged." > "$prompt_file"
-    # The unattended Ralph child starts from a conservative deterministic
-    # plan. A future classifier can strengthen these facts; it may never claim
-    # localization or proof that the caller has not established.
-    printf '%s\n' '{"phase":"implement","localized":false,"reversible":false,"targetedProof":false,"ambiguous":true,"changedFiles":0,"protectedSurfaces":[],"sameFailureStreak":0}' > "$execution_facts_file"
-    provider_args=(--prompt-file "$prompt_file" --execution-facts "$execution_facts_file" --target-dir "$TARGET_DIR" --timeout "$remaining" --output-dir "$provider_output_dir")
-    [ -z "$PROVIDER" ] || provider_args+=(--provider "$PROVIDER")
-    [ -z "$PROVIDER_FALLBACK" ] || provider_args+=(--fallback "$PROVIDER_FALLBACK")
+    # The Codex child uses the phase-v2 contract. It declares repository-wide
+    # planned scope because the shell launcher cannot infer item paths; any
+    # newly discovered protected path still stops for a critical replan.
+    if [ "$PROVIDER" = claude ]; then
+      printf '%s\n' '{"phase":"implement","localized":false,"reversible":false,"targetedProof":false,"ambiguous":true,"changedFiles":0,"protectedSurfaces":[],"sameFailureStreak":0}' > "$execution_facts_file"
+      provider_args=(--prompt-file "$prompt_file" --execution-facts "$execution_facts_file" --provider claude --target-dir "$TARGET_DIR" --timeout "$remaining" --output-dir "$provider_output_dir")
+      [ -z "$PROVIDER_FALLBACK" ] || provider_args+=(--fallback "$PROVIDER_FALLBACK")
+    else
+      printf '%s\n' '{"schemaVersion":2,"caller":"overnight-ralph","provider":"codex","phase":"implement","evidence":{"localized":false,"reversible":false,"targetedProof":false,"ambiguous":true,"changedFiles":0,"protectedSurfaces":[],"publicContract":false,"crossRepository":false,"plannedPaths":["**"]}}' > "$execution_facts_file"
+      provider_args=(--prompt-file "$prompt_file" --phase-request "$execution_facts_file" --provider codex --fallback none --target-dir "$TARGET_DIR" --timeout "$remaining" --output-dir "$provider_output_dir")
+    fi
     "$SCRIPT_DIR/provider-run.sh" "${provider_args[@]}" 2>&1 | tee -a "$LOG_FILE" "$iteration_log" >/dev/null
     run_rc=${PIPESTATUS[0]}
     rm -f "$prompt_file"

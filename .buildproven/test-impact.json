@@ -17,10 +17,16 @@
     {
       "paths": [
         "config/compute-governor-policy.json",
+        "config/compute-governor-policy-v1.json",
+        "config/compute-governor-policy-v2.json",
         "scripts/compute-governor.js",
         "scripts/provider-run.sh",
         "scripts/overnight-loop.sh",
-        "skills/ralph/reference.md"
+        "scripts/steward/orchestrate.sh",
+        "skills/ralph/reference.md",
+        "skills/cross-review/SKILL.md",
+        "docs/compute-governor.md",
+        "docs/decisions/ADR-phase-adaptive-worker-routing.md"
       ],
       "commands": [
         {

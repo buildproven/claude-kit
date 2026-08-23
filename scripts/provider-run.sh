@@ -12,10 +12,15 @@ FALLBACK=""
 PROMPT_FILE=""
 TARGET_DIR="$(pwd)"
 TIMEOUT_SECONDS=1800
-SANDBOX="workspace-write"
+SANDBOX=""
 OUTPUT_DIR=""
 EXECUTION_PLAN=""
 EXECUTION_FACTS=""
+PHASE_REQUEST=""
+SPECIALIZED_EXEMPTION=""
+PHASE_MODE=0
+PHASE_ACCESS=""
+PHASE_DISABLED_REASON=""
 GOVERNED_MODEL=""
 GOVERNED_EFFORT=""
 PROMPT_SNAPSHOT=""
@@ -45,7 +50,7 @@ cleanup_governed_inputs() {
 trap cleanup_governed_inputs EXIT
 
 usage() {
-  echo "usage: provider-run.sh --prompt-file file [--execution-plan plan.json | --execution-facts facts.json] [--provider auto|codex|claude] [--fallback none|codex|claude] [--target-dir dir] [--timeout seconds] [--sandbox read-only|workspace-write] [--output-dir dir]" >&2
+  echo "usage: provider-run.sh --prompt-file file [--phase-request request.json | --execution-plan plan.json | --execution-facts facts.json | --specialized-exemption name] [--provider auto|codex|claude] [--fallback none|codex|claude] [--target-dir dir] [--timeout seconds] [--sandbox read-only|workspace-write] [--output-dir dir]" >&2
 }
 
 while [ $# -gt 0 ]; do
@@ -59,6 +64,8 @@ while [ $# -gt 0 ]; do
     --output-dir) OUTPUT_DIR="${2:-}"; shift 2 ;;
     --execution-plan) EXECUTION_PLAN="${2:-}"; shift 2 ;;
     --execution-facts) EXECUTION_FACTS="${2:-}"; shift 2 ;;
+    --phase-request) PHASE_REQUEST="${2:-}"; shift 2 ;;
+    --specialized-exemption) SPECIALIZED_EXEMPTION="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) usage; exit 2 ;;
   esac
@@ -67,13 +74,19 @@ done
 [ -r "$PROMPT_FILE" ] || { echo "provider-run: unreadable prompt file" >&2; exit 2; }
 [ -d "$TARGET_DIR" ] || { echo "provider-run: target directory does not exist" >&2; exit 2; }
 [[ "$TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || { echo "provider-run: timeout must be positive" >&2; exit 2; }
-case "$SANDBOX" in read-only|workspace-write) ;; *) echo "provider-run: invalid sandbox" >&2; exit 2 ;; esac
+case "$SANDBOX" in ""|read-only|workspace-write) ;; *) echo "provider-run: invalid sandbox" >&2; exit 2 ;; esac
 [ -z "$EXECUTION_PLAN" ] || [ -r "$EXECUTION_PLAN" ] || { echo "provider-run: unreadable execution plan" >&2; exit 2; }
 [ -z "$EXECUTION_FACTS" ] || [ -r "$EXECUTION_FACTS" ] || { echo "provider-run: unreadable execution facts" >&2; exit 2; }
-[ -z "$EXECUTION_PLAN" ] || [ -z "$EXECUTION_FACTS" ] || { echo "provider-run: choose execution plan or facts, not both" >&2; exit 2; }
+[ -z "$PHASE_REQUEST" ] || [ -r "$PHASE_REQUEST" ] || { echo "provider-run: unreadable phase request" >&2; exit 2; }
+MODE_COUNT=0
+for mode_value in "$EXECUTION_PLAN" "$EXECUTION_FACTS" "$PHASE_REQUEST" "$SPECIALIZED_EXEMPTION"; do
+  [ -z "$mode_value" ] || MODE_COUNT=$((MODE_COUNT + 1))
+done
+[ "$MODE_COUNT" -eq 1 ] || { echo "provider-run: choose exactly one governed or specialized mode" >&2; exit 2; }
+[ -z "$SPECIALIZED_EXEMPTION" ] || case "$SPECIALIZED_EXEMPTION" in quality-panel|strategy-ensemble) ;; *) echo "provider-run: unknown specialized exemption" >&2; exit 2 ;; esac
 
 OUTPUT_DIR="${OUTPUT_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/provider-run.XXXXXX")}"
-if [ -n "$EXECUTION_PLAN" ] || [ -n "$EXECUTION_FACTS" ]; then
+if [ -n "$EXECUTION_PLAN" ] || [ -n "$EXECUTION_FACTS" ] || [ -n "$PHASE_REQUEST" ]; then
   OUTPUT_REAL=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$OUTPUT_DIR")
   TARGET_REAL=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$TARGET_DIR")
   case "$OUTPUT_REAL/" in
@@ -97,7 +110,7 @@ fi
 # Governed launches validate and execute the same private prompt snapshot.
 # This closes the gap where another process could replace the caller-owned
 # prompt between plan validation and provider stdin expansion.
-if [ -n "$EXECUTION_PLAN" ] || [ -n "$EXECUTION_FACTS" ]; then
+if [ -n "$EXECUTION_PLAN" ] || [ -n "$EXECUTION_FACTS" ] || [ -n "$PHASE_REQUEST" ]; then
   PROMPT_SNAPSHOT=$(mktemp "${TMPDIR:-/tmp}/provider-prompt.XXXXXX") \
     || { echo "provider-run: cannot allocate prompt snapshot" >&2; exit 2; }
   cp "$PROMPT_FILE" "$PROMPT_SNAPSHOT"
@@ -109,6 +122,17 @@ read -r POLICY_PRIMARY POLICY_FALLBACK < <(bs_provider_load)
 REQUESTED_PROVIDER="$PROVIDER"
 PROVIDER="${PROVIDER:-$POLICY_PRIMARY}"
 FALLBACK="${FALLBACK:-$POLICY_FALLBACK}"
+if [ -n "$PHASE_REQUEST" ]; then
+  PHASE_MODE=1
+  PHASE_PROVIDER=$(jq -r '.provider // empty' "$PHASE_REQUEST")
+  [ "$PHASE_PROVIDER" = codex ] || { echo "provider-run: schema-v2 phase provider is disabled" >&2; exit 2; }
+  if [ -n "$REQUESTED_PROVIDER" ] && [ "$REQUESTED_PROVIDER" != codex ]; then
+    echo "provider-run: explicit provider conflicts with phase request" >&2
+    exit 2
+  fi
+  PROVIDER=codex
+  FALLBACK=none
+fi
 if [ "$PROVIDER" = auto ]; then PROVIDER=$(bs_provider_invoker); fi
 bs_provider_validate "$PROVIDER" "$FALLBACK" || { echo "provider-run: invalid provider selection" >&2; exit 2; }
 
@@ -120,6 +144,19 @@ if [ -n "$EXECUTION_FACTS" ]; then
     | node "$SCRIPT_DIR/compute-governor.js" resolve-execution - "$PROMPT_FILE" "$TARGET_DIR" > "$PLAN_TEMP"; then
     rm -f "$PLAN_TEMP"
     echo "provider-run: execution facts cannot be resolved" >&2
+    exit 2
+  fi
+  mv "$PLAN_TEMP" "$EXECUTION_PLAN"
+fi
+
+if [ -n "$PHASE_REQUEST" ]; then
+  EXECUTION_PLAN="$OUTPUT_DIR/execution-plan.json"
+  PLAN_TEMP=$(mktemp "$OUTPUT_DIR/.execution-plan.XXXXXX") \
+    || { echo "provider-run: cannot allocate phase execution plan" >&2; exit 2; }
+  if ! node "$SCRIPT_DIR/compute-governor.js" resolve-phase-execution \
+    "$PHASE_REQUEST" "$PROMPT_FILE" "$TARGET_DIR" > "$PLAN_TEMP"; then
+    rm -f "$PLAN_TEMP"
+    echo "provider-run: phase request cannot be resolved" >&2
     exit 2
   fi
   mv "$PLAN_TEMP" "$EXECUTION_PLAN"
@@ -149,6 +186,21 @@ if [ -n "$EXECUTION_PLAN" ]; then
     TIMEOUT_SECONDS="$PLAN_TIMEOUT"
   fi
   FALLBACK=none
+  if [ "$(jq -r '.schemaVersion' "$EXECUTION_PLAN")" = 2 ]; then
+    PHASE_MODE=1
+    PHASE_ACCESS=$(jq -r '.accessProfile' "$EXECUTION_PLAN")
+    case "$PHASE_ACCESS" in
+      read-only) DERIVED_SANDBOX=read-only ;;
+      workspace-write) DERIVED_SANDBOX=workspace-write ;;
+      verification-only) DERIVED_SANDBOX=read-only; PHASE_DISABLED_REASON=verification-disabled ;;
+      *) echo "provider-run: invalid phase access profile" >&2; exit 2 ;;
+    esac
+    if [ -n "$SANDBOX" ] && [ "$SANDBOX" != "$DERIVED_SANDBOX" ]; then
+      echo "provider-run: sandbox conflicts with phase access profile" >&2
+      exit 2
+    fi
+    SANDBOX="$DERIVED_SANDBOX"
+  fi
 
   # Execute from a detached worktree at the exact bound HEAD. The provider can
   # never observe concurrent edits to the caller's live target. Its resulting
@@ -166,35 +218,66 @@ if [ -n "$EXECUTION_PLAN" ]; then
   TARGET_DIR="$GOVERNED_TARGET_SNAPSHOT"
 fi
 
+SANDBOX="${SANDBOX:-workspace-write}"
+
 DEADLINE="$SCRIPT_DIR/run-with-deadline.py"
 GOVERNED_STARTED_AT_MS=""
 [ -z "$EXECUTION_PLAN" ] || GOVERNED_STARTED_AT_MS=$(python3 -c 'import time; print(time.time_ns() // 1000000)')
 
 write_governed_record() {
-  local status="$1" effective_provider="$2" exit_code="$3" failure_category="$4" finished_at_ms record_temp usage_json
+  local status="$1" effective_provider="$2" exit_code="$3" failure_category="$4" finished_at_ms record_temp usage_json phase_status phase_category
   [ -n "$EXECUTION_PLAN" ] || return 0
   finished_at_ms=$(python3 -c 'import time; print(time.time_ns() // 1000000)')
   record_temp=$(mktemp "$OUTPUT_DIR/.run-record.XXXXXX") \
     || { echo "provider-run: cannot allocate run record" >&2; return 1; }
   usage_json=$(node "$SCRIPT_DIR/quality-provider-usage.js" extract \
     "$effective_provider" "$OUTPUT_DIR") || usage_json=null
-  jq -n \
-    --argjson plan "$(cat "$EXECUTION_PLAN")" \
-    --arg status "$status" \
-    --arg provider "$effective_provider" \
-    --arg failureCategory "$failure_category" \
-    --argjson exitCode "$exit_code" \
-    --argjson startedAt "$GOVERNED_STARTED_AT_MS" \
-    --argjson finishedAt "$finished_at_ms" \
-    --argjson usage "$usage_json" \
-    '{schemaVersion:1, plan:$plan, requested:{provider:$plan.provider,model:$plan.model,effort:$plan.effort}, effective:{provider:$provider,model:$plan.model,effort:$plan.effort}, attempts:1, timing:{startedAtEpochMs:$startedAt,finishedAtEpochMs:$finishedAt}, outcome:{status:$status,exitCode:$exitCode,providerFailureCategory:(if $failureCategory == "" then null else $failureCategory end)}, usage:$usage}' \
-    > "$record_temp"
+  if [ "$PHASE_MODE" -eq 1 ]; then
+    case "$status" in
+      passed) phase_status=completed; phase_category="" ;;
+      timeout) phase_status=provider-timeout; phase_category="$failure_category" ;;
+      unavailable) phase_status=provider-unavailable; phase_category="$failure_category" ;;
+      exhausted) phase_status=provider-exhausted; phase_category="$failure_category" ;;
+      replan-required) phase_status=replan-required; phase_category="$failure_category" ;;
+      capability-disabled) phase_status=capability-disabled; phase_category="$failure_category" ;;
+      *) phase_status=provider-failed; phase_category="$failure_category" ;;
+    esac
+    jq -n \
+      --argjson plan "$(cat "$EXECUTION_PLAN")" \
+      --arg status "$phase_status" \
+      --arg category "$phase_category" \
+      --argjson exitCode "$exit_code" \
+      --argjson startedAt "$GOVERNED_STARTED_AT_MS" \
+      --argjson finishedAt "$finished_at_ms" \
+      --argjson usage "$usage_json" \
+      '{schemaVersion:2,plan:$plan,requested:{provider:$plan.provider,model:$plan.model,effort:$plan.effort,executionProfileSha256:$plan.executionProfile.sha256},effective:{provider:$plan.provider,model:$plan.model,effort:$plan.effort,executionProfileSha256:$plan.executionProfile.sha256},timing:{startedAtEpochMs:$startedAt,finishedAtEpochMs:$finishedAt},outcome:{status:$status,exitCode:$exitCode,category:(if $category == "" then null else $category end)},usage:$usage}' \
+      > "$record_temp"
+  else
+    jq -n \
+      --argjson plan "$(cat "$EXECUTION_PLAN")" \
+      --arg status "$status" \
+      --arg provider "$effective_provider" \
+      --arg failureCategory "$failure_category" \
+      --argjson exitCode "$exit_code" \
+      --argjson startedAt "$GOVERNED_STARTED_AT_MS" \
+      --argjson finishedAt "$finished_at_ms" \
+      --argjson usage "$usage_json" \
+      '{schemaVersion:1, plan:$plan, requested:{provider:$plan.provider,model:$plan.model,effort:$plan.effort}, effective:{provider:$provider,model:$plan.model,effort:$plan.effort}, attempts:1, timing:{startedAtEpochMs:$startedAt,finishedAtEpochMs:$finishedAt}, outcome:{status:$status,exitCode:$exitCode,providerFailureCategory:(if $failureCategory == "" then null else $failureCategory end)}, usage:$usage}' \
+      > "$record_temp"
+  fi
   if ! node "$SCRIPT_DIR/compute-governor.js" validate-run-record "$record_temp" >/dev/null; then
     rm -f "$record_temp"
     return 1
   fi
   mv "$record_temp" "$OUTPUT_DIR/run-record.json"
 }
+
+if [ -n "$PHASE_DISABLED_REASON" ]; then
+  write_governed_record capability-disabled "$PROVIDER" 78 "$PHASE_DISABLED_REASON" \
+    || { echo "provider-run: cannot persist disabled phase receipt" >&2; exit 78; }
+  echo "provider-run: phase capability is disabled: $PHASE_DISABLED_REASON" >&2
+  exit 78
+fi
 
 fail_governed_handoff() {
   local message="$1"
@@ -236,7 +319,7 @@ classify_provider_failure() {
 
 run_one() {
   local provider="$1" rc last_message_file events_file result category detail
-  local -a CODEX_PLAN_ARGS=() CLAUDE_MODEL_ARGS=()
+  local -a CODEX_PLAN_ARGS=() CODEX_COMMAND=(codex) CLAUDE_MODEL_ARGS=()
   local stdout_file="$OUTPUT_DIR/$provider.stdout"
   local stderr_file="$OUTPUT_DIR/$provider.stderr"
   : > "$stdout_file"
@@ -249,9 +332,20 @@ run_one() {
       : > "$last_message_file"
       [ -z "$GOVERNED_MODEL" ] || CODEX_PLAN_ARGS+=(--model "$GOVERNED_MODEL")
       [ -z "$GOVERNED_EFFORT" ] || CODEX_PLAN_ARGS+=(-c "model_reasoning_effort=\"$GOVERNED_EFFORT\"")
+      if [ "$PHASE_MODE" -eq 1 ]; then
+        CODEX_COMMAND=(env -i "PATH=$PATH" "HOME=$HOME" "CODEX_HOME=${CODEX_HOME:-$HOME/.codex}" "TERM=${TERM:-dumb}" codex)
+        CODEX_PLAN_ARGS+=(
+          -a never
+          -c 'mcp_servers={}'
+          -c 'plugins={}'
+          -c 'hooks={}'
+          -c 'features.web_search=false'
+          -c 'sandbox_workspace_write.writable_roots=[]'
+        )
+      fi
       if [ ${#CODEX_PLAN_ARGS[@]} -gt 0 ]; then
         if python3 "$DEADLINE" --timeout-seconds "$TIMEOUT_SECONDS" -- \
-          codex exec --ephemeral -C "$TARGET_DIR" -s "$SANDBOX" --json \
+          "${CODEX_COMMAND[@]}" exec --ephemeral -C "$TARGET_DIR" -s "$SANDBOX" --json \
           "${CODEX_PLAN_ARGS[@]}" \
           -o "$last_message_file" - \
           < "$PROMPT_FILE" > "$events_file" 2> "$stderr_file"; then
@@ -263,7 +357,7 @@ run_one() {
         # Bash 3.2 treats an empty-array expansion as an unbound variable
         # under `set -u`. Keep the no-override path explicit for macOS.
         if python3 "$DEADLINE" --timeout-seconds "$TIMEOUT_SECONDS" -- \
-          codex exec --ephemeral -C "$TARGET_DIR" -s "$SANDBOX" --json \
+          "${CODEX_COMMAND[@]}" exec --ephemeral -C "$TARGET_DIR" -s "$SANDBOX" --json \
           -o "$last_message_file" - \
           < "$PROMPT_FILE" > "$events_file" 2> "$stderr_file"; then
           rc=0
@@ -369,6 +463,19 @@ if [ "$RC" -eq 0 ]; then
       fail_governed_handoff "provider-run: governed provider created ignored files that cannot be delivered safely"
     }
     git -C "$TARGET_DIR" diff --binary "$PLAN_TARGET_HEAD" -- > "$GOVERNED_PATCH"
+    if [ "$PHASE_MODE" -eq 1 ] && [ -s "$GOVERNED_PATCH" ]; then
+      if [ "$PHASE_ACCESS" = read-only ]; then
+        write_governed_record replan-required "$PROVIDER" 78 read-only-produced-patch >/dev/null 2>&1 || true
+        echo "provider-run: read-only phase produced a patch" >&2
+        exit 78
+      fi
+      if ! node "$SCRIPT_DIR/compute-governor.js" validate-phase-candidate \
+        "$EXECUTION_PLAN" "$TARGET_DIR" "$GOVERNED_PATCH" >/dev/null; then
+        write_governed_record replan-required "$PROVIDER" 78 candidate-replan-required >/dev/null 2>&1 || true
+        echo "provider-run: phase candidate requires a new critical plan" >&2
+        exit 78
+      fi
+    fi
     if [ -s "$GOVERNED_PATCH" ]; then
       git -C "$ORIGINAL_TARGET_DIR" apply --index --binary "$GOVERNED_PATCH" || {
         fail_governed_handoff "provider-run: governed provider changes could not be applied atomically"

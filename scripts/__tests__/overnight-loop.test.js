@@ -58,10 +58,11 @@ describe("overnight loop", () => {
     const source = execFileSync("sed", ["-n", "250,290p", loop], {
       encoding: "utf8",
     });
-    expect(source).toContain('--execution-facts "$execution_facts_file"');
+    expect(source).toContain('--phase-request "$execution_facts_file"');
     expect(source).toContain('--output-dir "$provider_output_dir"');
     expect(source).toContain('"phase":"implement"');
     expect(source).toContain('"targetedProof":false');
+    expect(source).toContain('"caller":"overnight-ralph"');
   });
 
   it("hard-stops a whole command at its deadline", () => {

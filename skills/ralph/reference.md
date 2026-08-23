@@ -61,19 +61,18 @@ repository.
 
 ## Governed provider launch
 
-When interactive Ralph has inspected an item, write a fact packet that
-states its phase, provider, protected surfaces, scope, ambiguity, targeted
-deterministic proof, and matching-failure streak. Do not describe every coding
-task as `standard` by default, and do not call a change cheap solely because it
-is small. The unattended shell launcher cannot infer those facts safely, so it
-uses a conservative `standard` packet and a durable per-attempt evidence
-directory. Resolve an evidence-backed interactive packet through the kit's
+When interactive Ralph has inspected an item, write a schema-v2 phase request
+that states its policy-known caller, canonical phase, planned paths, protected
+surfaces, scope, ambiguity, and targeted deterministic proof. The governor
+derives access and keeps execution at the reliable `standard` baseline unless a
+protected floor requires `critical`. The unattended shell launcher cannot infer
+paths safely, so it declares repository-wide planned scope; newly discovered
+protected paths still stop before handoff. Resolve the request through the kit's
 Compute Governor:
 
 ```bash
-node "$SCRIPT_DIR/compute-governor.js" explain "$EVIDENCE_DIR/item-facts.json"
-node "$SCRIPT_DIR/compute-governor.js" resolve-execution \
-  "$EVIDENCE_DIR/item-facts.json" \
+node "$SCRIPT_DIR/compute-governor.js" resolve-phase-execution \
+  "$EVIDENCE_DIR/item-phase-request.json" \
   "$EVIDENCE_DIR/item-prompt.md" \
   "$TARGET_DIR" \
   > "$EVIDENCE_DIR/item-plan.json"
@@ -87,13 +86,17 @@ the current session model or effort:
 ```bash
 bash "$SCRIPT_DIR/provider-run.sh" \
   --prompt-file "$EVIDENCE_DIR/item-prompt.md" \
-  --execution-plan "$EVIDENCE_DIR/item-plan.json" \
+  --phase-request "$EVIDENCE_DIR/item-phase-request.json" \
+  --provider codex \
+  --fallback none \
   --target-dir "$TARGET_DIR" \
   --output-dir "$EVIDENCE_DIR/provider-output"
 ```
 
-`provider-run.sh` validates the plan before spawning a provider, pins Codex or
-Claude model/effort where supported, and writes a redacted `run-record.json`.
+`provider-run.sh` resolves and validates the plan before spawning Codex, pins
+model/effort, derives sandbox access, and writes a redacted schema-v2
+`run-record.json`. Claude remains on the legacy v1 path until its phase adapter
+has an OS-enforced sandbox.
 An unsupported or mismatched plan is a launch failure; do not silently fall
 back to the interactive model. Two matching failures are a concrete escalation
 trigger. A model asking for more compute is not.

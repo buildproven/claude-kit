@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeTempDir } from "./helpers/tmp.js";
 import {
@@ -10,6 +10,11 @@ import {
   validatePlan,
   validateRunRecord,
   calibrationDecision,
+  resolvePhaseExecution,
+  validatePhasePlan,
+  validatePhaseExecutionPlan,
+  validatePhaseRunRecord,
+  validatePhaseCandidate,
 } from "../compute-governor";
 
 const base = {
@@ -22,6 +27,35 @@ const base = {
   protectedSurfaces: [],
   sameFailureStreak: 0,
 };
+
+const phaseEvidence = {
+  localized: false,
+  reversible: false,
+  targetedProof: false,
+  ambiguous: true,
+  changedFiles: 0,
+  protectedSurfaces: [],
+  publicContract: false,
+  crossRepository: false,
+  plannedPaths: ["src/"],
+};
+
+function phaseTarget(prefix = "governor-phase-") {
+  const target = makeTempDir(prefix);
+  const prompt = path.join(makeTempDir("governor-prompt-"), "prompt.md");
+  writeFileSync(prompt, "perform ordinary local work\n");
+  execFileSync("git", ["init", "-q"], { cwd: target });
+  execFileSync("git", ["config", "user.email", "tests@buildproven.local"], {
+    cwd: target,
+  });
+  execFileSync("git", ["config", "user.name", "BuildProven Tests"], {
+    cwd: target,
+  });
+  writeFileSync(path.join(target, "README.md"), "fixture\n");
+  execFileSync("git", ["add", "."], { cwd: target });
+  execFileSync("git", ["commit", "-qm", "fixture"], { cwd: target });
+  return { target, prompt };
+}
 
 describe("compute governor", () => {
   it("makes an eligible localized code change an economy-builder candidate", () => {
@@ -543,5 +577,221 @@ describe("compute governor", () => {
         candidate: [{ accepted: true, gatesPassed: true }],
       }),
     ).toThrow("calibration run evidence is incomplete");
+  });
+
+  it.each([
+    ["scan", "read-only"],
+    ["plan", "read-only"],
+    ["review", "read-only"],
+    ["verify", "verification-only"],
+    ["implement", "workspace-write"],
+    ["remediate", "workspace-write"],
+    ["diagnose", "workspace-write"],
+  ])("resolves schema-v2 %s with derived %s access", (phase, accessProfile) => {
+    const { target, prompt } = phaseTarget();
+    const caller = ["scan", "review"].includes(phase)
+      ? "cross-review"
+      : "interactive-ralph";
+    const plan = resolvePhaseExecution(
+      {
+        schemaVersion: 2,
+        caller,
+        provider: "codex",
+        phase,
+        evidence: phaseEvidence,
+      },
+      prompt,
+      target,
+    );
+    expect(plan).toMatchObject({
+      schemaVersion: 2,
+      route: "standard",
+      provider: "codex",
+      model: "gpt-5.6-terra",
+      phase,
+      accessProfile,
+      promotion: "economy-execution-disabled",
+    });
+    expect(validatePhasePlan(plan)).toEqual(plan);
+    expect(validatePhaseExecutionPlan(plan, prompt, target)).toEqual(plan);
+  });
+
+  it("normalizes schema-v2 test to verify but preserves legacy test", () => {
+    const { target, prompt } = phaseTarget();
+    const phasePlan = resolvePhaseExecution(
+      {
+        schemaVersion: 2,
+        caller: "interactive-ralph",
+        provider: "codex",
+        phase: "test",
+        evidence: phaseEvidence,
+      },
+      prompt,
+      target,
+    );
+    expect(phasePlan.phase).toBe("verify");
+    expect(resolve({ ...base, phase: "test" }).facts.phase).toBe("test");
+  });
+
+  it("routes protected schema-v2 work to critical and rejects caller escalation", () => {
+    const { target, prompt } = phaseTarget();
+    writeFileSync(prompt, "repair Stripe payment authorization\n");
+    const critical = resolvePhaseExecution(
+      {
+        schemaVersion: 2,
+        caller: "interactive-ralph",
+        provider: "codex",
+        phase: "implement",
+        evidence: phaseEvidence,
+      },
+      prompt,
+      target,
+    );
+    expect(critical).toMatchObject({
+      route: "critical",
+      model: "gpt-5.6-sol",
+      safetyFloor: "critical",
+    });
+    expect(() =>
+      resolvePhaseExecution(
+        {
+          schemaVersion: 2,
+          caller: "cross-review",
+          provider: "codex",
+          phase: "implement",
+          evidence: phaseEvidence,
+        },
+        prompt,
+        target,
+      ),
+    ).toThrow("invalid schema-v2 phase request");
+  });
+
+  it("rejects Claude, caller failure claims, and unsafe planned paths in v2", () => {
+    const { target, prompt } = phaseTarget();
+    for (const request of [
+      {
+        schemaVersion: 2,
+        caller: "interactive-ralph",
+        provider: "claude",
+        phase: "implement",
+        evidence: phaseEvidence,
+      },
+      {
+        schemaVersion: 2,
+        caller: "interactive-ralph",
+        provider: "codex",
+        phase: "implement",
+        evidence: { ...phaseEvidence, sameFailureStreak: 2 },
+      },
+      {
+        schemaVersion: 2,
+        caller: "interactive-ralph",
+        provider: "codex",
+        phase: "implement",
+        evidence: { ...phaseEvidence, plannedPaths: ["../src/"] },
+      },
+    ]) {
+      expect(() => resolvePhaseExecution(request, prompt, target)).toThrow(
+        "invalid schema-v2 phase request",
+      );
+    }
+  });
+
+  it("validates exact schema-v2 terminal and prelaunch receipts", () => {
+    const { target, prompt } = phaseTarget();
+    const plan = resolvePhaseExecution(
+      {
+        schemaVersion: 2,
+        caller: "interactive-ralph",
+        provider: "codex",
+        phase: "implement",
+        evidence: phaseEvidence,
+      },
+      prompt,
+      target,
+    );
+    const identity = {
+      provider: plan.provider,
+      model: plan.model,
+      effort: plan.effort,
+      executionProfileSha256: plan.executionProfile.sha256,
+    };
+    const record = {
+      schemaVersion: 2,
+      plan,
+      requested: identity,
+      effective: identity,
+      timing: { startedAtEpochMs: 1, finishedAtEpochMs: 2 },
+      outcome: { status: "completed", exitCode: 0, category: null },
+      usage: null,
+    };
+    expect(validatePhaseRunRecord(record)).toEqual(record);
+    expect(
+      validatePhaseRunRecord({
+        ...record,
+        outcome: {
+          status: "capability-disabled",
+          exitCode: 78,
+          category: "verification-disabled",
+        },
+      }).outcome.status,
+    ).toBe("capability-disabled");
+  });
+
+  it("approves only exact regular-file additions and rejects undeclared protected paths", () => {
+    const { target, prompt } = phaseTarget();
+    const request = {
+      schemaVersion: 2,
+      caller: "interactive-ralph",
+      provider: "codex",
+      phase: "implement",
+      evidence: phaseEvidence,
+    };
+    const plan = resolvePhaseExecution(request, prompt, target);
+    mkdirSync(path.join(target, "src"));
+    writeFileSync(
+      path.join(target, "src", "feature.js"),
+      "export default 1;\n",
+    );
+    execFileSync("git", ["add", "-N", "--all"], { cwd: target });
+    const patchFile = path.join(makeTempDir("governor-patch-"), "change.patch");
+    writeFileSync(
+      patchFile,
+      execFileSync("git", ["diff", "--binary", "HEAD", "--"], {
+        cwd: target,
+      }),
+    );
+    expect(validatePhaseCandidate(plan, target, patchFile)).toMatchObject({
+      status: "approved",
+      changedFiles: 1,
+    });
+
+    const protectedSubject = phaseTarget("governor-protected-path-");
+    const protectedPlan = resolvePhaseExecution(
+      {
+        ...request,
+        evidence: { ...phaseEvidence, plannedPaths: ["auth/"] },
+      },
+      protectedSubject.prompt,
+      protectedSubject.target,
+    );
+    mkdirSync(path.join(protectedSubject.target, "auth"));
+    writeFileSync(
+      path.join(protectedSubject.target, "auth", "guard.js"),
+      "export default 1;\n",
+    );
+    execFileSync("git", ["add", "-N", "--all"], {
+      cwd: protectedSubject.target,
+    });
+    writeFileSync(
+      patchFile,
+      execFileSync("git", ["diff", "--binary", "HEAD", "--"], {
+        cwd: protectedSubject.target,
+      }),
+    );
+    expect(() =>
+      validatePhaseCandidate(protectedPlan, protectedSubject.target, patchFile),
+    ).toThrow("undeclared protected path");
   });
 });

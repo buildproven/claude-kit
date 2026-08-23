@@ -14,6 +14,34 @@ const ROUTES = [
   "expert",
   "critical",
 ];
+const PHASES_V2 = [
+  "scan",
+  "plan",
+  "implement",
+  "verify",
+  "remediate",
+  "diagnose",
+  "review",
+];
+const ACCESS_RANK = ["read-only", "verification-only", "workspace-write"];
+const PHASE_ACCESS = Object.freeze({
+  scan: "read-only",
+  plan: "read-only",
+  review: "read-only",
+  verify: "verification-only",
+  implement: "workspace-write",
+  remediate: "workspace-write",
+  diagnose: "workspace-write",
+});
+const V2_OUTCOMES = new Set([
+  "completed",
+  "provider-failed",
+  "provider-timeout",
+  "provider-unavailable",
+  "provider-exhausted",
+  "replan-required",
+  "capability-disabled",
+]);
 const SENSITIVE_RECORD_KEYS = new Set([
   "prompt",
   "promptBody",
@@ -56,7 +84,21 @@ const EXECUTION_BINDING_KEYS = [
 ];
 
 function policyPath() {
-  return path.join(__dirname, "..", "config", "compute-governor-policy.json");
+  return path.join(
+    __dirname,
+    "..",
+    "config",
+    "compute-governor-policy-v1.json",
+  );
+}
+
+function policyV2Path() {
+  return path.join(
+    __dirname,
+    "..",
+    "config",
+    "compute-governor-policy-v2.json",
+  );
 }
 
 function requireCondition(condition, message) {
@@ -129,6 +171,30 @@ function loadPolicy(file = policyPath()) {
         );
       }),
     "compute-governor: protected prompt policy must exactly cover protected surfaces",
+  );
+  return policy;
+}
+
+function loadPolicyV2(file = policyV2Path()) {
+  const policy = parseJson(fs.readFileSync(file, "utf8"), "phase policy");
+  requireCondition(
+    policy.schemaVersion === 2 &&
+      typeof policy.policyVersion === "string" &&
+      policy.routes?.standard?.model &&
+      policy.routes?.critical?.model &&
+      policy.executionProfile?.version &&
+      policy.callers &&
+      Array.isArray(policy.protectedSurfaces) &&
+      policy.protectedPromptPatterns &&
+      policy.protectedPathRules,
+    "compute-governor: unsupported phase policy schema",
+  );
+  requireCondition(
+    Object.keys(policy.protectedPromptPatterns).sort().join("\0") ===
+      [...policy.protectedSurfaces].sort().join("\0") &&
+      Object.keys(policy.protectedPathRules).sort().join("\0") ===
+        [...policy.protectedSurfaces].sort().join("\0"),
+    "compute-governor: phase protected policy must cover every surface",
   );
   return policy;
 }
@@ -214,6 +280,166 @@ function resolveExecution(facts, promptFile, targetDir, policy = loadPolicy()) {
     ...resolveLaunch({ ...facts, protectedSurfaces }, policy),
     executionBinding: binding,
   };
+}
+
+function normalizedPhaseV2(phase) {
+  return phase === "test" ? "verify" : phase;
+}
+
+function phaseRequestValid(request, policy) {
+  if (!request || request.schemaVersion !== 2) return false;
+  const phase = normalizedPhaseV2(request.phase);
+  const caller = policy.callers[request.caller];
+  const evidence = request.evidence;
+  if (
+    request.provider !== "codex" ||
+    !PHASES_V2.includes(phase) ||
+    !caller ||
+    !caller.phases.includes(phase) ||
+    ACCESS_RANK.indexOf(PHASE_ACCESS[phase]) >
+      ACCESS_RANK.indexOf(caller.maxAccess) ||
+    !evidence ||
+    typeof evidence !== "object" ||
+    Array.isArray(evidence)
+  )
+    return false;
+  const expectedRequest = [
+    "schemaVersion",
+    "caller",
+    "provider",
+    "phase",
+    "evidence",
+  ].sort();
+  const expectedEvidence = [
+    "localized",
+    "reversible",
+    "targetedProof",
+    "ambiguous",
+    "changedFiles",
+    "protectedSurfaces",
+    "publicContract",
+    "crossRepository",
+    "plannedPaths",
+  ].sort();
+  if (
+    Object.keys(request).sort().join("\0") !== expectedRequest.join("\0") ||
+    Object.keys(evidence).sort().join("\0") !== expectedEvidence.join("\0")
+  )
+    return false;
+  if (
+    ![
+      "localized",
+      "reversible",
+      "targetedProof",
+      "ambiguous",
+      "publicContract",
+      "crossRepository",
+    ].every((key) => typeof evidence[key] === "boolean") ||
+    !Number.isInteger(evidence.changedFiles) ||
+    evidence.changedFiles < 0 ||
+    !Array.isArray(evidence.protectedSurfaces) ||
+    !evidence.protectedSurfaces.every((surface) =>
+      policy.protectedSurfaces.includes(surface),
+    ) ||
+    !Array.isArray(evidence.plannedPaths) ||
+    evidence.plannedPaths.length === 0 ||
+    !evidence.plannedPaths.every(
+      (candidate) =>
+        typeof candidate === "string" &&
+        candidate.length > 0 &&
+        candidate === candidate.trim() &&
+        (candidate === "**" ||
+          (!path.isAbsolute(candidate) &&
+            !candidate.includes("\\") &&
+            !candidate.split("/").includes("..") &&
+            !candidate.split("/").includes("."))),
+    )
+  )
+    return false;
+  return (
+    new Set(evidence.plannedPaths).size === evidence.plannedPaths.length &&
+    new Set(evidence.protectedSurfaces).size ===
+      evidence.protectedSurfaces.length
+  );
+}
+
+function assertPhaseRequest(request, policy = loadPolicyV2()) {
+  requireCondition(
+    phaseRequestValid(request, policy),
+    "compute-governor: invalid schema-v2 phase request",
+  );
+}
+
+function phaseExecutionBinding(promptFile, targetDir, policy) {
+  const prompt = fs.readFileSync(promptFile);
+  const target = fs.realpathSync(targetDir);
+  return {
+    schemaVersion: 2,
+    policyVersion: policy.policyVersion,
+    promptSha256: sha256(prompt),
+    targetIdentitySha256: sha256(target),
+    targetHead: requireCleanVersionedTarget(target),
+    classifiedProtectedSurfaces: classifiedProtectedSurfaces(
+      prompt.toString("utf8"),
+      policy,
+    ),
+  };
+}
+
+function resolvePhaseExecution(
+  request,
+  promptFile,
+  targetDir,
+  policy = loadPolicyV2(),
+) {
+  assertPhaseRequest(request, policy);
+  const phase = normalizedPhaseV2(request.phase);
+  const binding = phaseExecutionBinding(promptFile, targetDir, policy);
+  const protectedSurfaces = [
+    ...new Set([
+      ...request.evidence.protectedSurfaces,
+      ...binding.classifiedProtectedSurfaces,
+    ]),
+  ].sort();
+  const critical =
+    protectedSurfaces.length > 0 ||
+    request.evidence.publicContract ||
+    request.evidence.crossRepository;
+  const route = critical ? "critical" : "standard";
+  const routePolicy = policy.routes[route];
+  const executionProfile = {
+    version: policy.executionProfile.version,
+    sha256: sha256(canonicalJsonString(policy.executionProfile)),
+  };
+  return {
+    schemaVersion: 2,
+    policyVersion: policy.policyVersion,
+    route,
+    provider: "codex",
+    model: routePolicy.model,
+    effort: routePolicy.effort,
+    contextClass: "fresh-bounded-phase",
+    caller: request.caller,
+    phase,
+    accessProfile: PHASE_ACCESS[phase],
+    caps: routePolicy.caps,
+    safetyFloor: critical ? "critical" : "standard",
+    evidence: canonicalJson({
+      ...request.evidence,
+      protectedSurfaces,
+      plannedPaths: [...request.evidence.plannedPaths].sort(),
+    }),
+    reasons: critical
+      ? ["protected phase work"]
+      : ["reliable standard baseline"],
+    promotion: "economy-execution-disabled",
+    executionProfile,
+    executionBinding: binding,
+  };
+}
+
+function canonicalJsonString(value) {
+  return JSON.stringify(canonicalJson(value));
 }
 
 function resolveLaunch(facts, policy = loadPolicy()) {
@@ -469,7 +695,132 @@ function executionBindingValid(binding, policy) {
   );
 }
 
+function phaseBindingValid(binding, policy) {
+  return Boolean(
+    binding &&
+    binding.schemaVersion === 2 &&
+    binding.policyVersion === policy.policyVersion &&
+    /^[0-9a-f]{64}$/.test(binding.promptSha256) &&
+    /^[0-9a-f]{64}$/.test(binding.targetIdentitySha256) &&
+    /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(binding.targetHead) &&
+    Array.isArray(binding.classifiedProtectedSurfaces) &&
+    binding.classifiedProtectedSurfaces.every((surface) =>
+      policy.protectedSurfaces.includes(surface),
+    ),
+  );
+}
+
+function validatePhasePlan(plan, policy = loadPolicyV2()) {
+  requireCondition(
+    plan?.schemaVersion === 2 &&
+      ["standard", "critical"].includes(plan.route) &&
+      plan.provider === "codex" &&
+      PHASES_V2.includes(plan.phase) &&
+      plan.accessProfile === PHASE_ACCESS[plan.phase] &&
+      policy.callers[plan.caller]?.phases.includes(plan.phase) &&
+      ACCESS_RANK.indexOf(plan.accessProfile) <=
+        ACCESS_RANK.indexOf(policy.callers[plan.caller].maxAccess),
+    "compute-governor: invalid schema-v2 phase plan",
+  );
+  const protectedWork =
+    plan.evidence?.protectedSurfaces?.length > 0 ||
+    plan.evidence?.publicContract === true ||
+    plan.evidence?.crossRepository === true;
+  const expectedRoute = protectedWork ? "critical" : "standard";
+  const routePolicy = policy.routes[expectedRoute];
+  const expectedProfile = {
+    version: policy.executionProfile.version,
+    sha256: sha256(canonicalJsonString(policy.executionProfile)),
+  };
+  requireCondition(
+    plan.policyVersion === policy.policyVersion &&
+      plan.route === expectedRoute &&
+      plan.model === routePolicy.model &&
+      plan.effort === routePolicy.effort &&
+      plan.safetyFloor === expectedRoute &&
+      plan.contextClass === "fresh-bounded-phase" &&
+      plan.promotion === "economy-execution-disabled" &&
+      canonicalJsonString(plan.caps) ===
+        canonicalJsonString(routePolicy.caps) &&
+      canonicalJsonString(plan.executionProfile) ===
+        canonicalJsonString(expectedProfile) &&
+      phaseBindingValid(plan.executionBinding, policy),
+    "compute-governor: schema-v2 plan violates phase policy",
+  );
+  const request = {
+    schemaVersion: 2,
+    caller: plan.caller,
+    provider: plan.provider,
+    phase: plan.phase,
+    evidence: plan.evidence,
+  };
+  assertPhaseRequest(request, policy);
+  const expectedKeys = [
+    "schemaVersion",
+    "policyVersion",
+    "route",
+    "provider",
+    "model",
+    "effort",
+    "contextClass",
+    "caller",
+    "phase",
+    "accessProfile",
+    "caps",
+    "safetyFloor",
+    "evidence",
+    "reasons",
+    "promotion",
+    "executionProfile",
+    "executionBinding",
+  ];
+  assertExactKeys(plan, expectedKeys, "schema-v2 phase plan");
+  requireCondition(
+    Array.isArray(plan.reasons) &&
+      canonicalJsonString(plan.reasons) ===
+        canonicalJsonString(
+          protectedWork
+            ? ["protected phase work"]
+            : ["reliable standard baseline"],
+        ),
+    "compute-governor: schema-v2 plan reasons mismatch",
+  );
+  return plan;
+}
+
+function validatePhaseExecutionPlan(
+  plan,
+  promptFile,
+  targetDir,
+  policy = loadPolicyV2(),
+) {
+  validatePhasePlan(plan, policy);
+  requireCondition(
+    canonicalJsonString(plan.executionBinding) ===
+      canonicalJsonString(phaseExecutionBinding(promptFile, targetDir, policy)),
+    "compute-governor: schema-v2 plan is not bound to this prompt and target",
+  );
+  const expected = resolvePhaseExecution(
+    {
+      schemaVersion: 2,
+      caller: plan.caller,
+      provider: plan.provider,
+      phase: plan.phase,
+      evidence: plan.evidence,
+    },
+    promptFile,
+    targetDir,
+    policy,
+  );
+  requireCondition(
+    canonicalJsonString(plan) === canonicalJsonString(expected),
+    "compute-governor: schema-v2 phase plan is not exact",
+  );
+  return plan;
+}
+
 function validatePlan(plan, policy = loadPolicy()) {
+  if (plan?.schemaVersion === 2) return validatePhasePlan(plan);
   requireCondition(
     plan && plan.schemaVersion === 1 && ROUTES.includes(plan.route),
     "compute-governor: invalid execution plan",
@@ -518,6 +869,8 @@ function validateExecutionPlan(
   targetDir,
   policy = loadPolicy(),
 ) {
+  if (plan?.schemaVersion === 2)
+    return validatePhaseExecutionPlan(plan, promptFile, targetDir);
   validatePlan(plan, policy);
   requireCondition(
     plan.executionBinding &&
@@ -572,7 +925,77 @@ function usageValid(usage) {
   return validUsage(usage) || validUsage(usage, { aggregate: true });
 }
 
+function validatePhaseRunRecord(record) {
+  requireCondition(
+    record?.schemaVersion === 2 &&
+      record.plan?.schemaVersion === 2 &&
+      V2_OUTCOMES.has(record.outcome?.status),
+    "compute-governor: invalid schema-v2 phase run record",
+  );
+  assertNoSensitiveRecordFields(record);
+  assertExactKeys(
+    record,
+    [
+      "schemaVersion",
+      "plan",
+      "requested",
+      "effective",
+      "timing",
+      "outcome",
+      "usage",
+    ],
+    "schema-v2 run record",
+  );
+  assertExactKeys(
+    record.requested,
+    ["provider", "model", "effort", "executionProfileSha256"],
+    "schema-v2 requested identity",
+  );
+  assertExactKeys(
+    record.effective,
+    ["provider", "model", "effort", "executionProfileSha256"],
+    "schema-v2 effective identity",
+  );
+  assertExactKeys(
+    record.timing,
+    ["startedAtEpochMs", "finishedAtEpochMs"],
+    "schema-v2 timing",
+  );
+  assertExactKeys(
+    record.outcome,
+    ["status", "exitCode", "category"],
+    "schema-v2 outcome",
+  );
+  validatePhasePlan(record.plan);
+  const expectedIdentity = {
+    provider: record.plan.provider,
+    model: record.plan.model,
+    effort: record.plan.effort,
+    executionProfileSha256: record.plan.executionProfile.sha256,
+  };
+  const completed = record.outcome.status === "completed";
+  requireCondition(
+    canonicalJsonString(record.requested) ===
+      canonicalJsonString(expectedIdentity) &&
+      canonicalJsonString(record.effective) ===
+        canonicalJsonString(expectedIdentity) &&
+      Number.isInteger(record.timing.startedAtEpochMs) &&
+      Number.isInteger(record.timing.finishedAtEpochMs) &&
+      record.timing.finishedAtEpochMs >= record.timing.startedAtEpochMs &&
+      Number.isInteger(record.outcome.exitCode) &&
+      (completed
+        ? record.outcome.exitCode === 0 && record.outcome.category === null
+        : record.outcome.exitCode !== 0 &&
+          typeof record.outcome.category === "string" &&
+          record.outcome.category.length > 0) &&
+      usageValid(record.usage),
+    "compute-governor: schema-v2 run record contract mismatch",
+  );
+  return record;
+}
+
 function validateRunRecord(record) {
+  if (record?.schemaVersion === 2) return validatePhaseRunRecord(record);
   requireCondition(
     record &&
       record.schemaVersion === 1 &&
@@ -726,6 +1149,105 @@ function calibrationDecision(report) {
   };
 }
 
+function pathWithinPlan(candidate, plannedPaths) {
+  return plannedPaths.some((prefix) =>
+    prefix === "**"
+      ? true
+      : prefix.endsWith("/")
+        ? candidate.startsWith(prefix)
+        : candidate === prefix,
+  );
+}
+
+function validatePhaseCandidate(
+  plan,
+  targetDir,
+  patchFile,
+  policy = loadPolicyV2(),
+) {
+  validatePhasePlan(plan, policy);
+  requireCondition(
+    plan.accessProfile === "workspace-write",
+    "compute-governor: phase candidate requires workspace-write plan",
+  );
+  const patch = fs.readFileSync(patchFile);
+  const actualPatch = execFileSync(
+    "git",
+    ["diff", "--binary", plan.executionBinding.targetHead, "--"],
+    { cwd: targetDir, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  requireCondition(
+    patch.equals(actualPatch),
+    "compute-governor: candidate patch bytes changed before classification",
+  );
+  const raw = execFileSync(
+    "git",
+    ["diff", "--raw", "-z", plan.executionBinding.targetHead, "--"],
+    { cwd: targetDir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  const fields = raw.split("\0");
+  if (fields.at(-1) === "") fields.pop();
+  const changes = [];
+  for (let index = 0; index < fields.length;) {
+    const header = fields[index++];
+    const match = /^:(\d{6}) (\d{6}) [0-9a-f]+ [0-9a-f]+ ([A-Z])(\d*)$/.exec(
+      header,
+    );
+    requireCondition(match, "compute-governor: unclassifiable Git change");
+    const [, oldMode, newMode, status] = match;
+    requireCondition(
+      ["A", "M"].includes(status) &&
+        ["000000", "100644", "100755"].includes(oldMode) &&
+        ["100644", "100755"].includes(newMode),
+      "compute-governor: disallowed Git change kind or file mode",
+    );
+    const changedPath = fields[index++];
+    requireCondition(
+      typeof changedPath === "string" &&
+        changedPath.length > 0 &&
+        !path.isAbsolute(changedPath) &&
+        !changedPath.includes("\\") &&
+        !changedPath
+          .split("/")
+          .some((part) => [".", "..", ""].includes(part)) &&
+        pathWithinPlan(changedPath, plan.evidence.plannedPaths),
+      "compute-governor: changed path is malformed, unknown, or outside plan",
+    );
+    changes.push(changedPath);
+  }
+  const ignored = execFileSync(
+    "git",
+    ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"],
+    { cwd: targetDir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  requireCondition(
+    ignored.length === 0,
+    "compute-governor: ignored candidate files are not deliverable",
+  );
+  const discovered = Object.entries(policy.protectedPathRules)
+    .filter(([, prefixes]) =>
+      changes.some((changedPath) =>
+        prefixes.some((prefix) => changedPath.startsWith(prefix)),
+      ),
+    )
+    .map(([surface]) => surface)
+    .sort();
+  const undeclared = discovered.filter(
+    (surface) => !plan.evidence.protectedSurfaces.includes(surface),
+  );
+  requireCondition(
+    undeclared.length === 0,
+    "compute-governor: candidate discovered an undeclared protected path",
+  );
+  return {
+    schemaVersion: 2,
+    status: "approved",
+    patchSha256: sha256(patch),
+    changedFiles: changes.length,
+    discoveredProtectedSurfaces: discovered,
+  };
+}
+
 function readJson(file) {
   return parseJson(
     fs.readFileSync(file === "-" ? 0 : file, "utf8"),
@@ -745,6 +1267,9 @@ function main(argv) {
       "validate-execution-plan",
       "validate-run-record",
       "calibrate",
+      "resolve-phase-execution",
+      "validate-phase-execution-plan",
+      "validate-phase-candidate",
     ].includes(command)
   ) {
     throw new Error(
@@ -752,24 +1277,40 @@ function main(argv) {
     );
   }
   if (
-    ["resolve-execution", "validate-execution-plan"].includes(command) &&
+    [
+      "resolve-execution",
+      "validate-execution-plan",
+      "resolve-phase-execution",
+      "validate-phase-execution-plan",
+    ].includes(command) &&
     (!promptFile || !targetDir)
   ) {
     throw new Error(`${command} requires a prompt file and target directory`);
   }
+  if (command === "validate-phase-candidate" && (!promptFile || !targetDir)) {
+    throw new Error(
+      "validate-phase-candidate requires a target directory and patch file",
+    );
+  }
   const input = readJson(file);
   const result =
-    command === "resolve-execution"
-      ? resolveExecution(input, promptFile, targetDir)
-      : command === "validate-execution-plan"
-        ? validateExecutionPlan(input, promptFile, targetDir)
-        : command === "resolve" || command === "explain"
-          ? resolve(input)
-          : command === "validate-plan"
-            ? validatePlan(input)
-            : command === "validate-run-record"
-              ? validateRunRecord(input)
-              : calibrationDecision(input);
+    command === "resolve-phase-execution"
+      ? resolvePhaseExecution(input, promptFile, targetDir)
+      : command === "validate-phase-execution-plan"
+        ? validatePhaseExecutionPlan(input, promptFile, targetDir)
+        : command === "validate-phase-candidate"
+          ? validatePhaseCandidate(input, promptFile, targetDir)
+          : command === "resolve-execution"
+            ? resolveExecution(input, promptFile, targetDir)
+            : command === "validate-execution-plan"
+              ? validateExecutionPlan(input, promptFile, targetDir)
+              : command === "resolve" || command === "explain"
+                ? resolve(input)
+                : command === "validate-plan"
+                  ? validatePlan(input)
+                  : command === "validate-run-record"
+                    ? validateRunRecord(input)
+                    : calibrationDecision(input);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
@@ -791,4 +1332,11 @@ module.exports = {
   validateExecutionPlan,
   validateRunRecord,
   calibrationDecision,
+  PHASES_V2,
+  loadPolicyV2,
+  resolvePhaseExecution,
+  validatePhasePlan,
+  validatePhaseExecutionPlan,
+  validatePhaseRunRecord,
+  validatePhaseCandidate,
 };
