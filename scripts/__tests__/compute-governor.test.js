@@ -842,6 +842,33 @@ describe("compute governor", () => {
     expect(() =>
       validatePhaseCandidate(nestedPlan, nestedSubject.target, patchFile),
     ).toThrow("undeclared protected path");
+
+    const controlSubject = phaseTarget("governor-control-plane-path-");
+    const controlPlan = resolvePhaseExecution(
+      {
+        ...request,
+        evidence: { ...phaseEvidence, plannedPaths: ["**"] },
+      },
+      controlSubject.prompt,
+      controlSubject.target,
+    );
+    mkdirSync(path.join(controlSubject.target, "scripts"));
+    writeFileSync(
+      path.join(controlSubject.target, "scripts", "provider-run.sh"),
+      "#!/usr/bin/env bash\n",
+    );
+    execFileSync("git", ["add", "-N", "--all"], {
+      cwd: controlSubject.target,
+    });
+    writeFileSync(
+      patchFile,
+      execFileSync("git", ["diff", "--binary", "HEAD", "--"], {
+        cwd: controlSubject.target,
+      }),
+    );
+    expect(() =>
+      validatePhaseCandidate(controlPlan, controlSubject.target, patchFile),
+    ).toThrow("undeclared protected path");
   });
 
   it("rejects a permission-only change to a planned regular file", () => {

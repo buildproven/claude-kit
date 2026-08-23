@@ -16,7 +16,6 @@
     },
     {
       "paths": [
-        "config/compute-governor-policy.json",
         "config/compute-governor-policy-v1.json",
         "config/compute-governor-policy-v2.json",
         "scripts/compute-governor.js",

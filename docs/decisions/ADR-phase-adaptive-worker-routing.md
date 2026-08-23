@@ -113,7 +113,9 @@ traversal, malformed paths, symlinks, gitlinks, submodules, ignored files,
 unknown change kinds, unknown paths, renames, copies, deletions, type changes,
 unmerged entries, or changes outside the planned prefixes fail closed as
 `replan-required`. A newly found protected path that was not in the plan also
-requires a critical replan. Immediately before target mutation, the runner
+requires a critical replan. The governor, runner, and versioned policy files
+are protected security paths, so standard workers cannot rewrite their own
+control plane. Immediately before target mutation, the runner
 acquires a repository-scoped exclusive handoff lease. The lease remains held
 across destination HEAD/cleanliness validation, application of only the already
 classified patch bytes, digest verification, and rollback or terminal release.

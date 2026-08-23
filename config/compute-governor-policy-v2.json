@@ -63,7 +63,14 @@
     "migration": ["migrations/", "schema/"],
     "public-contract": ["api/", "cli/", "sdk/"],
     "deployment": [".github/workflows/", "deploy/", "infrastructure/"],
-    "security": ["security/", "secrets/"],
+    "security": [
+      "security/",
+      "secrets/",
+      "scripts/compute-governor.js",
+      "scripts/provider-run.sh",
+      "config/compute-governor-policy-v1.json",
+      "config/compute-governor-policy-v2.json"
+    ],
     "cross-repository": [".gitmodules"]
   },
   "protectedPromptPatterns": {
@@ -110,7 +117,11 @@
       "\\bsecurity\\b",
       "\\bsecret(?:s)?\\b",
       "\\bcredential(?:s)?\\b",
-      "\\bvulnerabilit(?:y|ies)\\b"
+      "\\bvulnerabilit(?:y|ies)\\b",
+      "\\bsandbox(?:ing)?\\b",
+      "\\bmodel rout(?:e|er|ing)\\b",
+      "\\bcompute governor\\b",
+      "\\bprovider runner\\b"
     ],
     "cross-repository": [
       "\\bcross[- ]repo(?:sitory)?\\b",

@@ -56,6 +56,10 @@ until application telemetry, exact token data, lineage, budgets, and late-defect
 adjudication can prove it safe. Repeated-failure escalation is also deferred
 until that lineage exists.
 
+The governor, provider runner, and both versioned policy files are protected
+security paths. A standard worker that discovers a change to this control plane
+must stop and obtain a new critical plan.
+
 Caller policy and phase derive access. `scan`, `plan`, and `review` are
 read-only. `implement`, `remediate`, and `diagnose` use workspace-write in a
 detached exact-HEAD worktree. `verify` and every Claude v2 request fail closed
