@@ -113,9 +113,10 @@ traversal, malformed paths, symlinks, gitlinks, submodules, ignored files,
 unknown change kinds, unknown paths, renames, copies, deletions, type changes,
 unmerged entries, or changes outside the planned prefixes fail closed as
 `replan-required`. A newly found protected path that was not in the plan also
-requires a critical replan. The governor, runner, and versioned policy files
-are protected security paths, so standard workers cannot rewrite their own
-control plane. Immediately before target mutation, the runner
+requires a critical replan. The governor, runner, provider policy, deadline and
+provider-evidence helpers, and versioned policy files are protected security
+paths, so standard workers cannot rewrite their own control plane. Immediately
+before target mutation, the runner
 acquires a repository-scoped exclusive handoff lease. The lease remains held
 across destination HEAD/cleanliness validation, application of only the already
 classified patch bytes, digest verification, and rollback or terminal release.
@@ -144,11 +145,15 @@ their existing outcome vocabulary and validator.
 
 Ordinary callers migrate to the phase contract:
 
-- unattended and interactive Ralph implementation workers;
-- overnight Ralph attempts;
-- fleet steward repair workers;
+- interactive Ralph implementation workers that explicitly select Codex;
+- overnight Ralph attempts that explicitly select Codex;
+- fleet steward repair workers that explicitly select Codex;
 - Codex cross-review read-only workers. Claude cross-review keeps the legacy v1
   path until the Claude phase sandbox exists.
+
+An unset Ralph or steward provider retains v1 provider-policy resolution. This
+keeps Claude-only hosts and configured fallback behavior working; v2 never
+silently turns an unset or `auto` provider into Codex.
 
 Quality's revision-bound review panel remains under its stronger manifest and
 diversity contract. Strategy panels remain explicit multi-provider

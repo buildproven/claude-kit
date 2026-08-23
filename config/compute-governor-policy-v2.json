@@ -68,6 +68,10 @@
       "secrets/",
       "scripts/compute-governor.js",
       "scripts/provider-run.sh",
+      "scripts/provider-policy.sh",
+      "scripts/run-with-deadline.py",
+      "scripts/quality-provider-error.js",
+      "scripts/quality-provider-usage.js",
       "config/compute-governor-policy-v1.json",
       "config/compute-governor-policy-v2.json"
     ],

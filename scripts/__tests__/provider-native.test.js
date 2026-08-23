@@ -1326,6 +1326,9 @@ describe("provider-native platform", () => {
     expect(script).toContain('d["openPullRequests"]');
     expect(script).toContain('d["stashes"]');
     expect(script).toContain('d["lockedWorktrees"]');
+    expect(script).toContain('if [ "$PROVIDER" = codex ]');
+    expect(script).toContain('[ -z "$PROVIDER" ] || args+=');
+    expect(script).toContain('[ -z "$FALLBACK" ] || args+=');
   });
 
   it("launches a governed Codex child with the plan's explicit model and effort", () => {

@@ -60,6 +60,9 @@ describe("overnight loop", () => {
     });
     expect(source).toContain('--phase-request "$execution_facts_file"');
     expect(source).toContain("--caller overnight-ralph");
+    expect(source).toContain('if [ "$PROVIDER" = codex ]');
+    expect(source).toContain('[ -z "$PROVIDER" ] || provider_args+=');
+    expect(source).toContain('[ -z "$PROVIDER_FALLBACK" ] || provider_args+=');
     expect(source).toContain('--output-dir "$provider_output_dir"');
     expect(source).toContain('"phase":"implement"');
     expect(source).toContain('"targetedProof":false');

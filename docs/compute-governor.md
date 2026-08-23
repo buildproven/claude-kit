@@ -56,9 +56,10 @@ until application telemetry, exact token data, lineage, budgets, and late-defect
 adjudication can prove it safe. Repeated-failure escalation is also deferred
 until that lineage exists.
 
-The governor, provider runner, and both versioned policy files are protected
-security paths. A standard worker that discovers a change to this control plane
-must stop and obtain a new critical plan.
+The governor, provider runner, provider policy, deadline and provider-evidence
+helpers, and both versioned policy files are protected security paths. A
+standard worker that discovers a change to this control plane must stop and
+obtain a new critical plan.
 
 Caller policy and phase derive access. `scan`, `plan`, and `review` are
 read-only. `implement`, `remediate`, and `diagnose` use workspace-write in a
@@ -91,8 +92,9 @@ raw responses, and arbitrary provider metadata are rejected.
 
 Existing `--execution-facts` and `--execution-plan` callers keep the frozen v1
 policy, resolver, plan, record, and validation behavior. Legacy `test` remains
-`test`. Claude cross-review and explicitly selected Claude Ralph/steward workers
-stay on v1 until Claude has the required v2 OS sandbox.
+`test`. Claude cross-review, explicitly selected Claude Ralph/steward workers,
+and Ralph/steward workers with no explicit provider stay on v1 until Claude has
+the required v2 OS sandbox. Explicit Codex selection opts those workers into v2.
 
 Every call to `provider-run.sh` must choose one mode: `--phase-request`,
 `--execution-facts`, `--execution-plan`, or a policy-known specialized exemption

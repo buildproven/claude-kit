@@ -113,13 +113,14 @@ node "$KIT_ROOT/scripts/worktree-manager.js" unlock --repo "$worktree" --branch 
 and complete the repository's provider-neutral quality merge workflow. Never push directly
 to the default branch. Return the PR URL and final verification evidence.
 EOF
-  if [ "$PROVIDER" = claude ]; then
-    printf '%s\n' '{"phase":"implement","localized":false,"reversible":false,"targetedProof":false,"ambiguous":true,"changedFiles":0,"protectedSurfaces":[],"sameFailureStreak":0}' > "$phase_request"
-    args=(--prompt-file "$prompt" --execution-facts "$phase_request" --provider claude --target-dir "$worktree" --timeout 3600 --output-dir "$provider_output")
-    [ -z "$FALLBACK" ] || args+=(--fallback "$FALLBACK")
-  else
+  if [ "$PROVIDER" = codex ]; then
     printf '%s\n' '{"schemaVersion":2,"caller":"fleet-steward","provider":"codex","phase":"implement","evidence":{"localized":false,"reversible":false,"targetedProof":false,"ambiguous":true,"changedFiles":0,"protectedSurfaces":[],"publicContract":false,"crossRepository":false,"plannedPaths":["**"]}}' > "$phase_request"
     args=(--prompt-file "$prompt" --phase-request "$phase_request" --caller fleet-steward --provider codex --fallback none --target-dir "$worktree" --timeout 3600 --output-dir "$provider_output")
+  else
+    printf '%s\n' '{"phase":"implement","localized":false,"reversible":false,"targetedProof":false,"ambiguous":true,"changedFiles":0,"protectedSurfaces":[],"sameFailureStreak":0}' > "$phase_request"
+    args=(--prompt-file "$prompt" --execution-facts "$phase_request" --target-dir "$worktree" --timeout 3600 --output-dir "$provider_output")
+    [ -z "$PROVIDER" ] || args+=(--provider "$PROVIDER")
+    [ -z "$FALLBACK" ] || args+=(--fallback "$FALLBACK")
   fi
   if "$KIT_ROOT/scripts/provider-run.sh" "${args[@]}" | tee "$STATE_DIR/$(basename "$repo")-$slug.result"; then
     fixed=$((fixed + 1))

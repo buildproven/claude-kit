@@ -843,32 +843,42 @@ describe("compute governor", () => {
       validatePhaseCandidate(nestedPlan, nestedSubject.target, patchFile),
     ).toThrow("undeclared protected path");
 
-    const controlSubject = phaseTarget("governor-control-plane-path-");
-    const controlPlan = resolvePhaseExecution(
-      {
-        ...request,
-        evidence: { ...phaseEvidence, plannedPaths: ["**"] },
-      },
-      controlSubject.prompt,
-      controlSubject.target,
-    );
-    mkdirSync(path.join(controlSubject.target, "scripts"));
-    writeFileSync(
-      path.join(controlSubject.target, "scripts", "provider-run.sh"),
-      "#!/usr/bin/env bash\n",
-    );
-    execFileSync("git", ["add", "-N", "--all"], {
-      cwd: controlSubject.target,
-    });
-    writeFileSync(
-      patchFile,
-      execFileSync("git", ["diff", "--binary", "HEAD", "--"], {
+    for (const controlPath of [
+      "scripts/compute-governor.js",
+      "scripts/provider-run.sh",
+      "scripts/provider-policy.sh",
+      "scripts/run-with-deadline.py",
+      "scripts/quality-provider-error.js",
+      "scripts/quality-provider-usage.js",
+      "config/compute-governor-policy-v1.json",
+      "config/compute-governor-policy-v2.json",
+    ]) {
+      const controlSubject = phaseTarget("governor-control-plane-path-");
+      const controlPlan = resolvePhaseExecution(
+        {
+          ...request,
+          evidence: { ...phaseEvidence, plannedPaths: ["**"] },
+        },
+        controlSubject.prompt,
+        controlSubject.target,
+      );
+      mkdirSync(path.dirname(path.join(controlSubject.target, controlPath)), {
+        recursive: true,
+      });
+      writeFileSync(path.join(controlSubject.target, controlPath), "fixture\n");
+      execFileSync("git", ["add", "-N", "--all"], {
         cwd: controlSubject.target,
-      }),
-    );
-    expect(() =>
-      validatePhaseCandidate(controlPlan, controlSubject.target, patchFile),
-    ).toThrow("undeclared protected path");
+      });
+      writeFileSync(
+        patchFile,
+        execFileSync("git", ["diff", "--binary", "HEAD", "--"], {
+          cwd: controlSubject.target,
+        }),
+      );
+      expect(() =>
+        validatePhaseCandidate(controlPlan, controlSubject.target, patchFile),
+      ).toThrow("undeclared protected path");
+    }
   });
 
   it("rejects a permission-only change to a planned regular file", () => {
