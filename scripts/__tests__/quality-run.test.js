@@ -31,6 +31,17 @@ function withManifestLock(file, mutation) {
 function validateIdentity(manifest) {
   if (manifest.behavior?.stale) throw new Error("manifest HEAD identity is stale");
 }
+function terminalEpoch(manifest) { return manifest.terminalEpoch || 0; }
+function resumeRecoverableTerminal(file) {
+  const manifest = read(file);
+  if (!manifest.behavior?.recoverTerminal || manifest.terminalState?.state !== "blocked") return null;
+  const epoch = terminalEpoch(manifest) + 1;
+  manifest.terminalHistory = [{ ...manifest.terminalState, disposition: "superseded-by-capability" }];
+  manifest.terminalEpoch = epoch;
+  manifest.terminalState = { state: "recovering", head: manifest.revisions.currentHead, terminalEpoch: epoch };
+  write(file, manifest);
+  return manifest.terminalState;
+}
 function mutationEvidenceValid(manifest) { return Boolean(manifest.mutation); }
 function incompleteRetryStatus(manifest) {
   const incomplete = manifest.reviews.filter((review) => review.status === "incomplete");
@@ -83,7 +94,7 @@ if (require.main === module) {
   process.stdout.write(inForce + "\\n");
 }
 module.exports = { incompleteRetryStatus, loadManifest, mutationEvidenceValid, recordTerminalState,
-  reviewAuthorization, reviewCoverage, validateIdentity, withManifestLock };
+  reviewAuthorization, reviewCoverage, resumeRecoverableTerminal, terminalEpoch, validateIdentity, withManifestLock };
 `;
 
 const FAKE_STEP = `
@@ -385,6 +396,27 @@ describe("quality-run public orchestration", () => {
     });
     expect(result.manifest.calls.at(-1)).toBe("quality-stamp-and-merge.sh");
     expect(result.manifest.telemetryWrites).toBe(1);
+  });
+
+  it("continues only the explicitly recoverable terminal merge campaign", () => {
+    const entry = fixture(
+      { recoverTerminal: true },
+      { merge: true, tier: "medium" },
+    );
+    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    manifest.terminalState = {
+      state: "blocked",
+      detail: "merge admission failed",
+      head: manifest.revisions.currentHead,
+    };
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+
+    const result = run(entry);
+
+    expect(result.status).toBe(0);
+    expect(result.manifest.terminalState).toMatchObject({ state: "merged" });
+    expect(result.manifest.terminalHistory).toHaveLength(1);
+    expect(result.manifest.terminalEpoch).toBe(1);
   });
 
   it("rejects merge exit zero without exact merged terminal evidence", () => {

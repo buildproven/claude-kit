@@ -33,6 +33,11 @@ function pinRepositoryLease(manifest) {
   process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = token;
 }
 
+function pinTerminalEpoch(manifest) {
+  const epoch = quality.terminalEpoch(manifest);
+  process.env.BS_QUALITY_TERMINAL_EPOCH = String(epoch);
+}
+
 function updateOrchestration(manifestPath, phase, status, detail = null) {
   quality.withManifestLock(manifestPath, (manifest) => {
     quality.validateIdentity(manifest, manifest.repo.realpath);
@@ -431,8 +436,15 @@ async function runManifest(manifestPath, dependencies = {}) {
   try {
     const manifest = manifestAt(manifestPath);
     pinRepositoryLease(manifest);
+    pinTerminalEpoch(manifest);
     quality.validateIdentity(manifest, manifest.repo.realpath);
     if (manifest.terminalState) {
+      const recovery = quality.resumeRecoverableTerminal(manifestPath);
+      if (recovery) {
+        const resumed = manifestAt(manifestPath);
+        pinTerminalEpoch(resumed);
+        return await runOpenCampaign(context, manifestPath, resumed);
+      }
       return {
         status: "terminal",
         state: manifest.terminalState.state,

@@ -36,6 +36,10 @@ if node "$SCRIPT_DIR/quality-invocation.js" ci-billing-capability "$MANIFEST" \
 fi
 CI_BUDGET_ARGS=()
 [ -z "$CI_BUDGET_MODE" ] || CI_BUDGET_ARGS=(--mode "$CI_BUDGET_MODE")
+record_merge_admission_block() {
+  node "$SCRIPT_DIR/quality-invocation.js" record-merge-admission-block \
+    "$MANIFEST" --conditions "$1" >/dev/null
+}
 REQUIRED_CHECKS_JSON=""
 REQUIRED_CHECKS_ABSENT=false
 if ! REQUIRED_CHECKS_OUTPUT="$(gh pr checks "$PR" \
@@ -68,6 +72,7 @@ fi
 if [ "$CI_ALREADY_GREEN" != true ]; then
   node "$SCRIPT_DIR/ci-budget-admission.js" \
     ${CI_BUDGET_ARGS[@]+"${CI_BUDGET_ARGS[@]}"} >/dev/null || {
+    record_merge_admission_block "ci:failed" || exit 1
     echo "❌ MERGE BLOCKED: GitHub Actions minute policy denied this candidate." >&2
     exit 1
   }

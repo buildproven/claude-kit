@@ -3,6 +3,7 @@ const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const invocation = require("../quality-invocation");
+const lease = require("../quality-repo-lease");
 const INVOCATION = path.join(__dirname, "..", "quality-invocation.js");
 
 // ---------------------------------------------------------------------------
@@ -255,6 +256,78 @@ describe("recordTerminalState", () => {
     const written = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
     expect(written.manifestRevision).toBe(7);
     expect(written.terminalState.state).toBe("blocked");
+  });
+
+  it("rejects a terminal writer from an earlier recovery epoch", () => {
+    const manifestPath = writeManifest({ terminalEpoch: 2 });
+
+    expect(() =>
+      invocation.recordTerminalState(manifestPath, "blocked", "late merge", {
+        terminalEpoch: 1,
+      }),
+    ).toThrow(/terminal writer epoch is stale/);
+    expect(readState(manifestPath)).toBeNull();
+  });
+
+  it("replaces only a matching recovering sentinel", () => {
+    const manifestPath = writeManifest({
+      terminalEpoch: 2,
+      terminalState: {
+        state: "recovering",
+        head: "b".repeat(40),
+        terminalEpoch: 2,
+      },
+    });
+
+    expect(
+      invocation.recordTerminalState(manifestPath, "merged", "pr:1", {
+        terminalEpoch: 2,
+      }),
+    ).toBe("merged");
+    expect(readState(manifestPath)).toMatchObject({
+      state: "merged",
+      terminalEpoch: 2,
+    });
+  });
+
+  it("lets the matching recovered merge receipt replace its sentinel", () => {
+    const manifestPath = writeManifest({
+      terminalEpoch: 2,
+      terminalState: {
+        state: "recovering",
+        head: "b".repeat(40),
+        terminalEpoch: 2,
+      },
+    });
+    const previousEpoch = process.env.BS_QUALITY_TERMINAL_EPOCH;
+    process.env.BS_QUALITY_TERMINAL_EPOCH = "2";
+    try {
+      lease._recordMergedTerminalRaw(manifestPath);
+    } finally {
+      if (previousEpoch === undefined)
+        delete process.env.BS_QUALITY_TERMINAL_EPOCH;
+      else process.env.BS_QUALITY_TERMINAL_EPOCH = previousEpoch;
+    }
+
+    expect(readState(manifestPath)).toMatchObject({
+      state: "merged",
+      terminalEpoch: 2,
+    });
+  });
+
+  it("binds a typed merge-admission block to the blocked terminal record", () => {
+    const manifestPath = writeManifest({ options: { merge: true } });
+    invocation.recordMergeAdmissionBlock(manifestPath, ["ci:failed"]);
+    invocation.recordTerminalState(
+      manifestPath,
+      "blocked",
+      "merge admission failed",
+    );
+
+    expect(readState(manifestPath)).toMatchObject({
+      state: "blocked",
+      mergeAdmissionConditions: ["ci:failed"],
+    });
   });
 
   it("marks the manifest terminal for isTerminal", () => {

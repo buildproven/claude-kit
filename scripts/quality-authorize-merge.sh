@@ -53,6 +53,11 @@ has_ci_billing_capability() {
     >/dev/null 2>&1
 }
 
+record_merge_admission_block() {
+  node "$SCRIPT_DIR/quality-invocation.js" record-merge-admission-block \
+    "$MANIFEST" --conditions "$1" >/dev/null
+}
+
 node "$SCRIPT_DIR/quality-invocation.js" review-authorization "$MANIFEST" >/dev/null || exit 1
 MERGE_REQUESTED="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" options.merge)"
 [ "$MERGE_REQUESTED" = true ] || {
@@ -497,6 +502,8 @@ if [ "$NONSTRICT_REFCAS_CAPABILITY" = true ] &&
 fi
 if [ "$MERGE_MODE" = protected-nonstrict-ref-cas ] &&
   [ "$NONSTRICT_REFCAS_CAPABILITY" != true ]; then
+  record_merge_admission_block \
+    "base:protected-nonstrict,pr:non-atomic-state" || exit 1
   echo "❌ MERGE BLOCKED: protected non-strict ref-CAS requires its exact signed capability." >&2
   exit 1
 fi

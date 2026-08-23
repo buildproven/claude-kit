@@ -5918,10 +5918,69 @@ const NON_REENTERABLE_REVIEW_STATES = new Set([
  * Returns the state actually in force (which may differ from `state` when the
  * campaign was already terminal).
  */
-function recordTerminalState(manifestPath, state, detail = null) {
+function terminalEpoch(manifest) {
+  return Number.isSafeInteger(manifest.terminalEpoch) &&
+    manifest.terminalEpoch >= 0
+    ? manifest.terminalEpoch
+    : 0;
+}
+
+function requestedTerminalEpoch(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error("terminal epoch must be a non-negative integer");
+  }
+  return parsed;
+}
+
+function mergeAdmissionConditions(manifest, state) {
+  const conditions = manifest.merge?.admissionBlock?.conditions;
+  if (
+    state !== "blocked" ||
+    manifest.merge?.admissionBlock?.head !== manifest.revisions?.currentHead ||
+    !Array.isArray(conditions) ||
+    conditions.length === 0 ||
+    !conditions.every((condition) => typeof condition === "string")
+  ) {
+    return null;
+  }
+  return [...conditions];
+}
+
+function recordTerminalState(manifestPath, state, detail = null, options = {}) {
   if (!TERMINAL_STATES.has(state)) {
     throw new Error(`unknown terminal state '${state}'`);
   }
+  const expectedEpoch = requestedTerminalEpoch(
+    options.terminalEpoch ?? process.env.BS_QUALITY_TERMINAL_EPOCH,
+  );
+  const write = (manifest) => {
+    const currentEpoch = terminalEpoch(manifest);
+    if (expectedEpoch !== null && expectedEpoch !== currentEpoch) {
+      throw new Error("terminal writer epoch is stale");
+    }
+    if (
+      manifest.terminalState &&
+      !(
+        manifest.terminalState.state === "recovering" &&
+        expectedEpoch === currentEpoch
+      )
+    ) {
+      return manifest.terminalState.state;
+    }
+    manifest.terminalState = {
+      state,
+      detail: detail ? String(detail).slice(0, 500) : null,
+      head: manifest.revisions?.currentHead ?? null,
+      terminalEpoch: currentEpoch,
+      recordedAt: new Date().toISOString(),
+    };
+    const conditions = mergeAdmissionConditions(manifest, state);
+    if (conditions)
+      manifest.terminalState.mergeAdmissionConditions = conditions;
+    return state;
+  };
   // Written under the manifest lock, but persisted WITHOUT bumping
   // manifestRevision. A terminal state is metadata about a campaign that has
   // already ended, not a state transition another writer contends for, and the
@@ -5939,38 +5998,129 @@ function recordTerminalState(manifestPath, state, detail = null) {
     return require("./quality-repo-lease").withManifestMutation(
       initial.manifestPath,
       process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN,
-      (manifest) => {
-        if (manifest.terminalState) return manifest.terminalState.state;
-        manifest.terminalState = {
-          state,
-          detail: detail ? String(detail).slice(0, 500) : null,
-          head: manifest.revisions?.currentHead ?? null,
-          recordedAt: new Date().toISOString(),
-        };
-        return state;
-      },
+      write,
     ).terminalState.state;
   }
   const lock = `${path.resolve(manifestPath)}.lock`;
   const descriptor = openManifestLock(lock);
   try {
     const loaded = loadManifest(manifestPath);
-    if (loaded.manifest.terminalState) {
-      // Already terminal — keep the first cause, whatever it was.
-      return loaded.manifest.terminalState.state;
-    }
-    loaded.manifest.terminalState = {
-      state,
-      detail: detail ? String(detail).slice(0, 500) : null,
-      head: loaded.manifest.revisions?.currentHead ?? null,
-      recordedAt: new Date().toISOString(),
-    };
+    const result = write(loaded.manifest);
     saveManifestMidTransaction(loaded.manifestPath, loaded.manifest);
-    return state;
+    return result;
   } finally {
     fs.closeSync(descriptor);
     fs.unlinkSync(lock);
   }
+}
+
+function recordMergeAdmissionBlock(manifestPath, conditions) {
+  if (
+    !Array.isArray(conditions) ||
+    conditions.length === 0 ||
+    !conditions.every((condition) => typeof condition === "string")
+  ) {
+    throw new Error("merge admission block requires typed condition ids");
+  }
+  return withManifestLock(manifestPath, (manifest) => {
+    manifest.merge ??= {};
+    manifest.merge.admissionBlock = {
+      conditions: [...new Set(conditions)].sort(),
+      head: manifest.revisions.currentHead,
+      recordedAt: new Date().toISOString(),
+    };
+    return manifest.merge.admissionBlock;
+  });
+}
+
+function recoveryScope(manifest, terminal) {
+  const conditions = terminal?.mergeAdmissionConditions;
+  if (
+    !Array.isArray(conditions) ||
+    conditions.length === 0 ||
+    !conditions.every((condition) => typeof condition === "string") ||
+    !approvalValid(manifest) ||
+    !conditions.every((condition) =>
+      manifest.approval.acceptedConditions.includes(condition),
+    )
+  ) {
+    return null;
+  }
+  if (conditions.length === 1 && conditions[0] === "ci:failed") {
+    return ciBillingCapabilityValid(manifest) ? manifest.approval.scope : null;
+  }
+  const refCas = protectedNonstrictRefCasCapability(manifest);
+  return refCas &&
+    conditions.length === 2 &&
+    conditions.includes("base:protected-nonstrict") &&
+    conditions.includes("pr:non-atomic-state")
+    ? manifest.approval.scope
+    : null;
+}
+
+function resumeRecoverableTerminal(manifestPath) {
+  const initial = loadManifest(manifestPath);
+  if (initial.manifest.options?.merge !== true) return null;
+  const initialTerminal = initial.manifest.terminalState;
+  if (
+    !initialTerminal ||
+    initialTerminal.head !== initial.manifest.revisions.currentHead ||
+    !["blocked", "recovering"].includes(initialTerminal.state) ||
+    !recoveryScope(
+      initial.manifest,
+      initialTerminal.state === "recovering"
+        ? initialTerminal.recovery
+        : initialTerminal,
+    )
+  ) {
+    return null;
+  }
+  return withManifestLock(manifestPath, (manifest) => {
+    const terminal = manifest.terminalState;
+    if (!terminal || terminal.head !== manifest.revisions.currentHead)
+      return null;
+    if (terminal.state === "recovering") {
+      return recoveryScope(manifest, terminal.recovery) ? terminal : null;
+    }
+    if (terminal.state !== "blocked") return null;
+    const scope = recoveryScope(manifest, terminal);
+    if (!scope) return null;
+    reviewCoverage(manifest);
+    if (
+      manifest.terminalHistory !== undefined &&
+      !Array.isArray(manifest.terminalHistory)
+    ) {
+      throw new Error("terminal history is malformed");
+    }
+    const nextEpoch = terminalEpoch(manifest) + 1;
+    const recoveredAt = new Date().toISOString();
+    manifest.terminalHistory ??= [];
+    manifest.terminalHistory.push({
+      ...terminal,
+      disposition: "superseded-by-capability",
+      supersededAt: recoveredAt,
+      capabilityScope: scope,
+    });
+    manifest.terminalHistory.push({
+      event: "reopened-by-capability",
+      head: manifest.revisions.currentHead,
+      terminalEpoch: nextEpoch,
+      capabilityScope: scope,
+      recordedAt: recoveredAt,
+    });
+    manifest.terminalEpoch = nextEpoch;
+    manifest.terminalState = {
+      state: "recovering",
+      head: manifest.revisions.currentHead,
+      terminalEpoch: nextEpoch,
+      recordedAt: recoveredAt,
+      recovery: {
+        mergeAdmissionConditions: terminal.mergeAdmissionConditions,
+        capabilityScope: scope,
+      },
+    };
+    return manifest.terminalState;
+  });
 }
 
 function isTerminal(manifest) {
@@ -6291,6 +6441,14 @@ const COMMANDS = {
     process.stdout.write(
       `${JSON.stringify(conditionTaxonomy.diagnoseConditions(manifest, {}))}\n`,
     ),
+  "record-merge-admission-block": ({ manifestArg, rawArgs }) => {
+    const options = parseOptions(rawArgs);
+    const conditions = String(options.conditions || "")
+      .split(",")
+      .map((condition) => condition.trim())
+      .filter(Boolean);
+    recordMergeAdmissionBlock(manifestArg, conditions);
+  },
 };
 
 function runAdvance(manifestArg, manifest, rawArgs) {
@@ -6396,6 +6554,7 @@ function runCommand(command, rawArgs) {
       manifestArg,
       options.state,
       options.detail,
+      { terminalEpoch: options["terminal-epoch"] },
     );
     const releaseStates = [
       "verified-unmerged",
@@ -6548,6 +6707,9 @@ module.exports = {
   recordGate,
   recordMutation,
   recordTerminalState,
+  recordMergeAdmissionBlock,
+  resumeRecoverableTerminal,
+  terminalEpoch,
   isTerminal,
   TERMINAL_STATES,
   hasAbandonedExecution,
