@@ -57,9 +57,9 @@ adjudication can prove it safe. Repeated-failure escalation is also deferred
 until that lineage exists.
 
 The governor, provider runner, provider policy, deadline and provider-evidence
-helpers, and both versioned policy files are protected security paths. A
-standard worker that discovers a change to this control plane must stop and
-obtain a new critical plan.
+helpers, autonomous runtime, migrated caller entrypoints, and both versioned
+policy files are protected security paths. A standard worker that discovers a
+change to this control plane must stop and obtain a new critical plan.
 
 Caller policy and phase derive access. `scan`, `plan`, and `review` are
 read-only. `implement`, `remediate`, and `diagnose` use workspace-write in a

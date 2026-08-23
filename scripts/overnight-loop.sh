@@ -46,7 +46,10 @@ done
 [[ "$MAX_HOURS" =~ ^[1-9][0-9]*$ ]] || die "--max-hours must be a positive integer (got '$MAX_HOURS')"
 [ -n "$LINEAR_PROJECT" ] || die "--linear-project is required (prevents cross-repo backlog execution)"
 
-LOG_DIR="${OVERNIGHT_LOOP_STATE_DIR:-$TARGET_DIR/.claude/overnight-loop}"
+TARGET_STATE_ID=$("$PYTHON_BIN" -c 'import hashlib,os,sys; print(hashlib.sha256(os.path.realpath(sys.argv[1]).encode()).hexdigest()[:16])' "$TARGET_DIR") \
+  || die "cannot derive target state identity"
+STATE_HOME="${XDG_STATE_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/state}"
+LOG_DIR="${OVERNIGHT_LOOP_STATE_DIR:-$STATE_HOME/buildproven/overnight-loop/$TARGET_STATE_ID}"
 LOG_FILE="$LOG_DIR/overnight-loop-$(date +%Y-%m-%d).log"
 STATUS_FILE="$LOG_DIR/overnight-loop-status.json"
 RUN_WITH_DEADLINE="$SCRIPT_DIR/run-with-deadline.py"

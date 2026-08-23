@@ -63,18 +63,16 @@ kit. Repository inventory tests prove that supported ordinary entrypoints pass
 their own fixed caller ID.
 
 `provider-run.sh` binds its sandbox to this profile and rejects a conflicting
-`--sandbox` argument. Codex runs with a runner-created isolated configuration
-home that contains only its authentication material and a versioned execution
-profile. The profile sets approval to `never`, disables MCP servers, plugins,
-hooks, web search, remote control, and extra writable roots, and selects native
-read-only or workspace-write sandboxing. The runner passes a minimal allowlist
-of environment variables and does not expose the caller's ambient secrets. The
-plan binds the execution-profile version and digest, and the run record persists
-that effective digest. The boundary protects target mutation integrity and
-limits ambient operational tools. It is not a confidentiality boundary: the
-provider process necessarily has provider authentication and can read the bound
-target and prompt. All Claude schema-v2 phase requests fail closed before
-provider launch.
+`--sandbox` argument. Codex uses its existing authentication/configuration home,
+but the runner passes a minimal environment and command-line overrides that set
+approval to `never`, replace MCP servers and plugins with empty maps, disable
+hooks and web search, remove extra writable roots, and select native read-only
+or workspace-write sandboxing. The plan binds the execution-profile version and
+digest, and the run record persists that effective digest. The boundary protects
+target mutation integrity and limits ambient operational tools. It is not a
+configuration-isolation or confidentiality boundary: the provider process has
+provider authentication and can read the bound target and prompt. All Claude
+schema-v2 phase requests fail closed before provider launch.
 Tool allowlists do not isolate lifecycle hooks or external verifiers from the
 host. Claude phase execution remains disabled until an OS-enforced sandbox
 proves that the model, hooks, and verifiers cannot mutate outside their approved
@@ -114,9 +112,9 @@ unknown change kinds, unknown paths, renames, copies, deletions, type changes,
 unmerged entries, or changes outside the planned prefixes fail closed as
 `replan-required`. A newly found protected path that was not in the plan also
 requires a critical replan. The governor, runner, provider policy, deadline and
-provider-evidence helpers, and versioned policy files are protected security
-paths, so standard workers cannot rewrite their own control plane. Immediately
-before target mutation, the runner
+provider-evidence helpers, autonomous runtime, migrated caller entrypoints, and
+versioned policy files are protected security paths, so standard workers cannot
+rewrite their own control plane. Immediately before target mutation, the runner
 acquires a repository-scoped exclusive handoff lease. The lease remains held
 across destination HEAD/cleanliness validation, application of only the already
 classified patch bytes, digest verification, and rollback or terminal release.

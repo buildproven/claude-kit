@@ -850,6 +850,11 @@ describe("compute governor", () => {
       "scripts/run-with-deadline.py",
       "scripts/quality-provider-error.js",
       "scripts/quality-provider-usage.js",
+      "scripts/autonomous-loop-runtime.js",
+      "scripts/overnight-loop.sh",
+      "scripts/steward/orchestrate.sh",
+      "skills/ralph/reference.md",
+      "skills/cross-review/SKILL.md",
       "config/compute-governor-policy-v1.json",
       "config/compute-governor-policy-v2.json",
     ]) {

@@ -69,6 +69,24 @@ describe("overnight loop", () => {
     expect(source).toContain('"caller":"overnight-ralph"');
   });
 
+  it("keeps default governed evidence outside the target worktree", () => {
+    const fx = fixture();
+    const stateHome = join(fx.root, "state");
+    const command = `set -- --linear-project claude-setup --target-dir '${fx.target}'; OVERNIGHT_LOOP_LIB_ONLY=1 source '${loop}'; printf '%s\n' "$LOG_DIR"`;
+    const logDir = execFileSync("bash", ["-c", command], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        SETUP_REPO: fx.setup,
+        XDG_STATE_HOME: stateHome,
+      },
+    }).trim();
+    expect(logDir).toMatch(
+      new RegExp(`^${stateHome}/buildproven/overnight-loop/[0-9a-f]{16}$`),
+    );
+    expect(logDir.startsWith(`${fx.target}/`)).toBe(false);
+  });
+
   it("hard-stops a whole command at its deadline", () => {
     const start = Date.now();
     const result = spawnSync(
