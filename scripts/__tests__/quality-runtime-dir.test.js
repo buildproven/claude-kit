@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { makeTempDir } from "./helpers/tmp.js";
@@ -8,25 +8,46 @@ const ROOT = path.resolve(import.meta.dirname, "..", "..");
 const RESOLVER = path.join(ROOT, "scripts", "quality-runtime-dir.sh");
 
 describe("quality runtime directory resolver", () => {
-  it("prints the canonical directory containing quality-invocation.js", () => {
+  const cohort = [
+    "quality-invocation.js",
+    "quality-run.js",
+    "quality-provider-usage.js",
+    "provider-run.sh",
+    "quality-run-bounded.sh",
+  ];
+
+  function isolatedResolver(omitted = []) {
+    const root = makeTempDir("quality-runtime-dir-");
+    const scripts = path.join(root, "scripts");
+    mkdirSync(scripts);
+    for (const sibling of ["quality-runtime-dir.sh", ...cohort]) {
+      if (!omitted.includes(sibling)) {
+        copyFileSync(
+          path.join(ROOT, "scripts", sibling),
+          path.join(scripts, sibling),
+        );
+      }
+    }
+    const resolver = path.join(scripts, "quality-runtime-dir.sh");
+    chmodSync(resolver, 0o755);
+    return { resolver, scripts };
+  }
+
+  it("prints the canonical directory containing a complete cohort", () => {
     const result = spawnSync("bash", [RESOLVER], { encoding: "utf8" });
 
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(path.join(ROOT, "scripts"));
   });
 
-  it("fails visibly when the invocation runtime is absent", () => {
-    const root = makeTempDir("quality-runtime-dir-");
-    const scripts = path.join(root, "scripts");
-    const resolver = path.join(scripts, "quality-runtime-dir.sh");
-    mkdirSync(scripts);
-    copyFileSync(RESOLVER, resolver);
-    chmodSync(resolver, 0o644);
-    writeFileSync(path.join(root, "unrelated"), "");
+  it.each(["quality-run.js", "quality-provider-usage.js"])(
+    "fails visibly when %s is absent",
+    (omitted) => {
+      const { resolver } = isolatedResolver([omitted]);
+      const result = spawnSync("bash", [resolver], { encoding: "utf8" });
 
-    const result = spawnSync("bash", [resolver], { encoding: "utf8" });
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toMatch(/quality-invocation\.js is missing/);
-  });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(`missing: ${omitted}`);
+    },
+  );
 });

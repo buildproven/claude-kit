@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
-# Print the canonical directory containing the installed quality runtime.
+# Print the canonical directory containing a complete quality runtime cohort.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-[ -f "$SCRIPT_DIR/quality-invocation.js" ] || {
-  echo "quality-runtime-dir: quality-invocation.js is missing beside this helper" >&2
+REQUIRED_SIBLINGS=(
+  quality-invocation.js
+  quality-run.js
+  quality-provider-usage.js
+  provider-run.sh
+  quality-run-bounded.sh
+)
+
+missing=()
+for sibling in "${REQUIRED_SIBLINGS[@]}"; do
+  [[ -f "$SCRIPT_DIR/$sibling" ]] || missing+=("$sibling")
+done
+if [[ "${#missing[@]}" -gt 0 ]]; then
+  printf 'quality-runtime-dir: incomplete quality runtime cohort beside this helper; missing: %s\n' \
+    "$(IFS=', '; printf '%s' "${missing[*]}")" >&2
   exit 1
-}
+fi
 printf '%s\n' "$SCRIPT_DIR"
