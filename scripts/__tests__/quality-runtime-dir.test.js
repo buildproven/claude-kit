@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { makeTempDir } from "./helpers/tmp.js";
@@ -50,4 +50,14 @@ describe("quality runtime directory resolver", () => {
       expect(result.stderr).toContain(`missing: ${omitted}`);
     },
   );
+
+  it("propagates a present resolver failure instead of falling through", () => {
+    const skill = readFileSync(
+      path.join(ROOT, "skills", "quality", "SKILL.md"),
+      "utf8",
+    );
+
+    expect(skill).toContain('bash "$resolver"; exit $?');
+    expect(skill).not.toContain('quality-runtime-dir.sh" 2>/dev/null');
+  });
 });
