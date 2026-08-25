@@ -182,6 +182,43 @@ describe("provider review runtime", () => {
     }
   });
 
+  it("reaps an immediate fork-and-setsid orphan after its provider parent exits", async () => {
+    const directory = makeTempDir("bounded-immediate-orphan-");
+    const pidFile = path.join(directory, "detached-helper.pid");
+    const unrelated = spawn("sleep", ["20"], { stdio: "ignore" });
+    let helperPid = null;
+    try {
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          BOUNDED,
+          "--timeout",
+          "20",
+          "--",
+          "python3",
+          "-c",
+          'import os,signal,sys,time; pid=os.fork(); sys.exit(0) if pid else None; os.setsid(); signal.signal(signal.SIGTERM, signal.SIG_IGN); open(sys.argv[1], "w").write(str(os.getpid())); time.sleep(20)',
+          pidFile,
+        ],
+        { encoding: "utf8", timeout: 10000 },
+      );
+      expect(result.status).toBe(0);
+      helperPid = Number(readFileSync(pidFile, "utf8").trim());
+      expect(Number.isSafeInteger(helperPid)).toBe(true);
+      await expectProcessToStop(helperPid);
+      expect(() => process.kill(unrelated.pid, 0)).not.toThrow();
+    } finally {
+      if (Number.isSafeInteger(helperPid)) {
+        try {
+          process.kill(helperPid, "SIGKILL");
+        } catch {
+          // The assertion above is the contract; cleanup is best effort.
+        }
+      }
+      unrelated.kill("SIGKILL");
+    }
+  });
+
   it("reaps the watchdog promptly after a successful command", () => {
     const started = Date.now();
     const result = spawnSync(
