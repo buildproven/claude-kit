@@ -217,7 +217,10 @@ function run(entry) {
     {
       encoding: "utf8",
       env,
-      timeout: 10000,
+      // The repository allows subprocess-heavy integration cases 60 seconds
+      // under its eight-worker pool. Keep this fixture below that bound while
+      // avoiding a machine-load-dependent false timeout.
+      timeout: 30_000,
     },
   );
   return {
