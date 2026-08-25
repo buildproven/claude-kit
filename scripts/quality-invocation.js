@@ -6100,12 +6100,10 @@ function resumeRecoverableTerminal(manifestPath) {
     const terminal = manifest.terminalState;
     if (!terminal || terminal.head !== manifest.revisions.currentHead)
       return null;
-    if (terminal.state === "recovering") {
-      recovered = recoveryScope(manifest, terminal.recovery) ? terminal : null;
-      return;
-    }
-    if (terminal.state !== "blocked") return null;
-    const scope = recoveryScope(manifest, terminal);
+    if (!["blocked", "recovering"].includes(terminal.state)) return null;
+    const recoveryEvidence =
+      terminal.state === "recovering" ? terminal.recovery : terminal;
+    const scope = recoveryScope(manifest, recoveryEvidence);
     if (!scope) return;
     reviewCoverage(manifest);
     if (
@@ -6117,12 +6115,14 @@ function resumeRecoverableTerminal(manifestPath) {
     const nextEpoch = terminalEpoch(manifest) + 1;
     const recoveredAt = new Date().toISOString();
     manifest.terminalHistory ??= [];
-    manifest.terminalHistory.push({
-      ...terminal,
-      disposition: "superseded-by-capability",
-      supersededAt: recoveredAt,
-      capabilityScope: scope,
-    });
+    if (terminal.state === "blocked") {
+      manifest.terminalHistory.push({
+        ...terminal,
+        disposition: "superseded-by-capability",
+        supersededAt: recoveredAt,
+        capabilityScope: scope,
+      });
+    }
     manifest.terminalHistory.push({
       event: "reopened-by-capability",
       head: manifest.revisions.currentHead,
@@ -6137,7 +6137,7 @@ function resumeRecoverableTerminal(manifestPath) {
       terminalEpoch: nextEpoch,
       recordedAt: recoveredAt,
       recovery: {
-        mergeAdmissionConditions: terminal.mergeAdmissionConditions,
+        mergeAdmissionConditions: recoveryEvidence.mergeAdmissionConditions,
         capabilityScope: scope,
       },
     };

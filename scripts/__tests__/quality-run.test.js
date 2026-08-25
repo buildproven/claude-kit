@@ -34,9 +34,13 @@ function validateIdentity(manifest) {
 function terminalEpoch(manifest) { return manifest.terminalEpoch || 0; }
 function resumeRecoverableTerminal(file) {
   const manifest = read(file);
-  if (!manifest.behavior?.recoverTerminal || manifest.terminalState?.state !== "blocked") return null;
+  if (!manifest.behavior?.recoverTerminal || !["blocked", "recovering"].includes(manifest.terminalState?.state)) return null;
   const epoch = terminalEpoch(manifest) + 1;
-  manifest.terminalHistory = [{ ...manifest.terminalState, disposition: "superseded-by-capability" }];
+  manifest.terminalHistory ||= [];
+  if (manifest.terminalState.state === "blocked") {
+    manifest.terminalHistory.push({ ...manifest.terminalState, disposition: "superseded-by-capability" });
+  }
+  manifest.terminalHistory.push({ event: "reopened-by-capability", terminalEpoch: epoch });
   manifest.terminalEpoch = epoch;
   manifest.terminalState = { state: "recovering", head: manifest.revisions.currentHead, terminalEpoch: epoch };
   write(file, manifest);
@@ -427,7 +431,7 @@ describe("quality-run public orchestration", () => {
 
     expect(result.status).toBe(0);
     expect(result.manifest.terminalState).toMatchObject({ state: "merged" });
-    expect(result.manifest.terminalHistory).toHaveLength(1);
+    expect(result.manifest.terminalHistory).toHaveLength(2);
     expect(result.manifest.terminalEpoch).toBe(1);
   });
 
@@ -481,6 +485,36 @@ describe("quality-run public orchestration", () => {
     expect(result.manifest.terminalState).toMatchObject({
       state: "recovering",
       terminalEpoch: 1,
+    });
+  });
+
+  it("advances the epoch when a second runner re-enters recovery", () => {
+    const entry = fixture(
+      { recoverTerminal: true, externalMergeRequirement: true },
+      { merge: true, tier: "medium" },
+    );
+    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    manifest.terminalEpoch = 1;
+    manifest.terminalHistory = [
+      { event: "reopened-by-capability", terminalEpoch: 1 },
+    ];
+    manifest.terminalState = {
+      state: "recovering",
+      head: manifest.revisions.currentHead,
+      terminalEpoch: 1,
+    };
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+
+    const result = run(entry);
+
+    expect(result.status).toBe(3);
+    expect(result.manifest.terminalState).toMatchObject({
+      state: "recovering",
+      terminalEpoch: 2,
+    });
+    expect(result.manifest.terminalHistory.at(-1)).toMatchObject({
+      event: "reopened-by-capability",
+      terminalEpoch: 2,
     });
   });
 
