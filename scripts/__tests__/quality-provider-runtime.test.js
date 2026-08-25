@@ -151,9 +151,8 @@ describe("provider review runtime", () => {
     let helperPid = null;
     try {
       const result = spawnSync(
-        "/bin/bash",
+        BOUNDED,
         [
-          BOUNDED,
           "--timeout",
           "20",
           "--",
