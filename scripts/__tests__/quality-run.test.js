@@ -457,6 +457,33 @@ describe("quality-run public orchestration", () => {
     });
   });
 
+  it("keeps a recovered external merge requirement actionable", () => {
+    const entry = fixture(
+      { recoverTerminal: true, externalMergeRequirement: true },
+      { merge: true, tier: "medium" },
+    );
+    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    manifest.terminalState = {
+      state: "blocked",
+      detail: "merge admission failed",
+      head: manifest.revisions.currentHead,
+    };
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+
+    const result = run(entry);
+
+    expect(result.status).toBe(3);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "action-required",
+      kind: "external-capability",
+      phase: "merge",
+    });
+    expect(result.manifest.terminalState).toMatchObject({
+      state: "recovering",
+      terminalEpoch: 1,
+    });
+  });
+
   it("rejects merge exit zero without exact merged terminal evidence", () => {
     const result = run(
       fixture({ mergeWithoutTerminal: true }, { merge: true, tier: "medium" }),

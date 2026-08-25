@@ -350,10 +350,7 @@ async function finishWithMerge(context, manifestPath, manifest, review) {
       head: afterMerge.revisions.currentHead,
     };
   }
-  if (
-    merge.code === ACTION_REQUIRED_EXIT &&
-    afterMerge.terminalState?.state !== "recovering"
-  ) {
+  if (merge.code === ACTION_REQUIRED_EXIT) {
     const message = `${merge.stderr || ""}\n${merge.stdout || ""}`.trim();
     return actionRequired(
       manifestPath,
