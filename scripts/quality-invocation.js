@@ -6061,13 +6061,18 @@ function recoveryScope(manifest, terminal) {
     return ciBillingCapabilityValid(manifest) ? manifest.approval.scope : null;
   }
   const refCas = protectedNonstrictRefCasCapability(manifest);
-  return refCas &&
-    conditions.length === 2 &&
-    conditions.includes("base:protected-nonstrict") &&
-    conditions.includes("pr:non-atomic-state") &&
-    manifest.approval.acceptedConditions.length === 2
-    ? manifest.approval.scope
-    : null;
+  if (
+    !refCas ||
+    !conditions.includes("base:protected-nonstrict") ||
+    !conditions.includes("pr:non-atomic-state")
+  ) {
+    return null;
+  }
+  // A ref-CAS capability may also carry the independently valid CI or
+  // review-exhaustion conditions. The capability validator owns the complete
+  // accepted-condition shape; recovery only requires that its blocked
+  // admission conditions remain covered by that signed capability.
+  return manifest.approval.scope;
 }
 
 function resumeRecoverableTerminal(manifestPath) {
@@ -6087,16 +6092,21 @@ function resumeRecoverableTerminal(manifestPath) {
   ) {
     return null;
   }
-  return withManifestLock(manifestPath, (manifest) => {
+  // withManifestLock deliberately returns the persisted manifest, not the
+  // mutation's return value. Keep the recovery result outside that wrapper so
+  // a lock-time refusal cannot be mistaken for a successful reopen.
+  let recovered = null;
+  withManifestLock(manifestPath, (manifest) => {
     const terminal = manifest.terminalState;
     if (!terminal || terminal.head !== manifest.revisions.currentHead)
       return null;
     if (terminal.state === "recovering") {
-      return recoveryScope(manifest, terminal.recovery) ? terminal : null;
+      recovered = recoveryScope(manifest, terminal.recovery) ? terminal : null;
+      return;
     }
     if (terminal.state !== "blocked") return null;
     const scope = recoveryScope(manifest, terminal);
-    if (!scope) return null;
+    if (!scope) return;
     reviewCoverage(manifest);
     if (
       manifest.terminalHistory !== undefined &&
@@ -6131,8 +6141,9 @@ function resumeRecoverableTerminal(manifestPath) {
         capabilityScope: scope,
       },
     };
-    return manifest.terminalState;
+    recovered = manifest.terminalState;
   });
+  return recovered;
 }
 
 function isTerminal(manifest) {
@@ -6721,6 +6732,7 @@ module.exports = {
   recordTerminalState,
   recordMergeAdmissionBlock,
   clearMergeAdmissionBlock,
+  recoveryScope,
   resumeRecoverableTerminal,
   terminalEpoch,
   isTerminal,
