@@ -83,6 +83,9 @@ command.
 6. Merged, superseded, interrupted, provider-incomplete, provider-contract,
    gate-failed, and identity-failed campaigns do not reopen.
 7. The only merge authority remains `quality-stamp-and-merge.sh`.
+8. Telemetry records each terminal state once per terminal epoch. Legacy
+   records without an epoch are epoch zero; later recovery outcomes cannot be
+   collapsed into an earlier terminal event with the same state name.
 
 ## Rollback
 
