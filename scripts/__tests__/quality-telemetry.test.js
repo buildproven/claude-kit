@@ -130,6 +130,16 @@ describe("deriveVerdict", () => {
     expect(deriveVerdict(manifest)).toBe("blocked");
     expect(deterministicBlockingCount(manifest)).toBe(1);
   });
+
+  it("reports a fenced recovery sentinel as incomplete", () => {
+    const manifest = baseManifest({
+      reviewContractVersion: 2,
+      options: { merge: true },
+      judge: undefined,
+      terminalState: { state: "recovering", detail: null },
+    });
+    expect(deriveVerdict(manifest)).toBe("incomplete");
+  });
 });
 
 describe("buildRecord", () => {

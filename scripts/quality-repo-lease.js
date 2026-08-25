@@ -1249,7 +1249,11 @@ function recordMergedTerminalRaw(manifestPath) {
     manifestPath,
     (manifest) => {
       if (manifest.terminalState?.state === "merged") return;
-      const recoveringEpoch = Number(process.env.BS_QUALITY_TERMINAL_EPOCH);
+      const requestedEpoch = process.env.BS_QUALITY_TERMINAL_EPOCH;
+      const recoveringEpoch =
+        requestedEpoch === undefined || requestedEpoch === ""
+          ? manifest.terminalState?.terminalEpoch
+          : Number(requestedEpoch);
       const replacingRecovery =
         manifest.terminalState?.state === "recovering" &&
         Number.isSafeInteger(recoveringEpoch) &&

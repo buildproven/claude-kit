@@ -290,7 +290,7 @@ describe("recordTerminalState", () => {
     });
   });
 
-  it("lets the matching recovered merge receipt replace its sentinel", () => {
+  it("lets a reconciled merge receipt replace its sentinel without an ambient epoch", () => {
     const manifestPath = writeManifest({
       terminalEpoch: 2,
       terminalState: {
@@ -300,7 +300,7 @@ describe("recordTerminalState", () => {
       },
     });
     const previousEpoch = process.env.BS_QUALITY_TERMINAL_EPOCH;
-    process.env.BS_QUALITY_TERMINAL_EPOCH = "2";
+    delete process.env.BS_QUALITY_TERMINAL_EPOCH;
     try {
       lease._recordMergedTerminalRaw(manifestPath);
     } finally {

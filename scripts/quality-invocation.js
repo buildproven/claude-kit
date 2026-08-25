@@ -5889,6 +5889,7 @@ function withManifestLock(file, mutation) {
 // fail loudly rather than be persisted as an unrecognized string that later
 // readers silently treat as "not terminal".
 const TERMINAL_STATES = new Set([
+  "recovering", // signed same-HEAD recovery is active and fenced
   "merged", // evidence complete, PR merged
   "verified-unmerged", // evidence complete, merge deliberately not attempted
   "blocked", // a gate/review/CI failure the operator must resolve

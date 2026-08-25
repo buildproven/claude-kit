@@ -53,6 +53,7 @@ const { reviewUsage, validUsage } = require("./quality-provider-usage");
 const TELEMETRY_SCHEMA_VERSION = 8;
 const REVIEW_TOKEN_CHARS_PER_TOKEN = 4;
 const TELEMETRY_TERMINAL_STATES = new Set([
+  "recovering",
   "merged",
   "verified-unmerged",
   "blocked",
@@ -295,6 +296,7 @@ function deriveVerdict(manifest) {
     if (
       [
         "timeout",
+        "recovering",
         "interrupted",
         "superseded",
         "policy-superseded",
