@@ -51,6 +51,19 @@ describe("quality runtime directory resolver", () => {
     },
   );
 
+  it("names every missing cohort sibling in one actionable diagnostic", () => {
+    const { resolver } = isolatedResolver([
+      "quality-run.js",
+      "quality-provider-usage.js",
+    ]);
+    const result = spawnSync("bash", [resolver], { encoding: "utf8" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "missing: quality-run.js, quality-provider-usage.js",
+    );
+  });
+
   it("propagates a present resolver failure instead of falling through", () => {
     const skill = readFileSync(
       path.join(ROOT, "skills", "quality", "SKILL.md"),
