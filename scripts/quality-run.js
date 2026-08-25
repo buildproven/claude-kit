@@ -304,6 +304,9 @@ async function finishWithMerge(context, manifestPath, manifest, review) {
     );
   }
   updateOrchestration(manifestPath, "merge", "running");
+  // An admission block describes one merge attempt only. Retaining it would
+  // let a later, unrelated failure inherit the prior signed condition.
+  quality.clearMergeAdmissionBlock(manifestPath);
   context.runtime.assertNotInterrupted({ signal: null });
   const expectedHead = manifest.revisions.currentHead;
   const merge = await context.execute(
@@ -337,14 +340,20 @@ async function finishWithMerge(context, manifestPath, manifest, review) {
     };
   }
   const afterMerge = manifestAt(manifestPath);
-  if (afterMerge.terminalState) {
+  if (
+    afterMerge.terminalState &&
+    afterMerge.terminalState.state !== "recovering"
+  ) {
     return {
       status: "terminal",
       state: afterMerge.terminalState.state,
       head: afterMerge.revisions.currentHead,
     };
   }
-  if (merge.code === ACTION_REQUIRED_EXIT) {
+  if (
+    merge.code === ACTION_REQUIRED_EXIT &&
+    afterMerge.terminalState?.state !== "recovering"
+  ) {
     const message = `${merge.stderr || ""}\n${merge.stdout || ""}`.trim();
     return actionRequired(
       manifestPath,
@@ -372,7 +381,10 @@ async function recordFailure(context, manifestPath, error) {
       head: manifest.revisions.currentHead,
     };
   }
-  if (!manifest.terminalState) {
+  if (
+    !manifest.terminalState ||
+    manifest.terminalState.state === "recovering"
+  ) {
     const stale =
       /identity.*(?:changed|mismatch)|(?:HEAD|head).*(?:changed|moved|mismatch)|stale|supersed/i.test(
         error.message,

@@ -42,6 +42,13 @@ function resumeRecoverableTerminal(file) {
   write(file, manifest);
   return manifest.terminalState;
 }
+function clearMergeAdmissionBlock(file) {
+  const manifest = read(file);
+  if (!manifest.merge?.admissionBlock) return false;
+  delete manifest.merge.admissionBlock;
+  write(file, manifest);
+  return true;
+}
 function mutationEvidenceValid(manifest) { return Boolean(manifest.mutation); }
 function incompleteRetryStatus(manifest) {
   const incomplete = manifest.reviews.filter((review) => review.status === "incomplete");
@@ -71,7 +78,9 @@ function reviewAuthorization(manifest) {
 }
 function recordTerminalState(file, state, detail) {
   const manifest = read(file);
-  manifest.terminalState ||= { state, detail, head: manifest.revisions.currentHead };
+  if (!manifest.terminalState || manifest.terminalState.state === "recovering") {
+    manifest.terminalState = { state, detail, head: manifest.revisions.currentHead };
+  }
   write(file, manifest);
   return manifest.terminalState.state;
 }
@@ -94,7 +103,7 @@ if (require.main === module) {
   process.stdout.write(inForce + "\\n");
 }
 module.exports = { incompleteRetryStatus, loadManifest, mutationEvidenceValid, recordTerminalState,
-  reviewAuthorization, reviewCoverage, resumeRecoverableTerminal, terminalEpoch, validateIdentity, withManifestLock };
+  clearMergeAdmissionBlock, reviewAuthorization, reviewCoverage, resumeRecoverableTerminal, terminalEpoch, validateIdentity, withManifestLock };
 `;
 
 const FAKE_STEP = `
@@ -420,6 +429,32 @@ describe("quality-run public orchestration", () => {
     expect(result.manifest.terminalState).toMatchObject({ state: "merged" });
     expect(result.manifest.terminalHistory).toHaveLength(1);
     expect(result.manifest.terminalEpoch).toBe(1);
+  });
+
+  it("records a new terminal cause when a recovered merge fails", () => {
+    const entry = fixture(
+      { recoverTerminal: true, failMerge: true },
+      { merge: true, tier: "medium" },
+    );
+    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    manifest.terminalState = {
+      state: "blocked",
+      detail: "merge admission failed",
+      head: manifest.revisions.currentHead,
+    };
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+
+    const result = run(entry);
+
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "terminal",
+      state: "blocked",
+    });
+    expect(result.manifest.terminalState).toMatchObject({
+      state: "blocked",
+      detail: "merge admission failed with exit 1",
+    });
   });
 
   it("rejects merge exit zero without exact merged terminal evidence", () => {

@@ -330,6 +330,18 @@ describe("recordTerminalState", () => {
     });
   });
 
+  it("does not carry an earlier admission block into the next merge attempt", () => {
+    const manifestPath = writeManifest({ options: { merge: true } });
+    invocation.recordMergeAdmissionBlock(manifestPath, ["ci:failed"]);
+
+    expect(invocation.clearMergeAdmissionBlock(manifestPath)).toBe(true);
+    invocation.recordTerminalState(manifestPath, "blocked", "gate:test");
+
+    expect(readState(manifestPath)).not.toHaveProperty(
+      "mergeAdmissionConditions",
+    );
+  });
+
   it("marks the manifest terminal for isTerminal", () => {
     const manifestPath = writeManifest();
     invocation.recordTerminalState(manifestPath, "verified-unmerged");

@@ -6033,6 +6033,16 @@ function recordMergeAdmissionBlock(manifestPath, conditions) {
   });
 }
 
+function clearMergeAdmissionBlock(manifestPath) {
+  let cleared = false;
+  withManifestLock(manifestPath, (manifest) => {
+    if (!manifest.merge?.admissionBlock) return;
+    delete manifest.merge.admissionBlock;
+    cleared = true;
+  });
+  return cleared;
+}
+
 function recoveryScope(manifest, terminal) {
   const conditions = terminal?.mergeAdmissionConditions;
   if (
@@ -6053,7 +6063,8 @@ function recoveryScope(manifest, terminal) {
   return refCas &&
     conditions.length === 2 &&
     conditions.includes("base:protected-nonstrict") &&
-    conditions.includes("pr:non-atomic-state")
+    conditions.includes("pr:non-atomic-state") &&
+    manifest.approval.acceptedConditions.length === 2
     ? manifest.approval.scope
     : null;
 }
@@ -6708,6 +6719,7 @@ module.exports = {
   recordMutation,
   recordTerminalState,
   recordMergeAdmissionBlock,
+  clearMergeAdmissionBlock,
   resumeRecoverableTerminal,
   terminalEpoch,
   isTerminal,
