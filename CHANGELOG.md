@@ -21,6 +21,37 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.9.1](https://github.com/buildproven/claude-kit/compare/v4.9.0...v4.9.1) (2026-08-26)
+
+
+### Bug Fixes
+
+* advance recovery epoch on re-entry ([cbda92a](https://github.com/buildproven/claude-kit/commit/cbda92ad589508f5fa8987b67f6ca2c55559b83c))
+* bind recovery telemetry to epoch ([535bb38](https://github.com/buildproven/claude-kit/commit/535bb381b63f0bf11e47370cb5b11b7a2355917e))
+* fail when quality runtime is absent ([8e0e16b](https://github.com/buildproven/claude-kit/commit/8e0e16b2818ebb0093ab2a0ba1c9e555c481ff82))
+* fence merge admission recovery ([1fbaded](https://github.com/buildproven/claude-kit/commit/1fbaded7c0fc5b35506517dfec990687040c44f2))
+* fence recovered merge failures ([e473699](https://github.com/buildproven/claude-kit/commit/e47369974a1c71e4a9971ca07dbd8e9da8679ea7))
+* isolate quality gate environment ([a015b0d](https://github.com/buildproven/claude-kit/commit/a015b0ded5c51ce44c95440cce6eb83b79baae32))
+* persist nonstrict recovery conditions ([891a8ae](https://github.com/buildproven/claude-kit/commit/891a8ae583160f0d23cd106b492a78948a3684fa))
+* persist recoverable merge requirements ([9b6981f](https://github.com/buildproven/claude-kit/commit/9b6981ffc963db86753d3999ec299086b81e87b1))
+* preserve recovered merge capability pauses ([8ba41e6](https://github.com/buildproven/claude-kit/commit/8ba41e64e8f556bcd93f17f9ec55fb3a4068e5aa))
+* preserve runtime cohort diagnostics ([1cd9247](https://github.com/buildproven/claude-kit/commit/1cd92476f6823fe91e1ab9ef98cf6e5c0f48ed67))
+* preserve signed recovery capability conditions ([a5afd5a](https://github.com/buildproven/claude-kit/commit/a5afd5a5e2e3ef00394f779daced689afbf92b98))
+* propagate incomplete runtime cohorts ([ed0d5af](https://github.com/buildproven/claude-kit/commit/ed0d5af82078713993b70385ad8ad7fa6a7ce672))
+* rearm exact-head gate budget ([7a3382d](https://github.com/buildproven/claude-kit/commit/7a3382d94dfcb8c64938c70b70aca620dc524368))
+* reconcile fenced merge receipts ([c1faeb8](https://github.com/buildproven/claude-kit/commit/c1faeb81c20d3a92bbd254cff39cb4106eddfc51))
+* recover signed same-head merge blocks ([0d7afce](https://github.com/buildproven/claude-kit/commit/0d7afce6487374466ffbdb062c1df649b29d96d0))
+* reopen proven descendant campaigns ([5a84abc](https://github.com/buildproven/claude-kit/commit/5a84abccc91f295dbb82f4756f3b7f36c6810318))
+* report incomplete runtime siblings ([69cfc9b](https://github.com/buildproven/claude-kit/commit/69cfc9ba243c0ee6d2e2b5e5302a534582b4a70e))
+* require complete quality runtime cohort ([884e714](https://github.com/buildproven/claude-kit/commit/884e7149e37f6a0b61dfde70af015b5866f8ad39))
+* resume terminal campaign at merge ([b708b41](https://github.com/buildproven/claude-kit/commit/b708b411a8fb0d524151be2f546eb27ad1f330b5))
+* scope terminal merge recovery ([ca3ae07](https://github.com/buildproven/claude-kit/commit/ca3ae07df02b7841a73f8b350fd4c8a1877ebeed))
+
+
+### Performance Improvements
+
+* coalesce overlapping vitest impact runs ([9020b1f](https://github.com/buildproven/claude-kit/commit/9020b1f8cbd73ecb40bc3a76c6015edf7d37a966))
+
 ## [4.9.0](https://github.com/buildproven/claude-kit/compare/v4.8.0...v4.9.0) (2026-08-23)
 
 
