@@ -30,8 +30,11 @@ The transition is eligible only when all of these conditions hold:
 1. The campaign is a merge campaign and its current terminal state is `blocked`.
 2. The terminal record is for the current exact HEAD.
 3. The terminal record carries a persisted, typed `mergeAdmissionCondition`
-   that was written by the merge-admission boundary before it returned its
-   block. The condition must be one of the exact condition IDs in the signed
+   that was written atomically with the blocked terminal state by the merge-
+   admission boundary. The admission evidence and terminal record share the
+   current terminal epoch and one unique merge-attempt ID. A pending HEAD-only
+   admission record is never copied into a later terminal cause. The condition
+   must be one of the exact condition IDs in the signed
    capability: `ci:failed` for the billing path, or
    `base:protected-nonstrict` and `pr:non-atomic-state` for ref-CAS. Generic
    shell exit text is never an admission predicate.
@@ -86,6 +89,9 @@ command.
 8. Telemetry records each terminal state once per terminal epoch. Legacy
    records without an epoch are epoch zero; later recovery outcomes cannot be
    collapsed into an earlier terminal event with the same state name.
+9. Exit status 2 from CI budget admission means a valid policy denial. Policy
+   validation, provider, parse, and internal failures use exit status 1 and are
+   not eligible for billing-denial recovery.
 
 ## Rollback
 
@@ -106,3 +112,5 @@ is actually used.
 - The original terminal record and recovery event persist in `terminalHistory`.
 - A stale pre-recovery terminal writer cannot overwrite the recovery result;
   an old runner treats an interrupted recovery as terminal.
+- A malformed CI policy and a provider failure cannot produce `ci:failed`.
+- A stale pending admission record cannot attach to a later gate failure.

@@ -317,24 +317,51 @@ describe("recordTerminalState", () => {
 
   it("binds a typed merge-admission block to the blocked terminal record", () => {
     const manifestPath = writeManifest({ options: { merge: true } });
-    invocation.recordMergeAdmissionBlock(manifestPath, ["ci:failed"]);
-    invocation.recordTerminalState(
+    invocation.recordMergeAdmissionBlockedTerminal(
       manifestPath,
-      "blocked",
+      ["ci:failed"],
       "merge admission failed",
     );
 
     expect(readState(manifestPath)).toMatchObject({
       state: "blocked",
+      detail: "merge admission failed",
+      mergeAdmissionConditions: ["ci:failed"],
+      terminalEpoch: 0,
+      mergeAttemptId: expect.any(String),
+    });
+  });
+
+  it("records merge admission evidence and its terminal cause atomically", () => {
+    const manifestPath = writeManifest({ options: { merge: true } });
+    invocation.recordMergeAdmissionBlockedTerminal(manifestPath, ["ci:failed"]);
+    const { manifest } = invocation.loadManifest(manifestPath);
+
+    expect(manifest.merge.admissionBlock).toMatchObject({
+      conditions: ["ci:failed"],
+      terminalEpoch: 0,
+      mergeAttemptId: expect.any(String),
+    });
+    expect(manifest.terminalState).toMatchObject({
+      state: "blocked",
+      terminalEpoch: manifest.merge.admissionBlock.terminalEpoch,
+      mergeAttemptId: manifest.merge.admissionBlock.mergeAttemptId,
       mergeAdmissionConditions: ["ci:failed"],
     });
   });
 
-  it("does not carry an earlier admission block into the next merge attempt", () => {
+  it("does not attach a stale pending admission block to another terminal cause", () => {
     const manifestPath = writeManifest({ options: { merge: true } });
-    invocation.recordMergeAdmissionBlock(manifestPath, ["ci:failed"]);
+    const { manifest } = invocation.loadManifest(manifestPath);
+    manifest.merge = {
+      admissionBlock: {
+        conditions: ["ci:failed"],
+        head: manifest.revisions.currentHead,
+        recordedAt: new Date().toISOString(),
+      },
+    };
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
-    expect(invocation.clearMergeAdmissionBlock(manifestPath)).toBe(true);
     invocation.recordTerminalState(manifestPath, "blocked", "gate:test");
 
     expect(readState(manifestPath)).not.toHaveProperty(

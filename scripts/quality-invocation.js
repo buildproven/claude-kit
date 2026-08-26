@@ -5935,20 +5935,6 @@ function requestedTerminalEpoch(value) {
   return parsed;
 }
 
-function mergeAdmissionConditions(manifest, state) {
-  const conditions = manifest.merge?.admissionBlock?.conditions;
-  if (
-    state !== "blocked" ||
-    manifest.merge?.admissionBlock?.head !== manifest.revisions?.currentHead ||
-    !Array.isArray(conditions) ||
-    conditions.length === 0 ||
-    !conditions.every((condition) => typeof condition === "string")
-  ) {
-    return null;
-  }
-  return [...conditions];
-}
-
 function recordTerminalState(manifestPath, state, detail = null, options = {}) {
   if (!TERMINAL_STATES.has(state)) {
     throw new Error(`unknown terminal state '${state}'`);
@@ -5977,9 +5963,6 @@ function recordTerminalState(manifestPath, state, detail = null, options = {}) {
       terminalEpoch: currentEpoch,
       recordedAt: new Date().toISOString(),
     };
-    const conditions = mergeAdmissionConditions(manifest, state);
-    if (conditions)
-      manifest.terminalState.mergeAdmissionConditions = conditions;
     return state;
   };
   // Written under the manifest lock, but persisted WITHOUT bumping
@@ -6015,7 +5998,11 @@ function recordTerminalState(manifestPath, state, detail = null, options = {}) {
   }
 }
 
-function recordMergeAdmissionBlock(manifestPath, conditions) {
+function recordMergeAdmissionBlockedTerminal(
+  manifestPath,
+  conditions,
+  detail = "merge admission blocked",
+) {
   if (
     !Array.isArray(conditions) ||
     conditions.length === 0 ||
@@ -6023,14 +6010,46 @@ function recordMergeAdmissionBlock(manifestPath, conditions) {
   ) {
     throw new Error("merge admission block requires typed condition ids");
   }
+  const expectedEpoch = requestedTerminalEpoch(
+    process.env.BS_QUALITY_TERMINAL_EPOCH,
+  );
   return withManifestLock(manifestPath, (manifest) => {
+    const currentEpoch = terminalEpoch(manifest);
+    if (expectedEpoch !== null && expectedEpoch !== currentEpoch) {
+      throw new Error("terminal writer epoch is stale");
+    }
+    if (
+      manifest.terminalState &&
+      !(
+        manifest.terminalState.state === "recovering" &&
+        expectedEpoch === currentEpoch
+      )
+    ) {
+      throw new Error(
+        `cannot record merge admission after terminal state '${manifest.terminalState.state}'`,
+      );
+    }
+    const mergeAttemptId = crypto.randomUUID();
+    const recordedAt = new Date().toISOString();
+    const typedConditions = [...new Set(conditions)].sort();
     manifest.merge ??= {};
     manifest.merge.admissionBlock = {
-      conditions: [...new Set(conditions)].sort(),
+      conditions: typedConditions,
       head: manifest.revisions.currentHead,
-      recordedAt: new Date().toISOString(),
+      terminalEpoch: currentEpoch,
+      mergeAttemptId,
+      recordedAt,
     };
-    return manifest.merge.admissionBlock;
+    manifest.terminalState = {
+      state: "blocked",
+      detail: String(detail).slice(0, 500),
+      head: manifest.revisions.currentHead,
+      terminalEpoch: currentEpoch,
+      mergeAttemptId,
+      mergeAdmissionConditions: typedConditions,
+      recordedAt,
+    };
+    return manifest.terminalState;
   });
 }
 
@@ -6464,13 +6483,17 @@ const COMMANDS = {
     process.stdout.write(
       `${JSON.stringify(conditionTaxonomy.diagnoseConditions(manifest, {}))}\n`,
     ),
-  "record-merge-admission-block": ({ manifestArg, rawArgs }) => {
+  "record-merge-admission-blocked-terminal": ({ manifestArg, rawArgs }) => {
     const options = parseOptions(rawArgs);
     const conditions = String(options.conditions || "")
       .split(",")
       .map((condition) => condition.trim())
       .filter(Boolean);
-    recordMergeAdmissionBlock(manifestArg, conditions);
+    recordMergeAdmissionBlockedTerminal(
+      manifestArg,
+      conditions,
+      options.detail || "merge admission blocked",
+    );
   },
 };
 
@@ -6730,7 +6753,7 @@ module.exports = {
   recordGate,
   recordMutation,
   recordTerminalState,
-  recordMergeAdmissionBlock,
+  recordMergeAdmissionBlockedTerminal,
   clearMergeAdmissionBlock,
   recoveryScope,
   resumeRecoverableTerminal,

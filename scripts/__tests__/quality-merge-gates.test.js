@@ -81,6 +81,12 @@ describe("quality merge gates", () => {
     );
     expect(source).toContain('if [ "$CI_ALREADY_GREEN" != true ]; then');
     expect(source).toMatch(/CI_ALREADY_GREEN[\s\S]*ci-budget-admission\.js/);
+    expect(source).toMatch(
+      /CI_BUDGET_STATUS=\$\?[\s\S]*"\$CI_BUDGET_STATUS" -eq 2[\s\S]*record_merge_admission_blocked_terminal "ci:failed"/,
+    );
+    expect(source).toContain(
+      "CI budget admission could not produce a policy decision",
+    );
   });
 
   it("falls back to signed local review evidence only after required CI is green", () => {
