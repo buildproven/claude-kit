@@ -118,7 +118,6 @@ describe("provider review runtime", () => {
   it("kills a hanging provider and a session-escaped helper at the wall-clock cap", async () => {
     const directory = makeTempDir("bounded-tree-");
     const pidFile = path.join(directory, "native-helper.pid");
-    const started = Date.now();
     const result = spawnSync(
       "/bin/bash",
       [
@@ -137,8 +136,8 @@ describe("provider review runtime", () => {
       ],
       { encoding: "utf8", timeout: 8000 },
     );
+    expect(result.error).toBeUndefined();
     expect(result.status).toBe(124);
-    expect(Date.now() - started).toBeLessThan(7000);
     const helperPid = Number(readFileSync(pidFile, "utf8").trim());
     expect(Number.isSafeInteger(helperPid)).toBe(true);
     await expectProcessToStop(helperPid);
@@ -151,9 +150,8 @@ describe("provider review runtime", () => {
     let helperPid = null;
     try {
       const result = spawnSync(
-        "/bin/bash",
+        BOUNDED,
         [
-          BOUNDED,
           "--timeout",
           "20",
           "--",
@@ -166,6 +164,46 @@ describe("provider review runtime", () => {
         { encoding: "utf8", timeout: 10000 },
       );
       expect(result.status).toBe(0);
+      expect(result.stdout).not.toContain("BS_QUALITY_PROCESS_OWNER");
+      expect(result.stderr).not.toContain("BS_QUALITY_PROCESS_OWNER");
+      helperPid = Number(readFileSync(pidFile, "utf8").trim());
+      expect(Number.isSafeInteger(helperPid)).toBe(true);
+      await expectProcessToStop(helperPid);
+      expect(() => process.kill(unrelated.pid, 0)).not.toThrow();
+    } finally {
+      if (Number.isSafeInteger(helperPid)) {
+        try {
+          process.kill(helperPid, "SIGKILL");
+        } catch {
+          // The assertion above is the contract; cleanup is best effort.
+        }
+      }
+      unrelated.kill("SIGKILL");
+    }
+  });
+
+  it("reaps an immediate fork-and-setsid orphan after its provider parent exits", async () => {
+    const directory = makeTempDir("bounded-immediate-orphan-");
+    const pidFile = path.join(directory, "detached-helper.pid");
+    const unrelated = spawn("sleep", ["20"], { stdio: "ignore" });
+    let helperPid = null;
+    try {
+      const result = spawnSync(
+        BOUNDED,
+        [
+          "--timeout",
+          "20",
+          "--",
+          "python3",
+          "-c",
+          'import os,signal,sys,time; pid=os.fork(); sys.exit(0) if pid else None; os.setsid(); signal.signal(signal.SIGTERM, signal.SIG_IGN); open(sys.argv[1], "w").write(str(os.getpid())); time.sleep(20)',
+          pidFile,
+        ],
+        { encoding: "utf8", timeout: 10000 },
+      );
+      expect(result.status).toBe(0);
+      expect(result.stdout).not.toContain("BS_QUALITY_PROCESS_OWNER");
+      expect(result.stderr).not.toContain("BS_QUALITY_PROCESS_OWNER");
       helperPid = Number(readFileSync(pidFile, "utf8").trim());
       expect(Number.isSafeInteger(helperPid)).toBe(true);
       await expectProcessToStop(helperPid);

@@ -3,6 +3,7 @@ const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const invocation = require("../quality-invocation");
+const lease = require("../quality-repo-lease");
 const INVOCATION = path.join(__dirname, "..", "quality-invocation.js");
 
 // ---------------------------------------------------------------------------
@@ -255,6 +256,117 @@ describe("recordTerminalState", () => {
     const written = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
     expect(written.manifestRevision).toBe(7);
     expect(written.terminalState.state).toBe("blocked");
+  });
+
+  it("rejects a terminal writer from an earlier recovery epoch", () => {
+    const manifestPath = writeManifest({ terminalEpoch: 2 });
+
+    expect(() =>
+      invocation.recordTerminalState(manifestPath, "blocked", "late merge", {
+        terminalEpoch: 1,
+      }),
+    ).toThrow(/terminal writer epoch is stale/);
+    expect(readState(manifestPath)).toBeNull();
+  });
+
+  it("replaces only a matching recovering sentinel", () => {
+    const manifestPath = writeManifest({
+      terminalEpoch: 2,
+      terminalState: {
+        state: "recovering",
+        head: "b".repeat(40),
+        terminalEpoch: 2,
+      },
+    });
+
+    expect(
+      invocation.recordTerminalState(manifestPath, "merged", "pr:1", {
+        terminalEpoch: 2,
+      }),
+    ).toBe("merged");
+    expect(readState(manifestPath)).toMatchObject({
+      state: "merged",
+      terminalEpoch: 2,
+    });
+  });
+
+  it("lets a reconciled merge receipt replace its sentinel without an ambient epoch", () => {
+    const manifestPath = writeManifest({
+      terminalEpoch: 2,
+      terminalState: {
+        state: "recovering",
+        head: "b".repeat(40),
+        terminalEpoch: 2,
+      },
+    });
+    const previousEpoch = process.env.BS_QUALITY_TERMINAL_EPOCH;
+    delete process.env.BS_QUALITY_TERMINAL_EPOCH;
+    try {
+      lease._recordMergedTerminalRaw(manifestPath);
+    } finally {
+      if (previousEpoch === undefined)
+        delete process.env.BS_QUALITY_TERMINAL_EPOCH;
+      else process.env.BS_QUALITY_TERMINAL_EPOCH = previousEpoch;
+    }
+
+    expect(readState(manifestPath)).toMatchObject({
+      state: "merged",
+      terminalEpoch: 2,
+    });
+  });
+
+  it("binds a typed merge-admission block to the blocked terminal record", () => {
+    const manifestPath = writeManifest({ options: { merge: true } });
+    invocation.recordMergeAdmissionBlockedTerminal(
+      manifestPath,
+      ["ci:failed"],
+      "merge admission failed",
+    );
+
+    expect(readState(manifestPath)).toMatchObject({
+      state: "blocked",
+      detail: "merge admission failed",
+      mergeAdmissionConditions: ["ci:failed"],
+      terminalEpoch: 0,
+      mergeAttemptId: expect.any(String),
+    });
+  });
+
+  it("records merge admission evidence and its terminal cause atomically", () => {
+    const manifestPath = writeManifest({ options: { merge: true } });
+    invocation.recordMergeAdmissionBlockedTerminal(manifestPath, ["ci:failed"]);
+    const { manifest } = invocation.loadManifest(manifestPath);
+
+    expect(manifest.merge.admissionBlock).toMatchObject({
+      conditions: ["ci:failed"],
+      terminalEpoch: 0,
+      mergeAttemptId: expect.any(String),
+    });
+    expect(manifest.terminalState).toMatchObject({
+      state: "blocked",
+      terminalEpoch: manifest.merge.admissionBlock.terminalEpoch,
+      mergeAttemptId: manifest.merge.admissionBlock.mergeAttemptId,
+      mergeAdmissionConditions: ["ci:failed"],
+    });
+  });
+
+  it("does not attach a stale pending admission block to another terminal cause", () => {
+    const manifestPath = writeManifest({ options: { merge: true } });
+    const { manifest } = invocation.loadManifest(manifestPath);
+    manifest.merge = {
+      admissionBlock: {
+        conditions: ["ci:failed"],
+        head: manifest.revisions.currentHead,
+        recordedAt: new Date().toISOString(),
+      },
+    };
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    invocation.recordTerminalState(manifestPath, "blocked", "gate:test");
+
+    expect(readState(manifestPath)).not.toHaveProperty(
+      "mergeAdmissionConditions",
+    );
   });
 
   it("marks the manifest terminal for isTerminal", () => {

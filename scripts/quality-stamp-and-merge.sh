@@ -36,6 +36,10 @@ if node "$SCRIPT_DIR/quality-invocation.js" ci-billing-capability "$MANIFEST" \
 fi
 CI_BUDGET_ARGS=()
 [ -z "$CI_BUDGET_MODE" ] || CI_BUDGET_ARGS=(--mode "$CI_BUDGET_MODE")
+record_merge_admission_blocked_terminal() {
+  node "$SCRIPT_DIR/quality-invocation.js" record-merge-admission-blocked-terminal \
+    "$MANIFEST" --conditions "$1" --detail "$2" >/dev/null
+}
 REQUIRED_CHECKS_JSON=""
 REQUIRED_CHECKS_ABSENT=false
 if ! REQUIRED_CHECKS_OUTPUT="$(gh pr checks "$PR" \
@@ -66,11 +70,20 @@ if printf '%s' "$CHECKS_FOR_ADMISSION_JSON" | jq -e \
   CI_ALREADY_GREEN=true
 fi
 if [ "$CI_ALREADY_GREEN" != true ]; then
-  node "$SCRIPT_DIR/ci-budget-admission.js" \
-    ${CI_BUDGET_ARGS[@]+"${CI_BUDGET_ARGS[@]}"} >/dev/null || {
-    echo "❌ MERGE BLOCKED: GitHub Actions minute policy denied this candidate." >&2
-    exit 1
-  }
+  if node "$SCRIPT_DIR/ci-budget-admission.js" \
+    ${CI_BUDGET_ARGS[@]+"${CI_BUDGET_ARGS[@]}"} >/dev/null; then
+    :
+  else
+    CI_BUDGET_STATUS=$?
+    if [ "$CI_BUDGET_STATUS" -eq 2 ]; then
+      CI_BUDGET_DETAIL="GitHub Actions minute policy denied this candidate"
+      record_merge_admission_blocked_terminal "ci:failed" "$CI_BUDGET_DETAIL" || exit 1
+      echo "❌ MERGE BLOCKED: $CI_BUDGET_DETAIL." >&2
+      exit 1
+    fi
+    echo "❌ MERGE FAILED: CI budget admission could not produce a policy decision (exit $CI_BUDGET_STATUS)." >&2
+    exit "$CI_BUDGET_STATUS"
+  fi
 fi
 
 # Keep the private signer outside every repository.  An explicit environment

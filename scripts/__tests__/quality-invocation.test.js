@@ -858,6 +858,24 @@ describe("quality invocation manifest", () => {
     expect(manifest.governor).not.toHaveProperty("validationDeadlineEpoch");
   });
 
+  it("keeps terminal fencing and signing secrets out of repository gates", () => {
+    const environment = invocation.repositoryGateEnvironment({
+      PATH: "/bin",
+      QUALITY_GATE_MARKER: "visible",
+      BS_QUALITY_TERMINAL_EPOCH: "3",
+      BS_QUALITY_REPOSITORY_LEASE_TOKEN: "lease-secret",
+      QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY: "review-secret",
+      QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY_FILE: "/private/review-key",
+      QUALITY_APPROVAL_PRIVATE_KEY: "approval-secret",
+      QUALITY_APPROVAL_PRIVATE_KEY_FILE: "/private/approval-key",
+    });
+
+    expect(environment).toEqual({
+      PATH: "/bin",
+      QUALITY_GATE_MARKER: "visible",
+    });
+  });
+
   it("authorizes Gemini inside the existing provider attempt budget", () => {
     const root = repo("gemini-provider-attempt");
     const manifest = createLegacyProviderFixture(root, []);
@@ -3163,6 +3181,10 @@ exec "${realGit}" "$@"
     );
     const usedBeforeAdvance = JSON.parse(readFileSync(manifestPath, "utf8"))
       .governor.providerSecondsUsed;
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      manifest.governor.activeSecondsUsed = 90;
+      manifest.governor.gateSecondsUsed = 30;
+    });
 
     writeFileSync(path.join(root, "next-head.js"), "export const next = 1;\n");
     git(root, ["add", "."]);
@@ -3173,6 +3195,14 @@ exec "${realGit}" "$@"
     const current = JSON.parse(readFileSync(manifestPath, "utf8"));
     expect(current.governor.providerSecondsUsed).toBe(usedBeforeAdvance);
     expect(current.governor.providerSecondsLimit).toBe(120);
+    expect(current.governor.activeSecondsUsed).toBe(0);
+    expect(current.governor.gateSecondsUsed).toBe(0);
+    expect(current.governor.headExecutionHistory.at(-1)).toMatchObject({
+      activeSecondsUsed: 90,
+      gateSecondsUsed: 30,
+      providerSecondsUsedAtClose: usedBeforeAdvance,
+      supersededByHead: current.revisions.currentHead,
+    });
     const authorization = JSON.parse(
       execFileSync(
         "node",
@@ -4365,8 +4395,8 @@ exit 99
       gateCount: 3,
       gateReserveSeconds: 360,
     });
-    // Phase ledgers retain their bounded allowances, but all execution also
-    // spends from one immutable campaign cap. Advancing does not mint time.
+    // The fixed active deadline is exact-HEAD scoped. Provider usage, provider
+    // attempts, review rounds, and fix limits remain cumulative across heads.
     expect(validationState.governor.gateSecondsLimit).toBe(1920);
     expect(validationState.governor.providerSecondsLimit).toBe(1080);
     expect(validationState.governor.activeSecondsLimit).toBe(
@@ -4942,6 +4972,72 @@ exit 1
 
     expect(() => prepareCodexReview(root, manifest)).not.toThrow();
     expect(invocation.loadManifest(manifest).manifest.reviews).toHaveLength(2);
+  });
+
+  it("archives a prior-head merge block when its descendant fix advances", () => {
+    const root = repo("blocked-descendant-advance");
+    const manifestPath = create(root, ["--merge"]);
+    const blockedHead = git(root, ["rev-parse", "HEAD"]);
+    invocation.recordMergeAdmissionBlockedTerminal(
+      manifestPath,
+      ["base:protected-nonstrict", "pr:non-atomic-state"],
+      "merge admission blocked",
+    );
+    writeFileSync(path.join(root, "fix.js"), "export const fixed = true;\n");
+    git(root, ["add", "fix.js"]);
+    git(root, ["commit", "-q", "-m", "fix: address merge review"]);
+    const nextHead = git(root, ["rev-parse", "HEAD"]);
+
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      expect(invocation.advanceHead(manifest, root)).toBe(true);
+    });
+
+    const { manifest } = invocation.loadManifest(manifestPath);
+    expect(manifest.revisions.currentHead).toBe(nextHead);
+    expect(manifest.terminalState).toBeNull();
+    expect(manifest.terminalEpoch).toBe(1);
+    expect(manifest.merge.admissionBlock).toBeUndefined();
+    expect(manifest.terminalHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          state: "blocked",
+          head: blockedHead,
+          disposition: "superseded-by-descendant",
+          supersededByHead: nextHead,
+        }),
+        expect.objectContaining({
+          event: "reopened-by-descendant",
+          head: nextHead,
+          priorHead: blockedHead,
+          terminalEpoch: 1,
+        }),
+      ]),
+    );
+  });
+
+  it("reconciles a stale prior-head block after an earlier runner advanced only HEAD", () => {
+    const root = repo("stale-blocked-descendant");
+    const manifestPath = create(root, ["--merge"]);
+    invocation.recordTerminalState(manifestPath, "blocked", "merge block");
+    writeFileSync(path.join(root, "fix.js"), "export const fixed = true;\n");
+    git(root, ["add", "fix.js"]);
+    git(root, ["commit", "-q", "-m", "fix: descendant"]);
+    const nextHead = git(root, ["rev-parse", "HEAD"]);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      manifest.revisions.currentHead = nextHead;
+    });
+
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      expect(invocation.advanceHead(manifest, root)).toBe(true);
+    });
+
+    const { manifest } = invocation.loadManifest(manifestPath);
+    expect(manifest.terminalState).toBeNull();
+    expect(manifest.terminalEpoch).toBe(1);
+    expect(manifest.terminalHistory.at(-1)).toMatchObject({
+      event: "reopened-by-descendant",
+      head: nextHead,
+    });
   });
 
   it("binds the immutable selection head into review evidence", () => {

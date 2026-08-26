@@ -33,6 +33,11 @@ function pinRepositoryLease(manifest) {
   process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN = token;
 }
 
+function pinTerminalEpoch(manifest) {
+  const epoch = quality.terminalEpoch(manifest);
+  process.env.BS_QUALITY_TERMINAL_EPOCH = String(epoch);
+}
+
 function updateOrchestration(manifestPath, phase, status, detail = null) {
   quality.withManifestLock(manifestPath, (manifest) => {
     quality.validateIdentity(manifest, manifest.repo.realpath);
@@ -299,6 +304,9 @@ async function finishWithMerge(context, manifestPath, manifest, review) {
     );
   }
   updateOrchestration(manifestPath, "merge", "running");
+  // An admission block describes one merge attempt only. Retaining it would
+  // let a later, unrelated failure inherit the prior signed condition.
+  quality.clearMergeAdmissionBlock(manifestPath);
   context.runtime.assertNotInterrupted({ signal: null });
   const expectedHead = manifest.revisions.currentHead;
   const merge = await context.execute(
@@ -332,7 +340,10 @@ async function finishWithMerge(context, manifestPath, manifest, review) {
     };
   }
   const afterMerge = manifestAt(manifestPath);
-  if (afterMerge.terminalState) {
+  if (
+    afterMerge.terminalState &&
+    afterMerge.terminalState.state !== "recovering"
+  ) {
     return {
       status: "terminal",
       state: afterMerge.terminalState.state,
@@ -341,6 +352,27 @@ async function finishWithMerge(context, manifestPath, manifest, review) {
   }
   if (merge.code === ACTION_REQUIRED_EXIT) {
     const message = `${merge.stderr || ""}\n${merge.stdout || ""}`.trim();
+    const terminal = await context.execute(
+      process.execPath,
+      [
+        script("quality-invocation.js"),
+        "terminal-state",
+        manifestPath,
+        "--state",
+        "blocked",
+        "--detail",
+        message || "merge requires an external governance capability",
+      ],
+      {
+        cwd: manifest.repo.realpath,
+        onChild: context.runtime.onChild,
+      },
+    );
+    if (terminal.code !== 0) {
+      throw new Error(
+        "merge capability requirement could not be persisted as a recoverable terminal event",
+      );
+    }
     return actionRequired(
       manifestPath,
       "merge",
@@ -367,7 +399,10 @@ async function recordFailure(context, manifestPath, error) {
       head: manifest.revisions.currentHead,
     };
   }
-  if (!manifest.terminalState) {
+  if (
+    !manifest.terminalState ||
+    manifest.terminalState.state === "recovering"
+  ) {
     const stale =
       /identity.*(?:changed|mismatch)|(?:HEAD|head).*(?:changed|moved|mismatch)|stale|supersed/i.test(
         error.message,
@@ -431,8 +466,20 @@ async function runManifest(manifestPath, dependencies = {}) {
   try {
     const manifest = manifestAt(manifestPath);
     pinRepositoryLease(manifest);
+    pinTerminalEpoch(manifest);
     quality.validateIdentity(manifest, manifest.repo.realpath);
     if (manifest.terminalState) {
+      const recovery = quality.resumeRecoverableTerminal(manifestPath);
+      if (recovery) {
+        const resumed = manifestAt(manifestPath);
+        pinTerminalEpoch(resumed);
+        return await finishWithMerge(
+          context,
+          manifestPath,
+          resumed,
+          reviewSummary(resumed),
+        );
+      }
       return {
         status: "terminal",
         state: manifest.terminalState.state,

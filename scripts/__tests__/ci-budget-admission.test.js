@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const { classify, collect, evaluate } = require("../ci-budget-admission");
 
 const policy = {
@@ -91,6 +92,67 @@ describe("CI budget admission", () => {
       expect(
         evaluate({ env: { XDG_CONFIG_HOME: root, XDG_STATE_HOME: root } }),
       ).toEqual({ state: "disabled", allowed: true, breakGlass: false });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reserves exit 2 for a valid billing-policy denial", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ci-budget-denial-"));
+    const policyPath = path.join(root, "claude-kit", "ci-budget-policy.json");
+    const snapshotPath = path.join(
+      root,
+      "claude-kit",
+      "ci-budget",
+      "snapshot.json",
+    );
+    try {
+      fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
+      fs.writeFileSync(policyPath, JSON.stringify(policy));
+      fs.writeFileSync(
+        snapshotPath,
+        JSON.stringify({
+          fetchedAt: new Date().toISOString(),
+          usedMinutes: 95,
+        }),
+      );
+      const result = spawnSync(
+        "node",
+        [path.join(__dirname, "..", "ci-budget-admission.js")],
+        {
+          env: { ...process.env, XDG_CONFIG_HOME: root, XDG_STATE_HOME: root },
+          encoding: "utf8",
+        },
+      );
+      expect(result.status).toBe(2);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        state: "hard",
+        allowed: false,
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses exit 1 for malformed policy instead of a recoverable denial", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ci-budget-error-"));
+    const policyPath = path.join(root, "claude-kit", "ci-budget-policy.json");
+    try {
+      fs.mkdirSync(path.dirname(policyPath), { recursive: true });
+      fs.writeFileSync(policyPath, "not-json");
+      const result = spawnSync(
+        "node",
+        [path.join(__dirname, "..", "ci-budget-admission.js")],
+        {
+          env: { ...process.env, XDG_CONFIG_HOME: root, XDG_STATE_HOME: root },
+          encoding: "utf8",
+        },
+      );
+      expect(result.status).toBe(1);
+      expect(JSON.parse(result.stderr)).toMatchObject({
+        state: "unavailable",
+        allowed: false,
+      });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

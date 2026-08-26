@@ -53,6 +53,11 @@ has_ci_billing_capability() {
     >/dev/null 2>&1
 }
 
+record_merge_admission_blocked_terminal() {
+  node "$SCRIPT_DIR/quality-invocation.js" record-merge-admission-blocked-terminal \
+    "$MANIFEST" --conditions "$1" --detail "$2" >/dev/null
+}
+
 node "$SCRIPT_DIR/quality-invocation.js" review-authorization "$MANIFEST" >/dev/null || exit 1
 MERGE_REQUESTED="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" options.merge)"
 [ "$MERGE_REQUESTED" = true ] || {
@@ -473,6 +478,9 @@ case "$ATOMIC_BASE_FRESHNESS" in
     MERGE_MODE=unprotectable
     ;;
   *)
+    record_merge_admission_blocked_terminal \
+      "base:protected-nonstrict,pr:non-atomic-state" \
+      "the PR base lacks server-enforced strict freshness" || exit 1
     echo "❌ MERGE BLOCKED: the PR base lacks server-enforced strict freshness." >&2
     echo "   Enable strict required-status checks or use a supported merge queue." >&2
     echo "   If this repo's plan cannot protect branches at all, set" >&2
@@ -497,6 +505,9 @@ if [ "$NONSTRICT_REFCAS_CAPABILITY" = true ] &&
 fi
 if [ "$MERGE_MODE" = protected-nonstrict-ref-cas ] &&
   [ "$NONSTRICT_REFCAS_CAPABILITY" != true ]; then
+  record_merge_admission_blocked_terminal \
+    "base:protected-nonstrict,pr:non-atomic-state" \
+    "protected non-strict ref-CAS requires its exact signed capability" || exit 1
   echo "❌ MERGE BLOCKED: protected non-strict ref-CAS requires its exact signed capability." >&2
   exit 1
 fi

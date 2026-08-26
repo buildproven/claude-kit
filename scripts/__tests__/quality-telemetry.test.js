@@ -130,6 +130,16 @@ describe("deriveVerdict", () => {
     expect(deriveVerdict(manifest)).toBe("blocked");
     expect(deterministicBlockingCount(manifest)).toBe(1);
   });
+
+  it("reports a fenced recovery sentinel as incomplete", () => {
+    const manifest = baseManifest({
+      reviewContractVersion: 2,
+      options: { merge: true },
+      judge: undefined,
+      terminalState: { state: "recovering", detail: null },
+    });
+    expect(deriveVerdict(manifest)).toBe("incomplete");
+  });
 });
 
 describe("buildRecord", () => {
@@ -139,7 +149,7 @@ describe("buildRecord", () => {
       nowIso: NOW,
     });
     expect(rec).toMatchObject({
-      telemetrySchemaVersion: 8,
+      telemetrySchemaVersion: 9,
       invocationId: "11111111-1111-4111-8111-111111111111",
       repoKey: "target-repo",
       taskType: "feature",
@@ -167,6 +177,7 @@ describe("buildRecord", () => {
       evidenceReusedCount: 0,
       testSelectionMode: null,
       terminalState: null,
+      terminalEpoch: 0,
       reviewRounds: 1,
       agentsRun: 2,
       blockingCount: 0,
@@ -589,6 +600,26 @@ describe("alreadyRecorded", () => {
     expect(alreadyRecorded(p, "abc")).toBe(true);
     expect(alreadyRecorded(p, "zzz")).toBe(false);
   });
+
+  it("deduplicates within an epoch but preserves a later recovery epoch", () => {
+    const p = path.join(dir, "t.jsonl");
+    fs.writeFileSync(
+      p,
+      `${JSON.stringify({ invocationId: "abc", terminalState: "blocked", terminalEpoch: 1 })}\n`,
+    );
+    expect(alreadyRecorded(p, "abc", "blocked", 1)).toBe(true);
+    expect(alreadyRecorded(p, "abc", "blocked", 2)).toBe(false);
+  });
+
+  it("treats a missing legacy epoch as epoch zero", () => {
+    const p = path.join(dir, "t.jsonl");
+    fs.writeFileSync(
+      p,
+      `${JSON.stringify({ invocationId: "abc", terminalState: "blocked" })}\n`,
+    );
+    expect(alreadyRecorded(p, "abc", "blocked", 0)).toBe(true);
+    expect(alreadyRecorded(p, "abc", "blocked", 1)).toBe(false);
+  });
 });
 
 describe("recordCampaign (idempotent append)", () => {
@@ -665,6 +696,40 @@ describe("recordCampaign (idempotent append)", () => {
     expect(
       records.filter((record) => record.terminalState === "merged"),
     ).toHaveLength(1);
+  });
+
+  it("appends repeated terminal states once per recovery epoch", () => {
+    const logPath = path.join(repoDir, "telemetry.jsonl");
+    process.env.BS_QUALITY_TELEMETRY_FILE = logPath;
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.terminalEpoch = 0;
+    manifest.terminalState = {
+      state: "blocked",
+      detail: "initial admission block",
+      terminalEpoch: 0,
+    };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    const deps = { execFileSync: NO_FILES, nowIso: NOW };
+
+    expect(recordCampaign(manifestPath, deps)).toBe(0);
+    expect(recordCampaign(manifestPath, deps)).toBe(0);
+    manifest.terminalEpoch = 1;
+    manifest.terminalState = {
+      state: "blocked",
+      detail: "later CI block",
+      terminalEpoch: 1,
+    };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    expect(recordCampaign(manifestPath, deps)).toBe(0);
+    expect(recordCampaign(manifestPath, deps)).toBe(0);
+
+    const records = fs
+      .readFileSync(logPath, "utf8")
+      .trim()
+      .split("\n")
+      .map(JSON.parse);
+    expect(records).toHaveLength(2);
+    expect(records.map((record) => record.terminalEpoch)).toEqual([0, 1]);
   });
 
   it("leaves a previously clean target tree unchanged by default", () => {

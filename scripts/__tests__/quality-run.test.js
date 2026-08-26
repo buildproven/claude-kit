@@ -31,6 +31,28 @@ function withManifestLock(file, mutation) {
 function validateIdentity(manifest) {
   if (manifest.behavior?.stale) throw new Error("manifest HEAD identity is stale");
 }
+function terminalEpoch(manifest) { return manifest.terminalEpoch || 0; }
+function resumeRecoverableTerminal(file) {
+  const manifest = read(file);
+  if (!manifest.behavior?.recoverTerminal || !["blocked", "recovering"].includes(manifest.terminalState?.state)) return null;
+  const epoch = terminalEpoch(manifest) + 1;
+  manifest.terminalHistory ||= [];
+  if (manifest.terminalState.state === "blocked") {
+    manifest.terminalHistory.push({ ...manifest.terminalState, disposition: "superseded-by-capability" });
+  }
+  manifest.terminalHistory.push({ event: "reopened-by-capability", terminalEpoch: epoch });
+  manifest.terminalEpoch = epoch;
+  manifest.terminalState = { state: "recovering", head: manifest.revisions.currentHead, terminalEpoch: epoch };
+  write(file, manifest);
+  return manifest.terminalState;
+}
+function clearMergeAdmissionBlock(file) {
+  const manifest = read(file);
+  if (!manifest.merge?.admissionBlock) return false;
+  delete manifest.merge.admissionBlock;
+  write(file, manifest);
+  return true;
+}
 function mutationEvidenceValid(manifest) { return Boolean(manifest.mutation); }
 function incompleteRetryStatus(manifest) {
   const incomplete = manifest.reviews.filter((review) => review.status === "incomplete");
@@ -60,7 +82,14 @@ function reviewAuthorization(manifest) {
 }
 function recordTerminalState(file, state, detail) {
   const manifest = read(file);
-  manifest.terminalState ||= { state, detail, head: manifest.revisions.currentHead };
+  if (!manifest.terminalState || manifest.terminalState.state === "recovering") {
+    manifest.terminalState = {
+      state,
+      detail,
+      head: manifest.revisions.currentHead,
+      terminalEpoch: terminalEpoch(manifest),
+    };
+  }
   write(file, manifest);
   return manifest.terminalState.state;
 }
@@ -83,7 +112,7 @@ if (require.main === module) {
   process.stdout.write(inForce + "\\n");
 }
 module.exports = { incompleteRetryStatus, loadManifest, mutationEvidenceValid, recordTerminalState,
-  reviewAuthorization, reviewCoverage, validateIdentity, withManifestLock };
+  clearMergeAdmissionBlock, reviewAuthorization, reviewCoverage, resumeRecoverableTerminal, terminalEpoch, validateIdentity, withManifestLock };
 `;
 
 const FAKE_STEP = `
@@ -101,7 +130,14 @@ if (step === "quality-risk-resolve.sh" && manifest.behavior?.failRisk) {
   fs.writeFileSync(file, JSON.stringify(manifest));
   process.exit(5);
 }
-if (step === "quality-select-agents.sh") manifest.panel = { rule: "fixture" };
+if (step === "quality-select-agents.sh") {
+  if (manifest.panel) {
+    fs.writeFileSync(file, JSON.stringify(manifest));
+    process.stderr.write("quality agent selection is immutable once persisted\\n");
+    process.exit(1);
+  }
+  manifest.panel = { rule: "fixture" };
+}
 if (step === "quality-run-gate.sh") {
   const name = args[args.indexOf("--name") + 1];
   if (manifest.behavior?.signalGate === name) {
@@ -129,6 +165,11 @@ if (step === "quality-run-review.sh") manifest.reviews.push({
 });
 if (step === "quality-stamp-and-merge.sh") {
   if (manifest.behavior?.externalMergeRequirement) {
+    manifest.merge ||= {};
+    manifest.merge.admissionBlock = {
+      conditions: ["base:protected-nonstrict", "pr:non-atomic-state"],
+      head: manifest.revisions.currentHead,
+    };
     fs.writeFileSync(file, JSON.stringify(manifest));
     process.stderr.write("protected base requires a signed capability\\n");
     process.exit(3);
@@ -206,7 +247,10 @@ function run(entry) {
     {
       encoding: "utf8",
       env,
-      timeout: 10000,
+      // The repository allows subprocess-heavy integration cases 60 seconds
+      // under its eight-worker pool. Keep this fixture below that bound while
+      // avoiding a machine-load-dependent false timeout.
+      timeout: 30_000,
     },
   );
   return {
@@ -387,6 +431,90 @@ describe("quality-run public orchestration", () => {
     expect(result.manifest.telemetryWrites).toBe(1);
   });
 
+  it("continues only the explicitly recoverable terminal merge campaign", () => {
+    const entry = fixture(
+      { recoverTerminal: true, externalMergeRequirement: true },
+      { merge: true, tier: "medium" },
+    );
+    expect(run(entry).status).toBe(3);
+    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    manifest.behavior.externalMergeRequirement = false;
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+
+    const result = run(entry);
+
+    expect(result.status).toBe(0);
+    expect(result.manifest.terminalState).toMatchObject({ state: "merged" });
+    expect(result.manifest.terminalHistory).toHaveLength(2);
+    expect(result.manifest.terminalEpoch).toBe(1);
+  });
+
+  it("records a new terminal cause when a recovered merge fails", () => {
+    const entry = fixture(
+      { recoverTerminal: true, externalMergeRequirement: true },
+      { merge: true, tier: "medium" },
+    );
+    expect(run(entry).status).toBe(3);
+    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    manifest.behavior.externalMergeRequirement = false;
+    manifest.behavior.failMerge = true;
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+
+    const result = run(entry);
+
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "terminal",
+      state: "blocked",
+    });
+    expect(result.manifest.terminalState).toMatchObject({
+      state: "blocked",
+      detail: "merge admission failed with exit 1",
+    });
+  });
+
+  it("keeps a recovered external merge requirement actionable", () => {
+    const entry = fixture(
+      { recoverTerminal: true, externalMergeRequirement: true },
+      { merge: true, tier: "medium" },
+    );
+    expect(run(entry).status).toBe(3);
+
+    const result = run(entry);
+
+    expect(result.status).toBe(3);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "action-required",
+      kind: "external-capability",
+      phase: "merge",
+    });
+    expect(result.manifest.terminalState).toMatchObject({
+      state: "blocked",
+      terminalEpoch: 1,
+    });
+  });
+
+  it("advances the epoch when a second runner re-enters recovery", () => {
+    const entry = fixture(
+      { recoverTerminal: true, externalMergeRequirement: true },
+      { merge: true, tier: "medium" },
+    );
+    expect(run(entry).status).toBe(3);
+    expect(run(entry).manifest.terminalEpoch).toBe(1);
+
+    const result = run(entry);
+
+    expect(result.status).toBe(3);
+    expect(result.manifest.terminalState).toMatchObject({
+      state: "blocked",
+      terminalEpoch: 2,
+    });
+    expect(result.manifest.terminalHistory.at(-1)).toMatchObject({
+      event: "reopened-by-capability",
+      terminalEpoch: 2,
+    });
+  });
+
   it("rejects merge exit zero without exact merged terminal evidence", () => {
     const result = run(
       fixture({ mergeWithoutTerminal: true }, { merge: true, tier: "medium" }),
@@ -426,7 +554,28 @@ describe("quality-run public orchestration", () => {
       kind: "external-capability",
       phase: "merge",
     });
-    expect(result.manifest.terminalState).toBeUndefined();
+    expect(result.manifest.terminalState).toMatchObject({
+      state: "blocked",
+      detail: expect.stringContaining("signed capability"),
+    });
+    expect(result.manifest.telemetryWrites).toBe(1);
+  });
+
+  it("resumes a structured merge requirement without replaying immutable phases", () => {
+    const entry = fixture(
+      { recoverTerminal: true, externalMergeRequirement: true },
+      { merge: true, tier: "medium" },
+    );
+    const initial = run(entry);
+    expect(initial.status).toBe(3);
+    expect(initial.manifest.terminalState).toMatchObject({ state: "blocked" });
+
+    const resumed = run(entry);
+
+    expect(resumed.status).toBe(3);
+    expect(resumed.stderr).not.toContain("agent selection is immutable");
+    expect(resumed.manifest.terminalEpoch).toBe(1);
+    expect(resumed.manifest.terminalHistory).toHaveLength(2);
   });
 
   it("records a CI merge-admission failure as blocked, not action-required", () => {

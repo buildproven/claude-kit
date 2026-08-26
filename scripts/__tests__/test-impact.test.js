@@ -128,6 +128,76 @@ describe("cross-language test impact", () => {
     });
   });
 
+  it("coalesces overlapping exact Vitest mappings into one unique run", () => {
+    const policy = {
+      version: 1,
+      mappings: [
+        {
+          paths: ["scripts/a.js"],
+          commands: [
+            {
+              executable: "npx",
+              args: [
+                "vitest",
+                "run",
+                "scripts/__tests__/a.test.js",
+                "scripts/__tests__/shared.test.js",
+              ],
+            },
+          ],
+        },
+        {
+          paths: ["scripts/b.js"],
+          commands: [
+            {
+              executable: "npx",
+              args: [
+                "vitest",
+                "run",
+                "scripts/__tests__/shared.test.js",
+                "scripts/__tests__/b.test.js",
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(plan(["scripts/a.js", "scripts/b.js"], policy)).toMatchObject({
+      mode: "focused",
+      commands: [
+        {
+          executable: "npx",
+          args: [
+            "vitest",
+            "run",
+            "scripts/__tests__/a.test.js",
+            "scripts/__tests__/shared.test.js",
+            "scripts/__tests__/b.test.js",
+          ],
+        },
+      ],
+    });
+  });
+
+  it("does not coalesce Vitest commands with runner options", () => {
+    const test = "scripts/__tests__/a.test.js";
+    const result = plan(["scripts/a.js"], {
+      version: 1,
+      mappings: [
+        {
+          paths: ["scripts/a.js"],
+          commands: [
+            { executable: "npx", args: ["vitest", "run", "--config", test] },
+          ],
+        },
+      ],
+    });
+    expect(result.commands).toEqual([
+      { executable: "npx", args: ["vitest", "run", "--config", test] },
+    ]);
+  });
+
   it("does not treat an option value as an executed test target", () => {
     const test = "scripts/__tests__/tool.test.js";
     const result = plan(["scripts/tool.js", test], {

@@ -60,6 +60,7 @@ function preflightRecord(reviewArm, recordedAt) {
     evidenceReusedCount: 0,
     testSelectionMode: null,
     terminalState: null,
+    terminalEpoch: 0,
     reviewRounds: 0,
     agentsRun: 0,
     blockingCount: null,

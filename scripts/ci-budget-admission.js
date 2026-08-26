@@ -178,7 +178,10 @@ if (require.main === module) {
         error: error.message,
       }),
     );
-    process.exitCode = 2;
+    // Exit 2 is reserved for a valid policy decision that denies new CI
+    // spend. Operational, validation, and provider failures must not be
+    // eligible for the signed billing-denial recovery capability.
+    process.exitCode = 1;
   }
 }
 

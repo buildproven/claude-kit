@@ -24,9 +24,10 @@
  * worktree must leave it clean. Committed, fleet-visible history remains
  * opt-in via $BS_QUALITY_TELEMETRY_FILE.
  *
- * IDEMPOTENT: keyed on invocationId plus terminal state. A campaign records
- * each terminal transition once, so a verified-unmerged receipt can later be
- * followed by one exact merged receipt without duplicate merge rows.
+ * IDEMPOTENT: keyed on invocationId, terminal state, and recovery epoch. A
+ * campaign records each terminal transition once, so a verified-unmerged
+ * receipt can later be followed by one exact merged receipt, while repeated
+ * blocked/recovering events in later recovery epochs remain observable.
  * Absence of a manifest, or an unreadable one, is a hard failure — telemetry
  * that silently no-ops would report "quality is cheap" by recording nothing.
  * But a telemetry WRITE failure must NOT fail the campaign: measuring the run
@@ -50,9 +51,10 @@ const {
 } = require("./quality-review-history");
 const { reviewUsage, validUsage } = require("./quality-provider-usage");
 
-const TELEMETRY_SCHEMA_VERSION = 8;
+const TELEMETRY_SCHEMA_VERSION = 9;
 const REVIEW_TOKEN_CHARS_PER_TOKEN = 4;
 const TELEMETRY_TERMINAL_STATES = new Set([
+  "recovering",
   "merged",
   "verified-unmerged",
   "blocked",
@@ -295,6 +297,7 @@ function deriveVerdict(manifest) {
     if (
       [
         "timeout",
+        "recovering",
         "interrupted",
         "superseded",
         "policy-superseded",
@@ -570,6 +573,8 @@ function validateRecord(record) {
   const validTerminalState =
     record.terminalState === null ||
     TELEMETRY_TERMINAL_STATES.has(record.terminalState);
+  const validTerminalEpoch =
+    Number.isSafeInteger(record.terminalEpoch) && record.terminalEpoch >= 0;
   const validExactUsage =
     record.reviewTokens === null
       ? [
@@ -647,6 +652,7 @@ function validateRecord(record) {
     (record.judgeArtifactSha256 === null ||
       typeof record.judgeArtifactSha256 === "string") &&
     validTerminalState &&
+    validTerminalEpoch &&
     [null, "none", "focused", "audit", "complete", "unmapped"].includes(
       record.testSelectionMode,
     ) &&
@@ -714,6 +720,14 @@ function buildRecord(manifest, { execFileSync, nowIso }) {
     ).length,
     testSelectionMode: testSelectionMode(manifest),
     terminalState: manifest.terminalState?.state ?? null,
+    terminalEpoch:
+      Number.isSafeInteger(manifest.terminalState?.terminalEpoch) &&
+      manifest.terminalState.terminalEpoch >= 0
+        ? manifest.terminalState.terminalEpoch
+        : Number.isSafeInteger(manifest.terminalEpoch) &&
+            manifest.terminalEpoch >= 0
+          ? manifest.terminalEpoch
+          : 0,
     reviewRounds: successfulReviewCount(manifest),
     agentsRun: Array.isArray(manifest.agents) ? manifest.agents.length : 0,
     blockingCount: Number.isFinite(judge.blockingCount)
@@ -735,7 +749,12 @@ function buildRecord(manifest, { execFileSync, nowIso }) {
  * Read-tolerant: a missing file is "not present"; a malformed line is skipped
  * (a single corrupt line must not resurrect a duplicate append nor throw).
  */
-function alreadyRecorded(logPath, invocationId, terminalState) {
+function alreadyRecorded(
+  logPath,
+  invocationId,
+  terminalState,
+  terminalEpoch = 0,
+) {
   let raw;
   try {
     raw = fs.readFileSync(logPath, "utf8");
@@ -749,7 +768,9 @@ function alreadyRecorded(logPath, invocationId, terminalState) {
       const record = JSON.parse(trimmed);
       if (
         record.invocationId === invocationId &&
-        (terminalState === undefined || record.terminalState === terminalState)
+        (terminalState === undefined ||
+          (record.terminalState === terminalState &&
+            (record.terminalEpoch ?? 0) === terminalEpoch))
       ) {
         return true;
       }
@@ -794,7 +815,14 @@ function recordCampaign(manifestPath, deps = {}) {
     );
     return 0;
   }
-  if (alreadyRecorded(logPath, manifest.invocationId, record.terminalState)) {
+  if (
+    alreadyRecorded(
+      logPath,
+      manifest.invocationId,
+      record.terminalState,
+      record.terminalEpoch,
+    )
+  ) {
     if (!quiet) {
       process.stdout.write(
         `[quality] telemetry: campaign ${manifest.invocationId} already recorded — skipping.\n`,

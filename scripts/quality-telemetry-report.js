@@ -4,7 +4,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const SUPPORTED_TELEMETRY_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8]);
+const SUPPORTED_TELEMETRY_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9]);
 const FINISHED_VERDICTS = new Set(["authorized", "passed"]);
 const FULL_SELECTION_MODES = new Set(["audit", "complete"]);
 

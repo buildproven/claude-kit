@@ -1249,9 +1249,19 @@ function recordMergedTerminalRaw(manifestPath) {
     manifestPath,
     (manifest) => {
       if (manifest.terminalState?.state === "merged") return;
+      const requestedEpoch = process.env.BS_QUALITY_TERMINAL_EPOCH;
+      const recoveringEpoch =
+        requestedEpoch === undefined || requestedEpoch === ""
+          ? manifest.terminalState?.terminalEpoch
+          : Number(requestedEpoch);
+      const replacingRecovery =
+        manifest.terminalState?.state === "recovering" &&
+        Number.isSafeInteger(recoveringEpoch) &&
+        recoveringEpoch === manifest.terminalState.terminalEpoch;
       if (
         manifest.terminalState &&
-        manifest.terminalState.state !== "verified-unmerged"
+        manifest.terminalState.state !== "verified-unmerged" &&
+        !replacingRecovery
       ) {
         return;
       }
@@ -1259,6 +1269,9 @@ function recordMergedTerminalRaw(manifestPath) {
         state: "merged",
         detail: `pr:${manifest.repo.pr}`,
         head: manifest.revisions?.currentHead ?? null,
+        terminalEpoch: Number.isSafeInteger(recoveringEpoch)
+          ? recoveringEpoch
+          : (manifest.terminalEpoch ?? 0),
         recordedAt: new Date().toISOString(),
       };
     },
@@ -1763,5 +1776,6 @@ module.exports = {
   _performRefCasUpdate: performRefCasUpdate,
   _parseIncludedGhResponse: parseIncludedGhResponse,
   _resolveRefCasAtMutation: resolveRefCasAtMutation,
+  _recordMergedTerminalRaw: recordMergedTerminalRaw,
   _waitForRefCasIntegration: waitForRefCasIntegration,
 };

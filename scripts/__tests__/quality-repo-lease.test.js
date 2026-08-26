@@ -262,6 +262,29 @@ function fixture(name, overrides = {}) {
 }
 
 describe("repository merge lease", () => {
+  it("recovers a ref-CAS block with a signed optional CI condition", () => {
+    const { manifestPath } = fixture("refcas-recovery-optional-ci");
+    const protectionDigest = "c".repeat(64);
+    const requiredChecks = [{ context: "quality", appId: 15368 }];
+    attachRefCasCapability(manifestPath, protectionDigest, requiredChecks, {
+      includeOutage: true,
+    });
+    const { manifest } = invocation.loadManifest(manifestPath);
+    expect(invocation.approvalValid(manifest)).toBe(true);
+    expect(
+      invocation.protectedNonstrictRefCasCapability(manifest),
+    ).not.toBeNull();
+
+    expect(
+      invocation.recoveryScope(manifest, {
+        mergeAdmissionConditions: [
+          "base:protected-nonstrict",
+          "pr:non-atomic-state",
+        ],
+      }),
+    ).toBe("operator-nonstrict-refcas-override");
+  });
+
   it("parses included GitHub responses with CRLF and rejects malformed output", () => {
     expect(
       lease._parseIncludedGhResponse(
