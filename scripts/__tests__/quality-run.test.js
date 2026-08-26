@@ -83,7 +83,12 @@ function reviewAuthorization(manifest) {
 function recordTerminalState(file, state, detail) {
   const manifest = read(file);
   if (!manifest.terminalState || manifest.terminalState.state === "recovering") {
-    manifest.terminalState = { state, detail, head: manifest.revisions.currentHead };
+    manifest.terminalState = {
+      state,
+      detail,
+      head: manifest.revisions.currentHead,
+      terminalEpoch: terminalEpoch(manifest),
+    };
   }
   write(file, manifest);
   return manifest.terminalState.state;
@@ -153,6 +158,11 @@ if (step === "quality-run-review.sh") manifest.reviews.push({
 });
 if (step === "quality-stamp-and-merge.sh") {
   if (manifest.behavior?.externalMergeRequirement) {
+    manifest.merge ||= {};
+    manifest.merge.admissionBlock = {
+      conditions: ["base:protected-nonstrict", "pr:non-atomic-state"],
+      head: manifest.revisions.currentHead,
+    };
     fs.writeFileSync(file, JSON.stringify(manifest));
     process.stderr.write("protected base requires a signed capability\\n");
     process.exit(3);
@@ -483,7 +493,7 @@ describe("quality-run public orchestration", () => {
       phase: "merge",
     });
     expect(result.manifest.terminalState).toMatchObject({
-      state: "recovering",
+      state: "blocked",
       terminalEpoch: 1,
     });
   });
@@ -509,7 +519,7 @@ describe("quality-run public orchestration", () => {
 
     expect(result.status).toBe(3);
     expect(result.manifest.terminalState).toMatchObject({
-      state: "recovering",
+      state: "blocked",
       terminalEpoch: 2,
     });
     expect(result.manifest.terminalHistory.at(-1)).toMatchObject({
@@ -557,7 +567,28 @@ describe("quality-run public orchestration", () => {
       kind: "external-capability",
       phase: "merge",
     });
-    expect(result.manifest.terminalState).toBeUndefined();
+    expect(result.manifest.terminalState).toMatchObject({
+      state: "blocked",
+      detail: expect.stringContaining("signed capability"),
+    });
+    expect(result.manifest.telemetryWrites).toBe(1);
+  });
+
+  it("resumes a structured merge requirement without replaying immutable phases", () => {
+    const entry = fixture(
+      { recoverTerminal: true, externalMergeRequirement: true },
+      { merge: true, tier: "medium" },
+    );
+    const initial = run(entry);
+    expect(initial.status).toBe(3);
+    expect(initial.manifest.terminalState).toMatchObject({ state: "blocked" });
+
+    const resumed = run(entry);
+
+    expect(resumed.status).toBe(3);
+    expect(resumed.stderr).not.toContain("agent selection is immutable");
+    expect(resumed.manifest.terminalEpoch).toBe(1);
+    expect(resumed.manifest.terminalHistory).toHaveLength(2);
   });
 
   it("records a CI merge-admission failure as blocked, not action-required", () => {

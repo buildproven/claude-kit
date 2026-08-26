@@ -352,6 +352,27 @@ async function finishWithMerge(context, manifestPath, manifest, review) {
   }
   if (merge.code === ACTION_REQUIRED_EXIT) {
     const message = `${merge.stderr || ""}\n${merge.stdout || ""}`.trim();
+    const terminal = await context.execute(
+      process.execPath,
+      [
+        script("quality-invocation.js"),
+        "terminal-state",
+        manifestPath,
+        "--state",
+        "blocked",
+        "--detail",
+        message || "merge requires an external governance capability",
+      ],
+      {
+        cwd: manifest.repo.realpath,
+        onChild: context.runtime.onChild,
+      },
+    );
+    if (terminal.code !== 0) {
+      throw new Error(
+        "merge capability requirement could not be persisted as a recoverable terminal event",
+      );
+    }
     return actionRequired(
       manifestPath,
       "merge",
