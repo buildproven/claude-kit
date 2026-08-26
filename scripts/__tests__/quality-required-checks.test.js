@@ -374,7 +374,7 @@ case "$*" in
       printf '%s\\n' '{"check_runs":[]}'
     fi
     ;;
-  *dispatches*) : > '${dispatch}' ;;
+  *dispatches*) cat > '${dispatch}' ;;
   *) exit 1 ;;
 esac
 `,
@@ -653,7 +653,7 @@ case "$*" in
   *commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs*) printf '%s\\n' '{"check_runs":[{"id":2,"name":"secret-history-scan","status":"completed","conclusion":"success","app":{"id":15368},"external_id":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:cccccccccccccccccccccccccccccccccccccccc:0123456789abcdef0123456789abcdef","details_url":"https://github.com/o/r/actions/runs/124"}]}' ;;
   *actions/runs/123*) printf '%s\\n' '{"workflow_id":77}' ;;
   *actions/runs/124*) printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","head_sha":"cccccccccccccccccccccccccccccccccccccccc","path":".github/workflows/secret-history-scan.yml","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:cccccccccccccccccccccccccccccccccccccccc:0123456789abcdef0123456789abcdef","status":"completed","conclusion":"success"}' ;;
-  *dispatches*) : > '${dispatch}'; exit 1 ;;
+  *dispatches*) cat > '${dispatch}'; exit 1 ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
 `,
@@ -1020,6 +1020,7 @@ esac
   it("fails closed when a protected workflow does not register its check", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
     const bin = path.join(root, "bin");
+    const dispatch = path.join(root, "dispatch.json");
     fs.mkdirSync(bin);
     const gh = path.join(bin, "gh");
     fs.writeFileSync(
@@ -1033,7 +1034,7 @@ case "$*" in
   *commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs*) printf '%s\\n' '{"check_runs":[]}' ;;
   *actions/runs/123*) printf '%s\\n' '{"workflow_id":77}' ;;
   *git/ref/heads/main*) printf '%s\\n' '{"object":{"sha":"cccccccccccccccccccccccccccccccccccccccc"}}' ;;
-  *dispatches*) : ;;
+  *dispatches*) cat > '${dispatch}' ;;
   *actions/runs*) printf '%s\\n' '{"total_count":1,"workflow_runs":[{"id":124,"workflow_id":77,"event":"repository_dispatch","head_branch":"main","head_sha":"cccccccccccccccccccccccccccccccccccccccc","status":"in_progress"}]}' ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
@@ -1061,11 +1062,16 @@ esac
     );
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("did not register on stamp");
+    expect(JSON.parse(fs.readFileSync(dispatch, "utf8"))).toMatchObject({
+      event_type: "harness-summary",
+      client_payload: { head_sha: "b".repeat(40) },
+    });
   });
 
   it("fails when an exact-head workflow completes without publishing its required check", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
     const bin = path.join(root, "bin");
+    const dispatch = path.join(root, "dispatch.json");
     fs.mkdirSync(bin);
     fs.writeFileSync(
       path.join(bin, "gh"),
@@ -1078,7 +1084,7 @@ case "$*" in
   *commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs*) printf '%s\\n' '{"check_runs":[]}' ;;
   *actions/runs/123*) printf '%s\\n' '{"workflow_id":77}' ;;
   *git/ref/heads/main*) printf '%s\\n' '{"object":{"sha":"cccccccccccccccccccccccccccccccccccccccc"}}' ;;
-  *dispatches*) : ;;
+  *dispatches*) cat > '${dispatch}' ;;
   *actions/runs*) printf '%s\\n' '{"total_count":1,"workflow_runs":[{"id":124,"workflow_id":77,"event":"repository_dispatch","head_branch":"main","head_sha":"cccccccccccccccccccccccccccccccccccccccc","status":"completed","conclusion":"success"}]}' ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
@@ -1106,6 +1112,10 @@ esac
     );
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("did not register on stamp");
+    expect(JSON.parse(fs.readFileSync(dispatch, "utf8"))).toMatchObject({
+      event_type: "harness-summary",
+      client_payload: { head_sha: "b".repeat(40) },
+    });
   });
 
   it("asserts exact-head success without relying on PR check rollups", () => {
