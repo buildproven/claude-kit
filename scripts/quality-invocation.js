@@ -2275,7 +2275,12 @@ function advanceHead(manifest, root, { acceptedConditions = [] } = {}) {
   // Returning before this assertion would grandfather that stale contract.
   assertCurrentReviewStrength(manifest, root);
   if (nextHead === priorHead) {
-    return supersedePriorHeadBlock(manifest, root, nextHead);
+    const blockedHead = manifest.terminalState?.head;
+    const superseded = supersedePriorHeadBlock(manifest, root, nextHead);
+    if (superseded) {
+      rearmExecutionForHead(manifest, blockedHead, nextHead);
+    }
+    return superseded;
   }
   const retry = incompleteRetryStatus(manifest);
   if (
@@ -6157,10 +6162,27 @@ function clearMergeAdmissionBlock(manifestPath) {
 
 function recoveryScope(manifest, terminal) {
   const conditions = terminal?.mergeAdmissionConditions;
+  const admission = manifest.merge?.admissionBlock;
+  const normalizedConditions = Array.isArray(conditions)
+    ? [...new Set(conditions)].sort()
+    : null;
+  const normalizedAdmissionConditions = Array.isArray(admission?.conditions)
+    ? [...new Set(admission.conditions)].sort()
+    : null;
   if (
     !Array.isArray(conditions) ||
     conditions.length === 0 ||
     !conditions.every((condition) => typeof condition === "string") ||
+    !admission ||
+    admission.head !== manifest.revisions.currentHead ||
+    admission.head !== terminal.head ||
+    !Number.isInteger(terminal.terminalEpoch) ||
+    admission.terminalEpoch !== terminal.terminalEpoch ||
+    typeof terminal.mergeAttemptId !== "string" ||
+    terminal.mergeAttemptId.length === 0 ||
+    admission.mergeAttemptId !== terminal.mergeAttemptId ||
+    JSON.stringify(normalizedAdmissionConditions) !==
+      JSON.stringify(normalizedConditions) ||
     !approvalValid(manifest) ||
     !conditions.every((condition) =>
       manifest.approval.acceptedConditions.includes(condition),

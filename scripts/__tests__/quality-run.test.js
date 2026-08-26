@@ -165,11 +165,27 @@ if (step === "quality-run-review.sh") manifest.reviews.push({
 });
 if (step === "quality-stamp-and-merge.sh") {
   if (manifest.behavior?.externalMergeRequirement) {
+    const terminalEpoch = manifest.terminalEpoch || 0;
+    const mergeAttemptId = "fixture-merge-attempt";
     manifest.merge ||= {};
     manifest.merge.admissionBlock = {
       conditions: ["base:protected-nonstrict", "pr:non-atomic-state"],
       head: manifest.revisions.currentHead,
+      terminalEpoch,
+      mergeAttemptId,
     };
+    manifest.terminalState = {
+      state: "blocked",
+      detail: "protected base requires a signed capability",
+      head: manifest.revisions.currentHead,
+      terminalEpoch,
+      mergeAttemptId,
+      mergeAdmissionConditions: [
+        "base:protected-nonstrict",
+        "pr:non-atomic-state",
+      ],
+    };
+    manifest.telemetryWrites = (manifest.telemetryWrites || 0) + 1;
     fs.writeFileSync(file, JSON.stringify(manifest));
     process.stderr.write("protected base requires a signed capability\\n");
     process.exit(3);

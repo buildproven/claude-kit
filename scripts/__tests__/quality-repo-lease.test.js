@@ -266,6 +266,11 @@ describe("repository merge lease", () => {
     const { manifestPath } = fixture("refcas-recovery-optional-ci");
     const protectionDigest = "c".repeat(64);
     const requiredChecks = [{ context: "quality", appId: 15368 }];
+    invocation.recordMergeAdmissionBlockedTerminal(
+      manifestPath,
+      ["base:protected-nonstrict", "pr:non-atomic-state"],
+      "merge admission blocked",
+    );
     attachRefCasCapability(manifestPath, protectionDigest, requiredChecks, {
       includeOutage: true,
     });
@@ -275,14 +280,28 @@ describe("repository merge lease", () => {
       invocation.protectedNonstrictRefCasCapability(manifest),
     ).not.toBeNull();
 
+    expect(invocation.recoveryScope(manifest, manifest.terminalState)).toBe(
+      "operator-nonstrict-refcas-override",
+    );
+
+    for (const field of ["head", "terminalEpoch", "mergeAttemptId"]) {
+      const tampered = structuredClone(manifest);
+      tampered.merge.admissionBlock[field] =
+        field === "terminalEpoch"
+          ? tampered.merge.admissionBlock[field] + 1
+          : `tampered-${field}`;
+      expect(
+        invocation.recoveryScope(tampered, tampered.terminalState),
+      ).toBeNull();
+    }
+    const conditionsTampered = structuredClone(manifest);
+    conditionsTampered.merge.admissionBlock.conditions = ["ci:failed"];
     expect(
-      invocation.recoveryScope(manifest, {
-        mergeAdmissionConditions: [
-          "base:protected-nonstrict",
-          "pr:non-atomic-state",
-        ],
-      }),
-    ).toBe("operator-nonstrict-refcas-override");
+      invocation.recoveryScope(
+        conditionsTampered,
+        conditionsTampered.terminalState,
+      ),
+    ).toBeNull();
   });
 
   it("parses included GitHub responses with CRLF and rejects malformed output", () => {

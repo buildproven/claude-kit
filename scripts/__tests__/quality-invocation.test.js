@@ -5025,6 +5025,8 @@ exit 1
     const nextHead = git(root, ["rev-parse", "HEAD"]);
     invocation.withManifestLock(manifestPath, (manifest) => {
       manifest.revisions.currentHead = nextHead;
+      manifest.governor.activeSecondsUsed = 90;
+      manifest.governor.gateSecondsUsed = 30;
     });
 
     invocation.withManifestLock(manifestPath, (manifest) => {
@@ -5037,6 +5039,14 @@ exit 1
     expect(manifest.terminalHistory.at(-1)).toMatchObject({
       event: "reopened-by-descendant",
       head: nextHead,
+    });
+    expect(manifest.governor.activeSecondsUsed).toBe(0);
+    expect(manifest.governor.gateSecondsUsed).toBe(0);
+    expect(manifest.governor.headExecutionHistory.at(-1)).toMatchObject({
+      head: expect.any(String),
+      supersededByHead: nextHead,
+      activeSecondsUsed: 90,
+      gateSecondsUsed: 30,
     });
   });
 

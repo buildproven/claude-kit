@@ -340,6 +340,42 @@ async function finishWithMerge(context, manifestPath, manifest, review) {
     };
   }
   const afterMerge = manifestAt(manifestPath);
+  if (merge.code === ACTION_REQUIRED_EXIT) {
+    const message = `${merge.stderr || ""}\n${merge.stdout || ""}`.trim();
+    const terminal = afterMerge.terminalState;
+    const admission = afterMerge.merge?.admissionBlock;
+    const terminalConditions = [
+      ...(terminal?.mergeAdmissionConditions || []),
+    ].sort();
+    const admissionConditions = [...(admission?.conditions || [])].sort();
+    const evidenceMatches =
+      terminal?.state === "blocked" &&
+      terminal.head === afterMerge.revisions.currentHead &&
+      admission?.head === terminal.head &&
+      Number.isInteger(terminal.terminalEpoch) &&
+      admission.terminalEpoch === terminal.terminalEpoch &&
+      typeof terminal.mergeAttemptId === "string" &&
+      terminal.mergeAttemptId.length > 0 &&
+      admission.mergeAttemptId === terminal.mergeAttemptId &&
+      terminalConditions.length > 0 &&
+      JSON.stringify(admissionConditions) ===
+        JSON.stringify(terminalConditions);
+    if (!evidenceMatches) {
+      throw Object.assign(
+        new Error(
+          "merge capability requirement lacks matching atomic admission evidence",
+        ),
+        { terminalContractFailure: true },
+      );
+    }
+    return actionRequired(
+      manifestPath,
+      "merge",
+      message || "merge requires an external governance capability",
+      afterMerge,
+      review,
+    );
+  }
   if (
     afterMerge.terminalState &&
     afterMerge.terminalState.state !== "recovering"
@@ -349,37 +385,6 @@ async function finishWithMerge(context, manifestPath, manifest, review) {
       state: afterMerge.terminalState.state,
       head: afterMerge.revisions.currentHead,
     };
-  }
-  if (merge.code === ACTION_REQUIRED_EXIT) {
-    const message = `${merge.stderr || ""}\n${merge.stdout || ""}`.trim();
-    const terminal = await context.execute(
-      process.execPath,
-      [
-        script("quality-invocation.js"),
-        "terminal-state",
-        manifestPath,
-        "--state",
-        "blocked",
-        "--detail",
-        message || "merge requires an external governance capability",
-      ],
-      {
-        cwd: manifest.repo.realpath,
-        onChild: context.runtime.onChild,
-      },
-    );
-    if (terminal.code !== 0) {
-      throw new Error(
-        "merge capability requirement could not be persisted as a recoverable terminal event",
-      );
-    }
-    return actionRequired(
-      manifestPath,
-      "merge",
-      message || "merge requires an external governance capability",
-      manifest,
-      review,
-    );
   }
   throw new Error(`merge admission failed with exit ${merge.code}`);
 }
