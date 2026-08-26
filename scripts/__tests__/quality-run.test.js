@@ -32,6 +32,12 @@ function validateIdentity(manifest) {
   if (manifest.behavior?.stale) throw new Error("manifest HEAD identity is stale");
 }
 function terminalEpoch(manifest) { return manifest.terminalEpoch || 0; }
+function advanceHead(manifest) {
+  if (!manifest.behavior?.nextHead) return false;
+  manifest.revisions.currentHead = manifest.behavior.nextHead;
+  delete manifest.behavior.nextHead;
+  return true;
+}
 function resumeRecoverableTerminal(file) {
   const manifest = read(file);
   if (!manifest.behavior?.recoverTerminal || !["blocked", "recovering"].includes(manifest.terminalState?.state)) return null;
@@ -80,6 +86,32 @@ function reviewAuthorization(manifest) {
   }
   return {};
 }
+function judgeContext(manifest) {
+  reviewCoverage(manifest);
+  return {
+    invocationId: "fixture-invocation",
+    repositoryKey: "fixture-repository",
+    head: manifest.revisions.currentHead,
+    reviewCount: manifest.reviews.length,
+    evidenceSha256: "fixture-evidence",
+    findings: Array.from({ length: manifest.behavior?.leads || 0 }, (_, index) => ({
+      id: "lead-" + (index + 1),
+      provider: "fixture-provider",
+      source: "fixture-review",
+    })),
+  };
+}
+function leadDispositionStatus(manifest) {
+  const context = judgeContext(manifest);
+  if (context.findings.length === 0) return { state: "not-required", context };
+  if (manifest.judge?.head !== context.head) return { state: "pending", context };
+  return {
+    state: manifest.judge.blockingCount > 0 ? "remediation-required" : "settled",
+    blockingCount: manifest.judge.blockingCount,
+    artifactPath: manifest.judge.artifactPath,
+    context,
+  };
+}
 function recordTerminalState(file, state, detail) {
   const manifest = read(file);
   if (!manifest.terminalState || manifest.terminalState.state === "recovering") {
@@ -111,7 +143,7 @@ if (require.main === module) {
   write(file, manifest);
   process.stdout.write(inForce + "\\n");
 }
-module.exports = { incompleteRetryStatus, loadManifest, mutationEvidenceValid, recordTerminalState,
+module.exports = { advanceHead, incompleteRetryStatus, judgeContext, leadDispositionStatus, loadManifest, mutationEvidenceValid, recordTerminalState,
   clearMergeAdmissionBlock, reviewAuthorization, reviewCoverage, resumeRecoverableTerminal, terminalEpoch, validateIdentity, withManifestLock };
 `;
 
@@ -121,7 +153,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const [step, ...args] = process.argv.slice(2);
 const index = args.indexOf("--manifest");
-const file = index >= 0 ? args[index + 1] : args[0];
+const file = index >= 0 ? args[index + 1] :
+  (step === "quality-run-governor.js" ? args[1] : args[0]);
 const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
 manifest.calls ||= [];
 manifest.calls.push(step);
@@ -156,8 +189,13 @@ if (step === "quality-run-gate.sh") {
   manifest.gates.push({ name, status: "success" });
 }
 if (step === "quality-mutation-check.sh") manifest.mutation = true;
+if (step === "quality-run-governor.js") {
+  if (manifest.behavior?.remediationBudgetFail) process.exit(1);
+  manifest.governor.remediationStartedAtEpoch ||= 1;
+}
 if (step === "quality-run-review.sh") manifest.reviews.push({
-  from: manifest.revisions.baseSha,
+  from: manifest.reviews.filter((review) =>
+    ["complete", "exempt"].includes(review.status)).at(-1)?.to || manifest.revisions.baseSha,
   to: manifest.revisions.currentHead,
   status: manifest.behavior?.incompleteReview ? "incomplete" :
     (manifest.risk.tier === "low" ? "exempt" : "complete"),
@@ -233,13 +271,21 @@ function fixture(behavior = {}, { merge = false, tier = "low" } = {}) {
     );
     chmodSync(file, 0o755);
   }
+  writeFileSync(
+    path.join(runtime, "quality-run-governor.js"),
+    `#!/usr/bin/env node\nprocess.argv.splice(2, 0, "quality-run-governor.js"); require("${path.join(runtime, "fake-step.js")}");\n`,
+  );
   const manifestPath = path.join(root, "invocation.json");
   writeFileSync(
     manifestPath,
     JSON.stringify({
       manifestRevision: 0,
       repo: { realpath: root },
-      revisions: { currentHead: "abc123", baseSha: "base123" },
+      revisions: {
+        initialHead: "abc123",
+        currentHead: "abc123",
+        baseSha: "base123",
+      },
       options: { merge },
       ...(merge
         ? { merge: { repositoryLease: { token: "fixture-token" } } }
@@ -248,6 +294,9 @@ function fixture(behavior = {}, { merge = false, tier = "low" } = {}) {
       requiredGates: ["lint", "test", "security"].map((name) => ({ name })),
       gates: [],
       reviews: [],
+      reviewContractVersion: 2,
+      invocationId: "fixture-invocation",
+      governor: { remediationStartedAtEpoch: null },
       behavior,
     }),
   );
@@ -277,6 +326,148 @@ function run(entry) {
 }
 
 describe("quality-run public orchestration", () => {
+  it("pauses for identity-bound lead verification before merge", () => {
+    const result = run(fixture({ leads: 2 }, { merge: true, tier: "medium" }));
+
+    expect(result.status).toBe(4);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "work-required",
+      kind: "lead-verification",
+      phase: "lead-verification",
+      context: { findings: [{ id: "lead-1" }, { id: "lead-2" }] },
+    });
+    expect(result.manifest.calls).not.toContain("quality-stamp-and-merge.sh");
+    expect(result.manifest.telemetryWrites).toBeUndefined();
+  });
+
+  it("requests one bounded remediation after confirmed findings", () => {
+    const entry = fixture({ leads: 1 }, { merge: true, tier: "medium" });
+    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    manifest.reviews.push({
+      from: manifest.revisions.baseSha,
+      to: manifest.revisions.currentHead,
+      status: "complete",
+      leadCount: 1,
+    });
+    manifest.judge = {
+      head: manifest.revisions.currentHead,
+      blockingCount: 1,
+      artifactPath: "/fixture/judge.json",
+    };
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+
+    const result = run(entry);
+
+    expect(result.status).toBe(4);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "work-required",
+      kind: "remediation",
+      phase: "remediation",
+      blockingCount: 1,
+    });
+    expect(result.manifest.governor.remediationStartedAtEpoch).toBe(1);
+    expect(result.manifest.calls).toContain("quality-run-governor.js");
+    expect(result.manifest.calls).not.toContain("quality-stamp-and-merge.sh");
+  });
+
+  it("resumes without replaying immutable policy after all leads are dispositioned", () => {
+    const entry = fixture({ leads: 1 }, { merge: true, tier: "medium" });
+    expect(run(entry).status).toBe(4);
+    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    manifest.judge = {
+      head: manifest.revisions.currentHead,
+      blockingCount: 0,
+      artifactPath: "/fixture/judge.json",
+    };
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+
+    const result = run(entry);
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "complete",
+      state: "merged",
+    });
+    expect(
+      result.manifest.calls.filter(
+        (call) => call === "quality-select-agents.sh",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("advances one repair head, runs delta review, and then merges", () => {
+    const entry = fixture({ leads: 1 }, { merge: true, tier: "medium" });
+    expect(run(entry).status).toBe(4);
+
+    let manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    manifest.judge = {
+      head: manifest.revisions.currentHead,
+      blockingCount: 1,
+      artifactPath: "/fixture/initial-judge.json",
+    };
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+    expect(run(entry).status).toBe(4);
+
+    manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    manifest.behavior.nextHead = "repair456";
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+    const delta = run(entry);
+    expect(delta.status).toBe(4);
+    expect(JSON.parse(delta.output)).toMatchObject({
+      status: "work-required",
+      kind: "lead-verification",
+      head: "repair456",
+    });
+    expect(delta.manifest.reviews.at(-1)).toMatchObject({
+      from: "abc123",
+      to: "repair456",
+    });
+
+    manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    manifest.judge = {
+      head: manifest.revisions.currentHead,
+      blockingCount: 0,
+      artifactPath: "/fixture/delta-judge.json",
+    };
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+    const merged = run(entry);
+    expect(merged.status).toBe(0);
+    expect(JSON.parse(merged.output)).toMatchObject({
+      status: "complete",
+      state: "merged",
+      head: "repair456",
+    });
+  });
+
+  it("stops clearly when the one remediation head still has confirmed findings", () => {
+    const entry = fixture({ leads: 1 }, { merge: true, tier: "medium" });
+    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    manifest.revisions.currentHead = "repair456";
+    manifest.governor.remediationStartedAtEpoch = 1;
+    manifest.reviews.push({
+      from: manifest.revisions.initialHead,
+      to: manifest.revisions.currentHead,
+      status: "complete",
+      leadCount: 1,
+    });
+    manifest.judge = {
+      head: manifest.revisions.currentHead,
+      blockingCount: 1,
+      artifactPath: "/fixture/judge.json",
+    };
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+
+    const result = run(entry);
+
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "terminal",
+      state: "blocked",
+      message: expect.stringContaining("bounded remediation did not converge"),
+    });
+    expect(result.manifest.telemetryWrites).toBe(1);
+  });
+
   it("runs low-risk gates and review in order, records one terminal result, and reuses it", () => {
     const entry = fixture();
     const first = run(entry);
@@ -420,17 +611,14 @@ describe("quality-run public orchestration", () => {
 
   it("pauses a merge only for a typed external capability requirement", () => {
     const result = run(
-      fixture(
-        { approvalRequired: true, leads: 2 },
-        { merge: true, tier: "medium" },
-      ),
+      fixture({ approvalRequired: true }, { merge: true, tier: "medium" }),
     );
     expect(result.status).toBe(3);
     expect(JSON.parse(result.output)).toMatchObject({
       status: "action-required",
       kind: "external-capability",
       phase: "authorization",
-      review: { leads: 2 },
+      review: { leads: 0 },
     });
     expect(result.manifest.terminalState).toBeUndefined();
     expect(result.manifest.calls).not.toContain("quality-stamp-and-merge.sh");

@@ -7,6 +7,7 @@ const quality = require("./quality-invocation");
 
 const ORCHESTRATION_SCHEMA_VERSION = 1;
 const ACTION_REQUIRED_EXIT = 3;
+const WORK_REQUIRED_EXIT = 4;
 const SCRIPT_DIR = __dirname;
 
 function parseArgs(argv) {
@@ -163,6 +164,20 @@ function actionRequired(manifestPath, phase, message, manifest, review) {
   };
 }
 
+function workRequired(manifestPath, phase, message, manifest, detail = {}) {
+  const { review, ...resultDetail } = detail;
+  updateOrchestration(manifestPath, phase, "work-required", message);
+  return {
+    status: "work-required",
+    kind: phase,
+    phase,
+    message,
+    head: manifest.revisions.currentHead,
+    review,
+    ...resultDetail,
+  };
+}
+
 function invocationRuntime(manifestPath, execute) {
   let activeChild = null;
   let interruptedSignal = null;
@@ -201,16 +216,22 @@ function invocationRuntime(manifestPath, execute) {
 }
 
 async function runDeterministicPhases(manifestPath, invoke) {
-  await invoke("risk", "bash", [
-    script("quality-risk-resolve.sh"),
-    "--manifest",
-    manifestPath,
-  ]);
-  await invoke("panel", "bash", [
-    script("quality-select-agents.sh"),
-    "--manifest",
-    manifestPath,
-  ]);
+  let manifest = manifestAt(manifestPath);
+  if (manifest.risk?.resolved !== true) {
+    await invoke("risk", "bash", [
+      script("quality-risk-resolve.sh"),
+      "--manifest",
+      manifestPath,
+    ]);
+  }
+  manifest = manifestAt(manifestPath);
+  if (!manifest.panel) {
+    await invoke("panel", "bash", [
+      script("quality-select-agents.sh"),
+      "--manifest",
+      manifestPath,
+    ]);
+  }
   for (const gate of manifestAt(manifestPath).requiredGates) {
     await invoke(`gate:${gate.name}`, "bash", [
       script("quality-run-gate.sh"),
@@ -452,6 +473,49 @@ async function runOpenCampaign(context, manifestPath, manifest) {
   manifest = manifestAt(manifestPath);
   quality.reviewCoverage(manifest);
   const review = reviewSummary(manifest);
+  if ((manifest.reviewContractVersion || 1) >= 2) {
+    const disposition = quality.leadDispositionStatus(manifest);
+    if (disposition.state === "pending") {
+      return workRequired(
+        manifestPath,
+        "lead-verification",
+        "verify every identity-bound AI lead, record its deterministic disposition, and resume this manifest",
+        manifest,
+        { review, context: disposition.context },
+      );
+    }
+    if (disposition.state === "remediation-required") {
+      const remediationStarted = Number.isInteger(
+        manifest.governor?.remediationStartedAtEpoch,
+      );
+      const remediationHead =
+        manifest.revisions.currentHead !== manifest.revisions.initialHead;
+      if (remediationStarted && remediationHead) {
+        throw new Error(
+          `bounded remediation did not converge: ${disposition.blockingCount} confirmed finding(s) remain after the one permitted repair head`,
+        );
+      }
+      if (!remediationStarted) {
+        await context.runtime.invoke("remediation-budget", process.execPath, [
+          script("quality-run-governor.js"),
+          "check",
+          manifestPath,
+        ]);
+        manifest = manifestAt(manifestPath);
+      }
+      return workRequired(
+        manifestPath,
+        "remediation",
+        "apply one batched repair commit for the confirmed findings, then resume this manifest for exact-head gates and delta review",
+        manifest,
+        {
+          review,
+          blockingCount: disposition.blockingCount,
+          artifactPath: disposition.artifactPath,
+        },
+      );
+    }
+  }
   return manifest.options?.merge === true
     ? finishWithMerge(context, manifestPath, manifest, review)
     : finishWithoutMerge(
@@ -469,8 +533,12 @@ async function runManifest(manifestPath, dependencies = {}) {
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
   for (const signal of signals) process.on(signal, runtime.onSignal);
   try {
-    const manifest = manifestAt(manifestPath);
+    let manifest = manifestAt(manifestPath);
     pinRepositoryLease(manifest);
+    quality.withManifestLock(manifestPath, (locked) => {
+      quality.advanceHead(locked, locked.repo.realpath);
+    });
+    manifest = manifestAt(manifestPath);
     pinTerminalEpoch(manifest);
     quality.validateIdentity(manifest, manifest.repo.realpath);
     if (manifest.terminalState) {
@@ -506,6 +574,8 @@ async function main() {
     emit(result);
     if (result.status === "action-required") {
       process.exitCode = ACTION_REQUIRED_EXIT;
+    } else if (result.status === "work-required") {
+      process.exitCode = WORK_REQUIRED_EXIT;
     } else if (result.status === "complete") {
       process.exitCode = 0;
     } else if (
@@ -522,6 +592,7 @@ async function main() {
 
 module.exports = {
   ACTION_REQUIRED_EXIT,
+  WORK_REQUIRED_EXIT,
   ORCHESTRATION_SCHEMA_VERSION,
   parseArgs,
   pinRepositoryLease,

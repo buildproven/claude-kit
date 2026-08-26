@@ -44,13 +44,25 @@ bash "$QUALITY_SCRIPTS_DIR/quality-status.sh" --manifest "<exact-manifest-path>"
 Hand the exact manifest to the deterministic runner. It owns risk and panel
 selection, immutable gates, mutation evidence, bounded review, optional merge,
 cleanup, terminal state, and telemetry. Do not sequence its phase scripts in
-the model session. Exit 3 is a typed pause for a named external capability;
-other non-zero exits are terminal evidence, not a prompt to improvise a retry.
+the model session. Exit 3 is a typed pause for a named external capability.
+Exit 4 is bounded local work that the active delivery agent must complete, then
+resume with the same manifest. Other non-zero exits are terminal evidence, not
+a prompt to improvise a retry.
 
 ```bash
 QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done; echo "quality runtime not found" >&2; exit 1)" || exit $?
 node "$QUALITY_SCRIPTS_DIR/quality-run.js" --manifest "<exact-manifest-path>"
 ```
+
+On exit 4, read the final structured result. For `lead-verification`, use only
+its identity-bound `context`, verify every lead against repository source and
+deterministic execution, retain each immutable finding payload, add the
+disposition, reason, and compatible resolution defined in section 4, then
+record that artifact with `quality-invocation.js judge`. Resume the runner. For
+`remediation`, apply all confirmed fixes in one batched commit and resume the
+runner. The runner advances a valid descendant HEAD, reruns exact-head gates,
+and performs the one delta review. Never report exit 4 as a blocker or ask the
+operator to restart the campaign.
 
 The sections below define the contracts enforced by that runner. They are not
 a second, model-driven execution path.

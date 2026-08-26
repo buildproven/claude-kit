@@ -5851,6 +5851,51 @@ function assertPersistedJudgeArtifactIntact(
   }
 }
 
+function leadDispositionStatus(manifest) {
+  const context = judgeContext(manifest);
+  if (context.findings.length === 0) {
+    return { state: "not-required", context };
+  }
+  const covered = coveredReviews(manifest);
+  const evidenceSha256 = crypto
+    .createHash("sha256")
+    .update(reviewedEvidence(manifest))
+    .digest("hex");
+  if (
+    manifest.judge?.head !== context.head ||
+    manifest.judge?.reviewCount !== covered.length ||
+    manifest.judge?.evidenceSha256 !== evidenceSha256
+  ) {
+    return { state: "pending", context };
+  }
+  if (
+    typeof manifest.judge.artifactPath !== "string" ||
+    typeof manifest.judge.artifactSha256 !== "string"
+  ) {
+    throw new Error("persisted lead disposition artifact is malformed");
+  }
+  const artifact = parseJson(
+    fs.readFileSync(manifest.judge.artifactPath, "utf8"),
+    "persisted lead disposition artifact",
+  );
+  const blockingCount = artifact.findings.filter(
+    (finding) => finding.disposition === "BLOCKING",
+  ).length;
+  assertPersistedJudgeArtifactIntact(
+    manifest,
+    artifact,
+    covered,
+    evidenceSha256,
+    blockingCount,
+  );
+  return {
+    state: blockingCount > 0 ? "remediation-required" : "settled",
+    blockingCount,
+    artifactPath: manifest.judge.artifactPath,
+    context,
+  };
+}
+
 function reviewAuthorization(manifest) {
   // This is the authoritative provider-neutral merge evidence boundary. Repeat
   // the strength assertion here so a caller cannot bypass resume/advance and
@@ -6882,6 +6927,7 @@ module.exports = {
   runGate,
   recordStamp,
   judgeContext,
+  leadDispositionStatus,
   repoKey,
   reviewDiffBuffer,
   reviewInfo,

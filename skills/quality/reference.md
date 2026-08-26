@@ -13,8 +13,10 @@ state. There is no session sentinel, active-state glob, mtime lookup, or
 `scripts/quality-run.js --manifest <exact-path>` is the public phase runner.
 It persists versioned orchestration progress under the same manifest lock and
 reuses exact-head gate, mutation, and review evidence on resume. Its JSON result
-is `complete`, `terminal`, or `action-required`. Exit 3 is reserved for a named
-external capability or branch-governance action. Gate, stale-head,
+is `complete`, `terminal`, `action-required`, or `work-required`. Exit 3 is
+reserved for a named external capability or branch-governance action. Exit 4
+requests bounded local lead verification or remediation and must resume the
+same manifest. Gate, stale-head,
 provider-contract, CI, and signal
 failures retain their typed terminal state and one idempotent telemetry record.
 An exhausted incomplete review cannot become `verified-unmerged`; it records
