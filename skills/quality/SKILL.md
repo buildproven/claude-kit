@@ -21,7 +21,7 @@ Each fenced Bash block starts a fresh shell. Begin every executable block with
 this resolver; it finds the installed runtime and fails closed when absent:
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done)" || exit $?
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done; echo "quality runtime not found" >&2; exit 1)" || exit $?
 ```
 
 Use `reference.md` only when resolving flags, target paths, manifest schema,
@@ -35,7 +35,7 @@ that exact manifest and prints repository-gate, provider, approval, and CI
 diagnosis. Do not substitute a PR number or search for an invocation.
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done)" || exit $?
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done; echo "quality runtime not found" >&2; exit 1)" || exit $?
 bash "$QUALITY_SCRIPTS_DIR/quality-status.sh" --manifest "<exact-manifest-path>"
 ```
 
@@ -48,7 +48,7 @@ the model session. Exit 3 is a typed pause for a named external capability;
 other non-zero exits are terminal evidence, not a prompt to improvise a retry.
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done)" || exit $?
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done; echo "quality runtime not found" >&2; exit 1)" || exit $?
 node "$QUALITY_SCRIPTS_DIR/quality-run.js" --manifest "<exact-manifest-path>"
 ```
 
@@ -99,7 +99,7 @@ For example, `bash "$QUALITY_SCRIPTS_DIR/quality-run-gate.sh" --manifest "<exact
 is a persisted-policy invocation, never a caller-supplied command.
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done)" || exit $?
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done; echo "quality runtime not found" >&2; exit 1)" || exit $?
 # Execute exactly the persisted gate contract. Replaying a name that is not in
 # requiredGates is a policy error, not a skip; verify-app is present only when
 # the caller passed --verify-app (BUI-306).
@@ -123,7 +123,7 @@ High/critical campaigns require the bounded detached-worktree mutation check
 after the recorded test gate succeeds. It must never modify the reviewed checkout.
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done)" || exit $?
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done; echo "quality runtime not found" >&2; exit 1)" || exit $?
 TIER="$(node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" field "<exact-manifest-path>" risk.tier)"
 case "$TIER" in
   high|critical) bash "$QUALITY_SCRIPTS_DIR/quality-mutation-check.sh" --manifest "<exact-manifest-path>" ;;
@@ -136,7 +136,7 @@ Formatting remediation uses the manifest-bound formatter and configured
 extensions; do not send unknown files directly to Prettier.
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done)" || exit $?
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done; echo "quality runtime not found" >&2; exit 1)" || exit $?
 node "$QUALITY_SCRIPTS_DIR/quality-format.js" --manifest "<exact-manifest-path>" -- <changed-files...>
 ```
 
@@ -149,7 +149,7 @@ lifecycle time is separate, and each attempt still has a strict timeout. Review
 artifacts must bind repository, PR, base, HEAD, invocation, diff hash, and round.
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done)" || exit $?
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done; echo "quality runtime not found" >&2; exit 1)" || exit $?
 "$QUALITY_SCRIPTS_DIR/quality-authorize-review-round.sh" "<exact-manifest-path>" || exit 1
 bash "$QUALITY_SCRIPTS_DIR/quality-run-review.sh" --manifest "<exact-manifest-path>"
 ```
@@ -210,7 +210,7 @@ Before any terminal deterministic-finding stop, print the categorized
 diagnosis:
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done)" || exit $?
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done; echo "quality runtime not found" >&2; exit 1)" || exit $?
 node "$QUALITY_SCRIPTS_DIR/quality-terminal-status.js" --manifest "<exact-manifest-path>" --category code-findings
 ```
 
@@ -269,7 +269,7 @@ The parenthetical legacy form used `reviewer=<provider>` and
 `head=<reviewed-head>, base=<base-sha>`; it is reader compatibility only.
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done)" || exit $?
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done; echo "quality runtime not found" >&2; exit 1)" || exit $?
 bash "$QUALITY_SCRIPTS_DIR/quality-stamp-and-merge.sh" --manifest "<exact-manifest-path>"
 ```
 
@@ -294,7 +294,7 @@ automatically after it persists the write-once terminal state. Do not depend on
 a separate agent-authored recorder step.
 
 ```bash
-QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done)" || exit $?
+QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done; echo "quality runtime not found" >&2; exit 1)" || exit $?
 node "$QUALITY_SCRIPTS_DIR/quality-invocation.js" terminal-state \
   "<exact-manifest-path>" --state verified-unmerged \
   --detail "deterministic evidence complete; merge not requested" >/dev/null

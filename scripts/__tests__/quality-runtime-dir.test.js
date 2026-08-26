@@ -67,10 +67,12 @@ describe("quality runtime directory resolver", () => {
       "utf8",
     );
 
-    const resolverLine = skill
+    const resolverLines = skill
       .split("\n")
-      .find((line) => line.startsWith('QUALITY_SCRIPTS_DIR="$(for d in '));
-    expect(resolverLine).toBeDefined();
+      .filter((line) => line.startsWith('QUALITY_SCRIPTS_DIR="$(for d in '));
+    expect(resolverLines).toHaveLength(10);
+    expect(new Set(resolverLines).size).toBe(1);
+    const resolverLine = resolverLines[0];
     const high = isolatedResolver(["quality-provider-usage.js"]);
     const low = isolatedResolver();
     const home = makeTempDir("quality-runtime-home-");
@@ -91,7 +93,24 @@ describe("quality runtime directory resolver", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("missing: quality-provider-usage.js");
     expect(result.stdout).toBe("");
-    expect(skill).not.toContain("quality runtime not found");
     expect(skill).not.toContain('quality-runtime-dir.sh" 2>/dev/null');
+
+    const absent = spawnSync(
+      "bash",
+      ["-c", `${resolverLine}\nprintf 'continued\\n'`],
+      {
+        cwd: home,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CLAUDE_PLUGIN_ROOT: path.join(home, "missing-plugin"),
+          CLAUDE_KIT_ROOT: path.join(home, "missing-kit"),
+          HOME: home,
+        },
+      },
+    );
+    expect(absent.status).toBe(1);
+    expect(absent.stderr).toContain("quality runtime not found");
+    expect(absent.stdout).toBe("");
   });
 });
