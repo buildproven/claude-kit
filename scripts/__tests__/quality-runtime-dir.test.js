@@ -40,16 +40,13 @@ describe("quality runtime directory resolver", () => {
     expect(result.stdout.trim()).toBe(path.join(ROOT, "scripts"));
   });
 
-  it.each(["quality-run.js", "quality-provider-usage.js"])(
-    "fails visibly when %s is absent",
-    (omitted) => {
-      const { resolver } = isolatedResolver([omitted]);
-      const result = spawnSync("bash", [resolver], { encoding: "utf8" });
+  it.each(cohort)("fails visibly when %s is absent", (omitted) => {
+    const { resolver } = isolatedResolver([omitted]);
+    const result = spawnSync("bash", [resolver], { encoding: "utf8" });
 
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain(`missing: ${omitted}`);
-    },
-  );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`missing: ${omitted}`);
+  });
 
   it("names every missing cohort sibling in one actionable diagnostic", () => {
     const { resolver } = isolatedResolver([
@@ -70,7 +67,31 @@ describe("quality runtime directory resolver", () => {
       "utf8",
     );
 
-    expect(skill).toContain('bash "$resolver"; exit $?');
+    const resolverLine = skill
+      .split("\n")
+      .find((line) => line.startsWith('QUALITY_SCRIPTS_DIR="$(for d in '));
+    expect(resolverLine).toBeDefined();
+    const high = isolatedResolver(["quality-provider-usage.js"]);
+    const low = isolatedResolver();
+    const home = makeTempDir("quality-runtime-home-");
+    const result = spawnSync(
+      "bash",
+      ["-c", `${resolverLine}\nprintf '%s\\n' "$QUALITY_SCRIPTS_DIR"`],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CLAUDE_PLUGIN_ROOT: path.dirname(high.scripts),
+          CLAUDE_KIT_ROOT: path.dirname(low.scripts),
+          HOME: home,
+        },
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("missing: quality-provider-usage.js");
+    expect(result.stdout).toBe("");
+    expect(skill).not.toContain("quality runtime not found");
     expect(skill).not.toContain('quality-runtime-dir.sh" 2>/dev/null');
   });
 });
