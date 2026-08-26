@@ -164,6 +164,8 @@ describe("provider review runtime", () => {
         { encoding: "utf8", timeout: 10000 },
       );
       expect(result.status).toBe(0);
+      expect(result.stdout).not.toContain("BS_QUALITY_PROCESS_OWNER");
+      expect(result.stderr).not.toContain("BS_QUALITY_PROCESS_OWNER");
       helperPid = Number(readFileSync(pidFile, "utf8").trim());
       expect(Number.isSafeInteger(helperPid)).toBe(true);
       await expectProcessToStop(helperPid);
@@ -200,6 +202,8 @@ describe("provider review runtime", () => {
         { encoding: "utf8", timeout: 10000 },
       );
       expect(result.status).toBe(0);
+      expect(result.stdout).not.toContain("BS_QUALITY_PROCESS_OWNER");
+      expect(result.stderr).not.toContain("BS_QUALITY_PROCESS_OWNER");
       helperPid = Number(readFileSync(pidFile, "utf8").trim());
       expect(Number.isSafeInteger(helperPid)).toBe(true);
       await expectProcessToStop(helperPid);
