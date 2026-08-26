@@ -114,6 +114,9 @@ command.
 11. Every exact head has one active execution allowance. Head advancement
     archives prior gate usage but never resets provider usage, provider starts,
     review rounds, or fix-count limits.
+12. Repository gate processes do not inherit the outer terminal epoch,
+    repository lease credential, or review and approval signing keys. Those
+    values remain available only to runner-owned orchestration processes.
 
 ## Rollback
 

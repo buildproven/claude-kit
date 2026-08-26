@@ -5309,6 +5309,21 @@ function executableAvailable(executable, environment) {
   return result.status === 0;
 }
 
+function repositoryGateEnvironment(environment = process.env) {
+  const isolated = { ...environment };
+  for (const name of [
+    "BS_QUALITY_TERMINAL_EPOCH",
+    "BS_QUALITY_REPOSITORY_LEASE_TOKEN",
+    "QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY",
+    "QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY_FILE",
+    "QUALITY_APPROVAL_PRIVATE_KEY",
+    "QUALITY_APPROVAL_PRIVATE_KEY_FILE",
+  ]) {
+    delete isolated[name];
+  }
+  return isolated;
+}
+
 function assertGateProcessResult(
   result,
   output,
@@ -5388,7 +5403,8 @@ function executeGate(manifest, required, name, log, manifestPath) {
     gateSeconds + gateReserveSeconds,
     gateRemaining,
   );
-  if (!executableAvailable(required.executable, process.env)) {
+  const gateEnvironment = repositoryGateEnvironment();
+  if (!executableAvailable(required.executable, gateEnvironment)) {
     fs.writeFileSync(
       log,
       `required gate executable '${required.executable}' is unavailable on PATH\n`,
@@ -5435,7 +5451,7 @@ function executeGate(manifest, required, name, log, manifestPath) {
       {
         cwd: manifest.repo.realpath,
         encoding: "utf8",
-        env: process.env,
+        env: gateEnvironment,
         maxBuffer: 64 * 1024 * 1024,
       },
     );
@@ -6839,6 +6855,7 @@ module.exports = {
   hasAbandonedExecution,
   reconcileAbandonedExecution,
   executionRemaining,
+  repositoryGateEnvironment,
   executableAvailable,
   runGate,
   recordStamp,

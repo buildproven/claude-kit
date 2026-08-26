@@ -858,6 +858,24 @@ describe("quality invocation manifest", () => {
     expect(manifest.governor).not.toHaveProperty("validationDeadlineEpoch");
   });
 
+  it("keeps terminal fencing and signing secrets out of repository gates", () => {
+    const environment = invocation.repositoryGateEnvironment({
+      PATH: "/bin",
+      QUALITY_GATE_MARKER: "visible",
+      BS_QUALITY_TERMINAL_EPOCH: "3",
+      BS_QUALITY_REPOSITORY_LEASE_TOKEN: "lease-secret",
+      QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY: "review-secret",
+      QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY_FILE: "/private/review-key",
+      QUALITY_APPROVAL_PRIVATE_KEY: "approval-secret",
+      QUALITY_APPROVAL_PRIVATE_KEY_FILE: "/private/approval-key",
+    });
+
+    expect(environment).toEqual({
+      PATH: "/bin",
+      QUALITY_GATE_MARKER: "visible",
+    });
+  });
+
   it("authorizes Gemini inside the existing provider attempt budget", () => {
     const root = repo("gemini-provider-attempt");
     const manifest = createLegacyProviderFixture(root, []);
