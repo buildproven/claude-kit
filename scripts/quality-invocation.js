@@ -2239,6 +2239,33 @@ function supersedePriorHeadBlock(
   return true;
 }
 
+function rearmExecutionForHead(manifest, priorHead, nextHead) {
+  const governor = manifest.governor;
+  if (governor.activeExecution) {
+    throw new Error("cannot advance HEAD while an execution is active");
+  }
+  if (
+    governor.headExecutionHistory !== undefined &&
+    !Array.isArray(governor.headExecutionHistory)
+  ) {
+    throw new Error("head execution history is malformed");
+  }
+  governor.headExecutionHistory ??= [];
+  governor.headExecutionHistory.push({
+    head: priorHead,
+    supersededByHead: nextHead,
+    activeSecondsUsed: governor.activeSecondsUsed,
+    gateSecondsUsed: governor.gateSecondsUsed,
+    providerSecondsUsedAtClose: governor.providerSecondsUsed,
+    closedAt: new Date().toISOString(),
+  });
+  // The fixed deadline is exact-HEAD scoped. A proven descendant must rerun
+  // deterministic evidence with a complete active-time allowance. Provider
+  // usage and attempts remain cumulative across the campaign lineage.
+  governor.activeSecondsUsed = 0;
+  governor.gateSecondsUsed = 0;
+}
+
 function advanceHead(manifest, root, { acceptedConditions = [] } = {}) {
   const nextHead = git(root, ["rev-parse", "HEAD"]);
   const priorHead = manifest.revisions.currentHead;
@@ -2316,6 +2343,7 @@ function advanceHead(manifest, root, { acceptedConditions = [] } = {}) {
     }
   }
   if (replay) recordBaseRebaseCarry(manifest, priorHead, nextHead, replay);
+  rearmExecutionForHead(manifest, priorHead, nextHead);
   supersedePriorHeadBlock(manifest, root, nextHead, Boolean(replay));
   invalidateApproval(manifest, nextHead);
   const completed = completedReviews(manifest);

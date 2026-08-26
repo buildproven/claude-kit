@@ -3163,6 +3163,10 @@ exec "${realGit}" "$@"
     );
     const usedBeforeAdvance = JSON.parse(readFileSync(manifestPath, "utf8"))
       .governor.providerSecondsUsed;
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      manifest.governor.activeSecondsUsed = 90;
+      manifest.governor.gateSecondsUsed = 30;
+    });
 
     writeFileSync(path.join(root, "next-head.js"), "export const next = 1;\n");
     git(root, ["add", "."]);
@@ -3173,6 +3177,14 @@ exec "${realGit}" "$@"
     const current = JSON.parse(readFileSync(manifestPath, "utf8"));
     expect(current.governor.providerSecondsUsed).toBe(usedBeforeAdvance);
     expect(current.governor.providerSecondsLimit).toBe(120);
+    expect(current.governor.activeSecondsUsed).toBe(0);
+    expect(current.governor.gateSecondsUsed).toBe(0);
+    expect(current.governor.headExecutionHistory.at(-1)).toMatchObject({
+      activeSecondsUsed: 90,
+      gateSecondsUsed: 30,
+      providerSecondsUsedAtClose: usedBeforeAdvance,
+      supersededByHead: current.revisions.currentHead,
+    });
     const authorization = JSON.parse(
       execFileSync(
         "node",
@@ -4365,8 +4377,8 @@ exit 99
       gateCount: 3,
       gateReserveSeconds: 360,
     });
-    // Phase ledgers retain their bounded allowances, but all execution also
-    // spends from one immutable campaign cap. Advancing does not mint time.
+    // The fixed active deadline is exact-HEAD scoped. Provider usage, provider
+    // attempts, review rounds, and fix limits remain cumulative across heads.
     expect(validationState.governor.gateSecondsLimit).toBe(1920);
     expect(validationState.governor.providerSecondsLimit).toBe(1080);
     expect(validationState.governor.activeSecondsLimit).toBe(

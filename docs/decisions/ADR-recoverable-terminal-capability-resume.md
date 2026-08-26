@@ -66,6 +66,13 @@ it does not reopen any other terminal class. The same reconciliation repairs a
 legacy manifest whose current head advanced before its prior-head block was
 cleared.
 
+The active execution deadline is also exact-HEAD scoped. A proven descendant
+archives the prior head's active and gate usage and receives a complete active
+gate allowance. Provider seconds, provider attempts, review rounds, and fix
+count stay cumulative across the campaign lineage. This lets the fixed head
+run its required deterministic suite without minting additional model capacity
+or weakening the 15-minute deadline for any one revision.
+
 ## Alternatives
 
 ### Make every blocked campaign resumable
@@ -104,6 +111,9 @@ command.
 10. A proven descendant may supersede only a prior-head `blocked` record. The
     prior record stays in terminal history, and the epoch advance fences every
     writer from the old head.
+11. Every exact head has one active execution allowance. Head advancement
+    archives prior gate usage but never resets provider usage, provider starts,
+    review rounds, or fix-count limits.
 
 ## Rollback
 
