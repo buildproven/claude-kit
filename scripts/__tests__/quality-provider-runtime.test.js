@@ -136,6 +136,7 @@ describe("provider review runtime", () => {
       ],
       { encoding: "utf8", timeout: 8000 },
     );
+    expect(result.error).toBeUndefined();
     expect(result.status).toBe(124);
     const helperPid = Number(readFileSync(pidFile, "utf8").trim());
     expect(Number.isSafeInteger(helperPid)).toBe(true);
