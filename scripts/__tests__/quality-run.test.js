@@ -370,6 +370,29 @@ describe("quality-run public orchestration", () => {
     expect(result.manifest.calls).not.toContain("quality-stamp-and-merge.sh");
   });
 
+  it("stops a repeated remediation resume when no repair commit was made", () => {
+    const entry = fixture({ leads: 1 }, { merge: true, tier: "medium" });
+    expect(run(entry).status).toBe(4);
+    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    manifest.judge = {
+      head: manifest.revisions.currentHead,
+      blockingCount: 1,
+      artifactPath: "/fixture/judge.json",
+    };
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+    expect(run(entry).status).toBe(4);
+
+    const repeated = run(entry);
+
+    expect(repeated.status).toBe(1);
+    expect(JSON.parse(repeated.output)).toMatchObject({
+      status: "terminal",
+      state: "blocked",
+      message: expect.stringContaining("repair commit is missing"),
+    });
+    expect(repeated.manifest.telemetryWrites).toBe(1);
+  });
+
   it("resumes without replaying immutable policy after all leads are dispositioned", () => {
     const entry = fixture({ leads: 1 }, { merge: true, tier: "medium" });
     expect(run(entry).status).toBe(4);

@@ -466,6 +466,61 @@ async function recordFailure(context, manifestPath, error) {
   };
 }
 
+async function pendingLeadWork(context, manifestPath, manifest, review) {
+  if ((manifest.reviewContractVersion || 1) < 2) return null;
+  const disposition = quality.leadDispositionStatus(manifest);
+  if (disposition.state === "pending") {
+    return workRequired(
+      manifestPath,
+      "lead-verification",
+      "verify every identity-bound AI lead, record its deterministic disposition, and resume this manifest",
+      manifest,
+      { review, context: disposition.context },
+    );
+  }
+  if (disposition.state !== "remediation-required") return null;
+  const remediation = remediationState(manifest);
+  if (remediation.started && !remediation.advanced && remediation.requested) {
+    throw new Error(
+      "bounded remediation made no progress: the requested repair commit is missing",
+    );
+  }
+  if (remediation.started && remediation.advanced) {
+    throw new Error(
+      `bounded remediation did not converge: ${disposition.blockingCount} confirmed finding(s) remain after the one permitted repair head`,
+    );
+  }
+  if (!remediation.started) {
+    await context.runtime.invoke("remediation-budget", process.execPath, [
+      script("quality-run-governor.js"),
+      "check",
+      manifestPath,
+    ]);
+    manifest = manifestAt(manifestPath);
+  }
+  return workRequired(
+    manifestPath,
+    "remediation",
+    "apply one batched repair commit for the confirmed findings, then resume this manifest for exact-head gates and delta review",
+    manifest,
+    {
+      review,
+      blockingCount: disposition.blockingCount,
+      artifactPath: disposition.artifactPath,
+    },
+  );
+}
+
+function remediationState(manifest) {
+  return {
+    started: Number.isInteger(manifest.governor?.remediationStartedAtEpoch),
+    advanced: manifest.revisions.currentHead !== manifest.revisions.initialHead,
+    requested:
+      manifest.orchestration?.head === manifest.revisions.currentHead &&
+      manifest.orchestration?.steps?.remediation?.status === "work-required",
+  };
+}
+
 async function runOpenCampaign(context, manifestPath, manifest) {
   updateOrchestration(manifestPath, "validate", "success");
   await runDeterministicPhases(manifestPath, context.runtime.invoke);
@@ -473,49 +528,13 @@ async function runOpenCampaign(context, manifestPath, manifest) {
   manifest = manifestAt(manifestPath);
   quality.reviewCoverage(manifest);
   const review = reviewSummary(manifest);
-  if ((manifest.reviewContractVersion || 1) >= 2) {
-    const disposition = quality.leadDispositionStatus(manifest);
-    if (disposition.state === "pending") {
-      return workRequired(
-        manifestPath,
-        "lead-verification",
-        "verify every identity-bound AI lead, record its deterministic disposition, and resume this manifest",
-        manifest,
-        { review, context: disposition.context },
-      );
-    }
-    if (disposition.state === "remediation-required") {
-      const remediationStarted = Number.isInteger(
-        manifest.governor?.remediationStartedAtEpoch,
-      );
-      const remediationHead =
-        manifest.revisions.currentHead !== manifest.revisions.initialHead;
-      if (remediationStarted && remediationHead) {
-        throw new Error(
-          `bounded remediation did not converge: ${disposition.blockingCount} confirmed finding(s) remain after the one permitted repair head`,
-        );
-      }
-      if (!remediationStarted) {
-        await context.runtime.invoke("remediation-budget", process.execPath, [
-          script("quality-run-governor.js"),
-          "check",
-          manifestPath,
-        ]);
-        manifest = manifestAt(manifestPath);
-      }
-      return workRequired(
-        manifestPath,
-        "remediation",
-        "apply one batched repair commit for the confirmed findings, then resume this manifest for exact-head gates and delta review",
-        manifest,
-        {
-          review,
-          blockingCount: disposition.blockingCount,
-          artifactPath: disposition.artifactPath,
-        },
-      );
-    }
-  }
+  const leadWork = await pendingLeadWork(
+    context,
+    manifestPath,
+    manifest,
+    review,
+  );
+  if (leadWork) return leadWork;
   return manifest.options?.merge === true
     ? finishWithMerge(context, manifestPath, manifest, review)
     : finishWithoutMerge(
