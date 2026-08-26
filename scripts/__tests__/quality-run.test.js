@@ -130,7 +130,14 @@ if (step === "quality-risk-resolve.sh" && manifest.behavior?.failRisk) {
   fs.writeFileSync(file, JSON.stringify(manifest));
   process.exit(5);
 }
-if (step === "quality-select-agents.sh") manifest.panel = { rule: "fixture" };
+if (step === "quality-select-agents.sh") {
+  if (manifest.panel) {
+    fs.writeFileSync(file, JSON.stringify(manifest));
+    process.stderr.write("quality agent selection is immutable once persisted\\n");
+    process.exit(1);
+  }
+  manifest.panel = { rule: "fixture" };
+}
 if (step === "quality-run-gate.sh") {
   const name = args[args.indexOf("--name") + 1];
   if (manifest.behavior?.signalGate === name) {
@@ -426,15 +433,12 @@ describe("quality-run public orchestration", () => {
 
   it("continues only the explicitly recoverable terminal merge campaign", () => {
     const entry = fixture(
-      { recoverTerminal: true },
+      { recoverTerminal: true, externalMergeRequirement: true },
       { merge: true, tier: "medium" },
     );
+    expect(run(entry).status).toBe(3);
     const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
-    manifest.terminalState = {
-      state: "blocked",
-      detail: "merge admission failed",
-      head: manifest.revisions.currentHead,
-    };
+    manifest.behavior.externalMergeRequirement = false;
     writeFileSync(entry.manifestPath, JSON.stringify(manifest));
 
     const result = run(entry);
@@ -447,15 +451,13 @@ describe("quality-run public orchestration", () => {
 
   it("records a new terminal cause when a recovered merge fails", () => {
     const entry = fixture(
-      { recoverTerminal: true, failMerge: true },
+      { recoverTerminal: true, externalMergeRequirement: true },
       { merge: true, tier: "medium" },
     );
+    expect(run(entry).status).toBe(3);
     const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
-    manifest.terminalState = {
-      state: "blocked",
-      detail: "merge admission failed",
-      head: manifest.revisions.currentHead,
-    };
+    manifest.behavior.externalMergeRequirement = false;
+    manifest.behavior.failMerge = true;
     writeFileSync(entry.manifestPath, JSON.stringify(manifest));
 
     const result = run(entry);
@@ -476,13 +478,7 @@ describe("quality-run public orchestration", () => {
       { recoverTerminal: true, externalMergeRequirement: true },
       { merge: true, tier: "medium" },
     );
-    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
-    manifest.terminalState = {
-      state: "blocked",
-      detail: "merge admission failed",
-      head: manifest.revisions.currentHead,
-    };
-    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+    expect(run(entry).status).toBe(3);
 
     const result = run(entry);
 
@@ -503,17 +499,8 @@ describe("quality-run public orchestration", () => {
       { recoverTerminal: true, externalMergeRequirement: true },
       { merge: true, tier: "medium" },
     );
-    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
-    manifest.terminalEpoch = 1;
-    manifest.terminalHistory = [
-      { event: "reopened-by-capability", terminalEpoch: 1 },
-    ];
-    manifest.terminalState = {
-      state: "recovering",
-      head: manifest.revisions.currentHead,
-      terminalEpoch: 1,
-    };
-    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+    expect(run(entry).status).toBe(3);
+    expect(run(entry).manifest.terminalEpoch).toBe(1);
 
     const result = run(entry);
 

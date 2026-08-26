@@ -473,7 +473,12 @@ async function runManifest(manifestPath, dependencies = {}) {
       if (recovery) {
         const resumed = manifestAt(manifestPath);
         pinTerminalEpoch(resumed);
-        return await runOpenCampaign(context, manifestPath, resumed);
+        return await finishWithMerge(
+          context,
+          manifestPath,
+          resumed,
+          reviewSummary(resumed),
+        );
       }
       return {
         status: "terminal",
