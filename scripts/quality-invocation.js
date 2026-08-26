@@ -2194,6 +2194,51 @@ function invalidateApproval(manifest, nextHead) {
   };
 }
 
+function supersedePriorHeadBlock(
+  manifest,
+  root,
+  nextHead,
+  allowReplay = false,
+) {
+  const terminal = manifest.terminalState;
+  if (
+    terminal?.state !== "blocked" ||
+    terminal.head === nextHead ||
+    !/^[0-9a-f]{40}$/.test(terminal.head || "") ||
+    (!allowReplay && !isAncestorOf(root, terminal.head, nextHead))
+  ) {
+    return false;
+  }
+  if (
+    manifest.terminalHistory !== undefined &&
+    !Array.isArray(manifest.terminalHistory)
+  ) {
+    throw new Error("terminal history is malformed");
+  }
+  const supersededAt = new Date().toISOString();
+  const nextEpoch = terminalEpoch(manifest) + 1;
+  manifest.terminalHistory ??= [];
+  manifest.terminalHistory.push({
+    ...terminal,
+    disposition: "superseded-by-descendant",
+    supersededAt,
+    supersededByHead: nextHead,
+  });
+  manifest.terminalHistory.push({
+    event: "reopened-by-descendant",
+    head: nextHead,
+    priorHead: terminal.head,
+    terminalEpoch: nextEpoch,
+    recordedAt: supersededAt,
+  });
+  manifest.terminalEpoch = nextEpoch;
+  delete manifest.terminalState;
+  if (manifest.merge?.admissionBlock?.head === terminal.head) {
+    delete manifest.merge.admissionBlock;
+  }
+  return true;
+}
+
 function advanceHead(manifest, root, { acceptedConditions = [] } = {}) {
   const nextHead = git(root, ["rev-parse", "HEAD"]);
   const priorHead = manifest.revisions.currentHead;
@@ -2202,7 +2247,9 @@ function advanceHead(manifest, root, { acceptedConditions = [] } = {}) {
   // underpowered (for example, the former 75–84 critical boundary gap).
   // Returning before this assertion would grandfather that stale contract.
   assertCurrentReviewStrength(manifest, root);
-  if (nextHead === priorHead) return false;
+  if (nextHead === priorHead) {
+    return supersedePriorHeadBlock(manifest, root, nextHead);
+  }
   const retry = incompleteRetryStatus(manifest);
   if (
     acceptedConditions.includes("review:provider-exhaustion") &&
@@ -2269,6 +2316,7 @@ function advanceHead(manifest, root, { acceptedConditions = [] } = {}) {
     }
   }
   if (replay) recordBaseRebaseCarry(manifest, priorHead, nextHead, replay);
+  supersedePriorHeadBlock(manifest, root, nextHead, Boolean(replay));
   invalidateApproval(manifest, nextHead);
   const completed = completedReviews(manifest);
   const previousReview = completed.at(-1);

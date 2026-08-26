@@ -57,6 +57,15 @@ All other terminal states remain immutable. Invalid, expired, wrong-PR,
 wrong-base, wrong-HEAD, incomplete-condition, gate-failed, review-incomplete,
 stale, and merged campaigns refuse recovery.
 
+A separate fix-round rule applies when HEAD advances. A `blocked` record bound
+to the prior head is archived only after the runtime proves that the new head
+is its descendant or an accepted rebase-only replay. The runtime increments
+the terminal epoch, clears the prior merge-admission block, and reruns the
+required descendant evidence. This is not same-head capability recovery, and
+it does not reopen any other terminal class. The same reconciliation repairs a
+legacy manifest whose current head advanced before its prior-head block was
+cleared.
+
 ## Alternatives
 
 ### Make every blocked campaign resumable
@@ -92,6 +101,9 @@ command.
 9. Exit status 2 from CI budget admission means a valid policy denial. Policy
    validation, provider, parse, and internal failures use exit status 1 and are
    not eligible for billing-denial recovery.
+10. A proven descendant may supersede only a prior-head `blocked` record. The
+    prior record stays in terminal history, and the epoch advance fences every
+    writer from the old head.
 
 ## Rollback
 

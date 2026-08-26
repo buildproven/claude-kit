@@ -4944,6 +4944,72 @@ exit 1
     expect(invocation.loadManifest(manifest).manifest.reviews).toHaveLength(2);
   });
 
+  it("archives a prior-head merge block when its descendant fix advances", () => {
+    const root = repo("blocked-descendant-advance");
+    const manifestPath = create(root, ["--merge"]);
+    const blockedHead = git(root, ["rev-parse", "HEAD"]);
+    invocation.recordMergeAdmissionBlockedTerminal(
+      manifestPath,
+      ["base:protected-nonstrict", "pr:non-atomic-state"],
+      "merge admission blocked",
+    );
+    writeFileSync(path.join(root, "fix.js"), "export const fixed = true;\n");
+    git(root, ["add", "fix.js"]);
+    git(root, ["commit", "-q", "-m", "fix: address merge review"]);
+    const nextHead = git(root, ["rev-parse", "HEAD"]);
+
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      expect(invocation.advanceHead(manifest, root)).toBe(true);
+    });
+
+    const { manifest } = invocation.loadManifest(manifestPath);
+    expect(manifest.revisions.currentHead).toBe(nextHead);
+    expect(manifest.terminalState).toBeNull();
+    expect(manifest.terminalEpoch).toBe(1);
+    expect(manifest.merge.admissionBlock).toBeUndefined();
+    expect(manifest.terminalHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          state: "blocked",
+          head: blockedHead,
+          disposition: "superseded-by-descendant",
+          supersededByHead: nextHead,
+        }),
+        expect.objectContaining({
+          event: "reopened-by-descendant",
+          head: nextHead,
+          priorHead: blockedHead,
+          terminalEpoch: 1,
+        }),
+      ]),
+    );
+  });
+
+  it("reconciles a stale prior-head block after an earlier runner advanced only HEAD", () => {
+    const root = repo("stale-blocked-descendant");
+    const manifestPath = create(root, ["--merge"]);
+    invocation.recordTerminalState(manifestPath, "blocked", "merge block");
+    writeFileSync(path.join(root, "fix.js"), "export const fixed = true;\n");
+    git(root, ["add", "fix.js"]);
+    git(root, ["commit", "-q", "-m", "fix: descendant"]);
+    const nextHead = git(root, ["rev-parse", "HEAD"]);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      manifest.revisions.currentHead = nextHead;
+    });
+
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      expect(invocation.advanceHead(manifest, root)).toBe(true);
+    });
+
+    const { manifest } = invocation.loadManifest(manifestPath);
+    expect(manifest.terminalState).toBeNull();
+    expect(manifest.terminalEpoch).toBe(1);
+    expect(manifest.terminalHistory.at(-1)).toMatchObject({
+      event: "reopened-by-descendant",
+      head: nextHead,
+    });
+  });
+
   it("binds the immutable selection head into review evidence", () => {
     const root = repo("v2-selection-head-binding");
     const manifest = create(root);
