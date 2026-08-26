@@ -478,6 +478,8 @@ case "$ATOMIC_BASE_FRESHNESS" in
     MERGE_MODE=unprotectable
     ;;
   *)
+    record_merge_admission_block \
+      "base:protected-nonstrict,pr:non-atomic-state" || exit 1
     echo "❌ MERGE BLOCKED: the PR base lacks server-enforced strict freshness." >&2
     echo "   Enable strict required-status checks or use a supported merge queue." >&2
     echo "   If this repo's plan cannot protect branches at all, set" >&2
