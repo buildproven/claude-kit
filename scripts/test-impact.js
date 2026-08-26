@@ -114,6 +114,37 @@ function uniqueCommands(commands) {
   });
 }
 
+function coalesceExactVitestRuns(commands) {
+  const normalized = uniqueCommands(commands);
+  const targets = [];
+  const targetSet = new Set();
+  let firstIndex = -1;
+  const compatible = normalized.map((item, index) => {
+    const candidates = explicitTestTargets(item);
+    const exact =
+      candidates.length > 0 &&
+      item.args.length === candidates.length + 2 &&
+      candidates.every((candidate) => JS_TEST.test(candidate));
+    if (!exact) return false;
+    if (firstIndex === -1) firstIndex = index;
+    for (const candidate of candidates) {
+      if (targetSet.has(candidate)) continue;
+      targetSet.add(candidate);
+      targets.push(candidate);
+    }
+    return true;
+  });
+  if (firstIndex === -1) return normalized;
+  const result = [];
+  normalized.forEach((item, index) => {
+    if (index === firstIndex) {
+      result.push({ executable: "npx", args: ["vitest", "run", ...targets] });
+    }
+    if (!compatible[index]) result.push(item);
+  });
+  return result;
+}
+
 function explicitTestTargets(selected) {
   if (selected.executable !== "npx") return [];
   const [runner, verb, ...rest] = selected.args;
@@ -176,7 +207,7 @@ function plan(changed, rawPolicy = { version: 1 }, options = {}) {
       mode: "focused",
       reason: "explicit-mutation-mapping",
       files,
-      commands: uniqueCommands(explicit.commands),
+      commands: coalesceExactVitestRuns(explicit.commands),
     };
 
   const auditRules = policy.audits.filter((rule) =>
@@ -187,7 +218,9 @@ function plan(changed, rawPolicy = { version: 1 }, options = {}) {
       mode: "audit",
       reason: auditRules.map((rule) => rule.reason).join("; "),
       files,
-      commands: uniqueCommands(auditRules.flatMap((rule) => rule.commands)),
+      commands: coalesceExactVitestRuns(
+        auditRules.flatMap((rule) => rule.commands),
+      ),
     };
 
   const commands = explicit.commands;
@@ -245,7 +278,7 @@ function plan(changed, rawPolicy = { version: 1 }, options = {}) {
       mode: "unmapped",
       reason: "unproven-test-impact",
       files,
-      commands: uniqueCommands(commands),
+      commands: coalesceExactVitestRuns(commands),
       uncovered,
       remediation: `map ${uncovered.join(", ")} in ${POLICY_FILE}`,
     };
@@ -255,7 +288,7 @@ function plan(changed, rawPolicy = { version: 1 }, options = {}) {
         mode: "focused",
         reason: "evidence-backed-selector",
         files,
-        commands: uniqueCommands(commands),
+        commands: coalesceExactVitestRuns(commands),
       }
     : { mode: "none", reason: "documentation-only", files, commands: [] };
 }
@@ -428,4 +461,5 @@ module.exports = {
   changedPaths,
   validatePolicy,
   explicitTestTargets,
+  coalesceExactVitestRuns,
 };
