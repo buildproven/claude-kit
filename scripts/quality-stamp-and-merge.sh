@@ -84,6 +84,13 @@ if [ "$CI_ALREADY_GREEN" != true ]; then
     echo "❌ MERGE FAILED: CI budget admission could not produce a policy decision (exit $CI_BUDGET_STATUS)." >&2
     exit "$CI_BUDGET_STATUS"
   fi
+else
+  # A prior CI-budget denial is immutable evidence, but it must not strand the
+  # same exact HEAD after GitHub reports current green CI. The resolver reads
+  # the live PR and registered checks again, archives only a matching
+  # `ci:failed` admission block, and leaves every other terminal cause intact.
+  node "$SCRIPT_DIR/quality-invocation.js" resolve-green-ci-admission-block \
+    "$MANIFEST" >/dev/null || exit 1
 fi
 
 # Keep the private signer outside every repository.  An explicit environment
