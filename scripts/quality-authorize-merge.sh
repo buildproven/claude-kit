@@ -510,12 +510,7 @@ if [ "$NONSTRICT_REFCAS_CAPABILITY" = true ] &&
   echo "❌ MERGE BLOCKED: the protected non-strict ref-CAS capability cannot authorize another merge mode." >&2
   exit 1
 fi
-if [ "$MERGE_MODE" = protected-nonstrict-ref-cas ] &&
-  [ "$NONSTRICT_REFCAS_CAPABILITY" != true ] &&
-  [ "${CI_BILLING_WAIVED:-false}" = true ]; then
-  echo "❌ MERGE BLOCKED: protected non-strict ref-CAS requires exact signed authority when CI is not green." >&2
-  exit 1
-fi
+CI_GREEN_VERIFIED=false
 if [ "$PREFLIGHT" = false ] && [ "${CI_BILLING_WAIVED:-false}" = false ]; then
   if [ "$ATOMIC_BASE_FRESHNESS" = unprotectable ]; then
     # This plan cannot define required checks, so the stamp waiter and final
@@ -532,6 +527,17 @@ if [ "$PREFLIGHT" = false ] && [ "${CI_BILLING_WAIVED:-false}" = false ]; then
       exit 1
     }
   fi
+  CI_GREEN_VERIFIED=true
+fi
+if [ "$PREFLIGHT" = false ] &&
+  [ "$MERGE_MODE" = protected-nonstrict-ref-cas ] &&
+  [ "$NONSTRICT_REFCAS_CAPABILITY" != true ] &&
+  [ "$CI_GREEN_VERIFIED" != true ]; then
+  record_merge_admission_blocked_terminal \
+    "ci:failed,base:protected-nonstrict,pr:non-atomic-state" \
+    "protected non-strict autonomous ref-CAS requires green exact-head CI" || exit 1
+  echo "❌ MERGE BLOCKED: protected non-strict autonomous ref-CAS requires green exact-head CI." >&2
+  exit 1
 fi
 # A CI billing waiver on a genuinely server-enforceable base is normally
 # refused outright: an admin merge there would silently step around real,

@@ -8,6 +8,15 @@ const script = readFileSync(
 );
 
 describe("quality merge authorization action boundary", () => {
+  it("requires direct green-CI evidence for autonomous ref-CAS", () => {
+    expect(script).toMatch(
+      /CI_GREEN_VERIFIED=false[\s\S]*quality-required-checks\.js" assert[\s\S]*CI_GREEN_VERIFIED=true/,
+    );
+    expect(script).toMatch(
+      /MERGE_MODE" = protected-nonstrict-ref-cas[\s\S]*NONSTRICT_REFCAS_CAPABILITY" != true[\s\S]*CI_GREEN_VERIFIED" != true[\s\S]*record_merge_admission_blocked_terminal[\s\S]*ci:failed,base:protected-nonstrict,pr:non-atomic-state/,
+    );
+  });
+
   it("returns the typed action-required exit for missing strict freshness", () => {
     const branch = script.match(
       /\*\)\n(?<body>[\s\S]*?the PR base lacks server-enforced strict freshness[\s\S]*?)\n\s*;;/,

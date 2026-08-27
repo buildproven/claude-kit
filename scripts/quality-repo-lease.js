@@ -1546,6 +1546,18 @@ function withNotStartedCleanup(manifestPath, presentedToken, operation) {
   }
 }
 
+function refCasProtectionMatches(inspection, guarded, options) {
+  return (
+    inspection.digest === options.protectionDigest &&
+    JSON.stringify(requiredCheckBindings(inspection.requiredChecks)) ===
+      JSON.stringify(requiredCheckBindings(options.requiredChecks)) &&
+    guarded.protectionDigest === options.protectionDigest &&
+    JSON.stringify(requiredCheckBindings(guarded.requiredChecks)) ===
+      JSON.stringify(requiredCheckBindings(options.requiredChecks)) &&
+    guarded.mode === "protected-nonstrict-ref-cas"
+  );
+}
+
 function assertRefCasPreconditions(manifest, guarded, options, head) {
   const branch = baseBranch(manifest);
   const inspection =
@@ -1555,15 +1567,7 @@ function assertRefCasPreconditions(manifest, guarded, options, head) {
       pr: manifest.repo.pr,
       cwd: manifest.repo.realpath,
     });
-  if (
-    inspection.digest !== options.protectionDigest ||
-    JSON.stringify(inspection.requiredChecks) !==
-      JSON.stringify(options.requiredChecks) ||
-    guarded.protectionDigest !== options.protectionDigest ||
-    JSON.stringify(guarded.requiredChecks) !==
-      JSON.stringify(options.requiredChecks) ||
-    guarded.mode !== "protected-nonstrict-ref-cas"
-  ) {
+  if (!refCasProtectionMatches(inspection, guarded, options)) {
     throw new Error(
       "protected non-strict branch protection changed before the guarded ref update",
     );
@@ -1886,6 +1890,7 @@ module.exports = {
   _performRefCasUpdate: performRefCasUpdate,
   _parseIncludedGhResponse: parseIncludedGhResponse,
   _autonomousRefCasAuthority: autonomousRefCasAuthority,
+  _refCasProtectionMatches: refCasProtectionMatches,
   _resolveRefCasAtMutation: resolveRefCasAtMutation,
   _recordMergedTerminalRaw: recordMergedTerminalRaw,
   _waitForRefCasIntegration: waitForRefCasIntegration,

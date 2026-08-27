@@ -1342,7 +1342,10 @@ esac
   it("authorizes protected non-strict ref-CAS from complete autonomous green evidence", () => {
     const head = "a".repeat(40);
     const digest = "d".repeat(64);
-    const requiredChecks = [{ context: "quality", appId: 15368 }];
+    const requiredChecks = [
+      { context: "build", appId: 15368 },
+      { context: "quality", appId: 15368 },
+    ];
     expect(
       lease._autonomousRefCasAuthority(
         {
@@ -1354,7 +1357,10 @@ esac
         {
           inspection: { digest, requiredChecks },
           authorization: { reviewStatus: "complete" },
-          checkStates: [{ context: "quality", appId: 15368, state: "success" }],
+          checkStates: [
+            { context: "quality", appId: 15368, state: "success" },
+            { context: "build", appId: 15368, state: "success" },
+          ],
         },
       ),
     ).toMatchObject({
@@ -1364,6 +1370,37 @@ esac
       requiredChecks,
       ciEvidenceSha256: null,
     });
+  });
+
+  it("treats reordered but identical check bindings as unchanged at mutation", () => {
+    const digest = "d".repeat(64);
+    const quality = { context: "quality", appId: 15368 };
+    const build = { context: "build", appId: 15368 };
+    expect(
+      lease._refCasProtectionMatches(
+        { digest, requiredChecks: [quality, build] },
+        {
+          mode: "protected-nonstrict-ref-cas",
+          protectionDigest: digest,
+          requiredChecks: [build, quality],
+        },
+        { protectionDigest: digest, requiredChecks: [quality, build] },
+      ),
+    ).toBe(true);
+    expect(
+      lease._refCasProtectionMatches(
+        { digest, requiredChecks: [quality, build] },
+        {
+          mode: "protected-nonstrict-ref-cas",
+          protectionDigest: digest,
+          requiredChecks: [build, quality],
+        },
+        {
+          protectionDigest: digest,
+          requiredChecks: [quality, { ...build, appId: 12345 }],
+        },
+      ),
+    ).toBe(false);
   });
 
   it.each([
