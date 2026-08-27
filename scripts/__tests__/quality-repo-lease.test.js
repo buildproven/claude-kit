@@ -1339,20 +1339,107 @@ esac
     }
   });
 
-  it("rejects direct ref-CAS selection without the signed outage capability", () => {
-    const candidate = fixture("refcas-without-capability");
-    const { manifest } = invocation.loadManifest(candidate.manifestPath);
-    const owner = lease.acquire(candidate.manifestPath);
+  it("authorizes protected non-strict ref-CAS from complete autonomous green evidence", () => {
+    const head = "a".repeat(40);
+    const digest = "d".repeat(64);
+    const requiredChecks = [{ context: "quality", appId: 15368 }];
+    expect(
+      lease._autonomousRefCasAuthority(
+        {
+          merge: { invalidatedStamps: [] },
+          risk: { mergeAuthority: "autonomous" },
+        },
+        { admin: true, protectionDigest: digest },
+        head,
+        {
+          inspection: { digest, requiredChecks },
+          authorization: { reviewStatus: "complete" },
+          checkStates: [{ context: "quality", appId: 15368, state: "success" }],
+        },
+      ),
+    ).toMatchObject({
+      authority: "autonomous-green",
+      mode: "protected-nonstrict-ref-cas",
+      protectionDigest: digest,
+      requiredChecks,
+      ciEvidenceSha256: null,
+    });
+  });
+
+  it.each([
+    {
+      name: "human-required merge authority",
+      manifest: { risk: { mergeAuthority: "human-required" } },
+      authorization: { reviewStatus: "complete" },
+      checkState: "success",
+    },
+    {
+      name: "operator review override",
+      manifest: { risk: { mergeAuthority: "autonomous" } },
+      authorization: { reviewStatus: "incomplete", operatorOverride: true },
+      checkState: "success",
+    },
+    {
+      name: "failed required CI",
+      manifest: { risk: { mergeAuthority: "autonomous" } },
+      authorization: { reviewStatus: "complete" },
+      checkState: "failed",
+    },
+    {
+      name: "changed protection digest",
+      manifest: { risk: { mergeAuthority: "autonomous" } },
+      authorization: { reviewStatus: "complete" },
+      checkState: "success",
+      requestedDigest: "e".repeat(64),
+    },
+    {
+      name: "changed required check App binding",
+      manifest: { risk: { mergeAuthority: "autonomous" } },
+      authorization: { reviewStatus: "complete" },
+      checkState: "success",
+      checkAppId: 12345,
+    },
+    {
+      name: "stamp commit mutation",
+      manifest: {
+        risk: { mergeAuthority: "autonomous" },
+        merge: { stampHead: "b".repeat(40) },
+      },
+      authorization: { reviewStatus: "complete" },
+      checkState: "success",
+    },
+  ])("keeps $name outside autonomous ref-CAS authority", (scenario) => {
+    const digest = "d".repeat(64);
     expect(() =>
-      lease.performMerge(candidate.manifestPath, owner.token, {
-        admin: true,
-        expectedHead: manifest.revisions.currentHead,
-        mode: "protected-nonstrict-ref-cas",
-        protectionDigest: "d".repeat(64),
-      }),
-    ).toThrow(/valid signed exact-head capability/);
-    expect(lease.status(candidate.manifestPath).mergeGuard).toBeNull();
-    lease.release(candidate.manifestPath, owner.token, "test-complete");
+      lease._autonomousRefCasAuthority(
+        {
+          ...scenario.manifest,
+          merge: {
+            invalidatedStamps: [],
+            ...(scenario.manifest.merge || {}),
+          },
+        },
+        {
+          admin: true,
+          protectionDigest: scenario.requestedDigest || digest,
+        },
+        "a".repeat(40),
+        {
+          inspection: {
+            digest,
+            requiredChecks: [{ context: "quality", appId: 15368 }],
+          },
+          authorization: scenario.authorization,
+          checkStates: [
+            {
+              context: "quality",
+              appId: scenario.checkAppId || 15368,
+              state: scenario.checkState,
+            },
+          ],
+        },
+      ),
+    ).toThrow(/complete exact-head review, green CI/);
   });
 
   it("rejects a manifest binding that differs from the signed capability", () => {

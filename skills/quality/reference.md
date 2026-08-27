@@ -413,23 +413,28 @@ on your plan.
 ### Protected non-strict ref-CAS
 
 A protected branch with non-empty required checks and GitHub `strict: false`
-is not unprotectable. The separate signed
-`operator-nonstrict-refcas-override` binds `base:protected-nonstrict`,
-`pr:non-atomic-state`, the complete classic-protection digest, required check
-names and App IDs, and the exact campaign identity. Green exact-head CI remains
-mandatory. During a classified Actions billing outage, the capability also
-binds `ci:failed` and the exact outage artifact. If provider discovery is
-exhausted, the same capability can also bind `review:provider-exhaustion`.
-Every included condition requires its category-specific acknowledgement; two
-separate capabilities cannot be composed after signing.
+is not unprotectable. A clean campaign with `mergeAuthority=autonomous` may use
+the protected non-strict ref-CAS path without an operator prompt. The lease
+independently rechecks complete exact-head review and gates, green required
+checks, App bindings, the complete classic-protection digest, resolved
+conversations, exact identity, and ancestry immediately before its non-force
+update.
 
-The final repository lease reloads the signed capability, requires enough
-remaining validity for the bounded request, and rechecks the live base,
-protection digest, administrator permission, immediate PR identity, head
-ancestry, and every required review conversation. The signed authority is a
-direct immutable-head integration: the PR check is not atomic with a concurrent
-close or retarget. It then updates only the exact base ref to the exact reviewed
-head through GitHub's ref API with `force: false`. A verified
+The separate signed `operator-nonstrict-refcas-override` remains the exception
+path. During a classified Actions billing outage, it binds `ci:failed` and the
+exact outage artifact. If provider discovery is exhausted, the same capability
+also binds `review:provider-exhaustion`. Every included condition requires its
+category-specific acknowledgement; two separate capabilities cannot be
+composed after signing.
+
+For an exception, the final repository lease reloads the signed capability and
+requires enough remaining validity for the bounded request. For the autonomous
+green path, it reruns provider-neutral review authorization and required CI
+validation. Both paths recheck the live base, protection digest, administrator
+permission, immediate PR identity, head ancestry, and every required review
+conversation. The direct immutable-head integration cannot atomically bind a
+concurrent PR close or retarget. It updates only the exact base ref to the exact
+reviewed head through GitHub's ref API with `force: false`. A verified
 non-fast-forward rejection releases only the short operation guard and keeps
 the campaign lease resumable. Any other uncertain response stays quarantined
 until exact integration or exact closed-without-merge state is proven.

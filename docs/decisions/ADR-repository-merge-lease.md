@@ -225,14 +225,15 @@ protection and exact branch were deleted, and branch absence was verified.
 
 ### Decision
 
-Add `protected-nonstrict-ref-cas` as an explicit signed merge mode.
+Add `protected-nonstrict-ref-cas` as an explicit merge mode.
 It uses the existing repository lease and merge-operation guard, but replaces
 the administrator pull-request merge request with one non-force Git-reference
-update to the exact reviewed head. A protected non-strict base without the exact
-signed ref-CAS capability remains blocked. Green CI uses the normal required-check
-gate. An outage additionally requires the signed CI condition and artifact.
-Provider exhaustion can be composed into the same signed capability; separate
-single-scope capabilities cannot overwrite each other safely.
+update to the exact reviewed head. A clean campaign with autonomous merge
+authority uses this transaction without a human prompt after the lease rechecks
+complete review and gates, green required CI, the closed protection contract,
+exact identity, conversations, and ancestry. An outage or incomplete review
+still requires the signed ref-CAS capability and its exact condition evidence.
+Separate single-scope capabilities cannot overwrite each other safely.
 
 1. Read the complete classic branch-protection and effective-rules responses
    with separate exit status and body capture. The first implementation accepts
@@ -266,8 +267,8 @@ single-scope capabilities cannot overwrite each other safely.
    ref and require exact equality with the manifest base immediately before the
    update call. Re-read the complete protection contract and compare its digest
    in that same guarded pre-request phase.
-4. Add a distinct signed `operator-nonstrict-refcas-override` capability. The
-   wrapper flag requires the exact accepted conditions `ci:failed`,
+4. Add a distinct signed `operator-nonstrict-refcas-override` capability for
+   exception cases. The wrapper flag requires the exact accepted conditions `ci:failed`,
    `base:protected-nonstrict`, and `pr:non-atomic-state`; separate
    acknowledgements for unavailable CI, the administrator ref mutation, and
    the close/retarget race; the exact PR/head/base/invocation identity,
@@ -379,14 +380,14 @@ single-scope capabilities cannot overwrite each other safely.
 
 ### Classification decision table
 
-| Gate                  | Strict               | Protected non-strict ref-CAS               | Plan-unprotectable           |
-| --------------------- | -------------------- | ------------------------------------------ | ---------------------------- |
-| Exact required checks | Required             | Names and App bindings recorded            | All registered checks        |
-| Billing outage        | Signed CI capability | Add signed CI condition and exact evidence | Existing plan-limited policy |
-| Human merge authority | Configured policy    | Configured policy plus signed ref-CAS user | Configured policy            |
-| Base mutation         | PR merge API         | Non-force ref update to existing head      | PR merge API                 |
-| Freshness claim       | GitHub strict        | GitHub fast-forward CAS                    | Non-atomic                   |
-| Admin bypass proof    | Billing outage only  | Exact classic admin bypass                 | Existing policy              |
+| Gate                  | Strict               | Protected non-strict ref-CAS                       | Plan-unprotectable           |
+| --------------------- | -------------------- | -------------------------------------------------- | ---------------------------- |
+| Exact required checks | Required             | Names and App bindings recorded                    | All registered checks        |
+| Billing outage        | Signed CI capability | Add signed CI condition and exact evidence         | Existing plan-limited policy |
+| Human merge authority | Configured policy    | Autonomous when fully green; signed for exceptions | Configured policy            |
+| Base mutation         | PR merge API         | Non-force ref update to existing head              | PR merge API                 |
+| Freshness claim       | GitHub strict        | GitHub fast-forward CAS                            | Non-atomic                   |
+| Admin bypass proof    | Billing outage only  | Exact classic admin bypass                         | Existing policy              |
 
 Both the authorizer and stamp preflight explicitly allowlist all three modes.
 No `!= unprotectable` test may stand in for a decision in this table.
@@ -427,10 +428,10 @@ condition and artifact.
   confirmed fleet policy that retains `strict: false`.
 - Use a merge queue: strong, but unavailable in some repositories and dependent
   on hosted CI.
-- Use unsigned ref-CAS for normal protected merges: rejected because an
-  administrator ref update would replace the normal PR merge boundary without
-  explicit operator authority. The accepted green path keeps server check
-  verification and adds the narrow signed ref-CAS authority.
+- Use an unchecked ref-CAS for normal protected merges: rejected. The accepted
+  autonomous green path repeats review, gate, required-check/App, protection,
+  conversation, identity, and ancestry checks at the mutation boundary. Any
+  missing or exceptional evidence still needs exact signed authority.
 - Push directly with Git or disable hooks: rejected. The GitHub ref API exposes
   the required non-force operation without weakening local push guards.
 

@@ -201,18 +201,16 @@ automatic retry for a marker-only fallback review (a separate mechanism)
 still gets its chance before an operator needs to reach for this — override
 is the final step after diagnosis, not a way to skip retrying first.
 
-A protected base with required checks and GitHub `strict: false` requires the
-repository owner to authorize the separate exact-head ref-CAS path. With green
-exact-head CI, accept only the administrator ref mutation and PR-state race:
+A protected base with required checks and GitHub `strict: false` uses the
+non-force exact-head ref-CAS path automatically when merge authority is
+autonomous and exact-head review, gates, required CI, protection, conversations,
+identity, and ancestry are complete. Do not request operator approval for that
+green path.
 
-```text
-/bs:quality approve --manifest <exact-manifest-path> --pr <number> --head <exact-40-character-sha> --override-nonstrict-refcas --reason "<text>" --accept base:protected-nonstrict,pr:non-atomic-state --i-understand-admin-ref-mutation --i-understand-pr-state-race
-```
-
-If the bounded provider review is also exhausted, add
+If the bounded provider review is exhausted, use the exception command and add
 `review:provider-exhaustion` to `--accept` and add
-`--i-understand-missing-review` to the same command. Do not mint a second
-capability; the one signed artifact must contain every accepted condition.
+`--i-understand-missing-review`. Do not mint a second capability; the one signed
+artifact must contain every accepted condition.
 
 During a classified Actions billing outage, also accept and bind the missing CI.
 The provider condition and acknowledgement can be added to this same command:
@@ -222,9 +220,9 @@ The provider condition and acknowledgement can be added to this same command:
 ```
 
 This mints `operator-nonstrict-refcas-override`, not the general quality or CI
-scope. Both forms bind the complete classic-protection digest and exact
-required-check App identities. The outage form additionally binds the exact CI
-evidence. The final lease rechecks protection, repository-admin
+scope. It binds the complete classic-protection digest, exact required-check App
+identities, and exact CI evidence. The final lease rechecks protection,
+repository-admin
 authority, resolved review threads, base SHA, PR identity, and head ancestry,
 then performs one GitHub ref update with `force: false`. A stale-base rejection
 keeps the campaign resumable. An ambiguous response remains quarantined.
