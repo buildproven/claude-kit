@@ -102,6 +102,82 @@ run_conventional_sibling_test() {
   return 2
 }
 
+array_contains() {
+  local expected="$1"
+  shift
+  local actual
+  for actual in "$@"; do
+    [ "$actual" = "$expected" ] && return 0
+  done
+  return 1
+}
+
+run_mutation_command() {
+  local log="$1" timeout_seconds="$2" executable="$3" argument plan mode command_count index child_executable
+  shift 3
+  local -a args=("$@") plan_args=() child_args=()
+  local saw_execute=false
+
+  # The persisted test gate can be the shared selector rather than the test
+  # runner itself. Expand that immutable plan here so every child command
+  # passes through the same mutation-only adaptation below. Running the
+  # selector with --execute would hide an npm/Vitest child and recursively
+  # include this script's own fixture suite (BUI-781).
+  if [ "$(basename "$executable")" = node ] &&
+     [ "$(basename "${args[0]:-}")" = test-impact.js ]; then
+    for argument in "${args[@]+"${args[@]}"}"; do
+      if [ "$argument" = --execute ] && [ "$saw_execute" = false ]; then
+        saw_execute=true
+      else
+        plan_args+=("$argument")
+      fi
+    done
+    if [ "$saw_execute" = true ]; then
+      plan="$(cd "$SANDBOX" && "$executable" "${plan_args[@]}" 2>> "$log")" || return $?
+      mode="$(printf '%s' "$plan" | jq -er '.mode')" || return 1
+      [ "$mode" != unmapped ] || {
+        printf '%s\n' "$plan" >> "$log"
+        return 2
+      }
+      command_count="$(printf '%s' "$plan" | jq -er '.commands | length')" || return 1
+      for ((index = 0; index < command_count; index += 1)); do
+        child_executable="$(printf '%s' "$plan" | jq -er ".commands[$index].executable")" || return 1
+        child_args=()
+        while IFS= read -r argument; do child_args+=("$argument"); done < <(
+          printf '%s' "$plan" | jq -r ".commands[$index].args[]"
+        )
+        run_mutation_command "$log" "$timeout_seconds" "$child_executable" \
+          "${child_args[@]+"${child_args[@]}"}" || return $?
+      done
+      return 0
+    fi
+  fi
+
+  if [ "$executable" = npx ] && [ "${args[0]:-}" = vitest ]; then
+    array_contains --bail=1 "${args[@]+"${args[@]}"}" || args+=(--bail=1)
+    if [ -f "$SANDBOX/scripts/__tests__/quality-mutation-check.test.js" ] &&
+       ! array_contains scripts/__tests__/quality-mutation-check.test.js \
+         "${args[@]+"${args[@]}"}"; then
+      args+=(--exclude scripts/__tests__/quality-mutation-check.test.js)
+    fi
+  elif [ "$executable" = npm ] &&
+       [ "${args[0]:-}" = run ] && [ "${args[1]:-}" = test ]; then
+    case "$REPO_TEST_SCRIPT" in
+      vitest\ *|npx\ vitest\ *)
+        array_contains --bail=1 "${args[@]+"${args[@]}"}" || args+=(-- --bail=1)
+        if [ -f "$SANDBOX/scripts/__tests__/quality-mutation-check.test.js" ] &&
+           ! array_contains scripts/__tests__/quality-mutation-check.test.js \
+             "${args[@]+"${args[@]}"}"; then
+          args+=(--exclude scripts/__tests__/quality-mutation-check.test.js)
+        fi
+        ;;
+    esac
+  fi
+
+  bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
+    "$executable" "${args[@]+"${args[@]}"}" >> "$log" 2>&1
+}
+
 run_candidate_tests() {
   local candidate="$1" log="$2" timeout_seconds="$3" plan mode command_count index executable
   local -a args=()
@@ -130,14 +206,14 @@ run_candidate_tests() {
         while IFS= read -r argument; do args+=("$argument"); done < <(
           printf '%s' "$plan" | jq -r ".commands[$index].args[]"
         )
-        bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
-          "$executable" "${args[@]}" >> "$log" 2>&1 || return $?
+        run_mutation_command "$log" "$timeout_seconds" "$executable" \
+          "${args[@]}" || return $?
       done
       return 0
     fi
   fi
-  bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
-    "$TEST_EXECUTABLE" "${MUTATION_TEST_ARGS[@]+"${MUTATION_TEST_ARGS[@]}"}" >> "$log" 2>&1
+  run_mutation_command "$log" "$timeout_seconds" "$TEST_EXECUTABLE" \
+    "${MUTATION_TEST_ARGS[@]+"${MUTATION_TEST_ARGS[@]}"}"
 }
 
 # Mutation evidence needs one observed failure, not a complete failure report.

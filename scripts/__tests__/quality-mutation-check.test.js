@@ -71,6 +71,7 @@ function installLocalNodeDependency(root, options) {
       path.join(dependency, "vitest.sh"),
       `#!/usr/bin/env bash
 printf "%s\\n" "$*"
+${options.requireMutationExclude ? 'case " $* " in *" --exclude scripts/__tests__/quality-mutation-check.test.js "*) ;; *) echo "recursive mutation contract was not excluded" >&2; exit 42 ;; esac\n' : ""}
 ${options.relatedNoTests ? 'case " $* " in *" related "*) echo "No test files found"; exit 0 ;; esac\n' : ""}
 ${options.siblingExitTwo ? `case " $* " in *" ${options.testPath || "logic.test.js"} "*) exit 2 ;; esac\n` : ""}node ${options.testPath || "logic.test.js"}
 `,
@@ -198,6 +199,54 @@ function installPackageManagerShim(root, options) {
   );
 }
 
+function installAuditPolicy(root, options) {
+  if (!options.auditMapping) return;
+  mkdirSync(path.join(root, ".buildproven"), { recursive: true });
+  writeFileSync(
+    path.join(root, ".buildproven", "test-impact.json"),
+    JSON.stringify({
+      version: 1,
+      jsRunner: "none",
+      mappings: [],
+      audits: [
+        {
+          paths: ["aaa-uncovered.js"],
+          reason: "fixture complete audit",
+          commands: [{ executable: "npm", args: ["run", "test"] }],
+        },
+      ],
+    }),
+  );
+}
+
+function installFocusedPolicy(root, options) {
+  if (!options.focusedMapping) return;
+  mkdirSync(path.join(root, ".buildproven"), { recursive: true });
+  writeFileSync(
+    path.join(root, ".buildproven", "test-impact.json"),
+    JSON.stringify({
+      version: 1,
+      jsRunner: "none",
+      mappings: [
+        {
+          paths: ["logic.js"],
+          commands: [{ executable: "node", args: ["logic.test.js"] }],
+        },
+      ],
+      audits: [],
+    }),
+  );
+}
+
+function installMutationContractFixture(root, options) {
+  if (!options.requireMutationExclude) return;
+  mkdirSync(path.join(root, "scripts", "__tests__"), { recursive: true });
+  writeFileSync(
+    path.join(root, "scripts", "__tests__", "quality-mutation-check.test.js"),
+    "throw new Error('mutation contract must not run recursively');\n",
+  );
+}
+
 function fixture(label, testBody, options = {}) {
   const root = makeTempDir(`quality-mutation-${label}-`);
   git(root, ["init", "-q", "-b", "main"]);
@@ -222,23 +271,9 @@ function fixture(label, testBody, options = {}) {
       }),
     );
   }
-  if (options.focusedMapping) {
-    mkdirSync(path.join(root, ".buildproven"), { recursive: true });
-    writeFileSync(
-      path.join(root, ".buildproven", "test-impact.json"),
-      JSON.stringify({
-        version: 1,
-        jsRunner: "none",
-        mappings: [
-          {
-            paths: ["logic.js"],
-            commands: [{ executable: "node", args: ["logic.test.js"] }],
-          },
-        ],
-        audits: [],
-      }),
-    );
-  }
+  installFocusedPolicy(root, options);
+  installAuditPolicy(root, options);
+  installMutationContractFixture(root, options);
   if (options.pytestRunner) {
     writeFileSync(
       path.join(root, ".quality-gates.json"),
@@ -619,6 +654,42 @@ describe("quality-mutation-check", () => {
       "utf8",
     );
     expect(log).toContain("run --bail=1");
+  });
+
+  it("adapts Vitest hidden behind an audit selector without recursive mutation work", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-recursion",
+      "require('./aaa-uncovered.js');\n",
+      {
+        auditMapping: true,
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+        vitestRunner: true,
+        requireMutationExclude: true,
+      },
+    );
+
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+    const stateRoot = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "stateRoot"],
+      { encoding: "utf8" },
+    ).trim();
+    const head = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "revisions.currentHead"],
+      { encoding: "utf8" },
+    ).trim();
+    const log = readFileSync(
+      path.join(stateRoot, "mutation", `${head}.aaa-uncovered.js.log`),
+      "utf8",
+    );
+    expect(log).toContain(
+      "--exclude scripts/__tests__/quality-mutation-check.test.js",
+    );
+    expect(log).not.toContain("recursive mutation contract was not excluded");
   });
 
   it("uses pytest fail-fast after the first controlled-revert failure", () => {
