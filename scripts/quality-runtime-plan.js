@@ -94,6 +94,7 @@ const RISK_FLOORS = {
   critical: { campaignSeconds: 900, reviewSeconds: 540 },
 };
 const ORCHESTRATION_SECONDS = 60;
+const MAX_CAMPAIGN_SECONDS = 60 * 60;
 
 function riskTier(riskScore) {
   if (riskScore >= CRITICAL_RISK_SCORE) return "critical";
@@ -153,6 +154,55 @@ function plannedDepth(mode, knobs) {
   return knobs.codex === "skip" ? "low" : knobs.codex;
 }
 
+function normalizeGateTimeoutSeconds(gateTimeoutSeconds) {
+  return Object.fromEntries(
+    Object.entries(gateTimeoutSeconds || {}).flatMap(([name, value]) => {
+      const seconds = Number(value);
+      return Number.isInteger(seconds) && seconds > 0 ? [[name, seconds]] : [];
+    }),
+  );
+}
+
+function gateTimeoutExtraSeconds(gateTimeoutSeconds, checkSeconds) {
+  return Object.values(gateTimeoutSeconds).reduce(
+    (total, seconds) => total + Math.max(0, seconds - checkSeconds),
+    0,
+  );
+}
+
+function gateCampaignBudget({
+  band,
+  riskFloor,
+  requiredGateCount,
+  declaredGateTimeoutSeconds,
+}) {
+  const declaredGateExtraSeconds = gateTimeoutExtraSeconds(
+    declaredGateTimeoutSeconds,
+    band.checkSeconds,
+  );
+  const gateReserveSeconds =
+    requiredGateCount * band.checkSeconds + declaredGateExtraSeconds;
+  const minimumCampaignSeconds =
+    gateReserveSeconds +
+    (requiredGateCount > 0 ? band.checkReserveSeconds : 0) +
+    band.reviewReserveSeconds +
+    band.verificationSeconds +
+    ORCHESTRATION_SECONDS;
+  if (minimumCampaignSeconds > MAX_CAMPAIGN_SECONDS) {
+    throw new Error(
+      `declared gate and review reserves require ${minimumCampaignSeconds}s, above the bounded ${MAX_CAMPAIGN_SECONDS}s campaign maximum`,
+    );
+  }
+  return {
+    gateReserveSeconds,
+    campaignSeconds: Math.max(
+      band.campaignSeconds,
+      riskFloor.campaignSeconds,
+      minimumCampaignSeconds,
+    ),
+  };
+}
+
 function planRuntime({
   riskScore,
   diffStats,
@@ -160,6 +210,7 @@ function planRuntime({
   knobs = null,
   minimumRisk = 0,
   gateCount = 0,
+  gateTimeoutSeconds = {},
 }) {
   if (!["discovery", "verification"].includes(mode)) {
     throw new Error(`invalid review mode: ${mode}`);
@@ -183,15 +234,14 @@ function planRuntime({
   // allowance up front so a small diff cannot consume its entire campaign
   // before the review evidence required for merge can even begin.
   const requiredGateCount = Math.max(0, Number(gateCount) || 0);
-  const gateReserveSeconds = requiredGateCount * band.checkSeconds;
-  const campaignSeconds = Math.min(
-    900,
-    Math.max(
-      band.campaignSeconds,
-      riskFloor.campaignSeconds,
-      gateReserveSeconds + reviewSeconds + ORCHESTRATION_SECONDS,
-    ),
-  );
+  const declaredGateTimeoutSeconds =
+    normalizeGateTimeoutSeconds(gateTimeoutSeconds);
+  const { gateReserveSeconds, campaignSeconds } = gateCampaignBudget({
+    band,
+    riskFloor,
+    requiredGateCount,
+    declaredGateTimeoutSeconds,
+  });
 
   return {
     riskScore: normalizedRisk,
@@ -210,6 +260,7 @@ function planRuntime({
     checkSeconds: band.checkSeconds,
     gateCount: requiredGateCount,
     gateReserveSeconds,
+    gateTimeoutSeconds: declaredGateTimeoutSeconds,
     reviewReserveSeconds: band.reviewReserveSeconds,
     checkReserveSeconds: band.checkReserveSeconds,
     agents: resolvedKnobs.agents,
@@ -235,6 +286,8 @@ function parseArgs(argv) {
       args.minimumRisk = Number(argv[++index]);
     } else if (argv[index] === "--gate-count" && argv[index + 1]) {
       args.gateCount = Number(argv[++index]);
+    } else if (argv[index] === "--gate-timeouts-json" && argv[index + 1]) {
+      args.gateTimeoutSeconds = JSON.parse(argv[++index]);
     } else if (argv[index] === "--json") {
       args.json = true;
     }
@@ -255,6 +308,7 @@ function main() {
     knobs: scored.knobs,
     minimumRisk: args.minimumRisk,
     gateCount: args.gateCount,
+    gateTimeoutSeconds: args.gateTimeoutSeconds,
   });
   const result = {
     ...plan,
@@ -285,4 +339,5 @@ module.exports = {
   repositoryFileCount,
   WORKLOAD_BANDS,
   RISK_FLOORS,
+  MAX_CAMPAIGN_SECONDS,
 };

@@ -22,6 +22,7 @@ const testImpact = require("./test-impact.js");
 const SCHEMA_VERSION = 1;
 const REVIEW_CONTRACT_VERSION = 2;
 const EXECUTION_BUDGET_VERSION = 1;
+const RUNTIME_PLAN_VERSION = 2;
 const REQUIRED_GATES_POLICY_VERSION = 3;
 const MAX_AGENT_TARGET = 9;
 const NEEDS_EXECUTION_BUDGET_MIGRATION = Symbol(
@@ -879,6 +880,8 @@ function optionalTypeGate({
 }
 
 const NATIVE_GATES_FILE = ".quality-gates.json";
+const HARNESS_CONFIG_FILE = "harness-config.json";
+const MAX_DECLARED_GATE_TIMEOUT_SECONDS = 30 * 60;
 const NATIVE_GATE_NAMES = new Set([
   "lint",
   "test",
@@ -958,6 +961,62 @@ function discoverNativeGates(root, head) {
   return gates;
 }
 
+function declaredGateTimeouts(root, head) {
+  const content = committedFile(root, head, HARNESS_CONFIG_FILE);
+  if (content === null) return new Map();
+  const config = parseJson(content, `${HARNESS_CONFIG_FILE} at ${head}`);
+  const definitions = config?.checkDefinitions;
+  if (
+    !definitions ||
+    Array.isArray(definitions) ||
+    typeof definitions !== "object"
+  ) {
+    return new Map();
+  }
+  const patterns = {
+    lint: /(?:^|[:\s-])(?:lint|format)(?:$|[:\s-])/i,
+    test: /(?:^|[:\s-])test(?:$|[:\s-])/i,
+    security: /(?:^|[:\s-])(?:security|audit|semgrep|gitleaks)(?:$|[:\s-])/i,
+    build: /(?:^|[:\s-])build(?:$|[:\s-])/i,
+    type: /(?:^|[:\s-])(?:type|typecheck|type-check)(?:$|[:\s-])/i,
+    consumer: /(?:^|[:\s-])consumer(?:$|[:\s-])/i,
+    "verify-app": /(?:^|[:\s-])(?:verify-app|e2e)(?:$|[:\s-])/i,
+  };
+  const timeouts = new Map();
+  for (const [definitionName, definition] of Object.entries(definitions)) {
+    const seconds = harnessCheckTimeoutSeconds(definitionName, definition);
+    if (seconds === null) continue;
+    const identity = `${definitionName} ${String(definition.command || "")}`;
+    for (const [gateName, pattern] of Object.entries(patterns)) {
+      if (!pattern.test(identity)) continue;
+      timeouts.set(gateName, Math.max(timeouts.get(gateName) || 0, seconds));
+    }
+  }
+  return timeouts;
+}
+
+function harnessCheckTimeoutSeconds(name, definition) {
+  if (
+    !definition ||
+    typeof definition !== "object" ||
+    Array.isArray(definition)
+  ) {
+    return null;
+  }
+  if (!Object.hasOwn(definition, "timeoutMinutes")) return null;
+  const minutes = Number(definition.timeoutMinutes);
+  if (
+    !Number.isInteger(minutes) ||
+    minutes < 1 ||
+    minutes * 60 > MAX_DECLARED_GATE_TIMEOUT_SECONDS
+  ) {
+    throw new Error(
+      `${HARNESS_CONFIG_FILE} checkDefinitions.${name}.timeoutMinutes must be an integer from 1 to 30`,
+    );
+  }
+  return minutes * 60;
+}
+
 function discoverRequiredGates(
   root,
   options,
@@ -975,6 +1034,7 @@ function discoverRequiredGates(
   const pyproject = committedFile(root, head, "pyproject.toml") || "";
   const pythonRepository = isPythonRepository(root, head, pyproject);
   const nativeGates = discoverNativeGates(root, head);
+  const gateTimeouts = declaredGateTimeouts(root, head);
   const requiredGate = (name, candidates, allowSkip = false) =>
     preferredRequiredGate({
       root,
@@ -1053,7 +1113,10 @@ function discoverRequiredGates(
   }
   const verifyAppGate = discoverVerifyAppGate(options, nativeGates);
   if (verifyAppGate) required.push(verifyAppGate);
-  return required;
+  return required.map((gate) => {
+    const timeoutSeconds = gateTimeouts.get(gate.name);
+    return timeoutSeconds ? { ...gate, timeoutSeconds } : gate;
+  });
 }
 
 function discoverImpactTestGate(root, options, head, baseSha) {
@@ -1397,6 +1460,7 @@ function identityWithoutProvider(identity) {
 function manifestIdentity(manifest) {
   return {
     executionBudgetVersion: manifest.governor?.executionBudgetVersion ?? 0,
+    runtimePlanVersion: manifest.runtimePlanVersion ?? 1,
     root: manifest.repo.realpath,
     gitCommonDir: manifest.repo.gitCommonDir,
     origin: manifest.repo.origin,
@@ -1478,6 +1542,7 @@ function supersedingManifest(
   const manifest = {
     schemaVersion: SCHEMA_VERSION,
     reviewContractVersion: REVIEW_CONTRACT_VERSION,
+    runtimePlanVersion: RUNTIME_PLAN_VERSION,
     manifestRevision: 0,
     invocationId,
     createdAt: now,
@@ -1939,6 +2004,7 @@ function createManifest(options) {
   };
   const campaignIdentity = {
     executionBudgetVersion: EXECUTION_BUDGET_VERSION,
+    runtimePlanVersion: RUNTIME_PLAN_VERSION,
     root,
     gitCommonDir: gitCommonDir(root),
     origin: originIdentity(root),
@@ -1997,6 +2063,7 @@ function createManifest(options) {
   const manifest = {
     schemaVersion: SCHEMA_VERSION,
     reviewContractVersion: REVIEW_CONTRACT_VERSION,
+    runtimePlanVersion: RUNTIME_PLAN_VERSION,
     manifestRevision: 0,
     invocationId,
     createdAt: now,
@@ -2469,16 +2536,43 @@ function gateRuntimePlan(manifest, options, checkSeconds) {
   if (gateCount !== manifest.requiredGates.length) {
     throw new Error("runtime plan gate count does not match required gates");
   }
-  if (gateReserveSeconds !== gateCount * checkSeconds) {
+  const gateTimeoutSeconds = parseJson(
+    options["gate-timeouts-json"] || "{}",
+    "gate timeout seconds",
+  );
+  if (
+    !gateTimeoutSeconds ||
+    Array.isArray(gateTimeoutSeconds) ||
+    typeof gateTimeoutSeconds !== "object" ||
+    Object.entries(gateTimeoutSeconds).some(
+      ([name, seconds]) =>
+        !manifest.requiredGates.some((gate) => gate.name === name) ||
+        !Number.isInteger(seconds) ||
+        seconds < 1,
+    )
+  ) {
+    throw new Error("runtime plan gate timeout seconds are invalid");
+  }
+  const declaredExtraSeconds = Object.values(gateTimeoutSeconds).reduce(
+    (total, seconds) => total + Math.max(0, seconds - checkSeconds),
+    0,
+  );
+  const expectedReserve = gateCount * checkSeconds + declaredExtraSeconds;
+  if (gateReserveSeconds !== expectedReserve) {
     throw new Error("runtime plan gate reserve does not match gate count");
   }
-  return { gateCount, gateReserveSeconds };
+  return { gateCount, gateReserveSeconds, gateTimeoutSeconds };
 }
 
 function buildRuntimePlan(manifest, options) {
   const checkSeconds = parseInteger(
     options["check-seconds"] || "300",
     "check seconds",
+    { minimum: 1 },
+  );
+  const checkReserveSeconds = parseInteger(
+    options["check-reserve-seconds"] || "300",
+    "check reserve seconds",
     { minimum: 1 },
   );
   const gatePlan = gateRuntimePlan(manifest, options, checkSeconds);
@@ -2515,11 +2609,7 @@ function buildRuntimePlan(manifest, options) {
       "review reserve seconds",
       { minimum: 1 },
     ),
-    checkReserveSeconds: parseInteger(
-      options["check-reserve-seconds"] || "300",
-      "check reserve seconds",
-      { minimum: 1 },
-    ),
+    checkReserveSeconds,
     reviewPasses: parseInteger(
       options["codex-rounds"] || "1",
       "review passes",
@@ -5405,7 +5495,10 @@ function executeGate(manifest, required, name, log, manifestPath) {
     );
   }
   const timeoutSeconds = Math.min(
-    gateSeconds + gateReserveSeconds,
+    Math.max(
+      gateSeconds + gateReserveSeconds,
+      declaredGateTimeout(runtime, name),
+    ),
     gateRemaining,
   );
   const gateEnvironment = repositoryGateEnvironment();
@@ -5480,6 +5573,14 @@ function executeGate(manifest, required, name, log, manifestPath) {
     manifest.risk?.resolved === true,
   );
   return output;
+}
+
+function declaredGateTimeout(runtime, name) {
+  const seconds =
+    runtime && runtime.gateTimeoutSeconds
+      ? runtime.gateTimeoutSeconds[name]
+      : 0;
+  return Number.isInteger(seconds) && seconds > 0 ? seconds : 0;
 }
 
 function runGate(manifest, options, manifestPath) {

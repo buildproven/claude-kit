@@ -7317,6 +7317,83 @@ exit 1
     );
   });
 
+  it("BUI-804: funds a declared long test gate without consuming review reserve", () => {
+    const root = repo("declared-long-test-gate");
+    writeFileSync(
+      path.join(root, "harness-config.json"),
+      JSON.stringify({
+        checkDefinitions: {
+          "lint-and-format": {
+            command: "npm run lint && npm run format:check",
+            timeoutMinutes: 5,
+          },
+          "test-integration": {
+            command: "npm run test:slow",
+            timeoutMinutes: 20,
+          },
+          "security-scan": {
+            command: "npm audit --audit-level=high",
+            timeoutMinutes: 5,
+          },
+        },
+      }),
+    );
+    git(root, ["add", "harness-config.json"]);
+    git(root, ["commit", "-q", "-m", "declare native check durations"]);
+
+    const manifestPath = create(root);
+    let manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(
+      Object.fromEntries(
+        manifest.requiredGates.map((gate) => [gate.name, gate.timeoutSeconds]),
+      ),
+    ).toMatchObject({ lint: 300, test: 1200, security: 300 });
+
+    execFileSync("bash", [RISK, "--manifest", manifestPath], { cwd: root });
+    manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifest.risk.runtime.gateTimeoutSeconds).toMatchObject({
+      lint: 300,
+      test: 1200,
+      security: 300,
+    });
+    expect(manifest.risk.runtime.campaignSeconds).toBeGreaterThan(900);
+    expect(
+      manifest.risk.runtime.campaignSeconds -
+        manifest.risk.runtime.gateReserveSeconds,
+    ).toBeGreaterThanOrEqual(
+      manifest.risk.runtime.reviewReserveSeconds +
+        manifest.risk.runtime.verificationSeconds +
+        60,
+    );
+  });
+
+  it("BUI-804: rejects an unbounded declared gate timeout", () => {
+    const root = repo("unbounded-declared-gate");
+    writeFileSync(
+      path.join(root, "harness-config.json"),
+      JSON.stringify({
+        checkDefinitions: {
+          "test-integration": {
+            command: "npm run test:slow",
+            timeoutMinutes: 31,
+          },
+        },
+      }),
+    );
+    git(root, ["add", "harness-config.json"]);
+    git(root, ["commit", "-q", "-m", "declare unbounded check duration"]);
+
+    const result = spawnSync(
+      "node",
+      [INVOCATION, "create", "--repo", root, "--base-ref", "origin/main"],
+      { cwd: root, encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(
+      /timeoutMinutes must be an integer from 1 to 30/,
+    );
+  });
+
   it("BUI-733: persists an evidence-backed affected test gate when the repository opts in", () => {
     const root = repo("affected-test-gate");
     mkdirSync(path.join(root, ".buildproven"));

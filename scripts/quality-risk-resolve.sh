@@ -26,6 +26,7 @@ LEVEL="$(field risk.level)"
 [ -n "$LEVEL" ] || LEVEL="$(field options.level)"
 RESOLVED_BASE="$(field revisions.baseRef)"
 GATE_COUNT="$(field requiredGates | jq 'length')"
+GATE_TIMEOUTS_JSON="$(field requiredGates | jq -c 'map(select(.timeoutSeconds != null) | {key: .name, value: .timeoutSeconds}) | from_entries')"
 cd "$GIT_ROOT" || exit 1
 
 case "$LEVEL" in
@@ -44,7 +45,7 @@ esac
 
 PLAN_JSON="$(node "$SCRIPT_DIR/quality-runtime-plan.js" \
   --base "$RESOLVED_BASE" --minimum-risk "$MINIMUM_RISK" \
-  --gate-count "$GATE_COUNT")" || exit 1
+  --gate-count "$GATE_COUNT" --gate-timeouts-json "$GATE_TIMEOUTS_JSON")" || exit 1
 PLAN_GATE_COUNT="$(printf '%s' "$PLAN_JSON" | jq -er '.gateCount | numbers')" || {
   echo "quality-risk-resolve: runtime plan is missing numeric gateCount" >&2
   exit 1
@@ -79,6 +80,7 @@ node "$SCRIPT_DIR/quality-invocation.js" risk "$MANIFEST" \
   --check-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.checkSeconds')" \
   --gate-count "$PLAN_GATE_COUNT" \
   --gate-reserve-seconds "$PLAN_GATE_RESERVE_SECONDS" \
+  --gate-timeouts-json "$(printf '%s' "$PLAN_JSON" | jq -c '.gateTimeoutSeconds')" \
   --review-reserve-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.reviewReserveSeconds')" \
   --check-reserve-seconds "$(printf '%s' "$PLAN_JSON" | jq -r '.checkReserveSeconds')" \
   --level "$LEVEL" || exit 1

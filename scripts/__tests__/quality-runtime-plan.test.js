@@ -96,7 +96,7 @@ describe("quality runtime planning", () => {
     expect(verification.reviewPasses).toBe(1);
   });
 
-  it("caps every default campaign at 15 minutes", () => {
+  it("keeps a default campaign without repository gates at 15 minutes", () => {
     expect(plan(100, 500, 100000).campaignSeconds).toBe(900);
   });
 
@@ -108,9 +108,38 @@ describe("quality runtime planning", () => {
     });
 
     expect(plan.gateReserveSeconds).toBe(360);
-    expect(plan.campaignSeconds).toBe(600);
+    expect(plan.campaignSeconds).toBe(
+      plan.gateReserveSeconds +
+        plan.checkReserveSeconds +
+        plan.reviewReserveSeconds +
+        plan.verificationSeconds +
+        60,
+    );
     expect(plan.campaignSeconds).toBeGreaterThanOrEqual(
       plan.gateReserveSeconds + plan.reviewSeconds,
+    );
+  });
+
+  it("funds declared long native gates and still reserves independent review", () => {
+    const plan = planRuntime({
+      riskScore: 35,
+      diffStats: { files: 12, lines: 700 },
+      gateCount: 3,
+      gateTimeoutSeconds: { lint: 300, test: 1200, security: 300 },
+    });
+
+    expect(plan.workload).toBe("medium");
+    expect(plan.gateTimeoutSeconds).toEqual({
+      lint: 300,
+      test: 1200,
+      security: 300,
+    });
+    expect(plan.gateReserveSeconds).toBe(1800);
+    expect(plan.campaignSeconds).toBe(2520);
+    expect(
+      plan.campaignSeconds - plan.gateReserveSeconds,
+    ).toBeGreaterThanOrEqual(
+      plan.reviewReserveSeconds + plan.verificationSeconds + 60,
     );
   });
 
