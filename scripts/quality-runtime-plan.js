@@ -301,12 +301,22 @@ function parseArgs(argv) {
     } else if (argv[index] === "--gate-count" && argv[index + 1]) {
       args.gateCount = Number(argv[++index]);
     } else if (argv[index] === "--gate-timeouts-json" && argv[index + 1]) {
-      args.gateTimeoutSeconds = JSON.parse(argv[++index]);
+      args.gateTimeoutSeconds = parseGateTimeoutsJson(argv[++index]);
     } else if (argv[index] === "--json") {
       args.json = true;
     }
   }
   return args;
+}
+
+function parseGateTimeoutsJson(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`gate timeouts are not valid JSON: ${error.message}`, {
+      cause: error,
+    });
+  }
 }
 
 function main() {

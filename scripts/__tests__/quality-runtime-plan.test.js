@@ -217,6 +217,15 @@ describe("quality runtime planning", () => {
     expect(huge.campaignSeconds).toBe(900);
   });
 
+  it("fails visibly when declared gate timeout JSON is malformed", () => {
+    expect(() =>
+      execFileSync("node", [PLANNER, "--gate-timeouts-json", "{"], {
+        encoding: "utf8",
+        stdio: "pipe",
+      }),
+    ).toThrow(/gate timeouts are not valid JSON/);
+  });
+
   it("keeps a submodule pointer bump scoped to the parent integration diff", () => {
     const parent = makeTempDir("quality-submodule-");
     const submodule = path.join(parent, "core");
