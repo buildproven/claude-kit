@@ -8,6 +8,7 @@ const {
 } = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { createHash } = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 const SOURCE_RUNNER = path.resolve(__dirname, "..", "quality-run.js");
 
@@ -16,6 +17,7 @@ const FAKE_INVOCATION = `
 const fs = require("node:fs");
 function read(file) { return JSON.parse(fs.readFileSync(file, "utf8")); }
 function write(file, value) { fs.writeFileSync(file, JSON.stringify(value)); }
+function parseJson(raw) { return JSON.parse(raw); }
 function loadManifest(file) { return { manifest: read(file), manifestPath: file }; }
 function withManifestLock(file, mutation) {
   const manifest = read(file);
@@ -143,7 +145,7 @@ if (require.main === module) {
   write(file, manifest);
   process.stdout.write(inForce + "\\n");
 }
-module.exports = { advanceHead, incompleteRetryStatus, judgeContext, leadDispositionStatus, loadManifest, mutationEvidenceValid, recordTerminalState,
+module.exports = { advanceHead, incompleteRetryStatus, judgeContext, leadDispositionStatus, loadManifest, mutationEvidenceValid, parseJson, recordTerminalState,
   clearMergeAdmissionBlock, reviewAuthorization, reviewCoverage, resumeRecoverableTerminal, terminalEpoch, validateIdentity, withManifestLock };
 `;
 
@@ -325,6 +327,42 @@ function run(entry) {
   };
 }
 
+function recordDisposition(entry, blockingCount, label = "judge") {
+  const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+  const findings = Array.from(
+    { length: manifest.behavior?.leads || 0 },
+    (_, index) => ({
+      id: `lead-${index + 1}`,
+      provider: "fixture-provider",
+      source: "fixture-review",
+      disposition: index < blockingCount ? "BLOCKING" : "SUPPRESSED",
+    }),
+  );
+  const artifact = {
+    invocationId: manifest.invocationId,
+    repositoryKey: "fixture-repository",
+    head: manifest.revisions.currentHead,
+    reviewCount: manifest.reviews.length,
+    evidenceSha256: "fixture-evidence",
+    findings,
+  };
+  const artifactPath = path.join(
+    path.dirname(entry.manifestPath),
+    `${label}.json`,
+  );
+  const raw = JSON.stringify(artifact);
+  writeFileSync(artifactPath, raw);
+  manifest.judge = {
+    head: artifact.head,
+    reviewCount: artifact.reviewCount,
+    evidenceSha256: artifact.evidenceSha256,
+    blockingCount,
+    artifactPath,
+    artifactSha256: createHash("sha256").update(raw).digest("hex"),
+  };
+  writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+}
+
 describe("quality-run public orchestration", () => {
   it("pauses for identity-bound lead verification before merge", () => {
     const result = run(fixture({ leads: 2 }, { merge: true, tier: "medium" }));
@@ -349,12 +387,8 @@ describe("quality-run public orchestration", () => {
       status: "complete",
       leadCount: 1,
     });
-    manifest.judge = {
-      head: manifest.revisions.currentHead,
-      blockingCount: 1,
-      artifactPath: "/fixture/judge.json",
-    };
     writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+    recordDisposition(entry, 1);
 
     const result = run(entry);
 
@@ -373,13 +407,7 @@ describe("quality-run public orchestration", () => {
   it("stops a repeated remediation resume when no repair commit was made", () => {
     const entry = fixture({ leads: 1 }, { merge: true, tier: "medium" });
     expect(run(entry).status).toBe(4);
-    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
-    manifest.judge = {
-      head: manifest.revisions.currentHead,
-      blockingCount: 1,
-      artifactPath: "/fixture/judge.json",
-    };
-    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+    recordDisposition(entry, 1);
     expect(run(entry).status).toBe(4);
 
     const repeated = run(entry);
@@ -396,13 +424,7 @@ describe("quality-run public orchestration", () => {
   it("resumes without replaying immutable policy after all leads are dispositioned", () => {
     const entry = fixture({ leads: 1 }, { merge: true, tier: "medium" });
     expect(run(entry).status).toBe(4);
-    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
-    manifest.judge = {
-      head: manifest.revisions.currentHead,
-      blockingCount: 0,
-      artifactPath: "/fixture/judge.json",
-    };
-    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+    recordDisposition(entry, 0);
 
     const result = run(entry);
 
@@ -418,20 +440,31 @@ describe("quality-run public orchestration", () => {
     ).toHaveLength(1);
   });
 
+  it("fails closed when the lead disposition artifact changes after recording", () => {
+    const entry = fixture({ leads: 1 }, { merge: true, tier: "medium" });
+    expect(run(entry).status).toBe(4);
+    recordDisposition(entry, 0);
+    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    writeFileSync(manifest.judge.artifactPath, "{}");
+
+    const result = run(entry);
+
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "terminal",
+      state: "blocked",
+      message: expect.stringContaining("integrity mismatch"),
+    });
+  });
+
   it("advances one repair head, runs delta review, and then merges", () => {
     const entry = fixture({ leads: 1 }, { merge: true, tier: "medium" });
     expect(run(entry).status).toBe(4);
 
-    let manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
-    manifest.judge = {
-      head: manifest.revisions.currentHead,
-      blockingCount: 1,
-      artifactPath: "/fixture/initial-judge.json",
-    };
-    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+    recordDisposition(entry, 1, "initial-judge");
     expect(run(entry).status).toBe(4);
 
-    manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    let manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
     manifest.behavior.nextHead = "repair456";
     writeFileSync(entry.manifestPath, JSON.stringify(manifest));
     const delta = run(entry);
@@ -446,13 +479,7 @@ describe("quality-run public orchestration", () => {
       to: "repair456",
     });
 
-    manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
-    manifest.judge = {
-      head: manifest.revisions.currentHead,
-      blockingCount: 0,
-      artifactPath: "/fixture/delta-judge.json",
-    };
-    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+    recordDisposition(entry, 0, "delta-judge");
     const merged = run(entry);
     expect(merged.status).toBe(0);
     expect(JSON.parse(merged.output)).toMatchObject({
@@ -473,12 +500,8 @@ describe("quality-run public orchestration", () => {
       status: "complete",
       leadCount: 1,
     });
-    manifest.judge = {
-      head: manifest.revisions.currentHead,
-      blockingCount: 1,
-      artifactPath: "/fixture/judge.json",
-    };
     writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+    recordDisposition(entry, 1);
 
     const result = run(entry);
 

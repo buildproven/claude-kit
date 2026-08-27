@@ -2,6 +2,8 @@
 "use strict";
 
 const path = require("node:path");
+const fs = require("node:fs");
+const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const quality = require("./quality-invocation");
 
@@ -468,7 +470,7 @@ async function recordFailure(context, manifestPath, error) {
 
 async function pendingLeadWork(context, manifestPath, manifest, review) {
   if ((manifest.reviewContractVersion || 1) < 2) return null;
-  const disposition = quality.leadDispositionStatus(manifest);
+  const disposition = leadDispositionStatus(manifest);
   if (disposition.state === "pending") {
     return workRequired(
       manifestPath,
@@ -519,6 +521,66 @@ function remediationState(manifest) {
       manifest.orchestration?.head === manifest.revisions.currentHead &&
       manifest.orchestration?.steps?.remediation?.status === "work-required",
   };
+}
+
+function leadDispositionStatus(manifest) {
+  const context = quality.judgeContext(manifest);
+  if (context.findings.length === 0) {
+    return { state: "not-required", context };
+  }
+  const judge = manifest.judge;
+  if (!dispositionFresh(judge, context)) {
+    return { state: "pending", context };
+  }
+  if (
+    typeof judge.artifactPath !== "string" ||
+    typeof judge.artifactSha256 !== "string"
+  ) {
+    throw new Error("persisted lead disposition artifact is malformed");
+  }
+  const raw = fs.readFileSync(judge.artifactPath);
+  const artifactSha256 = crypto.createHash("sha256").update(raw).digest("hex");
+  if (artifactSha256 !== judge.artifactSha256) {
+    throw new Error("persisted lead disposition artifact integrity mismatch");
+  }
+  const artifact = quality.parseJson(
+    raw.toString("utf8"),
+    "persisted lead disposition artifact",
+  );
+  if (!Array.isArray(artifact.findings)) {
+    throw new Error("persisted lead disposition artifact is malformed");
+  }
+  const artifactMatches = dispositionArtifactMatches(artifact, judge, context);
+  const blockingCount = artifact.findings.filter(
+    (finding) => finding.disposition === "BLOCKING",
+  ).length;
+  if (!artifactMatches || blockingCount !== judge.blockingCount) {
+    throw new Error("persisted lead disposition artifact integrity mismatch");
+  }
+  return {
+    state: blockingCount > 0 ? "remediation-required" : "settled",
+    blockingCount,
+    artifactPath: judge.artifactPath,
+    context,
+  };
+}
+
+function dispositionFresh(judge, context) {
+  return (
+    judge?.head === context.head &&
+    judge?.reviewCount === context.reviewCount &&
+    judge?.evidenceSha256 === context.evidenceSha256
+  );
+}
+
+function dispositionArtifactMatches(artifact, judge, context) {
+  return (
+    artifact.head === context.head &&
+    artifact.invocationId === context.invocationId &&
+    artifact.repositoryKey === context.repositoryKey &&
+    artifact.reviewCount === context.reviewCount &&
+    artifact.evidenceSha256 === context.evidenceSha256
+  );
 }
 
 async function runOpenCampaign(context, manifestPath, manifest) {

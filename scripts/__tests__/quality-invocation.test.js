@@ -4922,17 +4922,7 @@ exit 1
         recommendation: "verify second lead",
       },
     ]);
-    expect(
-      invocation.leadDispositionStatus(
-        JSON.parse(readFileSync(manifest, "utf8")),
-      ),
-    ).toMatchObject({ state: "pending" });
     recordJudgeArtifact(root, manifest, ["BLOCKING", "BLOCKING"]);
-    expect(
-      invocation.leadDispositionStatus(
-        JSON.parse(readFileSync(manifest, "utf8")),
-      ),
-    ).toMatchObject({ state: "remediation-required", blockingCount: 2 });
     recordMutationFixture(manifest);
     const authorization = JSON.parse(
       execFileSync("node", [INVOCATION, "review-authorization", manifest], {
