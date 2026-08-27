@@ -212,7 +212,9 @@ function installAuditPolicy(root, options) {
         {
           paths: ["aaa-uncovered.js"],
           reason: "fixture complete audit",
-          commands: [{ executable: "npm", args: ["run", "test"] }],
+          commands: [
+            { executable: "npm", args: options.auditArgs ?? ["test"] },
+          ],
         },
       ],
     }),
@@ -690,6 +692,25 @@ describe("quality-mutation-check", () => {
       "--exclude scripts/__tests__/quality-mutation-check.test.js",
     );
     expect(log).not.toContain("recursive mutation contract was not excluded");
+  });
+
+  it("inserts npm's pass-through separator before existing Vitest flags", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-existing-bail",
+      "require('./aaa-uncovered.js');\n",
+      {
+        auditMapping: true,
+        auditArgs: ["run", "test", "--bail=1"],
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+        vitestRunner: true,
+        requireMutationExclude: true,
+      },
+    );
+
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
   });
 
   it("uses pytest fail-fast after the first controlled-revert failure", () => {

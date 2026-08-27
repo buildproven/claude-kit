@@ -113,10 +113,10 @@ array_contains() {
 }
 
 run_mutation_command() {
-  local log="$1" timeout_seconds="$2" executable="$3" argument plan mode command_count index child_executable
+  local log="$1" timeout_seconds="$2" executable="$3" argument plan mode command_count index child_executable npm_test_prefix
   shift 3
-  local -a args=("$@") plan_args=() child_args=()
-  local saw_execute=false
+  local -a args=("$@") plan_args=() child_args=() normalized_args=()
+  local saw_execute=false saw_separator=false
 
   # The persisted test gate can be the shared selector rather than the test
   # runner itself. Expand that immutable plan here so every child command
@@ -160,15 +160,30 @@ run_mutation_command() {
          "${args[@]+"${args[@]}"}"; then
       args+=(--exclude scripts/__tests__/quality-mutation-check.test.js)
     fi
-  elif [ "$executable" = npm ] &&
-       [ "${args[0]:-}" = run ] && [ "${args[1]:-}" = test ]; then
+  elif [ "$executable" = npm ]; then
+    npm_test_prefix=0
+    if [ "${args[0]:-}" = test ]; then
+      npm_test_prefix=1
+    elif [ "${args[0]:-}" = run ] && [ "${args[1]:-}" = test ]; then
+      npm_test_prefix=2
+    fi
     case "$REPO_TEST_SCRIPT" in
       vitest\ *|npx\ vitest\ *)
-        array_contains --bail=1 "${args[@]+"${args[@]}"}" || args+=(-- --bail=1)
-        if [ -f "$SANDBOX/scripts/__tests__/quality-mutation-check.test.js" ] &&
-           ! array_contains scripts/__tests__/quality-mutation-check.test.js \
-             "${args[@]+"${args[@]}"}"; then
-          args+=(--exclude scripts/__tests__/quality-mutation-check.test.js)
+        if [ "$npm_test_prefix" -gt 0 ]; then
+          for ((index = npm_test_prefix; index < ${#args[@]}; index += 1)); do
+            [ "${args[$index]}" != -- ] || saw_separator=true
+          done
+          if [ "$saw_separator" = false ]; then
+            normalized_args=("${args[@]:0:npm_test_prefix}" --)
+            normalized_args+=("${args[@]:npm_test_prefix}")
+            args=("${normalized_args[@]}")
+          fi
+          array_contains --bail=1 "${args[@]+"${args[@]}"}" || args+=(--bail=1)
+          if [ -f "$SANDBOX/scripts/__tests__/quality-mutation-check.test.js" ] &&
+             ! array_contains scripts/__tests__/quality-mutation-check.test.js \
+               "${args[@]+"${args[@]}"}"; then
+            args+=(--exclude scripts/__tests__/quality-mutation-check.test.js)
+          fi
         fi
         ;;
     esac
