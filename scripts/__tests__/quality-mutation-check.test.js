@@ -202,6 +202,10 @@ function installPackageManagerShim(root, options) {
 
 function installAuditPolicy(root, options) {
   if (!options.auditMapping) return;
+  const auditCommand =
+    typeof options.auditCommand === "function"
+      ? options.auditCommand(root)
+      : options.auditCommand;
   mkdirSync(path.join(root, ".buildproven"), { recursive: true });
   writeFileSync(
     path.join(root, ".buildproven", "test-impact.json"),
@@ -214,7 +218,7 @@ function installAuditPolicy(root, options) {
           paths: ["aaa-uncovered.js"],
           reason: "fixture complete audit",
           commands: [
-            options.auditCommand ?? {
+            auditCommand ?? {
               executable: "npm",
               args: options.auditArgs ?? ["test"],
             },
@@ -222,6 +226,15 @@ function installAuditPolicy(root, options) {
         },
       ],
     }),
+  );
+}
+
+function installSlowSelector(root, options) {
+  if (!options.slowSelector) return;
+  mkdirSync(path.join(root, "selector"), { recursive: true });
+  writeFileSync(
+    path.join(root, "selector", "test-impact.js"),
+    "setTimeout(() => {}, 10_000);\n",
   );
 }
 
@@ -266,6 +279,7 @@ function fixture(label, testBody, options = {}) {
   installPnpmWorkspace(root, options);
   installLocalNodeDependency(root, options);
   installPackageManagerShim(root, options);
+  installSlowSelector(root, options);
   if (options.pnpmWorkspace) {
     writeFileSync(
       path.join(root, ".quality-gates.json"),
@@ -762,7 +776,7 @@ describe("quality-mutation-check", () => {
     );
   });
 
-  it("fails closed when an expanded selector has no executable commands", () => {
+  it("preserves a valid expanded selector with no selected tests", () => {
     const { root, manifest } = fixture(
       "audit-selector-none",
       "require('./aaa-uncovered.js');\n",
@@ -783,7 +797,52 @@ describe("quality-mutation-check", () => {
     );
 
     expect(() => runMutation(root, manifest)).toThrow(
-      /expanded test-impact plan has no executable mutation proof \(mode=none\)/,
+      /persisted tests remained green/,
+    );
+  });
+
+  it("does not record reserved orchestration status as red-capable evidence", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-orchestration-status",
+      "const fs=require('node:fs');\nif(!fs.existsSync('aaa-uncovered.js')) process.exit(125);\n",
+      {
+        auditMapping: true,
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+        vitestRunner: true,
+        requireMutationExclude: true,
+      },
+    );
+
+    expect(() => runMutation(root, manifest)).toThrow(
+      /controlled revert selector orchestration failed; this is not red-capable evidence/,
+    );
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.mutation).toBeNull();
+  });
+
+  it("bounds selector planning with the mutation timeout", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-timeout",
+      "require('./aaa-uncovered.js');\n",
+      {
+        auditMapping: true,
+        auditCommand: (fixtureRoot) => ({
+          executable: process.execPath,
+          args: [
+            path.join(fixtureRoot, "selector", "test-impact.js"),
+            "--execute",
+          ],
+        }),
+        slowSelector: true,
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+        checkSeconds: 2,
+      },
+    );
+
+    expect(() => runMutation(root, manifest)).toThrow(
+      /serialized baseline test timed out; no red-capable evidence/,
     );
   });
 

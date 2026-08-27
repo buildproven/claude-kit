@@ -48,6 +48,7 @@ TEST_EXECUTABLE="$(printf '%s' "$TEST_PLAN" | jq -r '.executable')"
 TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/quality-mutation.XXXXXX")"
 ARTIFACT="$STATE_ROOT/mutation/$HEAD.json"
 MUTATION_ACTIVE=false
+PLAN_ERROR_STATUS=125
 
 cleanup() {
   STATUS=$?
@@ -113,7 +114,7 @@ array_contains() {
 }
 
 run_mutation_command() {
-  local log="$1" timeout_seconds="$2" depth="$3" executable="$4" argument plan mode command_count index child_executable npm_test_prefix
+  local log="$1" timeout_seconds="$2" depth="$3" executable="$4" argument plan plan_status mode command_count index child_executable npm_test_prefix
   shift 4
   local -a args=("$@") plan_args=() child_args=()
   local saw_execute=false saw_separator=false runner_has_bail=false runner_has_exclusion=false
@@ -135,26 +136,40 @@ run_mutation_command() {
     if [ "$saw_execute" = true ]; then
       if [ "$depth" -ge 3 ]; then
         echo "quality-mutation-check: test-impact selector expansion exceeded depth 3; check for a recursive policy command" >> "$log"
-        return 1
+        return "$PLAN_ERROR_STATUS"
       fi
-      plan="$(cd "$SANDBOX" && "$executable" "${plan_args[@]}" 2>> "$log")" || return $?
-      mode="$(printf '%s' "$plan" | jq -er '.mode')" || return 1
+      if plan="$(cd "$SANDBOX" && bash "$SCRIPT_DIR/quality-run-bounded.sh" \
+        --timeout "$timeout_seconds" -- "$executable" "${plan_args[@]}" 2>> "$log")"; then
+        plan_status=0
+      else
+        plan_status=$?
+      fi
+      [ "$plan_status" -ne 124 ] || return 124
+      if [ "$plan_status" -ne 0 ]; then
+        echo "quality-mutation-check: bounded test-impact planning failed with exit $plan_status" >> "$log"
+        return "$PLAN_ERROR_STATUS"
+      fi
+      mode="$(printf '%s' "$plan" | jq -er '.mode')" || return "$PLAN_ERROR_STATUS"
       case "$mode" in
         focused|audit) ;;
+        none)
+          echo "quality-mutation-check: expanded test-impact plan selected no tests (mode=none)" >> "$log"
+          return 0
+          ;;
         *)
           echo "quality-mutation-check: expanded test-impact plan has no executable mutation proof (mode=$mode)" >> "$log"
           printf '%s\n' "$plan" >> "$log"
-          return 1
+          return "$PLAN_ERROR_STATUS"
           ;;
       esac
-      command_count="$(printf '%s' "$plan" | jq -er '.commands | length')" || return 1
+      command_count="$(printf '%s' "$plan" | jq -er '.commands | length')" || return "$PLAN_ERROR_STATUS"
       [ "$command_count" -gt 0 ] || {
         echo "quality-mutation-check: expanded test-impact plan has no executable commands" >> "$log"
         printf '%s\n' "$plan" >> "$log"
-        return 1
+        return "$PLAN_ERROR_STATUS"
       }
       for ((index = 0; index < command_count; index += 1)); do
-        child_executable="$(printf '%s' "$plan" | jq -er ".commands[$index].executable")" || return 1
+        child_executable="$(printf '%s' "$plan" | jq -er ".commands[$index].executable")" || return "$PLAN_ERROR_STATUS"
         child_args=()
         while IFS= read -r argument; do child_args+=("$argument"); done < <(
           printf '%s' "$plan" | jq -r ".commands[$index].args[]"
@@ -758,6 +773,11 @@ for CANDIDATE in "${CANDIDATES[@]+"${CANDIDATES[@]}"}"; do
   git -C "$ROOT" worktree remove --force "$SANDBOX" >/dev/null
   if [ "$RESULT" -eq 124 ]; then
     echo "quality-mutation-check: controlled revert test timed out; a hang is not red-capable evidence" >&2
+    exit 1
+  fi
+  if [ "$RESULT" -eq "$PLAN_ERROR_STATUS" ]; then
+    echo "quality-mutation-check: controlled revert selector orchestration failed; this is not red-capable evidence" >&2
+    tail -n 40 "$LOG" >&2 || true
     exit 1
   fi
   if [ "$RESULT" -ne 0 ]; then
