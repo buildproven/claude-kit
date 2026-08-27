@@ -96,7 +96,7 @@ describe("quality runtime planning", () => {
     expect(verification.reviewPasses).toBe(1);
   });
 
-  it("keeps a default campaign without repository gates at 15 minutes", () => {
+  it("caps every default campaign at 15 minutes", () => {
     expect(plan(100, 500, 100000).campaignSeconds).toBe(900);
   });
 
@@ -108,13 +108,7 @@ describe("quality runtime planning", () => {
     });
 
     expect(plan.gateReserveSeconds).toBe(360);
-    expect(plan.campaignSeconds).toBe(
-      plan.gateReserveSeconds +
-        plan.checkReserveSeconds +
-        plan.reviewReserveSeconds +
-        plan.verificationSeconds +
-        60,
-    );
+    expect(plan.campaignSeconds).toBe(600);
     expect(plan.campaignSeconds).toBeGreaterThanOrEqual(
       plan.gateReserveSeconds + plan.reviewSeconds,
     );
@@ -135,7 +129,7 @@ describe("quality runtime planning", () => {
       security: 300,
     });
     expect(plan.gateReserveSeconds).toBe(1800);
-    expect(plan.campaignSeconds).toBe(2520);
+    expect(plan.campaignSeconds).toBe(2130);
     expect(
       plan.campaignSeconds - plan.gateReserveSeconds,
     ).toBeGreaterThanOrEqual(

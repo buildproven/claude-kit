@@ -973,26 +973,35 @@ function declaredGateTimeouts(root, head) {
   ) {
     return new Map();
   }
-  const patterns = {
-    lint: /(?:^|[:\s-])(?:lint|format)(?:$|[:\s-])/i,
-    test: /(?:^|[:\s-])test(?:$|[:\s-])/i,
-    security: /(?:^|[:\s-])(?:security|audit|semgrep|gitleaks)(?:$|[:\s-])/i,
-    build: /(?:^|[:\s-])build(?:$|[:\s-])/i,
-    type: /(?:^|[:\s-])(?:type|typecheck|type-check)(?:$|[:\s-])/i,
-    consumer: /(?:^|[:\s-])consumer(?:$|[:\s-])/i,
-    "verify-app": /(?:^|[:\s-])(?:verify-app|e2e)(?:$|[:\s-])/i,
-  };
   const timeouts = new Map();
   for (const [definitionName, definition] of Object.entries(definitions)) {
     const seconds = harnessCheckTimeoutSeconds(definitionName, definition);
     if (seconds === null) continue;
-    const identity = `${definitionName} ${String(definition.command || "")}`;
-    for (const [gateName, pattern] of Object.entries(patterns)) {
-      if (!pattern.test(identity)) continue;
-      timeouts.set(gateName, Math.max(timeouts.get(gateName) || 0, seconds));
-    }
+    const gateName = harnessCheckGateName(definitionName);
+    if (!gateName) continue;
+    timeouts.set(gateName, Math.max(timeouts.get(gateName) || 0, seconds));
   }
   return timeouts;
+}
+
+function harnessCheckGateName(name) {
+  const normalized = String(name).toLowerCase();
+  if (/^verify-app(?:$|[:-])/.test(normalized)) return "verify-app";
+  const prefix = normalized.split(/[:-]/, 1)[0];
+  return {
+    lint: "lint",
+    format: "lint",
+    test: "test",
+    security: "security",
+    audit: "security",
+    semgrep: "security",
+    gitleaks: "security",
+    build: "build",
+    type: "type",
+    typecheck: "type",
+    consumer: "consumer",
+    e2e: "verify-app",
+  }[prefix];
 }
 
 function harnessCheckTimeoutSeconds(name, definition) {

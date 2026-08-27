@@ -173,6 +173,7 @@ function gateTimeoutExtraSeconds(gateTimeoutSeconds, checkSeconds) {
 function gateCampaignBudget({
   band,
   riskFloor,
+  reviewSeconds,
   requiredGateCount,
   declaredGateTimeoutSeconds,
 }) {
@@ -182,9 +183,21 @@ function gateCampaignBudget({
   );
   const gateReserveSeconds =
     requiredGateCount * band.checkSeconds + declaredGateExtraSeconds;
+  if (declaredGateExtraSeconds === 0) {
+    return {
+      gateReserveSeconds,
+      campaignSeconds: Math.min(
+        900,
+        Math.max(
+          band.campaignSeconds,
+          riskFloor.campaignSeconds,
+          gateReserveSeconds + reviewSeconds + ORCHESTRATION_SECONDS,
+        ),
+      ),
+    };
+  }
   const minimumCampaignSeconds =
     gateReserveSeconds +
-    (requiredGateCount > 0 ? band.checkReserveSeconds : 0) +
     band.reviewReserveSeconds +
     band.verificationSeconds +
     ORCHESTRATION_SECONDS;
@@ -239,6 +252,7 @@ function planRuntime({
   const { gateReserveSeconds, campaignSeconds } = gateCampaignBudget({
     band,
     riskFloor,
+    reviewSeconds,
     requiredGateCount,
     declaredGateTimeoutSeconds,
   });

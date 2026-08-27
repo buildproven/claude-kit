@@ -7394,6 +7394,34 @@ exit 1
     );
   });
 
+  it("BUI-804: maps one combined check declaration to only one gate", () => {
+    const root = repo("combined-declared-gate");
+    const packageFile = path.join(root, "package.json");
+    const packageJson = JSON.parse(readFileSync(packageFile, "utf8"));
+    packageJson.scripts.build = "true";
+    writeFileSync(packageFile, JSON.stringify(packageJson));
+    writeFileSync(
+      path.join(root, "harness-config.json"),
+      JSON.stringify({
+        checkDefinitions: {
+          "build-and-test": {
+            command: "npm run build && npm test",
+            timeoutMinutes: 20,
+          },
+        },
+      }),
+    );
+    git(root, ["add", "package.json", "harness-config.json"]);
+    git(root, ["commit", "-q", "-m", "declare combined check duration"]);
+
+    const manifest = JSON.parse(readFileSync(create(root), "utf8"));
+    const timeouts = Object.fromEntries(
+      manifest.requiredGates.map((gate) => [gate.name, gate.timeoutSeconds]),
+    );
+    expect(timeouts.build).toBe(1200);
+    expect(timeouts.test).toBeUndefined();
+  });
+
   it("BUI-733: persists an evidence-backed affected test gate when the repository opts in", () => {
     const root = repo("affected-test-gate");
     mkdirSync(path.join(root, ".buildproven"));
