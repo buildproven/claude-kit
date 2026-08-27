@@ -17,6 +17,18 @@ describe("quality merge authorization action boundary", () => {
     );
   });
 
+  it("keeps autonomous ref-CAS unavailable to human-required campaigns", () => {
+    expect(script).toMatch(
+      /MERGE_MODE" = protected-nonstrict-ref-cas[\s\S]*NONSTRICT_REFCAS_CAPABILITY" != true[\s\S]*MERGE_AUTHORITY" != autonomous[\s\S]*human-required protected non-strict ref-CAS needs exact signed authority/,
+    );
+  });
+
+  it("fails on protected non-strict inspection errors other than an unprotected 404", () => {
+    expect(script).toMatch(
+      /PROTECTED_NONSTRICT_RC[\s\S]*Branch not protected[\s\S]*Not Found \(HTTP 404\)[\s\S]*protected non-strict ref-CAS classification failed[\s\S]*exit 1/,
+    );
+  });
+
   it("returns the typed action-required exit for missing strict freshness", () => {
     const branch = script.match(
       /\*\)\n(?<body>[\s\S]*?the PR base lacks server-enforced strict freshness[\s\S]*?)\n\s*;;/,

@@ -417,7 +417,14 @@ if [ "$ATOMIC_BASE_FRESHNESS" != true ]; then
     2>"$PROTECTED_NONSTRICT_ERROR_FILE")" || PROTECTED_NONSTRICT_RC=$?
   if [ "$PROTECTED_NONSTRICT_RC" -ne 0 ]; then
     PROTECTED_NONSTRICT_ERROR="$(head -n 1 "$PROTECTED_NONSTRICT_ERROR_FILE")"
-    echo "[quality] protected non-strict ref-CAS unavailable: ${PROTECTED_NONSTRICT_ERROR:-classification failed}" >&2
+    case "$PROTECTED_NONSTRICT_ERROR" in
+      *"Branch not protected"* | *"Not Found (HTTP 404)"*) ;;
+      *)
+        echo "❌ MERGE BLOCKED: protected non-strict ref-CAS classification failed: ${PROTECTED_NONSTRICT_ERROR:-unknown error}" >&2
+        rm -f "$PROTECTED_NONSTRICT_ERROR_FILE"
+        exit 1
+        ;;
+    esac
   fi
   rm -f "$PROTECTED_NONSTRICT_ERROR_FILE"
   PROTECTED_NONSTRICT_DIGEST="$(printf '%s' "$PROTECTED_NONSTRICT_INSPECTION" |
@@ -588,6 +595,15 @@ case "$MERGE_AUTHORITY" in
     exit 1
     ;;
 esac
+if [ "$MERGE_MODE" = protected-nonstrict-ref-cas ] &&
+  [ "$NONSTRICT_REFCAS_CAPABILITY" != true ] &&
+  [ "$MERGE_AUTHORITY" != autonomous ]; then
+  record_merge_admission_blocked_terminal \
+    "base:protected-nonstrict,pr:non-atomic-state" \
+    "human-required protected non-strict ref-CAS needs exact signed authority" || exit 1
+  echo "❌ MERGE BLOCKED: human-required protected non-strict ref-CAS needs exact signed authority." >&2
+  exit 3
+fi
 
 # Manual-governance policy (legacy opt-in).
 #

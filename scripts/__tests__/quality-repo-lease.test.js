@@ -1417,6 +1417,12 @@ esac
       checkState: "success",
     },
     {
+      name: "legacy review evidence without explicit status",
+      manifest: { risk: { mergeAuthority: "autonomous" } },
+      authorization: {},
+      checkState: "success",
+    },
+    {
       name: "failed required CI",
       manifest: { risk: { mergeAuthority: "autonomous" } },
       authorization: { reviewStatus: "complete" },
@@ -1428,6 +1434,13 @@ esac
       authorization: { reviewStatus: "complete" },
       checkState: "success",
       requestedDigest: "e".repeat(64),
+    },
+    {
+      name: "missing authorizer protection digest",
+      manifest: { risk: { mergeAuthority: "autonomous" } },
+      authorization: { reviewStatus: "complete" },
+      checkState: "success",
+      requestedDigest: null,
     },
     {
       name: "changed required check App binding",
@@ -1458,7 +1471,10 @@ esac
         },
         {
           admin: true,
-          protectionDigest: scenario.requestedDigest || digest,
+          protectionDigest:
+            scenario.requestedDigest === undefined
+              ? digest
+              : scenario.requestedDigest,
         },
         "a".repeat(40),
         {
@@ -1477,6 +1493,31 @@ esac
         },
       ),
     ).toThrow(/complete exact-head review, green CI/);
+  });
+
+  it("rejects an invalid ref-CAS capability without acquiring a merge guard", () => {
+    const candidate = fixture("refcas-invalid-capability");
+    const { manifest } = invocation.loadManifest(candidate.manifestPath);
+    attachRefCasCapability(
+      candidate.manifestPath,
+      "c".repeat(64),
+      [{ context: "quality", appId: 15368 }],
+      { includeOutage: false },
+    );
+    invocation.withManifestLockRaw(candidate.manifestPath, (locked) => {
+      locked.approval.protectedNonstrictProtectionDigest = "d".repeat(64);
+    });
+    const owner = lease.acquire(candidate.manifestPath);
+    expect(() =>
+      lease.performMerge(candidate.manifestPath, owner.token, {
+        admin: true,
+        expectedHead: manifest.revisions.currentHead,
+        mode: "protected-nonstrict-ref-cas",
+        protectionDigest: "d".repeat(64),
+      }),
+    ).toThrow(/valid signed exact-head capability/);
+    expect(lease.status(candidate.manifestPath).mergeGuard).toBeNull();
+    lease.release(candidate.manifestPath, owner.token, "test-complete");
   });
 
   it("rejects a manifest binding that differs from the signed capability", () => {

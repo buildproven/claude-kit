@@ -907,10 +907,7 @@ function requiredCheckBindings(checks) {
 function autonomousReviewReady(manifest, authorization) {
   if (manifest.risk?.mergeAuthority !== "autonomous") return false;
   if (authorization?.operatorOverride === true) return false;
-  return (
-    !authorization?.reviewStatus ||
-    ["complete", "policy-exempt"].includes(authorization.reviewStatus)
-  );
+  return ["complete", "policy-exempt"].includes(authorization?.reviewStatus);
 }
 
 function autonomousRequestReady(manifest, options) {
@@ -920,9 +917,8 @@ function autonomousRequestReady(manifest, options) {
 
 function protectionBindingReady(inspection, options) {
   if (!/^[a-f0-9]{64}$/.test(inspection?.digest || "")) return false;
-  return (
-    !options.protectionDigest || options.protectionDigest === inspection.digest
-  );
+  if (!/^[a-f0-9]{64}$/.test(options.protectionDigest || "")) return false;
+  return options.protectionDigest === inspection.digest;
 }
 
 function greenCheckBindings(checkStates, inspection) {
