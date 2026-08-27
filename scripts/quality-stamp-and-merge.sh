@@ -42,17 +42,21 @@ record_merge_admission_blocked_terminal() {
 }
 REQUIRED_CHECKS_JSON=""
 REQUIRED_CHECKS_ABSENT=false
-if ! REQUIRED_CHECKS_OUTPUT="$(gh pr checks "$PR" \
+REQUIRED_CHECKS_LOOKUP_SUCCEEDED=false
+if REQUIRED_CHECKS_OUTPUT="$(gh pr checks "$PR" \
   --repo "$EXPECTED_REPOSITORY" --required --json state 2>&1)"; then
-  case "$REQUIRED_CHECKS_OUTPUT" in
-    "no required checks reported"*) REQUIRED_CHECKS_ABSENT=true ;;
-    *)
-      echo "[quality] required-check lookup failed; retaining normal CI budget admission." >&2
-      ;;
-  esac
-else
-  REQUIRED_CHECKS_JSON="$REQUIRED_CHECKS_OUTPUT"
+  REQUIRED_CHECKS_LOOKUP_SUCCEEDED=true
 fi
+case "$REQUIRED_CHECKS_OUTPUT" in
+  "no required checks reported"*) REQUIRED_CHECKS_ABSENT=true ;;
+  *)
+    if [ "$REQUIRED_CHECKS_LOOKUP_SUCCEEDED" = true ]; then
+      REQUIRED_CHECKS_JSON="$REQUIRED_CHECKS_OUTPUT"
+    else
+      echo "[quality] required-check lookup failed; retaining normal CI budget admission." >&2
+    fi
+    ;;
+esac
 CHECKS_FOR_ADMISSION_JSON="$REQUIRED_CHECKS_JSON"
 if [ "$REQUIRED_CHECKS_ABSENT" = true ]; then
   # Private repositories on plans without enforceable required contexts can
