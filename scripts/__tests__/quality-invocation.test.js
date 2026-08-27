@@ -7429,7 +7429,18 @@ exit 1
       path.join(root, ".buildproven", "test-impact.json"),
       JSON.stringify({ version: 1, jsRunner: "vitest" }),
     );
-    git(root, ["add", ".buildproven/test-impact.json"]);
+    writeFileSync(
+      path.join(root, "harness-config.json"),
+      JSON.stringify({
+        checkDefinitions: {
+          "test-integration": {
+            command: "npm run test:slow",
+            timeoutMinutes: 20,
+          },
+        },
+      }),
+    );
+    git(root, ["add", ".buildproven/test-impact.json", "harness-config.json"]);
     git(root, ["commit", "-q", "-m", "configure affected tests"]);
     git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
     writeFileSync(path.join(root, "file.js"), "export const value = 3;\n");
@@ -7444,6 +7455,7 @@ exit 1
       executable: process.execPath,
       testImpactMode: "focused",
     });
+    expect(testGate.timeoutSeconds).toBeUndefined();
     expect(testGate.args).toEqual([
       path.join(ROOT, "scripts", "test-impact.js"),
       "--execute",

@@ -1013,8 +1013,9 @@ function harnessCheckTimeoutSeconds(name, definition) {
     return null;
   }
   if (!Object.hasOwn(definition, "timeoutMinutes")) return null;
-  const minutes = Number(definition.timeoutMinutes);
+  const minutes = definition.timeoutMinutes;
   if (
+    typeof minutes !== "number" ||
     !Number.isInteger(minutes) ||
     minutes < 1 ||
     minutes * 60 > MAX_DECLARED_GATE_TIMEOUT_SECONDS
@@ -1123,6 +1124,7 @@ function discoverRequiredGates(
   const verifyAppGate = discoverVerifyAppGate(options, nativeGates);
   if (verifyAppGate) required.push(verifyAppGate);
   return required.map((gate) => {
+    if (gate.source.startsWith("test-impact:")) return gate;
     const timeoutSeconds = gateTimeouts.get(gate.name);
     return timeoutSeconds ? { ...gate, timeoutSeconds } : gate;
   });
