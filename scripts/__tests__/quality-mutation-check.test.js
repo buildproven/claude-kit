@@ -72,6 +72,7 @@ function installLocalNodeDependency(root, options) {
       `#!/usr/bin/env bash
 printf "%s\\n" "$*"
 ${options.requireMutationExclude ? 'case " $* " in *" --exclude scripts/__tests__/quality-mutation-check.test.js "*) ;; *) echo "recursive mutation contract was not excluded" >&2; exit 42 ;; esac\n' : ""}
+${options.rejectForwardedNpmSilent ? 'case " $* " in *" --silent "*) echo "npm-owned --silent reached Vitest" >&2; exit 43 ;; esac\n' : ""}
 ${options.relatedNoTests ? 'case " $* " in *" related "*) echo "No test files found"; exit 0 ;; esac\n' : ""}
 ${options.siblingExitTwo ? `case " $* " in *" ${options.testPath || "logic.test.js"} "*) exit 2 ;; esac\n` : ""}node ${options.testPath || "logic.test.js"}
 `,
@@ -213,7 +214,10 @@ function installAuditPolicy(root, options) {
           paths: ["aaa-uncovered.js"],
           reason: "fixture complete audit",
           commands: [
-            { executable: "npm", args: options.auditArgs ?? ["test"] },
+            options.auditCommand ?? {
+              executable: "npm",
+              args: options.auditArgs ?? ["test"],
+            },
           ],
         },
       ],
@@ -710,6 +714,51 @@ describe("quality-mutation-check", () => {
 
     expect(runMutation(root, manifest)).toMatch(
       /mutation evidence: revert-diff/,
+    );
+  });
+
+  it("preserves npm-owned flags before the pass-through separator", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-npm-silent",
+      "require('./aaa-uncovered.js');\n",
+      {
+        auditMapping: true,
+        auditArgs: ["test", "--silent"],
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+        vitestRunner: true,
+        requireMutationExclude: true,
+        rejectForwardedNpmSilent: true,
+      },
+    );
+
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+  });
+
+  it("fails closed on a recursive test-impact policy command", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-cycle",
+      "require('./aaa-uncovered.js');\n",
+      {
+        auditMapping: true,
+        auditCommand: {
+          executable: process.execPath,
+          args: [
+            path.join(ROOT, "scripts", "test-impact.js"),
+            "--execute",
+            "--",
+            "aaa-uncovered.js",
+          ],
+        },
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+      },
+    );
+
+    expect(() => runMutation(root, manifest)).toThrow(
+      /selector expansion exceeded depth 3/,
     );
   });
 

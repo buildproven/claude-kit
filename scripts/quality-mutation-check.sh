@@ -113,10 +113,10 @@ array_contains() {
 }
 
 run_mutation_command() {
-  local log="$1" timeout_seconds="$2" executable="$3" argument plan mode command_count index child_executable npm_test_prefix
-  shift 3
-  local -a args=("$@") plan_args=() child_args=() normalized_args=()
-  local saw_execute=false saw_separator=false
+  local log="$1" timeout_seconds="$2" depth="$3" executable="$4" argument plan mode command_count index child_executable npm_test_prefix
+  shift 4
+  local -a args=("$@") plan_args=() child_args=()
+  local saw_execute=false saw_separator=false runner_has_bail=false runner_has_exclusion=false
 
   # The persisted test gate can be the shared selector rather than the test
   # runner itself. Expand that immutable plan here so every child command
@@ -133,6 +133,10 @@ run_mutation_command() {
       fi
     done
     if [ "$saw_execute" = true ]; then
+      if [ "$depth" -ge 3 ]; then
+        echo "quality-mutation-check: test-impact selector expansion exceeded depth 3; check for a recursive policy command" >> "$log"
+        return 1
+      fi
       plan="$(cd "$SANDBOX" && "$executable" "${plan_args[@]}" 2>> "$log")" || return $?
       mode="$(printf '%s' "$plan" | jq -er '.mode')" || return 1
       [ "$mode" != unmapped ] || {
@@ -146,7 +150,7 @@ run_mutation_command() {
         while IFS= read -r argument; do child_args+=("$argument"); done < <(
           printf '%s' "$plan" | jq -r ".commands[$index].args[]"
         )
-        run_mutation_command "$log" "$timeout_seconds" "$child_executable" \
+        run_mutation_command "$log" "$timeout_seconds" "$((depth + 1))" "$child_executable" \
           "${child_args[@]+"${child_args[@]}"}" || return $?
       done
       return 0
@@ -171,17 +175,21 @@ run_mutation_command() {
       vitest\ *|npx\ vitest\ *)
         if [ "$npm_test_prefix" -gt 0 ]; then
           for ((index = npm_test_prefix; index < ${#args[@]}; index += 1)); do
-            [ "${args[$index]}" != -- ] || saw_separator=true
+            if [ "${args[$index]}" = -- ]; then
+              saw_separator=true
+              continue
+            fi
+            if [ "$saw_separator" = true ]; then
+              [ "${args[$index]}" != --bail=1 ] || runner_has_bail=true
+              [ "${args[$index]}" != scripts/__tests__/quality-mutation-check.test.js ] || runner_has_exclusion=true
+            fi
           done
           if [ "$saw_separator" = false ]; then
-            normalized_args=("${args[@]:0:npm_test_prefix}" --)
-            normalized_args+=("${args[@]:npm_test_prefix}")
-            args=("${normalized_args[@]}")
+            args+=(--)
           fi
-          array_contains --bail=1 "${args[@]+"${args[@]}"}" || args+=(--bail=1)
+          [ "$runner_has_bail" = true ] || args+=(--bail=1)
           if [ -f "$SANDBOX/scripts/__tests__/quality-mutation-check.test.js" ] &&
-             ! array_contains scripts/__tests__/quality-mutation-check.test.js \
-               "${args[@]+"${args[@]}"}"; then
+             [ "$runner_has_exclusion" = false ]; then
             args+=(--exclude scripts/__tests__/quality-mutation-check.test.js)
           fi
         fi
@@ -221,13 +229,13 @@ run_candidate_tests() {
         while IFS= read -r argument; do args+=("$argument"); done < <(
           printf '%s' "$plan" | jq -r ".commands[$index].args[]"
         )
-        run_mutation_command "$log" "$timeout_seconds" "$executable" \
+        run_mutation_command "$log" "$timeout_seconds" 0 "$executable" \
           "${args[@]}" || return $?
       done
       return 0
     fi
   fi
-  run_mutation_command "$log" "$timeout_seconds" "$TEST_EXECUTABLE" \
+  run_mutation_command "$log" "$timeout_seconds" 0 "$TEST_EXECUTABLE" \
     "${MUTATION_TEST_ARGS[@]+"${MUTATION_TEST_ARGS[@]}"}"
 }
 
