@@ -409,7 +409,7 @@ describe("claude-review-companion.sh", () => {
     expect(args).not.toContain("--allowedTools");
   });
 
-  it("binds Critical Claude slots to two model families", () => {
+  it("does not override the governor model for Critical Claude slots", () => {
     const d = tmpdir();
     const bin = path.join(d, "bin");
     const argsFile = path.join(d, "claude-args.txt");
@@ -443,14 +443,16 @@ describe("claude-review-companion.sh", () => {
     expect(r.code, r.stderr).toBe(0);
     const args = fs.readFileSync(argsFile, "utf8");
     expect(args).toContain("--model claude-sonnet-5");
-    expect(args).toContain("--model claude-opus-5");
+    expect(args).not.toContain("claude-opus");
     const slots = ["code-reviewer", "security-auditor"].map(
       (agent) =>
         JSON.parse(
           fs.readFileSync(path.join(d, "out", `${agent}.normalized.json`)),
         )._qualitySlot,
     );
-    expect(new Set(slots.map((slot) => slot.model)).size).toBe(2);
+    expect(new Set(slots.map((slot) => slot.model))).toEqual(
+      new Set(["claude-sonnet-5"]),
+    );
   });
 
   it("preserves a complete review emitted just before watchdog termination", () => {
