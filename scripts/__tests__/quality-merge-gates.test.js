@@ -70,6 +70,9 @@ describe("quality merge gates", () => {
     expect(source).toContain('gh pr checks "$PR"');
     expect(source).toContain("--required --json state");
     expect(source).toContain('"no required checks reported"*');
+    expect(source).toMatch(
+      /REQUIRED_CHECKS_LOOKUP_SUCCEEDED=false[\s\S]*REQUIRED_CHECKS_LOOKUP_SUCCEEDED=true[\s\S]*case "\$REQUIRED_CHECKS_OUTPUT" in[\s\S]*"no required checks reported"\*\) REQUIRED_CHECKS_ABSENT=true/,
+    );
     expect(source).not.toMatch(
       /--required --json state 2>\/dev\/null \|\| true/,
     );

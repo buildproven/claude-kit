@@ -2,8 +2,8 @@
 
 ## Status
 
-Accepted for BUI-795. Implementation must receive a bounded adversarial review
-before merge.
+Accepted for BUI-795 and amended for BUI-801. Implementation must receive a
+bounded adversarial review before merge.
 
 ## Context
 
@@ -73,6 +73,17 @@ count stay cumulative across the campaign lineage. This lets the fixed head
 run its required deterministic suite without minting additional model capacity
 or weakening the 15-minute deadline for any one revision.
 
+A separate same-HEAD resolution applies when the only terminal admission
+condition is `ci:failed` and GitHub later reports current green CI for the exact
+open PR and HEAD. The runtime reads the PR and all registered checks itself. It
+requires at least one check and accepts only `SUCCESS`, `SKIPPED`, or `NEUTRAL`.
+It then archives the original terminal record as `resolved-by-green-ci`, records
+the check count and exact HEAD, increments the terminal epoch, and clears only
+the matching CI admission block. It does not reset gates, reviews, counters, or
+budgets. Any other terminal condition still requires its existing signed
+capability or remains terminal. Final merge authorization reads the live PR,
+HEAD, base, and CI again, so this resolution cannot authorize a merge by itself.
+
 ## Alternatives
 
 ### Make every blocked campaign resumable
@@ -117,6 +128,9 @@ command.
 12. Repository gate processes do not inherit the outer terminal epoch,
     repository lease credential, or review and approval signing keys. Those
     values remain available only to runner-owned orchestration processes.
+13. A resolved CI admission block requires an open PR at the persisted exact
+    HEAD and at least one current registered green check. The final merge gate
+    revalidates that external evidence before mutation.
 
 ## Rollback
 
