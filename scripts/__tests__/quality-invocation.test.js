@@ -618,6 +618,11 @@ fi
     echo 'gh: Branch not protected (HTTP 404)' >&2
     exit 1
   fi
+  if [[ "$*" == *"/protection"* ]]; then
+    printf '%s\\n' '{"message":"Branch not protected"}'
+    echo 'gh: Branch not protected (HTTP 404)' >&2
+    exit 1
+  fi
   if [[ "$*" == *"/rules/branches/"* ]]; then
     case "\${QUALITY_TEST_EFFECTIVE_RULES:-none}" in
       strict)
