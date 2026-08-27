@@ -139,11 +139,20 @@ run_mutation_command() {
       fi
       plan="$(cd "$SANDBOX" && "$executable" "${plan_args[@]}" 2>> "$log")" || return $?
       mode="$(printf '%s' "$plan" | jq -er '.mode')" || return 1
-      [ "$mode" != unmapped ] || {
-        printf '%s\n' "$plan" >> "$log"
-        return 2
-      }
+      case "$mode" in
+        focused|audit) ;;
+        *)
+          echo "quality-mutation-check: expanded test-impact plan has no executable mutation proof (mode=$mode)" >> "$log"
+          printf '%s\n' "$plan" >> "$log"
+          return 1
+          ;;
+      esac
       command_count="$(printf '%s' "$plan" | jq -er '.commands | length')" || return 1
+      [ "$command_count" -gt 0 ] || {
+        echo "quality-mutation-check: expanded test-impact plan has no executable commands" >> "$log"
+        printf '%s\n' "$plan" >> "$log"
+        return 1
+      }
       for ((index = 0; index < command_count; index += 1)); do
         child_executable="$(printf '%s' "$plan" | jq -er ".commands[$index].executable")" || return 1
         child_args=()

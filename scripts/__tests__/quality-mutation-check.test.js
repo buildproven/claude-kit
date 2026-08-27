@@ -762,6 +762,31 @@ describe("quality-mutation-check", () => {
     );
   });
 
+  it("fails closed when an expanded selector has no executable commands", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-none",
+      "require('./aaa-uncovered.js');\n",
+      {
+        auditMapping: true,
+        auditCommand: {
+          executable: process.execPath,
+          args: [
+            path.join(ROOT, "scripts", "test-impact.js"),
+            "--execute",
+            "--",
+            "README.md",
+          ],
+        },
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+      },
+    );
+
+    expect(() => runMutation(root, manifest)).toThrow(
+      /expanded test-impact plan has no executable mutation proof \(mode=none\)/,
+    );
+  });
+
   it("uses pytest fail-fast after the first controlled-revert failure", () => {
     const { root, manifest } = fixture(
       "pytest-fail-fast",
