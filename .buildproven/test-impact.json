@@ -18,6 +18,7 @@
       "paths": [
         "config/compute-governor-policy-v1.json",
         "config/compute-governor-policy-v2.json",
+        "scripts/claude-review-companion.sh",
         "scripts/compute-governor.js",
         "scripts/provider-run.sh",
         "scripts/overnight-loop.sh",
@@ -33,6 +34,7 @@
           "args": [
             "vitest",
             "run",
+            "scripts/__tests__/claude-review-companion.test.js",
             "scripts/__tests__/compute-governor.test.js",
             "scripts/__tests__/provider-native.test.js",
             "scripts/__tests__/overnight-loop.test.js"
