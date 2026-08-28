@@ -25,6 +25,13 @@ function directDependencies(pkg) {
   }).sort();
 }
 
+function dependencySpecs(pkg) {
+  return {
+    ...(pkg.dependencies || {}),
+    ...(pkg.devDependencies || {}),
+  };
+}
+
 function packageBinNames(name, pkg) {
   if (typeof pkg.bin === "string") return [name.split("/").at(-1)];
   if (!pkg.bin || typeof pkg.bin !== "object") return [];
@@ -45,14 +52,49 @@ function packageManager(root, pkg) {
   return "npm";
 }
 
-function inspectPnpDependencies(root, dependencies) {
+function regexEscape(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function yarnLockedReference(lockText, name, requested) {
+  const descriptor = new RegExp(
+    `${regexEscape(name)}@(?:npm:)?${regexEscape(requested)}(?:\\"|,|:)`,
+  );
+  const resolution = new RegExp(
+    `^\\s+resolution: ["']?${regexEscape(name)}@([^"'\\s]+)`,
+    "m",
+  );
+  for (const block of lockText.split(/\n(?=\S)/)) {
+    if (!descriptor.test(block)) continue;
+    const match = block.match(resolution);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+function inspectPnpDependencies(root, dependencies, specs) {
   const failures = [];
   const pnpFile = path.join(root, ".pnp.cjs");
+  const lockFile = path.join(root, "yarn.lock");
+  if (!fs.existsSync(lockFile)) return ["yarn.lock is missing"];
+  const lockText = fs.readFileSync(lockFile, "utf8");
   let api;
   try {
     api = createRequire(pnpFile)(pnpFile);
   } catch (error) {
     return [`yarn: .pnp.cjs is unreadable (${error.message})`];
+  }
+  if (
+    typeof api.findPackageLocator !== "function" ||
+    typeof api.getPackageInformation !== "function" ||
+    typeof api.resolveToUnqualified !== "function"
+  ) {
+    return ["yarn: .pnp.cjs does not expose the required resolution API"];
+  }
+  const rootLocator = api.findPackageLocator(`${root}${path.sep}`);
+  const rootInfo = rootLocator ? api.getPackageInformation(rootLocator) : null;
+  if (!(rootInfo?.packageDependencies instanceof Map)) {
+    return ["yarn: root package is missing from PnP state"];
   }
   for (const name of dependencies) {
     try {
@@ -62,12 +104,24 @@ function inspectPnpDependencies(root, dependencies) {
       }
     } catch {
       failures.push(`${name}: package is not resolvable from Yarn PnP state`);
+      continue;
+    }
+    const installedReference = rootInfo.packageDependencies.get(name);
+    const lockedReference = yarnLockedReference(lockText, name, specs[name]);
+    if (!lockedReference) {
+      failures.push(
+        `${name}: current manifest has no matching yarn.lock record`,
+      );
+    } else if (installedReference !== lockedReference) {
+      failures.push(
+        `${name}: PnP reference ${installedReference || "missing"}, yarn.lock requires ${lockedReference}`,
+      );
     }
   }
   return failures;
 }
 
-function inspectLinkedManager(root, manager, dependencies) {
+function inspectLinkedManager(root, manager, dependencies, specs) {
   const failures = [];
   const readinessMarkers = {
     pnpm: ["node_modules/.modules.yaml"],
@@ -81,7 +135,10 @@ function inspectLinkedManager(root, manager, dependencies) {
     return { manager, failures };
   }
   if (manager === "yarn" && fs.existsSync(path.join(root, ".pnp.cjs"))) {
-    return { manager, failures: inspectPnpDependencies(root, dependencies) };
+    return {
+      manager,
+      failures: inspectPnpDependencies(root, dependencies, specs),
+    };
   }
   for (const name of dependencies) {
     if (!fs.existsSync(path.join(root, "node_modules", name))) {
@@ -108,10 +165,11 @@ function inspectDependencies(root) {
   if (!fs.existsSync(packageFile)) return { manager: null, failures: [] };
   const pkg = readJson(packageFile, "package.json");
   const dependencies = directDependencies(pkg);
+  const specs = dependencySpecs(pkg);
   const manager = packageManager(root, pkg);
   if (dependencies.length === 0) return { manager, failures: [] };
   if (manager !== "npm")
-    return inspectLinkedManager(root, manager, dependencies);
+    return inspectLinkedManager(root, manager, dependencies, specs);
   const lockFile = path.join(root, "package-lock.json");
   if (!fs.existsSync(lockFile)) {
     return { manager: "npm", failures: ["package-lock.json is missing"] };

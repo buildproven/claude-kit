@@ -127,7 +127,15 @@ describe("quality dependency preflight", () => {
     fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(pkg));
     fs.writeFileSync(
       path.join(root, ".pnp.cjs"),
-      "module.exports = { resolveToUnqualified() { throw new Error('missing'); } };\n",
+      `module.exports = {
+  resolveToUnqualified() { throw new Error("missing"); },
+  findPackageLocator() { return { name: "fixture", reference: "workspace:." }; },
+  getPackageInformation() { return { packageDependencies: new Map([["eslint", "npm:1.2.3"]]) }; }
+};\n`,
+    );
+    fs.writeFileSync(
+      path.join(root, "yarn.lock"),
+      '"eslint@npm:1.2.3":\n  resolution: "eslint@npm:1.2.3"\n',
     );
     const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
       encoding: "utf8",
@@ -138,6 +146,38 @@ describe("quality dependency preflight", () => {
     });
     expect(result.status).toBe(78);
     expect(result.stderr).toMatch(/not resolvable from Yarn PnP state/);
+  });
+
+  it("rejects a PnP reference that is stale against the current Yarn lock", () => {
+    const root = fixture();
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(root, "package.json"), "utf8"),
+    );
+    pkg.packageManager = "yarn@4.0.0";
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(pkg));
+    fs.writeFileSync(
+      path.join(root, "yarn.lock"),
+      '"eslint@npm:1.2.3":\n  resolution: "eslint@npm:1.2.3"\n',
+    );
+    fs.writeFileSync(
+      path.join(root, ".pnp.cjs"),
+      `module.exports = {
+  resolveToUnqualified() { return "/cache/eslint"; },
+  findPackageLocator() { return { name: "fixture", reference: "workspace:." }; },
+  getPackageInformation() { return { packageDependencies: new Map([["eslint", "npm:1.1.0"]]) }; }
+};\n`,
+    );
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BS_QUALITY_PREFLIGHT_TELEMETRY_FILE: path.join(root, "preflight.jsonl"),
+      },
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(
+      /PnP reference npm:1\.1\.0, yarn\.lock requires npm:1\.2\.3/,
+    );
   });
 
   it.each([
