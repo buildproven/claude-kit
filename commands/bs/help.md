@@ -25,12 +25,12 @@ An exhausted quality provider retry can cross a legitimate descendant fix only
 through an exact-new-HEAD operator override that names
 `review:provider-exhaustion` and acknowledges the missing review.
 
-During a classified Actions billing outage, `/bs:quality approve
---override-nonstrict-refcas` is the separate signed path for an exact-head
-protected `strict: false` merge. It requires both missing-CI and administrator
-ref-mutation acknowledgements, plus explicit acceptance that concurrent PR
-close or retarget state cannot atomically cancel the update. It never applies
-to normal merges.
+Fully green protected `strict: false` delivery is autonomous through the
+non-force exact-ref CAS path. During a classified Actions billing outage,
+`/bs:quality approve --override-nonstrict-refcas` is the separate signed path.
+It requires both missing-CI and administrator ref-mutation acknowledgements,
+plus explicit acceptance that concurrent PR close or retarget state cannot
+atomically cancel the update.
 
 **Arguments received:** $ARGUMENTS
 

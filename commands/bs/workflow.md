@@ -70,6 +70,12 @@ deterministic gates and mutation evidence at that HEAD before attaching it.
 Repositories that explicitly set `scorePolicy.mergeAuthority` to
 `"human-required"` retain the legacy signed, expiring approval command; it is
 invalidated by any genuine HEAD change.
+Protected `strict: false` ref-CAS remains signed-only unless the repository also
+commits `scorePolicy.protectedNonstrictRefCas` as
+`"accept-non-atomic-pr-state"`. That one-time policy accepts the unavoidable
+close-or-retarget race without adding an approval prompt to every later green
+PR. The runtime resolves and binds it from the protected base, so a candidate
+cannot add the authority that it consumes.
 Check an in-flight or stalled campaign's state on demand (gates, provider
 review, break-glass, CI) without waiting for a failure:
 
@@ -142,8 +148,9 @@ contract so the branch stays green.
 - Post-edit linting hooks
 - Stop validation hooks
 - CI quality gates on pull requests
-- Signed outage recovery for exact-head, protected `strict: false` merges; the
-  lease uses a non-force ref update and keeps rejected campaigns resumable
+- Autonomous green exact-head delivery for protected `strict: false` bases,
+  plus signed outage recovery; both use a non-force ref update and keep safely
+  rejected campaigns resumable
 
 ## Command quick reference
 

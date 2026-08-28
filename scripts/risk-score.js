@@ -57,6 +57,10 @@ const DEFAULTS = {
   // A repository can explicitly retain the legacy signed human capability by
   // setting scorePolicy.mergeAuthority to "human-required".
   mergeAuthority: "autonomous",
+  // A direct protected-branch ref-CAS cannot atomically bind a concurrent PR
+  // close or retarget. Keep that transaction signed-only unless the repository
+  // commits an explicit, reviewable acceptance of this exact cancellation risk.
+  protectedNonstrictRefCas: "signed-only",
   // Path → base score. First matching tier wins (most-sensitive first).
   // Security surface pins a high floor regardless of change nature.
   securityFloor: [
@@ -1742,6 +1746,7 @@ function validateScoreConfig(cfg) {
       "mergeAuthority must be either 'autonomous' or 'human-required'",
     );
   }
+  validateProtectedNonstrictRefCas(cfg?.protectedNonstrictRefCas);
   for (const name of ["securityFloor", "humanFloor", "high", "low"]) {
     requirePatternList(cfg?.[name], name);
   }
@@ -1764,6 +1769,14 @@ function validateScoreConfig(cfg) {
   return cfg;
 }
 
+function validateProtectedNonstrictRefCas(value) {
+  if (!["signed-only", "accept-non-atomic-pr-state"].includes(value)) {
+    throw new Error(
+      "protectedNonstrictRefCas must be either 'signed-only' or 'accept-non-atomic-pr-state'",
+    );
+  }
+}
+
 function isPlainObject(value) {
   return (
     value !== null &&
@@ -1774,10 +1787,7 @@ function isPlainObject(value) {
   );
 }
 
-function loadConfig(repoRoot) {
-  const p = path.join(repoRoot || process.cwd(), "harness-config.json");
-  if (!fs.existsSync(p)) return validateScoreConfig(DEFAULTS);
-  const repoCfg = parseConfigJson(fs.readFileSync(p, "utf8"), p);
+function configFromRoot(repoCfg) {
   if (!isPlainObject(repoCfg)) {
     throw new Error(
       "invalid risk policy: harness-config root must be an object",
@@ -1799,6 +1809,36 @@ function loadConfig(repoRoot) {
   validateScoreConfig(cfg);
   assertBuiltInAgentCurve(cfg.curve);
   return cfg;
+}
+
+function loadConfig(repoRoot) {
+  const p = path.join(repoRoot || process.cwd(), "harness-config.json");
+  if (!fs.existsSync(p)) return validateScoreConfig(DEFAULTS);
+  return configFromRoot(parseConfigJson(fs.readFileSync(p, "utf8"), p));
+}
+
+function loadConfigAtRevision(repoRoot, revision) {
+  if (!/^[0-9a-f]{40}$/.test(revision || "")) {
+    throw new Error("risk policy base revision must be an exact SHA");
+  }
+  let raw;
+  try {
+    raw = execFileSync(
+      "git",
+      [
+        "-C",
+        repoRoot || process.cwd(),
+        "show",
+        `${revision}:harness-config.json`,
+      ],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    );
+  } catch {
+    return validateScoreConfig(DEFAULTS);
+  }
+  return configFromRoot(
+    parseConfigJson(raw, `${revision}:harness-config.json`),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1975,6 +2015,7 @@ module.exports = {
   matchesSecurityFloor,
   touchesHumanFloor,
   loadConfig,
+  loadConfigAtRevision,
   deepMerge,
   parseNameStatusZ,
   parseNumstatZ,
