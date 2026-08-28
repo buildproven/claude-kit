@@ -61,6 +61,22 @@ function clearMergeAdmissionBlock(file) {
   write(file, manifest);
   return true;
 }
+function resolveGreenCiAdmissionBlock(file) {
+  const manifest = read(file);
+  if (!manifest.behavior?.greenCiRecovery ||
+      manifest.terminalState?.state !== "blocked" ||
+      JSON.stringify(manifest.terminalState?.mergeAdmissionConditions) !== JSON.stringify(["ci:failed"]) ||
+      JSON.stringify(manifest.merge?.admissionBlock?.conditions) !== JSON.stringify(["ci:failed"])) return false;
+  const epoch = terminalEpoch(manifest) + 1;
+  manifest.terminalHistory ||= [];
+  manifest.terminalHistory.push({ ...manifest.terminalState, disposition: "resolved-by-green-ci" });
+  manifest.terminalHistory.push({ event: "reopened-by-green-ci", terminalEpoch: epoch });
+  manifest.terminalEpoch = epoch;
+  delete manifest.terminalState;
+  delete manifest.merge.admissionBlock;
+  write(file, manifest);
+  return true;
+}
 function mutationEvidenceValid(manifest) { return Boolean(manifest.mutation); }
 function incompleteRetryStatus(manifest) {
   const incomplete = manifest.reviews.filter((review) => review.status === "incomplete");
@@ -146,7 +162,7 @@ if (require.main === module) {
   process.stdout.write(inForce + "\\n");
 }
 module.exports = { advanceHead, incompleteRetryStatus, judgeContext, leadDispositionStatus, loadManifest, mutationEvidenceValid, parseJson, recordTerminalState,
-  clearMergeAdmissionBlock, reviewAuthorization, reviewCoverage, resumeRecoverableTerminal, terminalEpoch, validateIdentity, withManifestLock };
+  clearMergeAdmissionBlock, resolveGreenCiAdmissionBlock, reviewAuthorization, reviewCoverage, resumeRecoverableTerminal, terminalEpoch, validateIdentity, withManifestLock };
 `;
 
 const FAKE_STEP = `
@@ -697,6 +713,49 @@ describe("quality-run public orchestration", () => {
     expect(result.manifest.terminalState).toMatchObject({ state: "merged" });
     expect(result.manifest.terminalHistory).toHaveLength(2);
     expect(result.manifest.terminalEpoch).toBe(1);
+  });
+
+  it("re-enters a same-head CI admission block after current CI becomes green", () => {
+    const entry = fixture(
+      { greenCiRecovery: true },
+      { merge: true, tier: "medium" },
+    );
+    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    manifest.risk.resolved = true;
+    manifest.gates = manifest.requiredGates.map(({ name }) => ({
+      name,
+      status: "success",
+    }));
+    manifest.reviews = [
+      {
+        from: manifest.revisions.baseSha,
+        to: manifest.revisions.currentHead,
+        status: "complete",
+        leadCount: 0,
+      },
+    ];
+    manifest.merge.admissionBlock = {
+      conditions: ["ci:failed"],
+      head: manifest.revisions.currentHead,
+    };
+    manifest.terminalState = {
+      state: "blocked",
+      head: manifest.revisions.currentHead,
+      mergeAdmissionConditions: ["ci:failed"],
+    };
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+
+    const result = run(entry);
+
+    expect(result.status).toBe(0);
+    expect(result.manifest.terminalState).toMatchObject({ state: "merged" });
+    expect(result.manifest.terminalHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ disposition: "resolved-by-green-ci" }),
+        expect.objectContaining({ event: "reopened-by-green-ci" }),
+      ]),
+    );
+    expect(result.manifest.calls).toEqual(["quality-stamp-and-merge.sh"]);
   });
 
   it("records a new terminal cause when a recovered merge fails", () => {

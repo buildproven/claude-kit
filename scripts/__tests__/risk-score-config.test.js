@@ -119,6 +119,7 @@ describe("loadConfig — per-repo harness-config.json", () => {
       path.join(dir, "harness-config.json"),
       JSON.stringify({
         scorePolicy: {
+          mergeAuthority: "human-required",
           protectedNonstrictRefCas: "accept-non-atomic-pr-state",
         },
       }),
@@ -138,6 +139,12 @@ describe("loadConfig — per-repo harness-config.json", () => {
     expect(loadConfigAtRevision(dir, base).mergeAuthority).toBe("autonomous");
     expect(loadConfigAtRevision(dir, candidate).protectedNonstrictRefCas).toBe(
       "accept-non-atomic-pr-state",
+    );
+    expect(loadConfigAtRevision(dir, candidate).mergeAuthority).toBe(
+      "human-required",
+    );
+    expect(() => loadConfigAtRevision(dir, "f".repeat(40))).toThrow(
+      /not a readable commit/,
     );
   });
 

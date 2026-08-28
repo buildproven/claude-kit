@@ -1821,20 +1821,52 @@ function loadConfigAtRevision(repoRoot, revision) {
   if (!/^[0-9a-f]{40}$/.test(revision || "")) {
     throw new Error("risk policy base revision must be an exact SHA");
   }
+  const root = repoRoot || process.cwd();
+  try {
+    execFileSync(
+      "git",
+      ["-C", root, "cat-file", "-e", `${revision}^{commit}`],
+      {
+        stdio: "ignore",
+      },
+    );
+  } catch {
+    throw new Error(
+      `risk policy base revision is not a readable commit: ${revision}`,
+    );
+  }
+  let policyPath;
+  try {
+    policyPath = execFileSync(
+      "git",
+      [
+        "-C",
+        root,
+        "ls-tree",
+        "--name-only",
+        revision,
+        "--",
+        "harness-config.json",
+      ],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    ).trim();
+  } catch {
+    throw new Error(
+      `risk policy tree is not readable at base revision: ${revision}`,
+    );
+  }
+  if (!policyPath) return validateScoreConfig(DEFAULTS);
   let raw;
   try {
     raw = execFileSync(
       "git",
-      [
-        "-C",
-        repoRoot || process.cwd(),
-        "show",
-        `${revision}:harness-config.json`,
-      ],
+      ["-C", root, "show", `${revision}:harness-config.json`],
       { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
     );
   } catch {
-    return validateScoreConfig(DEFAULTS);
+    throw new Error(
+      `risk policy file is not readable at base revision: ${revision}`,
+    );
   }
   return configFromRoot(
     parseConfigJson(raw, `${revision}:harness-config.json`),

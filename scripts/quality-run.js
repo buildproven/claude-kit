@@ -623,6 +623,18 @@ async function runManifest(manifestPath, dependencies = {}) {
     pinTerminalEpoch(manifest);
     quality.validateIdentity(manifest, manifest.repo.realpath);
     if (manifest.terminalState) {
+      const ciRecovery = quality.resolveGreenCiAdmissionBlock(manifestPath);
+      if (ciRecovery) {
+        const resumed = manifestAt(manifestPath);
+        pinTerminalEpoch(resumed);
+        quality.validateIdentity(resumed, resumed.repo.realpath);
+        return await finishWithMerge(
+          context,
+          manifestPath,
+          resumed,
+          reviewSummary(resumed),
+        );
+      }
       const recovery = quality.resumeRecoverableTerminal(manifestPath);
       if (recovery) {
         const resumed = manifestAt(manifestPath);
