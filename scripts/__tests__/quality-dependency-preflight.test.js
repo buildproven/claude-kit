@@ -118,6 +118,64 @@ describe("quality dependency preflight", () => {
     expect(result.stderr).toMatch(/pnpm install --frozen-lockfile/);
   });
 
+  it("rejects stale Yarn PnP state that cannot resolve a direct dependency", () => {
+    const root = fixture();
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(root, "package.json"), "utf8"),
+    );
+    pkg.packageManager = "yarn@4.0.0";
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(pkg));
+    fs.writeFileSync(
+      path.join(root, ".pnp.cjs"),
+      "module.exports = { resolveToUnqualified() { throw new Error('missing'); } };\n",
+    );
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BS_QUALITY_PREFLIGHT_TELEMETRY_FILE: path.join(root, "preflight.jsonl"),
+      },
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/not resolvable from Yarn PnP state/);
+  });
+
+  it.each([
+    {
+      name: "npm v1 dependency records",
+      lock: {
+        lockfileVersion: 1,
+        dependencies: { eslint: { version: "1.2.3" } },
+      },
+    },
+    {
+      name: "npm workspace link records",
+      lock: {
+        lockfileVersion: 3,
+        packages: {
+          "node_modules/eslint": { link: true, resolved: "packages/eslint" },
+          "packages/eslint": { version: "1.2.3" },
+        },
+      },
+    },
+  ])("accepts $name when the installed package matches", ({ lock }) => {
+    const root = fixture();
+    fs.writeFileSync(
+      path.join(root, "package-lock.json"),
+      JSON.stringify(lock),
+    );
+    const packageRoot = path.join(root, "node_modules", "eslint");
+    fs.mkdirSync(packageRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "eslint", version: "1.2.3" }),
+    );
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("wires the preflight before immutable manifest creation", () => {
     const source = fs.readFileSync(BOOTSTRAP, "utf8");
     expect(source).toContain(

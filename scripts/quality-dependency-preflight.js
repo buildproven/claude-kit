@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
+const { createRequire } = require("node:module");
 
 function readJson(file, label) {
   try {
@@ -44,6 +45,28 @@ function packageManager(root, pkg) {
   return "npm";
 }
 
+function inspectPnpDependencies(root, dependencies) {
+  const failures = [];
+  const pnpFile = path.join(root, ".pnp.cjs");
+  let api;
+  try {
+    api = createRequire(pnpFile)(pnpFile);
+  } catch (error) {
+    return [`yarn: .pnp.cjs is unreadable (${error.message})`];
+  }
+  for (const name of dependencies) {
+    try {
+      const resolved = api.resolveToUnqualified(name, `${root}${path.sep}`);
+      if (!resolved) {
+        failures.push(`${name}: package is not resolvable from Yarn PnP state`);
+      }
+    } catch {
+      failures.push(`${name}: package is not resolvable from Yarn PnP state`);
+    }
+  }
+  return failures;
+}
+
 function inspectLinkedManager(root, manager, dependencies) {
   const failures = [];
   const readinessMarkers = {
@@ -58,7 +81,7 @@ function inspectLinkedManager(root, manager, dependencies) {
     return { manager, failures };
   }
   if (manager === "yarn" && fs.existsSync(path.join(root, ".pnp.cjs"))) {
-    return { manager, failures };
+    return { manager, failures: inspectPnpDependencies(root, dependencies) };
   }
   for (const name of dependencies) {
     if (!fs.existsSync(path.join(root, "node_modules", name))) {
@@ -66,6 +89,18 @@ function inspectLinkedManager(root, manager, dependencies) {
     }
   }
   return { manager, failures };
+}
+
+function npmLockedVersion(lock, name) {
+  const relative = `node_modules/${name}`;
+  const record = lock.packages?.[relative];
+  if (typeof record?.version === "string") return record.version;
+  if (record?.link === true && typeof record.resolved === "string") {
+    const target = lock.packages?.[record.resolved];
+    if (typeof target?.version === "string") return target.version;
+  }
+  const legacy = lock.dependencies?.[name];
+  return typeof legacy?.version === "string" ? legacy.version : null;
 }
 
 function inspectDependencies(root) {
@@ -86,8 +121,8 @@ function inspectDependencies(root) {
   for (const name of dependencies) {
     const relative = `node_modules/${name}`;
     const installedFile = path.join(root, relative, "package.json");
-    const locked = lock.packages?.[relative];
-    if (!locked || typeof locked.version !== "string") {
+    const lockedVersion = npmLockedVersion(lock, name);
+    if (!lockedVersion) {
       failures.push(`${name}: missing lockfile package record`);
       continue;
     }
@@ -96,9 +131,9 @@ function inspectDependencies(root) {
       continue;
     }
     const installed = readJson(installedFile, `${name} package.json`);
-    if (installed.version !== locked.version) {
+    if (installed.version !== lockedVersion) {
       failures.push(
-        `${name}: installed ${installed.version || "unknown"}, lockfile requires ${locked.version}`,
+        `${name}: installed ${installed.version || "unknown"}, lockfile requires ${lockedVersion}`,
       );
       continue;
     }
