@@ -2,7 +2,13 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 
-const { score, loadConfig, deepMerge, DEFAULTS } = require("../risk-score");
+const {
+  score,
+  loadConfig,
+  loadConfigAtRevision,
+  deepMerge,
+  DEFAULTS,
+} = require("../risk-score");
 const { makeTempDir } = require("./helpers/tmp.js");
 
 /**
@@ -42,6 +48,7 @@ describe("loadConfig — per-repo harness-config.json", () => {
   it("returns the defaults when no config file exists", () => {
     expect(loadConfig(repoWith(null))).toBe(DEFAULTS);
     expect(DEFAULTS.mergeAuthority).toBe("autonomous");
+    expect(DEFAULTS.protectedNonstrictRefCas).toBe("signed-only");
   });
 
   it("merges a repo's scorePolicy over the defaults", () => {
@@ -73,6 +80,65 @@ describe("loadConfig — per-repo harness-config.json", () => {
         repoWith({ scorePolicy: { mergeAuthority: "ask-the-model" } }),
       ),
     ).toThrow(/mergeAuthority must be either/i);
+  });
+
+  it("requires an exact repository policy for autonomous protected non-strict ref-CAS", () => {
+    expect(
+      loadConfig(
+        repoWith({
+          scorePolicy: {
+            protectedNonstrictRefCas: "accept-non-atomic-pr-state",
+          },
+        }),
+      ).protectedNonstrictRefCas,
+    ).toBe("accept-non-atomic-pr-state");
+    expect(() =>
+      loadConfig(
+        repoWith({
+          scorePolicy: { protectedNonstrictRefCas: "accept-everything" },
+        }),
+      ),
+    ).toThrow(/protectedNonstrictRefCas must be either/i);
+  });
+
+  it("reads cancellation-risk acceptance only from the exact base revision", () => {
+    const dir = repoWith(null);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+    execFileSync("git", ["config", "user.name", "test"], { cwd: dir });
+    execFileSync("git", ["config", "user.email", "test@example.com"], {
+      cwd: dir,
+    });
+    fs.writeFileSync(path.join(dir, "README.md"), "base\n");
+    execFileSync("git", ["add", "README.md"], { cwd: dir });
+    execFileSync("git", ["commit", "-qm", "base"], { cwd: dir });
+    const base = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: dir,
+      encoding: "utf8",
+    }).trim();
+    fs.writeFileSync(
+      path.join(dir, "harness-config.json"),
+      JSON.stringify({
+        scorePolicy: {
+          protectedNonstrictRefCas: "accept-non-atomic-pr-state",
+        },
+      }),
+    );
+    execFileSync("git", ["add", "harness-config.json"], { cwd: dir });
+    execFileSync("git", ["commit", "-qm", "candidate acceptance"], {
+      cwd: dir,
+    });
+    const candidate = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: dir,
+      encoding: "utf8",
+    }).trim();
+
+    expect(loadConfigAtRevision(dir, base).protectedNonstrictRefCas).toBe(
+      "signed-only",
+    );
+    expect(loadConfigAtRevision(dir, base).mergeAuthority).toBe("autonomous");
+    expect(loadConfigAtRevision(dir, candidate).protectedNonstrictRefCas).toBe(
+      "accept-non-atomic-pr-state",
+    );
   });
 
   it("fails closed on malformed JSON", () => {
