@@ -751,6 +751,49 @@ describe("quality-mutation-check", () => {
     );
   });
 
+  it("recognizes npm test after a leading npm-owned option", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-leading-npm-silent",
+      "require('./aaa-uncovered.js');\n",
+      {
+        auditMapping: true,
+        auditArgs: ["--silent", "test"],
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+        vitestRunner: true,
+        requireMutationExclude: true,
+        rejectForwardedNpmSilent: true,
+      },
+    );
+
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+  });
+
+  it("does not confuse a positional mutation-test path with an exclusion", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-positional-mutation-test",
+      "require('./aaa-uncovered.js');\n",
+      {
+        auditMapping: true,
+        auditArgs: [
+          "test",
+          "--",
+          "scripts/__tests__/quality-mutation-check.test.js",
+        ],
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+        vitestRunner: true,
+        requireMutationExclude: true,
+      },
+    );
+
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+  });
+
   it("fails closed on a recursive test-impact policy command", () => {
     const { root, manifest } = fixture(
       "audit-selector-cycle",

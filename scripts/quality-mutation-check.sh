@@ -113,6 +113,40 @@ array_contains() {
   return 1
 }
 
+vitest_has_mutation_exclusion() {
+  local argument expect_exclude_value=false
+  for argument in "$@"; do
+    if [ "$expect_exclude_value" = true ]; then
+      [ "$argument" != scripts/__tests__/quality-mutation-check.test.js ] || return 0
+      expect_exclude_value=false
+      continue
+    fi
+    case "$argument" in
+      --exclude) expect_exclude_value=true ;;
+      --exclude=scripts/__tests__/quality-mutation-check.test.js) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+npm_test_prefix() {
+  local index argument
+  local -a npm_args=("$@")
+  for ((index = 0; index < ${#npm_args[@]}; index += 1)); do
+    argument="${npm_args[$index]}"
+    [ "$argument" != -- ] || break
+    if [ "$argument" = test ]; then
+      printf '%s\n' "$((index + 1))"
+      return 0
+    fi
+    if [ "$argument" = run ] && [ "${npm_args[$((index + 1))]:-}" = test ]; then
+      printf '%s\n' "$((index + 2))"
+      return 0
+    fi
+  done
+  printf '0\n'
+}
+
 run_mutation_command() {
   local log="$1" timeout_seconds="$2" depth="$3" executable="$4" argument plan plan_status mode command_count index child_executable npm_test_prefix
   shift 4
@@ -184,17 +218,12 @@ run_mutation_command() {
   if [ "$executable" = npx ] && [ "${args[0]:-}" = vitest ]; then
     array_contains --bail=1 "${args[@]+"${args[@]}"}" || args+=(--bail=1)
     if [ -f "$SANDBOX/scripts/__tests__/quality-mutation-check.test.js" ] &&
-       ! array_contains scripts/__tests__/quality-mutation-check.test.js \
+       ! vitest_has_mutation_exclusion \
          "${args[@]+"${args[@]}"}"; then
       args+=(--exclude scripts/__tests__/quality-mutation-check.test.js)
     fi
   elif [ "$executable" = npm ]; then
-    npm_test_prefix=0
-    if [ "${args[0]:-}" = test ]; then
-      npm_test_prefix=1
-    elif [ "${args[0]:-}" = run ] && [ "${args[1]:-}" = test ]; then
-      npm_test_prefix=2
-    fi
+    npm_test_prefix="$(npm_test_prefix "${args[@]+"${args[@]}"}")"
     case "$REPO_TEST_SCRIPT" in
       vitest\ *|npx\ vitest\ *)
         if [ "$npm_test_prefix" -gt 0 ]; then
@@ -205,9 +234,12 @@ run_mutation_command() {
             fi
             if [ "$saw_separator" = true ]; then
               [ "${args[$index]}" != --bail=1 ] || runner_has_bail=true
-              [ "${args[$index]}" != scripts/__tests__/quality-mutation-check.test.js ] || runner_has_exclusion=true
             fi
           done
+          if [ "$saw_separator" = true ] &&
+             vitest_has_mutation_exclusion "${args[@]:$((npm_test_prefix + 1))}"; then
+            runner_has_exclusion=true
+          fi
           if [ "$saw_separator" = false ]; then
             args+=(--)
           fi
