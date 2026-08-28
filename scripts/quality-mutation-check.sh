@@ -388,16 +388,8 @@ done < <(
 # behavioral test has a chance to prove the revert. This is only an ordering
 # optimization: every candidate remains eligible and the red-capable proof
 # still requires baseline pass plus controlled-revert failure.
-is_recursive_mutation_target() {
-  case "$1" in
-    */quality-mutation-check.sh) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
 candidate_has_sibling_test() {
   local candidate="$1" directory stem sibling
-  is_recursive_mutation_target "$candidate" && return 1
   directory="$(dirname "$candidate")"
   stem="$(basename "$candidate")"
   stem="${stem%.*}"
@@ -413,7 +405,6 @@ candidate_has_sibling_test() {
 
 candidate_has_planned_sibling_test() {
   local candidate="$1" directory stem sibling
-  is_recursive_mutation_target "$candidate" && return 1
   directory="$(dirname "$candidate")"
   stem="$(basename "$candidate")"
   stem="${stem%.*}"
@@ -437,13 +428,6 @@ candidate_has_mapped_test() {
     '.mappings[]? | select((.paths // []) | index($candidate)) | .commands[]? | (.args // []) | any(.[]; test("(^|/)(test|tests|spec|__tests__)/|\\.(test|spec)\\.(js|ts|jsx|tsx)$"))' \
     "$ROOT/.buildproven/test-impact.json" >/dev/null 2>&1
 }
-
-FILTERED_CANDIDATES=()
-for CANDIDATE in "${CANDIDATES[@]+"${CANDIDATES[@]}"}"; do
-  is_recursive_mutation_target "$CANDIDATE" ||
-    FILTERED_CANDIDATES+=("$CANDIDATE")
-done
-CANDIDATES=("${FILTERED_CANDIDATES[@]+"${FILTERED_CANDIDATES[@]}"}")
 
 if [ "${#CANDIDATES[@]}" -gt 1 ]; then
   ORDERED_CANDIDATES=()
