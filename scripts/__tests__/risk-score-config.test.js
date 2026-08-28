@@ -42,6 +42,7 @@ describe("loadConfig — per-repo harness-config.json", () => {
   it("returns the defaults when no config file exists", () => {
     expect(loadConfig(repoWith(null))).toBe(DEFAULTS);
     expect(DEFAULTS.mergeAuthority).toBe("autonomous");
+    expect(DEFAULTS.protectedNonstrictRefCas).toBe("signed-only");
   });
 
   it("merges a repo's scorePolicy over the defaults", () => {
@@ -73,6 +74,25 @@ describe("loadConfig — per-repo harness-config.json", () => {
         repoWith({ scorePolicy: { mergeAuthority: "ask-the-model" } }),
       ),
     ).toThrow(/mergeAuthority must be either/i);
+  });
+
+  it("requires an exact repository policy for autonomous protected non-strict ref-CAS", () => {
+    expect(
+      loadConfig(
+        repoWith({
+          scorePolicy: {
+            protectedNonstrictRefCas: "accept-non-atomic-pr-state",
+          },
+        }),
+      ).protectedNonstrictRefCas,
+    ).toBe("accept-non-atomic-pr-state");
+    expect(() =>
+      loadConfig(
+        repoWith({
+          scorePolicy: { protectedNonstrictRefCas: "accept-everything" },
+        }),
+      ),
+    ).toThrow(/protectedNonstrictRefCas must be either/i);
   });
 
   it("fails closed on malformed JSON", () => {

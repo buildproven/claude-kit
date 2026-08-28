@@ -70,6 +70,10 @@ deterministic gates and mutation evidence at that HEAD before attaching it.
 Repositories that explicitly set `scorePolicy.mergeAuthority` to
 `"human-required"` retain the legacy signed, expiring approval command; it is
 invalidated by any genuine HEAD change.
+Protected `strict: false` ref-CAS remains signed-only unless the repository also
+commits `scorePolicy.protectedNonstrictRefCas` as
+`"accept-non-atomic-pr-state"`. That one-time policy accepts the unavoidable
+close-or-retarget race without adding an approval prompt to every green PR.
 Check an in-flight or stalled campaign's state on demand (gates, provider
 review, break-glass, CI) without waiting for a failure:
 

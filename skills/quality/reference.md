@@ -414,7 +414,11 @@ on your plan.
 
 A protected branch with non-empty required checks and GitHub `strict: false`
 is not unprotectable. A clean campaign with `mergeAuthority=autonomous` may use
-the protected non-strict ref-CAS path without an operator prompt. The lease
+the protected non-strict ref-CAS path without an operator prompt only when the
+repository commits `scorePolicy.protectedNonstrictRefCas` as
+`"accept-non-atomic-pr-state"`. The default is `"signed-only"`. The explicit
+policy accepts the unavoidable concurrent close-or-retarget race once instead
+of asking on every green PR. The lease
 independently rechecks complete exact-head review and gates, green required
 checks, App bindings, the complete classic-protection digest, resolved
 conversations, exact identity, and ancestry immediately before its non-force

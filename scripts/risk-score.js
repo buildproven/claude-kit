@@ -57,6 +57,10 @@ const DEFAULTS = {
   // A repository can explicitly retain the legacy signed human capability by
   // setting scorePolicy.mergeAuthority to "human-required".
   mergeAuthority: "autonomous",
+  // A direct protected-branch ref-CAS cannot atomically bind a concurrent PR
+  // close or retarget. Keep that transaction signed-only unless the repository
+  // commits an explicit, reviewable acceptance of this exact cancellation risk.
+  protectedNonstrictRefCas: "signed-only",
   // Path → base score. First matching tier wins (most-sensitive first).
   // Security surface pins a high floor regardless of change nature.
   securityFloor: [
@@ -1742,6 +1746,15 @@ function validateScoreConfig(cfg) {
       "mergeAuthority must be either 'autonomous' or 'human-required'",
     );
   }
+  if (
+    !["signed-only", "accept-non-atomic-pr-state"].includes(
+      cfg?.protectedNonstrictRefCas,
+    )
+  ) {
+    throw new Error(
+      "protectedNonstrictRefCas must be either 'signed-only' or 'accept-non-atomic-pr-state'",
+    );
+  }
   for (const name of ["securityFloor", "humanFloor", "high", "low"]) {
     requirePatternList(cfg?.[name], name);
   }
@@ -1824,6 +1837,7 @@ function score({
     return {
       riskScore: 100,
       mergeAuthority: cfg.mergeAuthority,
+      protectedNonstrictRefCas: cfg.protectedNonstrictRefCas,
       taskType: "unknown",
       changeNature: "unknown",
       diffStats: { files: 0, lines: 0 },
@@ -1854,6 +1868,7 @@ function score({
     return {
       riskScore: 100,
       mergeAuthority: cfg.mergeAuthority,
+      protectedNonstrictRefCas: cfg.protectedNonstrictRefCas,
       taskType: "unknown",
       changeNature: "unknown",
       diffStats: { files: 0, lines: 0 },
@@ -1889,6 +1904,7 @@ function score({
   return {
     ...scored,
     mergeAuthority: cfg.mergeAuthority,
+    protectedNonstrictRefCas: cfg.protectedNonstrictRefCas,
     taskType,
     diffStats,
     knobs,

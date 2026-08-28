@@ -1,0 +1,5 @@
+{
+  "scorePolicy": {
+    "protectedNonstrictRefCas": "accept-non-atomic-pr-state"
+  }
+}

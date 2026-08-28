@@ -1350,7 +1350,10 @@ esac
       lease._autonomousRefCasAuthority(
         {
           merge: { invalidatedStamps: [] },
-          risk: { mergeAuthority: "autonomous" },
+          risk: {
+            mergeAuthority: "autonomous",
+            protectedNonstrictRefCas: "accept-non-atomic-pr-state",
+          },
         },
         { admin: true, protectionDigest: digest },
         head,
@@ -1411,40 +1414,76 @@ esac
       checkState: "success",
     },
     {
-      name: "operator review override",
+      name: "missing repository cancellation-risk acceptance",
       manifest: { risk: { mergeAuthority: "autonomous" } },
+      authorization: { reviewStatus: "complete" },
+      checkState: "success",
+    },
+    {
+      name: "operator review override",
+      manifest: {
+        risk: {
+          mergeAuthority: "autonomous",
+          protectedNonstrictRefCas: "accept-non-atomic-pr-state",
+        },
+      },
       authorization: { reviewStatus: "incomplete", operatorOverride: true },
       checkState: "success",
     },
     {
       name: "legacy review evidence without explicit status",
-      manifest: { risk: { mergeAuthority: "autonomous" } },
+      manifest: {
+        risk: {
+          mergeAuthority: "autonomous",
+          protectedNonstrictRefCas: "accept-non-atomic-pr-state",
+        },
+      },
       authorization: {},
       checkState: "success",
     },
     {
       name: "failed required CI",
-      manifest: { risk: { mergeAuthority: "autonomous" } },
+      manifest: {
+        risk: {
+          mergeAuthority: "autonomous",
+          protectedNonstrictRefCas: "accept-non-atomic-pr-state",
+        },
+      },
       authorization: { reviewStatus: "complete" },
       checkState: "failed",
     },
     {
       name: "changed protection digest",
-      manifest: { risk: { mergeAuthority: "autonomous" } },
+      manifest: {
+        risk: {
+          mergeAuthority: "autonomous",
+          protectedNonstrictRefCas: "accept-non-atomic-pr-state",
+        },
+      },
       authorization: { reviewStatus: "complete" },
       checkState: "success",
       requestedDigest: "e".repeat(64),
     },
     {
       name: "missing authorizer protection digest",
-      manifest: { risk: { mergeAuthority: "autonomous" } },
+      manifest: {
+        risk: {
+          mergeAuthority: "autonomous",
+          protectedNonstrictRefCas: "accept-non-atomic-pr-state",
+        },
+      },
       authorization: { reviewStatus: "complete" },
       checkState: "success",
       requestedDigest: null,
     },
     {
       name: "changed required check App binding",
-      manifest: { risk: { mergeAuthority: "autonomous" } },
+      manifest: {
+        risk: {
+          mergeAuthority: "autonomous",
+          protectedNonstrictRefCas: "accept-non-atomic-pr-state",
+        },
+      },
       authorization: { reviewStatus: "complete" },
       checkState: "success",
       checkAppId: 12345,
@@ -1452,7 +1491,10 @@ esac
     {
       name: "stamp commit mutation",
       manifest: {
-        risk: { mergeAuthority: "autonomous" },
+        risk: {
+          mergeAuthority: "autonomous",
+          protectedNonstrictRefCas: "accept-non-atomic-pr-state",
+        },
         merge: { stampHead: "b".repeat(40) },
       },
       authorization: { reviewStatus: "complete" },

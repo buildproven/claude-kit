@@ -591,10 +591,12 @@ if [ -n "${CI_BILLING_WAIVER_ARTIFACT:-}" ] &&
 fi
 TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"
 MERGE_AUTHORITY="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.mergeAuthority)"
+PROTECTED_NONSTRICT_REFCAS_POLICY="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.protectedNonstrictRefCas)"
 # Manifests created before mergeAuthority was introduced retain their original
 # manual-governance behavior. Every newly resolved campaign persists an explicit
 # value, so an installed runtime upgrade can never grant authority mid-campaign.
 [ -n "$MERGE_AUTHORITY" ] || MERGE_AUTHORITY=human-required
+[ -n "$PROTECTED_NONSTRICT_REFCAS_POLICY" ] || PROTECTED_NONSTRICT_REFCAS_POLICY=signed-only
 case "$MERGE_AUTHORITY" in
   autonomous | human-required) ;;
   *)
@@ -604,11 +606,12 @@ case "$MERGE_AUTHORITY" in
 esac
 if [ "$MERGE_MODE" = protected-nonstrict-ref-cas ] &&
   [ "$NONSTRICT_REFCAS_CAPABILITY" != true ] &&
-  [ "$MERGE_AUTHORITY" != autonomous ]; then
+  { [ "$MERGE_AUTHORITY" != autonomous ] ||
+    [ "$PROTECTED_NONSTRICT_REFCAS_POLICY" != accept-non-atomic-pr-state ]; }; then
   record_merge_admission_blocked_terminal \
     "base:protected-nonstrict,pr:non-atomic-state" \
-    "human-required protected non-strict ref-CAS needs exact signed authority" || exit 1
-  echo "❌ MERGE BLOCKED: human-required protected non-strict ref-CAS needs exact signed authority." >&2
+    "protected non-strict ref-CAS needs exact signed authority or explicit repository cancellation-risk acceptance" || exit 1
+  echo "❌ MERGE BLOCKED: protected non-strict ref-CAS needs exact signed authority or explicit repository cancellation-risk acceptance." >&2
   exit 3
 fi
 

@@ -259,6 +259,7 @@ function main() {
   const result = {
     ...plan,
     mergeAuthority: scored.mergeAuthority,
+    protectedNonstrictRefCas: scored.protectedNonstrictRefCas,
     taskType: scored.taskType,
     changeNature: scored.changeNature,
     reasons: scored.reasons,

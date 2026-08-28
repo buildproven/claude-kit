@@ -17,9 +17,9 @@ describe("quality merge authorization action boundary", () => {
     );
   });
 
-  it("keeps autonomous ref-CAS unavailable to human-required campaigns", () => {
+  it("requires autonomous authority and repository cancellation-risk acceptance", () => {
     expect(script).toMatch(
-      /MERGE_MODE" = protected-nonstrict-ref-cas[\s\S]*NONSTRICT_REFCAS_CAPABILITY" != true[\s\S]*MERGE_AUTHORITY" != autonomous[\s\S]*human-required protected non-strict ref-CAS needs exact signed authority/,
+      /MERGE_MODE" = protected-nonstrict-ref-cas[\s\S]*NONSTRICT_REFCAS_CAPABILITY" != true[\s\S]*MERGE_AUTHORITY" != autonomous[\s\S]*PROTECTED_NONSTRICT_REFCAS_POLICY" != accept-non-atomic-pr-state[\s\S]*explicit repository cancellation-risk acceptance/,
     );
   });
 

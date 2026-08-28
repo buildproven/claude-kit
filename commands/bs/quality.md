@@ -203,9 +203,12 @@ is the final step after diagnosis, not a way to skip retrying first.
 
 A protected base with required checks and GitHub `strict: false` uses the
 non-force exact-head ref-CAS path automatically when merge authority is
-autonomous and exact-head review, gates, required CI, protection, conversations,
-identity, and ancestry are complete. Do not request operator approval for that
-green path.
+autonomous, the repository explicitly sets
+`scorePolicy.protectedNonstrictRefCas` to
+`"accept-non-atomic-pr-state"`, and exact-head review, gates, required CI,
+protection, conversations, identity, and ancestry are complete. This committed
+policy accepts the close-or-retarget race once; do not request operator approval
+for each green delivery. Repositories without it remain signed-only.
 
 If the bounded provider review is exhausted, use the exception command and add
 `review:provider-exhaustion` to `--accept` and add

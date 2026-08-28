@@ -2139,6 +2139,7 @@ printf '%s\\n' "$manifest"
     expect(manifest.risk.resolved).toBe(true);
     expect(manifest.risk.tier).not.toBe("auto");
     expect(manifest.risk.mergeAuthority).toBe("autonomous");
+    expect(manifest.risk.protectedNonstrictRefCas).toBe("signed-only");
     expect(manifest.risk.taskType).toBe("bugfix");
     expect(manifest.risk.score).toBe(35);
     expect(manifest.risk.agentTarget).toBe(1);
@@ -2167,6 +2168,31 @@ printf '%s\\n' "$manifest"
     expect(result.status, result.stderr).toBe(0);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     expect(manifest.risk.mergeAuthority).toBe("human-required");
+    expect(manifest.risk.protectedNonstrictRefCas).toBe("signed-only");
+  });
+
+  it("persists explicit repository acceptance for non-atomic PR cancellation state", () => {
+    const root = repo("accepted-nonstrict-refcas");
+    writeFileSync(
+      path.join(root, "harness-config.json"),
+      JSON.stringify({
+        scorePolicy: {
+          protectedNonstrictRefCas: "accept-non-atomic-pr-state",
+        },
+      }),
+    );
+    git(root, ["add", "harness-config.json"]);
+    git(root, ["commit", "-qm", "accept non-atomic PR cancellation state"]);
+    const manifestPath = create(root);
+    const result = spawnSync("bash", [RISK, "--manifest", manifestPath], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifest.risk.protectedNonstrictRefCas).toBe(
+      "accept-non-atomic-pr-state",
+    );
   });
 
   it("fails closed to human-required when a direct risk write omits authority", () => {
@@ -2185,6 +2211,10 @@ printf '%s\\n' "$manifest"
     expect(
       invocation.loadManifest(manifestPath).manifest.risk.mergeAuthority,
     ).toBe("human-required");
+    expect(
+      invocation.loadManifest(manifestPath).manifest.risk
+        .protectedNonstrictRefCas,
+    ).toBe("signed-only");
   });
 
   it("locates an explicit target manifest without trusting the caller cwd", () => {

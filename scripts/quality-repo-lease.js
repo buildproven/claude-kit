@@ -906,6 +906,8 @@ function requiredCheckBindings(checks) {
 
 function autonomousReviewReady(manifest, authorization) {
   if (manifest.risk?.mergeAuthority !== "autonomous") return false;
+  if (manifest.risk?.protectedNonstrictRefCas !== "accept-non-atomic-pr-state")
+    return false;
   if (authorization?.operatorOverride === true) return false;
   return ["complete", "policy-exempt"].includes(authorization?.reviewStatus);
 }

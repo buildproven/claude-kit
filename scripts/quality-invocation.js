@@ -2623,6 +2623,14 @@ function parseMergeAuthority(value) {
   return mergeAuthority;
 }
 
+function parseProtectedNonstrictRefCas(value) {
+  const policy = value || "signed-only";
+  if (!["signed-only", "accept-non-atomic-pr-state"].includes(policy)) {
+    throw new Error(`invalid protected non-strict ref-CAS policy '${policy}'`);
+  }
+  return policy;
+}
+
 function setRisk(manifest, options) {
   const tier = options.tier;
   if (!["low", "medium", "high", "critical"].includes(tier)) {
@@ -2637,6 +2645,9 @@ function setRisk(manifest, options) {
   }
   const taskType = options["task-type"] || "unknown";
   const mergeAuthority = parseMergeAuthority(options["merge-authority"]);
+  const protectedNonstrictRefCas = parseProtectedNonstrictRefCas(
+    options["protected-nonstrict-ref-cas"],
+  );
   if (
     ![
       "unknown",
@@ -2665,6 +2676,7 @@ function setRisk(manifest, options) {
     resolved: true,
     tier,
     mergeAuthority,
+    protectedNonstrictRefCas,
     taskType,
     score:
       options.score === undefined || options.score === ""

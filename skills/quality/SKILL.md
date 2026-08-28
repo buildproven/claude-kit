@@ -80,6 +80,10 @@ preserves gates, CI, freshness, and audit evidence. Explicit
 `mergeAuthority=human-required` policy
 still needs the wrapper-created, identity-bound, unexpired capability; nested
 processes cannot create one.
+Autonomous protected non-strict ref-CAS additionally requires the repository's
+committed `protectedNonstrictRefCas=accept-non-atomic-pr-state` policy. The
+fleet default is signed-only because the ref update cannot atomically bind a
+concurrent pull-request close or retarget.
 
 An exhausted provider retry may be resumed across a legitimate descendant fix
 only through an exact-new-HEAD operator override accepting
@@ -249,7 +253,10 @@ A protected `strict: false` base uses one non-force GitHub ref update after the
 merge lease rechecks complete review and gates, green required CI and App
 bindings, the closed protection contract, resolved conversations, base, PR,
 head, and ancestry. This complete green path is ordinary autonomous delivery;
-it does not require an operator prompt. The distinct signed
+it requires the committed
+`scorePolicy.protectedNonstrictRefCas="accept-non-atomic-pr-state"` policy as
+one-time acceptance of the close-or-retarget race, and does not require a
+per-PR operator prompt. The distinct signed
 `operator-nonstrict-refcas-override` remains required when the transaction also
 accepts an Actions outage or provider exhaustion. Both conditions must be in
 the same capability when they apply. Never reinterpret an ordinary CI

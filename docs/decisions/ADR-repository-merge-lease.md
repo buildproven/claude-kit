@@ -229,8 +229,12 @@ Add `protected-nonstrict-ref-cas` as an explicit merge mode.
 It uses the existing repository lease and merge-operation guard, but replaces
 the administrator pull-request merge request with one non-force Git-reference
 update to the exact reviewed head. A clean campaign with autonomous merge
-authority uses this transaction without a human prompt after the lease rechecks
-complete review and gates, green required CI, the closed protection contract,
+authority uses this transaction without a per-PR human prompt only when the
+repository commits
+`scorePolicy.protectedNonstrictRefCas="accept-non-atomic-pr-state"`. That
+policy is the durable owner acceptance that a concurrent PR close or retarget
+cannot be atomically bound to the ref update. The lease still rechecks complete
+review and gates, green required CI, the closed protection contract,
 exact identity, conversations, and ancestry. An outage or incomplete review
 still requires the signed ref-CAS capability and its exact condition evidence.
 Separate single-scope capabilities cannot overwrite each other safely.
@@ -429,9 +433,10 @@ condition and artifact.
 - Use a merge queue: strong, but unavailable in some repositories and dependent
   on hosted CI.
 - Use an unchecked ref-CAS for normal protected merges: rejected. The accepted
-  autonomous green path repeats review, gate, required-check/App, protection,
-  conversation, identity, and ancestry checks at the mutation boundary. Any
-  missing or exceptional evidence still needs exact signed authority.
+  autonomous green path requires the repository's explicit cancellation-risk
+  policy and repeats review, gate, required-check/App, protection, conversation,
+  identity, and ancestry checks at the mutation boundary. Any missing policy or
+  exceptional evidence still needs exact signed authority.
 - Push directly with Git or disable hooks: rejected. The GitHub ref API exposes
   the required non-force operation without weakening local push guards.
 
