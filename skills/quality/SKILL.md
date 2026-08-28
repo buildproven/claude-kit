@@ -80,6 +80,13 @@ preserves gates, CI, freshness, and audit evidence. Explicit
 `mergeAuthority=human-required` policy
 still needs the wrapper-created, identity-bound, unexpired capability; nested
 processes cannot create one.
+Autonomous protected non-strict ref-CAS additionally requires the repository's
+committed `protectedNonstrictRefCas=accept-non-atomic-pr-state` policy. The
+fleet default is signed-only because the ref update cannot atomically bind a
+concurrent pull-request close or retarget. Resolve and persist this policy from
+the exact protected base together with `mergeAuthority`, then re-read that base
+revision at mutation time. A candidate-head policy change cannot add ref-CAS
+authority or remove human-required governance for its own merge.
 
 An exhausted provider retry may be resumed across a legitimate descendant fix
 only through an exact-new-HEAD operator override accepting
@@ -245,14 +252,20 @@ path. Trusted GitHub Actions evidence may be reused without another API call
 only when repository, workflow, check, base SHA, candidate SHA/kind, source app,
 source URL, and successful conclusion all still match exactly.
 
-A protected `strict: false` base remains blocked unless the exact campaign has
-the distinct signed `operator-nonstrict-refcas-override`. The merge lease uses
-one non-force GitHub ref update after it rechecks the complete protection
-contract, required App bindings, resolved conversations, base, PR, and head.
-Green CI remains required unless the same capability also binds the exact
-Actions outage evidence. A provider-exhaustion decision must also be included
-in this same capability when both conditions apply. Never reinterpret the
-ordinary CI capability as this scope.
+A protected `strict: false` base uses one non-force GitHub ref update after the
+merge lease rechecks complete review and gates, green required CI and App
+bindings, the closed protection contract, resolved conversations, base, PR,
+head, and ancestry. This complete green path is ordinary autonomous delivery;
+it requires the committed
+`scorePolicy.protectedNonstrictRefCas="accept-non-atomic-pr-state"` policy as
+one-time acceptance of the close-or-retarget race, and does not require a
+per-PR operator prompt after that policy is present on the protected base. A PR
+that introduces the policy remains signed-only for its own delivery. The
+distinct signed
+`operator-nonstrict-refcas-override` remains required when the transaction also
+accepts an Actions outage or provider exhaustion. Both conditions must be in
+the same capability when they apply. Never reinterpret an ordinary CI
+capability as this scope.
 
 contiguous review checkpoints are mandatory.
 

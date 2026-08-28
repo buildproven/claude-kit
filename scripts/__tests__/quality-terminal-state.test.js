@@ -350,6 +350,67 @@ describe("recordTerminalState", () => {
     });
   });
 
+  it("archives a same-head CI admission block after current registered CI is green", () => {
+    const manifestPath = writeManifest({ options: { merge: true } });
+    invocation.recordMergeAdmissionBlockedTerminal(manifestPath, ["ci:failed"]);
+    const head =
+      invocation.loadManifest(manifestPath).manifest.revisions.currentHead;
+
+    expect(
+      invocation.resolveGreenCiAdmissionBlock(manifestPath, {
+        readPullRequest: () => ({ state: "OPEN", headRefOid: head }),
+        readChecks: () => [{ state: "SUCCESS" }, { state: "SKIPPED" }],
+      }),
+    ).toBe(true);
+
+    const { manifest } = invocation.loadManifest(manifestPath);
+    expect(manifest.terminalState).toBeNull();
+    expect(manifest.merge.admissionBlock).toBeUndefined();
+    expect(manifest.terminalEpoch).toBe(1);
+    expect(manifest.terminalHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ disposition: "resolved-by-green-ci" }),
+        expect.objectContaining({
+          event: "reopened-by-green-ci",
+          head,
+          checkCount: 2,
+          terminalEpoch: 1,
+        }),
+      ]),
+    );
+  });
+
+  it("keeps a CI admission block when checks are missing", () => {
+    const manifestPath = writeManifest({ options: { merge: true } });
+    invocation.recordMergeAdmissionBlockedTerminal(manifestPath, ["ci:failed"]);
+    const head =
+      invocation.loadManifest(manifestPath).manifest.revisions.currentHead;
+
+    expect(() =>
+      invocation.resolveGreenCiAdmissionBlock(manifestPath, {
+        readPullRequest: () => ({ state: "OPEN", headRefOid: head }),
+        readChecks: () => [],
+      }),
+    ).toThrow(/current registered checks/);
+    expect(readState(manifestPath)).toMatchObject({
+      state: "blocked",
+      mergeAdmissionConditions: ["ci:failed"],
+    });
+  });
+
+  it("keeps a CI admission block when the live PR head differs", () => {
+    const manifestPath = writeManifest({ options: { merge: true } });
+    invocation.recordMergeAdmissionBlockedTerminal(manifestPath, ["ci:failed"]);
+
+    expect(() =>
+      invocation.resolveGreenCiAdmissionBlock(manifestPath, {
+        readPullRequest: () => ({ state: "OPEN", headRefOid: "c".repeat(40) }),
+        readChecks: () => [{ state: "SUCCESS" }],
+      }),
+    ).toThrow(/open exact-head PR/);
+    expect(readState(manifestPath)).toMatchObject({ state: "blocked" });
+  });
+
   it("does not attach a stale pending admission block to another terminal cause", () => {
     const manifestPath = writeManifest({ options: { merge: true } });
     const { manifest } = invocation.loadManifest(manifestPath);

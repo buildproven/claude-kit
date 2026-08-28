@@ -65,6 +65,9 @@ TASK_TYPE="$(printf '%s' "$PLAN_JSON" | jq -r '.taskType')"
 node "$SCRIPT_DIR/quality-invocation.js" risk "$MANIFEST" \
   --tier "$TIER" \
   --merge-authority "$(printf '%s' "$PLAN_JSON" | jq -r '.mergeAuthority')" \
+  --merge-authority-base-sha "$(printf '%s' "$PLAN_JSON" | jq -r '.mergeAuthorityBaseSha')" \
+  --protected-nonstrict-ref-cas "$(printf '%s' "$PLAN_JSON" | jq -r '.protectedNonstrictRefCas')" \
+  --protected-nonstrict-ref-cas-base-sha "$(printf '%s' "$PLAN_JSON" | jq -r '.protectedNonstrictRefCasBaseSha')" \
   --task-type "$TASK_TYPE" \
   --score "$RISK_SCORE" \
   --agents "$AGENT_TARGET" \

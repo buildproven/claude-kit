@@ -71,6 +71,8 @@ function installLocalNodeDependency(root, options) {
       path.join(dependency, "vitest.sh"),
       `#!/usr/bin/env bash
 printf "%s\\n" "$*"
+${options.requireMutationExclude ? 'case " $* " in *" --exclude scripts/__tests__/quality-mutation-check.test.js "*) ;; *) echo "recursive mutation contract was not excluded" >&2; exit 42 ;; esac\n' : ""}
+${options.rejectForwardedNpmSilent ? 'case " $* " in *" --silent "*) echo "npm-owned --silent reached Vitest" >&2; exit 43 ;; esac\n' : ""}
 ${options.relatedNoTests ? 'case " $* " in *" related "*) echo "No test files found"; exit 0 ;; esac\n' : ""}
 ${options.siblingExitTwo ? `case " $* " in *" ${options.testPath || "logic.test.js"} "*) exit 2 ;; esac\n` : ""}node ${options.testPath || "logic.test.js"}
 `,
@@ -198,6 +200,72 @@ function installPackageManagerShim(root, options) {
   );
 }
 
+function installAuditPolicy(root, options) {
+  if (!options.auditMapping) return;
+  const auditCommand =
+    typeof options.auditCommand === "function"
+      ? options.auditCommand(root)
+      : options.auditCommand;
+  mkdirSync(path.join(root, ".buildproven"), { recursive: true });
+  writeFileSync(
+    path.join(root, ".buildproven", "test-impact.json"),
+    JSON.stringify({
+      version: 1,
+      jsRunner: "none",
+      mappings: [],
+      audits: [
+        {
+          paths: ["aaa-uncovered.js"],
+          reason: "fixture complete audit",
+          commands: [
+            auditCommand ?? {
+              executable: "npm",
+              args: options.auditArgs ?? ["test"],
+            },
+          ],
+        },
+      ],
+    }),
+  );
+}
+
+function installSlowSelector(root, options) {
+  if (!options.slowSelector) return;
+  mkdirSync(path.join(root, "selector"), { recursive: true });
+  writeFileSync(
+    path.join(root, "selector", "test-impact.js"),
+    "setTimeout(() => {}, 10_000);\n",
+  );
+}
+
+function installFocusedPolicy(root, options) {
+  if (!options.focusedMapping) return;
+  mkdirSync(path.join(root, ".buildproven"), { recursive: true });
+  writeFileSync(
+    path.join(root, ".buildproven", "test-impact.json"),
+    JSON.stringify({
+      version: 1,
+      jsRunner: "none",
+      mappings: [
+        {
+          paths: ["logic.js"],
+          commands: [{ executable: "node", args: ["logic.test.js"] }],
+        },
+      ],
+      audits: [],
+    }),
+  );
+}
+
+function installMutationContractFixture(root, options) {
+  if (!options.requireMutationExclude) return;
+  mkdirSync(path.join(root, "scripts", "__tests__"), { recursive: true });
+  writeFileSync(
+    path.join(root, "scripts", "__tests__", "quality-mutation-check.test.js"),
+    "throw new Error('mutation contract must not run recursively');\n",
+  );
+}
+
 function fixture(label, testBody, options = {}) {
   const root = makeTempDir(`quality-mutation-${label}-`);
   git(root, ["init", "-q", "-b", "main"]);
@@ -211,6 +279,7 @@ function fixture(label, testBody, options = {}) {
   installPnpmWorkspace(root, options);
   installLocalNodeDependency(root, options);
   installPackageManagerShim(root, options);
+  installSlowSelector(root, options);
   if (options.pnpmWorkspace) {
     writeFileSync(
       path.join(root, ".quality-gates.json"),
@@ -222,23 +291,9 @@ function fixture(label, testBody, options = {}) {
       }),
     );
   }
-  if (options.focusedMapping) {
-    mkdirSync(path.join(root, ".buildproven"), { recursive: true });
-    writeFileSync(
-      path.join(root, ".buildproven", "test-impact.json"),
-      JSON.stringify({
-        version: 1,
-        jsRunner: "none",
-        mappings: [
-          {
-            paths: ["logic.js"],
-            commands: [{ executable: "node", args: ["logic.test.js"] }],
-          },
-        ],
-        audits: [],
-      }),
-    );
-  }
+  installFocusedPolicy(root, options);
+  installAuditPolicy(root, options);
+  installMutationContractFixture(root, options);
   if (options.pytestRunner) {
     writeFileSync(
       path.join(root, ".quality-gates.json"),
@@ -619,6 +674,245 @@ describe("quality-mutation-check", () => {
       "utf8",
     );
     expect(log).toContain("run --bail=1");
+  });
+
+  it("adapts Vitest hidden behind an audit selector without recursive mutation work", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-recursion",
+      "require('./aaa-uncovered.js');\n",
+      {
+        auditMapping: true,
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+        vitestRunner: true,
+        requireMutationExclude: true,
+      },
+    );
+
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+    const stateRoot = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "stateRoot"],
+      { encoding: "utf8" },
+    ).trim();
+    const head = execFileSync(
+      "node",
+      [INVOCATION, "field", manifest, "revisions.currentHead"],
+      { encoding: "utf8" },
+    ).trim();
+    const log = readFileSync(
+      path.join(stateRoot, "mutation", `${head}.aaa-uncovered.js.log`),
+      "utf8",
+    );
+    expect(log).toContain(
+      "--exclude scripts/__tests__/quality-mutation-check.test.js",
+    );
+    expect(log).not.toContain("recursive mutation contract was not excluded");
+  });
+
+  it("inserts npm's pass-through separator before existing Vitest flags", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-existing-bail",
+      "require('./aaa-uncovered.js');\n",
+      {
+        auditMapping: true,
+        auditArgs: ["run", "test", "--bail=1"],
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+        vitestRunner: true,
+        requireMutationExclude: true,
+      },
+    );
+
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+  });
+
+  it("preserves npm-owned flags before the pass-through separator", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-npm-silent",
+      "require('./aaa-uncovered.js');\n",
+      {
+        auditMapping: true,
+        auditArgs: ["test", "--silent"],
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+        vitestRunner: true,
+        requireMutationExclude: true,
+        rejectForwardedNpmSilent: true,
+      },
+    );
+
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+  });
+
+  it("recognizes npm test after a leading npm-owned option", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-leading-npm-silent",
+      "require('./aaa-uncovered.js');\n",
+      {
+        auditMapping: true,
+        auditArgs: ["--silent", "test"],
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+        vitestRunner: true,
+        requireMutationExclude: true,
+        rejectForwardedNpmSilent: true,
+      },
+    );
+
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+  });
+
+  it("does not confuse a positional mutation-test path with an exclusion", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-positional-mutation-test",
+      "require('./aaa-uncovered.js');\n",
+      {
+        auditMapping: true,
+        auditArgs: [
+          "test",
+          "--",
+          "scripts/__tests__/quality-mutation-check.test.js",
+        ],
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+        vitestRunner: true,
+        requireMutationExclude: true,
+      },
+    );
+
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+  });
+
+  it("fails closed on a recursive test-impact policy command", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-cycle",
+      "require('./aaa-uncovered.js');\n",
+      {
+        auditMapping: true,
+        auditCommand: {
+          executable: process.execPath,
+          args: [
+            path.join(ROOT, "scripts", "test-impact.js"),
+            "--execute",
+            "--",
+            "aaa-uncovered.js",
+          ],
+        },
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+      },
+    );
+
+    expect(() => runMutation(root, manifest)).toThrow(
+      /selector expansion exceeded depth 3/,
+    );
+  });
+
+  it("finds a recursive test-impact selector after a leading Node option", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-leading-node-option",
+      "require('./aaa-uncovered.js');\n",
+      {
+        auditMapping: true,
+        auditCommand: {
+          executable: process.execPath,
+          args: [
+            "--conditions=node",
+            path.join(ROOT, "scripts", "test-impact.js"),
+            "--execute",
+            "--",
+            "aaa-uncovered.js",
+          ],
+        },
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+      },
+    );
+
+    expect(() => runMutation(root, manifest)).toThrow(
+      /selector expansion exceeded depth 3/,
+    );
+  });
+
+  it("preserves a valid expanded selector with no selected tests", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-none",
+      "require('./aaa-uncovered.js');\n",
+      {
+        auditMapping: true,
+        auditCommand: {
+          executable: process.execPath,
+          args: [
+            path.join(ROOT, "scripts", "test-impact.js"),
+            "--execute",
+            "--",
+            "README.md",
+          ],
+        },
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+      },
+    );
+
+    expect(() => runMutation(root, manifest)).toThrow(
+      /persisted tests remained green/,
+    );
+  });
+
+  it("does not record reserved orchestration status as red-capable evidence", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-orchestration-status",
+      "const fs=require('node:fs');\nif(!fs.existsSync('aaa-uncovered.js')) process.exit(125);\n",
+      {
+        auditMapping: true,
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+        vitestRunner: true,
+        requireMutationExclude: true,
+      },
+    );
+
+    expect(() => runMutation(root, manifest)).toThrow(
+      /controlled revert selector orchestration failed; this is not red-capable evidence/,
+    );
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    expect(state.mutation).toBeNull();
+  });
+
+  it("bounds selector planning with the mutation timeout", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-timeout",
+      "require('./aaa-uncovered.js');\n",
+      {
+        auditMapping: true,
+        auditCommand: (fixtureRoot) => ({
+          executable: process.execPath,
+          args: [
+            path.join(fixtureRoot, "selector", "test-impact.js"),
+            "--execute",
+          ],
+        }),
+        slowSelector: true,
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+        checkSeconds: 2,
+      },
+    );
+
+    expect(() => runMutation(root, manifest)).toThrow(
+      /serialized baseline test timed out; no red-capable evidence/,
+    );
   });
 
   it("uses pytest fail-fast after the first controlled-revert failure", () => {

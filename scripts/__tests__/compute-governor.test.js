@@ -63,7 +63,7 @@ describe("compute governor", () => {
     const plan = resolve(base);
     expect(plan).toMatchObject({
       schemaVersion: 1,
-      policyVersion: "2026-08-12",
+      policyVersion: "2026-08-26-no-opus",
       route: "economy-builder",
       provider: "codex",
       model: "gpt-5.6-luna",
@@ -241,7 +241,7 @@ describe("compute governor", () => {
       promotion: "calibration-required-standard-fallback",
       executionBinding: {
         schemaVersion: 1,
-        policyVersion: "2026-08-12",
+        policyVersion: "2026-08-26-no-opus",
         promptSha256: "a".repeat(64),
         targetIdentitySha256: "b".repeat(64),
         targetHead: "c".repeat(40),
@@ -300,7 +300,7 @@ describe("compute governor", () => {
       promotion: "calibration-required-standard-fallback",
       executionBinding: {
         schemaVersion: 1,
-        policyVersion: "2026-08-12",
+        policyVersion: "2026-08-26-no-opus",
         promptSha256: "a".repeat(64),
         targetIdentitySha256: "b".repeat(64),
         targetHead: "c".repeat(64),
@@ -495,7 +495,15 @@ describe("compute governor", () => {
   it("loads a complete versioned policy", () => {
     const policy = loadPolicy();
     expect(policy.schemaVersion).toBe(1);
-    expect(policy.routes.critical.providers.claude.model).toBe("claude-opus-5");
+    expect(policy.routes.critical.providers.claude.model).toBe(
+      "claude-sonnet-5",
+    );
+    expect(
+      Object.values(policy.routes).map((route) => route.providers.claude.model),
+    ).not.toContain("claude-opus-5");
+    expect(policy.routes["economy-builder"].providers.claude.effort).toBe(
+      "low",
+    );
   });
 
   it("rejects provider mappings that cannot pin model and effort", () => {

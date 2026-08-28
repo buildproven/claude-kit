@@ -423,22 +423,14 @@ run_agent() {
 # Bash `wait` blocks the caller's Bash tool call synchronously in every context.
 pids=()
 mandatory=0
-slot_index=0
 IFS=',' read -ra AGENT_LIST <<< "$AGENTS"
 for agent in "${AGENT_LIST[@]}"; do
   agent="$(printf '%s' "$agent" | tr -d '[:space:]')"
   [ -z "$agent" ] && continue
   mandatory=$((mandatory + 1))
   slot_model="$EFFECTIVE_MODEL"
-  if [ "$RISK_TIER" = critical ] && [ "$slot_index" -eq 1 ]; then
-    case "$EFFECTIVE_MODEL" in
-      *opus*) slot_model="claude-sonnet-5" ;;
-      *) slot_model="claude-opus-5" ;;
-    esac
-  fi
   run_agent "$agent" "$slot_model" &
   pids+=("$!")
-  slot_index=$((slot_index + 1))
 done
 
 if [ "$mandatory" -eq 0 ]; then

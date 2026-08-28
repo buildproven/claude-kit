@@ -2724,6 +2724,43 @@ function parseMergeAuthority(value) {
   return mergeAuthority;
 }
 
+function parseProtectedNonstrictRefCas(value) {
+  const policy = value || "signed-only";
+  if (!["signed-only", "accept-non-atomic-pr-state"].includes(policy)) {
+    throw new Error(`invalid protected non-strict ref-CAS policy '${policy}'`);
+  }
+  return policy;
+}
+
+function basePolicyBinding(
+  manifest,
+  options,
+  mergeAuthority,
+  protectedNonstrictRefCas,
+) {
+  const mergeAuthorityBaseSha = options["merge-authority-base-sha"] || null;
+  const protectedNonstrictRefCasBaseSha =
+    options["protected-nonstrict-ref-cas-base-sha"] || null;
+  const exactBase = manifest.revisions.baseHeadSha;
+  const autonomousBaseBound =
+    mergeAuthority !== "autonomous" ||
+    (mergeAuthorityBaseSha === exactBase &&
+      /^[0-9a-f]{40}$/.test(mergeAuthorityBaseSha));
+  if (!autonomousBaseBound) {
+    throw new Error("merge authority must be bound to the exact base SHA");
+  }
+  if (
+    protectedNonstrictRefCas === "accept-non-atomic-pr-state" &&
+    (protectedNonstrictRefCasBaseSha !== exactBase ||
+      !/^[0-9a-f]{40}$/.test(protectedNonstrictRefCasBaseSha))
+  ) {
+    throw new Error(
+      "protected non-strict ref-CAS acceptance must be bound to the exact base SHA",
+    );
+  }
+  return { mergeAuthorityBaseSha, protectedNonstrictRefCasBaseSha };
+}
+
 function setRisk(manifest, options) {
   const tier = options.tier;
   if (!["low", "medium", "high", "critical"].includes(tier)) {
@@ -2738,6 +2775,16 @@ function setRisk(manifest, options) {
   }
   const taskType = options["task-type"] || "unknown";
   const mergeAuthority = parseMergeAuthority(options["merge-authority"]);
+  const protectedNonstrictRefCas = parseProtectedNonstrictRefCas(
+    options["protected-nonstrict-ref-cas"],
+  );
+  const { mergeAuthorityBaseSha, protectedNonstrictRefCasBaseSha } =
+    basePolicyBinding(
+      manifest,
+      options,
+      mergeAuthority,
+      protectedNonstrictRefCas,
+    );
   if (
     ![
       "unknown",
@@ -2766,6 +2813,9 @@ function setRisk(manifest, options) {
     resolved: true,
     tier,
     mergeAuthority,
+    mergeAuthorityBaseSha,
+    protectedNonstrictRefCas,
+    protectedNonstrictRefCasBaseSha,
     taskType,
     score:
       options.score === undefined || options.score === ""
@@ -6272,6 +6322,125 @@ function clearMergeAdmissionBlock(manifestPath) {
   return cleared;
 }
 
+function matchingCiAdmissionBlock(manifest) {
+  const terminal = manifest.terminalState;
+  const admission = manifest.merge?.admissionBlock;
+  return Boolean(
+    terminal?.state === "blocked" &&
+    terminal.head === manifest.revisions.currentHead &&
+    admission?.head === terminal.head &&
+    Number.isInteger(terminal.terminalEpoch) &&
+    admission.terminalEpoch === terminal.terminalEpoch &&
+    typeof terminal.mergeAttemptId === "string" &&
+    terminal.mergeAttemptId.length > 0 &&
+    admission.mergeAttemptId === terminal.mergeAttemptId &&
+    JSON.stringify(terminal.mergeAdmissionConditions) ===
+      JSON.stringify(["ci:failed"]) &&
+    JSON.stringify(admission.conditions) === JSON.stringify(["ci:failed"]),
+  );
+}
+
+function githubJson(root, args, label) {
+  const result = spawnSync("gh", args, {
+    cwd: root,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status !== 0) {
+    throw new Error(`${label} failed: ${(result.stderr || "").trim()}`);
+  }
+  return parseJson(result.stdout, label);
+}
+
+function resolveGreenCiAdmissionBlock(manifestPath, adapters = {}) {
+  const initial = loadManifest(manifestPath).manifest;
+  if (!matchingCiAdmissionBlock(initial)) return false;
+  const readPullRequest =
+    adapters.readPullRequest ??
+    ((manifest) =>
+      githubJson(
+        manifest.repo.realpath,
+        [
+          "pr",
+          "view",
+          String(manifest.repo.pr),
+          "--repo",
+          manifest.repo.githubRepository,
+          "--json",
+          "state,headRefOid",
+        ],
+        "current pull request",
+      ));
+  const readChecks =
+    adapters.readChecks ??
+    ((manifest) =>
+      githubJson(
+        manifest.repo.realpath,
+        [
+          "pr",
+          "checks",
+          String(manifest.repo.pr),
+          "--repo",
+          manifest.repo.githubRepository,
+          "--json",
+          "state",
+        ],
+        "current pull request checks",
+      ));
+  const pullRequest = readPullRequest(initial);
+  if (
+    pullRequest?.state !== "OPEN" ||
+    pullRequest.headRefOid !== initial.revisions.currentHead
+  ) {
+    throw new Error("green CI resolution requires the open exact-head PR");
+  }
+  const checks = readChecks(initial);
+  const greenStates = new Set(["SUCCESS", "SKIPPED", "NEUTRAL"]);
+  if (
+    !Array.isArray(checks) ||
+    checks.length === 0 ||
+    checks.some((check) => !greenStates.has(check?.state))
+  ) {
+    throw new Error("green CI resolution requires current registered checks");
+  }
+  const expectedAttemptId = initial.terminalState.mergeAttemptId;
+  let resolved = false;
+  withManifestLock(manifestPath, (manifest) => {
+    if (
+      !matchingCiAdmissionBlock(manifest) ||
+      manifest.terminalState.mergeAttemptId !== expectedAttemptId
+    ) {
+      throw new Error("CI admission block changed during green CI resolution");
+    }
+    if (
+      manifest.terminalHistory !== undefined &&
+      !Array.isArray(manifest.terminalHistory)
+    ) {
+      throw new Error("terminal history is malformed");
+    }
+    const resolvedAt = new Date().toISOString();
+    const nextEpoch = terminalEpoch(manifest) + 1;
+    manifest.terminalHistory ??= [];
+    manifest.terminalHistory.push({
+      ...manifest.terminalState,
+      disposition: "resolved-by-green-ci",
+      resolvedAt,
+    });
+    manifest.terminalHistory.push({
+      event: "reopened-by-green-ci",
+      head: manifest.revisions.currentHead,
+      terminalEpoch: nextEpoch,
+      checkCount: checks.length,
+      recordedAt: resolvedAt,
+    });
+    manifest.terminalEpoch = nextEpoch;
+    delete manifest.terminalState;
+    delete manifest.merge.admissionBlock;
+    resolved = true;
+  });
+  return resolved;
+}
+
 function recoveryScope(manifest, terminal) {
   const conditions = terminal?.mergeAdmissionConditions;
   const admission = manifest.merge?.admissionBlock;
@@ -6721,6 +6890,10 @@ const COMMANDS = {
       options.detail || "merge admission blocked",
     );
   },
+  "resolve-green-ci-admission-block": ({ manifestArg }) =>
+    process.stdout.write(
+      `${resolveGreenCiAdmissionBlock(manifestArg) ? "resolved" : "unchanged"}\n`,
+    ),
 };
 
 function runAdvance(manifestArg, manifest, rawArgs) {
@@ -6981,6 +7154,7 @@ module.exports = {
   recordTerminalState,
   recordMergeAdmissionBlockedTerminal,
   clearMergeAdmissionBlock,
+  resolveGreenCiAdmissionBlock,
   recoveryScope,
   resumeRecoverableTerminal,
   terminalEpoch,

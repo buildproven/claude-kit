@@ -16,6 +16,7 @@ const {
   scoreToKnobs,
   DEFAULTS,
   CRITICAL_RISK_SCORE,
+  loadConfigAtRevision,
 } = require("./risk-score");
 const { execFileSync } = require("node:child_process");
 
@@ -322,6 +323,10 @@ function parseGateTimeoutsJson(raw) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const scored = score({ base: args.base });
+  const policyBaseSha = execFileSync("git", ["rev-parse", scored.base], {
+    encoding: "utf8",
+  }).trim();
+  const basePolicy = loadConfigAtRevision(process.cwd(), policyBaseSha);
   const plan = planRuntime({
     riskScore: scored.riskScore,
     diffStats: {
@@ -336,7 +341,10 @@ function main() {
   });
   const result = {
     ...plan,
-    mergeAuthority: scored.mergeAuthority,
+    mergeAuthority: basePolicy.mergeAuthority,
+    mergeAuthorityBaseSha: policyBaseSha,
+    protectedNonstrictRefCas: basePolicy.protectedNonstrictRefCas,
+    protectedNonstrictRefCasBaseSha: policyBaseSha,
     taskType: scored.taskType,
     changeNature: scored.changeNature,
     reasons: scored.reasons,

@@ -48,6 +48,7 @@ TEST_EXECUTABLE="$(printf '%s' "$TEST_PLAN" | jq -r '.executable')"
 TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/quality-mutation.XXXXXX")"
 ARTIFACT="$STATE_ROOT/mutation/$HEAD.json"
 MUTATION_ACTIVE=false
+PLAN_ERROR_STATUS=125
 
 cleanup() {
   STATUS=$?
@@ -102,6 +103,168 @@ run_conventional_sibling_test() {
   return 2
 }
 
+array_contains() {
+  local expected="$1"
+  shift
+  local actual
+  for actual in "$@"; do
+    [ "$actual" = "$expected" ] && return 0
+  done
+  return 1
+}
+
+vitest_has_mutation_exclusion() {
+  local argument expect_exclude_value=false
+  for argument in "$@"; do
+    if [ "$expect_exclude_value" = true ]; then
+      [ "$argument" != scripts/__tests__/quality-mutation-check.test.js ] || return 0
+      expect_exclude_value=false
+      continue
+    fi
+    case "$argument" in
+      --exclude) expect_exclude_value=true ;;
+      --exclude=scripts/__tests__/quality-mutation-check.test.js) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+npm_test_prefix() {
+  local index argument
+  local -a npm_args=("$@")
+  for ((index = 0; index < ${#npm_args[@]}; index += 1)); do
+    argument="${npm_args[$index]}"
+    [ "$argument" != -- ] || break
+    if [ "$argument" = test ]; then
+      printf '%s\n' "$((index + 1))"
+      return 0
+    fi
+    if [ "$argument" = run ] && [ "${npm_args[$((index + 1))]:-}" = test ]; then
+      printf '%s\n' "$((index + 2))"
+      return 0
+    fi
+  done
+  printf '0\n'
+}
+
+node_runs_test_impact_selector() {
+  local argument
+  for argument in "$@"; do
+    [ "$(basename "$argument")" != test-impact.js ] || return 0
+  done
+  return 1
+}
+
+run_mutation_command() {
+  local log="$1" timeout_seconds="$2" depth="$3" executable="$4" argument plan plan_status mode command_count index child_executable npm_test_prefix
+  shift 4
+  local -a args=("$@") plan_args=() child_args=()
+  local saw_execute=false saw_separator=false runner_has_bail=false runner_has_exclusion=false
+
+  # The persisted test gate can be the shared selector rather than the test
+  # runner itself. Expand that immutable plan here so every child command
+  # passes through the same mutation-only adaptation below. Running the
+  # selector with --execute would hide an npm/Vitest child and recursively
+  # include this script's own fixture suite (BUI-781).
+  if [ "$(basename "$executable")" = node ] &&
+     node_runs_test_impact_selector "${args[@]+"${args[@]}"}"; then
+    for argument in "${args[@]+"${args[@]}"}"; do
+      if [ "$argument" = --execute ] && [ "$saw_execute" = false ]; then
+        saw_execute=true
+      else
+        plan_args+=("$argument")
+      fi
+    done
+    if [ "$saw_execute" = true ]; then
+      if [ "$depth" -ge 3 ]; then
+        echo "quality-mutation-check: test-impact selector expansion exceeded depth 3; check for a recursive policy command" >> "$log"
+        return "$PLAN_ERROR_STATUS"
+      fi
+      if plan="$(cd "$SANDBOX" && bash "$SCRIPT_DIR/quality-run-bounded.sh" \
+        --timeout "$timeout_seconds" -- "$executable" "${plan_args[@]}" 2>> "$log")"; then
+        plan_status=0
+      else
+        plan_status=$?
+      fi
+      [ "$plan_status" -ne 124 ] || return 124
+      if [ "$plan_status" -ne 0 ]; then
+        echo "quality-mutation-check: bounded test-impact planning failed with exit $plan_status" >> "$log"
+        return "$PLAN_ERROR_STATUS"
+      fi
+      mode="$(printf '%s' "$plan" | jq -er '.mode')" || return "$PLAN_ERROR_STATUS"
+      case "$mode" in
+        focused|audit) ;;
+        none)
+          echo "quality-mutation-check: expanded test-impact plan selected no tests (mode=none)" >> "$log"
+          return 0
+          ;;
+        *)
+          echo "quality-mutation-check: expanded test-impact plan has no executable mutation proof (mode=$mode)" >> "$log"
+          printf '%s\n' "$plan" >> "$log"
+          return "$PLAN_ERROR_STATUS"
+          ;;
+      esac
+      command_count="$(printf '%s' "$plan" | jq -er '.commands | length')" || return "$PLAN_ERROR_STATUS"
+      [ "$command_count" -gt 0 ] || {
+        echo "quality-mutation-check: expanded test-impact plan has no executable commands" >> "$log"
+        printf '%s\n' "$plan" >> "$log"
+        return "$PLAN_ERROR_STATUS"
+      }
+      for ((index = 0; index < command_count; index += 1)); do
+        child_executable="$(printf '%s' "$plan" | jq -er ".commands[$index].executable")" || return "$PLAN_ERROR_STATUS"
+        child_args=()
+        while IFS= read -r argument; do child_args+=("$argument"); done < <(
+          printf '%s' "$plan" | jq -r ".commands[$index].args[]"
+        )
+        run_mutation_command "$log" "$timeout_seconds" "$((depth + 1))" "$child_executable" \
+          "${child_args[@]+"${child_args[@]}"}" || return $?
+      done
+      return 0
+    fi
+  fi
+
+  if [ "$executable" = npx ] && [ "${args[0]:-}" = vitest ]; then
+    array_contains --bail=1 "${args[@]+"${args[@]}"}" || args+=(--bail=1)
+    if [ -f "$SANDBOX/scripts/__tests__/quality-mutation-check.test.js" ] &&
+       ! vitest_has_mutation_exclusion \
+         "${args[@]+"${args[@]}"}"; then
+      args+=(--exclude scripts/__tests__/quality-mutation-check.test.js)
+    fi
+  elif [ "$executable" = npm ]; then
+    npm_test_prefix="$(npm_test_prefix "${args[@]+"${args[@]}"}")"
+    case "$REPO_TEST_SCRIPT" in
+      vitest\ *|npx\ vitest\ *)
+        if [ "$npm_test_prefix" -gt 0 ]; then
+          for ((index = npm_test_prefix; index < ${#args[@]}; index += 1)); do
+            if [ "${args[$index]}" = -- ]; then
+              saw_separator=true
+              continue
+            fi
+            if [ "$saw_separator" = true ]; then
+              [ "${args[$index]}" != --bail=1 ] || runner_has_bail=true
+            fi
+          done
+          if [ "$saw_separator" = true ] &&
+             vitest_has_mutation_exclusion "${args[@]:$((npm_test_prefix + 1))}"; then
+            runner_has_exclusion=true
+          fi
+          if [ "$saw_separator" = false ]; then
+            args+=(--)
+          fi
+          [ "$runner_has_bail" = true ] || args+=(--bail=1)
+          if [ -f "$SANDBOX/scripts/__tests__/quality-mutation-check.test.js" ] &&
+             [ "$runner_has_exclusion" = false ]; then
+            args+=(--exclude scripts/__tests__/quality-mutation-check.test.js)
+          fi
+        fi
+        ;;
+    esac
+  fi
+
+  bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
+    "$executable" "${args[@]+"${args[@]}"}" >> "$log" 2>&1
+}
+
 run_candidate_tests() {
   local candidate="$1" log="$2" timeout_seconds="$3" plan mode command_count index executable
   local -a args=()
@@ -130,14 +293,14 @@ run_candidate_tests() {
         while IFS= read -r argument; do args+=("$argument"); done < <(
           printf '%s' "$plan" | jq -r ".commands[$index].args[]"
         )
-        bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
-          "$executable" "${args[@]}" >> "$log" 2>&1 || return $?
+        run_mutation_command "$log" "$timeout_seconds" 0 "$executable" \
+          "${args[@]}" || return $?
       done
       return 0
     fi
   fi
-  bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$timeout_seconds" -- \
-    "$TEST_EXECUTABLE" "${MUTATION_TEST_ARGS[@]+"${MUTATION_TEST_ARGS[@]}"}" >> "$log" 2>&1
+  run_mutation_command "$log" "$timeout_seconds" 0 "$TEST_EXECUTABLE" \
+    "${MUTATION_TEST_ARGS[@]+"${MUTATION_TEST_ARGS[@]}"}"
 }
 
 # Mutation evidence needs one observed failure, not a complete failure report.
@@ -233,16 +396,8 @@ done < <(
 # behavioral test has a chance to prove the revert. This is only an ordering
 # optimization: every candidate remains eligible and the red-capable proof
 # still requires baseline pass plus controlled-revert failure.
-is_recursive_mutation_target() {
-  case "$1" in
-    */quality-mutation-check.sh) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
 candidate_has_sibling_test() {
   local candidate="$1" directory stem sibling
-  is_recursive_mutation_target "$candidate" && return 1
   directory="$(dirname "$candidate")"
   stem="$(basename "$candidate")"
   stem="${stem%.*}"
@@ -258,7 +413,6 @@ candidate_has_sibling_test() {
 
 candidate_has_planned_sibling_test() {
   local candidate="$1" directory stem sibling
-  is_recursive_mutation_target "$candidate" && return 1
   directory="$(dirname "$candidate")"
   stem="$(basename "$candidate")"
   stem="${stem%.*}"
@@ -282,13 +436,6 @@ candidate_has_mapped_test() {
     '.mappings[]? | select((.paths // []) | index($candidate)) | .commands[]? | (.args // []) | any(.[]; test("(^|/)(test|tests|spec|__tests__)/|\\.(test|spec)\\.(js|ts|jsx|tsx)$"))' \
     "$ROOT/.buildproven/test-impact.json" >/dev/null 2>&1
 }
-
-FILTERED_CANDIDATES=()
-for CANDIDATE in "${CANDIDATES[@]+"${CANDIDATES[@]}"}"; do
-  is_recursive_mutation_target "$CANDIDATE" ||
-    FILTERED_CANDIDATES+=("$CANDIDATE")
-done
-CANDIDATES=("${FILTERED_CANDIDATES[@]+"${FILTERED_CANDIDATES[@]}"}")
 
 if [ "${#CANDIDATES[@]}" -gt 1 ]; then
   ORDERED_CANDIDATES=()
@@ -650,6 +797,11 @@ for CANDIDATE in "${CANDIDATES[@]+"${CANDIDATES[@]}"}"; do
   git -C "$ROOT" worktree remove --force "$SANDBOX" >/dev/null
   if [ "$RESULT" -eq 124 ]; then
     echo "quality-mutation-check: controlled revert test timed out; a hang is not red-capable evidence" >&2
+    exit 1
+  fi
+  if [ "$RESULT" -eq "$PLAN_ERROR_STATUS" ]; then
+    echo "quality-mutation-check: controlled revert selector orchestration failed; this is not red-capable evidence" >&2
+    tail -n 40 "$LOG" >&2 || true
     exit 1
   fi
   if [ "$RESULT" -ne 0 ]; then
