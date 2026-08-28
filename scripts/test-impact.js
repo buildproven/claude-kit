@@ -321,7 +321,15 @@ function execute(result, root = process.cwd()) {
     return 2;
   }
   for (const item of result.commands || []) {
-    const child = spawnSync(item.executable, item.args, {
+    // A bare npx can download and reify a newer package even when the
+    // lockfile-installed binary exists. npm 11 can then replace the active
+    // worktree's node_modules while a quality gate is running. Impact plans
+    // are repository contracts, so they must use only prepared dependencies.
+    const args =
+      item.executable === "npx" && !item.args.includes("--no-install")
+        ? ["--no-install", ...item.args]
+        : item.args;
+    const child = spawnSync(item.executable, args, {
       cwd: root,
       env: process.env,
       stdio: "inherit",

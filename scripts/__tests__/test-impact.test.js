@@ -524,6 +524,42 @@ describe("cross-language test impact", () => {
     expect(readFileSync(target, "utf8")).toBe("ok");
   });
 
+  it("runs npx selectors from prepared dependencies without installing", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "test-impact-npx-"));
+    const bin = path.join(root, "bin");
+    const target = path.join(root, "argv.txt");
+    mkdirSync(bin);
+    writeFileSync(
+      path.join(bin, "npx"),
+      `#!/usr/bin/env bash\nprintf '%s\\n' "$@" > "${target}"\n`,
+      { mode: 0o755 },
+    );
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}:${previousPath}`;
+    try {
+      expect(
+        execute(
+          {
+            mode: "focused",
+            commands: [
+              { executable: "npx", args: ["vitest", "run", "one.test.js"] },
+            ],
+          },
+          root,
+        ),
+      ).toBe(0);
+    } finally {
+      process.env.PATH = previousPath;
+    }
+    expect(readFileSync(target, "utf8").split("\n")).toEqual([
+      "--no-install",
+      "vitest",
+      "run",
+      "one.test.js",
+      "",
+    ]);
+  });
+
   it("fails visibly instead of executing partial commands when impact is unmapped", () => {
     expect(
       execute({
