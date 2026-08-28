@@ -395,6 +395,19 @@ describe("provider review runtime", () => {
     expect(runner).not.toMatch(/REVIEW_PROVIDER[^\n]*!= claude/);
   });
 
+  it("isolates Codex review cache state before probing provider health", () => {
+    const runner = readFileSync(RUN_REVIEW, "utf8");
+    expect(runner).toContain(
+      'QUALITY_CODEX_SOURCE_HOME="${QUALITY_CODEX_SOURCE_HOME:-${CODEX_HOME:-$HOME/.codex}}"',
+    );
+    expect(runner).toContain(
+      'CODEX_HOME="$(bash "$SCRIPT_DIR/quality-codex-home.sh")"',
+    );
+    expect(runner.indexOf("quality-codex-home.sh")).toBeLessThan(
+      runner.indexOf("quality-codex-cache-guard.sh"),
+    );
+  });
+
   it("kills the provider tree when the wrapper itself is cancelled", async () => {
     const dir = makeTempDir("bounded-cancel-");
     const pidFile = path.join(dir, "child.pid");

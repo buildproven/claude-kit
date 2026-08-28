@@ -3,6 +3,8 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+QUALITY_CODEX_SOURCE_HOME="${QUALITY_CODEX_SOURCE_HOME:-${CODEX_HOME:-$HOME/.codex}}"
+export QUALITY_CODEX_SOURCE_HOME
 MANIFEST=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -315,10 +317,12 @@ run_codex_review() {
   schema="$SCRIPT_DIR/schemas/quality-review-output.schema.json"
   [ -f "$schema" ] || return 2
   command -v codex >/dev/null 2>&1 || return 2
-  # Probe the codex models-cache (BUI-352). exit 1 means an incompatible codex
-  # version owns $CODEX_HOME and codex will stall its whole clock on an
-  # unparseable cache — treat codex as UNAVAILABLE (return 2) so the runner
-  # fails over to the fallback provider immediately instead of after a timeout.
+  # Isolate cache state by installed CLI version. The desktop app can continue
+  # to update the operator home without invalidating an active quality review.
+  CODEX_HOME="$(bash "$SCRIPT_DIR/quality-codex-home.sh")" || return 2
+  export CODEX_HOME
+  # Probe the version-scoped cache. A failed one-shot regeneration still makes
+  # Codex unavailable so the runner can use its fallback without a long stall.
   if ! bash "$SCRIPT_DIR/quality-codex-cache-guard.sh"; then
     return 2
   fi

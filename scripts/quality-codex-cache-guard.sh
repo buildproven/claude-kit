@@ -3,17 +3,14 @@
 #
 # THE BUG: codex caches model metadata in $CODEX_HOME/models_cache.json
 # (default ~/.codex), tagged with the client_version that wrote it. On a host
-# where a NEWER codex also touches $CODEX_HOME — notably the ChatGPT / Codex
-# desktop app, whose model-resolution infra writes the cache in its own newer
-# schema — the CLI the quality review invokes can't parse it
+# where a NEWER codex also touches the same home — notably the ChatGPT / Codex
+# desktop app — the CLI the quality review invokes can't parse it
 # ("failed to load/renew models cache: missing field 'supports_reasoning_summaries'").
 # codex then stalls resolving models and burns its entire review clock without
 # emitting findings (rc=76). This cost ~2h of blocked merges in one session.
 #
-# WHY WE DON'T "HEAL" IT: clearing the cache doesn't stick. The very next
-# `codex exec` — even the CLI's own — re-resolves through the shared desktop-app
-# infra and rewrites the cache in the incompatible newer schema. The cache
-# cannot be won on such a host, so a refresh loop is futile (and slow).
+# The quality runner now gives each installed CLI version its own cache home.
+# This guard remains the bounded health check for that private cache.
 #
 # THE CONTRACT: probe whether the INSTALLED codex can actually use the cache.
 #   exit 0  → cache is healthy for the installed codex; run the codex review.
@@ -73,8 +70,6 @@ if cache_is_healthy; then
   exit 0
 fi
 
-# Still unhealthy → another codex version (e.g. the ChatGPT/Codex desktop app)
-# owns $CODEX_HOME and keeps rewriting an incompatible cache. codex WILL stall
-# and time out. Tell the caller to skip it and use the fallback immediately.
-echo "[quality] codex models-cache is owned by an incompatible codex version and cannot be won on this host; skipping codex, using the fallback provider (BUI-352)." >&2
+# Still unhealthy. Do not retry and consume the complete provider clock.
+echo "[quality] codex models-cache regeneration is incompatible with the installed CLI; skipping codex and using the fallback provider (BUI-352)." >&2
 exit 1

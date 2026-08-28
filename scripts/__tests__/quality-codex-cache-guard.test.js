@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { makeTempDir } from "./helpers/tmp.js";
@@ -8,6 +8,11 @@ const GUARD = path.resolve(
   import.meta.dirname,
   "..",
   "quality-codex-cache-guard.sh",
+);
+const HOME_SELECTOR = path.resolve(
+  import.meta.dirname,
+  "..",
+  "quality-codex-home.sh",
 );
 
 // Run the guard with a fake `codex` on PATH and an isolated CODEX_HOME so the
@@ -67,7 +72,71 @@ describe("quality-codex-cache-guard", () => {
       regenWrites: '{"client_version":"0.145.0","models":[{"slug":"x"}]}', // desktop app rewins
     });
     expect(code).toBe(1);
-    expect(stderr).toMatch(/cannot be won|using the fallback/);
+    expect(stderr).toMatch(/using the fallback/);
+  });
+
+  it("keeps quality cache healthy when a competing client rewrites the source cache", () => {
+    const sourceHome = makeTempDir("codex-source-");
+    const stateRoot = makeTempDir("codex-quality-state-");
+    const binDir = makeTempDir("codex-bin-");
+    const sourceCache = path.join(sourceHome, "models_cache.json");
+    const authPath = path.join(sourceHome, "auth.json");
+    const execCount = path.join(binDir, "exec-count");
+    writeFileSync(authPath, "test-auth-placeholder");
+    writeFileSync(
+      sourceCache,
+      '{"client_version":"0.200.0","models":[{"slug":"desktop"}]}',
+    );
+    writeFileSync(
+      path.join(binDir, "codex"),
+      `#!/usr/bin/env bash
+if [ "$1" = "--version" ]; then echo "codex-cli 0.149.1"; exit 0; fi
+if [ "$1" = "exec" ]; then
+  count=0; [ ! -f "${execCount}" ] || count="$(cat "${execCount}")"
+  printf '%s' "$((count + 1))" > "${execCount}"
+  printf '%s' '{"client_version":"0.149.1","models":[{"slug":"review"}]}' > "$CODEX_HOME/models_cache.json"
+fi
+`,
+      { mode: 0o755 },
+    );
+    const env = {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      QUALITY_CODEX_SOURCE_HOME: sourceHome,
+      QUALITY_CODEX_STATE_ROOT: stateRoot,
+    };
+    const firstHome = spawnSync("bash", [HOME_SELECTOR], {
+      encoding: "utf8",
+      env,
+    }).stdout.trim();
+    const secondHome = spawnSync("bash", [HOME_SELECTOR], {
+      encoding: "utf8",
+      env,
+    }).stdout.trim();
+    expect(secondHome).toBe(firstHome);
+    expect(realpathSync(path.join(firstHome, "auth.json"))).toBe(
+      realpathSync(authPath),
+    );
+
+    const reviewEnv = { ...env, CODEX_HOME: firstHome };
+    const first = spawnSync("bash", [GUARD], {
+      encoding: "utf8",
+      env: reviewEnv,
+    });
+    expect(first.status).toBe(0);
+    expect(first.stderr).toMatch(/refreshed/);
+    writeFileSync(
+      sourceCache,
+      '{"client_version":"0.201.0","models":[{"slug":"desktop-new"}]}',
+    );
+    const second = spawnSync("bash", [GUARD], {
+      encoding: "utf8",
+      env: reviewEnv,
+    });
+    expect(second.status).toBe(0);
+    expect(second.stderr).toBe("");
+    expect(readFileSync(execCount, "utf8")).toBe("1");
+    expect(readFileSync(sourceCache, "utf8")).toContain("0.201.0");
   });
 
   it("exits 1 on a corrupt cache that regen can't fix", () => {
