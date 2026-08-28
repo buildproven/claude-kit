@@ -21,6 +21,12 @@ const TOP_LEVEL_FIELDS = new Set([
 ]);
 const GITHUB_ACTIONS_APP_ID = 15368;
 
+class PolicyRejection extends Error {}
+
+function rejectPolicy(message) {
+  throw new PolicyRejection(message);
+}
+
 function canonicalJson(value) {
   if (Array.isArray(value)) return value.map(canonicalJson);
   if (value && typeof value === "object") {
@@ -55,9 +61,10 @@ function assertBooleanRule(protection, field, expected) {
     new Set(["enabled"]),
     field,
   );
-  if (rule.enabled !== expected) {
-    throw new Error(`${field}.enabled must be ${expected}`);
-  }
+  if (typeof rule.enabled !== "boolean")
+    throw new Error(`${field}.enabled must be boolean`);
+  if (rule.enabled !== expected)
+    rejectPolicy(`${field}.enabled must be ${expected}`);
 }
 
 function assertBooleanRuleShape(protection, field) {
@@ -87,9 +94,10 @@ function assertUrlBooleanRule(protection, field, expected) {
     new Set(["url", "enabled"]),
     field,
   );
-  if (typeof rule.url !== "string" || rule.enabled !== expected) {
-    throw new Error(`${field} is not explicitly ${expected}`);
-  }
+  if (typeof rule.url !== "string" || typeof rule.enabled !== "boolean")
+    throw new Error(`${field} is malformed`);
+  if (rule.enabled !== expected)
+    rejectPolicy(`${field} is not explicitly ${expected}`);
 }
 
 function assertEmptyActors(value, label) {
@@ -100,12 +108,10 @@ function assertEmptyActors(value, label) {
     label,
   );
   for (const key of ["users", "teams", "apps"]) {
-    if (
-      actors[key] !== undefined &&
-      (!Array.isArray(actors[key]) || actors[key].length !== 0)
-    ) {
-      throw new Error(`${label}.${key} must be empty`);
-    }
+    if (actors[key] === undefined) continue;
+    if (!Array.isArray(actors[key]))
+      throw new Error(`${label}.${key} must be an array`);
+    if (actors[key].length !== 0) rejectPolicy(`${label}.${key} must be empty`);
   }
 }
 
@@ -118,25 +124,27 @@ function requiredChecks(protection) {
   if (
     typeof status.url !== "string" ||
     typeof status.contexts_url !== "string" ||
-    status.strict !== false ||
+    typeof status.strict !== "boolean" ||
     !Array.isArray(status.contexts) ||
     !Array.isArray(status.checks) ||
-    status.contexts.length === 0 ||
     status.contexts.length !== status.checks.length
   ) {
-    throw new Error(
-      "required_status_checks must be complete, non-empty, and strict:false",
-    );
+    throw new Error("required_status_checks is malformed");
   }
-  const contexts = status.contexts;
+  if (status.strict !== false || status.contexts.length === 0) {
+    rejectPolicy("required_status_checks must be non-empty and strict:false");
+  }
   if (
-    contexts.some((context) => typeof context !== "string" || !context) ||
-    new Set(contexts).size !== contexts.length
+    status.contexts.some(
+      (context) => typeof context !== "string" || !context,
+    ) ||
+    new Set(status.contexts).size !== status.contexts.length
   ) {
     throw new Error(
       "required status contexts must be unique non-empty strings",
     );
   }
+  const contexts = status.contexts;
   const checks = status.checks.map((check) => {
     const closed = assertClosedObject(
       check,
@@ -144,14 +152,15 @@ function requiredChecks(protection) {
       "required status check",
     );
     if (
+      typeof closed.context !== "string" ||
       !contexts.includes(closed.context) ||
-      !Number.isInteger(closed.app_id) ||
-      closed.app_id !== GITHUB_ACTIONS_APP_ID
-    ) {
-      throw new Error(
+      !Number.isInteger(closed.app_id)
+    )
+      throw new Error("required status check is malformed");
+    if (closed.app_id !== GITHUB_ACTIONS_APP_ID)
+      rejectPolicy(
         "every waived required status check must be bound to the GitHub Actions App",
       );
-    }
     return { context: closed.context, appId: closed.app_id };
   });
   if (new Set(checks.map((check) => check.context)).size !== checks.length) {
@@ -181,12 +190,17 @@ function assertReviewRule(protection) {
   if (
     typeof closed.url !== "string" ||
     typeof closed.dismiss_stale_reviews !== "boolean" ||
+    typeof closed.require_code_owner_reviews !== "boolean" ||
+    typeof closed.require_last_push_approval !== "boolean" ||
+    !Number.isInteger(closed.required_approving_review_count)
+  )
+    throw new Error("pull request review protection is malformed");
+  if (
     closed.require_code_owner_reviews !== false ||
     closed.require_last_push_approval !== false ||
     closed.required_approving_review_count !== 0
-  ) {
-    throw new Error("pull request review protection is not inert");
-  }
+  )
+    rejectPolicy("pull request review protection is not inert");
   assertEmptyActors(closed.dismissal_restrictions, "dismissal_restrictions");
   assertEmptyActors(
     closed.bypass_pull_request_allowances,
@@ -226,9 +240,7 @@ function assertConversationRule(protection, reviewThreads) {
       "review thread",
     );
     if (closed.isResolved !== true) {
-      throw new Error(
-        "an exact pull request review conversation is unresolved",
-      );
+      rejectPolicy("an exact pull request review conversation is unresolved");
     }
   }
 }
@@ -244,14 +256,16 @@ function classifyProtectedNonstrict({
     TOP_LEVEL_FIELDS,
     "classic branch protection",
   );
-  if (repositoryAdmin !== true) {
-    throw new Error("authenticated actor is not a repository administrator");
-  }
-  if (!Array.isArray(effectiveRules) || effectiveRules.length !== 0) {
-    throw new Error("effective rulesets are present or unavailable");
-  }
+  if (typeof repositoryAdmin !== "boolean")
+    throw new Error("repository administrator permission is malformed");
+  if (!repositoryAdmin)
+    rejectPolicy("authenticated actor is not a repository administrator");
+  if (!Array.isArray(effectiveRules))
+    throw new Error("effective rulesets are malformed");
+  if (effectiveRules.length !== 0)
+    rejectPolicy("effective rulesets are present");
   if (closed.restrictions !== undefined && closed.restrictions !== null) {
-    throw new Error("push restrictions are present");
+    rejectPolicy("push restrictions are present");
   }
   const checks = requiredChecks(closed);
   assertReviewRule(closed);
@@ -392,12 +406,13 @@ if (require.main === module) {
     main();
   } catch (error) {
     process.stderr.write(`quality protected non-strict: ${error.message}\n`);
-    process.exit(1);
+    process.exit(error instanceof PolicyRejection ? 3 : 1);
   }
 }
 
 module.exports = {
   GITHUB_ACTIONS_APP_ID,
+  PolicyRejection,
   classifyProtectedNonstrict,
   inspectProtectedNonstrict,
   normalizeProtectedBranch,

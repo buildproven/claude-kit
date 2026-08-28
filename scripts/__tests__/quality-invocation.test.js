@@ -619,6 +619,15 @@ fi
     exit 1
   fi
   if [[ "$*" == *"/protection"* ]]; then
+    if [ "\${QUALITY_TEST_PROTECTION_MODE:-}" = plan-limit ]; then
+      printf '%s\\n' '{"message":"Upgrade to GitHub Pro or make this repository public to enable this feature.","status":"403"}'
+      echo 'gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)' >&2
+      exit 1
+    fi
+    if [ "\${QUALITY_TEST_PROTECTION_MODE:-}" = malformed ]; then
+      printf '%s\\n' '[]'
+      exit 0
+    fi
     printf '%s\\n' '{"message":"Branch not protected"}'
     echo 'gh: Branch not protected (HTTP 404)' >&2
     exit 1
@@ -639,6 +648,10 @@ fi
   fi
   if [[ "$*" == *"/check-runs"* ]]; then
     printf '%s\\n' '{"check_runs":[{"id":1,"name":"quality","status":"completed","conclusion":"success","app":{"id":15368}}]}'
+    exit 0
+  fi
+  if [[ "$*" == *"--jq .private"* ]]; then
+    printf '%s\\n' 'true'
     exit 0
   fi
   printf '%s\\n' '[]'
@@ -4554,6 +4567,41 @@ exit 99
     );
     expect(wrongHeadRef.status).not.toBe(0);
     expect(wrongHeadRef.stderr).toMatch(/head branch identity changed/);
+    const planLimited = spawnSync(
+      "bash",
+      [AUTHORIZE, "--manifest", manifest, "--preflight"],
+      {
+        cwd: caller,
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          QUALITY_TEST_PROTECTION_MODE: "plan-limit",
+          BS_QUALITY_ALLOW_UNPROTECTABLE_BASE: "true",
+        },
+        encoding: "utf8",
+      },
+    );
+    expect(planLimited.status, planLimited.stderr).toBe(0);
+    expect(planLimited.stdout).toContain(
+      "BS_QUALITY_BASE_PROTECTION=unprotectable",
+    );
+
+    const malformedProtection = spawnSync(
+      "bash",
+      [AUTHORIZE, "--manifest", manifest, "--preflight"],
+      {
+        cwd: caller,
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          QUALITY_TEST_PROTECTION_MODE: "malformed",
+        },
+        encoding: "utf8",
+      },
+    );
+    expect(malformedProtection.status).toBe(1);
+    expect(malformedProtection.stderr).toMatch(/classification failed/);
+
     const unprotected = spawnSync(
       "bash",
       [AUTHORIZE, "--manifest", manifest, "--preflight"],

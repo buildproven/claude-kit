@@ -13,7 +13,7 @@ describe("quality merge authorization action boundary", () => {
       /CI_GREEN_VERIFIED=false[\s\S]*quality-required-checks\.js" assert[\s\S]*CI_GREEN_VERIFIED=true/,
     );
     expect(script).toMatch(
-      /MERGE_MODE" = protected-nonstrict-ref-cas[\s\S]*NONSTRICT_REFCAS_CAPABILITY" != true[\s\S]*CI_GREEN_VERIFIED" != true[\s\S]*record_merge_admission_blocked_terminal[\s\S]*ci:failed,base:protected-nonstrict,pr:non-atomic-state/,
+      /MERGE_MODE" = protected-nonstrict-ref-cas[\s\S]*NONSTRICT_REFCAS_CAPABILITY" != true[\s\S]*CI_GREEN_VERIFIED" != true[\s\S]*record_merge_admission_blocked_terminal[\s\S]*"ci:failed"/,
     );
   });
 
@@ -25,7 +25,7 @@ describe("quality merge authorization action boundary", () => {
 
   it("fails on protected non-strict inspection errors other than an unprotected 404", () => {
     expect(script).toMatch(
-      /PROTECTED_NONSTRICT_RC[\s\S]*Branch not protected[\s\S]*Not Found \(HTTP 404\)[\s\S]*protected non-strict ref-CAS classification failed[\s\S]*exit 1/,
+      /PROTECTED_NONSTRICT_RC[\s\S]*3:\*[\s\S]*Branch not protected[\s\S]*Not Found \(HTTP 404\)[\s\S]*protected non-strict ref-CAS classification failed[\s\S]*exit 1/,
     );
   });
 

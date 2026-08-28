@@ -408,6 +408,7 @@ fi
 # classifier. A clean campaign with autonomous merge authority may use this
 # transaction directly. Signed capability authority remains required when the
 # campaign also accepts failed CI, incomplete review, or another override.
+UNPROTECTABLE_MERGE_POLICY="${BS_QUALITY_ALLOW_UNPROTECTABLE_BASE:-false}"
 if [ "$ATOMIC_BASE_FRESHNESS" != true ]; then
   PROTECTED_NONSTRICT_ERROR_FILE="$(mktemp)"
   PROTECTED_NONSTRICT_RC=0
@@ -417,12 +418,19 @@ if [ "$ATOMIC_BASE_FRESHNESS" != true ]; then
     2>"$PROTECTED_NONSTRICT_ERROR_FILE")" || PROTECTED_NONSTRICT_RC=$?
   if [ "$PROTECTED_NONSTRICT_RC" -ne 0 ]; then
     PROTECTED_NONSTRICT_ERROR="$(head -n 1 "$PROTECTED_NONSTRICT_ERROR_FILE")"
-    case "$PROTECTED_NONSTRICT_ERROR" in
-      *"Branch not protected"* | *"Not Found (HTTP 404)"*) ;;
+    case "$PROTECTED_NONSTRICT_RC:$PROTECTED_NONSTRICT_ERROR" in
+      3:* | *"Branch not protected"* | *"Not Found (HTTP 404)"*) ;;
       *)
-        echo "❌ MERGE BLOCKED: protected non-strict ref-CAS classification failed: ${PROTECTED_NONSTRICT_ERROR:-unknown error}" >&2
-        rm -f "$PROTECTED_NONSTRICT_ERROR_FILE"
-        exit 1
+        if [ "$UNPROTECTABLE_MERGE_POLICY" = true ]; then
+          # The source-owned protectability classifier below performs a fresh
+          # read and accepts only GitHub's exact private-plan-limit response.
+          # Do not turn this preliminary API failure into authority.
+          :
+        else
+          echo "❌ MERGE BLOCKED: protected non-strict ref-CAS classification failed: ${PROTECTED_NONSTRICT_ERROR:-unknown error}" >&2
+          rm -f "$PROTECTED_NONSTRICT_ERROR_FILE"
+          exit 1
+        fi
         ;;
     esac
   fi
@@ -448,7 +456,6 @@ fi
 # had their chance to authorize: a ruleset can supply strict freshness on a repo
 # with no classic protection, so running this earlier would reject a properly
 # protected base.
-UNPROTECTABLE_MERGE_POLICY="${BS_QUALITY_ALLOW_UNPROTECTABLE_BASE:-false}"
 if [ "$ATOMIC_BASE_FRESHNESS" = false ] && [ "$UNPROTECTABLE_MERGE_POLICY" = true ]; then
   # Classification lives in quality-base-protectability.sh so it is executable
   # in tests; it fails closed on anything short of a proven plan limit.
@@ -541,7 +548,7 @@ if [ "$PREFLIGHT" = false ] &&
   [ "$NONSTRICT_REFCAS_CAPABILITY" != true ] &&
   [ "$CI_GREEN_VERIFIED" != true ]; then
   record_merge_admission_blocked_terminal \
-    "ci:failed,base:protected-nonstrict,pr:non-atomic-state" \
+    "ci:failed" \
     "protected non-strict autonomous ref-CAS requires green exact-head CI" || exit 1
   echo "❌ MERGE BLOCKED: protected non-strict autonomous ref-CAS requires green exact-head CI." >&2
   exit 1
