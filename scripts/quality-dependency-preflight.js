@@ -72,6 +72,15 @@ function yarnLockedReference(lockText, name, requested) {
   return null;
 }
 
+function yarnWorkspaceReference(lockText, name, installedReference) {
+  if (!installedReference?.startsWith("workspace:")) return null;
+  const resolution = new RegExp(
+    `^\\s+resolution: ["']?${regexEscape(name)}@${regexEscape(installedReference)}["']?\\s*$`,
+    "m",
+  );
+  return resolution.test(lockText) ? installedReference : null;
+}
+
 function inspectPnpDependencies(root, dependencies, specs) {
   const failures = [];
   const pnpFile = path.join(root, ".pnp.cjs");
@@ -107,7 +116,11 @@ function inspectPnpDependencies(root, dependencies, specs) {
       continue;
     }
     const installedReference = rootInfo.packageDependencies.get(name);
-    const lockedReference = yarnLockedReference(lockText, name, specs[name]);
+    const lockedReference =
+      yarnLockedReference(lockText, name, specs[name]) ||
+      (String(specs[name]).startsWith("workspace:")
+        ? yarnWorkspaceReference(lockText, name, installedReference)
+        : null);
     if (!lockedReference) {
       failures.push(
         `${name}: current manifest has no matching yarn.lock record`,
@@ -123,6 +136,15 @@ function inspectPnpDependencies(root, dependencies, specs) {
 
 function inspectLinkedManager(root, manager, dependencies, specs) {
   const failures = [];
+  const lockMarkers = {
+    pnpm: ["pnpm-lock.yaml"],
+    yarn: ["yarn.lock"],
+    bun: ["bun.lock", "bun.lockb"],
+  }[manager];
+  if (!lockMarkers.some((marker) => fs.existsSync(path.join(root, marker)))) {
+    failures.push(`${manager}: lockfile is missing`);
+    return { manager, failures };
+  }
   const readinessMarkers = {
     pnpm: ["node_modules/.modules.yaml"],
     yarn: ["node_modules", ".pnp.cjs", ".yarn/install-state.gz"],
@@ -141,8 +163,16 @@ function inspectLinkedManager(root, manager, dependencies, specs) {
     };
   }
   for (const name of dependencies) {
-    if (!fs.existsSync(path.join(root, "node_modules", name))) {
+    const installedFile = path.join(root, "node_modules", name, "package.json");
+    if (!fs.existsSync(installedFile)) {
       failures.push(`${name}: package is not linked in this worktree`);
+      continue;
+    }
+    const installed = readJson(installedFile, `${name} package.json`);
+    for (const bin of packageBinNames(name, installed)) {
+      if (!fs.existsSync(path.join(root, "node_modules", ".bin", bin))) {
+        failures.push(`${name}: package-local executable ${bin} is missing`);
+      }
     }
   }
   return { manager, failures };

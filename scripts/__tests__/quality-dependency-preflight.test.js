@@ -90,9 +90,65 @@ describe("quality dependency preflight", () => {
     fs.mkdirSync(path.join(root, "node_modules", "eslint"), {
       recursive: true,
     });
+    fs.writeFileSync(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: 9\n");
+    fs.writeFileSync(
+      path.join(root, "node_modules", "eslint", "package.json"),
+      JSON.stringify({ name: "eslint", version: "1.2.3" }),
+    );
     fs.writeFileSync(
       path.join(root, "node_modules", ".modules.yaml"),
       "layoutVersion: 5\n",
+    );
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("rejects linked-manager state without its lockfile", () => {
+    const root = fixture();
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(root, "package.json"), "utf8"),
+    );
+    pkg.packageManager = "pnpm@10.0.0";
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(pkg));
+    fs.mkdirSync(path.join(root, "node_modules", "eslint"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(root, "node_modules", ".modules.yaml"),
+      "layoutVersion: 5\n",
+    );
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        BS_QUALITY_PREFLIGHT_TELEMETRY_FILE: path.join(root, "preflight.jsonl"),
+      },
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/pnpm: lockfile is missing/);
+  });
+
+  it("accepts a valid Yarn PnP workspace reference", () => {
+    const root = fixture();
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(root, "package.json"), "utf8"),
+    );
+    pkg.packageManager = "yarn@4.0.0";
+    pkg.devDependencies = { "@repo/foo": "workspace:*" };
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(pkg));
+    fs.writeFileSync(
+      path.join(root, "yarn.lock"),
+      '"@repo/foo@workspace:packages/foo":\n  resolution: "@repo/foo@workspace:packages/foo"\n',
+    );
+    fs.writeFileSync(
+      path.join(root, ".pnp.cjs"),
+      `module.exports = {
+  resolveToUnqualified() { return "/repo/packages/foo"; },
+  findPackageLocator() { return { name: "fixture", reference: "workspace:." }; },
+  getPackageInformation() { return { packageDependencies: new Map([["@repo/foo", "workspace:packages/foo"]]) }; }
+};\n`,
     );
     const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
       encoding: "utf8",
