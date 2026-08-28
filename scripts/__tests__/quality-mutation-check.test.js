@@ -819,6 +819,32 @@ describe("quality-mutation-check", () => {
     );
   });
 
+  it("finds a recursive test-impact selector after a leading Node option", () => {
+    const { root, manifest } = fixture(
+      "audit-selector-leading-node-option",
+      "require('./aaa-uncovered.js');\n",
+      {
+        auditMapping: true,
+        auditCommand: {
+          executable: process.execPath,
+          args: [
+            "--conditions=node",
+            path.join(ROOT, "scripts", "test-impact.js"),
+            "--execute",
+            "--",
+            "aaa-uncovered.js",
+          ],
+        },
+        sourcePath: "zzz-uncovered-guard.js",
+        uncoveredSource: true,
+      },
+    );
+
+    expect(() => runMutation(root, manifest)).toThrow(
+      /selector expansion exceeded depth 3/,
+    );
+  });
+
   it("preserves a valid expanded selector with no selected tests", () => {
     const { root, manifest } = fixture(
       "audit-selector-none",

@@ -147,6 +147,14 @@ npm_test_prefix() {
   printf '0\n'
 }
 
+node_runs_test_impact_selector() {
+  local argument
+  for argument in "$@"; do
+    [ "$(basename "$argument")" != test-impact.js ] || return 0
+  done
+  return 1
+}
+
 run_mutation_command() {
   local log="$1" timeout_seconds="$2" depth="$3" executable="$4" argument plan plan_status mode command_count index child_executable npm_test_prefix
   shift 4
@@ -159,7 +167,7 @@ run_mutation_command() {
   # selector with --execute would hide an npm/Vitest child and recursively
   # include this script's own fixture suite (BUI-781).
   if [ "$(basename "$executable")" = node ] &&
-     [ "$(basename "${args[0]:-}")" = test-impact.js ]; then
+     node_runs_test_impact_selector "${args[@]+"${args[@]}"}"; then
     for argument in "${args[@]+"${args[@]}"}"; do
       if [ "$argument" = --execute ] && [ "$saw_execute" = false ]; then
         saw_execute=true
