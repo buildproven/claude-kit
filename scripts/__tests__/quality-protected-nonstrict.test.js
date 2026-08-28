@@ -1,5 +1,8 @@
 import { createRequire } from "node:module";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
@@ -8,6 +11,11 @@ const { classifyProtectedNonstrict } = require(
 );
 const { normalizeProtectedBranch } = require(
   path.resolve(import.meta.dirname, "..", "quality-protected-nonstrict.js"),
+);
+const classifierPath = path.resolve(
+  import.meta.dirname,
+  "..",
+  "quality-protected-nonstrict.js",
 );
 
 function fixture(overrides = {}) {
@@ -61,6 +69,53 @@ describe("protected non-strict outage classifier", () => {
     const input = fixture();
     input.protection.required_status_checks.checks[0].app_id = 99999;
     expect(() => classifyProtectedNonstrict(input)).toThrow(/GitHub Actions/);
+  });
+
+  it("uses a typed policy exit for a valid but ineligible protection", () => {
+    const bin = mkdtempSync(path.join(tmpdir(), "protected-nonstrict-gh-"));
+    const gh = path.join(bin, "gh");
+    const input = fixture();
+    input.protection.required_pull_request_reviews = {
+      url: "https://api.github.test/reviews",
+      dismiss_stale_reviews: true,
+      require_code_owner_reviews: false,
+      require_last_push_approval: false,
+      required_approving_review_count: 1,
+    };
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env bash
+if [[ "$*" == *"/protection"* ]]; then
+  printf '%s\\n' '${JSON.stringify(input.protection)}'
+elif [[ "$*" == *"/rules/branches/"* ]]; then
+  printf '%s\\n' '${JSON.stringify(input.effectiveRules)}'
+elif [ "$2" = graphql ]; then
+  printf '%s\\n' '${JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: input.reviewThreads } } } })}'
+else
+  printf '%s\\n' '${JSON.stringify({ permissions: { admin: input.repositoryAdmin } })}'
+fi
+`,
+    );
+    chmodSync(gh, 0o755);
+    const result = spawnSync(
+      "node",
+      [
+        classifierPath,
+        "inspect",
+        "--repo",
+        "owner/repo",
+        "--branch",
+        "main",
+        "--pr",
+        "1",
+      ],
+      {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        encoding: "utf8",
+      },
+    );
+    expect(result.status).toBe(3);
+    expect(result.stderr).toMatch(/review protection is not inert/);
   });
 
   it.each([

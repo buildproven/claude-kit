@@ -404,37 +404,61 @@ if [ "$ATOMIC_BASE_FRESHNESS" != true ]; then
     fi
   fi
 fi
-# A protected strict:false base is never accepted as an ordinary merge. The
-# only supported case is the separately signed ref-CAS capability, paired with
-# a complete deny-by-default classic-protection inspection. The inspection
-# also proves repository-admin authority and all required conversation threads.
-if [ "$ATOMIC_BASE_FRESHNESS" != true ] &&
-  node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
-    --scope operator-nonstrict-refcas-override >/dev/null 2>&1; then
+# A protected strict:false base uses the complete deny-by-default ref-CAS
+# classifier. A clean campaign with autonomous merge authority may use this
+# transaction directly. Signed capability authority remains required when the
+# campaign also accepts failed CI, incomplete review, or another override.
+UNPROTECTABLE_MERGE_POLICY="${BS_QUALITY_ALLOW_UNPROTECTABLE_BASE:-false}"
+if [ "$ATOMIC_BASE_FRESHNESS" != true ]; then
+  PROTECTED_NONSTRICT_ERROR_FILE="$(mktemp)"
+  PROTECTED_NONSTRICT_RC=0
   PROTECTED_NONSTRICT_INSPECTION="$(node \
     "$SCRIPT_DIR/quality-protected-nonstrict.js" inspect \
-    --repo "$REPOSITORY" --branch "$ACTUAL_BASE_NAME" --pr "$PR")" || {
-    echo "❌ MERGE BLOCKED: protected non-strict ref-CAS classification failed." >&2
-    exit 1
-  }
-  PROTECTED_NONSTRICT_DIGEST="$(printf '%s' "$PROTECTED_NONSTRICT_INSPECTION" |
-    jq -r '.digest // empty')"
-  SIGNED_PROTECTED_NONSTRICT_DIGEST="$(node \
-    "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" \
-    approval.protectedNonstrictProtectionDigest)"
-  [ -n "$PROTECTED_NONSTRICT_DIGEST" ] &&
-    [ "$PROTECTED_NONSTRICT_DIGEST" = "$SIGNED_PROTECTED_NONSTRICT_DIGEST" ] || {
-    echo "❌ MERGE BLOCKED: protected non-strict branch protection differs from the signed operator diagnosis." >&2
-    exit 1
-  }
-  ATOMIC_BASE_FRESHNESS=protected-nonstrict-ref-cas
-  ATOMIC_BASE_SOURCE=classic
+    --repo "$REPOSITORY" --branch "$ACTUAL_BASE_NAME" --pr "$PR" \
+    2>"$PROTECTED_NONSTRICT_ERROR_FILE")" || PROTECTED_NONSTRICT_RC=$?
+  if [ "$PROTECTED_NONSTRICT_RC" -ne 0 ]; then
+    PROTECTED_NONSTRICT_ERROR="$(head -n 1 "$PROTECTED_NONSTRICT_ERROR_FILE")"
+    case "$PROTECTED_NONSTRICT_RC:$PROTECTED_NONSTRICT_ERROR" in
+      3:* | *"classic branch protection read failed:"*"Branch not protected (HTTP 404)"*) ;;
+      *)
+        if [ "$UNPROTECTABLE_MERGE_POLICY" = true ]; then
+          # The source-owned protectability classifier below performs a fresh
+          # read and accepts only GitHub's exact private-plan-limit response.
+          # Do not turn this preliminary API failure into authority.
+          :
+        else
+          echo "❌ MERGE BLOCKED: protected non-strict ref-CAS classification failed: ${PROTECTED_NONSTRICT_ERROR:-unknown error}" >&2
+          rm -f "$PROTECTED_NONSTRICT_ERROR_FILE"
+          exit 1
+        fi
+        ;;
+    esac
+  fi
+  rm -f "$PROTECTED_NONSTRICT_ERROR_FILE"
+  PROTECTED_NONSTRICT_DIGEST=""
+  if [ "$PROTECTED_NONSTRICT_RC" -eq 0 ]; then
+    PROTECTED_NONSTRICT_DIGEST="$(printf '%s' "$PROTECTED_NONSTRICT_INSPECTION" |
+      jq -r '.digest // empty')"
+  fi
+  if [ -n "$PROTECTED_NONSTRICT_DIGEST" ]; then
+    if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
+      --scope operator-nonstrict-refcas-override >/dev/null 2>&1; then
+      SIGNED_PROTECTED_NONSTRICT_DIGEST="$(node \
+        "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" \
+        approval.protectedNonstrictProtectionDigest)"
+      [ "$PROTECTED_NONSTRICT_DIGEST" = "$SIGNED_PROTECTED_NONSTRICT_DIGEST" ] || {
+        echo "❌ MERGE BLOCKED: protected non-strict branch protection differs from the signed operator diagnosis." >&2
+        exit 1
+      }
+    fi
+    ATOMIC_BASE_FRESHNESS=protected-nonstrict-ref-cas
+    ATOMIC_BASE_SOURCE=classic
+  fi
 fi
 # Last resort, and only after BOTH classic protection and effective rulesets have
 # had their chance to authorize: a ruleset can supply strict freshness on a repo
 # with no classic protection, so running this earlier would reject a properly
 # protected base.
-UNPROTECTABLE_MERGE_POLICY="${BS_QUALITY_ALLOW_UNPROTECTABLE_BASE:-false}"
 if [ "$ATOMIC_BASE_FRESHNESS" = false ] && [ "$UNPROTECTABLE_MERGE_POLICY" = true ]; then
   # Classification lives in quality-base-protectability.sh so it is executable
   # in tests; it fails closed on anything short of a proven plan limit.
@@ -503,14 +527,7 @@ if [ "$NONSTRICT_REFCAS_CAPABILITY" = true ] &&
   echo "❌ MERGE BLOCKED: the protected non-strict ref-CAS capability cannot authorize another merge mode." >&2
   exit 1
 fi
-if [ "$MERGE_MODE" = protected-nonstrict-ref-cas ] &&
-  [ "$NONSTRICT_REFCAS_CAPABILITY" != true ]; then
-  record_merge_admission_blocked_terminal \
-    "base:protected-nonstrict,pr:non-atomic-state" \
-    "protected non-strict ref-CAS requires its exact signed capability" || exit 1
-  echo "❌ MERGE BLOCKED: protected non-strict ref-CAS requires its exact signed capability." >&2
-  exit 1
-fi
+CI_GREEN_VERIFIED=false
 if [ "$PREFLIGHT" = false ] && [ "${CI_BILLING_WAIVED:-false}" = false ]; then
   if [ "$ATOMIC_BASE_FRESHNESS" = unprotectable ]; then
     # This plan cannot define required checks, so the stamp waiter and final
@@ -527,6 +544,17 @@ if [ "$PREFLIGHT" = false ] && [ "${CI_BILLING_WAIVED:-false}" = false ]; then
       exit 1
     }
   fi
+  CI_GREEN_VERIFIED=true
+fi
+if [ "$PREFLIGHT" = false ] &&
+  [ "$MERGE_MODE" = protected-nonstrict-ref-cas ] &&
+  [ "$NONSTRICT_REFCAS_CAPABILITY" != true ] &&
+  [ "$CI_GREEN_VERIFIED" != true ]; then
+  record_merge_admission_blocked_terminal \
+    "ci:failed" \
+    "protected non-strict autonomous ref-CAS requires green exact-head CI" || exit 1
+  echo "❌ MERGE BLOCKED: protected non-strict autonomous ref-CAS requires green exact-head CI." >&2
+  exit 1
 fi
 # A CI billing waiver on a genuinely server-enforceable base is normally
 # refused outright: an admin merge there would silently step around real,
@@ -566,10 +594,14 @@ if [ -n "${CI_BILLING_WAIVER_ARTIFACT:-}" ] &&
 fi
 TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"
 MERGE_AUTHORITY="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.mergeAuthority)"
+MERGE_AUTHORITY_BASE_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.mergeAuthorityBaseSha)"
+PROTECTED_NONSTRICT_REFCAS_POLICY="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.protectedNonstrictRefCas)"
+PROTECTED_NONSTRICT_REFCAS_POLICY_BASE_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.protectedNonstrictRefCasBaseSha)"
 # Manifests created before mergeAuthority was introduced retain their original
 # manual-governance behavior. Every newly resolved campaign persists an explicit
 # value, so an installed runtime upgrade can never grant authority mid-campaign.
 [ -n "$MERGE_AUTHORITY" ] || MERGE_AUTHORITY=human-required
+[ -n "$PROTECTED_NONSTRICT_REFCAS_POLICY" ] || PROTECTED_NONSTRICT_REFCAS_POLICY=signed-only
 case "$MERGE_AUTHORITY" in
   autonomous | human-required) ;;
   *)
@@ -577,6 +609,18 @@ case "$MERGE_AUTHORITY" in
     exit 1
     ;;
 esac
+if [ "$MERGE_MODE" = protected-nonstrict-ref-cas ] &&
+  [ "$NONSTRICT_REFCAS_CAPABILITY" != true ] &&
+  { [ "$MERGE_AUTHORITY" != autonomous ] ||
+    [ "$MERGE_AUTHORITY_BASE_SHA" != "$EXPECTED_BASE_OID" ] ||
+    [ "$PROTECTED_NONSTRICT_REFCAS_POLICY" != accept-non-atomic-pr-state ] ||
+    [ "$PROTECTED_NONSTRICT_REFCAS_POLICY_BASE_SHA" != "$EXPECTED_BASE_OID" ]; }; then
+  record_merge_admission_blocked_terminal \
+    "base:protected-nonstrict,pr:non-atomic-state" \
+    "protected non-strict ref-CAS needs exact signed authority or explicit repository cancellation-risk acceptance" || exit 1
+  echo "❌ MERGE BLOCKED: protected non-strict ref-CAS needs exact signed authority or explicit repository cancellation-risk acceptance." >&2
+  exit 3
+fi
 
 # Manual-governance policy (legacy opt-in).
 #
@@ -685,7 +729,11 @@ FINAL_BASE_OID="$(printf '%s' "$FINAL_BASE_LS" | awk 'NR==1 {print $1}')"
 LEASE_ADMIN=false
 if [ "$MERGE_MODE" = protected-nonstrict-ref-cas ]; then
   LEASE_ADMIN=true
-  echo "⚠️  [quality] administrator non-force ref update authorized by the signed protected non-strict ref-CAS capability." >&2
+  if [ "$NONSTRICT_REFCAS_CAPABILITY" = true ]; then
+    echo "⚠️  [quality] administrator non-force ref update authorized by the signed protected non-strict ref-CAS capability." >&2
+  else
+    echo "[quality] autonomous non-force exact-ref update authorized by complete green evidence." >&2
+  fi
 fi
 if [ "${CI_BILLING_WAIVED:-false}" = true ]; then
   if [ "$ATOMIC_BASE_FRESHNESS" != unprotectable ]; then

@@ -892,6 +892,169 @@ function assertMergeIntentTransition(record, nextMode) {
   }
 }
 
+function requiredCheckBindings(checks) {
+  return (checks || [])
+    .map((check) => ({
+      context: check.context,
+      appId: check.appId,
+    }))
+    .sort(
+      (left, right) =>
+        left.context.localeCompare(right.context) || left.appId - right.appId,
+    );
+}
+
+function autonomousBasePolicyReady(manifest, basePolicy) {
+  const exactBase = manifest.revisions.baseHeadSha;
+  return Boolean(
+    /^[0-9a-f]{40}$/.test(exactBase || "") &&
+    manifest.risk?.mergeAuthorityBaseSha === exactBase &&
+    manifest.risk?.protectedNonstrictRefCasBaseSha === exactBase &&
+    basePolicy?.baseSha === exactBase &&
+    basePolicy?.mergeAuthority === "autonomous" &&
+    basePolicy?.protectedNonstrictRefCas === "accept-non-atomic-pr-state",
+  );
+}
+
+function autonomousReviewReady(manifest, authorization, basePolicy) {
+  if (manifest.risk?.mergeAuthority !== "autonomous") return false;
+  if (manifest.risk?.protectedNonstrictRefCas !== "accept-non-atomic-pr-state")
+    return false;
+  if (!autonomousBasePolicyReady(manifest, basePolicy)) return false;
+  if (authorization?.operatorOverride === true) return false;
+  return ["complete", "policy-exempt"].includes(authorization?.reviewStatus);
+}
+
+function autonomousRequestReady(manifest, options) {
+  if (options.admin !== true || manifest.merge?.stampHead) return false;
+  return !options.ciEvidenceSha256;
+}
+
+function protectionBindingReady(inspection, options) {
+  if (!/^[a-f0-9]{64}$/.test(inspection?.digest || "")) return false;
+  if (!/^[a-f0-9]{64}$/.test(options.protectionDigest || "")) return false;
+  return options.protectionDigest === inspection.digest;
+}
+
+function greenCheckBindings(checkStates, inspection) {
+  if (!Array.isArray(checkStates)) return null;
+  if (checkStates.some((check) => check.state !== "success")) return null;
+  const bindings = requiredCheckBindings(checkStates);
+  return JSON.stringify(bindings) ===
+    JSON.stringify(requiredCheckBindings(inspection?.requiredChecks))
+    ? bindings
+    : null;
+}
+
+function autonomousRefCasAuthority(
+  manifest,
+  options,
+  head,
+  { inspection, authorization, checkStates, basePolicy },
+) {
+  const requiredChecks = greenCheckBindings(checkStates, inspection);
+  if (
+    !autonomousRequestReady(manifest, options) ||
+    !autonomousReviewReady(manifest, authorization, basePolicy) ||
+    !protectionBindingReady(inspection, options) ||
+    !requiredChecks
+  ) {
+    throw new Error(
+      "protected non-strict autonomous ref-CAS requires complete exact-head review, green CI, and unchanged supported protection",
+    );
+  }
+  return {
+    ...options,
+    mode: "protected-nonstrict-ref-cas",
+    authority: "autonomous-green",
+    protectionDigest: inspection.digest,
+    requiredChecks,
+    ciEvidenceSha256: null,
+    head,
+  };
+}
+
+function resolveProtectedNonstrictMode(manifest, options, head) {
+  const invocation = require("./quality-invocation.js");
+  const capability = invocation.protectedNonstrictRefCasCapability(manifest);
+  if (
+    manifest.approval?.scope === "operator-nonstrict-refcas-override" &&
+    !capability
+  ) {
+    throw new Error(
+      "protected non-strict ref-CAS requires its valid signed exact-head capability",
+    );
+  }
+  if (capability) {
+    if (
+      options.admin !== true ||
+      manifest.merge?.stampHead ||
+      (capability.ciEvidenceSha256 &&
+        !invocation.ciBillingEvidenceBindingValid(
+          manifest,
+          capability.ciEvidenceSha256,
+        )) ||
+      capability.baseSha !== manifest.revisions.baseHeadSha ||
+      !/^[a-f0-9]{64}$/.test(capability.protectionDigest || "") ||
+      (options.protectionDigest &&
+        options.protectionDigest !== capability.protectionDigest)
+    ) {
+      throw new Error(
+        "protected non-strict ref-CAS requires its valid signed exact-head capability",
+      );
+    }
+    return {
+      ...options,
+      mode: "protected-nonstrict-ref-cas",
+      authority: "signed-capability",
+      protectionDigest: capability.protectionDigest,
+      requiredChecks: capability.requiredChecks,
+      ciEvidenceSha256: capability.ciEvidenceSha256,
+    };
+  }
+  const branch = baseBranch(manifest);
+  const inspection =
+    require("./quality-protected-nonstrict.js").inspectProtectedNonstrict({
+      repository: manifest.repo.githubRepository,
+      branch,
+      pr: manifest.repo.pr,
+      cwd: manifest.repo.realpath,
+    });
+  const authorization = invocation.reviewAuthorization(manifest);
+  const basePolicy = protectedNonstrictBasePolicy(manifest);
+  const checkStates = require("./quality-required-checks.js").assertChecks(
+    manifest.repo.githubRepository,
+    branch,
+    head,
+  );
+  return autonomousRefCasAuthority(manifest, options, head, {
+    inspection,
+    authorization,
+    checkStates,
+    basePolicy,
+  });
+}
+
+function protectedNonstrictBasePolicy(manifest) {
+  const baseSha = manifest.risk?.protectedNonstrictRefCasBaseSha;
+  if (!/^[0-9a-f]{40}$/.test(baseSha || "")) {
+    return {
+      baseSha: null,
+      mergeAuthority: "human-required",
+      protectedNonstrictRefCas: "signed-only",
+    };
+  }
+  const config = require("./risk-score.js").loadConfigAtRevision(
+    manifest.repo.realpath,
+    baseSha,
+  );
+  return {
+    baseSha,
+    mergeAuthority: config.mergeAuthority,
+    protectedNonstrictRefCas: config.protectedNonstrictRefCas,
+  };
+}
+
 function acquireMergeGuard(manifestPath, presentedToken, options = {}) {
   const loaded = loadManifest(manifestPath);
   const tuple = ownerTuple(loaded.manifest, loaded.manifestPath, {
@@ -925,7 +1088,10 @@ function acquireMergeGuard(manifestPath, presentedToken, options = {}) {
         loaded.manifest.revisions.baseHeadSha,
       token: presentedToken,
       admin: options.admin === true,
-      adminReason: options.admin === true ? "ci-billing-waiver" : null,
+      adminReason:
+        options.admin === true
+          ? options.authority || "ci-billing-waiver"
+          : null,
       mode: nextMode,
       protectionDigest: options.protectionDigest || null,
       requiredChecks: options.requiredChecks || null,
@@ -1350,33 +1516,7 @@ function resolveMergeMode(manifest, options, head) {
     throw new Error(`unsupported merge mode '${mode}'`);
   }
   if (mode === "protected-nonstrict-ref-cas") {
-    const invocation = require("./quality-invocation.js");
-    const capability = invocation.protectedNonstrictRefCasCapability(manifest);
-    if (
-      options.admin !== true ||
-      manifest.merge?.stampHead ||
-      !capability ||
-      (capability.ciEvidenceSha256 &&
-        !invocation.ciBillingEvidenceBindingValid(
-          manifest,
-          capability.ciEvidenceSha256,
-        )) ||
-      capability.baseSha !== manifest.revisions.baseHeadSha ||
-      !/^[a-f0-9]{64}$/.test(capability.protectionDigest || "") ||
-      (options.protectionDigest &&
-        options.protectionDigest !== capability.protectionDigest)
-    ) {
-      throw new Error(
-        "protected non-strict ref-CAS requires its valid signed exact-head capability",
-      );
-    }
-    return {
-      ...options,
-      mode,
-      protectionDigest: capability.protectionDigest,
-      requiredChecks: capability.requiredChecks,
-      ciEvidenceSha256: capability.ciEvidenceSha256,
-    };
+    return resolveProtectedNonstrictMode(manifest, options, head);
   }
   return { ...options, mode };
 }
@@ -1384,7 +1524,10 @@ function resolveMergeMode(manifest, options, head) {
 function resolveRefCasAtMutation(manifest, options, head) {
   const resolved = resolveMergeMode(manifest, options, head);
   const expiresAt = Date.parse(manifest.approval?.expiresAt || "");
-  if (!Number.isFinite(expiresAt) || expiresAt - Date.now() < 120_000) {
+  if (
+    resolved.authority === "signed-capability" &&
+    (!Number.isFinite(expiresAt) || expiresAt - Date.now() < 120_000)
+  ) {
     throw new Error(
       "protected non-strict ref-CAS capability must remain valid through the bounded ref update",
     );
@@ -1436,6 +1579,18 @@ function withNotStartedCleanup(manifestPath, presentedToken, operation) {
   }
 }
 
+function refCasProtectionMatches(inspection, guarded, options) {
+  return (
+    inspection.digest === options.protectionDigest &&
+    JSON.stringify(requiredCheckBindings(inspection.requiredChecks)) ===
+      JSON.stringify(requiredCheckBindings(options.requiredChecks)) &&
+    guarded.protectionDigest === options.protectionDigest &&
+    JSON.stringify(requiredCheckBindings(guarded.requiredChecks)) ===
+      JSON.stringify(requiredCheckBindings(options.requiredChecks)) &&
+    guarded.mode === "protected-nonstrict-ref-cas"
+  );
+}
+
 function assertRefCasPreconditions(manifest, guarded, options, head) {
   const branch = baseBranch(manifest);
   const inspection =
@@ -1445,15 +1600,7 @@ function assertRefCasPreconditions(manifest, guarded, options, head) {
       pr: manifest.repo.pr,
       cwd: manifest.repo.realpath,
     });
-  if (
-    inspection.digest !== options.protectionDigest ||
-    JSON.stringify(inspection.requiredChecks) !==
-      JSON.stringify(options.requiredChecks) ||
-    guarded.protectionDigest !== options.protectionDigest ||
-    JSON.stringify(guarded.requiredChecks) !==
-      JSON.stringify(options.requiredChecks) ||
-    guarded.mode !== "protected-nonstrict-ref-cas"
-  ) {
+  if (!refCasProtectionMatches(inspection, guarded, options)) {
     throw new Error(
       "protected non-strict branch protection changed before the guarded ref update",
     );
@@ -1775,6 +1922,8 @@ module.exports = {
   _exactOpenRemoteOutcome: exactOpenRemoteOutcome,
   _performRefCasUpdate: performRefCasUpdate,
   _parseIncludedGhResponse: parseIncludedGhResponse,
+  _autonomousRefCasAuthority: autonomousRefCasAuthority,
+  _refCasProtectionMatches: refCasProtectionMatches,
   _resolveRefCasAtMutation: resolveRefCasAtMutation,
   _recordMergedTerminalRaw: recordMergedTerminalRaw,
   _waitForRefCasIntegration: waitForRefCasIntegration,
