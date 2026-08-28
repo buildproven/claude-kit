@@ -40,6 +40,12 @@ function advanceHead(manifest) {
   delete manifest.behavior.nextHead;
   return true;
 }
+function advanceManifest(file) {
+  return withManifestLock(file, (manifest) => {
+    manifest.advanceMode = "transactional";
+    return advanceHead(manifest);
+  });
+}
 function resumeRecoverableTerminal(file) {
   const manifest = read(file);
   if (!manifest.behavior?.recoverTerminal || !["blocked", "recovering"].includes(manifest.terminalState?.state)) return null;
@@ -162,7 +168,7 @@ if (require.main === module) {
   process.stdout.write(inForce + "\\n");
 }
 module.exports = { advanceHead, incompleteRetryStatus, judgeContext, leadDispositionStatus, loadManifest, mutationEvidenceValid, parseJson, recordTerminalState,
-  clearMergeAdmissionBlock, resolveGreenCiAdmissionBlock, reviewAuthorization, reviewCoverage, resumeRecoverableTerminal, terminalEpoch, validateIdentity, withManifestLock };
+  advanceManifest, clearMergeAdmissionBlock, resolveGreenCiAdmissionBlock, reviewAuthorization, reviewCoverage, resumeRecoverableTerminal, terminalEpoch, validateIdentity, withManifestLock };
 `;
 
 const FAKE_STEP = `
@@ -494,6 +500,7 @@ describe("quality-run public orchestration", () => {
       from: "abc123",
       to: "repair456",
     });
+    expect(delta.manifest.advanceMode).toBe("transactional");
 
     recordDisposition(entry, 0, "delta-judge");
     const merged = run(entry);

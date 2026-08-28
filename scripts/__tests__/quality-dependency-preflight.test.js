@@ -32,7 +32,10 @@ function fixture() {
     path.join(root, "package-lock.json"),
     JSON.stringify({
       lockfileVersion: 3,
-      packages: { "node_modules/eslint": { version: "1.2.3" } },
+      packages: {
+        "": { devDependencies: { eslint: "1.2.3" } },
+        "node_modules/eslint": { version: "1.2.3" },
+      },
     }),
   );
   fs.writeFileSync(path.join(root, "test.js"), "process.exit(0);\n");
@@ -80,81 +83,31 @@ describe("quality dependency preflight", () => {
     expect(result.status, result.stderr).toBe(0);
   });
 
-  it("uses the declared package manager instead of requiring an npm lockfile", () => {
-    const root = fixture();
-    const pkg = JSON.parse(
-      fs.readFileSync(path.join(root, "package.json"), "utf8"),
-    );
-    pkg.packageManager = "pnpm@10.0.0";
-    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(pkg));
-    fs.mkdirSync(path.join(root, "node_modules", "eslint"), {
-      recursive: true,
-    });
-    fs.writeFileSync(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: 9\n");
-    fs.writeFileSync(
-      path.join(root, "node_modules", "eslint", "package.json"),
-      JSON.stringify({ name: "eslint", version: "1.2.3" }),
-    );
-    fs.writeFileSync(
-      path.join(root, "node_modules", ".modules.yaml"),
-      "layoutVersion: 5\n",
-    );
-    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
-      encoding: "utf8",
-    });
-    expect(result.status, result.stderr).toBe(0);
-  });
-
-  it("rejects linked-manager state without its lockfile", () => {
-    const root = fixture();
-    const pkg = JSON.parse(
-      fs.readFileSync(path.join(root, "package.json"), "utf8"),
-    );
-    pkg.packageManager = "pnpm@10.0.0";
-    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(pkg));
-    fs.mkdirSync(path.join(root, "node_modules", "eslint"), {
-      recursive: true,
-    });
-    fs.writeFileSync(
-      path.join(root, "node_modules", ".modules.yaml"),
-      "layoutVersion: 5\n",
-    );
-    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        BS_QUALITY_PREFLIGHT_TELEMETRY_FILE: path.join(root, "preflight.jsonl"),
-      },
-    });
-    expect(result.status).toBe(78);
-    expect(result.stderr).toMatch(/pnpm: lockfile is missing/);
-  });
-
-  it("accepts a valid Yarn PnP workspace reference", () => {
-    const root = fixture();
-    const pkg = JSON.parse(
-      fs.readFileSync(path.join(root, "package.json"), "utf8"),
-    );
-    pkg.packageManager = "yarn@4.0.0";
-    pkg.devDependencies = { "@repo/foo": "workspace:*" };
-    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(pkg));
-    fs.writeFileSync(
-      path.join(root, "yarn.lock"),
-      '"@repo/foo@workspace:packages/foo":\n  resolution: "@repo/foo@workspace:packages/foo"\n',
-    );
-    fs.writeFileSync(
-      path.join(root, ".pnp.cjs"),
-      `module.exports = {
-  resolveToUnqualified() { return "/repo/packages/foo"; },
-  findPackageLocator() { return { name: "fixture", reference: "workspace:." }; },
-  getPackageInformation() { return { packageDependencies: new Map([["@repo/foo", "workspace:packages/foo"]]) }; }
-};\n`,
-    );
-    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
-      encoding: "utf8",
-    });
-    expect(result.status, result.stderr).toBe(0);
-  });
+  it.each(["pnpm", "yarn", "bun"])(
+    "fails closed without a source-owned %s dependency verifier",
+    (manager) => {
+      const root = fixture();
+      const pkg = JSON.parse(
+        fs.readFileSync(path.join(root, "package.json"), "utf8"),
+      );
+      pkg.packageManager = `${manager}@1.0.0`;
+      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(pkg));
+      const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          BS_QUALITY_PREFLIGHT_TELEMETRY_FILE: path.join(
+            root,
+            "preflight.jsonl",
+          ),
+        },
+      });
+      expect(result.status).toBe(78);
+      expect(result.stderr).toMatch(
+        /source-owned exact dependency-state verification is not available/,
+      );
+    },
+  );
 
   it("reports the repair command for the declared package manager", () => {
     const root = fixture();
@@ -174,81 +127,13 @@ describe("quality dependency preflight", () => {
     expect(result.stderr).toMatch(/pnpm install --frozen-lockfile/);
   });
 
-  it("rejects stale Yarn PnP state that cannot resolve a direct dependency", () => {
-    const root = fixture();
-    const pkg = JSON.parse(
-      fs.readFileSync(path.join(root, "package.json"), "utf8"),
-    );
-    pkg.packageManager = "yarn@4.0.0";
-    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(pkg));
-    fs.writeFileSync(
-      path.join(root, ".pnp.cjs"),
-      `module.exports = {
-  resolveToUnqualified() { throw new Error("missing"); },
-  findPackageLocator() { return { name: "fixture", reference: "workspace:." }; },
-  getPackageInformation() { return { packageDependencies: new Map([["eslint", "npm:1.2.3"]]) }; }
-};\n`,
-    );
-    fs.writeFileSync(
-      path.join(root, "yarn.lock"),
-      '"eslint@npm:1.2.3":\n  resolution: "eslint@npm:1.2.3"\n',
-    );
-    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        BS_QUALITY_PREFLIGHT_TELEMETRY_FILE: path.join(root, "preflight.jsonl"),
-      },
-    });
-    expect(result.status).toBe(78);
-    expect(result.stderr).toMatch(/not resolvable from Yarn PnP state/);
-  });
-
-  it("rejects a PnP reference that is stale against the current Yarn lock", () => {
-    const root = fixture();
-    const pkg = JSON.parse(
-      fs.readFileSync(path.join(root, "package.json"), "utf8"),
-    );
-    pkg.packageManager = "yarn@4.0.0";
-    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(pkg));
-    fs.writeFileSync(
-      path.join(root, "yarn.lock"),
-      '"eslint@npm:1.2.3":\n  resolution: "eslint@npm:1.2.3"\n',
-    );
-    fs.writeFileSync(
-      path.join(root, ".pnp.cjs"),
-      `module.exports = {
-  resolveToUnqualified() { return "/cache/eslint"; },
-  findPackageLocator() { return { name: "fixture", reference: "workspace:." }; },
-  getPackageInformation() { return { packageDependencies: new Map([["eslint", "npm:1.1.0"]]) }; }
-};\n`,
-    );
-    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        BS_QUALITY_PREFLIGHT_TELEMETRY_FILE: path.join(root, "preflight.jsonl"),
-      },
-    });
-    expect(result.status).toBe(78);
-    expect(result.stderr).toMatch(
-      /PnP reference npm:1\.1\.0, yarn\.lock requires npm:1\.2\.3/,
-    );
-  });
-
   it.each([
-    {
-      name: "npm v1 dependency records",
-      lock: {
-        lockfileVersion: 1,
-        dependencies: { eslint: { version: "1.2.3" } },
-      },
-    },
     {
       name: "npm workspace link records",
       lock: {
         lockfileVersion: 3,
         packages: {
+          "": { devDependencies: { eslint: "1.2.3" } },
           "node_modules/eslint": { link: true, resolved: "packages/eslint" },
           "packages/eslint": { version: "1.2.3" },
         },

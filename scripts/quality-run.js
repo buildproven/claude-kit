@@ -616,9 +616,7 @@ async function runManifest(manifestPath, dependencies = {}) {
   try {
     let manifest = manifestAt(manifestPath);
     pinRepositoryLease(manifest);
-    quality.withManifestLock(manifestPath, (locked) => {
-      quality.advanceHead(locked, locked.repo.realpath);
-    });
+    quality.advanceManifest(manifestPath);
     manifest = manifestAt(manifestPath);
     pinTerminalEpoch(manifest);
     quality.validateIdentity(manifest, manifest.repo.realpath);

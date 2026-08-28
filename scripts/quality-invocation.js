@@ -6930,7 +6930,7 @@ const COMMANDS = {
     ),
 };
 
-function runAdvance(manifestArg, manifest, rawArgs) {
+function advanceManifestTransaction(manifestArg, manifest, rawArgs) {
   const options = parseOptions(rawArgs);
   const acceptedConditions = options["allow-exhausted-review"]
     ? String(process.env.BS_QUALITY_ADVANCE_DECISION || "")
@@ -7026,6 +7026,16 @@ function runAdvance(manifestArg, manifest, rawArgs) {
     }
     locked.governor.lastActivityAt = new Date().toISOString();
   });
+  return updated;
+}
+
+function advanceManifest(manifestArg, rawArgs = []) {
+  const { manifest } = loadManifest(manifestArg);
+  return advanceManifestTransaction(manifestArg, manifest, rawArgs);
+}
+
+function runAdvance(manifestArg, manifest, rawArgs) {
+  const updated = advanceManifestTransaction(manifestArg, manifest, rawArgs);
   process.stdout.write(`${updated.revisions.currentHead}\n`);
 }
 
@@ -7178,6 +7188,7 @@ function main() {
 module.exports = {
   SCHEMA_VERSION,
   advanceHead,
+  advanceManifest,
   approvalPayloadIdentityMatches,
   assertApprovalPayloadShape,
   approvalValid,

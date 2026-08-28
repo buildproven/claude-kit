@@ -161,10 +161,14 @@ node_runs_test_impact_selector() {
 }
 
 run_mutation_command() {
-  local log="$1" timeout_seconds="$2" depth="$3" executable="$4" argument plan plan_status mode command_count index child_executable npm_test_prefix
+  local log="$1" timeout_seconds="$2" depth="$3" executable="$4" argument plan plan_status mode command_count index child_executable npm_test_prefix remaining_seconds
   shift 4
   local -a args=("$@") plan_args=() child_args=()
   local saw_execute=false saw_separator=false runner_has_bail=false runner_has_exclusion=false
+
+  remaining_seconds=$((DEADLINE - $(date +%s)))
+  [ "$remaining_seconds" -gt 0 ] || return 124
+  [ "$timeout_seconds" -le "$remaining_seconds" ] || timeout_seconds="$remaining_seconds"
 
   # The persisted test gate can be the shared selector rather than the test
   # runner itself. Expand that immutable plan here so every child command
@@ -210,6 +214,10 @@ run_mutation_command() {
           ;;
       esac
       command_count="$(printf '%s' "$plan" | jq -er '.commands | length')" || return "$PLAN_ERROR_STATUS"
+      [ "$command_count" -le 64 ] || {
+        echo "quality-mutation-check: expanded test-impact plan exceeds 64 commands" >> "$log"
+        return "$PLAN_ERROR_STATUS"
+      }
       [ "$command_count" -gt 0 ] || {
         echo "quality-mutation-check: expanded test-impact plan has no executable commands" >> "$log"
         printf '%s\n' "$plan" >> "$log"
