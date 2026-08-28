@@ -160,6 +160,23 @@
       ]
     },
     {
+      "paths": ["scripts/quality-risk-resolve.sh"],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/quality-gemini-runtime.test.js",
+            "scripts/__tests__/quality-invocation.test.js",
+            "scripts/__tests__/quality-operator-override.test.js",
+            "scripts/__tests__/quality-runtime-plan.test.js",
+            "scripts/__tests__/quality-terminal-status.test.js"
+          ]
+        }
+      ]
+    },
+    {
       "paths": [
         "scripts/quality-authorize-merge.sh",
         "scripts/__tests__/quality-authorize-merge.test.js",
