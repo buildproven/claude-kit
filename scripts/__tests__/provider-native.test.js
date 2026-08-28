@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   readlinkSync,
+  statSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -1212,6 +1213,7 @@ describe("provider-native platform", () => {
     const staleLock = path.join(cacheDir, "mcp-parity-default.json.lock");
     const codexHome = path.join(dir, "codex");
     const calls = path.join(dir, "calls");
+    const parityLink = path.join(dir, "setup-mcp-parity");
     mkdirSync(config, { recursive: true });
     mkdirSync(bin);
     mkdirSync(codexHome);
@@ -1231,6 +1233,7 @@ describe("provider-native platform", () => {
     const client = `printf '%s %s\n' "$(basename "$0")" "$*" >> '${calls}'\ncase "$1 $2" in "mcp list") exit 0 ;; "mcp get") exit 1 ;; esac`;
     executable(path.join(bin, "claude"), client);
     executable(path.join(bin, "codex"), client);
+    symlinkSync(MCP_PARITY, parityLink);
     const env = {
       ...process.env,
       HOME: dir,
@@ -1240,7 +1243,7 @@ describe("provider-native platform", () => {
       PATH: `${bin}:${process.env.PATH}`,
     };
 
-    const first = spawnSync("bash", [MCP_PARITY, "--profile", "default"], {
+    const first = spawnSync("bash", [parityLink, "--profile", "default"], {
       encoding: "utf8",
       env,
     });
@@ -1249,7 +1252,7 @@ describe("provider-native platform", () => {
     expect(firstCalls).toContain("claude mcp list");
     expect(firstCalls).toContain("codex mcp list");
 
-    const second = spawnSync("bash", [MCP_PARITY, "--profile", "default"], {
+    const second = spawnSync("bash", [parityLink, "--profile", "default"], {
       encoding: "utf8",
       env,
     });
@@ -1399,6 +1402,17 @@ describe("provider-native platform", () => {
     ];
     execFileSync("python3", [MCP_CACHE, "record", ...args]);
     expect(spawnSync("python3", [MCP_CACHE, "hit", ...args]).status).toBe(0);
+    const executableMetadata = statSync(executablePath, { bigint: true });
+    executable(executablePath, "exit 1");
+    execFileSync("python3", [
+      "-c",
+      "import os,sys; os.utime(sys.argv[1], ns=(int(sys.argv[2]), int(sys.argv[3])))",
+      executablePath,
+      String(executableMetadata.atimeNs),
+      String(executableMetadata.mtimeNs),
+    ]);
+    expect(spawnSync("python3", [MCP_CACHE, "hit", ...args]).status).toBe(1);
+    execFileSync("python3", [MCP_CACHE, "record", ...args]);
     writeFileSync(source, "source-b\n");
     expect(spawnSync("python3", [MCP_CACHE, "hit", ...args]).status).toBe(1);
   });

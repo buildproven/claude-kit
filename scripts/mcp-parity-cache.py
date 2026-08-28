@@ -34,17 +34,7 @@ def file_identity(path: Path) -> dict[str, object]:
 
 
 def executable_identity(path: Path) -> dict[str, object]:
-    try:
-        resolved = path.resolve(strict=True)
-        metadata = resolved.stat()
-    except (FileNotFoundError, OSError):
-        return {"path": str(path), "state": "missing"}
-    return {
-        "path": str(resolved),
-        "state": "present",
-        "size": metadata.st_size,
-        "mtimeNs": metadata.st_mtime_ns,
-    }
+    return file_identity(path)
 
 
 def fingerprint(args: argparse.Namespace) -> str:

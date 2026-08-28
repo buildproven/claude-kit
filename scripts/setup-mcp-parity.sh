@@ -15,11 +15,13 @@ set -euo pipefail
 # scripts/ dir sits directly under its repo root). Detect embedding by
 # preferring an overlay-level config/mcp.json one level higher, since that
 # file only ever exists at the true overlay root.
-if [ -L "${BASH_SOURCE[0]}" ]; then
-  SETUP_MCP_PARITY_REAL_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
-else
-  SETUP_MCP_PARITY_REAL_PATH="${BASH_SOURCE[0]}"
-fi
+SETUP_MCP_PARITY_REAL_PATH="$(python3 - "${BASH_SOURCE[0]}" <<'PY'
+import sys
+from pathlib import Path
+
+print(Path(sys.argv[1]).resolve(strict=True))
+PY
+)"
 SETUP_MCP_PARITY_SCRIPTS_DIR="$(cd "$(dirname "$SETUP_MCP_PARITY_REAL_PATH")" && pwd -P)"
 SETUP_MCP_PARITY_ONE_UP="$(cd "$SETUP_MCP_PARITY_SCRIPTS_DIR/.." && pwd -P)"
 if [ -z "${SETUP_REPO:-}" ] && [ -f "$SETUP_MCP_PARITY_ONE_UP/../config/mcp.json" ]; then
