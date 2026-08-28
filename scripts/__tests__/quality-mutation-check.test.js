@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -429,6 +429,19 @@ function runMutation(root, manifest) {
   } catch (error) {
     throw new Error(error.stderr.toString(), { cause: error });
   }
+}
+
+function runMutationProcess(root, manifest) {
+  return spawnSync("bash", [MUTATION, "--manifest", manifest], {
+    cwd: root,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_ALLOW_PROTOCOL: "file",
+      PATH: `${path.join(root, "test-bin")}:${process.env.PATH}`,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 }
 
 describe("config-promotion filter", () => {
@@ -1163,6 +1176,28 @@ describe("quality-mutation-check", () => {
       readFileSync(path.join(stateRoot, "mutation", `${head}.json`), "utf8"),
     );
     expect(artifact.mutatedPaths).toEqual(["logic.js"]);
+  });
+
+  it("orders a controlled self-mutation candidate without shell lookup errors", () => {
+    const { root, manifest } = fixture(
+      "self-mutation-ordering",
+      `const fs = require("node:fs");
+const source = fs.readFileSync("scripts/quality-mutation-check.sh", "utf8");
+if (!source.includes("role === 'admin'")) process.exit(1);
+`,
+      {
+        sourcePath: "scripts/quality-mutation-check.sh",
+        testPath: "scripts/__tests__/quality-mutation-check.test.js",
+        testScript: "node scripts/__tests__/quality-mutation-check.test.js",
+        uncoveredSource: true,
+      },
+    );
+
+    const result = runMutationProcess(root, manifest);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).not.toContain("is_recursive_mutation_target");
+    expect(result.stdout).toMatch(/mutation evidence: revert-diff/);
   });
 
   it("skips the gate when the diff touches only a submodule pointer bump", () => {
