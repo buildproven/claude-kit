@@ -560,6 +560,39 @@ describe("cross-language test impact", () => {
     ]);
   });
 
+  it("does not mistake a package argument for the npx no-install option", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "test-impact-npx-order-"));
+    const bin = path.join(root, "bin");
+    const target = path.join(root, "argv.txt");
+    mkdirSync(bin);
+    writeFileSync(
+      path.join(bin, "npx"),
+      `#!/usr/bin/env bash\nprintf '%s\\n' "$@" > "${target}"\n`,
+      { mode: 0o755 },
+    );
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}:${previousPath}`;
+    try {
+      expect(
+        execute(
+          {
+            mode: "focused",
+            commands: [{ executable: "npx", args: ["vitest", "--no-install"] }],
+          },
+          root,
+        ),
+      ).toBe(0);
+    } finally {
+      process.env.PATH = previousPath;
+    }
+    expect(readFileSync(target, "utf8").split("\n")).toEqual([
+      "--no-install",
+      "vitest",
+      "--no-install",
+      "",
+    ]);
+  });
+
   it("fails visibly instead of executing partial commands when impact is unmapped", () => {
     expect(
       execute({

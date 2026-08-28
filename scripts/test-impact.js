@@ -326,7 +326,7 @@ function execute(result, root = process.cwd()) {
     // worktree's node_modules while a quality gate is running. Impact plans
     // are repository contracts, so they must use only prepared dependencies.
     const args =
-      item.executable === "npx" && !item.args.includes("--no-install")
+      item.executable === "npx" && item.args[0] !== "--no-install"
         ? ["--no-install", ...item.args]
         : item.args;
     const child = spawnSync(item.executable, args, {
