@@ -419,7 +419,7 @@ if [ "$ATOMIC_BASE_FRESHNESS" != true ]; then
   if [ "$PROTECTED_NONSTRICT_RC" -ne 0 ]; then
     PROTECTED_NONSTRICT_ERROR="$(head -n 1 "$PROTECTED_NONSTRICT_ERROR_FILE")"
     case "$PROTECTED_NONSTRICT_RC:$PROTECTED_NONSTRICT_ERROR" in
-      3:* | *"Branch not protected"* | *"Not Found (HTTP 404)"*) ;;
+      3:* | *"classic branch protection read failed:"*"Branch not protected (HTTP 404)"*) ;;
       *)
         if [ "$UNPROTECTABLE_MERGE_POLICY" = true ]; then
           # The source-owned protectability classifier below performs a fresh
@@ -435,8 +435,11 @@ if [ "$ATOMIC_BASE_FRESHNESS" != true ]; then
     esac
   fi
   rm -f "$PROTECTED_NONSTRICT_ERROR_FILE"
-  PROTECTED_NONSTRICT_DIGEST="$(printf '%s' "$PROTECTED_NONSTRICT_INSPECTION" |
-    jq -r '.digest // empty')"
+  PROTECTED_NONSTRICT_DIGEST=""
+  if [ "$PROTECTED_NONSTRICT_RC" -eq 0 ]; then
+    PROTECTED_NONSTRICT_DIGEST="$(printf '%s' "$PROTECTED_NONSTRICT_INSPECTION" |
+      jq -r '.digest // empty')"
+  fi
   if [ -n "$PROTECTED_NONSTRICT_DIGEST" ]; then
     if node "$SCRIPT_DIR/quality-invocation.js" approval-scope "$MANIFEST" \
       --scope operator-nonstrict-refcas-override >/dev/null 2>&1; then
@@ -591,6 +594,7 @@ if [ -n "${CI_BILLING_WAIVER_ARTIFACT:-}" ] &&
 fi
 TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"
 MERGE_AUTHORITY="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.mergeAuthority)"
+MERGE_AUTHORITY_BASE_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.mergeAuthorityBaseSha)"
 PROTECTED_NONSTRICT_REFCAS_POLICY="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.protectedNonstrictRefCas)"
 PROTECTED_NONSTRICT_REFCAS_POLICY_BASE_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.protectedNonstrictRefCasBaseSha)"
 # Manifests created before mergeAuthority was introduced retain their original
@@ -608,6 +612,7 @@ esac
 if [ "$MERGE_MODE" = protected-nonstrict-ref-cas ] &&
   [ "$NONSTRICT_REFCAS_CAPABILITY" != true ] &&
   { [ "$MERGE_AUTHORITY" != autonomous ] ||
+    [ "$MERGE_AUTHORITY_BASE_SHA" != "$EXPECTED_BASE_OID" ] ||
     [ "$PROTECTED_NONSTRICT_REFCAS_POLICY" != accept-non-atomic-pr-state ] ||
     [ "$PROTECTED_NONSTRICT_REFCAS_POLICY_BASE_SHA" != "$EXPECTED_BASE_OID" ]; }; then
   record_merge_admission_blocked_terminal \

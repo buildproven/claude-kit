@@ -84,8 +84,9 @@ Autonomous protected non-strict ref-CAS additionally requires the repository's
 committed `protectedNonstrictRefCas=accept-non-atomic-pr-state` policy. The
 fleet default is signed-only because the ref update cannot atomically bind a
 concurrent pull-request close or retarget. Resolve and persist this policy from
-the exact protected base, then re-read that base revision at mutation time. A
-candidate-head policy change cannot authorize its own merge.
+the exact protected base together with `mergeAuthority`, then re-read that base
+revision at mutation time. A candidate-head policy change cannot add ref-CAS
+authority or remove human-required governance for its own merge.
 
 An exhausted provider retry may be resumed across a legitimate descendant fix
 only through an exact-new-HEAD operator override accepting

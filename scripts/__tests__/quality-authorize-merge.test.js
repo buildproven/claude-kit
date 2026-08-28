@@ -25,7 +25,13 @@ describe("quality merge authorization action boundary", () => {
 
   it("fails on protected non-strict inspection errors other than an unprotected 404", () => {
     expect(script).toMatch(
-      /PROTECTED_NONSTRICT_RC[\s\S]*3:\*[\s\S]*Branch not protected[\s\S]*Not Found \(HTTP 404\)[\s\S]*protected non-strict ref-CAS classification failed[\s\S]*exit 1/,
+      /PROTECTED_NONSTRICT_RC[\s\S]*3:\*[\s\S]*classic branch protection read failed:[\s\S]*Branch not protected \(HTTP 404\)[\s\S]*protected non-strict ref-CAS classification failed[\s\S]*exit 1/,
+    );
+  });
+
+  it("never consumes classifier stdout after a nonzero exit", () => {
+    expect(script).toMatch(
+      /PROTECTED_NONSTRICT_DIGEST=""[\s\S]*PROTECTED_NONSTRICT_RC" -eq 0[\s\S]*jq -r '\.digest \/\/ empty'/,
     );
   });
 

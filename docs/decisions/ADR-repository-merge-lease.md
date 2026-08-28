@@ -235,7 +235,9 @@ repository commits
 policy is the durable owner acceptance that a concurrent PR close or retarget
 cannot be atomically bound to the ref update. Resolve it only from the exact
 protected-base commit, persist the source SHA, and re-read that revision at the
-mutation boundary; a candidate-head policy change cannot authorize itself. The
+mutation boundary. Resolve `mergeAuthority` from the same base revision; a
+candidate-head policy change cannot authorize itself or remove base-owned
+manual governance. The
 lease still rechecks complete review and gates, green required CI, the closed
 protection contract,
 exact identity, conversations, and ancestry. An outage or incomplete review

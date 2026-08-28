@@ -210,7 +210,8 @@ protection, conversations, identity, and ancestry are complete. This committed
 policy must already exist on the exact protected base; a PR cannot authorize
 itself. It accepts the close-or-retarget race once, so do not request operator
 approval for each later green delivery. Repositories without it remain
-signed-only.
+signed-only. `mergeAuthority` comes from that same base commit, so a candidate
+cannot remove human-required governance for its own delivery.
 
 If the bounded provider review is exhausted, use the exception command and add
 `review:provider-exhaustion` to `--accept` and add

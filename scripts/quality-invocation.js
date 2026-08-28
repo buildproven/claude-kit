@@ -2631,6 +2631,35 @@ function parseProtectedNonstrictRefCas(value) {
   return policy;
 }
 
+function basePolicyBinding(
+  manifest,
+  options,
+  mergeAuthority,
+  protectedNonstrictRefCas,
+) {
+  const mergeAuthorityBaseSha = options["merge-authority-base-sha"] || null;
+  const protectedNonstrictRefCasBaseSha =
+    options["protected-nonstrict-ref-cas-base-sha"] || null;
+  const exactBase = manifest.revisions.baseHeadSha;
+  const autonomousBaseBound =
+    mergeAuthority !== "autonomous" ||
+    (mergeAuthorityBaseSha === exactBase &&
+      /^[0-9a-f]{40}$/.test(mergeAuthorityBaseSha));
+  if (!autonomousBaseBound) {
+    throw new Error("merge authority must be bound to the exact base SHA");
+  }
+  if (
+    protectedNonstrictRefCas === "accept-non-atomic-pr-state" &&
+    (protectedNonstrictRefCasBaseSha !== exactBase ||
+      !/^[0-9a-f]{40}$/.test(protectedNonstrictRefCasBaseSha))
+  ) {
+    throw new Error(
+      "protected non-strict ref-CAS acceptance must be bound to the exact base SHA",
+    );
+  }
+  return { mergeAuthorityBaseSha, protectedNonstrictRefCasBaseSha };
+}
+
 function setRisk(manifest, options) {
   const tier = options.tier;
   if (!["low", "medium", "high", "critical"].includes(tier)) {
@@ -2648,17 +2677,13 @@ function setRisk(manifest, options) {
   const protectedNonstrictRefCas = parseProtectedNonstrictRefCas(
     options["protected-nonstrict-ref-cas"],
   );
-  const protectedNonstrictRefCasBaseSha =
-    options["protected-nonstrict-ref-cas-base-sha"] || null;
-  if (
-    protectedNonstrictRefCas === "accept-non-atomic-pr-state" &&
-    (protectedNonstrictRefCasBaseSha !== manifest.revisions.baseHeadSha ||
-      !/^[0-9a-f]{40}$/.test(protectedNonstrictRefCasBaseSha))
-  ) {
-    throw new Error(
-      "protected non-strict ref-CAS acceptance must be bound to the exact base SHA",
+  const { mergeAuthorityBaseSha, protectedNonstrictRefCasBaseSha } =
+    basePolicyBinding(
+      manifest,
+      options,
+      mergeAuthority,
+      protectedNonstrictRefCas,
     );
-  }
   if (
     ![
       "unknown",
@@ -2687,6 +2712,7 @@ function setRisk(manifest, options) {
     resolved: true,
     tier,
     mergeAuthority,
+    mergeAuthorityBaseSha,
     protectedNonstrictRefCas,
     protectedNonstrictRefCasBaseSha,
     taskType,

@@ -904,18 +904,23 @@ function requiredCheckBindings(checks) {
     );
 }
 
+function autonomousBasePolicyReady(manifest, basePolicy) {
+  const exactBase = manifest.revisions.baseHeadSha;
+  return Boolean(
+    /^[0-9a-f]{40}$/.test(exactBase || "") &&
+    manifest.risk?.mergeAuthorityBaseSha === exactBase &&
+    manifest.risk?.protectedNonstrictRefCasBaseSha === exactBase &&
+    basePolicy?.baseSha === exactBase &&
+    basePolicy?.mergeAuthority === "autonomous" &&
+    basePolicy?.protectedNonstrictRefCas === "accept-non-atomic-pr-state",
+  );
+}
+
 function autonomousReviewReady(manifest, authorization, basePolicy) {
   if (manifest.risk?.mergeAuthority !== "autonomous") return false;
   if (manifest.risk?.protectedNonstrictRefCas !== "accept-non-atomic-pr-state")
     return false;
-  const policyBaseSha = manifest.risk?.protectedNonstrictRefCasBaseSha;
-  if (
-    policyBaseSha !== manifest.revisions.baseHeadSha ||
-    !/^[0-9a-f]{40}$/.test(policyBaseSha || "") ||
-    basePolicy?.baseSha !== policyBaseSha ||
-    basePolicy?.value !== "accept-non-atomic-pr-state"
-  )
-    return false;
+  if (!autonomousBasePolicyReady(manifest, basePolicy)) return false;
   if (authorization?.operatorOverride === true) return false;
   return ["complete", "policy-exempt"].includes(authorization?.reviewStatus);
 }
@@ -1016,16 +1021,7 @@ function resolveProtectedNonstrictMode(manifest, options, head) {
       cwd: manifest.repo.realpath,
     });
   const authorization = invocation.reviewAuthorization(manifest);
-  const policyBaseSha = manifest.risk?.protectedNonstrictRefCasBaseSha;
-  const basePolicy = {
-    baseSha: policyBaseSha,
-    value: /^[0-9a-f]{40}$/.test(policyBaseSha || "")
-      ? require("./risk-score.js").loadConfigAtRevision(
-          manifest.repo.realpath,
-          policyBaseSha,
-        ).protectedNonstrictRefCas
-      : "signed-only",
-  };
+  const basePolicy = protectedNonstrictBasePolicy(manifest);
   const checkStates = require("./quality-required-checks.js").assertChecks(
     manifest.repo.githubRepository,
     branch,
@@ -1037,6 +1033,26 @@ function resolveProtectedNonstrictMode(manifest, options, head) {
     checkStates,
     basePolicy,
   });
+}
+
+function protectedNonstrictBasePolicy(manifest) {
+  const baseSha = manifest.risk?.protectedNonstrictRefCasBaseSha;
+  if (!/^[0-9a-f]{40}$/.test(baseSha || "")) {
+    return {
+      baseSha: null,
+      mergeAuthority: "human-required",
+      protectedNonstrictRefCas: "signed-only",
+    };
+  }
+  const config = require("./risk-score.js").loadConfigAtRevision(
+    manifest.repo.realpath,
+    baseSha,
+  );
+  return {
+    baseSha,
+    mergeAuthority: config.mergeAuthority,
+    protectedNonstrictRefCas: config.protectedNonstrictRefCas,
+  };
 }
 
 function acquireMergeGuard(manifestPath, presentedToken, options = {}) {

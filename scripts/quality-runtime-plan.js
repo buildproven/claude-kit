@@ -263,7 +263,8 @@ function main() {
   });
   const result = {
     ...plan,
-    mergeAuthority: scored.mergeAuthority,
+    mergeAuthority: basePolicy.mergeAuthority,
+    mergeAuthorityBaseSha: policyBaseSha,
     protectedNonstrictRefCas: basePolicy.protectedNonstrictRefCas,
     protectedNonstrictRefCasBaseSha: policyBaseSha,
     taskType: scored.taskType,

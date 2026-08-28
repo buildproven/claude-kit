@@ -135,6 +135,7 @@ describe("loadConfig — per-repo harness-config.json", () => {
     expect(loadConfigAtRevision(dir, base).protectedNonstrictRefCas).toBe(
       "signed-only",
     );
+    expect(loadConfigAtRevision(dir, base).mergeAuthority).toBe("autonomous");
     expect(loadConfigAtRevision(dir, candidate).protectedNonstrictRefCas).toBe(
       "accept-non-atomic-pr-state",
     );

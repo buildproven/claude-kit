@@ -421,7 +421,8 @@ policy accepts the unavoidable concurrent close-or-retarget race once instead
 of asking on every later green PR. Risk resolution reads it from the exact
 protected-base commit, binds that source SHA in the manifest, and the lease
 re-reads the same revision at the mutation boundary. A candidate cannot add the
-authority that it consumes. The lease
+authority that it consumes. `mergeAuthority` is resolved and rebound from that
+same base policy so a candidate cannot remove manual governance either. The lease
 independently rechecks complete exact-head review and gates, green required
 checks, App bindings, the complete classic-protection digest, resolved
 conversations, exact identity, and ancestry immediately before its non-force

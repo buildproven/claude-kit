@@ -1353,6 +1353,7 @@ esac
           merge: { invalidatedStamps: [] },
           risk: {
             mergeAuthority: "autonomous",
+            mergeAuthorityBaseSha: baseSha,
             protectedNonstrictRefCas: "accept-non-atomic-pr-state",
             protectedNonstrictRefCasBaseSha: baseSha,
           },
@@ -1369,7 +1370,8 @@ esac
           ],
           basePolicy: {
             baseSha,
-            value: "accept-non-atomic-pr-state",
+            mergeAuthority: "autonomous",
+            protectedNonstrictRefCas: "accept-non-atomic-pr-state",
           },
         },
       ),
@@ -1519,6 +1521,10 @@ esac
           ...scenario.manifest,
           risk: {
             ...scenario.manifest.risk,
+            mergeAuthorityBaseSha:
+              scenario.manifest.risk?.mergeAuthority === "autonomous"
+                ? baseSha
+                : undefined,
             protectedNonstrictRefCasBaseSha: policyAccepted
               ? baseSha
               : undefined,
@@ -1552,7 +1558,8 @@ esac
           ],
           basePolicy: {
             baseSha,
-            value: "accept-non-atomic-pr-state",
+            mergeAuthority: "autonomous",
+            protectedNonstrictRefCas: "accept-non-atomic-pr-state",
           },
         },
       ),
@@ -1569,6 +1576,7 @@ esac
           revisions: { baseHeadSha: baseSha },
           risk: {
             mergeAuthority: "autonomous",
+            mergeAuthorityBaseSha: baseSha,
             protectedNonstrictRefCas: "accept-non-atomic-pr-state",
             protectedNonstrictRefCasBaseSha: baseSha,
           },
@@ -1582,7 +1590,11 @@ esac
           },
           authorization: { reviewStatus: "complete" },
           checkStates: [{ context: "quality", appId: 15368, state: "success" }],
-          basePolicy: { baseSha, value: "signed-only" },
+          basePolicy: {
+            baseSha,
+            mergeAuthority: "autonomous",
+            protectedNonstrictRefCas: "signed-only",
+          },
         },
       ),
     ).toThrow(/complete exact-head review, green CI/);

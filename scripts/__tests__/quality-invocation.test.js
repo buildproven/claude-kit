@@ -2139,6 +2139,9 @@ printf '%s\\n' "$manifest"
     expect(manifest.risk.resolved).toBe(true);
     expect(manifest.risk.tier).not.toBe("auto");
     expect(manifest.risk.mergeAuthority).toBe("autonomous");
+    expect(manifest.risk.mergeAuthorityBaseSha).toBe(
+      manifest.revisions.baseHeadSha,
+    );
     expect(manifest.risk.protectedNonstrictRefCas).toBe("signed-only");
     expect(manifest.risk.protectedNonstrictRefCasBaseSha).toBe(
       manifest.revisions.baseHeadSha,
@@ -2155,7 +2158,7 @@ printf '%s\\n' "$manifest"
     });
   }, 120_000);
 
-  it("persists an explicit human-required policy in the immutable risk contract", () => {
+  it("does not let candidate-only policy change merge authority", () => {
     const root = repo("human-required-authority");
     writeFileSync(
       path.join(root, "harness-config.json"),
@@ -2170,9 +2173,34 @@ printf '%s\\n' "$manifest"
     });
     expect(result.status, result.stderr).toBe(0);
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    expect(manifest.risk.mergeAuthority).toBe("human-required");
+    expect(manifest.risk.mergeAuthority).toBe("autonomous");
+    expect(manifest.risk.mergeAuthorityBaseSha).toBe(
+      manifest.revisions.baseHeadSha,
+    );
     expect(manifest.risk.protectedNonstrictRefCas).toBe("signed-only");
     expect(manifest.risk.protectedNonstrictRefCasBaseSha).toBe(
+      manifest.revisions.baseHeadSha,
+    );
+  });
+
+  it("persists human-required merge authority from the protected base", () => {
+    const root = repo("base-human-required-authority");
+    writeFileSync(
+      path.join(root, "harness-config.json"),
+      JSON.stringify({ scorePolicy: { mergeAuthority: "human-required" } }),
+    );
+    git(root, ["add", "harness-config.json"]);
+    git(root, ["commit", "-qm", "configure manual governance"]);
+    git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    const manifestPath = create(root);
+    const result = spawnSync("bash", [RISK, "--manifest", manifestPath], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifest.risk.mergeAuthority).toBe("human-required");
+    expect(manifest.risk.mergeAuthorityBaseSha).toBe(
       manifest.revisions.baseHeadSha,
     );
   });
@@ -2246,6 +2274,9 @@ printf '%s\\n' "$manifest"
     expect(
       invocation.loadManifest(manifestPath).manifest.risk.mergeAuthority,
     ).toBe("human-required");
+    expect(
+      invocation.loadManifest(manifestPath).manifest.risk.mergeAuthorityBaseSha,
+    ).toBeNull();
     expect(
       invocation.loadManifest(manifestPath).manifest.risk
         .protectedNonstrictRefCas,
