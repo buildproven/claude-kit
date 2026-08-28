@@ -1341,6 +1341,7 @@ esac
 
   it("authorizes protected non-strict ref-CAS from complete autonomous green evidence", () => {
     const head = "a".repeat(40);
+    const baseSha = "b".repeat(40);
     const digest = "d".repeat(64);
     const requiredChecks = [
       { context: "build", appId: 15368 },
@@ -1353,7 +1354,9 @@ esac
           risk: {
             mergeAuthority: "autonomous",
             protectedNonstrictRefCas: "accept-non-atomic-pr-state",
+            protectedNonstrictRefCasBaseSha: baseSha,
           },
+          revisions: { baseHeadSha: baseSha },
         },
         { admin: true, protectionDigest: digest },
         head,
@@ -1364,6 +1367,10 @@ esac
             { context: "quality", appId: 15368, state: "success" },
             { context: "build", appId: 15368, state: "success" },
           ],
+          basePolicy: {
+            baseSha,
+            value: "accept-non-atomic-pr-state",
+          },
         },
       ),
     ).toMatchObject({
@@ -1502,10 +1509,21 @@ esac
     },
   ])("keeps $name outside autonomous ref-CAS authority", (scenario) => {
     const digest = "d".repeat(64);
+    const baseSha = "b".repeat(40);
+    const policyAccepted =
+      scenario.manifest.risk?.protectedNonstrictRefCas ===
+      "accept-non-atomic-pr-state";
     expect(() =>
       lease._autonomousRefCasAuthority(
         {
           ...scenario.manifest,
+          risk: {
+            ...scenario.manifest.risk,
+            protectedNonstrictRefCasBaseSha: policyAccepted
+              ? baseSha
+              : undefined,
+          },
+          revisions: { baseHeadSha: baseSha },
           merge: {
             invalidatedStamps: [],
             ...(scenario.manifest.merge || {}),
@@ -1532,6 +1550,39 @@ esac
               state: scenario.checkState,
             },
           ],
+          basePolicy: {
+            baseSha,
+            value: "accept-non-atomic-pr-state",
+          },
+        },
+      ),
+    ).toThrow(/complete exact-head review, green CI/);
+  });
+
+  it("rejects acceptance introduced only by the candidate head", () => {
+    const baseSha = "b".repeat(40);
+    const digest = "d".repeat(64);
+    expect(() =>
+      lease._autonomousRefCasAuthority(
+        {
+          merge: { invalidatedStamps: [] },
+          revisions: { baseHeadSha: baseSha },
+          risk: {
+            mergeAuthority: "autonomous",
+            protectedNonstrictRefCas: "accept-non-atomic-pr-state",
+            protectedNonstrictRefCasBaseSha: baseSha,
+          },
+        },
+        { admin: true, protectionDigest: digest },
+        "a".repeat(40),
+        {
+          inspection: {
+            digest,
+            requiredChecks: [{ context: "quality", appId: 15368 }],
+          },
+          authorization: { reviewStatus: "complete" },
+          checkStates: [{ context: "quality", appId: 15368, state: "success" }],
+          basePolicy: { baseSha, value: "signed-only" },
         },
       ),
     ).toThrow(/complete exact-head review, green CI/);

@@ -83,7 +83,9 @@ processes cannot create one.
 Autonomous protected non-strict ref-CAS additionally requires the repository's
 committed `protectedNonstrictRefCas=accept-non-atomic-pr-state` policy. The
 fleet default is signed-only because the ref update cannot atomically bind a
-concurrent pull-request close or retarget.
+concurrent pull-request close or retarget. Resolve and persist this policy from
+the exact protected base, then re-read that base revision at mutation time. A
+candidate-head policy change cannot authorize its own merge.
 
 An exhausted provider retry may be resumed across a legitimate descendant fix
 only through an exact-new-HEAD operator override accepting
@@ -256,7 +258,9 @@ head, and ancestry. This complete green path is ordinary autonomous delivery;
 it requires the committed
 `scorePolicy.protectedNonstrictRefCas="accept-non-atomic-pr-state"` policy as
 one-time acceptance of the close-or-retarget race, and does not require a
-per-PR operator prompt. The distinct signed
+per-PR operator prompt after that policy is present on the protected base. A PR
+that introduces the policy remains signed-only for its own delivery. The
+distinct signed
 `operator-nonstrict-refcas-override` remains required when the transaction also
 accepts an Actions outage or provider exhaustion. Both conditions must be in
 the same capability when they apply. Never reinterpret an ordinary CI

@@ -592,6 +592,7 @@ fi
 TIER="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.tier)"
 MERGE_AUTHORITY="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.mergeAuthority)"
 PROTECTED_NONSTRICT_REFCAS_POLICY="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.protectedNonstrictRefCas)"
+PROTECTED_NONSTRICT_REFCAS_POLICY_BASE_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.protectedNonstrictRefCasBaseSha)"
 # Manifests created before mergeAuthority was introduced retain their original
 # manual-governance behavior. Every newly resolved campaign persists an explicit
 # value, so an installed runtime upgrade can never grant authority mid-campaign.
@@ -607,7 +608,8 @@ esac
 if [ "$MERGE_MODE" = protected-nonstrict-ref-cas ] &&
   [ "$NONSTRICT_REFCAS_CAPABILITY" != true ] &&
   { [ "$MERGE_AUTHORITY" != autonomous ] ||
-    [ "$PROTECTED_NONSTRICT_REFCAS_POLICY" != accept-non-atomic-pr-state ]; }; then
+    [ "$PROTECTED_NONSTRICT_REFCAS_POLICY" != accept-non-atomic-pr-state ] ||
+    [ "$PROTECTED_NONSTRICT_REFCAS_POLICY_BASE_SHA" != "$EXPECTED_BASE_OID" ]; }; then
   record_merge_admission_blocked_terminal \
     "base:protected-nonstrict,pr:non-atomic-state" \
     "protected non-strict ref-CAS needs exact signed authority or explicit repository cancellation-risk acceptance" || exit 1

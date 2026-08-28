@@ -73,7 +73,9 @@ invalidated by any genuine HEAD change.
 Protected `strict: false` ref-CAS remains signed-only unless the repository also
 commits `scorePolicy.protectedNonstrictRefCas` as
 `"accept-non-atomic-pr-state"`. That one-time policy accepts the unavoidable
-close-or-retarget race without adding an approval prompt to every green PR.
+close-or-retarget race without adding an approval prompt to every later green
+PR. The runtime resolves and binds it from the protected base, so a candidate
+cannot add the authority that it consumes.
 Check an in-flight or stalled campaign's state on demand (gates, provider
 review, break-glass, CI) without waiting for a failure:
 

@@ -418,7 +418,10 @@ the protected non-strict ref-CAS path without an operator prompt only when the
 repository commits `scorePolicy.protectedNonstrictRefCas` as
 `"accept-non-atomic-pr-state"`. The default is `"signed-only"`. The explicit
 policy accepts the unavoidable concurrent close-or-retarget race once instead
-of asking on every green PR. The lease
+of asking on every later green PR. Risk resolution reads it from the exact
+protected-base commit, binds that source SHA in the manifest, and the lease
+re-reads the same revision at the mutation boundary. A candidate cannot add the
+authority that it consumes. The lease
 independently rechecks complete exact-head review and gates, green required
 checks, App bindings, the complete classic-protection digest, resolved
 conversations, exact identity, and ancestry immediately before its non-force

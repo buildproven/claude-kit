@@ -1746,15 +1746,7 @@ function validateScoreConfig(cfg) {
       "mergeAuthority must be either 'autonomous' or 'human-required'",
     );
   }
-  if (
-    !["signed-only", "accept-non-atomic-pr-state"].includes(
-      cfg?.protectedNonstrictRefCas,
-    )
-  ) {
-    throw new Error(
-      "protectedNonstrictRefCas must be either 'signed-only' or 'accept-non-atomic-pr-state'",
-    );
-  }
+  validateProtectedNonstrictRefCas(cfg?.protectedNonstrictRefCas);
   for (const name of ["securityFloor", "humanFloor", "high", "low"]) {
     requirePatternList(cfg?.[name], name);
   }
@@ -1777,6 +1769,14 @@ function validateScoreConfig(cfg) {
   return cfg;
 }
 
+function validateProtectedNonstrictRefCas(value) {
+  if (!["signed-only", "accept-non-atomic-pr-state"].includes(value)) {
+    throw new Error(
+      "protectedNonstrictRefCas must be either 'signed-only' or 'accept-non-atomic-pr-state'",
+    );
+  }
+}
+
 function isPlainObject(value) {
   return (
     value !== null &&
@@ -1787,10 +1787,7 @@ function isPlainObject(value) {
   );
 }
 
-function loadConfig(repoRoot) {
-  const p = path.join(repoRoot || process.cwd(), "harness-config.json");
-  if (!fs.existsSync(p)) return validateScoreConfig(DEFAULTS);
-  const repoCfg = parseConfigJson(fs.readFileSync(p, "utf8"), p);
+function configFromRoot(repoCfg) {
   if (!isPlainObject(repoCfg)) {
     throw new Error(
       "invalid risk policy: harness-config root must be an object",
@@ -1812,6 +1809,36 @@ function loadConfig(repoRoot) {
   validateScoreConfig(cfg);
   assertBuiltInAgentCurve(cfg.curve);
   return cfg;
+}
+
+function loadConfig(repoRoot) {
+  const p = path.join(repoRoot || process.cwd(), "harness-config.json");
+  if (!fs.existsSync(p)) return validateScoreConfig(DEFAULTS);
+  return configFromRoot(parseConfigJson(fs.readFileSync(p, "utf8"), p));
+}
+
+function loadConfigAtRevision(repoRoot, revision) {
+  if (!/^[0-9a-f]{40}$/.test(revision || "")) {
+    throw new Error("risk policy base revision must be an exact SHA");
+  }
+  let raw;
+  try {
+    raw = execFileSync(
+      "git",
+      [
+        "-C",
+        repoRoot || process.cwd(),
+        "show",
+        `${revision}:harness-config.json`,
+      ],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    );
+  } catch {
+    return validateScoreConfig(DEFAULTS);
+  }
+  return configFromRoot(
+    parseConfigJson(raw, `${revision}:harness-config.json`),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1837,7 +1864,6 @@ function score({
     return {
       riskScore: 100,
       mergeAuthority: cfg.mergeAuthority,
-      protectedNonstrictRefCas: cfg.protectedNonstrictRefCas,
       taskType: "unknown",
       changeNature: "unknown",
       diffStats: { files: 0, lines: 0 },
@@ -1868,7 +1894,6 @@ function score({
     return {
       riskScore: 100,
       mergeAuthority: cfg.mergeAuthority,
-      protectedNonstrictRefCas: cfg.protectedNonstrictRefCas,
       taskType: "unknown",
       changeNature: "unknown",
       diffStats: { files: 0, lines: 0 },
@@ -1904,7 +1929,6 @@ function score({
   return {
     ...scored,
     mergeAuthority: cfg.mergeAuthority,
-    protectedNonstrictRefCas: cfg.protectedNonstrictRefCas,
     taskType,
     diffStats,
     knobs,
@@ -1991,6 +2015,7 @@ module.exports = {
   matchesSecurityFloor,
   touchesHumanFloor,
   loadConfig,
+  loadConfigAtRevision,
   deepMerge,
   parseNameStatusZ,
   parseNumstatZ,

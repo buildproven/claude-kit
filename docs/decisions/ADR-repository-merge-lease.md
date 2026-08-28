@@ -233,8 +233,11 @@ authority uses this transaction without a per-PR human prompt only when the
 repository commits
 `scorePolicy.protectedNonstrictRefCas="accept-non-atomic-pr-state"`. That
 policy is the durable owner acceptance that a concurrent PR close or retarget
-cannot be atomically bound to the ref update. The lease still rechecks complete
-review and gates, green required CI, the closed protection contract,
+cannot be atomically bound to the ref update. Resolve it only from the exact
+protected-base commit, persist the source SHA, and re-read that revision at the
+mutation boundary; a candidate-head policy change cannot authorize itself. The
+lease still rechecks complete review and gates, green required CI, the closed
+protection contract,
 exact identity, conversations, and ancestry. An outage or incomplete review
 still requires the signed ref-CAS capability and its exact condition evidence.
 Separate single-scope capabilities cannot overwrite each other safely.

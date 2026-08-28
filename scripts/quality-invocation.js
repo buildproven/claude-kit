@@ -2648,6 +2648,17 @@ function setRisk(manifest, options) {
   const protectedNonstrictRefCas = parseProtectedNonstrictRefCas(
     options["protected-nonstrict-ref-cas"],
   );
+  const protectedNonstrictRefCasBaseSha =
+    options["protected-nonstrict-ref-cas-base-sha"] || null;
+  if (
+    protectedNonstrictRefCas === "accept-non-atomic-pr-state" &&
+    (protectedNonstrictRefCasBaseSha !== manifest.revisions.baseHeadSha ||
+      !/^[0-9a-f]{40}$/.test(protectedNonstrictRefCasBaseSha))
+  ) {
+    throw new Error(
+      "protected non-strict ref-CAS acceptance must be bound to the exact base SHA",
+    );
+  }
   if (
     ![
       "unknown",
@@ -2677,6 +2688,7 @@ function setRisk(manifest, options) {
     tier,
     mergeAuthority,
     protectedNonstrictRefCas,
+    protectedNonstrictRefCasBaseSha,
     taskType,
     score:
       options.score === undefined || options.score === ""

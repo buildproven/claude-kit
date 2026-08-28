@@ -904,9 +904,17 @@ function requiredCheckBindings(checks) {
     );
 }
 
-function autonomousReviewReady(manifest, authorization) {
+function autonomousReviewReady(manifest, authorization, basePolicy) {
   if (manifest.risk?.mergeAuthority !== "autonomous") return false;
   if (manifest.risk?.protectedNonstrictRefCas !== "accept-non-atomic-pr-state")
+    return false;
+  const policyBaseSha = manifest.risk?.protectedNonstrictRefCasBaseSha;
+  if (
+    policyBaseSha !== manifest.revisions.baseHeadSha ||
+    !/^[0-9a-f]{40}$/.test(policyBaseSha || "") ||
+    basePolicy?.baseSha !== policyBaseSha ||
+    basePolicy?.value !== "accept-non-atomic-pr-state"
+  )
     return false;
   if (authorization?.operatorOverride === true) return false;
   return ["complete", "policy-exempt"].includes(authorization?.reviewStatus);
@@ -937,12 +945,12 @@ function autonomousRefCasAuthority(
   manifest,
   options,
   head,
-  { inspection, authorization, checkStates },
+  { inspection, authorization, checkStates, basePolicy },
 ) {
   const requiredChecks = greenCheckBindings(checkStates, inspection);
   if (
     !autonomousRequestReady(manifest, options) ||
-    !autonomousReviewReady(manifest, authorization) ||
+    !autonomousReviewReady(manifest, authorization, basePolicy) ||
     !protectionBindingReady(inspection, options) ||
     !requiredChecks
   ) {
@@ -1008,6 +1016,16 @@ function resolveProtectedNonstrictMode(manifest, options, head) {
       cwd: manifest.repo.realpath,
     });
   const authorization = invocation.reviewAuthorization(manifest);
+  const policyBaseSha = manifest.risk?.protectedNonstrictRefCasBaseSha;
+  const basePolicy = {
+    baseSha: policyBaseSha,
+    value: /^[0-9a-f]{40}$/.test(policyBaseSha || "")
+      ? require("./risk-score.js").loadConfigAtRevision(
+          manifest.repo.realpath,
+          policyBaseSha,
+        ).protectedNonstrictRefCas
+      : "signed-only",
+  };
   const checkStates = require("./quality-required-checks.js").assertChecks(
     manifest.repo.githubRepository,
     branch,
@@ -1017,6 +1035,7 @@ function resolveProtectedNonstrictMode(manifest, options, head) {
     inspection,
     authorization,
     checkStates,
+    basePolicy,
   });
 }
 
