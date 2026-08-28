@@ -5766,6 +5766,33 @@ function validMutationArtifact(manifest, artifact) {
     artifact.tier === manifest.risk.tier,
   ].every(Boolean);
   if (!identityValid) return false;
+  const candidateBase = artifact.candidateBase || artifact.base;
+  if (candidateBase !== artifact.base) {
+    const carry = manifest.mutationCarry;
+    if (
+      !carry ||
+      carry.priorHead !== candidateBase ||
+      carry.artifactSha256 !== artifact.reusedArtifactSha256 ||
+      !fs.existsSync(carry.artifactPath) ||
+      sha256File(carry.artifactPath) !== carry.artifactSha256
+    ) {
+      return false;
+    }
+    const prior = parseJson(
+      fs.readFileSync(carry.artifactPath, "utf8"),
+      "prior mutation evidence artifact",
+    );
+    if (
+      prior.invocationId !== manifest.invocationId ||
+      prior.base !== manifest.revisions.baseSha ||
+      prior.head !== candidateBase ||
+      prior.tier !== manifest.risk.tier ||
+      !validMutationPaths(prior.mutatedPaths) ||
+      prior.testFailureObserved !== true
+    ) {
+      return false;
+    }
+  }
   if (["gitlink-skip", "no-mutable-source"].includes(artifact.method)) {
     // A diff with no executable source to mutate. This is a distinct,
     // legitimately evidenced outcome from a revert that failed to prove
@@ -5805,6 +5832,13 @@ function mutationEvidenceValid(manifest, options = {}) {
   if (!["high", "critical"].includes(tier)) return false;
   const mutation = manifest.mutation;
   if (!mutation || mutation.head !== manifest.revisions.currentHead) {
+    return false;
+  }
+  if (
+    typeof mutation.artifactPath !== "string" ||
+    mutation.artifactPath === "" ||
+    typeof mutation.artifactSha256 !== "string"
+  ) {
     return false;
   }
   if (!fs.existsSync(mutation.artifactPath)) return false;
@@ -6922,6 +6956,12 @@ function runAdvance(manifestArg, manifest, rawArgs) {
     validateIdentity(locked, manifest.repo.realpath, { requireHead: false });
     bindPrRepositoryIdentity(locked, options);
     const priorHead = locked.revisions.currentHead;
+    const priorMutation =
+      ["high", "critical"].includes(locked.risk?.tier) &&
+      locked.mutation &&
+      mutationEvidenceValid(locked)
+        ? { ...locked.mutation }
+        : null;
     const nextHead = git(locked.repo.realpath, ["rev-parse", "HEAD"]);
     if (options["allow-exhausted-review"]) {
       validateDescendantAdvanceAuthorization(
@@ -6969,6 +7009,21 @@ function runAdvance(manifestArg, manifest, rawArgs) {
       : unionRequiredGates(locked.requiredGates, discovered, replaceNames);
     locked.requiredGatesPolicyVersion = REQUIRED_GATES_POLICY_VERSION;
     locked[NEEDS_REQUIRED_GATES_MIGRATION] = false;
+    if (priorMutation && nextHead !== priorHead) {
+      const priorArtifact = parseJson(
+        fs.readFileSync(priorMutation.artifactPath, "utf8"),
+        "prior mutation evidence artifact",
+      );
+      locked.mutationCarry = {
+        priorHead,
+        artifactPath: priorMutation.artifactPath,
+        artifactSha256: priorMutation.artifactSha256,
+        avoidedSeconds: Number.isInteger(priorArtifact.executionSeconds)
+          ? priorArtifact.executionSeconds
+          : 0,
+        recordedAt: new Date().toISOString(),
+      };
+    }
     locked.governor.lastActivityAt = new Date().toISOString();
   });
   process.stdout.write(`${updated.revisions.currentHead}\n`);

@@ -637,6 +637,11 @@ for argument in "$@"; do
   esac
 done
 
+# Package scripts resolve repository-local binaries through node_modules/.bin.
+# Verify the exact lockfile installation before immutable campaign state or a
+# merge lease exists, so an environment defect cannot become a source gate.
+node "$SCRIPT_DIR/quality-dependency-preflight.js" --repo "$GIT_ROOT" || exit $?
+
 CREATE_ARGS=(create --repo "$GIT_ROOT" --base-ref "$BASE_REF" \
   --level "$LEVEL_ARG" --scope "$SCOPE_ARG")
 case "$REVIEW_ARM_ARG" in

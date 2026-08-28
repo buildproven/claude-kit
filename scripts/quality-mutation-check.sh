@@ -40,6 +40,11 @@ bash "$SCRIPT_DIR/quality-assert-clean.sh" \
 
 BASE="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.baseSha)"
 HEAD="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" revisions.currentHead)"
+MUTATION_BASE="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" mutationCarry.priorHead 2>/dev/null || true)"
+[ -n "$MUTATION_BASE" ] || MUTATION_BASE="$BASE"
+REUSED_ARTIFACT_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" mutationCarry.artifactSha256 2>/dev/null || true)"
+AVOIDED_SECONDS="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" mutationCarry.avoidedSeconds 2>/dev/null || true)"
+case "$AVOIDED_SECONDS" in ''|*[!0-9]*) AVOIDED_SECONDS=0 ;; esac
 STATE_ROOT="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" stateRoot)"
 INVOCATION_ID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" invocationId)"
 CHECK_SECONDS="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.runtime.checkSeconds)"
@@ -383,7 +388,7 @@ CANDIDATES=()
 while IFS= read -r CANDIDATE; do
   CANDIDATES+=("$CANDIDATE")
 done < <(
-  git -C "$ROOT" diff --name-only --diff-filter=AM "$BASE..$HEAD" -- \
+  git -C "$ROOT" diff --name-only --diff-filter=AM "$MUTATION_BASE..$HEAD" -- \
     | awk '
       /(^|\/)(test|tests|spec|__tests__)(\/|$)/ { next }
       /\.(js|cjs|mjs|jsx|ts|tsx|py|rb|go|java|kt|rs|c|cc|cpp|h|sh|bash|zsh)$/ { print }
@@ -444,9 +449,45 @@ candidate_has_mapped_test() {
     "$ROOT/.buildproven/test-impact.json" >/dev/null 2>&1
 }
 
+candidate_test_cost() {
+  local candidate="$1" directory stem sibling test_file total=0 count=0
+  if [ -f "$ROOT/.buildproven/test-impact.json" ]; then
+    while IFS= read -r test_file; do
+      [ -f "$ROOT/$test_file" ] || continue
+      total=$((total + $(wc -c < "$ROOT/$test_file")))
+      count=$((count + 1))
+    done < <(
+      jq -r --arg candidate "$candidate" '
+        .mappings[]?
+        | select((.paths // []) | index($candidate))
+        | .commands[]?.args[]?
+        | select(test("(^|/)(test|tests|spec|__tests__)/|\\.(test|spec)\\.(js|ts|jsx|tsx)$"))
+      ' "$ROOT/.buildproven/test-impact.json" 2>/dev/null || true
+    )
+  fi
+  if [ "$count" -eq 0 ]; then
+    directory="$(dirname "$candidate")"
+    stem="$(basename "$candidate")"
+    stem="${stem%.*}"
+    for sibling in \
+      "$directory/__tests__/$stem.test.js" \
+      "$directory/__tests__/$stem.test.ts" \
+      "$directory/$stem.test.js" \
+      "$directory/$stem.test.ts"; do
+      [ -f "$ROOT/$sibling" ] || continue
+      total=$((total + $(wc -c < "$ROOT/$sibling")))
+      count=$((count + 1))
+    done
+  fi
+  [ "$count" -gt 0 ] || total=999999999
+  printf '%d\n' $((total + count * 1000))
+}
+
 if [ "${#CANDIDATES[@]}" -gt 1 ]; then
   ORDERED_CANDIDATES=()
-  for PRIORITY in mapped-test planned-sibling sibling fallback; do
+  while IFS=$'\t' read -r _priority _cost CANDIDATE; do
+    ORDERED_CANDIDATES+=("$CANDIDATE")
+  done < <(
     for CANDIDATE in "${CANDIDATES[@]+"${CANDIDATES[@]}"}"; do
       HAS_SIBLING=false
       candidate_has_sibling_test "$CANDIDATE" && HAS_SIBLING=true
@@ -454,25 +495,19 @@ if [ "${#CANDIDATES[@]}" -gt 1 ]; then
       candidate_has_planned_sibling_test "$CANDIDATE" && HAS_PLANNED_SIBLING=true
       HAS_MAPPED_TEST=false
       candidate_has_mapped_test "$CANDIDATE" && HAS_MAPPED_TEST=true
-      if [ "$PRIORITY" = mapped-test ] && [ "$HAS_MAPPED_TEST" = true ]; then
-        ORDERED_CANDIDATES+=("$CANDIDATE")
-      elif [ "$PRIORITY" = planned-sibling ] && [ "$HAS_PLANNED_SIBLING" = true ] &&
-        [ "$HAS_MAPPED_TEST" = false ]; then
-        ORDERED_CANDIDATES+=("$CANDIDATE")
-      elif [ "$PRIORITY" = sibling ] && [ "$HAS_SIBLING" = true ] &&
-        [ "$HAS_PLANNED_SIBLING" = false ] && [ "$HAS_MAPPED_TEST" = false ]; then
-        ORDERED_CANDIDATES+=("$CANDIDATE")
-      elif [ "$PRIORITY" = fallback ] && [ "$HAS_SIBLING" = false ] &&
-        [ "$HAS_PLANNED_SIBLING" = false ] && [ "$HAS_MAPPED_TEST" = false ]; then
-        ORDERED_CANDIDATES+=("$CANDIDATE")
+      if [ "$HAS_MAPPED_TEST" = true ]; then PRIORITY=1
+      elif [ "$HAS_PLANNED_SIBLING" = true ]; then PRIORITY=2
+      elif [ "$HAS_SIBLING" = true ]; then PRIORITY=3
+      else PRIORITY=4
       fi
-    done
-  done
+      printf '%d\t%012d\t%s\n' "$PRIORITY" "$(candidate_test_cost "$CANDIDATE")" "$CANDIDATE"
+    done | sort -t $'\t' -k1,1n -k2,2n -k3,3
+  )
   CANDIDATES=("${ORDERED_CANDIDATES[@]+"${ORDERED_CANDIDATES[@]}"}")
 fi
 
 if [ "${#CANDIDATES[@]}" -eq 0 ]; then
-  DIFF_RAW="$(git -C "$ROOT" diff --raw --diff-filter=AM "$BASE..$HEAD" --)"
+  DIFF_RAW="$(git -C "$ROOT" diff --raw --diff-filter=AM "$MUTATION_BASE..$HEAD" --)"
   # `grep -c .` exits 1 on zero matches; `|| true` keeps an empty $DIFF_RAW
   # (e.g. a delete-only diff) from aborting the script under set -e.
   DIFF_ENTRY_COUNT="$(printf '%s\n' "$DIFF_RAW" | grep -c . || true)"
@@ -496,7 +531,7 @@ if [ "${#CANDIDATES[@]}" -eq 0 ]; then
   # which previously failed closed. Recount the diff without the test
   # exclusion and require that no source file of any kind changed.
   SOURCE_ENTRY_COUNT="$(
-    git -C "$ROOT" diff --name-only --diff-filter=AM "$BASE..$HEAD" -- \
+    git -C "$ROOT" diff --name-only --diff-filter=AM "$MUTATION_BASE..$HEAD" -- \
       | awk '
         /\.(js|cjs|mjs|jsx|ts|tsx|py|rb|go|java|kt|rs|c|cc|cpp|h|sh|bash|zsh)$/ { print }
       ' \
@@ -526,7 +561,7 @@ if [ "${#CANDIDATES[@]}" -eq 0 ]; then
     while IFS= read -r CONFIG_CANDIDATE; do
       CANDIDATES+=("$CONFIG_CANDIDATE")
     done < <(
-      git -C "$ROOT" diff --name-only --diff-filter=AM "$BASE..$HEAD" -- \
+      git -C "$ROOT" diff --name-only --diff-filter=AM "$MUTATION_BASE..$HEAD" -- \
         | awk '
           /(^|\/)(test|tests|spec|__tests__)(\/|$)/ { next }
           /(^|\/)(package|package-lock|npm-shrinkwrap|composer|Cargo|Gemfile|go)\.(json|lock|toml|sum)$/ { next }
@@ -570,7 +605,10 @@ if [ "${#CANDIDATES[@]}" -eq 0 ]; then
       --arg head "$HEAD" \
       --arg tier "$TIER" \
       --arg method "$SKIP_METHOD" \
-      '{schemaVersion: 1, invocationId: $invocationId, base: $base, head: $head, tier: $tier, method: $method, mutatedPaths: [], testFailureObserved: false}' \
+      --arg candidateBase "$MUTATION_BASE" \
+      --arg reusedArtifactSha256 "$REUSED_ARTIFACT_SHA" \
+      --argjson avoidedSeconds "$AVOIDED_SECONDS" \
+      '{schemaVersion: 1, invocationId: $invocationId, base: $base, head: $head, tier: $tier, method: $method, candidateBase: $candidateBase, reusedArtifactSha256: ($reusedArtifactSha256 | if length > 0 then . else null end), avoidedSeconds: $avoidedSeconds, mutatedPaths: [], testFailureObserved: false}' \
       > "$ARTIFACT"
     # set -euo pipefail (line 5) means a non-zero exit from either call below
     # aborts the script before the success echo/exit 0 can be reached.
@@ -590,6 +628,7 @@ CHECK_SECONDS="$(
   printf '%s' "$MUTATION_AUTHORIZATION" | jq -er '.remainingSeconds'
 )"
 MUTATION_ACTIVE=true
+MUTATION_STARTED_AT=$SECONDS
 DEADLINE=$(( $(date +%s) + CHECK_SECONDS ))
 
 mkdir -p "$(dirname "$ARTIFACT")"
@@ -701,8 +740,12 @@ record_evidence() {
     --arg head "$HEAD" \
     --arg tier "$TIER" \
     --arg method "$METHOD" \
+    --arg candidateBase "$MUTATION_BASE" \
+    --arg reusedArtifactSha256 "$REUSED_ARTIFACT_SHA" \
+    --argjson avoidedSeconds "$AVOIDED_SECONDS" \
+    --argjson executionSeconds "$((SECONDS - MUTATION_STARTED_AT))" \
     --argjson mutatedPaths "$(printf '%s\n' "${MUTATED_PATHS[@]}" | jq -R . | jq -s .)" \
-    '{schemaVersion: 1, invocationId: $invocationId, base: $base, head: $head, tier: $tier, method: $method, mutatedPaths: $mutatedPaths, testFailureObserved: true}' \
+    '{schemaVersion: 1, invocationId: $invocationId, base: $base, head: $head, tier: $tier, method: $method, candidateBase: $candidateBase, reusedArtifactSha256: ($reusedArtifactSha256 | if length > 0 then . else null end), avoidedSeconds: $avoidedSeconds, executionSeconds: $executionSeconds, mutatedPaths: $mutatedPaths, testFailureObserved: true}' \
     > "$ARTIFACT"
   complete_mutation_execution
   node "$SCRIPT_DIR/quality-invocation.js" mutation-record "$MANIFEST" \
@@ -786,8 +829,8 @@ for CANDIDATE in "${CANDIDATES[@]+"${CANDIDATES[@]}"}"; do
     fi
     exit 1
   fi
-  if git -C "$ROOT" cat-file -e "$BASE:$CANDIDATE" 2>/dev/null; then
-    git -C "$SANDBOX" restore --source "$BASE" -- "$CANDIDATE"
+  if git -C "$ROOT" cat-file -e "$MUTATION_BASE:$CANDIDATE" 2>/dev/null; then
+    git -C "$SANDBOX" restore --source "$MUTATION_BASE" -- "$CANDIDATE"
   else
     git -C "$SANDBOX" rm -q -- "$CANDIDATE"
   fi
