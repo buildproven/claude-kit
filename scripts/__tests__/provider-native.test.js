@@ -1,4 +1,5 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -1210,7 +1211,13 @@ describe("provider-native platform", () => {
     const bin = path.join(dir, "bin");
     const state = path.join(dir, "state");
     const cacheDir = path.join(state, "claude-kit");
-    const staleLock = path.join(cacheDir, "mcp-parity-default.json.lock");
+    const defaultProfileKey = createHash("sha256")
+      .update("default")
+      .digest("hex");
+    const staleLock = path.join(
+      cacheDir,
+      `mcp-parity-${defaultProfileKey}.json.lock`,
+    );
     const codexHome = path.join(dir, "codex");
     const calls = path.join(dir, "calls");
     const parityLink = path.join(dir, "setup-mcp-parity");
@@ -1226,7 +1233,7 @@ describe("provider-native platform", () => {
       path.join(config, "mcp.json"),
       JSON.stringify({
         defaultProfile: "default",
-        profiles: { default: [] },
+        profiles: { default: [], "x/../../escaped": [] },
         servers: [],
       }),
     );
@@ -1267,6 +1274,19 @@ describe("provider-native platform", () => {
     });
     expect(drift.status, drift.stderr).toBe(0);
     expect(readFileSync(calls, "utf8")).not.toBe(firstCalls);
+
+    const unsafeProfile = spawnSync(
+      "bash",
+      [MCP_PARITY, "--profile", "x/../../escaped"],
+      { encoding: "utf8", env },
+    );
+    expect(unsafeProfile.status, unsafeProfile.stderr).toBe(0);
+    expect(existsSync(path.join(state, "escaped.json"))).toBe(false);
+    expect(
+      readdirSync(cacheDir).every((name) =>
+        /^mcp-parity-[a-f0-9]{64}\.json$/.test(name),
+      ),
+    ).toBe(true);
   });
 
   it("serializes concurrent MCP parity sync and reuses the completed result", async () => {
