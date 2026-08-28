@@ -34,10 +34,14 @@ CHECK=0
 CACHE_LOCK_OWNED=0
 CACHE_ELIGIBLE=0
 SELECTED_MANIFEST=""
+MCP_LOCK_OWNER_TEMP=""
 
 cleanup() {
   if [ -n "$SELECTED_MANIFEST" ]; then
     rm -f "$SELECTED_MANIFEST"
+  fi
+  if [ -n "$MCP_LOCK_OWNER_TEMP" ]; then
+    rm -f "$MCP_LOCK_OWNER_TEMP"
   fi
   if [ "$CACHE_LOCK_OWNED" -eq 1 ]; then
     rm -f "$MCP_CACHE_LOCK/owner"
@@ -116,24 +120,51 @@ MCP_CACHE_ARGS=(
   --client-executable "$MCP_CODEX_BIN"
 )
 
+process_start_identity() {
+  ps -o lstart= -p "$1" 2>/dev/null | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
 if [ "$LOGIN" -eq 0 ] && [ "$FORCE" -eq 0 ] && [ "$CHECK" -eq 0 ]; then
   CACHE_ELIGIBLE=1
+  missing_owner_seen=0
   python3 "$MCP_CACHE_HELPER" prepare "${MCP_CACHE_ARGS[@]}"
   for ((attempt = 1; attempt <= 30; attempt++)); do
     if mkdir "$MCP_CACHE_LOCK" 2>/dev/null; then
-      printf '%s\n' "$$" > "$MCP_CACHE_LOCK/owner"
+      lock_owner_started="$(process_start_identity "$$")"
+      if [ -z "$lock_owner_started" ]; then
+        rmdir "$MCP_CACHE_LOCK" 2>/dev/null || true
+        echo "unable to establish MCP parity cache lock owner identity" >&2
+        exit 1
+      fi
+      MCP_LOCK_OWNER_TEMP="$MCP_CACHE_LOCK/.owner.$$"
+      printf '%s\n%s\n' "$$" "$lock_owner_started" > "$MCP_LOCK_OWNER_TEMP"
+      mv "$MCP_LOCK_OWNER_TEMP" "$MCP_CACHE_LOCK/owner"
+      MCP_LOCK_OWNER_TEMP=""
       CACHE_LOCK_OWNED=1
       break
     fi
-    lock_owner="$(cat "$MCP_CACHE_LOCK/owner" 2>/dev/null || true)"
-    if [[ "$lock_owner" =~ ^[1-9][0-9]*$ ]] && ! kill -0 "$lock_owner" 2>/dev/null; then
+    if [ ! -f "$MCP_CACHE_LOCK/owner" ] && [ "$missing_owner_seen" -eq 0 ]; then
+      missing_owner_seen=1
+      sleep 1
+      continue
+    fi
+    lock_owner="$(sed -n '1p' "$MCP_CACHE_LOCK/owner" 2>/dev/null || true)"
+    lock_owner_started="$(sed -n '2p' "$MCP_CACHE_LOCK/owner" 2>/dev/null || true)"
+    current_owner_started=""
+    if [[ "$lock_owner" =~ ^[1-9][0-9]*$ ]]; then
+      current_owner_started="$(process_start_identity "$lock_owner")"
+    fi
+    if [ -z "$current_owner_started" ] || [ "$current_owner_started" != "$lock_owner_started" ]; then
       stale_lock="$MCP_CACHE_LOCK.stale.$$"
       if mv "$MCP_CACHE_LOCK" "$stale_lock" 2>/dev/null; then
         rm -f "$stale_lock/owner"
+        find "$stale_lock" -maxdepth 1 -type f -name '.owner.*' -delete
         rmdir "$stale_lock" 2>/dev/null || true
       fi
+      missing_owner_seen=0
       continue
     fi
+    missing_owner_seen=0
     sleep 1
   done
   [ "$CACHE_LOCK_OWNED" -eq 1 ] || {

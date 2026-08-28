@@ -1208,11 +1208,18 @@ describe("provider-native platform", () => {
     const config = path.join(setup, "config");
     const bin = path.join(dir, "bin");
     const state = path.join(dir, "state");
+    const cacheDir = path.join(state, "claude-kit");
+    const staleLock = path.join(cacheDir, "mcp-parity-default.json.lock");
     const codexHome = path.join(dir, "codex");
     const calls = path.join(dir, "calls");
     mkdirSync(config, { recursive: true });
     mkdirSync(bin);
     mkdirSync(codexHome);
+    mkdirSync(staleLock, { recursive: true });
+    writeFileSync(
+      path.join(staleLock, "owner"),
+      `${process.pid}\nreused-pid\n`,
+    );
     writeFileSync(
       path.join(config, "mcp.json"),
       JSON.stringify({
