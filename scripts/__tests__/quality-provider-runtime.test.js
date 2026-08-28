@@ -67,6 +67,45 @@ async function expectProcessToStop(
   }
 }
 
+function runWithLivenessDeadline(command, args, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    const deadline = setTimeout(() => {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        // The process can exit between the deadline and the signal.
+      }
+      reject(
+        new Error(
+          `${command} exceeded its ${timeoutMs}ms cancellation liveness deadline`,
+        ),
+      );
+    }, timeoutMs);
+    child.once("error", (error) => {
+      clearTimeout(deadline);
+      reject(error);
+    });
+    child.once("close", (code, signal) => {
+      clearTimeout(deadline);
+      resolve({ code, signal, stdout, stderr });
+    });
+  });
+}
+
 describe("provider review runtime", () => {
   it("documents the exact Quality-* schema emitted by the runtime", () => {
     const skill = readFileSync(
@@ -421,15 +460,12 @@ ps -o lstart= -p "$child" | sed 's/[[:space:]]*$//' > "$3"
 kill -TERM "$wrapper"
 wait "$wrapper" 2>/dev/null || true
 `;
-    const result = spawnSync(
+    const result = await runWithLivenessDeadline(
       "bash",
       ["-c", script, "cancel", BOUNDED, pidFile, startFile],
-      {
-        encoding: "utf8",
-        timeout: 5000,
-      },
+      10000,
     );
-    expect(result.status).toBe(0);
+    expect(result.code, result.stderr).toBe(0);
     // Cancellation must wait for the wrapper's TERM/KILL escalation and the
     // runner's process reaper. A child that survives is an infinite loop, so
     // this remains a hard liveness bound rather than a timing exemption.
