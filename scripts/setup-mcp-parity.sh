@@ -15,7 +15,11 @@ set -euo pipefail
 # scripts/ dir sits directly under its repo root). Detect embedding by
 # preferring an overlay-level config/mcp.json one level higher, since that
 # file only ever exists at the true overlay root.
-SETUP_MCP_PARITY_REAL_PATH="$(readlink -f "${HOME}/.claude/scripts/setup-mcp-parity.sh" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+if [ -L "${BASH_SOURCE[0]}" ]; then
+  SETUP_MCP_PARITY_REAL_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+else
+  SETUP_MCP_PARITY_REAL_PATH="${BASH_SOURCE[0]}"
+fi
 SETUP_MCP_PARITY_SCRIPTS_DIR="$(cd "$(dirname "$SETUP_MCP_PARITY_REAL_PATH")" && pwd -P)"
 SETUP_MCP_PARITY_ONE_UP="$(cd "$SETUP_MCP_PARITY_SCRIPTS_DIR/.." && pwd -P)"
 if [ -z "${SETUP_REPO:-}" ] && [ -f "$SETUP_MCP_PARITY_ONE_UP/../config/mcp.json" ]; then
@@ -27,6 +31,20 @@ PROFILE=""
 LOGIN=0
 FORCE=0
 CHECK=0
+CACHE_LOCK_OWNED=0
+CACHE_ELIGIBLE=0
+SELECTED_MANIFEST=""
+
+cleanup() {
+  if [ -n "$SELECTED_MANIFEST" ]; then
+    rm -f "$SELECTED_MANIFEST"
+  fi
+  if [ "$CACHE_LOCK_OWNED" -eq 1 ]; then
+    rm -f "$MCP_CACHE_LOCK/owner"
+    rmdir "$MCP_CACHE_LOCK" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -74,6 +92,62 @@ for client in claude codex; do
     exit 1
   }
 done
+
+MCP_SYNC_PY="$(dirname "$SETUP_MCP_PARITY_REAL_PATH")/mcp-sync.py"
+MCP_CACHE_HELPER="$(dirname "$SETUP_MCP_PARITY_REAL_PATH")/mcp-parity-cache.py"
+MCP_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+MCP_CACHE_DIR="$MCP_STATE_HOME/claude-kit"
+MCP_CACHE="$MCP_CACHE_DIR/mcp-parity-$PROFILE.json"
+MCP_CACHE_LOCK="$MCP_CACHE.lock"
+MCP_CLAUDE_CONFIG="$HOME/.claude.json"
+MCP_CODEX_CONFIG="${CODEX_HOME:-$HOME/.codex}/config.toml"
+MCP_CLAUDE_BIN="$(command -v claude)"
+MCP_CODEX_BIN="$(command -v codex)"
+MCP_CACHE_ARGS=(
+  --cache "$MCP_CACHE"
+  --profile "$PROFILE"
+  --source "$MANIFEST"
+  --source "$SETUP_MCP_PARITY_REAL_PATH"
+  --source "$MCP_SYNC_PY"
+  --source "$MCP_CACHE_HELPER"
+  --client-config "$MCP_CLAUDE_CONFIG"
+  --client-config "$MCP_CODEX_CONFIG"
+  --client-executable "$MCP_CLAUDE_BIN"
+  --client-executable "$MCP_CODEX_BIN"
+)
+
+if [ "$LOGIN" -eq 0 ] && [ "$FORCE" -eq 0 ] && [ "$CHECK" -eq 0 ]; then
+  CACHE_ELIGIBLE=1
+  python3 "$MCP_CACHE_HELPER" prepare "${MCP_CACHE_ARGS[@]}"
+  for ((attempt = 1; attempt <= 30; attempt++)); do
+    if mkdir "$MCP_CACHE_LOCK" 2>/dev/null; then
+      printf '%s\n' "$$" > "$MCP_CACHE_LOCK/owner"
+      CACHE_LOCK_OWNED=1
+      break
+    fi
+    lock_owner="$(cat "$MCP_CACHE_LOCK/owner" 2>/dev/null || true)"
+    if [[ "$lock_owner" =~ ^[1-9][0-9]*$ ]] && ! kill -0 "$lock_owner" 2>/dev/null; then
+      stale_lock="$MCP_CACHE_LOCK.stale.$$"
+      if mv "$MCP_CACHE_LOCK" "$stale_lock" 2>/dev/null; then
+        rm -f "$stale_lock/owner"
+        rmdir "$stale_lock" 2>/dev/null || true
+      fi
+      continue
+    fi
+    sleep 1
+  done
+  [ "$CACHE_LOCK_OWNED" -eq 1 ] || {
+    echo "timed out waiting for MCP parity cache lock: $MCP_CACHE_LOCK" >&2
+    exit 1
+  }
+  if python3 "$MCP_CACHE_HELPER" hit "${MCP_CACHE_ARGS[@]}"; then
+    rm -f "$MCP_CACHE_LOCK/owner"
+    rmdir "$MCP_CACHE_LOCK"
+    CACHE_LOCK_OWNED=0
+    echo "MCP profile unchanged: $PROFILE (verified cached parity)"
+    exit 0
+  fi
+fi
 
 managed_retired_registration() {
   client="$1"
@@ -126,10 +200,6 @@ prune_retired_registration() {
 }
 
 SELECTED_MANIFEST="$(mktemp "${TMPDIR:-/tmp}/bs-mcp-profile.XXXXXX")"
-cleanup() {
-  rm -f "$SELECTED_MANIFEST"
-}
-trap cleanup EXIT
 
 jq --arg profile "$PROFILE" '
   ((.profiles[.defaultProfile] + .profiles[$profile]) | unique) as $selected
@@ -148,7 +218,6 @@ args=(--manifest "$SELECTED_MANIFEST")
 # ships from the kit, an overlay's scripts/ if overridden there), not
 # necessarily under $SETUP_REPO/core/ — a standalone kit install has no
 # core/ subdirectory at all.
-MCP_SYNC_PY="$(dirname "$SETUP_MCP_PARITY_REAL_PATH")/mcp-sync.py"
 DRIFT=0
 python3 "$MCP_SYNC_PY" "${args[@]}" || DRIFT=1
 [ "$CHECK" -eq 1 ] || [ "$DRIFT" -eq 0 ] || exit 1
@@ -188,4 +257,7 @@ for client in claude codex; do
 done
 
 [ "$DRIFT" -eq 0 ] || exit 1
+if [ "$CACHE_ELIGIBLE" -eq 1 ]; then
+  python3 "$MCP_CACHE_HELPER" record "${MCP_CACHE_ARGS[@]}"
+fi
 echo "MCP profile active: $PROFILE ($(jq '.servers | length' "$SELECTED_MANIFEST") server(s))"

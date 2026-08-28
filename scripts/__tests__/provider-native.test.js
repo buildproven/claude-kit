@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -19,6 +19,8 @@ const PROVIDER_RUN = path.join(ROOT, "scripts", "provider-run.sh");
 const COMPUTE_GOVERNOR = path.join(ROOT, "scripts", "compute-governor.js");
 const SKILL_SYNC = path.join(ROOT, "scripts", "setup-codex-skills.sh");
 const MCP_SYNC = path.join(ROOT, "scripts", "mcp-sync.py");
+const MCP_PARITY = path.join(ROOT, "scripts", "setup-mcp-parity.sh");
+const MCP_CACHE = path.join(ROOT, "scripts", "mcp-parity-cache.py");
 const AUDIT_REPO = path.join(ROOT, "scripts", "steward", "audit-repo.sh");
 const STEWARD_ORCHESTRATE = path.join(
   ROOT,
@@ -1198,6 +1200,200 @@ describe("provider-native platform", () => {
     expect(readFileSync(path.join(codexHome, "config.toml"), "utf8")).toContain(
       '[mcp_servers."shared"]\nurl = "https://example.test/mcp"',
     );
+  });
+
+  it("reuses verified MCP parity until source or client state changes", () => {
+    const dir = makeTempDir("mcp-parity-cache-");
+    const setup = path.join(dir, "setup");
+    const config = path.join(setup, "config");
+    const bin = path.join(dir, "bin");
+    const state = path.join(dir, "state");
+    const codexHome = path.join(dir, "codex");
+    const calls = path.join(dir, "calls");
+    mkdirSync(config, { recursive: true });
+    mkdirSync(bin);
+    mkdirSync(codexHome);
+    writeFileSync(
+      path.join(config, "mcp.json"),
+      JSON.stringify({
+        defaultProfile: "default",
+        profiles: { default: [] },
+        servers: [],
+      }),
+    );
+    const client = `printf '%s %s\n' "$(basename "$0")" "$*" >> '${calls}'\ncase "$1 $2" in "mcp list") exit 0 ;; "mcp get") exit 1 ;; esac`;
+    executable(path.join(bin, "claude"), client);
+    executable(path.join(bin, "codex"), client);
+    const env = {
+      ...process.env,
+      HOME: dir,
+      CODEX_HOME: codexHome,
+      SETUP_REPO: setup,
+      XDG_STATE_HOME: state,
+      PATH: `${bin}:${process.env.PATH}`,
+    };
+
+    const first = spawnSync("bash", [MCP_PARITY, "--profile", "default"], {
+      encoding: "utf8",
+      env,
+    });
+    expect(first.status, first.stderr).toBe(0);
+    const firstCalls = readFileSync(calls, "utf8");
+    expect(firstCalls).toContain("claude mcp list");
+    expect(firstCalls).toContain("codex mcp list");
+
+    const second = spawnSync("bash", [MCP_PARITY, "--profile", "default"], {
+      encoding: "utf8",
+      env,
+    });
+    expect(second.status, second.stderr).toBe(0);
+    expect(second.stdout).toContain("verified cached parity");
+    expect(readFileSync(calls, "utf8")).toBe(firstCalls);
+
+    writeFileSync(path.join(dir, ".claude.json"), '{"mcpServers":{}}\n');
+    const drift = spawnSync("bash", [MCP_PARITY, "--profile", "default"], {
+      encoding: "utf8",
+      env,
+    });
+    expect(drift.status, drift.stderr).toBe(0);
+    expect(readFileSync(calls, "utf8")).not.toBe(firstCalls);
+  });
+
+  it("serializes concurrent MCP parity sync and reuses the completed result", async () => {
+    const dir = makeTempDir("mcp-parity-concurrent-");
+    const setup = path.join(dir, "setup");
+    const config = path.join(setup, "config");
+    const bin = path.join(dir, "bin");
+    const state = path.join(dir, "state");
+    const codexHome = path.join(dir, "codex");
+    const calls = path.join(dir, "calls");
+    mkdirSync(config, { recursive: true });
+    mkdirSync(bin);
+    mkdirSync(codexHome);
+    writeFileSync(
+      path.join(config, "mcp.json"),
+      JSON.stringify({
+        defaultProfile: "default",
+        profiles: { default: [] },
+        servers: [],
+      }),
+    );
+    const client = `printf '%s %s\n' "$(basename "$0")" "$*" >> '${calls}'\ncase "$1 $2" in "mcp list") sleep 1; exit 0 ;; "mcp get") exit 1 ;; esac`;
+    executable(path.join(bin, "claude"), client);
+    executable(path.join(bin, "codex"), client);
+    const env = {
+      ...process.env,
+      HOME: dir,
+      CODEX_HOME: codexHome,
+      SETUP_REPO: setup,
+      XDG_STATE_HOME: state,
+      PATH: `${bin}:${process.env.PATH}`,
+    };
+    const run = () =>
+      new Promise((resolve) => {
+        const child = spawn("bash", [MCP_PARITY, "--profile", "default"], {
+          env,
+        });
+        let stdout = "";
+        let stderr = "";
+        child.stdout.on("data", (chunk) => {
+          stdout += chunk;
+        });
+        child.stderr.on("data", (chunk) => {
+          stderr += chunk;
+        });
+        child.on("close", (status) => resolve({ status, stdout, stderr }));
+      });
+
+    const results = await Promise.all([run(), run()]);
+    for (const result of results) {
+      expect(result.status, result.stderr).toBe(0);
+    }
+    expect(
+      results.filter((result) =>
+        result.stdout.includes("verified cached parity"),
+      ),
+    ).toHaveLength(1);
+    const logged = readFileSync(calls, "utf8").trim().split("\n");
+    expect(logged.filter((call) => call === "claude mcp list")).toHaveLength(1);
+    expect(logged.filter((call) => call === "codex mcp list")).toHaveLength(1);
+  });
+
+  it("fails closed on corrupt MCP cache state and records only after success", () => {
+    const dir = makeTempDir("mcp-parity-cache-failure-");
+    const setup = path.join(dir, "setup");
+    const config = path.join(setup, "config");
+    const bin = path.join(dir, "bin");
+    const state = path.join(dir, "state");
+    const cacheDir = path.join(state, "claude-kit");
+    const cache = path.join(cacheDir, "mcp-parity-default.json");
+    mkdirSync(config, { recursive: true });
+    mkdirSync(bin);
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(
+      path.join(config, "mcp.json"),
+      JSON.stringify({
+        defaultProfile: "default",
+        profiles: { default: ["shared"] },
+        servers: [
+          {
+            name: "shared",
+            transport: "http",
+            url: "https://example.test/mcp",
+          },
+        ],
+      }),
+    );
+    writeFileSync(cache, "not-json\n");
+    executable(
+      path.join(bin, "claude"),
+      'case "$1 $2" in "mcp list") exit 0 ;; "mcp add") exit 9 ;; esac',
+    );
+    executable(
+      path.join(bin, "codex"),
+      'case "$1 $2" in "mcp list") exit 0 ;; esac',
+    );
+    const result = spawnSync("bash", [MCP_PARITY, "--profile", "default"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: dir,
+        CODEX_HOME: path.join(dir, "codex"),
+        SETUP_REPO: setup,
+        XDG_STATE_HOME: state,
+        PATH: `${bin}:${process.env.PATH}`,
+      },
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(readFileSync(cache, "utf8")).toBe("not-json\n");
+  });
+
+  it("binds MCP cache hits to every declared source and client identity", () => {
+    const dir = makeTempDir("mcp-cache-helper-");
+    const cache = path.join(dir, "cache.json");
+    const source = path.join(dir, "source");
+    const clientConfig = path.join(dir, "client.json");
+    const executablePath = path.join(dir, "client");
+    writeFileSync(source, "source-a\n");
+    writeFileSync(clientConfig, "client-a\n");
+    executable(executablePath, "exit 0");
+    const args = [
+      "--cache",
+      cache,
+      "--profile",
+      "default",
+      "--source",
+      source,
+      "--client-config",
+      clientConfig,
+      "--client-executable",
+      executablePath,
+    ];
+    execFileSync("python3", [MCP_CACHE, "record", ...args]);
+    expect(spawnSync("python3", [MCP_CACHE, "hit", ...args]).status).toBe(0);
+    writeFileSync(source, "source-b\n");
+    expect(spawnSync("python3", [MCP_CACHE, "hit", ...args]).status).toBe(1);
   });
 
   it("audits convergence residue without running repository test suites", () => {
