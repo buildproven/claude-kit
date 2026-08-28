@@ -4,7 +4,7 @@
 const path = require("node:path");
 const fs = require("node:fs");
 const crypto = require("node:crypto");
-const { spawn } = require("node:child_process");
+const { execFileSync, spawn, spawnSync } = require("node:child_process");
 const quality = require("./quality-invocation");
 
 const ORCHESTRATION_SCHEMA_VERSION = 1;
@@ -154,6 +154,68 @@ function likelyExternalRequirement(message) {
   );
 }
 
+function deliveryClaim(manifest) {
+  return manifest.options?.deliveryClaim || "contract";
+}
+
+function verifyDeliveryClaim(manifest) {
+  const claim = deliveryClaim(manifest);
+  const { productPrd, productTasks, deliveryEvidence } = manifest.options || {};
+  if (
+    claim === "contract" &&
+    !productPrd &&
+    !productTasks &&
+    !deliveryEvidence
+  ) {
+    return "declared contract; no product verifier inputs supplied";
+  }
+  if (!productPrd || !productTasks || !deliveryEvidence) {
+    throw new Error(
+      `${claim} delivery claim requires --product-prd, --product-tasks, and --delivery-evidence`,
+    );
+  }
+  const changedFilesPath = path.join(
+    manifest.stateRoot,
+    "delivery-changed-files.json",
+  );
+  const changedFiles = execFileSync(
+    "git",
+    [
+      "diff",
+      "--name-only",
+      `${manifest.revisions.baseSha}...${manifest.revisions.currentHead}`,
+    ],
+    { cwd: manifest.repo.realpath, encoding: "utf8" },
+  )
+    .split("\n")
+    .filter(Boolean);
+  fs.writeFileSync(changedFilesPath, JSON.stringify(changedFiles));
+  const result = spawnSync(
+    process.execPath,
+    [
+      script("product-completion.js"),
+      "verify-claim",
+      "--claim",
+      claim,
+      "--prd",
+      productPrd,
+      "--tasks",
+      productTasks,
+      "--changed-files",
+      changedFilesPath,
+      "--evidence",
+      deliveryEvidence,
+    ],
+    { cwd: manifest.repo.realpath, encoding: "utf8" },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      `delivery claim verification failed: ${result.stderr.trim()}`,
+    );
+  }
+  return result.stdout.trim();
+}
+
 function actionRequired(manifestPath, phase, message, manifest, review) {
   updateOrchestration(manifestPath, phase, "action-required", message);
   return {
@@ -243,6 +305,13 @@ async function runDeterministicPhases(manifestPath, invoke) {
       gate.name,
     ]);
   }
+  const manifestAfterGates = manifestAt(manifestPath);
+  updateOrchestration(
+    manifestPath,
+    "delivery-claim",
+    "success",
+    verifyDeliveryClaim(manifestAfterGates),
+  );
   const gated = manifestAt(manifestPath);
   if (
     ["high", "critical"].includes(gated.risk.tier) &&

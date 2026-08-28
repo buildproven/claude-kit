@@ -96,6 +96,7 @@ PROMPT
 TARGET_DIR="$(git rev-parse --show-toplevel)"
 EXECUTION_FACTS="$OUT_DIR/execution-facts.json"
 CHANGED_FILES="$(git diff --name-only "$BASE"...HEAD | wc -l | tr -d ' ')"
+set +e
 if [ "$REVIEWER" = codex ]; then
   PLANNED_PATHS="$(git diff --name-only -z "$BASE"...HEAD | jq -Rs 'split("\u0000") | map(select(length > 0))')"
   jq -n \
@@ -128,6 +129,12 @@ else
     --timeout 900 \
     --output-dir "$OUT_DIR"
 fi
+PROVIDER_EXIT=$?
+set -e
+node ~/.claude/scripts/cross-review-result.js \
+  --output-dir "$OUT_DIR" --provider "$REVIEWER" \
+  --head "$(git rev-parse HEAD)" --exit-code "$PROVIDER_EXIT"
+exit "$PROVIDER_EXIT"
 ```
 
 Use `--sandbox read-only`. A reviewer has no reason to write to the tree, and a
@@ -138,6 +145,28 @@ to the provider that authored the change reproduces BUI-468, where a degraded pa
 returned same-model consensus that read as independent agreement.
 
 ### Step 4 — report
+
+Step 3 captures the provider exit code without converting an infrastructure
+failure to success, then writes the typed result before it returns.
+
+`$OUT_DIR/result.json` has this typed contract:
+
+```json
+{
+  "schemaVersion": 1,
+  "authority": "advisory",
+  "status": "complete | unavailable | exhausted | timed-out",
+  "provider": "claude",
+  "head": "..."
+}
+```
+
+Callers must read this result. Exit codes 74–76 mean the advisory result is
+unavailable, exhausted, or timed out; they do not block implementation or
+product continuation. Preserve the non-zero infrastructure exit so operators
+can diagnose it. Advisory findings are leads. Only quality, a deterministic
+repository gate, an accepted quality finding, or an explicitly authorized
+external dependency can block delivery.
 
 Report the findings as-is, then state two things explicitly:
 

@@ -86,7 +86,7 @@ for ((argument_index = 0; argument_index < ${#BOOTSTRAP_ARGS[@]}; argument_index
       echo "❌ --merge accepts only the bare flag or --merge=true" >&2
       exit 1
       ;;
-    --level|--scope|--review-arm|--target-dir|--target|--worktree|--pr|--pull|--pull-request|--branch|--head|--head-ref)
+    --level|--scope|--review-arm|--delivery-claim|--product-prd|--product-tasks|--delivery-evidence|--target-dir|--target|--worktree|--pr|--pull|--pull-request|--branch|--head|--head-ref)
       case "$argument" in
         --target-dir|--target|--worktree|--pr|--pull|--pull-request|--branch|--head|--head-ref)
           EXPLICIT_TARGET=true
@@ -100,7 +100,7 @@ for ((argument_index = 0; argument_index < ${#BOOTSTRAP_ARGS[@]}; argument_index
         exit 1
       }
       ;;
-    --level=*|--scope=*|--review-arm=*|--target-dir=*|--target=*|--worktree=*|--pr=*|--pull=*|--pull-request=*|--branch=*|--head=*|--head-ref=*)
+    --level=*|--scope=*|--review-arm=*|--delivery-claim=*|--product-prd=*|--product-tasks=*|--delivery-evidence=*|--target-dir=*|--target=*|--worktree=*|--pr=*|--pull=*|--pull-request=*|--branch=*|--head=*|--head-ref=*)
       case "$argument" in
         --target-dir=*|--target=*|--worktree=*|--pr=*|--pull=*|--pull-request=*|--branch=*|--head=*|--head-ref=*)
           EXPLICIT_TARGET=true
@@ -618,12 +618,20 @@ SCOPE_ARG=branch
 SKIP_TESTS=false
 VERIFY_APP=false
 REVIEW_ARM_ARG=""
+DELIVERY_CLAIM_ARG=""
+PRODUCT_PRD_ARG=""
+PRODUCT_TASKS_ARG=""
+DELIVERY_EVIDENCE_ARG=""
 previous=""
 for argument in "$@"; do
   case "$previous" in
     --level) LEVEL_ARG="$argument"; previous=""; continue ;;
     --scope) SCOPE_ARG="$argument"; previous=""; continue ;;
     --review-arm) REVIEW_ARM_ARG="$argument"; previous=""; continue ;;
+    --delivery-claim) DELIVERY_CLAIM_ARG="$argument"; previous=""; continue ;;
+    --product-prd) PRODUCT_PRD_ARG="$argument"; previous=""; continue ;;
+    --product-tasks) PRODUCT_TASKS_ARG="$argument"; previous=""; continue ;;
+    --delivery-evidence) DELIVERY_EVIDENCE_ARG="$argument"; previous=""; continue ;;
   esac
   case "$argument" in
     --level) previous="--level" ;;
@@ -632,6 +640,14 @@ for argument in "$@"; do
     --scope=*) SCOPE_ARG="${argument#*=}" ;;
     --review-arm) previous="--review-arm" ;;
     --review-arm=*) REVIEW_ARM_ARG="${argument#*=}" ;;
+    --delivery-claim) previous="--delivery-claim" ;;
+    --delivery-claim=*) DELIVERY_CLAIM_ARG="${argument#*=}" ;;
+    --product-prd) previous="--product-prd" ;;
+    --product-prd=*) PRODUCT_PRD_ARG="${argument#*=}" ;;
+    --product-tasks) previous="--product-tasks" ;;
+    --product-tasks=*) PRODUCT_TASKS_ARG="${argument#*=}" ;;
+    --delivery-evidence) previous="--delivery-evidence" ;;
+    --delivery-evidence=*) DELIVERY_EVIDENCE_ARG="${argument#*=}" ;;
     --skip-tests) SKIP_TESTS=true ;;
     --verify-app) VERIFY_APP=true ;;
   esac
@@ -679,6 +695,10 @@ BASE_HEAD_SHA_ARG="${FRESH_BASE_OID:-${PR_BASE_OID:-}}"
 [ "$ARGS_MERGE" = true ] && CREATE_ARGS+=(--merge)
 [ "$SKIP_TESTS" = true ] && CREATE_ARGS+=(--skip-tests)
 [ "$VERIFY_APP" = true ] && CREATE_ARGS+=(--verify-app)
+[ -n "$DELIVERY_CLAIM_ARG" ] && CREATE_ARGS+=(--delivery-claim "$DELIVERY_CLAIM_ARG")
+[ -n "$PRODUCT_PRD_ARG" ] && CREATE_ARGS+=(--product-prd "$PRODUCT_PRD_ARG")
+[ -n "$PRODUCT_TASKS_ARG" ] && CREATE_ARGS+=(--product-tasks "$PRODUCT_TASKS_ARG")
+[ -n "$DELIVERY_EVIDENCE_ARG" ] && CREATE_ARGS+=(--delivery-evidence "$DELIVERY_EVIDENCE_ARG")
 [ -n "${RES_PR:-}" ] && CREATE_ARGS+=(--pr "$RES_PR")
 if [ -n "${RES_PR:-}" ]; then
   GITHUB_REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1

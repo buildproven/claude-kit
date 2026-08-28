@@ -51,7 +51,12 @@ INIT → PICK → IMPLEMENT → QUALITY → REFLECT → DECIDE
 
 `DECIDE` may mark an item done only after quality passes and the trajectory
 score is recorded. A low score is diagnostic; it cannot override a hard gate.
-At session end, finalize state and promote only bounded, actionable learnings.
+After an exact-head merge, run `product-completion.js next` against the
+governing PRD and tasks: contract-done selects the next implementation task;
+implementation-done selects the next implementation task or reports a hosted
+gate; product-done is valid only when no required task remains. Empty or
+malformed PRD evidence is `UNVERIFIED`, never success. At session end,
+finalize state and promote only bounded, actionable learnings.
 
 ## Start safely
 
