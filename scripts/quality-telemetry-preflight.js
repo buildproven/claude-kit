@@ -58,6 +58,7 @@ function preflightRecord(reviewArm, recordedAt) {
     activeDurationSeconds: null,
     fixCommitCount: 0,
     evidenceReusedCount: 0,
+    mutationAvoidedSeconds: 0,
     testSelectionMode: null,
     terminalState: null,
     terminalEpoch: 0,

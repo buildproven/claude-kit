@@ -246,12 +246,25 @@ function installFocusedPolicy(root, options) {
     JSON.stringify({
       version: 1,
       jsRunner: "none",
-      mappings: [
-        {
-          paths: ["logic.js"],
-          commands: [{ executable: "node", args: ["logic.test.js"] }],
-        },
-      ],
+      mappings: options.costRanking
+        ? [
+            {
+              paths: ["aaa-expensive.js"],
+              commands: [
+                { executable: "node", args: ["aaa-expensive.test.js"] },
+              ],
+            },
+            {
+              paths: ["zzz-cheap.js"],
+              commands: [{ executable: "node", args: ["zzz-cheap.test.js"] }],
+            },
+          ]
+        : [
+            {
+              paths: ["logic.js"],
+              commands: [{ executable: "node", args: ["logic.test.js"] }],
+            },
+          ],
       audits: [],
     }),
   );
@@ -330,6 +343,16 @@ function fixture(label, testBody, options = {}) {
         : "exports.isAllowed = () => false;\n",
     );
   }
+  if (options.costRanking) {
+    writeFileSync(
+      path.join(root, "zzz-cheap.js"),
+      "exports.allowed = false;\n",
+    );
+    writeFileSync(
+      path.join(root, "zzz-cheap.test.js"),
+      "if (!require('./zzz-cheap').allowed) process.exit(1);\n",
+    );
+  }
   if (options.submodule) {
     const submodule = makeTempDir(`quality-mutation-${label}-submodule-`);
     git(submodule, ["init", "-q", "-b", "main"]);
@@ -376,6 +399,10 @@ function fixture(label, testBody, options = {}) {
       ? "is_allowed() { return 0; }\n"
       : "exports.isAllowed = (role) => role === 'admin';\n",
   );
+  if (options.costRanking) {
+    writeFileSync(path.join(root, "zzz-cheap.js"), "exports.allowed = true;\n");
+    git(root, ["add", "zzz-cheap.js"]);
+  }
   git(root, ["add", source]);
   git(root, ["commit", "-qm", "feat: authorize admin"]);
   installPytestRunner(root, options);
@@ -1198,6 +1225,72 @@ if (!source.includes("role === 'admin'")) process.exit(1);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).not.toContain("is_recursive_mutation_target");
     expect(result.stdout).toMatch(/mutation evidence: revert-diff/);
+  });
+
+  it("tries the smallest mapped behavioral proof before path order", () => {
+    const { root, manifest } = fixture(
+      "cost-ranking",
+      `${"// expensive fixture padding\n".repeat(500)}if (!require('./aaa-expensive').isAllowed('admin')) process.exit(1);\n`,
+      {
+        sourcePath: "aaa-expensive.js",
+        testPath: "aaa-expensive.test.js",
+        testScript: "node aaa-expensive.test.js && node zzz-cheap.test.js",
+        focusedMapping: true,
+        costRanking: true,
+      },
+    );
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    const artifact = JSON.parse(
+      readFileSync(state.mutation.artifactPath, "utf8"),
+    );
+    expect(artifact.mutatedPaths).toEqual(["zzz-cheap.js"]);
+  });
+
+  it("proves only a descendant remediation delta and retains prior red evidence", () => {
+    const { root, manifest } = fixture(
+      "descendant-delta",
+      `${"// expensive fixture padding\n".repeat(500)}if (!require('./aaa-expensive').isAllowed('admin')) process.exit(1);\n`,
+      {
+        sourcePath: "aaa-expensive.js",
+        testPath: "aaa-expensive.test.js",
+        testScript: "node aaa-expensive.test.js && node zzz-cheap.test.js",
+        focusedMapping: true,
+        costRanking: true,
+      },
+    );
+    runMutation(root, manifest);
+    const priorState = JSON.parse(readFileSync(manifest, "utf8"));
+    const priorHead = priorState.revisions.currentHead;
+    const priorArtifactSha = priorState.mutation.artifactSha256;
+
+    writeFileSync(
+      path.join(root, "aaa-expensive.js"),
+      "exports.isAllowed = (role) => role === 'admin' || role === 'auditor';\n",
+    );
+    writeFileSync(
+      path.join(root, "aaa-expensive.test.js"),
+      "if (!require('./aaa-expensive').isAllowed('auditor')) process.exit(1);\n",
+    );
+    git(root, ["add", "aaa-expensive.js", "aaa-expensive.test.js"]);
+    git(root, ["commit", "-qm", "fix: authorize auditor"]);
+    execFileSync("node", [INVOCATION, "advance", manifest], { cwd: root });
+
+    expect(runMutation(root, manifest)).toMatch(
+      /mutation evidence: revert-diff/,
+    );
+    const state = JSON.parse(readFileSync(manifest, "utf8"));
+    const artifact = JSON.parse(
+      readFileSync(state.mutation.artifactPath, "utf8"),
+    );
+    expect(artifact).toMatchObject({
+      candidateBase: priorHead,
+      reusedArtifactSha256: priorArtifactSha,
+      mutatedPaths: ["aaa-expensive.js"],
+    });
+    expect(state.mutationCarry.priorHead).toBe(priorHead);
   });
 
   it("skips the gate when the diff touches only a submodule pointer bump", () => {

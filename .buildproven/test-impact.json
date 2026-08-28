@@ -56,6 +56,24 @@
       ]
     },
     {
+      "paths": [
+        "scripts/quality-bootstrap.sh",
+        "scripts/quality-dependency-preflight.js",
+        "scripts/__tests__/quality-dependency-preflight.test.js"
+      ],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/quality-dependency-preflight.test.js",
+            "scripts/__tests__/quality-bootstrap-guards.test.js"
+          ]
+        }
+      ]
+    },
+    {
       "paths": [".github/workflows/quality.yml"],
       "commands": [
         {

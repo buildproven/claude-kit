@@ -175,6 +175,7 @@ describe("buildRecord", () => {
       gateDurationSeconds: null,
       fixCommitCount: 0,
       evidenceReusedCount: 0,
+      mutationAvoidedSeconds: 0,
       testSelectionMode: null,
       terminalState: null,
       terminalEpoch: 0,
@@ -185,6 +186,23 @@ describe("buildRecord", () => {
       mergeRequested: false,
       verdict: "passed",
     });
+  });
+
+  it("records mutation seconds avoided by descendant evidence carry", () => {
+    const record = buildRecord(
+      baseManifest({ mutationCarry: { avoidedSeconds: 247 } }),
+      { execFileSync: NO_FILES, nowIso: NOW },
+    );
+    expect(record.mutationAvoidedSeconds).toBe(247);
+  });
+
+  it("keeps existing schema-v9 telemetry readable before the new metric", () => {
+    const record = buildRecord(baseManifest(), {
+      execFileSync: NO_FILES,
+      nowIso: NOW,
+    });
+    delete record.mutationAvoidedSeconds;
+    expect(validateRecord(record)).toBe(true);
   });
 
   it("records the persisted affected-test mode without re-deriving the plan", () => {

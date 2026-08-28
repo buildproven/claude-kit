@@ -628,6 +628,8 @@ function validateRecord(record) {
     validProxyMetric(record.gateDurationSeconds) &&
     validProxyMetric(record.fixCommitCount) &&
     validProxyMetric(record.evidenceReusedCount) &&
+    (record.mutationAvoidedSeconds === undefined ||
+      validProxyMetric(record.mutationAvoidedSeconds)) &&
     validProxyMetric(record.deterministicFailureCount) &&
     Array.isArray(record.providersAttempted) &&
     record.providersAttempted.every(
@@ -718,6 +720,11 @@ function buildRecord(manifest, { execFileSync, nowIso }) {
       (gate) =>
         gate.head === manifest.revisions?.currentHead && gate.remoteEvidence,
     ).length,
+    mutationAvoidedSeconds: Number.isInteger(
+      manifest.mutationCarry?.avoidedSeconds,
+    )
+      ? manifest.mutationCarry.avoidedSeconds
+      : 0,
     testSelectionMode: testSelectionMode(manifest),
     terminalState: manifest.terminalState?.state ?? null,
     terminalEpoch:
