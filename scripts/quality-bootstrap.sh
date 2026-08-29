@@ -256,8 +256,8 @@ if [ -n "$MANIFEST_ARG" ]; then
       RESUME_REPOSITORY_ID="$(node "$SCRIPT_DIR/quality-invocation.js" field \
         "$MANIFEST_ARG" repo.githubRepositoryId 2>/dev/null || true)"
       if [ -n "$RESUME_REPOSITORY_ID" ] && [ "$RESUME_REPOSITORY_ID" != null ]; then
-        LIVE_REPOSITORY_ID="$(gh repo view "$RESUME_GITHUB_REPOSITORY" \
-          --json databaseId --jq .databaseId)" || exit 1
+        LIVE_REPOSITORY_ID="$(gh api "repos/$RESUME_GITHUB_REPOSITORY" \
+          --jq '.id | tostring')" || exit 1
         [ "$LIVE_REPOSITORY_ID" = "$RESUME_REPOSITORY_ID" ] || {
           echo "quality-bootstrap: GitHub repository numeric identity changed" >&2
           exit 1
@@ -717,7 +717,8 @@ if [ -n "${RES_PR:-}" ]; then
     --head-repository "$PR_HEAD_REPOSITORY" \
     --cross-repository "$PR_IS_CROSS_REPOSITORY")
   if [ -n "$DELIVERY_EVIDENCE_ARG" ]; then
-    GITHUB_REPOSITORY_ID="$(gh repo view --json databaseId --jq .databaseId)" || exit 1
+    GITHUB_REPOSITORY_ID="$(gh api "repos/$GITHUB_REPOSITORY" \
+      --jq '.id | tostring')" || exit 1
     CREATE_ARGS+=(--github-repository-id "$GITHUB_REPOSITORY_ID")
   fi
 fi

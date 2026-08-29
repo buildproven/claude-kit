@@ -169,4 +169,11 @@ describe("delivery-claim argument wiring", () => {
       expect(source).toContain(`CREATE_ARGS+=(${flag}`);
     }
   });
+
+  it("binds product evidence to the numeric REST repository ID", () => {
+    const source = fs.readFileSync(SCRIPT, "utf8");
+    expect(source).toContain('gh api "repos/$GITHUB_REPOSITORY"');
+    expect(source).toContain("--jq '.id | tostring'");
+    expect(source).not.toContain("--json databaseId");
+  });
 });
