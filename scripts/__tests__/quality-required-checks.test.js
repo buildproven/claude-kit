@@ -79,6 +79,8 @@ case "$*" in
       printf '%s\\n' '${JSON.stringify({ check_runs: targetRuns })}'
     fi
     ;;
+  *actions/workflows/.github%2Fworkflows%2Fsecret-history-scan.yml*) printf '%s\\n' '{"id":77,"path":".github/workflows/secret-history-scan.yml","state":"active"}' ;;
+  *actions/workflows/.github%2Fworkflows%2Fharness-gate.yml*) printf '%s\\n' '{"id":77,"path":".github/workflows/harness-gate.yml","state":"active"}' ;;
   *actions/runs/123*) printf '%s\\n' '{"workflow_id":77}' ;;
   *repos/owner/repo/dispatches*)
     body="$(cat)"
@@ -749,6 +751,7 @@ case "$*" in
   *commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/check-runs*) printf '%s\\n' '{"check_runs":[{"id":1,"name":"secret-history-scan","status":"completed","conclusion":"success","app":{"id":15368},"details_url":"https://github.com/o/r/actions/runs/123"}]}' ;;
   *git/ref/heads/main*) printf '%s\\n' '{"object":{"sha":"cccccccccccccccccccccccccccccccccccccccc"}}' ;;
   *commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs*) printf '%s\\n' '{"check_runs":[{"id":2,"name":"secret-history-scan","status":"completed","conclusion":"success","app":{"id":15368},"external_id":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:cccccccccccccccccccccccccccccccccccccccc:0123456789abcdef0123456789abcdef","details_url":"https://github.com/o/r/actions/runs/124"}]}' ;;
+  *actions/workflows/.github%2Fworkflows%2Fsecret-history-scan.yml*) printf '%s\\n' '{"id":77,"path":".github/workflows/secret-history-scan.yml","state":"active"}' ;;
   *actions/runs/123*) printf '%s\\n' '{"workflow_id":77}' ;;
   *actions/runs/124*) printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","head_sha":"cccccccccccccccccccccccccccccccccccccccc","path":".github/workflows/secret-history-scan.yml","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:cccccccccccccccccccccccccccccccccccccccc:0123456789abcdef0123456789abcdef","status":"completed","conclusion":"success"}' ;;
   *dispatches*) cat > '${dispatch}'; exit 1 ;;
@@ -814,6 +817,7 @@ case "$*" in
       printf '%s\\n' '{"check_runs":[{"id":2,"name":"secret-history-scan","status":"completed","conclusion":"success","app":{"id":15368},"external_id":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:cccccccccccccccccccccccccccccccccccccccc:0123456789abcdef0123456789abcdef","details_url":"https://github.com/o/r/actions/runs/124"}]}'
     fi
     ;;
+  *actions/workflows/.github%2Fworkflows%2Fsecret-history-scan.yml*) printf '%s\\n' '{"id":77,"path":".github/workflows/secret-history-scan.yml","state":"active"}' ;;
   *actions/runs/123*) printf '%s\\n' '{"workflow_id":77}' ;;
   *actions/runs/124*) printf '%s\\n' '{"workflow_id":77,"event":"repository_dispatch","head_branch":"main","head_sha":"cccccccccccccccccccccccccccccccccccccccc","path":".github/workflows/secret-history-scan.yml","display_title":"secret-history-scan:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:cccccccccccccccccccccccccccccccccccccccc:0123456789abcdef0123456789abcdef","status":"completed","conclusion":"success"}' ;;
   *actions/runs/125*)
@@ -1076,7 +1080,7 @@ esac
     ]);
   });
 
-  it("resolves a protected controller without scanning ancestor check runs", () => {
+  it("resolves a protected controller before an exact source workflow", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
     const bin = path.join(root, "bin");
     const calls = path.join(root, "calls");
@@ -1099,8 +1103,9 @@ printf '%s\n' "$*" >> '${calls}'
 case "$*" in
   *protection/required_status_checks*) printf '%s\n' '{"checks":[{"context":"secret-history-scan","app_id":15368}]}' ;;
   *rules/branches/main*) printf '%s\n' '[]' ;;
-  *commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/check-runs*) printf '%s\n' '{"total_count":0,"check_runs":[]}' ;;
+  *commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/check-runs*) printf '%s\n' '{"total_count":1,"check_runs":[{"id":1,"name":"secret-history-scan","status":"completed","conclusion":"success","app":{"id":15368},"details_url":"https://github.com/o/r/actions/runs/123/job/456"}]}' ;;
   *commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs*) printf '%s\n' '{"total_count":0,"check_runs":[]}' ;;
+  *actions/runs/123*) printf '%s\n' '{"workflow_id":999}' ;;
   *git/ref/heads/main*) printf '%s\n' '{"object":{"sha":"cccccccccccccccccccccccccccccccccccccccc"}}' ;;
   *actions/workflows/.github%2Fworkflows%2Fsecret-history-scan.yml*) printf '%s\n' '{"id":77,"path":".github/workflows/secret-history-scan.yml","state":"active"}' ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
@@ -1135,6 +1140,7 @@ esac
     expect(callLog).toContain(
       "actions/workflows/.github%2Fworkflows%2Fsecret-history-scan.yml",
     );
+    expect(callLog).not.toContain("actions/runs/123");
     expect(callLog).not.toMatch(/commits\/0{39}[1-9a-f]\/check-runs/);
   });
 
@@ -1246,6 +1252,7 @@ case "$*" in
   *rules/branches/main*) printf '%s\\n' '[]' ;;
   *commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/check-runs*) printf '%s\\n' '{"check_runs":[{"id":1,"name":"harness-summary","status":"completed","conclusion":"success","app":{"id":15368},"details_url":"https://github.com/o/r/actions/runs/123/job/456"}]}' ;;
   *commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs*) printf '%s\\n' '{"check_runs":[]}' ;;
+  *actions/workflows/.github%2Fworkflows%2Fharness-gate.yml*) printf '%s\\n' '{"id":77,"path":".github/workflows/harness-gate.yml","state":"active"}' ;;
   *actions/runs/123*) printf '%s\\n' '{"workflow_id":77}' ;;
   *git/ref/heads/main*) printf '%s\\n' '{"object":{"sha":"cccccccccccccccccccccccccccccccccccccccc"}}' ;;
   *dispatches*) cat > '${dispatch}' ;;
@@ -1296,6 +1303,7 @@ case "$*" in
   *rules/branches/main*) printf '%s\\n' '[]' ;;
   *commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/check-runs*) printf '%s\\n' '{"check_runs":[{"id":1,"name":"harness-summary","status":"completed","conclusion":"success","app":{"id":15368},"details_url":"https://github.com/o/r/actions/runs/123/job/456"}]}' ;;
   *commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs*) printf '%s\\n' '{"check_runs":[]}' ;;
+  *actions/workflows/.github%2Fworkflows%2Fharness-gate.yml*) printf '%s\\n' '{"id":77,"path":".github/workflows/harness-gate.yml","state":"active"}' ;;
   *actions/runs/123*) printf '%s\\n' '{"workflow_id":77}' ;;
   *git/ref/heads/main*) printf '%s\\n' '{"object":{"sha":"cccccccccccccccccccccccccccccccccccccccc"}}' ;;
   *dispatches*) cat > '${dispatch}' ;;

@@ -823,11 +823,11 @@ function workflowIdForRequirement({
   protectedConfig,
   historicalRuns,
 }) {
-  const exactSource = matchingRuns(sourceRuns, requirement)[0];
-  if (exactSource) return workflowIdForRun(repository, exactSource);
   if (protectedConfig) {
     return workflowIdForProtectedController(repository, protectedConfig);
   }
+  const exactSource = matchingRuns(sourceRuns, requirement)[0];
+  if (exactSource) return workflowIdForRun(repository, exactSource);
   const source = sourceRunForRequirement(
     repository,
     sourceHead,
