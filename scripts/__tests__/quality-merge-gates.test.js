@@ -85,7 +85,7 @@ describe("quality merge gates", () => {
     expect(source).toContain('if [ "$CI_ALREADY_REGISTERED" != true ]; then');
     expect(source).toMatch(/CI_ALREADY_REGISTERED[\s\S]*admit_ci_dispatch/);
     expect(source).toMatch(
-      /quality-required-checks\.js" prepare[\s\S]*PREPARE_JSON[\s\S]*\.dispatches \| length[\s\S]*admit_ci_dispatch[\s\S]*enforce_ci_budget_admission[\s\S]*quality-required-checks\.js" ensure/,
+      /quality-required-checks\.js" prepare[\s\S]*PREPARED_DISPATCH_COUNT[\s\S]*if \[ "\$PREPARED_DISPATCH_COUNT" -gt 0 \]; then[\s\S]*admit_ci_dispatch[\s\S]*enforce_ci_budget_admission[\s\S]*quality-required-checks\.js" ensure[\s\S]*fi[\s\S]*quality-required-checks\.js" wait/,
     );
     expect(source.indexOf('quality-required-checks.js" prepare')).toBeLessThan(
       source.lastIndexOf("enforce_ci_budget_admission"),

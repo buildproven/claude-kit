@@ -365,17 +365,18 @@ else
   PREPARE_JSON="$(node "$SCRIPT_DIR/quality-required-checks.js" prepare \
     --repo "$EXPECTED_REPOSITORY" --base "$BASE_BRANCH" \
     --source-head "$REVIEWED_HEAD" --head "$MERGE_HEAD")" || exit 1
-  if [ "$(printf '%s' "$PREPARE_JSON" | jq '.dispatches | length')" -gt 0 ]; then
+  PREPARED_DISPATCH_COUNT="$(printf '%s' "$PREPARE_JSON" | jq '.dispatches | length')"
+  if [ "$PREPARED_DISPATCH_COUNT" -gt 0 ]; then
     admit_ci_dispatch
-  fi
-  enforce_ci_budget_admission
-  ENSURE_JSON="$(node "$SCRIPT_DIR/quality-required-checks.js" ensure \
-    --repo "$EXPECTED_REPOSITORY" --base "$BASE_BRANCH" \
-    --source-head "$REVIEWED_HEAD" --head "$MERGE_HEAD" \
-    --head-ref "$EXPECTED_HEAD_REF")" || exit 1
-  if [ "$(printf '%s' "$ENSURE_JSON" | jq '.deferred | length')" -gt 0 ]; then
-    printf '%s' "$ENSURE_JSON" | jq -r \
-      '.deferred[] | "[quality] exact-head workflow registered; required check remains deferred: \(.context) workflow=\(.workflowId) run=\(.runId) status=\(.status)"' >&2
+    enforce_ci_budget_admission
+    ENSURE_JSON="$(node "$SCRIPT_DIR/quality-required-checks.js" ensure \
+      --repo "$EXPECTED_REPOSITORY" --base "$BASE_BRANCH" \
+      --source-head "$REVIEWED_HEAD" --head "$MERGE_HEAD" \
+      --head-ref "$EXPECTED_HEAD_REF")" || exit 1
+    if [ "$(printf '%s' "$ENSURE_JSON" | jq '.deferred | length')" -gt 0 ]; then
+      printf '%s' "$ENSURE_JSON" | jq -r \
+        '.deferred[] | "[quality] exact-head workflow registered; required check remains deferred: \(.context) workflow=\(.workflowId) run=\(.runId) status=\(.status)"' >&2
+    fi
   fi
   bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CI_TIMEOUT" -- \
     node "$SCRIPT_DIR/quality-required-checks.js" wait \
