@@ -168,6 +168,46 @@ describe("quality-required-checks", () => {
     }
   });
 
+  it("marks a registered failed check as requiring new budgeted dispatch", () => {
+    const originalPath = process.env.PATH;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-prepare-"));
+    const sourceRun = {
+      id: 1,
+      name: "quality",
+      status: "completed",
+      conclusion: "success",
+      app: { id: 15368 },
+      details_url: "https://github.com/o/r/actions/runs/123",
+    };
+    const failedRun = {
+      ...sourceRun,
+      id: 2,
+      conclusion: "failure",
+    };
+    const fixture = fakeGh(root, [sourceRun], [failedRun], [failedRun]);
+    process.env.PATH = `${fixture.bin}:${originalPath}`;
+    try {
+      expect(
+        prepareChecks({
+          repository: "owner/repo",
+          base: "main",
+          sourceHead: "a".repeat(40),
+          targetHead: "b".repeat(40),
+        }).dispatches,
+      ).toEqual([
+        {
+          context: "quality",
+          workflowId: 77,
+          transport: "workflow_dispatch",
+        },
+      ]);
+      expect(fs.existsSync(fixture.log)).toBe(false);
+    } finally {
+      process.env.PATH = originalPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("claims each repository dispatch nonce durably before sending it", () => {
     const fields = {
       repository: "owner/repo",

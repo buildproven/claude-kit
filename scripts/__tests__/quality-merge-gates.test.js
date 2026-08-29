@@ -65,7 +65,7 @@ const WORKFLOW_COMMAND = readFileSync(
  * PASSED. These tests pin the gate that closes that hole.
  */
 describe("quality merge gates", () => {
-  it("does not treat a registered exact-head check set as new CI spend", () => {
+  it("admits budget whenever preparation proves a dispatch is needed", () => {
     const source = STAMP_AND_MERGE;
     expect(source).toContain('gh pr checks "$PR"');
     expect(source).toContain("--required --json state");
@@ -83,11 +83,9 @@ describe("quality merge gates", () => {
       /CHECKS_FOR_ADMISSION_JSON="\$REQUIRED_CHECKS_JSON"[\s\S]*CHECKS_FOR_ADMISSION_JSON="\$REGISTERED_CHECKS_JSON"/,
     );
     expect(source).toContain('if [ "$CI_ALREADY_REGISTERED" != true ]; then');
+    expect(source).toMatch(/CI_ALREADY_REGISTERED[\s\S]*admit_ci_dispatch/);
     expect(source).toMatch(
-      /CI_ALREADY_REGISTERED[\s\S]*ci-budget-admission\.js/,
-    );
-    expect(source).toMatch(
-      /CI_BUDGET_STATUS=\$\?[\s\S]*"\$CI_BUDGET_STATUS" -ne 2[\s\S]*quality-required-checks\.js" prepare[\s\S]*enforce_ci_budget_admission[\s\S]*quality-required-checks\.js" ensure/,
+      /quality-required-checks\.js" prepare[\s\S]*PREPARE_JSON[\s\S]*\.dispatches \| length[\s\S]*admit_ci_dispatch[\s\S]*enforce_ci_budget_admission[\s\S]*quality-required-checks\.js" ensure/,
     );
     expect(source.indexOf('quality-required-checks.js" prepare')).toBeLessThan(
       source.lastIndexOf("enforce_ci_budget_admission"),
