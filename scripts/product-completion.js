@@ -106,30 +106,40 @@ function sha256File(file) {
     .digest("hex");
 }
 
-function receiptRecord(value, label, fields, head, evidencePath) {
+function receiptPath(value, label, evidencePath) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return `${label} must name an immutable receipt`;
+    return { error: `${label} must name an immutable receipt` };
   }
   if (
     !nonEmptyString(value.receipt) ||
     !/^[a-f0-9]{64}$/i.test(value.sha256 || "")
   ) {
-    return `${label} needs receipt and sha256`;
+    return { error: `${label} needs receipt and sha256` };
   }
   const receipt = path.resolve(path.dirname(evidencePath || ""), value.receipt);
   const evidenceRoot = path.dirname(path.resolve(evidencePath || ""));
   if (!receipt.startsWith(`${evidenceRoot}${path.sep}`)) {
-    return `${label} receipt must stay inside the evidence directory`;
+    return {
+      error: `${label} receipt must stay inside the evidence directory`,
+    };
   }
+  return { receipt };
+}
+
+function loadReceipt(receipt, expectedDigest, label) {
   let record;
   try {
     if (!fs.statSync(receipt).isFile()) return `${label} receipt is not a file`;
-    if (sha256File(receipt) !== value.sha256.toLowerCase())
+    if (sha256File(receipt) !== expectedDigest.toLowerCase())
       return `${label} receipt digest does not match`;
     record = JSON.parse(fs.readFileSync(receipt, "utf8"));
   } catch (error) {
     return `${label} receipt cannot be verified: ${error.message}`;
   }
+  return record;
+}
+
+function receiptMetadataError(record, label, fields, head) {
   for (const field of fields) {
     if (!nonEmptyString(record[field]))
       return `${label} receipt is missing ${field}`;
@@ -144,6 +154,14 @@ function receiptRecord(value, label, fields, head, evidencePath) {
     return `${label} receipt has invalid schema, kind, head, or observedAt`;
   }
   return null;
+}
+
+function receiptRecord(value, label, fields, head, evidencePath) {
+  const resolved = receiptPath(value, label, evidencePath);
+  if (resolved.error) return resolved.error;
+  const record = loadReceipt(resolved.receipt, value.sha256, label);
+  if (typeof record === "string") return record;
+  return receiptMetadataError(record, label, fields, head);
 }
 
 function productionCodeChange(file) {
