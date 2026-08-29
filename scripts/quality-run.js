@@ -4,8 +4,9 @@
 const path = require("node:path");
 const fs = require("node:fs");
 const crypto = require("node:crypto");
-const { execFileSync, spawn, spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const quality = require("./quality-invocation");
+const { productionCodeChange } = require("./product-completion");
 
 const ORCHESTRATION_SCHEMA_VERSION = 1;
 const ACTION_REQUIRED_EXIT = 3;
@@ -161,12 +162,26 @@ function deliveryClaim(manifest) {
 function verifyDeliveryClaim(manifest) {
   const claim = deliveryClaim(manifest);
   const { productPrd, productTasks, deliveryEvidence } = manifest.options || {};
+  const changedFiles = quality.changedFiles(
+    manifest.repo.realpath,
+    manifest.revisions.baseSha,
+    manifest.revisions.currentHead,
+  );
+  if (changedFiles === null) {
+    throw new Error("delivery claim cannot classify the exact candidate diff");
+  }
   if (
     claim === "contract" &&
     !productPrd &&
     !productTasks &&
     !deliveryEvidence
   ) {
+    const productFile = changedFiles.find(productionCodeChange);
+    if (productFile) {
+      throw new Error(
+        `contract delivery claim requires product evidence for product-affecting file '${productFile}'`,
+      );
+    }
     return "declared contract; no product verifier inputs supplied";
   }
   if (!productPrd || !productTasks || !deliveryEvidence) {
@@ -178,17 +193,6 @@ function verifyDeliveryClaim(manifest) {
     manifest.stateRoot,
     "delivery-changed-files.json",
   );
-  const changedFiles = execFileSync(
-    "git",
-    [
-      "diff",
-      "--name-only",
-      `${manifest.revisions.baseSha}...${manifest.revisions.currentHead}`,
-    ],
-    { cwd: manifest.repo.realpath, encoding: "utf8" },
-  )
-    .split("\n")
-    .filter(Boolean);
   fs.writeFileSync(changedFilesPath, JSON.stringify(changedFiles));
   const result = spawnSync(
     process.execPath,

@@ -9,8 +9,10 @@ const crypto = require("node:crypto");
 
 const PHASES = new Set(["contract", "implementation", "hosted", "validation"]);
 const CLAIMS = new Set(["contract", "local-product", "hosted", "validated"]);
-const SOURCE_EXTENSIONS =
-  /\.(?:[cm]?[jt]sx?|py|rb|go|rs|java|kt|php|cs|swift|sh)$/i;
+const NON_PRODUCT_PATH =
+  /^(?:\.github\/|docs?\/|tests?\/|fixtures?\/)|(?:^|\/)(?:__tests__|__fixtures__)\//i;
+const NON_PRODUCT_FILE =
+  /(?:\.test|\.spec)\.[^/]+$|\.(?:md|mdx|rst|txt|snap)$/i;
 
 function fail(message) {
   throw new Error(message);
@@ -162,11 +164,9 @@ function receiptRecord(value, label, fields, head, evidencePath) {
 function productionCodeChange(file) {
   return (
     typeof file === "string" &&
-    !/(?:^|\/)__(?:tests|fixtures)__\//.test(file) &&
-    !/(?:^|\/)(?:test|tests|docs|config|fixtures)\//.test(file) &&
-    !/^\.github\//.test(file) &&
-    !/(?:\.test|\.spec)\.[cm]?[jt]sx?$/i.test(file) &&
-    SOURCE_EXTENSIONS.test(file)
+    file.length > 0 &&
+    !NON_PRODUCT_PATH.test(file) &&
+    !NON_PRODUCT_FILE.test(file)
   );
 }
 
@@ -198,6 +198,11 @@ function verifyClaim(
     ),
   ].filter(Boolean);
   if (claim === "contract") {
+    for (const file of changedFiles.filter(productionCodeChange)) {
+      errors.push(
+        `contract claim cannot cover product-affecting file '${file}'`,
+      );
+    }
     if (
       !changedFiles.some((file) =>
         /(?:prd|decision|adr|architecture)/i.test(file),
@@ -303,7 +308,13 @@ function main(argv) {
     process.exitCode = 1;
 }
 
-module.exports = { parseTasks, validate, verifyClaim, next };
+module.exports = {
+  next,
+  parseTasks,
+  productionCodeChange,
+  validate,
+  verifyClaim,
+};
 if (require.main === module) {
   try {
     main(process.argv.slice(2));

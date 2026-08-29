@@ -100,6 +100,10 @@ function reviewCoverage(manifest) {
     throw new Error("required gate evidence is incomplete");
   }
 }
+function changedFiles(root, baseSha, head) {
+  const manifest = read(process.env.QUALITY_TEST_MANIFEST);
+  return manifest.behavior?.changedFiles || [];
+}
 function reviewAuthorization(manifest) {
   reviewCoverage(manifest);
   if (manifest.behavior?.approvalRequired) {
@@ -168,7 +172,7 @@ if (require.main === module) {
   process.stdout.write(inForce + "\\n");
 }
 module.exports = { advanceHead, incompleteRetryStatus, judgeContext, leadDispositionStatus, loadManifest, mutationEvidenceValid, parseJson, recordTerminalState,
-  advanceManifest, clearMergeAdmissionBlock, resolveGreenCiAdmissionBlock, reviewAuthorization, reviewCoverage, resumeRecoverableTerminal, terminalEpoch, validateIdentity, withManifestLock };
+  advanceManifest, changedFiles, clearMergeAdmissionBlock, resolveGreenCiAdmissionBlock, reviewAuthorization, reviewCoverage, resumeRecoverableTerminal, terminalEpoch, validateIdentity, withManifestLock };
 `;
 
 const FAKE_STEP = `
@@ -276,6 +280,10 @@ function fixture(behavior = {}, { merge = false, tier = "low" } = {}) {
   const runtime = path.join(root, "scripts");
   mkdirSync(runtime);
   copyFileSync(SOURCE_RUNNER, path.join(runtime, "quality-run.js"));
+  copyFileSync(
+    path.resolve(__dirname, "..", "product-completion.js"),
+    path.join(runtime, "product-completion.js"),
+  );
   chmodSync(path.join(runtime, "quality-run.js"), 0o755);
   writeFileSync(path.join(runtime, "quality-invocation.js"), FAKE_INVOCATION);
   writeFileSync(path.join(runtime, "fake-step.js"), FAKE_STEP);
@@ -328,7 +336,7 @@ function fixture(behavior = {}, { merge = false, tier = "low" } = {}) {
 }
 
 function run(entry) {
-  const env = { ...process.env };
+  const env = { ...process.env, QUALITY_TEST_MANIFEST: entry.manifestPath };
   delete env.BS_QUALITY_REPOSITORY_LEASE_TOKEN;
   const result = spawnSync(
     process.execPath,
@@ -576,6 +584,18 @@ describe("quality-run public orchestration", () => {
     });
     expect(result.manifest.calls).not.toContain("quality-run-review.sh");
     expect(result.manifest.telemetryWrites).toBe(1);
+  });
+
+  it("blocks an evidence-free contract claim for a product diff", () => {
+    const result = run(fixture({ changedFiles: ["src/App.tsx"] }));
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "terminal",
+      state: "blocked",
+      message:
+        "contract delivery claim requires product evidence for product-affecting file 'src/App.tsx'",
+    });
+    expect(result.manifest.calls).not.toContain("quality-run-review.sh");
   });
 
   it("records signal interruption as one terminal campaign", () => {

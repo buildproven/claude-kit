@@ -10,6 +10,7 @@ const RESOLVER = path.join(ROOT, "scripts", "quality-runtime-dir.sh");
 describe("quality runtime directory resolver", () => {
   const cohort = [
     "quality-invocation.js",
+    "product-completion.js",
     "quality-run.js",
     "quality-provider-usage.js",
     "provider-run.sh",

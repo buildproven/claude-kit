@@ -56,9 +56,11 @@ node "$QUALITY_SCRIPTS_DIR/quality-run.js" --manifest "<exact-manifest-path>"
 
 Every campaign declares `--delivery-claim contract|local-product|hosted|validated`.
 The claim is immutable campaign evidence, not a new correctness gate. Verify
-the claim with `product-completion.js`: a docs-only change may claim `contract`;
-`local-product` needs a production-code change plus behavioral and acceptance
-receipts. Each receipt is a readable JSON artifact with an SHA-256 digest,
+the claim with `product-completion.js`: only documentation, tests/fixtures, and
+GitHub workflow metadata may use the evidence-free `contract` path. Every
+other changed path is product-affecting and needs an applicable explicit
+claim; `local-product` needs behavioral and acceptance receipts. Each receipt
+is a readable JSON artifact with an SHA-256 digest,
 schema version, kind, candidate HEAD, and timestamp; Boolean assertions and
 unreadable references fail. `hosted` additionally needs a deployment receipt
 (receipt and environment) and hosted journey (URL and artifact); `validated`

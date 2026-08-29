@@ -7222,6 +7222,7 @@ module.exports = {
   completeProviderAttempt,
   atomicWrite,
   canonicalRoot,
+  changedFiles,
   createManifest,
   loadManifest,
   lifecycleStale,

@@ -112,6 +112,28 @@ describe("product completion", () => {
     ).toBe(false);
   });
 
+  it("rejects contract claims that include known or unknown product files", () => {
+    const { prd, tasks } = files({ phase: "contract" });
+    const result = validate(prd, tasks);
+    for (const productFile of [
+      "src/towns.js",
+      "src/Towns.vue",
+      "config/app.json",
+    ]) {
+      const claim = verifyClaim(
+        result,
+        "contract",
+        ["docs/prd/towns.md", productFile],
+        {},
+        { head: HEAD },
+      );
+      expect(claim.valid).toBe(false);
+      expect(claim.errors).toContain(
+        `contract claim cannot cover product-affecting file '${productFile}'`,
+      );
+    }
+  });
+
   it("requires a receipt digest bound to the candidate head", () => {
     const { prd, tasks } = files();
     const local = evidence(path.dirname(prd));
