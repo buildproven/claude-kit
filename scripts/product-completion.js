@@ -11,8 +11,17 @@ const PHASES = new Set(["contract", "implementation", "hosted", "validation"]);
 const CLAIMS = new Set(["contract", "local-product", "hosted", "validated"]);
 const NON_PRODUCT_PATH =
   /^(?:\.github\/|docs?\/|tests?\/|fixtures?\/)|(?:^|\/)(?:__tests__|__fixtures__)\//i;
-const NON_PRODUCT_FILE =
-  /(?:\.test|\.spec)\.[^/]+$|^(?:README|CHANGELOG|LICENSE|CONTRIBUTING|SECURITY|CODE_OF_CONDUCT|AGENTS|CLAUDE)(?:\.[^/]+)?$/i;
+const NON_PRODUCT_TEST_FILE = /(?:\.test|\.spec)\.[^/]+$/i;
+const NON_PRODUCT_ROOT_NAMES = new Set([
+  "AGENTS",
+  "CHANGELOG",
+  "CLAUDE",
+  "CODE_OF_CONDUCT",
+  "CONTRIBUTING",
+  "LICENSE",
+  "README",
+  "SECURITY",
+]);
 
 function fail(message) {
   throw new Error(message);
@@ -162,11 +171,14 @@ function receiptRecord(value, label, fields, head, evidencePath) {
 }
 
 function productionCodeChange(file) {
+  if (typeof file !== "string" || file.length === 0) return false;
+  const rootName = file.includes("/")
+    ? null
+    : file.split(".", 1)[0].toUpperCase();
   return (
-    typeof file === "string" &&
-    file.length > 0 &&
     !NON_PRODUCT_PATH.test(file) &&
-    !NON_PRODUCT_FILE.test(file)
+    !NON_PRODUCT_TEST_FILE.test(file) &&
+    !NON_PRODUCT_ROOT_NAMES.has(rootName)
   );
 }
 
