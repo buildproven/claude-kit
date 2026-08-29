@@ -205,6 +205,8 @@ function verifyDeliveryClaim(manifest) {
       changedFilesPath,
       "--evidence",
       deliveryEvidence,
+      "--head",
+      manifest.revisions.currentHead,
     ],
     { cwd: manifest.repo.realpath, encoding: "utf8" },
   );

@@ -15,9 +15,10 @@
 - [ ] Delivery-Claim: hosted
 - [ ] Delivery-Claim: validated
 
-<!-- For local-product, link behavioral tests and PRD acceptance evidence.
-For hosted, add the exact deployment receipt and hosted journey check.
-For validated, add dated real-user evidence. Docs-only PRs may claim contract. -->
+<!-- For local-product, provide revision-bound behavioral-test and PRD-acceptance
+receipts. For hosted, add the exact deployment receipt and hosted journey
+receipt. For validated, add a dated real-user receipt. Docs-only PRs may claim
+contract. -->
 
 ## Linear issues
 

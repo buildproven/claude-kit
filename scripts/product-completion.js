@@ -4,14 +4,13 @@
 // Product delivery evidence is deliberately separate from quality correctness.
 // It classifies what a PRD/task set proves; it does not alter gate or merge policy.
 const fs = require("node:fs");
+const path = require("node:path");
+const crypto = require("node:crypto");
 
 const PHASES = new Set(["contract", "implementation", "hosted", "validation"]);
 const CLAIMS = new Set(["contract", "local-product", "hosted", "validated"]);
-const PRODUCTION_PATHS = [
-  /^(?:src|app|lib|bin)\//,
-  /^scripts\/(?!__tests__\/)/,
-  /^packages\/[^/]+\/(?:src|app|lib)\//,
-];
+const SOURCE_EXTENSIONS =
+  /\.(?:[cm]?[jt]sx?|py|rb|go|rs|java|kt|php|cs|swift|sh)$/i;
 
 function fail(message) {
   throw new Error(message);
@@ -100,18 +99,49 @@ function nonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
 }
 
-function datedRecord(value, label, fields) {
+function sha256File(file) {
+  return crypto
+    .createHash("sha256")
+    .update(fs.readFileSync(file))
+    .digest("hex");
+}
+
+function receiptRecord(value, label, fields, head, evidencePath) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return `${label} must be an evidence record`;
-  }
-  for (const field of fields) {
-    if (!nonEmptyString(value[field])) return `${label} is missing ${field}`;
+    return `${label} must name an immutable receipt`;
   }
   if (
-    !nonEmptyString(value.observedAt) ||
-    Number.isNaN(Date.parse(value.observedAt))
+    !nonEmptyString(value.receipt) ||
+    !/^[a-f0-9]{64}$/i.test(value.sha256 || "")
   ) {
-    return `${label} needs an ISO-8601 observedAt timestamp`;
+    return `${label} needs receipt and sha256`;
+  }
+  const receipt = path.resolve(path.dirname(evidencePath || ""), value.receipt);
+  const evidenceRoot = path.dirname(path.resolve(evidencePath || ""));
+  if (!receipt.startsWith(`${evidenceRoot}${path.sep}`)) {
+    return `${label} receipt must stay inside the evidence directory`;
+  }
+  let record;
+  try {
+    if (!fs.statSync(receipt).isFile()) return `${label} receipt is not a file`;
+    if (sha256File(receipt) !== value.sha256.toLowerCase())
+      return `${label} receipt digest does not match`;
+    record = JSON.parse(fs.readFileSync(receipt, "utf8"));
+  } catch (error) {
+    return `${label} receipt cannot be verified: ${error.message}`;
+  }
+  for (const field of fields) {
+    if (!nonEmptyString(record[field]))
+      return `${label} receipt is missing ${field}`;
+  }
+  if (
+    record.schemaVersion !== 1 ||
+    record.kind !== label ||
+    record.head !== head ||
+    !nonEmptyString(record.observedAt) ||
+    Number.isNaN(Date.parse(record.observedAt))
+  ) {
+    return `${label} receipt has invalid schema, kind, head, or observedAt`;
   }
   return null;
 }
@@ -120,24 +150,39 @@ function productionCodeChange(file) {
   return (
     typeof file === "string" &&
     !/(?:^|\/)__(?:tests|fixtures)__\//.test(file) &&
+    !/(?:^|\/)(?:test|tests|docs|config|fixtures)\//.test(file) &&
+    !/^\.github\//.test(file) &&
     !/(?:\.test|\.spec)\.[cm]?[jt]sx?$/i.test(file) &&
-    PRODUCTION_PATHS.some((pattern) => pattern.test(file))
+    SOURCE_EXTENSIONS.test(file)
   );
 }
 
-function verifyClaim(result, claim, changedFiles, evidence) {
+function verifyClaim(
+  result,
+  claim,
+  changedFiles,
+  evidence,
+  { head, evidencePath } = {},
+) {
   if (!CLAIMS.has(claim)) fail(`invalid delivery claim '${claim}'`);
   const errors = [...result.errors];
   const phases = new Set(result.tasks.map((task) => task.phase));
   const sourceChange = changedFiles.some(productionCodeChange);
   const localEvidence = [
-    datedRecord(evidence.behavioralTests, "behavioralTests", [
-      "command",
-      "artifact",
-    ]),
-    datedRecord(evidence.acceptanceEvidence, "acceptanceEvidence", [
-      "artifact",
-    ]),
+    receiptRecord(
+      evidence.behavioralTests,
+      "behavioralTests",
+      ["command", "artifact"],
+      head,
+      evidencePath,
+    ),
+    receiptRecord(
+      evidence.acceptanceEvidence,
+      "acceptanceEvidence",
+      ["artifact"],
+      head,
+      evidencePath,
+    ),
   ].filter(Boolean);
   if (claim === "contract") {
     if (
@@ -159,18 +204,31 @@ function verifyClaim(result, claim, changedFiles, evidence) {
   }
   if (["hosted", "validated"].includes(claim)) {
     for (const error of [
-      datedRecord(evidence.deploymentReceipt, "deploymentReceipt", [
-        "receipt",
-        "environment",
-      ]),
-      datedRecord(evidence.hostedJourney, "hostedJourney", ["url", "artifact"]),
+      receiptRecord(
+        evidence.deploymentReceipt,
+        "deploymentReceipt",
+        ["receipt", "environment"],
+        head,
+        evidencePath,
+      ),
+      receiptRecord(
+        evidence.hostedJourney,
+        "hostedJourney",
+        ["url", "artifact"],
+        head,
+        evidencePath,
+      ),
     ].filter(Boolean))
       errors.push(`${claim} claim ${error}`);
   }
   if (claim === "validated") {
-    const error = datedRecord(evidence.realUserEvidence, "realUserEvidence", [
-      "record",
-    ]);
+    const error = receiptRecord(
+      evidence.realUserEvidence,
+      "realUserEvidence",
+      ["record"],
+      head,
+      evidencePath,
+    );
     if (error) errors.push(`validated claim ${error}`);
   }
   return { schemaVersion: 1, claim, valid: errors.length === 0, errors };
@@ -220,6 +278,7 @@ function main(argv) {
       args.claim,
       readJson(args["changed-files"], "changed files"),
       readJson(args.evidence, "evidence"),
+      { head: args.head, evidencePath: args.evidence },
     );
   } else if (command === "next") output = next(result);
   else if (command !== "validate")
