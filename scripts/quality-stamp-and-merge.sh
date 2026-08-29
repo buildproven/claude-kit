@@ -356,6 +356,13 @@ elif [ "$PREFLIGHT_BASE_PROTECTION" = unprotectable ]; then
   bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CI_TIMEOUT" -- \
     bash "$SCRIPT_DIR/quality-wait-required-checks.sh" --pr "$PR" || RC=$?
 else
+  # Resolve required-check mappings and protected-dispatch credentials without
+  # mutating GitHub. This preserves the actionable condition while keeping a
+  # real local budget refusal ahead of every workflow dispatch.
+  node "$SCRIPT_DIR/quality-required-checks.js" prepare \
+    --repo "$EXPECTED_REPOSITORY" --base "$BASE_BRANCH" \
+    --source-head "$REVIEWED_HEAD" --head "$MERGE_HEAD" >/dev/null || exit 1
+  enforce_ci_budget_admission
   ENSURE_JSON="$(node "$SCRIPT_DIR/quality-required-checks.js" ensure \
     --repo "$EXPECTED_REPOSITORY" --base "$BASE_BRANCH" \
     --source-head "$REVIEWED_HEAD" --head "$MERGE_HEAD" \
@@ -364,7 +371,6 @@ else
     printf '%s' "$ENSURE_JSON" | jq -r \
       '.deferred[] | "[quality] exact-head workflow registered; required check remains deferred: \(.context) workflow=\(.workflowId) run=\(.runId) status=\(.status)"' >&2
   fi
-  enforce_ci_budget_admission
   bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CI_TIMEOUT" -- \
     node "$SCRIPT_DIR/quality-required-checks.js" wait \
       --repo "$EXPECTED_REPOSITORY" --base "$BASE_BRANCH" \

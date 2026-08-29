@@ -925,6 +925,57 @@ function waitForRegistration({
   return runs;
 }
 
+function prepareChecks({ repository, base, sourceHead, targetHead }) {
+  const requirements = requiredChecks(repository, base);
+  const sourceRuns = checkRuns(repository, sourceHead);
+  const targetRuns = checkRuns(repository, targetHead);
+  const protectedCheckRequired = requirements.some(protectedCheckConfig);
+  const baseHead = protectedCheckRequired
+    ? branchHeadSha(repository, base)
+    : null;
+  const dispatches = [];
+  for (const requirement of requirements) {
+    const protectedConfig = protectedCheckConfig(requirement);
+    if (!protectedConfig) {
+      const target = checkState(targetRuns, requirement);
+      if (["pending", "success"].includes(target.state)) continue;
+    }
+    const source = sourceRunForRequirement(
+      repository,
+      sourceHead,
+      sourceRuns,
+      requirement,
+    );
+    if (!source) {
+      throw new Error(
+        `cannot map required check '${requirement.context}' to a workflow from the reviewed head or its first-parent history`,
+      );
+    }
+    const workflowId = workflowIdForRun(repository, source);
+    if (protectedConfig) {
+      const target = trustedSecretCheckState({
+        repository,
+        runs: targetRuns,
+        requirement,
+        workflowId,
+        base,
+        targetHead,
+        baseHead,
+      });
+      if (["pending", "success"].includes(target.state)) continue;
+      // Validate signer availability without creating a nonce claim, remote
+      // ref, repository dispatch, or workflow run.
+      signingKeyFromEnvironment();
+    }
+    dispatches.push({
+      context: requirement.context,
+      workflowId,
+      transport: protectedConfig ? "repository_dispatch" : "workflow_dispatch",
+    });
+  }
+  return { requirements, dispatches };
+}
+
 function ensureChecks({
   repository,
   base,
@@ -1210,8 +1261,24 @@ function commandContext(options) {
 function main() {
   const [command, ...args] = process.argv.slice(2);
   const options = parseOptions(args);
-  if (command === "ensure") {
+  if (command === "prepare" || command === "ensure") {
     const context = commandContext(options);
+    const sourceHead = validateSha(
+      requiredOption(options, "source-head"),
+      "source-head",
+    );
+    if (command === "prepare") {
+      process.stdout.write(
+        `${JSON.stringify(
+          prepareChecks({
+            ...context,
+            sourceHead,
+            targetHead: context.head,
+          }),
+        )}\n`,
+      );
+      return;
+    }
     const registrationSeconds = Number.parseInt(
       options["registration-timeout"] || "30",
       10,
@@ -1221,10 +1288,7 @@ function main() {
     }
     const result = ensureChecks({
       ...context,
-      sourceHead: validateSha(
-        requiredOption(options, "source-head"),
-        "source-head",
-      ),
+      sourceHead,
       targetHead: context.head,
       headRef: validateRef(requiredOption(options, "head-ref"), "head-ref"),
       registrationSeconds,
@@ -1272,7 +1336,7 @@ function main() {
     return;
   }
   throw new Error(
-    "usage: quality-required-checks.js <ensure|wait|assert|cleanup-claims> ...",
+    "usage: quality-required-checks.js <prepare|ensure|wait|assert|cleanup-claims> ...",
   );
 }
 
@@ -1295,6 +1359,7 @@ module.exports = {
   dispatchedRunsForHead,
   ensureChecks,
   matchingRuns,
+  prepareChecks,
   requiredChecks,
   graphqlRequirements,
   trustedSecretCheckState,

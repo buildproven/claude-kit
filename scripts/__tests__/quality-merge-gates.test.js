@@ -87,10 +87,13 @@ describe("quality merge gates", () => {
       /CI_ALREADY_REGISTERED[\s\S]*ci-budget-admission\.js/,
     );
     expect(source).toMatch(
-      /CI_BUDGET_STATUS=\$\?[\s\S]*"\$CI_BUDGET_STATUS" -ne 2[\s\S]*quality-required-checks\.js" ensure[\s\S]*enforce_ci_budget_admission/,
+      /CI_BUDGET_STATUS=\$\?[\s\S]*"\$CI_BUDGET_STATUS" -ne 2[\s\S]*quality-required-checks\.js" prepare[\s\S]*enforce_ci_budget_admission[\s\S]*quality-required-checks\.js" ensure/,
     );
-    expect(source.indexOf('quality-required-checks.js" ensure')).toBeLessThan(
+    expect(source.indexOf('quality-required-checks.js" prepare')).toBeLessThan(
       source.lastIndexOf("enforce_ci_budget_admission"),
+    );
+    expect(source.lastIndexOf("enforce_ci_budget_admission")).toBeLessThan(
+      source.indexOf('quality-required-checks.js" ensure'),
     );
     expect(source).toContain(
       "local CI budget policy denied new workflow spend for this candidate",

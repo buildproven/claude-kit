@@ -25,6 +25,7 @@ const {
   cleanupRemoteDispatchClaims,
   ensureChecks,
   matchingRuns,
+  prepareChecks,
   requiredChecks,
   trustedSecretCheckState,
 } = require("../quality-required-checks.js");
@@ -110,6 +111,63 @@ function run(root, args, fixture) {
 }
 
 describe("quality-required-checks", () => {
+  it("prepares protected dispatches without mutating GitHub", () => {
+    const originalPath = process.env.PATH;
+    const originalKey = process.env.QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-prepare-"));
+    const fixture = fakeGh(
+      root,
+      [
+        {
+          id: 1,
+          name: "secret-history-scan",
+          status: "completed",
+          conclusion: "success",
+          app: { id: 15368 },
+          details_url: "https://github.com/o/r/actions/runs/123",
+        },
+      ],
+      [],
+      [],
+      "secret-history-scan",
+    );
+    process.env.PATH = `${fixture.bin}:${originalPath}`;
+    try {
+      delete process.env.QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY;
+      expect(() =>
+        prepareChecks({
+          repository: "owner/repo",
+          base: "main",
+          sourceHead: "a".repeat(40),
+          targetHead: "b".repeat(40),
+        }),
+      ).toThrow(/private key/);
+
+      process.env.QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY = dispatchKey;
+      expect(
+        prepareChecks({
+          repository: "owner/repo",
+          base: "main",
+          sourceHead: "a".repeat(40),
+          targetHead: "b".repeat(40),
+        }).dispatches,
+      ).toEqual([
+        {
+          context: "secret-history-scan",
+          workflowId: 77,
+          transport: "repository_dispatch",
+        },
+      ]);
+      expect(fs.existsSync(fixture.log)).toBe(false);
+    } finally {
+      process.env.PATH = originalPath;
+      if (originalKey === undefined)
+        delete process.env.QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY;
+      else process.env.QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY = originalKey;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("claims each repository dispatch nonce durably before sending it", () => {
     const fields = {
       repository: "owner/repo",
