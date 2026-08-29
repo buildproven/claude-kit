@@ -99,11 +99,8 @@ function nonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
 }
 
-function sha256File(file) {
-  return crypto
-    .createHash("sha256")
-    .update(fs.readFileSync(file))
-    .digest("hex");
+function sha256(value) {
+  return crypto.createHash("sha256").update(value).digest("hex");
 }
 
 function receiptPath(value, label, evidencePath) {
@@ -127,16 +124,14 @@ function receiptPath(value, label, evidencePath) {
 }
 
 function loadReceipt(receipt, expectedDigest, label) {
-  let record;
   try {
-    if (!fs.statSync(receipt).isFile()) return `${label} receipt is not a file`;
-    if (sha256File(receipt) !== expectedDigest.toLowerCase())
+    const body = fs.readFileSync(receipt);
+    if (sha256(body) !== expectedDigest.toLowerCase())
       return `${label} receipt digest does not match`;
-    record = JSON.parse(fs.readFileSync(receipt, "utf8"));
+    return JSON.parse(body.toString("utf8"));
   } catch (error) {
     return `${label} receipt cannot be verified: ${error.message}`;
   }
-  return record;
 }
 
 function receiptMetadataError(record, label, fields, head) {
