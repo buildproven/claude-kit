@@ -79,10 +79,10 @@ if printf '%s' "$CHECKS_FOR_ADMISSION_JSON" | jq -e \
   CI_ALREADY_GREEN=true
 fi
 CI_BUDGET_STATUS=0
-if [ "$CI_ALREADY_REGISTERED" != true ]; then
+admit_ci_dispatch() {
   if node "$SCRIPT_DIR/ci-budget-admission.js" \
     ${CI_BUDGET_ARGS[@]+"${CI_BUDGET_ARGS[@]}"} >/dev/null; then
-    :
+    CI_BUDGET_STATUS=0
   else
     CI_BUDGET_STATUS=$?
     if [ "$CI_BUDGET_STATUS" -ne 2 ]; then
@@ -93,9 +93,9 @@ if [ "$CI_ALREADY_REGISTERED" != true ]; then
     # not evidence that GitHub denied runner allocation. Preserve it until the
     # required-check preparation below has exposed any more specific lookup,
     # registration, dispatch, or credential condition.
-    echo "[quality] local CI budget policy refused new spend; preparing missing required checks before terminal admission." >&2
+    echo "[quality] local CI budget policy refused the prepared required-check dispatch; terminal admission follows." >&2
   fi
-fi
+}
 if [ "$CI_ALREADY_GREEN" = true ]; then
   # A prior CI-budget denial is immutable evidence, but it must not strand the
   # same exact HEAD after GitHub reports current green CI. The resolver reads
@@ -352,6 +352,9 @@ if [ "$CI_BUDGET_MODE" = local-exact-head ]; then
   CI_BILLING_WAIVED=true
   echo "⚠️  [quality] exact-HEAD CI billing override validated before workflow dispatch; using local gates and review." >&2
 elif [ "$PREFLIGHT_BASE_PROTECTION" = unprotectable ]; then
+  if [ "$CI_ALREADY_REGISTERED" != true ]; then
+    admit_ci_dispatch
+  fi
   enforce_ci_budget_admission
   bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CI_TIMEOUT" -- \
     bash "$SCRIPT_DIR/quality-wait-required-checks.sh" --pr "$PR" || RC=$?
@@ -359,9 +362,12 @@ else
   # Resolve required-check mappings and protected-dispatch credentials without
   # mutating GitHub. This preserves the actionable condition while keeping a
   # real local budget refusal ahead of every workflow dispatch.
-  node "$SCRIPT_DIR/quality-required-checks.js" prepare \
+  PREPARE_JSON="$(node "$SCRIPT_DIR/quality-required-checks.js" prepare \
     --repo "$EXPECTED_REPOSITORY" --base "$BASE_BRANCH" \
-    --source-head "$REVIEWED_HEAD" --head "$MERGE_HEAD" >/dev/null || exit 1
+    --source-head "$REVIEWED_HEAD" --head "$MERGE_HEAD")" || exit 1
+  if [ "$(printf '%s' "$PREPARE_JSON" | jq '.dispatches | length')" -gt 0 ]; then
+    admit_ci_dispatch
+  fi
   enforce_ci_budget_admission
   ENSURE_JSON="$(node "$SCRIPT_DIR/quality-required-checks.js" ensure \
     --repo "$EXPECTED_REPOSITORY" --base "$BASE_BRANCH" \
