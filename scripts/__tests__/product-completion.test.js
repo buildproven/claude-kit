@@ -118,6 +118,8 @@ describe("product completion", () => {
     for (const productFile of [
       "src/towns.js",
       "src/Towns.vue",
+      "src/prompts/system.txt",
+      "src/content/help.mdx",
       "config/app.json",
     ]) {
       const claim = verifyClaim(

@@ -12,7 +12,7 @@ const CLAIMS = new Set(["contract", "local-product", "hosted", "validated"]);
 const NON_PRODUCT_PATH =
   /^(?:\.github\/|docs?\/|tests?\/|fixtures?\/)|(?:^|\/)(?:__tests__|__fixtures__)\//i;
 const NON_PRODUCT_FILE =
-  /(?:\.test|\.spec)\.[^/]+$|\.(?:md|mdx|rst|txt|snap)$/i;
+  /(?:\.test|\.spec)\.[^/]+$|^(?:README|CHANGELOG|LICENSE|CONTRIBUTING|SECURITY|CODE_OF_CONDUCT|AGENTS|CLAUDE)(?:\.[^/]+)?$/i;
 
 function fail(message) {
   throw new Error(message);
