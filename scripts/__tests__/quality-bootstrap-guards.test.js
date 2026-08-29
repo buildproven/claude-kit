@@ -140,3 +140,33 @@ describe("BUI-306: --verify-app argument wiring", () => {
     expect(source).toContain("--verify-app) VERIFY_APP=true ;;");
   });
 });
+
+describe("delivery-claim argument wiring", () => {
+  it.each([
+    ["--delivery-claim", "local-product"],
+    ["--product-prd", "docs/prd/towns.md"],
+    ["--product-tasks", "docs/prd/towns-tasks.md"],
+    ["--delivery-evidence", "evidence.json"],
+  ])("accepts %s before target resolution", (flag, value) => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "qbg-delivery-"));
+    try {
+      const r = run([flag, value], { cwd });
+      expect(r.stderr).not.toMatch(/unexpected quality argument/i);
+      expect(r.stdout + r.stderr).toMatch(/could not resolve a git root/i);
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("forwards every product-completion input to the immutable manifest", () => {
+    const source = fs.readFileSync(SCRIPT, "utf8");
+    for (const flag of [
+      "--delivery-claim",
+      "--product-prd",
+      "--product-tasks",
+      "--delivery-evidence",
+    ]) {
+      expect(source).toContain(`CREATE_ARGS+=(${flag}`);
+    }
+  });
+});
