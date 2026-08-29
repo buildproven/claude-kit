@@ -34,6 +34,9 @@ atomically cancel the update.
 
 **Arguments received:** $ARGUMENTS
 
+Namespaced commands are human entrypoint wrappers. Agent-visible bare skills
+own executable behavior and never delegate back to a command.
+
 ## Instructions
 
 **This command generates its output dynamically from command frontmatter.** Do NOT hardcode command lists.

@@ -29,6 +29,8 @@ Rules (see plan §5):
   R3 invoke resolves           — the skill a command delegates to must exist
   R4 no reverse edges          — a SKILL.md must not invoke another /command
   R5 no cross-dir duplicates   — same base name defined in >1 command (or skill) dir
+  R6 no self delegation        — an agent-visible skill must execute its behavior,
+                                 not invoke its paired /command
 
 This linter is dependency-free (hand-parses YAML frontmatter) so it runs
 identically across the kit and any overlay repo without a pip step.
@@ -59,6 +61,11 @@ KEBAB = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 # inline links, declared cross-references) are removed by _strip_for_edge_scan
 # BEFORE this runs, so a bare token match here is a genuine invocation.
 REVERSE_EDGE = re.compile(r"/((?:bs|cc|gh):[a-z0-9-]+)")
+SELF_DELEGATION = re.compile(
+    r"\b(?:run|invoke|execute|call|delegate\s+to)\s+"
+    r"(?:the\s+)?(?:command\s+)?/((?:bs|cc|gh):[a-z0-9-]+)",
+    re.IGNORECASE,
+)
 # How a command declares the skill it runs. This is the ONLY mechanism — Claude
 # Code does not parse an `invokes:` frontmatter field (verified against 2.1.207).
 INVOKE_PROSE = re.compile(r"[Ii]nvoke the `?([a-z0-9-]+)`? skill")
@@ -302,9 +309,7 @@ def _find_dependency_skill_names(root: Path) -> set[str]:
                 skills_dir.parts
             ):
                 continue
-            names.update(
-                item.parent.name for item in skills_dir.rglob("SKILL.md")
-            )
+            names.update(item.parent.name for item in skills_dir.rglob("SKILL.md"))
     return names
 
 
@@ -361,6 +366,21 @@ def lint(root: Path) -> Report:
                 name,
                 f"skill body invokes command(s) {cross_edges} — skills must never "
                 "call other /commands (recursion risk)",
+            )
+        self_edges = sorted(
+            {
+                "/" + match.group(1)
+                for match in SELF_DELEGATION.finditer(scan)
+                if match.group(1).split(":", 1)[-1] == name
+            }
+        )
+        if self_edges:
+            rep.add(
+                "R6",
+                "high",
+                name,
+                f"agent-visible skill delegates to paired command(s) {self_edges} "
+                "— put executable behavior in the skill",
             )
 
     available_skills = set(skill_dirs) | _find_dependency_skill_names(root)
