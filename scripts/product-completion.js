@@ -7,6 +7,11 @@ const fs = require("node:fs");
 
 const PHASES = new Set(["contract", "implementation", "hosted", "validation"]);
 const CLAIMS = new Set(["contract", "local-product", "hosted", "validated"]);
+const PRODUCTION_PATHS = [
+  /^(?:src|app|lib|bin)\//,
+  /^scripts\/(?!__tests__\/)/,
+  /^packages\/[^/]+\/(?:src|app|lib)\//,
+];
 
 function fail(message) {
   throw new Error(message);
@@ -91,13 +96,49 @@ function readJson(file, label) {
   }
 }
 
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+function datedRecord(value, label, fields) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return `${label} must be an evidence record`;
+  }
+  for (const field of fields) {
+    if (!nonEmptyString(value[field])) return `${label} is missing ${field}`;
+  }
+  if (
+    !nonEmptyString(value.observedAt) ||
+    Number.isNaN(Date.parse(value.observedAt))
+  ) {
+    return `${label} needs an ISO-8601 observedAt timestamp`;
+  }
+  return null;
+}
+
+function productionCodeChange(file) {
+  return (
+    typeof file === "string" &&
+    !/(?:^|\/)__(?:tests|fixtures)__\//.test(file) &&
+    !/(?:\.test|\.spec)\.[cm]?[jt]sx?$/i.test(file) &&
+    PRODUCTION_PATHS.some((pattern) => pattern.test(file))
+  );
+}
+
 function verifyClaim(result, claim, changedFiles, evidence) {
   if (!CLAIMS.has(claim)) fail(`invalid delivery claim '${claim}'`);
   const errors = [...result.errors];
   const phases = new Set(result.tasks.map((task) => task.phase));
-  const sourceChange = changedFiles.some((file) => !/\.(md|txt)$/i.test(file));
-  const localProof =
-    evidence.behavioralTests === true && evidence.acceptanceEvidence === true;
+  const sourceChange = changedFiles.some(productionCodeChange);
+  const localEvidence = [
+    datedRecord(evidence.behavioralTests, "behavioralTests", [
+      "command",
+      "artifact",
+    ]),
+    datedRecord(evidence.acceptanceEvidence, "acceptanceEvidence", [
+      "artifact",
+    ]),
+  ].filter(Boolean);
   if (claim === "contract") {
     if (
       !changedFiles.some((file) =>
@@ -114,21 +155,23 @@ function verifyClaim(result, claim, changedFiles, evidence) {
       errors.push(`${claim} claim needs an implementation task`);
     if (!sourceChange)
       errors.push(`${claim} claim needs a production-code change`);
-    if (!localProof)
-      errors.push(
-        `${claim} claim needs behavioralTests and acceptanceEvidence`,
-      );
+    errors.push(...localEvidence.map((error) => `${claim} claim ${error}`));
   }
   if (["hosted", "validated"].includes(claim)) {
-    if (
-      evidence.deploymentReceipt !== true ||
-      evidence.hostedJourney !== true
-    ) {
-      errors.push(`${claim} claim needs deploymentReceipt and hostedJourney`);
-    }
+    for (const error of [
+      datedRecord(evidence.deploymentReceipt, "deploymentReceipt", [
+        "receipt",
+        "environment",
+      ]),
+      datedRecord(evidence.hostedJourney, "hostedJourney", ["url", "artifact"]),
+    ].filter(Boolean))
+      errors.push(`${claim} claim ${error}`);
   }
-  if (claim === "validated" && evidence.realUserEvidence !== true) {
-    errors.push("validated claim needs dated realUserEvidence");
+  if (claim === "validated") {
+    const error = datedRecord(evidence.realUserEvidence, "realUserEvidence", [
+      "record",
+    ]);
+    if (error) errors.push(`validated claim ${error}`);
   }
   return { schemaVersion: 1, claim, valid: errors.length === 0, errors };
 }
@@ -137,6 +180,9 @@ function next(result) {
   if (!result.valid)
     return { schemaVersion: 1, status: "UNVERIFIED", errors: result.errors };
   const open = result.tasks.filter((task) => !task.completed);
+  const contract = open.filter((task) => task.phase === "contract");
+  if (contract.length)
+    return { schemaVersion: 1, status: "next-contract", task: contract[0] };
   const implementation = open.filter((task) => task.phase === "implementation");
   if (implementation.length)
     return {

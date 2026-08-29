@@ -19,6 +19,18 @@ function files({ phase = "implementation", checked = false } = {}) {
   return { prd, tasks };
 }
 
+const localEvidence = {
+  behavioralTests: {
+    command: "npm test -- towns",
+    artifact: "artifacts/towns-tests.json",
+    observedAt: "2026-08-29T12:00:00Z",
+  },
+  acceptanceEvidence: {
+    artifact: "artifacts/towns-browser.json",
+    observedAt: "2026-08-29T12:01:00Z",
+  },
+};
+
 describe("product completion", () => {
   it("requires a phase and an implementation task for user-facing work", () => {
     const { prd, tasks } = files({ phase: "contract" });
@@ -26,8 +38,7 @@ describe("product completion", () => {
     expect(result.valid).toBe(false);
     expect(
       verifyClaim(result, "local-product", ["src/towns.js"], {
-        behavioralTests: true,
-        acceptanceEvidence: true,
+        ...localEvidence,
       }).valid,
     ).toBe(false);
   });
@@ -40,7 +51,7 @@ describe("product completion", () => {
   it("keeps hosted and real-user validation separate from local proof", () => {
     const { prd, tasks } = files();
     const result = validate(prd, tasks);
-    const local = { behavioralTests: true, acceptanceEvidence: true };
+    const local = localEvidence;
     expect(
       verifyClaim(result, "local-product", ["src/towns.js"], local).valid,
     ).toBe(true);
@@ -50,9 +61,42 @@ describe("product completion", () => {
     expect(
       verifyClaim(result, "validated", ["src/towns.js"], {
         ...local,
-        deploymentReceipt: true,
-        hostedJourney: true,
+        deploymentReceipt: {
+          receipt: "deployments/123",
+          environment: "staging",
+          observedAt: "2026-08-29T12:02:00Z",
+        },
+        hostedJourney: {
+          url: "https://example.test/towns",
+          artifact: "artifacts/towns-hosted.json",
+          observedAt: "2026-08-29T12:03:00Z",
+        },
       }).valid,
     ).toBe(false);
+  });
+
+  it("rejects self-attested evidence and test-only source changes", () => {
+    const { prd, tasks } = files();
+    const result = validate(prd, tasks);
+    expect(
+      verifyClaim(
+        result,
+        "local-product",
+        ["scripts/__tests__/towns.test.js"],
+        {
+          behavioralTests: true,
+          acceptanceEvidence: true,
+        },
+      ).valid,
+    ).toBe(false);
+  });
+
+  it("does not call a product done while a contract task is open", () => {
+    const { prd, tasks } = files({ checked: true });
+    writeFileSync(
+      tasks,
+      `- [ ] 1.0 Confirm data source\n  - Phase: contract\n  - Delivers: A confirmed source.\n  - Evidence: source decision\n\n- [x] 2.0 Find similar towns\n  - Phase: implementation\n  - Delivers: A user receives ten explainable alternatives.\n  - Evidence: browser journey + API behavior test\n`,
+    );
+    expect(next(validate(prd, tasks)).status).toBe("next-contract");
   });
 });

@@ -57,10 +57,11 @@ node "$QUALITY_SCRIPTS_DIR/quality-run.js" --manifest "<exact-manifest-path>"
 Every campaign declares `--delivery-claim contract|local-product|hosted|validated`.
 The claim is immutable campaign evidence, not a new correctness gate. Verify
 the claim with `product-completion.js`: a docs-only change may claim `contract`;
-`local-product` needs production-code change plus behavioral and acceptance
-evidence; `hosted` additionally needs an exact deployment receipt and hosted
-journey; `validated` additionally needs dated real-user evidence. Local tests
-never imply hosted or validated status.
+`local-product` needs a production-code change plus dated behavioral and
+acceptance evidence records, not Boolean assertions. `hosted` additionally
+needs a dated deployment receipt (receipt and environment) and hosted journey
+(URL and artifact); `validated` additionally needs a dated real-user record.
+Local tests never imply hosted or validated status.
 
 On exit 4, read the final structured result. For `lead-verification`, use only
 its identity-bound `context`, verify every lead against repository source and
