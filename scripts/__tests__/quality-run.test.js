@@ -652,6 +652,20 @@ describe("quality-run public orchestration", () => {
     expect(result.stderr).not.toContain(secret);
   });
 
+  it("rejects terminal control sequences in structured diagnostics", () => {
+    const result = run(
+      fixture({
+        changedFiles: ["src/App.tsx"],
+        productVerifier:
+          'process.stdout.write(JSON.stringify({valid:false,errors:["\\u001b[2Jmisleading"]})); process.exitCode=1;',
+      }),
+    );
+    expect(JSON.parse(result.output).message).toContain(
+      "unsafe or empty diagnostics",
+    );
+    expect(result.stdout).not.toContain("\u001b");
+  });
+
   it("keeps a verifier process failure distinct from validation errors", () => {
     const result = run(
       fixture({

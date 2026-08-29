@@ -178,12 +178,17 @@ function verifierFailure(result) {
   if (output?.valid !== false || !Array.isArray(output.errors)) {
     return "product verifier returned an invalid failure result";
   }
+  const hasControlCharacter = (value) =>
+    [...value].some((character) => {
+      const codePoint = character.codePointAt(0);
+      return codePoint < 32 || (codePoint >= 127 && codePoint <= 159);
+    });
   const errors = output.errors.filter(
     (error) =>
       typeof error === "string" &&
       error.length > 0 &&
       error.length <= 500 &&
-      !/[\r\n\0]/.test(error),
+      !hasControlCharacter(error),
   );
   if (errors.length === 0 || errors.length !== output.errors.length) {
     return "product verifier returned unsafe or empty diagnostics";
