@@ -6,6 +6,20 @@
 
 <!-- List the key changes -->
 
+## Delivery claim
+
+<!-- Select exactly one. This declares the strongest evidence this PR claims. -->
+
+- [ ] Delivery-Claim: contract
+- [ ] Delivery-Claim: local-product
+- [ ] Delivery-Claim: hosted
+- [ ] Delivery-Claim: validated
+
+<!-- For local-product, provide revision-bound behavioral-test and PRD-acceptance
+receipts. For hosted, add the exact deployment receipt and hosted journey
+receipt. For validated, add a dated real-user receipt. Docs-only PRs may claim
+contract. -->
+
 ## Linear issues
 
 <!--

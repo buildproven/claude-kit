@@ -54,6 +54,17 @@ QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}"
 node "$QUALITY_SCRIPTS_DIR/quality-run.js" --manifest "<exact-manifest-path>"
 ```
 
+Every campaign declares `--delivery-claim contract|local-product|hosted|validated`.
+The claim is immutable campaign evidence, not a new correctness gate. Verify
+the claim with `product-completion.js`: a docs-only change may claim `contract`;
+`local-product` needs a production-code change plus behavioral and acceptance
+receipts. Each receipt is a readable JSON artifact with an SHA-256 digest,
+schema version, kind, candidate HEAD, and timestamp; Boolean assertions and
+unreadable references fail. `hosted` additionally needs a deployment receipt
+(receipt and environment) and hosted journey (URL and artifact); `validated`
+additionally needs a real-user receipt. Local tests never imply hosted or
+validated status.
+
 On exit 4, read the final structured result. For `lead-verification`, use only
 its identity-bound `context`, verify every lead against repository source and
 deterministic execution, retain each immutable finding payload, add the

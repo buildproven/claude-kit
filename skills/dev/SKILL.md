@@ -363,7 +363,21 @@ asked for implementation only. In that mode, stop after releasing the terminal
 lock and report the branch plus focused test evidence. Never infer `--no-ship`
 from `--experiment` alone.
 
-After quality returns, provide the terminal result:
+After exact-head merge, run the product-continuation audit when the governing
+PRD and task list are present. This is separate from quality: it determines
+what product behavior remains, not whether the merged revision is correct.
+
+```bash
+node "$QUALITY_SCRIPTS_DIR/product-completion.js" next \
+  --prd "<governing-prd>" --tasks "<governing-task-list>"
+```
+
+- `next-implementation`: create the next safe worktree and continue.
+- `external-gate`: report the named hosted or real-user validation gate.
+- `product-done`: report completion only after every required task is complete.
+- `UNVERIFIED`: stop the completion claim and repair malformed or empty PRD evidence.
+
+After quality and this audit return, provide the terminal result:
 
 ```markdown
 🎯 TASK COMPLETE

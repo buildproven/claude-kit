@@ -1,7 +1,7 @@
 ---
 name: bs:quality
 description: Autonomous quality loop with configurable thoroughness. Runs checks, revision-bound review, remediation, CI, and optional merge.
-argument-hint: "[status --manifest <path>] [--level auto|95|98] [--scope branch] [--review-arm native|bespoke] [--verify-app] [--merge] [--pr <number>] [--manifest <path>] [--target-dir <path>]"
+argument-hint: "[status --manifest <path>] [--level auto|95|98] [--scope branch] [--review-arm native|bespoke] [--delivery-claim contract|local-product|hosted|validated] [--product-prd <path> --product-tasks <path> --delivery-evidence <json>] [--verify-app] [--merge] [--pr <number>] [--manifest <path>] [--target-dir <path>]"
 tags: [quality, ci, review]
 category: quality
 ---
@@ -78,6 +78,13 @@ advisory: unavailable or malformed provider output is signed as `incomplete`,
 never presented as a clean review. Deterministic gate or mutation failures,
 stale revision identity, invalid evidence or signatures, required CI failures,
 and explicit human-required policy remain hard merge blocks.
+
+Declare the strongest delivery claim. `contract` is the default only for
+backward-compatible non-product campaigns. Any `local-product`, `hosted`, or
+`validated` claim requires `--product-prd`, `--product-tasks`, and a JSON
+`--delivery-evidence` file; quality runs the separate product-completion
+verifier after deterministic gates. This verifier does not weaken or replace
+quality gates.
 
 `--review-arm native|bespoke` is the bounded Wave 3 experiment control.
 `native` assigns Codex's provider-native structured review with Claude fallback;

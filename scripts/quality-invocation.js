@@ -25,6 +25,12 @@ const EXECUTION_BUDGET_VERSION = 1;
 const RUNTIME_PLAN_VERSION = 2;
 const REQUIRED_GATES_POLICY_VERSION = 3;
 const MAX_AGENT_TARGET = 9;
+const DELIVERY_CLAIMS = new Set([
+  "contract",
+  "local-product",
+  "hosted",
+  "validated",
+]);
 const NEEDS_EXECUTION_BUDGET_MIGRATION = Symbol(
   "needs-execution-budget-migration",
 );
@@ -1406,6 +1412,14 @@ function parseOptions(args) {
   return options;
 }
 
+function deliveryClaim(options) {
+  const claim = firstValue(options["delivery-claim"], "contract");
+  if (!DELIVERY_CLAIMS.has(claim)) {
+    throw new Error(`invalid delivery claim '${claim}'`);
+  }
+  return claim;
+}
+
 function executableScope(options) {
   const scope = firstValue(options.scope, "branch");
   if (scope !== "branch") {
@@ -2012,6 +2026,10 @@ function createManifest(options) {
     skipTests: options["skip-tests"] === true,
     verifyApp: options["verify-app"] === true,
     reviewArm: reviewArm(options, provider),
+    deliveryClaim: deliveryClaim(options),
+    productPrd: options["product-prd"] || null,
+    productTasks: options["product-tasks"] || null,
+    deliveryEvidence: options["delivery-evidence"] || null,
   };
   const campaignIdentity = {
     executionBudgetVersion: EXECUTION_BUDGET_VERSION,

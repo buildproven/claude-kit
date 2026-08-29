@@ -107,13 +107,14 @@ Output to `docs/prd/<feature-slug>.md`. Audience: a junior engineer who has neve
 - Q: <unresolved thing> → Owner: <who decides> → By: <date>
 ```
 
-After writing, **show the PRD to the user**. Explicitly say:
+After writing, **show the PRD to the user**. Ask whether it is approved or
+needs edits. Accept unambiguous semantic approval such as `approved`, `build
+it`, `do that`, `fine`, `yes`, or `looks good`. Never require a password phrase.
+A later explicit user instruction overrides an earlier pause. Ask again only
+when a material product decision is genuinely ambiguous.
 
-> _"Read this carefully. Reply **`PRD approved`** to lock and move to parent tasks. Otherwise paste edits and I'll revise."_
-
-Wait. Do not start generating tasks speculatively. Do not accept "looks good" — require the exact phrase `PRD approved` (case-insensitive OK) so the gate is unambiguous.
-
-Carson's rule: _read the thing_. If the user replies in under 30 seconds, gently push: _"Want a real read first? Edits caught here are 10x cheaper than caught at implementation."_
+> _"Approve this PRD or tell me what to change. I will ask again only if a
+> material product decision remains unclear."_
 
 ## Phase 3 — Parent Tasks (PAUSE GATE)
 
@@ -129,9 +130,16 @@ verifiable alone.
 
 For every parent task include:
 
+- **Phase** — one of `contract`, `implementation`, `hosted`, or `validation`
 - **Delivers** — the behavior a user or caller can observe
 - **Blocked by** — only tasks that genuinely prevent it from starting
-- **Verification** — the command or observable result proving the slice works
+- **Evidence** — the command or observable result proving the slice works
+
+For a user-facing PRD, include at least one `implementation` task. A completed
+`contract` task only proves the specification or architecture is done; it never
+completes the product. `implementation` means locally usable customer behavior.
+`hosted` requires a deployed journey, and `validation` requires dated evidence
+from real target users. Do not infer either from local tests.
 
 This tracer-bullet and blocking-edge discipline is adapted from Matt Pocock's
 MIT-licensed `to-tickets` skill; see `NOTICE`.
@@ -142,18 +150,24 @@ MIT-licensed `to-tickets` skill; see `NOTICE`.
 > PRD: docs/prd/<feature-slug>.md
 
 - [ ] 0.0 Create feature branch `feat/<slug>`
+  - Phase: contract
+  - Delivers: the implementation has an isolated branch and an agreed source of truth
+  - Evidence: branch exists and PRD validation passes
 - [ ] 1.0 Request a password-reset email
+  - Phase: implementation
   - Delivers: a user can submit an email and receive a safe, non-enumerating response
   - Blocked by: 0.0
-  - Verification: integration test for known and unknown accounts
+  - Evidence: integration test for known and unknown accounts
 - [ ] 2.0 Complete reset with a valid token
+  - Phase: implementation
   - Delivers: a user can set a new password once with an unexpired token
   - Blocked by: 1.0
-  - Verification: browser test covers success, reuse, and expiry
+  - Evidence: browser test covers success, reuse, and expiry
 - [ ] 3.0 Recover from invalid or expired reset links
+  - Phase: implementation
   - Delivers: the user sees a clear recovery path instead of a dead end
   - Blocked by: 2.0
-  - Verification: browser test confirms recovery CTA and keyboard access
+  - Evidence: browser test confirms recovery CTA and keyboard access
 ```
 
 ### Wide refactors: expand → migrate → contract
@@ -169,13 +183,13 @@ Sequence it instead:
 Make blocking edges explicit. Do not create a single task that knowingly leaves
 the repository broken between steps.
 
-**HARD STOP.** Show the parent list. Ask:
+**PAUSE WHEN NEEDED.** Show the parent list. Ask:
 
-> _"Reply **`parents approved`** to expand subtasks. Otherwise paste edits or reorder first."_
+> _"Approve these tasks or tell me what to change. I will continue when your
+> instruction is unambiguous."_
 
-Require the exact phrase `parents approved`. Generic "yes" / "ok" / "looks good" must trigger a re-prompt: _"Confirm with the phrase 'parents approved' to avoid accidental advancement."_ This sounds pedantic but it's the difference between a gate and a speed bump.
-
-Do **NOT** proceed to subtasks without that phrase.
+Accept unambiguous semantic approval. Do not advance only when a material
+product decision remains unclear.
 
 ## Phase 4 — Subtasks (after approval)
 
@@ -243,6 +257,14 @@ Once PRD + tasks + acceptance criteria are locked:
 - `/bs:ralph --inline "<paste task list>"` — autonomous loop (sub-task by sub-task with reflection)
 
 Both consume `docs/prd/<feature-slug>-tasks.md` as backlog. The state-machine of `/bs:ralph` (PICK→IMPLEMENT→QUALITY→REFLECT→DECIDE) maps to one subtask per cycle.
+
+Validate the distinction before claiming completion:
+
+```bash
+node scripts/product-completion.js validate \
+  --prd docs/prd/<feature-slug>.md \
+  --tasks docs/prd/<feature-slug>-tasks.md
+```
 
 ## Anti-patterns this skill refuses
 
