@@ -1076,6 +1076,122 @@ esac
     ]);
   });
 
+  it("resolves a protected controller without scanning ancestor check runs", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
+    const bin = path.join(root, "bin");
+    const calls = path.join(root, "calls");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      path.join(bin, "git"),
+      `#!/usr/bin/env bash
+set -eu
+printf '%s\n' ${Array.from({ length: 100 }, (_, index) =>
+        (index + 1).toString(16).padStart(40, "0"),
+      ).join(" ")}
+`,
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >> '${calls}'
+case "$*" in
+  *protection/required_status_checks*) printf '%s\n' '{"checks":[{"context":"secret-history-scan","app_id":15368}]}' ;;
+  *rules/branches/main*) printf '%s\n' '[]' ;;
+  *commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/check-runs*) printf '%s\n' '{"total_count":0,"check_runs":[]}' ;;
+  *commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs*) printf '%s\n' '{"total_count":0,"check_runs":[]}' ;;
+  *git/ref/heads/main*) printf '%s\n' '{"object":{"sha":"cccccccccccccccccccccccccccccccccccccccc"}}' ;;
+  *actions/workflows/.github%2Fworkflows%2Fsecret-history-scan.yml*) printf '%s\n' '{"id":77,"path":".github/workflows/secret-history-scan.yml","state":"active"}' ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    const result = run(
+      root,
+      [
+        "prepare",
+        "--repo",
+        "owner/repo",
+        "--base",
+        "main",
+        "--source-head",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--head",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      ],
+      { bin },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).dispatches).toEqual([
+      {
+        context: "secret-history-scan",
+        workflowId: 77,
+        transport: "repository_dispatch",
+      },
+    ]);
+    const callLog = fs.readFileSync(calls, "utf8");
+    expect(callLog).toContain(
+      "actions/workflows/.github%2Fworkflows%2Fsecret-history-scan.yml",
+    );
+    expect(callLog).not.toMatch(/commits\/0{39}[1-9a-f]\/check-runs/);
+  });
+
+  it("bounds the historical fallback independently of repository depth", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
+    const bin = path.join(root, "bin");
+    const calls = path.join(root, "calls");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      path.join(bin, "git"),
+      `#!/usr/bin/env bash
+set -eu
+printf '%s\n' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ${Array.from(
+        { length: 99 },
+        (_, index) => (index + 1).toString(16).padStart(40, "0"),
+      ).join(" ")}
+`,
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >> '${calls}'
+case "$*" in
+  *protection/required_status_checks*) printf '%s\n' '{"checks":[{"context":"quality","app_id":15368}]}' ;;
+  *rules/branches/main*) printf '%s\n' '[]' ;;
+  *check-runs*) printf '%s\n' '{"total_count":0,"check_runs":[]}' ;;
+  *) echo "unexpected gh call: $*" >&2; exit 1 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    const result = run(
+      root,
+      [
+        "prepare",
+        "--repo",
+        "owner/repo",
+        "--base",
+        "main",
+        "--source-head",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--head",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      ],
+      { bin },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("cannot map required check 'quality'");
+    const ancestorCalls = fs
+      .readFileSync(calls, "utf8")
+      .split("\n")
+      .filter((line) => /commits\/0{39}[1-9a-f]\/check-runs/.test(line));
+    expect(ancestorCalls).toHaveLength(3);
+  });
+
   it("fails quickly when a dispatched required context never registers", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "quality-checks-"));
     const sourceRuns = [

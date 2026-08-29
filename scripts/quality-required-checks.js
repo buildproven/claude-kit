@@ -13,6 +13,7 @@ const {
 } = require("./quality-review-evidence.js");
 
 const ACCEPTED_CONCLUSIONS = new Set(["success"]);
+const MAX_HISTORICAL_CHECK_COMMITS = 3;
 const PROTECTED_CHECKS = Object.freeze({
   "secret-history-scan": Object.freeze({
     runPrefix: "secret-history-scan:",
@@ -754,6 +755,22 @@ function workflowIdForRun(repository, run) {
   return workflowRunForCheck(repository, run).workflow_id;
 }
 
+function workflowIdForProtectedController(repository, protectedConfig) {
+  const workflow = apiJson(
+    `repos/${repository}/actions/workflows/${encodeURIComponent(protectedConfig.workflowPath)}`,
+  );
+  if (
+    !Number.isInteger(workflow.id) ||
+    workflow.path !== protectedConfig.workflowPath ||
+    workflow.state !== "active"
+  ) {
+    throw new Error(
+      `trusted protected workflow '${protectedConfig.workflowPath}' is missing, inactive, or has invalid identity`,
+    );
+  }
+  return workflow.id;
+}
+
 function workflowRunForCheck(repository, run) {
   const match = String(run.details_url || "").match(/\/actions\/runs\/(\d+)/);
   if (!match) {
@@ -771,27 +788,59 @@ function sourceRunForRequirement(
   sourceHead,
   sourceRuns,
   requirement,
+  historicalRuns,
 ) {
   const exact = matchingRuns(sourceRuns, requirement)[0];
   if (exact) return exact;
   const ancestors = runGit([
     "rev-list",
     "--first-parent",
-    "--max-count=100",
+    `--max-count=${MAX_HISTORICAL_CHECK_COMMITS + 1}`,
     sourceHead,
   ])
     .trim()
     .split("\n")
     .filter(Boolean)
-    .slice(1);
+    .slice(1, MAX_HISTORICAL_CHECK_COMMITS + 1);
   for (const ancestor of ancestors) {
+    if (!historicalRuns.has(ancestor)) {
+      historicalRuns.set(ancestor, checkRuns(repository, ancestor));
+    }
     const historical = matchingRuns(
-      checkRuns(repository, ancestor),
+      historicalRuns.get(ancestor),
       requirement,
     )[0];
     if (historical) return historical;
   }
   return null;
+}
+
+function workflowIdForRequirement({
+  repository,
+  sourceHead,
+  sourceRuns,
+  requirement,
+  protectedConfig,
+  historicalRuns,
+}) {
+  const exactSource = matchingRuns(sourceRuns, requirement)[0];
+  if (exactSource) return workflowIdForRun(repository, exactSource);
+  if (protectedConfig) {
+    return workflowIdForProtectedController(repository, protectedConfig);
+  }
+  const source = sourceRunForRequirement(
+    repository,
+    sourceHead,
+    sourceRuns,
+    requirement,
+    historicalRuns,
+  );
+  if (!source) {
+    throw new Error(
+      `cannot map required check '${requirement.context}' to a workflow from the reviewed head or its bounded first-parent history`,
+    );
+  }
+  return workflowIdForRun(repository, source);
 }
 
 function dispatchWorkflow(repository, workflowId, ref) {
@@ -934,24 +983,21 @@ function prepareChecks({ repository, base, sourceHead, targetHead }) {
     ? branchHeadSha(repository, base)
     : null;
   const dispatches = [];
+  const historicalRuns = new Map();
   for (const requirement of requirements) {
     const protectedConfig = protectedCheckConfig(requirement);
     if (!protectedConfig) {
       const target = checkState(targetRuns, requirement);
       if (["pending", "success"].includes(target.state)) continue;
     }
-    const source = sourceRunForRequirement(
+    const workflowId = workflowIdForRequirement({
       repository,
       sourceHead,
       sourceRuns,
       requirement,
-    );
-    if (!source) {
-      throw new Error(
-        `cannot map required check '${requirement.context}' to a workflow from the reviewed head or its first-parent history`,
-      );
-    }
-    const workflowId = workflowIdForRun(repository, source);
+      protectedConfig,
+      historicalRuns,
+    });
     if (protectedConfig) {
       const target = trustedSecretCheckState({
         repository,
@@ -1004,24 +1050,21 @@ function ensureChecks({
   const dispatched = [];
   const dispatchedRequirements = [];
   const dispatchedWorkflowIds = new Set();
+  const historicalRuns = new Map();
   for (const requirement of requirements) {
     const protectedConfig = protectedCheckConfig(requirement);
     if (!protectedConfig) {
       const target = checkState(targetRuns, requirement);
       if (["pending", "success"].includes(target.state)) continue;
     }
-    const source = sourceRunForRequirement(
+    const workflowId = workflowIdForRequirement({
       repository,
       sourceHead,
       sourceRuns,
       requirement,
-    );
-    if (!source) {
-      throw new Error(
-        `cannot map required check '${requirement.context}' to a workflow from the reviewed head or its first-parent history`,
-      );
-    }
-    const workflowId = workflowIdForRun(repository, source);
+      protectedConfig,
+      historicalRuns,
+    });
     if (protectedConfig) {
       const target = trustedSecretCheckState({
         repository,
