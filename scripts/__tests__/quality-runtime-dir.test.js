@@ -11,6 +11,7 @@ describe("quality runtime directory resolver", () => {
   const cohort = [
     "quality-invocation.js",
     "product-completion.js",
+    "product-evidence.js",
     "quality-run.js",
     "quality-provider-usage.js",
     "provider-run.sh",

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "algorithm": "Ed25519",
+  "canonicalization": "RFC8785",
+  "publicKeySpkiBase64": "MCowBQYDK2VwAyEADZn52jZZYfbgMvmITN6ZtFCVN+8ZjTOTDZQkJd3fw7g=",
+  "receipt": {
+    "payload": {
+      "schemaVersion": 2,
+      "issuer": "buildproven-conformance",
+      "repository": "buildproven/example",
+      "repositoryId": "123456",
+      "head": "0123456789abcdef0123456789abcdef01234567",
+      "requirementsDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "kind": "behavioralTests",
+      "observedAt": "2026-08-29T12:00:00.000Z",
+      "evidenceSource": "conformance-vector-v1",
+      "result": "passed",
+      "environment": "local",
+      "provenance": {
+        "executionOwner": "issuer",
+        "runId": "protected-run-123",
+        "runnerIsolation": "fresh-protected"
+      },
+      "artifact": {
+        "path": "artifacts/result.json",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "command": "npm test -- example"
+    },
+    "signature": "frnU7BIALZFMOjLcmOjYfxuD_mq2th_Mxscb5Ug2GWkl3vXp3LaBPQRmmMbF1eVPWZojA6mm71IiI1P_2NEACw"
+  },
+  "canonicalPayload": "{\"artifact\":{\"path\":\"artifacts/result.json\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"command\":\"npm test -- example\",\"environment\":\"local\",\"evidenceSource\":\"conformance-vector-v1\",\"head\":\"0123456789abcdef0123456789abcdef01234567\",\"issuer\":\"buildproven-conformance\",\"kind\":\"behavioralTests\",\"observedAt\":\"2026-08-29T12:00:00.000Z\",\"provenance\":{\"executionOwner\":\"issuer\",\"runId\":\"protected-run-123\",\"runnerIsolation\":\"fresh-protected\"},\"repository\":\"buildproven/example\",\"repositoryId\":\"123456\",\"requirementsDigest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"result\":\"passed\",\"schemaVersion\":2}"
+}

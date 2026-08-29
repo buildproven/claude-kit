@@ -159,6 +159,48 @@ function deliveryClaim(manifest) {
   return manifest.options?.deliveryClaim || "contract";
 }
 
+function deliveryRepository(manifest) {
+  if (manifest.repo.githubRepository) return manifest.repo.githubRepository;
+  const origin = manifest.repo.origin || "";
+  const match = origin.match(/github\.com(?::|\/)([^/]+\/[^/]+?)(?:\.git)?$/i);
+  if (!match)
+    throw new Error("delivery claim requires a GitHub repository identity");
+  return match[1];
+}
+
+function deliveryRepositoryId(manifest) {
+  const value = String(manifest.repo.githubRepositoryId || "");
+  if (!/^[1-9][0-9]*$/.test(value)) {
+    throw new Error(
+      "delivery claim requires an immutable GitHub repository ID",
+    );
+  }
+  return value;
+}
+
+function verifyDeliveryEvidenceDigest(manifest, evidencePath) {
+  const binding = manifest.deliveryEvidenceBinding;
+  const expected = binding?.sha256;
+  if (binding?.head !== manifest.revisions.currentHead) {
+    throw new Error("delivery evidence is not bound to the current HEAD");
+  }
+  if (!/^[a-f0-9]{64}$/i.test(expected || "")) {
+    throw new Error("delivery evidence digest is missing from campaign state");
+  }
+  let body;
+  try {
+    body = fs.readFileSync(path.resolve(manifest.repo.realpath, evidencePath));
+  } catch (error) {
+    throw new Error(`delivery evidence cannot be read: ${error.message}`, {
+      cause: error,
+    });
+  }
+  const actual = crypto.createHash("sha256").update(body).digest("hex");
+  if (actual !== expected.toLowerCase()) {
+    throw new Error("delivery evidence changed without a HEAD advance");
+  }
+}
+
 function verifierFailure(result) {
   if (result.error) {
     return `product verifier could not start (${result.error.code || "process error"})`;
@@ -226,6 +268,7 @@ function verifyDeliveryClaim(manifest) {
       `${claim} delivery claim requires --product-prd, --product-tasks, and --delivery-evidence`,
     );
   }
+  verifyDeliveryEvidenceDigest(manifest, deliveryEvidence);
   const changedFilesPath = path.join(
     manifest.stateRoot,
     "delivery-changed-files.json",
@@ -246,8 +289,14 @@ function verifyDeliveryClaim(manifest) {
       changedFilesPath,
       "--evidence",
       deliveryEvidence,
+      "--evidence-sha256",
+      manifest.deliveryEvidenceBinding.sha256,
       "--head",
       manifest.revisions.currentHead,
+      "--repository",
+      deliveryRepository(manifest),
+      "--repository-id",
+      deliveryRepositoryId(manifest),
     ],
     { cwd: manifest.repo.realpath, encoding: "utf8" },
   );

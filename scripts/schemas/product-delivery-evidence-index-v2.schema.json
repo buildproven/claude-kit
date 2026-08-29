@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://buildproven.dev/schemas/product-delivery-evidence-index-v2.schema.json",
+  "title": "BuildProven product delivery evidence index v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "repository",
+    "repositoryId",
+    "behavioralTests",
+    "acceptanceEvidence"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "repository": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+    "repositoryId": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+    "expectedEnvironment": { "type": "string", "minLength": 1 },
+    "deploymentIdentity": { "type": "string", "minLength": 1 },
+    "behavioralTests": { "$ref": "#/$defs/reference" },
+    "acceptanceEvidence": { "$ref": "#/$defs/reference" },
+    "deploymentReceipt": { "$ref": "#/$defs/reference" },
+    "hostedJourney": { "$ref": "#/$defs/reference" },
+    "realUserEvidence": { "$ref": "#/$defs/reference" }
+  },
+  "$defs": {
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["receipt", "sha256"],
+      "properties": {
+        "receipt": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    }
+  }
+}

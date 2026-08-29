@@ -4,8 +4,7 @@
 // Product delivery evidence is deliberately separate from quality correctness.
 // It classifies what a PRD/task set proves; it does not alter gate or merge policy.
 const fs = require("node:fs");
-const path = require("node:path");
-const crypto = require("node:crypto");
+const { sha256, verifyReceipt } = require("./product-evidence");
 
 const PHASES = new Set(["contract", "implementation", "hosted", "validation"]);
 const CLAIMS = new Set(["contract", "local-product", "hosted", "validated"]);
@@ -22,15 +21,27 @@ const NON_PRODUCT_ROOT_NAMES = new Set([
   "README",
   "SECURITY",
 ]);
+const EVIDENCE_KEYS = new Set([
+  "schemaVersion",
+  "repository",
+  "repositoryId",
+  "expectedEnvironment",
+  "deploymentIdentity",
+  "behavioralTests",
+  "acceptanceEvidence",
+  "deploymentReceipt",
+  "hostedJourney",
+  "realUserEvidence",
+]);
 
 function fail(message) {
   throw new Error(message);
 }
 
-function read(file, label) {
+function readBytes(file, label) {
   if (!file) fail(`${label} is required`);
   try {
-    return fs.readFileSync(file, "utf8");
+    return fs.readFileSync(file);
   } catch (error) {
     fail(`${label} cannot be read: ${error.message}`);
   }
@@ -69,8 +80,18 @@ function userFacing(prd) {
 }
 
 function validate(prdPath, tasksPath) {
-  const prd = read(prdPath, "PRD");
-  const taskSource = read(tasksPath, "task list");
+  const prdBytes = readBytes(prdPath, "PRD");
+  const taskBytes = readBytes(tasksPath, "task list");
+  const prd = prdBytes.toString("utf8");
+  const taskSource = taskBytes.toString("utf8");
+  const requirementsDigest = sha256(
+    Buffer.from(
+      JSON.stringify({
+        prdSha256: sha256(prdBytes),
+        tasksSha256: sha256(taskBytes),
+      }),
+    ),
+  );
   const tasks = parseTasks(taskSource);
   const errors = [];
   if (tasks.length === 0) errors.push("task list has no parent tasks");
@@ -92,16 +113,27 @@ function validate(prdPath, tasksPath) {
     schemaVersion: 1,
     valid: errors.length === 0,
     userFacing: userFacing(prd),
+    requirementsDigest,
     tasks,
     errors,
   };
 }
 
-function readJson(file, label) {
+function readJson(file, label, expectedDigest = null) {
   if (!file) return {};
   try {
-    return JSON.parse(read(file, label));
+    const body = fs.readFileSync(file);
+    if (
+      expectedDigest &&
+      sha256(body) !== String(expectedDigest).toLowerCase()
+    ) {
+      fail(`${label} changed after campaign creation`);
+    }
+    return JSON.parse(body.toString("utf8"));
   } catch (error) {
+    if (error.message === `${label} changed after campaign creation`) {
+      throw error;
+    }
     fail(`${label} is not valid JSON: ${error.message}`);
   }
 }
@@ -110,64 +142,14 @@ function nonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
 }
 
-function sha256(value) {
-  return crypto.createHash("sha256").update(value).digest("hex");
-}
-
-function receiptPath(value, label, evidencePath) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { error: `${label} must name an immutable receipt` };
-  }
-  if (
-    !nonEmptyString(value.receipt) ||
-    !/^[a-f0-9]{64}$/i.test(value.sha256 || "")
-  ) {
-    return { error: `${label} needs receipt and sha256` };
-  }
-  const receipt = path.resolve(path.dirname(evidencePath || ""), value.receipt);
-  const evidenceRoot = path.dirname(path.resolve(evidencePath || ""));
-  if (!receipt.startsWith(`${evidenceRoot}${path.sep}`)) {
-    return {
-      error: `${label} receipt must stay inside the evidence directory`,
-    };
-  }
-  return { receipt };
-}
-
-function loadReceipt(receipt, expectedDigest, label) {
+function receiptRecord(value, label, expected, options) {
   try {
-    const body = fs.readFileSync(receipt);
-    if (sha256(body) !== expectedDigest.toLowerCase())
-      return `${label} receipt digest does not match`;
-    return JSON.parse(body.toString("utf8"));
+    return {
+      payload: verifyReceipt(value, { ...expected, kind: label }, options),
+    };
   } catch (error) {
-    return `${label} receipt cannot be verified: ${error.message}`;
+    return { error: error.message };
   }
-}
-
-function receiptMetadataError(record, label, fields, head) {
-  for (const field of fields) {
-    if (!nonEmptyString(record[field]))
-      return `${label} receipt is missing ${field}`;
-  }
-  if (
-    record.schemaVersion !== 1 ||
-    record.kind !== label ||
-    record.head !== head ||
-    !nonEmptyString(record.observedAt) ||
-    Number.isNaN(Date.parse(record.observedAt))
-  ) {
-    return `${label} receipt has invalid schema, kind, head, or observedAt`;
-  }
-  return null;
-}
-
-function receiptRecord(value, label, fields, head, evidencePath) {
-  const resolved = receiptPath(value, label, evidencePath);
-  if (resolved.error) return resolved.error;
-  const record = loadReceipt(resolved.receipt, value.sha256, label);
-  if (typeof record === "string") return record;
-  return receiptMetadataError(record, label, fields, head);
 }
 
 function productionCodeChange(file) {
@@ -182,33 +164,74 @@ function productionCodeChange(file) {
   );
 }
 
+function evidenceIndexError(evidence, repository, repositoryId) {
+  if (
+    evidence.schemaVersion === 2 &&
+    evidence.repository === repository &&
+    evidence.repositoryId === repositoryId &&
+    /^[^/]+\/[^/]+$/.test(repository || "") &&
+    /^[1-9][0-9]*$/.test(repositoryId || "") &&
+    !Object.keys(evidence).some((key) => !EVIDENCE_KEYS.has(key))
+  ) {
+    return null;
+  }
+  return "delivery evidence has invalid schema, repository identity, or fields";
+}
+
+function receiptErrors(records, prefix) {
+  return records
+    .filter(({ error }) => error)
+    .map(({ error }) => `${prefix} ${error}`);
+}
+
+function localReceipts(evidence, expected, verification) {
+  return [
+    receiptRecord(
+      evidence.behavioralTests,
+      "behavioralTests",
+      expected,
+      verification,
+    ),
+    receiptRecord(
+      evidence.acceptanceEvidence,
+      "acceptanceEvidence",
+      expected,
+      verification,
+    ),
+  ];
+}
+
+function hostedReceipts(evidence, expected, verification) {
+  return [
+    receiptRecord(
+      evidence.deploymentReceipt,
+      "deploymentReceipt",
+      expected,
+      verification,
+    ),
+    receiptRecord(
+      evidence.hostedJourney,
+      "hostedJourney",
+      expected,
+      verification,
+    ),
+  ];
+}
+
 function verifyClaim(
   result,
   claim,
   changedFiles,
   evidence,
-  { head, evidencePath } = {},
+  { head, evidencePath, repository, repositoryId, trustedPublicKey } = {},
 ) {
   if (!CLAIMS.has(claim)) fail(`invalid delivery claim '${claim}'`);
   const errors = [...result.errors];
   const phases = new Set(result.tasks.map((task) => task.phase));
   const sourceChange = changedFiles.some(productionCodeChange);
-  const localEvidence = [
-    receiptRecord(
-      evidence.behavioralTests,
-      "behavioralTests",
-      ["command", "artifact"],
-      head,
-      evidencePath,
-    ),
-    receiptRecord(
-      evidence.acceptanceEvidence,
-      "acceptanceEvidence",
-      ["artifact"],
-      head,
-      evidencePath,
-    ),
-  ].filter(Boolean);
+  const verification = { evidencePath, trustedPublicKey };
+  const indexError = evidenceIndexError(evidence, repository, repositoryId);
+  if (indexError) errors.push(indexError);
   if (claim === "contract") {
     for (const file of changedFiles.filter(productionCodeChange)) {
       errors.push(
@@ -230,34 +253,62 @@ function verifyClaim(
       errors.push(`${claim} claim needs an implementation task`);
     if (!sourceChange)
       errors.push(`${claim} claim needs a production-code change`);
-    errors.push(...localEvidence.map((error) => `${claim} claim ${error}`));
+    errors.push(
+      ...receiptErrors(
+        localReceipts(
+          evidence,
+          {
+            head,
+            repository,
+            repositoryId,
+            requirementsDigest: result.requirementsDigest,
+          },
+          verification,
+        ),
+        `${claim} claim`,
+      ),
+    );
   }
   if (["hosted", "validated"].includes(claim)) {
-    for (const error of [
-      receiptRecord(
-        evidence.deploymentReceipt,
-        "deploymentReceipt",
-        ["receipt", "environment"],
-        head,
-        evidencePath,
+    if (
+      !nonEmptyString(evidence.expectedEnvironment) ||
+      !nonEmptyString(evidence.deploymentIdentity)
+    ) {
+      errors.push(
+        `${claim} claim needs expectedEnvironment and deploymentIdentity`,
+      );
+    }
+    errors.push(
+      ...receiptErrors(
+        hostedReceipts(
+          evidence,
+          {
+            head,
+            repository,
+            repositoryId,
+            requirementsDigest: result.requirementsDigest,
+            environment: evidence.expectedEnvironment,
+            deploymentIdentity: evidence.deploymentIdentity,
+          },
+          verification,
+        ),
+        `${claim} claim`,
       ),
-      receiptRecord(
-        evidence.hostedJourney,
-        "hostedJourney",
-        ["url", "artifact"],
-        head,
-        evidencePath,
-      ),
-    ].filter(Boolean))
-      errors.push(`${claim} claim ${error}`);
+    );
   }
   if (claim === "validated") {
-    const error = receiptRecord(
+    const { error } = receiptRecord(
       evidence.realUserEvidence,
       "realUserEvidence",
-      ["record"],
-      head,
-      evidencePath,
+      {
+        head,
+        repository,
+        repositoryId,
+        requirementsDigest: result.requirementsDigest,
+        environment: evidence.expectedEnvironment,
+        deploymentIdentity: evidence.deploymentIdentity,
+      },
+      verification,
     );
     if (error) errors.push(`validated claim ${error}`);
   }
@@ -307,8 +358,13 @@ function main(argv) {
       result,
       args.claim,
       readJson(args["changed-files"], "changed files"),
-      readJson(args.evidence, "evidence"),
-      { head: args.head, evidencePath: args.evidence },
+      readJson(args.evidence, "evidence", args["evidence-sha256"]),
+      {
+        head: args.head,
+        evidencePath: args.evidence,
+        repository: args.repository,
+        repositoryId: args["repository-id"],
+      },
     );
   } else if (command === "next") output = next(result);
   else if (command !== "validate")

@@ -4,6 +4,30 @@
   "mappings": [
     {
       "paths": [
+        "scripts/product-completion.js",
+        "scripts/product-evidence.js",
+        "scripts/schemas/product-evidence-receipt-v2.schema.json",
+        "scripts/schemas/product-delivery-evidence-index-v2.schema.json",
+        "scripts/schemas/product-evidence-v2-conformance.json",
+        "scripts/__tests__/product-completion.test.js",
+        "docs/decisions/ADR-authenticated-product-completion-receipts.md"
+      ],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/product-completion.test.js",
+            "scripts/__tests__/quality-run.test.js",
+            "scripts/__tests__/quality-invocation.test.js",
+            "scripts/__tests__/quality-runtime-dir.test.js"
+          ]
+        }
+      ]
+    },
+    {
+      "paths": [
         "scripts/vcycle-creator.js",
         "docs/decisions/ADR-vcycle-creator.md"
       ],

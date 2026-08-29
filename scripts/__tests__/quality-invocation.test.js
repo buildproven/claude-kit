@@ -723,6 +723,68 @@ describe("required gate reuse", () => {
 });
 
 describe("quality invocation manifest", () => {
+  it("binds the exact delivery-evidence index digest to the current HEAD", () => {
+    const root = repo("delivery-evidence-digest");
+    const evidence = path.join(root, "evidence.json");
+    const body = '{"schemaVersion":2,"repository":"owner/repo"}\n';
+    writeFileSync(evidence, body);
+
+    const manifestPath = create(root, [
+      "--delivery-claim",
+      "local-product",
+      "--product-prd",
+      "prd.md",
+      "--product-tasks",
+      "tasks.md",
+      "--delivery-evidence",
+      "evidence.json",
+    ]);
+    const manifest = invocation.loadManifest(manifestPath).manifest;
+
+    expect(manifest.deliveryEvidenceBinding).toMatchObject({
+      head: manifest.revisions.currentHead,
+      sha256: createHash("sha256").update(body).digest("hex"),
+      history: [],
+    });
+    writeFileSync(evidence, `${body} `);
+    const changedManifestPath = create(root, [
+      "--delivery-claim",
+      "local-product",
+      "--product-prd",
+      "prd.md",
+      "--product-tasks",
+      "tasks.md",
+      "--delivery-evidence",
+      "evidence.json",
+    ]);
+    expect(changedManifestPath).toBe(manifestPath);
+  });
+
+  it("renews the delivery-evidence binding only when HEAD advances", () => {
+    const root = repo("delivery-evidence-renewal");
+    const evidence = path.join(root, "evidence.json");
+    writeFileSync(evidence, "initial evidence\n");
+    const manifestPath = create(root, ["--delivery-evidence", "evidence.json"]);
+    const prior = invocation.loadManifest(manifestPath).manifest;
+    const priorHead = prior.revisions.currentHead;
+    const priorDigest = prior.deliveryEvidenceBinding.sha256;
+
+    writeFileSync(path.join(root, "fix.js"), "export const fixed = true;\n");
+    git(root, ["add", "fix.js"]);
+    git(root, ["commit", "-q", "-m", "fix: renew evidence"]);
+    writeFileSync(evidence, "renewed evidence\n");
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      expect(invocation.advanceHead(manifest, root)).toBe(true);
+    });
+
+    const renewed = invocation.loadManifest(manifestPath).manifest;
+    expect(renewed.deliveryEvidenceBinding).toMatchObject({
+      head: renewed.revisions.currentHead,
+      sha256: createHash("sha256").update("renewed evidence\n").digest("hex"),
+      history: [{ head: priorHead, sha256: priorDigest }],
+    });
+  });
+
   it("hashes the same recursive core diff that the review envelope contains", () => {
     const submodule = makeTempDir("quality-core-source-");
     git(submodule, ["init", "-q", "-b", "main"]);

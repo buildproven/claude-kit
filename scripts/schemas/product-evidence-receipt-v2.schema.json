@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://buildproven.dev/schemas/product-evidence-receipt-v2.schema.json",
+  "title": "BuildProven authenticated product evidence receipt v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["payload", "signature"],
+  "properties": {
+    "payload": {
+      "oneOf": [
+        { "$ref": "#/$defs/behavioralTests" },
+        { "$ref": "#/$defs/acceptanceEvidence" },
+        { "$ref": "#/$defs/deploymentReceipt" },
+        { "$ref": "#/$defs/hostedJourney" },
+        { "$ref": "#/$defs/realUserEvidence" }
+      ]
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "commonPayload": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "issuer",
+        "repository",
+        "repositoryId",
+        "head",
+        "requirementsDigest",
+        "kind",
+        "observedAt",
+        "evidenceSource",
+        "result",
+        "environment",
+        "provenance",
+        "artifact"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 2 },
+        "issuer": { "type": "string", "minLength": 1 },
+        "repository": {
+          "type": "string",
+          "pattern": "^[^/]+/[^/]+$"
+        },
+        "repositoryId": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$"
+        },
+        "head": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "requirementsDigest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "kind": { "type": "string" },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "evidenceSource": { "type": "string", "minLength": 1 },
+        "result": { "const": "passed" },
+        "environment": { "type": "string", "minLength": 1 },
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "artifact": { "$ref": "#/$defs/artifact" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executionOwner", "runId", "runnerIsolation"],
+      "properties": {
+        "executionOwner": { "const": "issuer" },
+        "runId": { "type": "string", "minLength": 1 },
+        "runnerIsolation": { "const": "fresh-protected" }
+      }
+    },
+    "behavioralTests": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/commonPayload" },
+        {
+          "required": ["command"],
+          "properties": {
+            "kind": { "const": "behavioralTests" },
+            "command": { "type": "string", "minLength": 1 }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "acceptanceEvidence": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/commonPayload" },
+        {
+          "properties": {
+            "kind": { "const": "acceptanceEvidence" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "deploymentReceipt": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/commonPayload" },
+        {
+          "required": ["deploymentIdentity"],
+          "properties": {
+            "kind": { "const": "deploymentReceipt" },
+            "deploymentIdentity": { "type": "string", "minLength": 1 }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "hostedJourney": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/commonPayload" },
+        {
+          "required": ["deploymentIdentity", "url"],
+          "properties": {
+            "kind": { "const": "hostedJourney" },
+            "deploymentIdentity": { "type": "string", "minLength": 1 },
+            "url": { "type": "string", "format": "uri", "pattern": "^https://" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "realUserEvidence": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/commonPayload" },
+        {
+          "required": ["deploymentIdentity"],
+          "properties": {
+            "kind": { "const": "realUserEvidence" },
+            "deploymentIdentity": { "type": "string", "minLength": 1 }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

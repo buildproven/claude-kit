@@ -60,12 +60,19 @@ the claim with `product-completion.js`: only documentation, tests/fixtures, and
 GitHub workflow metadata may use the evidence-free `contract` path. Every
 other changed path is product-affecting and needs an applicable explicit
 claim; `local-product` needs behavioral and acceptance receipts. Each receipt
-is a readable JSON artifact with an SHA-256 digest,
-schema version, kind, candidate HEAD, and timestamp; Boolean assertions and
-unreadable references fail. `hosted` additionally needs a deployment receipt
-(receipt and environment) and hosted journey (URL and artifact); `validated`
-additionally needs a real-user receipt. Local tests never imply hosted or
-validated status.
+is a signed version 2 Ed25519 envelope from the fixed system trust root. It
+binds the issuer, GitHub repository name and numeric ID, exact HEAD,
+requirements digest, protected producer provenance, result, environment,
+evidence source, and the digest of a readable artifact. Candidate-worker
+verification is preflight only; admission verification uses a trusted verifier
+on a fresh protected worker. The manifest binds one delivery-evidence index
+digest per HEAD and rotates it only during an authorized HEAD advance. `hosted`
+additionally needs a deployment
+receipt and HTTPS journey from one expected environment and deployment;
+`validated` additionally needs real-user evidence from that deployment. Local
+tests never imply hosted or validated status. See
+`docs/decisions/ADR-authenticated-product-completion-receipts.md` for the wire
+format and trust-root locations.
 
 On exit 4, read the final structured result. For `lead-verification`, use only
 its identity-bound `context`, verify every lead against repository source and

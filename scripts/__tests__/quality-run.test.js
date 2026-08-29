@@ -284,6 +284,10 @@ function fixture(behavior = {}, { merge = false, tier = "low" } = {}) {
     path.resolve(__dirname, "..", "product-completion.js"),
     path.join(runtime, "product-completion.js"),
   );
+  copyFileSync(
+    path.resolve(__dirname, "..", "product-evidence.js"),
+    path.join(runtime, "product-evidence.js"),
+  );
   if (behavior.productVerifier) {
     const verifier = path.join(runtime, "product-completion.js");
     writeFileSync(
@@ -320,7 +324,11 @@ function fixture(behavior = {}, { merge = false, tier = "low" } = {}) {
     JSON.stringify({
       manifestRevision: 0,
       stateRoot: root,
-      repo: { realpath: root },
+      repo: {
+        realpath: root,
+        origin: "https://github.com/buildproven/fixture.git",
+        githubRepositoryId: "123456",
+      },
       revisions: {
         initialHead: "abc123",
         currentHead: "abc123",
@@ -346,6 +354,15 @@ function fixture(behavior = {}, { merge = false, tier = "low" } = {}) {
       invocationId: "fixture-invocation",
       governor: { remediationStartedAtEpoch: null },
       behavior,
+      ...(behavior.productVerifier
+        ? {
+            deliveryEvidenceBinding: {
+              head: "abc123",
+              sha256: createHash("sha256").update("fixture\n").digest("hex"),
+              history: [],
+            },
+          }
+        : {}),
     }),
   );
   if (behavior.productVerifier) {
@@ -635,6 +652,26 @@ describe("quality-run public orchestration", () => {
     );
     expect(result.status).toBe(1);
     expect(JSON.parse(result.output).message).toContain(diagnostic);
+  });
+
+  it("rejects a delivery-evidence index changed without a HEAD advance", () => {
+    const entry = fixture({
+      changedFiles: ["src/App.tsx"],
+      productVerifier:
+        "process.stdout.write(JSON.stringify({valid:true,errors:[]}));",
+    });
+    writeFileSync(
+      path.join(path.dirname(entry.manifestPath), "evidence.json"),
+      "changed\n",
+    );
+
+    const result = run(entry);
+
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.output).message).toContain(
+      "delivery evidence changed without a HEAD advance",
+    );
+    expect(result.manifest.calls).not.toContain("quality-run-review.sh");
   });
 
   it("classifies malformed verifier output without exposing it", () => {

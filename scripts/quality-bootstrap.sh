@@ -253,6 +253,17 @@ if [ -n "$MANIFEST_ARG" ]; then
         --head-ref "$RESUME_HEAD_REF" \
         --head-repository "$RESUME_HEAD_REPOSITORY" \
         --cross-repository "$RESUME_CROSS_REPOSITORY")
+      RESUME_REPOSITORY_ID="$(node "$SCRIPT_DIR/quality-invocation.js" field \
+        "$MANIFEST_ARG" repo.githubRepositoryId 2>/dev/null || true)"
+      if [ -n "$RESUME_REPOSITORY_ID" ] && [ "$RESUME_REPOSITORY_ID" != null ]; then
+        LIVE_REPOSITORY_ID="$(gh repo view "$RESUME_GITHUB_REPOSITORY" \
+          --json databaseId --jq .databaseId)" || exit 1
+        [ "$LIVE_REPOSITORY_ID" = "$RESUME_REPOSITORY_ID" ] || {
+          echo "quality-bootstrap: GitHub repository numeric identity changed" >&2
+          exit 1
+        }
+        ADVANCE_ARGS+=(--github-repository-id "$LIVE_REPOSITORY_ID")
+      fi
     fi
     node "$SCRIPT_DIR/quality-invocation.js" "${ADVANCE_ARGS[@]}" >/dev/null || exit 1
   fi
@@ -705,6 +716,10 @@ if [ -n "${RES_PR:-}" ]; then
   CREATE_ARGS+=(--github-repo "$GITHUB_REPOSITORY" --head-ref "$PR_HEAD_NAME" \
     --head-repository "$PR_HEAD_REPOSITORY" \
     --cross-repository "$PR_IS_CROSS_REPOSITORY")
+  if [ -n "$DELIVERY_EVIDENCE_ARG" ]; then
+    GITHUB_REPOSITORY_ID="$(gh repo view --json databaseId --jq .databaseId)" || exit 1
+    CREATE_ARGS+=(--github-repository-id "$GITHUB_REPOSITORY_ID")
+  fi
 fi
 BS_QUALITY_MANIFEST="$(node "$SCRIPT_DIR/quality-invocation.js" "${CREATE_ARGS[@]}")" || exit 1
 BS_QUALITY_REPOSITORY_LEASE_TOKEN=""

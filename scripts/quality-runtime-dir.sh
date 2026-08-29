@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REQUIRED_SIBLINGS=(
   quality-invocation.js
   product-completion.js
+  product-evidence.js
   quality-run.js
   quality-provider-usage.js
   provider-run.sh

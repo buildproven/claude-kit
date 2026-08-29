@@ -1420,6 +1420,26 @@ function deliveryClaim(options) {
   return claim;
 }
 
+function deliveryEvidenceDigest(root, value) {
+  if (!value) return null;
+  const file = path.resolve(root, value);
+  let body;
+  try {
+    body = fs.readFileSync(file);
+  } catch (error) {
+    throw new Error(`delivery evidence cannot be read: ${error.message}`, {
+      cause: error,
+    });
+  }
+  return crypto.createHash("sha256").update(body).digest("hex");
+}
+
+function initialDeliveryEvidenceBinding(root, head, value) {
+  return value
+    ? { head, sha256: deliveryEvidenceDigest(root, value), history: [] }
+    : null;
+}
+
 function executableScope(options) {
   const scope = firstValue(options.scope, "branch");
   if (scope !== "branch") {
@@ -1436,6 +1456,7 @@ function resolvePrIdentity(options) {
       ? null
       : parseInteger(options.pr, "pr", { minimum: 1 });
   const githubRepository = firstValue(options["github-repo"], null);
+  const githubRepositoryId = firstValue(options["github-repository-id"], null);
   const headRefName = firstValue(options["head-ref"], null);
   const headRepository = firstValue(options["head-repository"], null);
   const crossRepositoryValue = options["cross-repository"];
@@ -1470,6 +1491,7 @@ function resolvePrIdentity(options) {
   return {
     pr,
     githubRepository,
+    githubRepositoryId,
     headRefName,
     headRepository,
     isCrossRepository,
@@ -1491,6 +1513,7 @@ function manifestIdentity(manifest) {
     origin: manifest.repo.origin,
     pr: manifest.repo.pr,
     githubRepository: manifest.repo.githubRepository,
+    githubRepositoryId: manifest.repo.githubRepositoryId,
     headRefName: manifest.repo.headRefName,
     headRepository: manifest.repo.headRepository,
     isCrossRepository: manifest.repo.isCrossRepository,
@@ -1574,11 +1597,17 @@ function supersedingManifest(
     updatedAt: now,
     stateRoot,
     options: campaignIdentity.options,
+    deliveryEvidenceBinding: initialDeliveryEvidenceBinding(
+      campaignIdentity.root,
+      campaignIdentity.head,
+      campaignIdentity.options.deliveryEvidence,
+    ),
     repo: {
       realpath: campaignIdentity.root,
       key: repoKey(campaignIdentity.root),
       pr: campaignIdentity.pr,
       githubRepository: campaignIdentity.githubRepository,
+      githubRepositoryId: campaignIdentity.githubRepositoryId,
       headRefName: campaignIdentity.headRefName,
       headRepository: campaignIdentity.headRepository,
       isCrossRepository: campaignIdentity.isCrossRepository,
@@ -2009,6 +2038,7 @@ function createManifest(options) {
   const {
     pr,
     githubRepository,
+    githubRepositoryId,
     headRefName,
     headRepository,
     isCrossRepository,
@@ -2019,6 +2049,12 @@ function createManifest(options) {
   }
   const baseHeadSha = firstValue(options["base-head-sha"], baseSha);
   const provider = buildProvider(options);
+  const deliveryEvidence = options["delivery-evidence"] || null;
+  const deliveryEvidenceBinding = initialDeliveryEvidenceBinding(
+    root,
+    head,
+    deliveryEvidence,
+  );
   const manifestOptions = {
     merge: options.merge === true,
     level: firstValue(options.level, "auto"),
@@ -2029,7 +2065,7 @@ function createManifest(options) {
     deliveryClaim: deliveryClaim(options),
     productPrd: options["product-prd"] || null,
     productTasks: options["product-tasks"] || null,
-    deliveryEvidence: options["delivery-evidence"] || null,
+    deliveryEvidence,
   };
   const campaignIdentity = {
     executionBudgetVersion: EXECUTION_BUDGET_VERSION,
@@ -2039,6 +2075,7 @@ function createManifest(options) {
     origin: originIdentity(root),
     pr,
     githubRepository,
+    githubRepositoryId,
     headRefName,
     headRepository,
     isCrossRepository,
@@ -2099,11 +2136,13 @@ function createManifest(options) {
     updatedAt: now,
     stateRoot,
     options: manifestOptions,
+    deliveryEvidenceBinding,
     repo: {
       realpath: root,
       key,
       pr,
       githubRepository,
+      githubRepositoryId,
       headRefName,
       headRepository,
       isCrossRepository,
@@ -2480,6 +2519,25 @@ function advanceHead(manifest, root, { acceptedConditions = [] } = {}) {
     delete manifest.merge.stampHead;
     delete manifest.merge.stampedAt;
     delete manifest.merge.stampPublication;
+  }
+  if (manifest.options?.deliveryEvidence) {
+    const priorBinding = manifest.deliveryEvidenceBinding;
+    if (
+      !priorBinding ||
+      priorBinding.head !== priorHead ||
+      !/^[0-9a-f]{64}$/.test(priorBinding.sha256 || "")
+    ) {
+      throw new Error(
+        "delivery evidence binding is invalid for the prior HEAD",
+      );
+    }
+    priorBinding.history ??= [];
+    priorBinding.history.push({ head: priorHead, sha256: priorBinding.sha256 });
+    priorBinding.head = nextHead;
+    priorBinding.sha256 = deliveryEvidenceDigest(
+      root,
+      manifest.options.deliveryEvidence,
+    );
   }
   manifest.revisions.currentHead = nextHead;
   return true;
@@ -2917,6 +2975,11 @@ function prIdentityOptions(manifest, options) {
       manifest.repo.githubRepository,
       null,
     ),
+    githubRepositoryId: firstValue(
+      options["github-repository-id"],
+      manifest.repo.githubRepositoryId,
+      null,
+    ),
     headRefName: firstValue(
       options["head-ref"],
       manifest.repo.headRefName,
@@ -2951,6 +3014,7 @@ function bindPrRepositoryIdentity(manifest, options) {
   if (manifest.repo.pr === null) return;
   const identityOptionNames = [
     "github-repo",
+    "github-repository-id",
     "head-ref",
     "head-repository",
     "cross-repository",
