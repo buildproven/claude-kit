@@ -159,6 +159,38 @@ function deliveryClaim(manifest) {
   return manifest.options?.deliveryClaim || "contract";
 }
 
+function verifierFailure(result) {
+  if (result.error) {
+    return `product verifier could not start (${result.error.code || "process error"})`;
+  }
+  if (result.signal) {
+    return `product verifier terminated by signal ${result.signal}`;
+  }
+  if (!result.stdout?.trim()) {
+    return `product verifier process failed with status ${result.status}`;
+  }
+  let output;
+  try {
+    output = JSON.parse(result.stdout);
+  } catch {
+    return "product verifier returned malformed structured output";
+  }
+  if (output?.valid !== false || !Array.isArray(output.errors)) {
+    return "product verifier returned an invalid failure result";
+  }
+  const errors = output.errors.filter(
+    (error) =>
+      typeof error === "string" &&
+      error.length > 0 &&
+      error.length <= 500 &&
+      !/[\r\n\0]/.test(error),
+  );
+  if (errors.length === 0 || errors.length !== output.errors.length) {
+    return "product verifier returned unsafe or empty diagnostics";
+  }
+  return errors.slice(0, 10).join("; ");
+}
+
 function verifyDeliveryClaim(manifest) {
   const claim = deliveryClaim(manifest);
   const { productPrd, productTasks, deliveryEvidence } = manifest.options || {};
@@ -216,7 +248,7 @@ function verifyDeliveryClaim(manifest) {
   );
   if (result.status !== 0) {
     throw new Error(
-      `delivery claim verification failed: ${result.stderr.trim()}`,
+      `delivery claim verification failed: ${verifierFailure(result)}`,
     );
   }
   return result.stdout.trim();

@@ -284,6 +284,13 @@ function fixture(behavior = {}, { merge = false, tier = "low" } = {}) {
     path.resolve(__dirname, "..", "product-completion.js"),
     path.join(runtime, "product-completion.js"),
   );
+  if (behavior.productVerifier) {
+    const verifier = path.join(runtime, "product-completion.js");
+    writeFileSync(
+      verifier,
+      `#!/usr/bin/env node\nmodule.exports = { productionCodeChange: () => true };\nif (require.main === module) { ${behavior.productVerifier} }\n`,
+    );
+  }
   chmodSync(path.join(runtime, "quality-run.js"), 0o755);
   writeFileSync(path.join(runtime, "quality-invocation.js"), FAKE_INVOCATION);
   writeFileSync(path.join(runtime, "fake-step.js"), FAKE_STEP);
@@ -312,13 +319,22 @@ function fixture(behavior = {}, { merge = false, tier = "low" } = {}) {
     manifestPath,
     JSON.stringify({
       manifestRevision: 0,
+      stateRoot: root,
       repo: { realpath: root },
       revisions: {
         initialHead: "abc123",
         currentHead: "abc123",
         baseSha: "base123",
       },
-      options: { merge },
+      options: behavior.productVerifier
+        ? {
+            merge,
+            deliveryClaim: "local-product",
+            productPrd: path.join(root, "prd.md"),
+            productTasks: path.join(root, "tasks.md"),
+            deliveryEvidence: path.join(root, "evidence.json"),
+          }
+        : { merge },
       ...(merge
         ? { merge: { repositoryLease: { token: "fixture-token" } } }
         : {}),
@@ -332,6 +348,11 @@ function fixture(behavior = {}, { merge = false, tier = "low" } = {}) {
       behavior,
     }),
   );
+  if (behavior.productVerifier) {
+    for (const name of ["prd.md", "tasks.md", "evidence.json"]) {
+      writeFileSync(path.join(root, name), "fixture\n");
+    }
+  }
   return { manifestPath, runner: path.join(runtime, "quality-run.js") };
 }
 
@@ -596,6 +617,51 @@ describe("quality-run public orchestration", () => {
         "contract delivery claim requires product evidence for product-affecting file 'src/App.tsx'",
     });
     expect(result.manifest.calls).not.toContain("quality-run-review.sh");
+  });
+
+  it.each([
+    ["incomplete tasks", "implementation task is incomplete"],
+    ["digest mismatch", "behavioralTests receipt digest does not match"],
+    [
+      "missing receipt fields",
+      "acceptanceEvidence receipt is missing artifact",
+    ],
+  ])("preserves actionable product diagnostics for %s", (_case, diagnostic) => {
+    const result = run(
+      fixture({
+        changedFiles: ["src/App.tsx"],
+        productVerifier: `process.stdout.write(JSON.stringify({valid:false,errors:[${JSON.stringify(diagnostic)}]})); process.exitCode=1;`,
+      }),
+    );
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.output).message).toContain(diagnostic);
+  });
+
+  it("classifies malformed verifier output without exposing it", () => {
+    const secret = "raw-secret-value";
+    const result = run(
+      fixture({
+        changedFiles: ["src/App.tsx"],
+        productVerifier: `process.stdout.write("not-json ${secret}"); process.stderr.write("${secret}"); process.exitCode=1;`,
+      }),
+    );
+    const message = JSON.parse(result.output).message;
+    expect(message).toContain("malformed structured output");
+    expect(message).not.toContain(secret);
+    expect(result.stdout).not.toContain(secret);
+    expect(result.stderr).not.toContain(secret);
+  });
+
+  it("keeps a verifier process failure distinct from validation errors", () => {
+    const result = run(
+      fixture({
+        changedFiles: ["src/App.tsx"],
+        productVerifier: "process.exit(9);",
+      }),
+    );
+    expect(JSON.parse(result.output).message).toContain(
+      "product verifier process failed with status 9",
+    );
   });
 
   it("records signal interruption as one terminal campaign", () => {
