@@ -65,7 +65,7 @@ const WORKFLOW_COMMAND = readFileSync(
  * PASSED. These tests pin the gate that closes that hole.
  */
 describe("quality merge gates", () => {
-  it("does not treat an already-green exact-head check set as new CI spend", () => {
+  it("does not treat a registered exact-head check set as new CI spend", () => {
     const source = STAMP_AND_MERGE;
     expect(source).toContain('gh pr checks "$PR"');
     expect(source).toContain("--required --json state");
@@ -82,10 +82,21 @@ describe("quality merge gates", () => {
     expect(source).toMatch(
       /CHECKS_FOR_ADMISSION_JSON="\$REQUIRED_CHECKS_JSON"[\s\S]*CHECKS_FOR_ADMISSION_JSON="\$REGISTERED_CHECKS_JSON"/,
     );
-    expect(source).toContain('if [ "$CI_ALREADY_GREEN" != true ]; then');
-    expect(source).toMatch(/CI_ALREADY_GREEN[\s\S]*ci-budget-admission\.js/);
+    expect(source).toContain('if [ "$CI_ALREADY_REGISTERED" != true ]; then');
     expect(source).toMatch(
-      /CI_BUDGET_STATUS=\$\?[\s\S]*"\$CI_BUDGET_STATUS" -eq 2[\s\S]*record_merge_admission_blocked_terminal "ci:failed"/,
+      /CI_ALREADY_REGISTERED[\s\S]*ci-budget-admission\.js/,
+    );
+    expect(source).toMatch(
+      /CI_BUDGET_STATUS=\$\?[\s\S]*"\$CI_BUDGET_STATUS" -ne 2[\s\S]*quality-required-checks\.js" ensure[\s\S]*enforce_ci_budget_admission/,
+    );
+    expect(source.indexOf('quality-required-checks.js" ensure')).toBeLessThan(
+      source.lastIndexOf("enforce_ci_budget_admission"),
+    );
+    expect(source).toContain(
+      "local CI budget policy denied new workflow spend for this candidate",
+    );
+    expect(source).not.toContain(
+      "GitHub Actions minute policy denied this candidate",
     );
     expect(source).toContain(
       "CI budget admission could not produce a policy decision",

@@ -68,27 +68,35 @@ if [ "$REQUIRED_CHECKS_ABSENT" = true ]; then
   CHECKS_FOR_ADMISSION_JSON="$REGISTERED_CHECKS_JSON"
 fi
 CI_ALREADY_GREEN=false
+CI_ALREADY_REGISTERED=false
+if printf '%s' "$CHECKS_FOR_ADMISSION_JSON" | jq -e \
+  'length > 0' >/dev/null 2>&1; then
+  CI_ALREADY_REGISTERED=true
+fi
 if printf '%s' "$CHECKS_FOR_ADMISSION_JSON" | jq -e \
   'length > 0 and all(.[]; .state == "SUCCESS" or .state == "SKIPPED" or .state == "NEUTRAL")' \
   >/dev/null 2>&1; then
   CI_ALREADY_GREEN=true
 fi
-if [ "$CI_ALREADY_GREEN" != true ]; then
+CI_BUDGET_STATUS=0
+if [ "$CI_ALREADY_REGISTERED" != true ]; then
   if node "$SCRIPT_DIR/ci-budget-admission.js" \
     ${CI_BUDGET_ARGS[@]+"${CI_BUDGET_ARGS[@]}"} >/dev/null; then
     :
   else
     CI_BUDGET_STATUS=$?
-    if [ "$CI_BUDGET_STATUS" -eq 2 ]; then
-      CI_BUDGET_DETAIL="GitHub Actions minute policy denied this candidate"
-      record_merge_admission_blocked_terminal "ci:failed" "$CI_BUDGET_DETAIL" || exit 1
-      echo "❌ MERGE BLOCKED: $CI_BUDGET_DETAIL." >&2
-      exit 1
+    if [ "$CI_BUDGET_STATUS" -ne 2 ]; then
+      echo "❌ MERGE FAILED: CI budget admission could not produce a policy decision (exit $CI_BUDGET_STATUS)." >&2
+      exit "$CI_BUDGET_STATUS"
     fi
-    echo "❌ MERGE FAILED: CI budget admission could not produce a policy decision (exit $CI_BUDGET_STATUS)." >&2
-    exit "$CI_BUDGET_STATUS"
+    # A valid local policy refusal is authoritative budget evidence, but it is
+    # not evidence that GitHub denied runner allocation. Preserve it until the
+    # required-check preparation below has exposed any more specific lookup,
+    # registration, dispatch, or credential condition.
+    echo "[quality] local CI budget policy refused new spend; preparing missing required checks before terminal admission." >&2
   fi
-else
+fi
+if [ "$CI_ALREADY_GREEN" = true ]; then
   # A prior CI-budget denial is immutable evidence, but it must not strand the
   # same exact HEAD after GitHub reports current green CI. The resolver reads
   # the live PR and registered checks again, archives only a matching
@@ -326,6 +334,14 @@ BASE_BRANCH="${BASE_BRANCH#origin/}"
 RC=0
 CI_BILLING_WAIVED=false
 CI_WAIVER_ARTIFACT="$(dirname "$MANIFEST")/ci-billing-waiver.json"
+enforce_ci_budget_admission() {
+  [ "$CI_BUDGET_STATUS" -ne 2 ] || {
+    CI_BUDGET_DETAIL="local CI budget policy denied new workflow spend for this candidate"
+    record_merge_admission_blocked_terminal "ci:failed" "$CI_BUDGET_DETAIL" || exit 1
+    echo "❌ MERGE BLOCKED: $CI_BUDGET_DETAIL." >&2
+    exit 1
+  }
+}
 if [ "$CI_BUDGET_MODE" = local-exact-head ]; then
   # The operator capability is already bound to independently classified
   # billing-preallocation evidence. Revalidate it before any workflow dispatch
@@ -336,6 +352,7 @@ if [ "$CI_BUDGET_MODE" = local-exact-head ]; then
   CI_BILLING_WAIVED=true
   echo "⚠️  [quality] exact-HEAD CI billing override validated before workflow dispatch; using local gates and review." >&2
 elif [ "$PREFLIGHT_BASE_PROTECTION" = unprotectable ]; then
+  enforce_ci_budget_admission
   bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CI_TIMEOUT" -- \
     bash "$SCRIPT_DIR/quality-wait-required-checks.sh" --pr "$PR" || RC=$?
 else
@@ -347,6 +364,7 @@ else
     printf '%s' "$ENSURE_JSON" | jq -r \
       '.deferred[] | "[quality] exact-head workflow registered; required check remains deferred: \(.context) workflow=\(.workflowId) run=\(.runId) status=\(.status)"' >&2
   fi
+  enforce_ci_budget_admission
   bash "$SCRIPT_DIR/quality-run-bounded.sh" --timeout "$CI_TIMEOUT" -- \
     node "$SCRIPT_DIR/quality-required-checks.js" wait \
       --repo "$EXPECTED_REPOSITORY" --base "$BASE_BRANCH" \
