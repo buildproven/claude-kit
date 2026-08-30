@@ -619,6 +619,32 @@ describe("quality-run public orchestration", () => {
     expect(result.manifest.calls).not.toContain("quality-run-review.sh");
   });
 
+  it("runs an evidence-free contract claim for quality-control configuration", () => {
+    const result = run(
+      fixture({
+        changedFiles: [".buildproven/test-impact.json", "harness-config.json"],
+      }),
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "complete",
+      state: "verified-unmerged",
+    });
+    expect(result.manifest.calls).toContain("quality-run-review.sh");
+  });
+
+  it("blocks similarly named harness configuration that is not the exact quality-control file", () => {
+    const result = run(fixture({ changedFiles: ["harness-config.js"] }));
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "terminal",
+      state: "blocked",
+      message:
+        "contract delivery claim requires product evidence for product-affecting file 'harness-config.js'",
+    });
+    expect(result.manifest.calls).not.toContain("quality-run-review.sh");
+  });
+
   it.each([
     ["incomplete tasks", "implementation task is incomplete"],
     ["digest mismatch", "behavioralTests receipt digest does not match"],

@@ -137,6 +137,36 @@ describe("quality runtime planning", () => {
     );
   });
 
+  it("BUI-822: funds claude-kit's measured native test gate", () => {
+    const harnessConfig = JSON.parse(
+      fs.readFileSync(path.join(__dirname, "..", "..", "harness-config.json")),
+    );
+    const testTimeoutMinutes =
+      harnessConfig.checkDefinitions?.test?.timeoutMinutes;
+
+    expect(testTimeoutMinutes).toBe(15);
+
+    const plan = planRuntime({
+      riskScore: 80,
+      diffStats: {
+        files: 15,
+        lines: 4103,
+        repositoryFiles: 426,
+      },
+      gateCount: 3,
+      gateTimeoutSeconds: { test: testTimeoutMinutes * 60 },
+    });
+
+    expect(plan.workload).toBe("large");
+    expect(plan.gateReserveSeconds).toBe(1500);
+    expect(plan.campaignSeconds).toBe(1950);
+    expect(
+      plan.campaignSeconds - plan.gateReserveSeconds,
+    ).toBeGreaterThanOrEqual(
+      plan.reviewReserveSeconds + plan.verificationSeconds + 60,
+    );
+  });
+
   it("lets explicit quality levels raise depth without erasing size scaling", () => {
     const level95 = planRuntime({
       riskScore: 5,

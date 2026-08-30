@@ -3,7 +3,12 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { validate, verifyClaim, next } from "../product-completion.js";
+import {
+  validate,
+  verifyClaim,
+  next,
+  productionCodeChange,
+} from "../product-completion.js";
 
 function files({ phase = "implementation", checked = false } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "product-completion-"));
@@ -51,7 +56,7 @@ function evidence(dir) {
 
 describe("product completion", () => {
   it("requires a phase and an implementation task for user-facing work", () => {
-    const { prd, tasks } = files({ phase: "contract" });
+    const { prd, tasks } = files({ phase: "contract", checked: true });
     const local = evidence(path.dirname(prd));
     const result = validate(prd, tasks);
     expect(result.valid).toBe(false);
@@ -133,6 +138,19 @@ describe("product completion", () => {
       expect(claim.errors).toContain(
         `contract claim cannot cover product-affecting file '${productFile}'`,
       );
+    }
+  });
+
+  it("allows contract claims for repository quality-control configuration", () => {
+    for (const file of [
+      "docs/decisions/ADR-quality-runtime.md",
+      ".buildproven/test-impact.json",
+      "harness-config.json",
+    ]) {
+      expect(productionCodeChange(file)).toBe(false);
+    }
+    for (const file of ["harness-config.js", "harness-config.yaml"]) {
+      expect(productionCodeChange(file)).toBe(true);
     }
   });
 

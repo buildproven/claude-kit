@@ -10,8 +10,9 @@ const crypto = require("node:crypto");
 const PHASES = new Set(["contract", "implementation", "hosted", "validation"]);
 const CLAIMS = new Set(["contract", "local-product", "hosted", "validated"]);
 const NON_PRODUCT_PATH =
-  /^(?:\.github\/|docs?\/|tests?\/|fixtures?\/)|(?:^|\/)(?:__tests__|__fixtures__)\//i;
+  /^(?:\.buildproven\/|\.github\/|docs?\/|tests?\/|fixtures?\/)|(?:^|\/)(?:__tests__|__fixtures__)\//i;
 const NON_PRODUCT_TEST_FILE = /(?:\.test|\.spec)\.[^/]+$/i;
+const NON_PRODUCT_EXACT_PATHS = new Set(["harness-config.json"]);
 const NON_PRODUCT_ROOT_NAMES = new Set([
   "AGENTS",
   "CHANGELOG",
@@ -172,6 +173,7 @@ function receiptRecord(value, label, fields, head, evidencePath) {
 
 function productionCodeChange(file) {
   if (typeof file !== "string" || file.length === 0) return false;
+  if (NON_PRODUCT_EXACT_PATHS.has(file)) return false;
   const rootName = file.includes("/")
     ? null
     : file.split(".", 1)[0].toUpperCase();
