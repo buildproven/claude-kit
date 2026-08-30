@@ -62,7 +62,8 @@ KEBAB = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 # BEFORE this runs, so a bare token match here is a genuine invocation.
 REVERSE_EDGE = re.compile(r"/((?:bs|cc|gh):[a-z0-9-]+)")
 SELF_DELEGATION = re.compile(
-    r"\b(?:run|invoke|execute|call|delegate\s+to)\s+"
+    r"\b(?:run|invoke|execute|call|use|start|trigger|launch|dispatch|"
+    r"delegate\s+to|hand\s+off\s+to)\s+"
     r"(?:the\s+)?(?:command\s+)?/((?:bs|cc|gh):[a-z0-9-]+)",
     re.IGNORECASE,
 )
