@@ -463,6 +463,72 @@ describe("quality dependency preflight", () => {
     expect(result.stderr).toMatch(/missing\.js|bin eslint/u);
   });
 
+  it("rejects a directory-backed Yarn PnP local package at an alternate path", () => {
+    const root = fixture();
+    selectFixtureManager(root, "yarn", "4.18.0");
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json")));
+    pkg.devDependencies.eslint = "workspace:packages/eslint";
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(pkg));
+    fs.writeFileSync(
+      path.join(root, "yarn.lock"),
+      '__metadata:\n  version: 10\n"eslint@workspace:packages/eslint":\n  version: 1.2.3\n  resolution: "eslint@workspace:packages/eslint"\n  linkType: soft\n"fixture@workspace:.":\n  version: 0.0.0-use.local\n  resolution: "fixture@workspace:."\n  dependencies:\n    eslint: "workspace:packages/eslint"\n',
+    );
+    fs.writeFileSync(
+      path.join(root, ".yarnrc.yml"),
+      "pnpEnableInlining: false\n",
+    );
+    const locked = path.join(root, "packages", "eslint");
+    const alternate = path.join(root, "packages", "alternate");
+    for (const directory of [locked, alternate]) {
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(
+        path.join(directory, "package.json"),
+        JSON.stringify({ name: "eslint", version: "1.2.3" }),
+      );
+    }
+    fs.writeFileSync(
+      path.join(root, ".pnp.data.json"),
+      JSON.stringify({
+        dependencyTreeRoots: [{ name: "fixture", reference: "workspace:." }],
+        packageRegistryData: [
+          [
+            "fixture",
+            [
+              [
+                "workspace:.",
+                {
+                  packageLocation: "./",
+                  packageDependencies: [
+                    ["eslint", "workspace:packages/eslint"],
+                  ],
+                  linkType: "SOFT",
+                },
+              ],
+            ],
+          ],
+          [
+            "eslint",
+            [
+              [
+                "workspace:packages/eslint",
+                {
+                  packageLocation: "./packages/alternate/",
+                  packageDependencies: [],
+                  linkType: "SOFT",
+                },
+              ],
+            ],
+          ],
+        ],
+      }),
+    );
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/locked Yarn local target/);
+  });
+
   it("rejects duplicate raw ZIP entries before Yarn path normalization", () => {
     const root = fixture();
     const { archive } = installYarnPnpFixture(root);
@@ -506,6 +572,25 @@ describe("quality dependency preflight", () => {
     });
     expect(result.status).toBe(78);
     expect(result.stderr).toMatch(/differs from the supported template/);
+  });
+
+  it("rejects an exact regular shim that targets a different command owner", async () => {
+    const root = fixture();
+    installFixturePackage(root);
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json")));
+    pkg.bin = { eslint: "tools/pwn.js" };
+    fs.mkdirSync(path.join(root, "tools"));
+    fs.writeFileSync(path.join(root, "tools", "pwn.js"), "");
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(pkg));
+    const command = path.join(root, "node_modules", ".bin", "eslint");
+    fs.unlinkSync(command);
+    const { cmdShim } = await import("@zkochan/cmd-shim");
+    await cmdShim(path.join(root, "tools", "pwn.js"), command);
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/eslint targets the wrong file/);
   });
 
   it("accepts exact POSIX, CMD, and PowerShell wrappers from the supported generator", async () => {
@@ -676,6 +761,36 @@ describe("quality dependency preflight", () => {
     expect(result.stderr).toMatch(/install.globalStore is unsupported/);
   });
 
+  it("rejects prototype-mutating Bun lock properties", () => {
+    const root = fixture();
+    selectFixtureManager(root, "bun", "1.4.0");
+    fs.writeFileSync(
+      path.join(root, "bun.lock"),
+      '{"__proto__":{"lockfileVersion":1,"workspaces":{"":{"devDependencies":{"eslint":"1.2.3"}}},"packages":{"eslint":["eslint@1.2.3","",{}]}}}',
+    );
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/forbidden property '__proto__'/);
+  });
+
+  it("counts scalar JSON values before allocating parsed objects", () => {
+    const { validateJsonText } = require(PREFLIGHT);
+    const source = `[${"0,".repeat(1_000_000)}0]`;
+    expect(() => validateJsonText(source, "scalar lock")).toThrow(
+      /exceeds 1000000 nodes/,
+    );
+  });
+
+  it("counts scalar YAML values before allocating parsed objects", () => {
+    const { validateYamlText } = require(PREFLIGHT);
+    const source = `[${"0,".repeat(1_000_000)}0]`;
+    expect(() => validateYamlText(source, "scalar lock")).toThrow(
+      /exceeds 1000000 pre-parse tokens/,
+    );
+  });
+
   it("rejects JSON input deeper than the parser contract", () => {
     const root = fixture();
     let nested = {};
@@ -805,6 +920,45 @@ describe("quality dependency preflight", () => {
     });
     expect(result.status).toBe(78);
     expect(result.stderr).toMatch(/does not match package-lock target/);
+  });
+
+  it("rejects a Yarn workspace link to a same-version alternate target", () => {
+    const root = fixture();
+    selectFixtureManager(root, "yarn", "4.18.0");
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json")));
+    pkg.devDependencies.eslint = "workspace:packages/eslint";
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(pkg));
+    fs.writeFileSync(
+      path.join(root, "yarn.lock"),
+      '__metadata:\n  version: 10\n"eslint@workspace:packages/eslint":\n  version: 1.2.3\n  resolution: "eslint@workspace:packages/eslint"\n  linkType: soft\n"fixture@workspace:.":\n  version: 0.0.0-use.local\n  resolution: "fixture@workspace:."\n  dependencies:\n    eslint: "workspace:packages/eslint"\n',
+    );
+    fs.writeFileSync(
+      path.join(root, ".yarnrc.yml"),
+      "nodeLinker: node-modules\n",
+    );
+    fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "node_modules", ".yarn-state.yml"),
+      '__metadata:\n  version: 1\n"eslint@workspace:packages/eslint":\n  locations:\n    - "node_modules/eslint"\n',
+    );
+    const locked = path.join(root, "packages", "eslint");
+    const alternate = path.join(root, "packages", "alternate");
+    for (const directory of [locked, alternate]) {
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(
+        path.join(directory, "package.json"),
+        JSON.stringify({ name: "eslint", version: "1.2.3" }),
+      );
+    }
+    fs.symlinkSync(
+      path.relative(path.join(root, "node_modules"), alternate),
+      path.join(root, "node_modules", "eslint"),
+    );
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/locked Yarn local target/);
   });
 
   it("wires the preflight before immutable manifest creation", () => {

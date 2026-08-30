@@ -6,10 +6,14 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
-const { parse: parseJsonc, printParseErrorCode } = require("jsonc-parser");
+const {
+  parse: parseJsonc,
+  printParseErrorCode,
+  visit: visitJson,
+} = require("jsonc-parser");
 const { parseSyml } = require("@yarnpkg/parsers");
 const { ZipFS } = require("@yarnpkg/libzip");
-const { parseAllDocuments, parseDocument } = require("yaml");
+const { Lexer: YamlLexer, parseAllDocuments, parseDocument } = require("yaml");
 const { parse: parseToml } = require("smol-toml");
 
 const SUPPORTED_MANAGERS = ["npm", "pnpm", "yarn", "bun"];
@@ -22,7 +26,9 @@ const MAX_ZIP_EXPANDED_BYTES = 2 * 1024 * 1024 * 1024;
 
 function readJson(file, label) {
   try {
-    const value = JSON.parse(readText(file, label));
+    const text = readText(file, label);
+    validateJsonText(text, label);
+    const value = JSON.parse(text);
     validateObjectLimits(value, label);
     return value;
   } catch (error) {
@@ -32,12 +38,62 @@ function readJson(file, label) {
   }
 }
 
+function validateJsonText(text, label, options = {}) {
+  let depth = 0;
+  let nodes = 0;
+  const count = () => {
+    nodes += 1;
+    if (nodes > MAX_NODES)
+      throw new Error(`${label} exceeds ${MAX_NODES} nodes`);
+  };
+  const enter = () => {
+    count();
+    depth += 1;
+    if (depth > MAX_DEPTH)
+      throw new Error(`${label} exceeds ${MAX_DEPTH} levels`);
+  };
+  visitJson(
+    text,
+    {
+      onObjectBegin: enter,
+      onObjectProperty(name) {
+        count();
+        if (name === "__proto__") {
+          throw new Error(`${label} contains forbidden property '${name}'`);
+        }
+      },
+      onObjectEnd() {
+        depth -= 1;
+      },
+      onArrayBegin: enter,
+      onArrayEnd() {
+        depth -= 1;
+      },
+      onLiteralValue: count,
+      onError(error) {
+        throw new Error(`${label} is malformed: ${printParseErrorCode(error)}`);
+      },
+    },
+    {
+      allowTrailingComma: options.allowTrailingComma === true,
+      disallowComments: options.allowComments !== true,
+    },
+  );
+}
+
 function validateObjectLimits(value, label) {
   const stack = [{ value, depth: 0 }];
   const seen = new Set();
   let nodes = 0;
   while (stack.length > 0) {
     const current = stack.pop();
+    if (current.depth > MAX_DEPTH) {
+      throw new Error(`${label} exceeds ${MAX_DEPTH} levels`);
+    }
+    nodes += 1;
+    if (nodes > MAX_NODES) {
+      throw new Error(`${label} exceeds ${MAX_NODES} nodes`);
+    }
     if (
       current.value === null ||
       typeof current.value !== "object" ||
@@ -45,16 +101,31 @@ function validateObjectLimits(value, label) {
     ) {
       continue;
     }
-    if (current.depth > MAX_DEPTH) {
-      throw new Error(`${label} exceeds ${MAX_DEPTH} levels`);
-    }
     seen.add(current.value);
-    nodes += 1;
-    if (nodes > MAX_NODES) {
-      throw new Error(`${label} exceeds ${MAX_NODES} nodes`);
-    }
     for (const child of Object.values(current.value)) {
       stack.push({ value: child, depth: current.depth + 1 });
+    }
+  }
+}
+
+function validateYamlText(text, label) {
+  let tokens = 0;
+  for (const token of new YamlLexer().lex(text)) {
+    if (/^\s*$/u.test(token) || token.startsWith("#")) continue;
+    tokens += 1;
+    if (tokens > MAX_NODES) {
+      throw new Error(`${label} exceeds ${MAX_NODES} pre-parse tokens`);
+    }
+  }
+}
+
+function validateTomlText(text, label) {
+  let tokens = 0;
+  for (const character of text) {
+    if (!["=", ",", "[", "{"].includes(character)) continue;
+    tokens += 1;
+    if (tokens > MAX_NODES) {
+      throw new Error(`${label} exceeds ${MAX_NODES} pre-parse tokens`);
     }
   }
 }
@@ -98,6 +169,7 @@ function readText(file, label) {
 }
 
 function parseYaml(text, label) {
+  validateYamlText(text, label);
   const document = parseDocument(text, {
     maxAliasCount: 100,
     uniqueKeys: true,
@@ -269,6 +341,16 @@ function validateInstalled(
         containedRealpath(root, command, `${name} executable ${bin}`) !== target
       ) {
         failures.push(`${name}: executable ${bin} targets the wrong file`);
+      } else if (!commandStat.isSymbolicLink()) {
+        const marker = `# cmd-shim-target=${target.replaceAll("\\", "/")}`;
+        if (
+          readText(command, `${name} executable ${bin}`)
+            .trimEnd()
+            .split("\n")
+            .at(-1) !== marker
+        ) {
+          failures.push(`${name}: executable ${bin} targets the wrong file`);
+        }
       }
     }
   } catch (error) {
@@ -508,6 +590,7 @@ function pnpmSelection(lock, name) {
 
 function inspectPnpm(root, dependencies, specs) {
   const text = readText(path.join(root, "pnpm-lock.yaml"), "pnpm-lock.yaml");
+  validateYamlText(text, "pnpm-lock.yaml");
   const documents = parseAllDocuments(text, {
     maxAliasCount: 100,
     uniqueKeys: true,
@@ -651,6 +734,26 @@ function yarnSelectedRecord(lock, name, selector) {
   return keys.length === 1 ? lock[keys[0]] : null;
 }
 
+function yarnLocalTarget(root, name, record) {
+  const prefix = `${name}@`;
+  if (!String(record?.resolution || "").startsWith(prefix)) return null;
+  const reference = record.resolution.slice(prefix.length);
+  const match = reference.match(/^(workspace|file|link|portal):(.+)$/u);
+  if (!match) return null;
+  const selector = match[2].split("::", 1)[0];
+  if (!selector || /^[~^*]/u.test(selector)) {
+    throw new Error(`${name}: Yarn local locator has no concrete path`);
+  }
+  if (record.linkType !== "soft") {
+    throw new Error(`${name}: Yarn local locator must use a soft link`);
+  }
+  return containedRealpath(
+    root,
+    path.resolve(root, selector),
+    `${name} locked Yarn local package`,
+  );
+}
+
 function yarnLocatorSlug(name, reference) {
   const scopeSeparator = name.startsWith("@") ? name.indexOf("/") : -1;
   const scope = scopeSeparator === -1 ? null : name.slice(1, scopeSeparator);
@@ -677,7 +780,9 @@ function yarnLocatorSlug(name, reference) {
 function inspectYarn(root, pkg, dependencies, specs) {
   let lock;
   try {
-    lock = parseSyml(readText(path.join(root, "yarn.lock"), "yarn.lock"));
+    const text = readText(path.join(root, "yarn.lock"), "yarn.lock");
+    validateYamlText(text, "yarn.lock");
+    lock = parseSyml(text);
     validateObjectLimits(lock, "yarn.lock");
   } catch (error) {
     return [`yarn.lock is malformed: ${error.message}`];
@@ -754,6 +859,30 @@ function inspectYarn(root, pkg, dependencies, specs) {
             packageMap?.packages?.["."]?.dependencies?.[name] || "",
           )
         : path.join(root, "node_modules", name);
+    try {
+      const localTarget = yarnLocalTarget(root, name, record);
+      if (
+        localTarget &&
+        containedRealpath(root, packageRoot, `${name} installed package`) !==
+          localTarget
+      ) {
+        failures.push(
+          `${name}: installed package does not match the locked Yarn local target`,
+        );
+        continue;
+      }
+      if (
+        localTarget &&
+        linker === "node-modules" &&
+        !fs.lstatSync(packageRoot).isSymbolicLink()
+      ) {
+        failures.push(`${name}: Yarn local package is not installed as a link`);
+        continue;
+      }
+    } catch (error) {
+      failures.push(`${name}: ${error.message}`);
+      continue;
+    }
     if (linker === "pnpm") {
       const reference = record.resolution.slice(`${name}@`.length);
       const expectedMap = `.store/${yarnLocatorSlug(name, reference)}/package`;
@@ -829,6 +958,26 @@ function inspectYarnPnp(root, rootRecord, lock, dependencies, specs) {
       failures.push(
         ...validateYarnArchive(root, name, info.packageLocation, record),
       );
+      continue;
+    }
+    try {
+      const localTarget = yarnLocalTarget(root, name, record);
+      if (
+        localTarget &&
+        (info.linkType !== "SOFT" ||
+          containedRealpath(
+            root,
+            path.resolve(root, info.packageLocation),
+            `${name} PnP package`,
+          ) !== localTarget)
+      ) {
+        failures.push(
+          `${name}: PnP package does not match the locked Yarn local target`,
+        );
+        continue;
+      }
+    } catch (error) {
+      failures.push(`${name}: ${error.message}`);
       continue;
     }
     failures.push(
@@ -1018,7 +1167,14 @@ function inspectBun(root, pkg, dependencies, specs) {
   }
   const errors = [];
   const lock = parseJsonc(
-    readText(path.join(root, "bun.lock"), "bun.lock"),
+    (() => {
+      const text = readText(path.join(root, "bun.lock"), "bun.lock");
+      validateJsonText(text, "bun.lock", {
+        allowComments: true,
+        allowTrailingComma: true,
+      });
+      return text;
+    })(),
     errors,
     { allowTrailingComma: true },
   );
@@ -1026,14 +1182,21 @@ function inspectBun(root, pkg, dependencies, specs) {
     return [`bun.lock is malformed: ${printParseErrorCode(errors[0].error)}`];
   }
   validateObjectLimits(lock, "bun.lock");
-  if (![1, 2, 3].includes(lock.lockfileVersion)) {
+  if (
+    !Object.hasOwn(lock, "lockfileVersion") ||
+    !Object.hasOwn(lock, "workspaces") ||
+    !Object.hasOwn(lock, "packages") ||
+    ![1, 2, 3].includes(lock.lockfileVersion)
+  ) {
     return [
       `bun: unsupported lock schema ${lock.lockfileVersion || "missing"}`,
     ];
   }
   const bunfigFile = path.join(root, "bunfig.toml");
   if (fs.existsSync(bunfigFile)) {
-    const bunfig = parseToml(readText(bunfigFile, "bunfig.toml"));
+    const text = readText(bunfigFile, "bunfig.toml");
+    validateTomlText(text, "bunfig.toml");
+    const bunfig = parseToml(text);
     validateObjectLimits(bunfig, "bunfig.toml");
     if (bunfig.install?.globalStore === true) {
       return [
@@ -1048,9 +1211,17 @@ function inspectBun(root, pkg, dependencies, specs) {
   ) {
     return ["bun: schema 3 overrides do not match package.json"];
   }
+  if (
+    typeof lock.workspaces !== "object" ||
+    lock.workspaces === null ||
+    !Object.hasOwn(lock.workspaces, "")
+  ) {
+    return ["bun: root workspace record is missing"];
+  }
+  const rootWorkspace = lock.workspaces[""];
   const rootSpecs = {
-    ...(lock.workspaces?.[""]?.dependencies || {}),
-    ...(lock.workspaces?.[""]?.devDependencies || {}),
+    ...(rootWorkspace?.dependencies || {}),
+    ...(rootWorkspace?.devDependencies || {}),
   };
   const failures = [];
   for (const name of dependencies) {
@@ -1060,11 +1231,21 @@ function inspectBun(root, pkg, dependencies, specs) {
       );
       continue;
     }
-    const record = lock.packages?.[name];
+    if (
+      typeof lock.packages !== "object" ||
+      lock.packages === null ||
+      !Object.hasOwn(lock.packages, name)
+    ) {
+      failures.push(`${name}: missing Bun package record`);
+      continue;
+    }
+    const record = lock.packages[name];
     const locator = String(record?.[0] || "");
     const override = bunOverrideVersion(pkg, name);
     if (override.present && override.version === null) {
-      failures.push(`${name}: unsupported Bun override ${pkg.overrides[name]}`);
+      failures.push(
+        `${name}: unsupported Bun override ${Object.hasOwn(pkg.overrides || {}, name) ? pkg.overrides[name] : "missing"}`,
+      );
       continue;
     }
     if (
@@ -1319,7 +1500,14 @@ async function main(argv = process.argv.slice(2)) {
   }
 }
 
-module.exports = { check, inspectDependencies, isSubpath, telemetryFile };
+module.exports = {
+  check,
+  inspectDependencies,
+  isSubpath,
+  telemetryFile,
+  validateJsonText,
+  validateYamlText,
+};
 
 if (require.main === module) {
   main().then((code) => {
