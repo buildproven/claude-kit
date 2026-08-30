@@ -38,6 +38,14 @@ describe("CSC agent-visible skill contract", () => {
     );
   });
 
+  it("rejects backticked self-delegation after an invocation verb", () => {
+    const result = lint("When triggered, run `/bs:status` for the report.");
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout).violations).toContainEqual(
+      expect.objectContaining({ rule: "R6", name: "status" }),
+    );
+  });
+
   it("allows self-documentation while the skill executes behavior", () => {
     const result = lint(
       "The `/bs:status` command is a human wrapper. Read Git status directly.",
