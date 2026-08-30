@@ -740,6 +740,14 @@ Quality-Evidence-Signature: ${signature}`;
     expect(source).toMatch(
       /PROVIDER_RC" -eq 76 \] && \[ "\$FALLBACK_ON_TIMEOUT" = 1 \]/,
     );
+    expect(source).toMatch(/PROVIDER_RC" -eq 78/);
+    expect(source).toMatch(/provider-input-too-large/);
+    expect(source).toMatch(
+      /classify_structured_provider_failure codex "\$error_file"/,
+    );
+    expect(source).toMatch(
+      /RETRY_STATE" = pending \].*INCOMPLETE_CATEGORY" != provider-input-too-large/s,
+    );
   });
 
   it("runs Gemini through the same bounded, read-only provider contract", () => {

@@ -46,6 +46,35 @@ describe("structured provider failure classification", () => {
     ).toBe(false);
   });
 
+  it("classifies the exact Codex input-limit rejection for fallback", () => {
+    expect(
+      classifyStructuredFailure(
+        'Error: turn/start: turn/start failed: Input exceeds the maximum length of 1048576 characters. (code -32602), data: {"input_error_code":"input_too_large","max_chars":1048576,"actual_chars":1310705}',
+      ),
+    ).toEqual({
+      category: "provider-input-too-large",
+      resetAt: null,
+      maxChars: 1_048_576,
+      actualChars: 1_310_705,
+    });
+  });
+
+  it("does not classify partial input-limit text without the typed error", () => {
+    expect(
+      classifyStructuredFailure(
+        "Input exceeds the maximum length of 1048576 characters.",
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects inconsistent typed input-limit metadata", () => {
+    expect(
+      classifyStructuredFailure(
+        'Error: turn/start: Input exceeds the maximum length of 1048576 characters. (code -32602), data: {"input_error_code":"input_too_large","max_chars":1048576,"actual_chars":100}',
+      ),
+    ).toBeNull();
+  });
+
   it("preserves a typed reset time for actionable recovery", () => {
     expect(
       classifyStructuredFailure(
