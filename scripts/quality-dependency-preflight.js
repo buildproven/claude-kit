@@ -5,6 +5,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const zlib = require("node:zlib");
 const { execFileSync } = require("node:child_process");
 const {
   parse: parseJsonc,
@@ -142,8 +143,21 @@ function validateYamlText(text, label) {
       }
       atLineStart = false;
     }
+    if (/^(?:---|\.\.\.)$/u.test(token)) {
+      if (flowDepth !== 0) {
+        throw new Error(`${label} has unbalanced pre-parse flow tokens`);
+      }
+      indentationStack.splice(1);
+      lineSequenceDepth = 0;
+      continue;
+    }
     if (token === "[" || token === "{") flowDepth += 1;
-    if (token === "]" || token === "}") flowDepth -= 1;
+    if (token === "]" || token === "}") {
+      if (flowDepth === 0) {
+        throw new Error(`${label} has pre-parse flow-depth underflow`);
+      }
+      flowDepth -= 1;
+    }
     if (/^-$/u.test(token)) lineSequenceDepth += 1;
     if (
       indentationStack.length - 1 + flowDepth + lineSequenceDepth >
@@ -237,16 +251,56 @@ function packageBinEntries(name, pkg) {
   return Object.entries(pkg.bin);
 }
 
-function exactVersion(value) {
-  const core = String(value).split(/[+-]/, 1)[0];
-  const parts = core.split(".");
+function semverIdentifier(value) {
   return (
-    parts.length === 3 &&
-    parts.every(
-      (part) =>
-        part !== "" && [...part].every((char) => char >= "0" && char <= "9"),
+    value !== "" &&
+    [...value].every(
+      (character) =>
+        (character >= "0" && character <= "9") ||
+        (character >= "A" && character <= "Z") ||
+        (character >= "a" && character <= "z") ||
+        character === "-",
     )
   );
+}
+
+function semverNumber(value) {
+  return (
+    value !== "" &&
+    (value.length === 1 || value[0] !== "0") &&
+    [...value].every((character) => character >= "0" && character <= "9")
+  );
+}
+
+function exactVersion(value) {
+  const source = String(value);
+  const buildParts = source.split("+");
+  if (
+    buildParts.length > 2 ||
+    (buildParts.length === 2 &&
+      !buildParts[1].split(".").every(semverIdentifier))
+  ) {
+    return false;
+  }
+  const version = buildParts[0];
+  const dash = version.indexOf("-");
+  const core = dash === -1 ? version : version.slice(0, dash);
+  const prerelease = dash === -1 ? null : version.slice(dash + 1);
+  if (
+    prerelease !== null &&
+    !prerelease.split(".").every((identifier) => {
+      const numeric = [...identifier].every(
+        (character) => character >= "0" && character <= "9",
+      );
+      return (
+        semverIdentifier(identifier) && (!numeric || semverNumber(identifier))
+      );
+    })
+  ) {
+    return false;
+  }
+  const coreParts = core.split(".");
+  return coreParts.length === 3 && coreParts.every(semverNumber);
 }
 
 function versionParts(value) {
@@ -1124,6 +1178,7 @@ function zipEntryNameSafe(name) {
 function inspectRawZip(bytes, name) {
   const eocdSignature = 0x06054b50;
   const centralSignature = 0x02014b50;
+  const localSignature = 0x04034b50;
   let eocd = -1;
   const lower = Math.max(0, bytes.length - 65_557);
   for (let offset = bytes.length - 22; offset >= lower; offset -= 1) {
@@ -1151,8 +1206,12 @@ function inspectRawZip(bytes, name) {
     const nameLength = bytes.readUInt16LE(offset + 28);
     const extraLength = bytes.readUInt16LE(offset + 30);
     const commentLength = bytes.readUInt16LE(offset + 32);
+    const flags = bytes.readUInt16LE(offset + 8);
+    const method = bytes.readUInt16LE(offset + 10);
+    const compressedSize = bytes.readUInt32LE(offset + 20);
     const entrySize = bytes.readUInt32LE(offset + 24);
     const attributes = bytes.readUInt32LE(offset + 38);
+    const localOffset = bytes.readUInt32LE(offset + 42);
     const entryName = bytes.toString(
       "utf8",
       offset + 46,
@@ -1172,7 +1231,51 @@ function inspectRawZip(bytes, name) {
     }
     if (entrySize > MAX_ZIP_ENTRY_BYTES)
       throw new Error(`${name}: Yarn archive entry is too large`);
-    expanded += entrySize;
+    if ((flags & 0x08) !== 0) {
+      throw new Error(
+        `${name}: Yarn archive uses an unsupported data descriptor`,
+      );
+    }
+    if (
+      localOffset + 30 > bytes.length ||
+      bytes.readUInt32LE(localOffset) !== localSignature
+    ) {
+      throw new Error(`${name}: Yarn archive local header is invalid`);
+    }
+    const localNameLength = bytes.readUInt16LE(localOffset + 26);
+    const localExtraLength = bytes.readUInt16LE(localOffset + 28);
+    const dataOffset = localOffset + 30 + localNameLength + localExtraLength;
+    const localName = bytes.toString(
+      "utf8",
+      localOffset + 30,
+      localOffset + 30 + localNameLength,
+    );
+    if (
+      localName !== entryName ||
+      bytes.readUInt16LE(localOffset + 8) !== method ||
+      bytes.readUInt32LE(localOffset + 18) !== compressedSize ||
+      bytes.readUInt32LE(localOffset + 22) !== entrySize ||
+      dataOffset + compressedSize > bytes.length
+    ) {
+      throw new Error(`${name}: Yarn archive local and central sizes differ`);
+    }
+    const compressed = bytes.subarray(dataOffset, dataOffset + compressedSize);
+    let actual;
+    if (method === 0) {
+      actual = compressed;
+    } else if (method === 8) {
+      actual = zlib.inflateRawSync(compressed, {
+        maxOutputLength: MAX_ZIP_ENTRY_BYTES + 1,
+      });
+    } else {
+      throw new Error(`${name}: Yarn archive compression is unsupported`);
+    }
+    if (actual.length !== entrySize) {
+      throw new Error(
+        `${name}: Yarn archive expanded size differs from metadata`,
+      );
+    }
+    expanded += actual.length;
     offset += 46 + nameLength + extraLength + commentLength;
   }
   if (offset !== end)
@@ -1467,7 +1570,17 @@ async function inspectDependencies(root) {
   const pkg = readJson(packageFile, "package.json");
   const dependencies = directDependencies(pkg);
   const specs = dependencySpecs(pkg);
-  if (dependencies.length === 0) return { manager: null, failures: [] };
+  if (dependencies.length === 0) {
+    const binRoot = path.join(root, "node_modules", ".bin");
+    const entries = fs.existsSync(binRoot) ? fs.readdirSync(binRoot) : [];
+    return {
+      manager: null,
+      failures:
+        entries.length === 0
+          ? []
+          : ["dependency-free project has unbound node_modules/.bin entries"],
+    };
+  }
   let managerInfo;
   try {
     managerInfo = packageManager(root, pkg);
@@ -1539,7 +1652,7 @@ async function inspectDependencies(root) {
     };
   }
   const failures = [];
-  if (![2, 3, 4].includes(lock.lockfileVersion)) {
+  if (![2, 3].includes(lock.lockfileVersion)) {
     return {
       manager: "npm",
       failures: [

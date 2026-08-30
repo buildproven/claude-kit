@@ -705,6 +705,32 @@ describe("quality dependency preflight", () => {
     expect(result.stderr).toMatch(/duplicate or unsafe entry/);
   });
 
+  it("rejects a ZIP whose expanded bytes differ from forged size metadata", () => {
+    const root = fixture();
+    const { archive } = installYarnPnpFixture(root);
+    const bytes = fs.readFileSync(archive);
+    const entry = Buffer.from("node_modules/eslint/package.json");
+    const centralName = bytes.lastIndexOf(entry);
+    const centralOffset = centralName - 46;
+    const localOffset = bytes.readUInt32LE(centralOffset + 42);
+    bytes.writeUInt32LE(1, centralOffset + 24);
+    bytes.writeUInt32LE(1, localOffset + 22);
+    fs.writeFileSync(archive, bytes);
+    const lockFile = path.join(root, "yarn.lock");
+    const lock = fs
+      .readFileSync(lockFile, "utf8")
+      .replace(
+        /checksum: test\/[a-f0-9]+/u,
+        `checksum: test/${crypto.createHash("sha512").update(bytes).digest("hex")}`,
+      );
+    fs.writeFileSync(lockFile, lock);
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/expanded size differs from metadata/);
+  });
+
   it("rejects a regular command shim with injected shell code", () => {
     const root = fixture();
     installPnpmFixturePackage(root);
@@ -998,6 +1024,13 @@ describe("quality dependency preflight", () => {
     );
   });
 
+  it("rejects YAML flow-depth underflow before composition", () => {
+    const { validateYamlText } = require(PREFLIGHT);
+    expect(() => validateYamlText("]\nvalue: 1\n", "malformed YAML")).toThrow(
+      /flow-depth underflow/,
+    );
+  });
+
   it("reads pnpm modules state once for all direct dependencies", async () => {
     const root = fixture();
     selectFixtureManager(root, "pnpm", "11.25.0");
@@ -1037,6 +1070,50 @@ describe("quality dependency preflight", () => {
     });
     expect(result.status).toBe(78);
     expect(result.stderr).toMatch(/\.cmd differs from the supported template/);
+  });
+
+  it("rejects unbound executables in a dependency-free project", () => {
+    const root = fixture();
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json")));
+    pkg.devDependencies = {};
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(pkg));
+    fs.writeFileSync(
+      path.join(root, "package-lock.json"),
+      JSON.stringify({ lockfileVersion: 3, packages: { "": {} } }),
+    );
+    const binRoot = path.join(root, "node_modules", ".bin");
+    fs.mkdirSync(binRoot, { recursive: true });
+    fs.writeFileSync(path.join(binRoot, "stale"), "#!/bin/sh\nexit 0\n");
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/unbound node_modules\/\.bin entries/);
+  });
+
+  it("rejects npm lockfile schema 4 until its graph metadata is supported", () => {
+    const root = fixture();
+    installFixturePackage(root);
+    const lockFile = path.join(root, "package-lock.json");
+    const lock = JSON.parse(fs.readFileSync(lockFile));
+    lock.lockfileVersion = 4;
+    fs.writeFileSync(lockFile, JSON.stringify(lock));
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/unsupported package-lock schema 4/);
+  });
+
+  it("rejects a malformed exact package-manager SemVer", () => {
+    const root = fixture();
+    selectFixtureManager(root, "npm", "9.0.0-not a valid version");
+    installFixturePackage(root);
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/packageManager must be/);
   });
 
   it("rejects JSON input deeper than the parser contract", () => {

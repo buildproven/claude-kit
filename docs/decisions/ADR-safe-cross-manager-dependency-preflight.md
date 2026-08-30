@@ -184,7 +184,8 @@ available. Never replace a removed adapter with package-manager execution.
   supports the protocol; contained local dependencies pass.
 - External installed-package and command symlinks fail for every linker; a
   checksum-verified Yarn hard-cache archive remains the only path exception.
-- npm v4 and Bun v2 fixtures pass; unsupported newer schemas fail closed.
+- npm v2 and v3 and Bun v2 fixtures pass; unsupported newer schemas fail
+  closed. npm v4 remains unsupported until its graph metadata is verified.
 - Bun v3 override fixtures pass, and global-store installations fail with the
   contained-install repair action.
 - Exact manager declarations select their matching retained lockfile; missing,
@@ -196,6 +197,9 @@ available. Never replace a removed adapter with package-manager execution.
   executable symlinks still require exact Windows sibling wrappers.
 - pnpm reads its invariant modules state once, YAML depth fails before document
   composition, and scoped Bun local locators bind the declared package name.
+- ZIP expansion is checked against bounded actual output, malformed flow depth
+  fails before YAML composition, dependency-free `.bin` state fails closed,
+  and package-manager declarations require complete valid SemVer.
 - Mutation-during-read fixtures, parser limit fixtures, ZIP bombs, duplicate or
   unsafe ZIP entries, and POSIX symlink, POSIX shell-shim, and Windows command
   escapes fail closed.
