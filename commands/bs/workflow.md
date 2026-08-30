@@ -67,6 +67,8 @@ impossible primary request.
 If custom review-check publication is unavailable while exact-head CI is
 pending, quality completes the bounded CI wait before it signs local review
 evidence. A failed CI result remains a hard block.
+Claude fallback prompts use standard input and preserve the exact review
+envelope without placing a large diff in process arguments.
 
 If a bounded provider retry is exhausted and a real descendant fix lands, resume
 the same campaign only with an exact-new-HEAD override accepting

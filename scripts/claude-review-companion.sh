@@ -194,11 +194,11 @@ fi
 # This runs the child in its own process group (set -m) and, on expiry, kills
 # the entire group: TERM, grace, then KILL. Nothing survives it.
 run_with_timeout() {
-  local secs="$1"; shift
+  local secs="$1" stdin_file="$2"; shift 2
   local child_pid watchdog_pid rc
 
   set -m                       # own process group for the child
-  "$@" &
+  "$@" < "$stdin_file" &
   child_pid=$!
   set +m
 
@@ -289,9 +289,9 @@ run_agent() {
   #
   # Critical's second slot uses a different Claude model family. The effective
   # model is written into each normalized, hash-inventoried result.
-  raw="$(run_with_timeout "$TIMEOUT" \
+  raw="$(run_with_timeout "$TIMEOUT" "$CTX_FILE" \
         env BS_QUALITY_HEADLESS=1 \
-        claude -p "$(cat "$CTX_FILE")" \
+        claude -p \
           --no-session-persistence \
           --setting-sources "" \
           --strict-mcp-config \
