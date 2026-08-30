@@ -6441,6 +6441,93 @@ exit 1
     });
   });
 
+  it("accepts a complete critical Claude fallback on one configured model family", () => {
+    const root = repo("critical-single-family-claude-fallback");
+    const manifestPath = create(root);
+    const agents = ["code-reviewer", "silent-failure-hunter"];
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.setRisk(manifest, {
+        tier: "critical",
+        taskType: "bugfix",
+        score: 90,
+        agents: 2,
+        "codex-depth": "xhigh",
+        "codex-rounds": 1,
+      });
+      invocation.setAgents(manifest, agents, {
+        domain: "general",
+        rule: "critical-reliability-backstop",
+      });
+    });
+    execFileSync("node", [GOVERNOR, "bump-round", manifestPath], {
+      cwd: root,
+    });
+    const loaded = invocation.loadManifest(manifestPath).manifest;
+    const info = invocation.reviewInfo(loaded);
+    mkdirSync(info.artifactDir, { recursive: true });
+    writeFileSync(
+      path.join(info.artifactDir, "diff.txt"),
+      execFileSync("git", ["diff", `${info.from}..${info.to}`], { cwd: root }),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "identity.json"),
+      execFileSync("node", [INVOCATION, "review-identity", manifestPath], {
+        cwd: root,
+      }),
+    );
+    writeFileSync(
+      path.join(info.artifactDir, "review-focus.txt"),
+      "critical fallback fixture\n",
+    );
+    for (const role of agents) {
+      const normalized = {
+        verdict: "approve",
+        summary: `${role} found no issue`,
+        findings: [],
+        _qualitySlot: {
+          role,
+          provider: "claude",
+          model: "claude-sonnet-5",
+        },
+      };
+      writeFileSync(
+        path.join(info.artifactDir, `${role}.normalized.json`),
+        JSON.stringify(normalized),
+      );
+      writeFileSync(
+        path.join(info.artifactDir, `${role}.result.json`),
+        JSON.stringify({ structured_output: normalized }),
+      );
+      writeFileSync(
+        path.join(info.artifactDir, `${role}.findings.txt`),
+        `NO FINDINGS. Verdict: approve. ${role} found no issue\n<<<NO FINDINGS>>>\n`,
+      );
+    }
+    invocation.writeArtifactInventory(loaded, info.artifactDir, "claude");
+    const diffSha = createHash("sha256")
+      .update(readFileSync(path.join(info.artifactDir, "diff.txt")))
+      .digest("hex");
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      invocation.recordReview(manifest, {
+        from: info.from,
+        to: info.to,
+        provider: "claude",
+        primary: "codex",
+        fallback: "claude",
+        "artifact-dir": info.artifactDir,
+        "diff-sha": diffSha,
+      });
+    });
+    for (const name of ["lint", "test", "security"]) {
+      recordGateFixture(manifestPath, name);
+    }
+    recordMutationFixture(manifestPath);
+
+    expect(() =>
+      invocation.judgeContext(invocation.loadManifest(manifestPath).manifest),
+    ).not.toThrow();
+  });
+
   it("inventories preserved Codex findings with a complete Claude fallback panel", () => {
     const root = repo("fallback-inventory");
     const manifestPath = create(root);

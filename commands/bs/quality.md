@@ -83,6 +83,8 @@ pending, merge waits for CI and signs local review evidence only after CI is
 green. The pending state is not recorded as a terminal failure.
 Claude fallback review streams the exact prompt through standard input. Large
 diffs do not enter the process argument list or depend on the host ARG_MAX.
+Critical Claude fallback requires usable evidence for every selected role. It
+does not terminal-block only because those roles inherit one model family.
 
 Declare the strongest delivery claim. `contract` is the default only for
 backward-compatible non-product campaigns. Any `local-product`, `hosted`, or

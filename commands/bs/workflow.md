@@ -15,6 +15,9 @@ Use each runtime's normal medium-effort profile for daily development. The
 quality workflow performs any bounded high-effort adversarial escalation; do
 not select Opus or a Codex power profile for ordinary commands.
 
+If critical review falls back to Claude, all selected roles must complete. The
+fallback can use the configured model family without an automatic Opus route.
+
 `/bs:dev` and `/bs:plan` automatically run the Architecture Decision Gate. An
 ADR is required only for an irreversible boundary (auth/payments, durable data,
 public contracts, distributed consistency, or cross-repo dependencies). It is

@@ -21,6 +21,9 @@ Only an auth/payments, durable-data, public-contract, distributed-consistency,
 cross-repository, or similarly irreversible decision creates an ADR and earns a
 bounded high-effort review.
 
+Critical Claude fallback keeps every selected review role fail-closed, but a
+single available model family does not discard a complete role-bound panel.
+
 An exhausted quality provider retry can cross a legitimate descendant fix only
 through an exact-new-HEAD operator override that names
 `review:provider-exhaustion` and acknowledges the missing review.
