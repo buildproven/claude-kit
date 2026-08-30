@@ -4,6 +4,9 @@ module.exports = {
   entry: [
     "scripts/*.{js,mjs,cjs}",
     "scripts/bench/*.{js,mjs,cjs}",
+    "scripts/generated/quality-dependency-preflight/index.js",
+    // ncc emits cmd-shim's ESM boundary as a deterministic runtime chunk.
+    "scripts/generated/quality-dependency-preflight/674.index.js",
     "eslint-plugin-defensive/index.js",
   ],
   project: ["scripts/**/*.{js,mjs,cjs}", "eslint-plugin-defensive/**/*.js"],

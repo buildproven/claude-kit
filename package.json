@@ -28,25 +28,35 @@
     "license:check": "license-checker-rseidelsohn --onlyAllow \"MIT;ISC;BSD-2-Clause;BSD-3-Clause;Apache-2.0;0BSD;BlueOak-1.0.0;CC0-1.0;CC-BY-3.0;CC-BY-4.0;Unlicense;Python-2.0;MPL-2.0\" --excludePrivatePackages",
     "dead-code": "knip --no-exit-code || echo \"Dead code found (non-blocking)\"",
     "dead-code:strict": "knip",
+    "build:dependency-preflight": "node scripts/build-quality-dependency-preflight.js --write",
+    "check:dependency-preflight": "node scripts/build-quality-dependency-preflight.js",
     "check:commands": "bash scripts/check-command-readme.sh"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.2.1",
     "@commitlint/config-conventional": "^21.2.0",
     "@eslint/js": "^10.0.1",
+    "@vercel/ncc": "0.45.0",
     "@vitest/coverage-v8": "^4.1.0",
+    "@yarnpkg/fslib": "3.1.5",
+    "@yarnpkg/libzip": "3.2.2",
+    "@yarnpkg/parsers": "3.1.0",
+    "@zkochan/cmd-shim": "9.0.7",
     "ajv": "^8.20.0",
     "eslint": "^10.7.0",
     "eslint-plugin-n": "^18.2.2",
     "eslint-plugin-security": "^4.0.1",
     "globals": "^17.9.0",
     "husky": "^9.1.4",
+    "jsonc-parser": "3.3.1",
     "knip": "^6.31.0",
     "license-checker-rseidelsohn": "^5.0.1",
     "lint-staged": "^17.3.0",
     "pnpm": "11.22.0",
     "prettier": "^3.9.6",
-    "vitest": "^4.0.18"
+    "smol-toml": "1.8.0",
+    "vitest": "^4.0.18",
+    "yaml": "2.9.0"
   },
   "lint-staged": {
     "package.json": [
