@@ -135,6 +135,9 @@ contract so the branch stays green.
 
 ### Autonomous backlog work
 
+The human commands invoke executable `backlog` and `ralph` skills. Agents invoke
+the bare skills directly; a skill never calls a user-only slash command.
+
 ```bash
 /bs:backlog
 /bs:ralph

@@ -28,6 +28,25 @@
     },
     {
       "paths": [
+        "scripts/csc_lint.py",
+        "skills/status/SKILL.md",
+        "skills/backlog/SKILL.md",
+        "commands/bs/status.md",
+        "commands/bs/backlog.md"
+      ],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": ["vitest", "run", "scripts/__tests__/csc-lint.test.js"]
+        },
+        {
+          "executable": "python3",
+          "args": ["scripts/csc_lint.py", "--strict"]
+        }
+      ]
+    },
+    {
+      "paths": [
         "scripts/vcycle-creator.js",
         "docs/decisions/ADR-vcycle-creator.md"
       ],

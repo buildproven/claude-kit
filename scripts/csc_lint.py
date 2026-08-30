@@ -29,6 +29,8 @@ Rules (see plan §5):
   R3 invoke resolves           — the skill a command delegates to must exist
   R4 no reverse edges          — a SKILL.md must not invoke another /command
   R5 no cross-dir duplicates   — same base name defined in >1 command (or skill) dir
+  R6 no self delegation        — an agent-visible skill must execute its behavior,
+                                 not invoke its paired /command
 
 This linter is dependency-free (hand-parses YAML frontmatter) so it runs
 identically across the kit and any overlay repo without a pip step.
@@ -59,6 +61,12 @@ KEBAB = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 # inline links, declared cross-references) are removed by _strip_for_edge_scan
 # BEFORE this runs, so a bare token match here is a genuine invocation.
 REVERSE_EDGE = re.compile(r"/((?:bs|cc|gh):[a-z0-9-]+)")
+SELF_DELEGATION = re.compile(
+    r"\b(?:run|invoke|execute|call|use|start|trigger|launch|dispatch|"
+    r"delegate\s+to|hand\s+off\s+to)\s+"
+    r"(?:the\s+)?(?:command\s+)?/((?:bs|cc|gh):[a-z0-9-]+)",
+    re.IGNORECASE,
+)
 # How a command declares the skill it runs. This is the ONLY mechanism — Claude
 # Code does not parse an `invokes:` frontmatter field (verified against 2.1.207).
 INVOKE_PROSE = re.compile(r"[Ii]nvoke the `?([a-z0-9-]+)`? skill")
@@ -67,12 +75,14 @@ INVOKE_PROSE = re.compile(r"[Ii]nvoke the `?([a-z0-9-]+)`? skill")
 CODE_FENCE = re.compile(
     r"^[ \t]*(```|~~~).*?^[ \t]*\1[ \t]*$", re.DOTALL | re.MULTILINE
 )
-# Inline code spans — `` `/bs:x` `` (one or more backticks). Backticks mark text
-# as a literal NAME, not an executed directive; a doc that says "run `/bs:quality`
-# afterward" is referencing the command, not invoking it mid-skill. Stripped
-# before the scan for the same reason as fences and links. A BARE token in prose
-# (no backticks) is still treated as a genuine invocation (plan §5.4).
+# Inline code spans — `` `/bs:x` `` (one or more backticks). R4 removes these
+# literal command names to avoid treating documentation as a cross edge. R6
+# preserves a command-only span because an invocation verb such as "run" makes
+# that same syntax executable self-delegation. Other inline code is removed.
 INLINE_CODE = re.compile(r"(`+)[^`]*?\1")
+INLINE_COMMAND_CODE = re.compile(
+    r"(`+)\s*(/((?:bs|cc|gh):[a-z0-9-]+))\s*\1", re.IGNORECASE
+)
 # Markdown inline links to a command — `[text](/bs:x)`, `[/bs:x](/bs:x)`, or
 # ``[`/bs:x`](/bs:x ...)``. A link is a cross-reference (documentation), not an
 # invocation. We strip the ENTIRE span (label + destination): stripping only the
@@ -101,7 +111,9 @@ HEADING_LINE = re.compile(r"^[ \t]*#{1,6}\s")
 REF_LINK_DEF = re.compile(r"^[ \t]*\[[^\]]+\]:\s*/(?:bs|cc|gh):[a-z0-9-]+")
 
 
-def _strip_for_edge_scan(body: str) -> str:
+def _strip_for_edge_scan(
+    body: str, *, preserve_inline_commands: bool = False
+) -> str:
     """Remove non-invocation contexts before the reverse-edge scan.
 
     Strips, in this order:
@@ -113,10 +125,13 @@ def _strip_for_edge_scan(body: str) -> str:
         "See also" heading block, until the next heading).
 
     What remains is prose where a bare slash-command token is a genuine
-    invocation (plan §5.4).
+    invocation (plan §5.4). When preserve_inline_commands is true, a code span
+    that contains only a slash command is normalized to its bare token for R6.
     """
     body = CODE_FENCE.sub("", body)
     body = MD_LINK_TO_CMD.sub("", body)
+    if preserve_inline_commands:
+        body = INLINE_COMMAND_CODE.sub(r"\2", body)
     body = INLINE_CODE.sub("", body)
     kept = []
     in_cross_ref_section = False
@@ -302,9 +317,7 @@ def _find_dependency_skill_names(root: Path) -> set[str]:
                 skills_dir.parts
             ):
                 continue
-            names.update(
-                item.parent.name for item in skills_dir.rglob("SKILL.md")
-            )
+            names.update(item.parent.name for item in skills_dir.rglob("SKILL.md"))
     return names
 
 
@@ -361,6 +374,22 @@ def lint(root: Path) -> Report:
                 name,
                 f"skill body invokes command(s) {cross_edges} — skills must never "
                 "call other /commands (recursion risk)",
+            )
+        self_scan = _strip_for_edge_scan(body, preserve_inline_commands=True)
+        self_edges = sorted(
+            {
+                "/" + match.group(1)
+                for match in SELF_DELEGATION.finditer(self_scan)
+                if match.group(1).split(":", 1)[-1] == name
+            }
+        )
+        if self_edges:
+            rep.add(
+                "R6",
+                "high",
+                name,
+                f"agent-visible skill delegates to paired command(s) {self_edges} "
+                "— put executable behavior in the skill",
             )
 
     available_skills = set(skill_dirs) | _find_dependency_skill_names(root)
