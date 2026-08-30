@@ -220,7 +220,7 @@
       ]
     },
     {
-      "paths": ["scripts/quality-risk-resolve.sh"],
+      "paths": ["harness-config.json", "scripts/quality-risk-resolve.sh"],
       "commands": [
         {
           "executable": "npx",
