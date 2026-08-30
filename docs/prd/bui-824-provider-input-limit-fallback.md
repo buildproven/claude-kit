@@ -21,6 +21,9 @@ the configured fallback.
 - Try the configured fallback at most once.
 - Do not retry the same oversized input when no fallback is available.
 - Keep incomplete fallback outcomes fail-closed.
+- Do not convert unavailable review-check publication plus pending exact-head
+  CI into an immutable terminal failure. Wait for CI, then sign local review
+  evidence only after CI is green.
 
 ## Acceptance
 
@@ -28,3 +31,5 @@ the configured fallback.
   character limit.
 - Partial or inconsistent error text is not classified.
 - Provider runtime and merge-policy regression suites pass.
+- A pending-CI regression proves that unavailable check publication defers
+  local evidence until after the bounded CI wait.

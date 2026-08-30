@@ -64,6 +64,9 @@ fails, or repository policy explicitly requires a human.
 If the primary rejects the exact envelope as too large, quality preserves the
 envelope and tries the configured fallback once instead of replaying the same
 impossible primary request.
+If custom review-check publication is unavailable while exact-head CI is
+pending, quality completes the bounded CI wait before it signs local review
+evidence. A failed CI result remains a hard block.
 
 If a bounded provider retry is exhausted and a real descendant fix lands, resume
 the same campaign only with an exact-new-HEAD override accepting

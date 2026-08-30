@@ -9,3 +9,8 @@
   - Phase: implementation
   - Delivers: The fallback runs once without truncating the diff or retrying an impossible primary input.
   - Evidence: Provider runtime and merge-policy tests.
+
+- [x] 3.0 Preserve pending CI when review-check publication is unavailable
+  - Phase: implementation
+  - Delivers: Merge waits for exact-head CI and signs local review evidence only after CI is green.
+  - Evidence: Merge-gate regression and the live PR 460 failure reproduction.

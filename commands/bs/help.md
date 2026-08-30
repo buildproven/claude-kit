@@ -150,6 +150,8 @@ Invoked naturally — Claude Code or Codex picks the right skill from context.
 review, resume, optional protected merge, and terminal telemetry.
 An exact envelope that exceeds the primary provider's input limit goes once to
 the configured fallback; it is not truncated or replayed to the same provider.
+If review-check publication is unavailable, quality waits for exact-head CI
+before it signs local review evidence instead of failing while CI is pending.
 
 | Old Command           | Replacement                      |
 | --------------------- | -------------------------------- |
