@@ -149,6 +149,9 @@ describe("product completion", () => {
     ]) {
       expect(productionCodeChange(file)).toBe(false);
     }
+    for (const file of ["harness-config.js", "harness-config.yaml"]) {
+      expect(productionCodeChange(file)).toBe(true);
+    }
   });
 
   it("requires a receipt digest bound to the candidate head", () => {
