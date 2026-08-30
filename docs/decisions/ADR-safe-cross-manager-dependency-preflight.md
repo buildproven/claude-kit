@@ -181,3 +181,14 @@ available. Never replace a removed adapter with package-manager execution.
   escapes fail closed.
 - Legacy `bun.lockb` reports Bun's exact text migration command.
 - The existing npm fixtures and the complete repository audit remain green.
+
+## Delivery tasks
+
+- [x] 1.0 Define the safe cross-manager verification contract
+  - Phase: contract
+  - Delivers: Accepted manager, lockfile, installed-state, path, parser, and archive invariants.
+  - Evidence: This ADR and its malicious-fixture verification matrix.
+- [x] 2.0 Implement the source-owned dependency preflight
+  - Phase: implementation
+  - Delivers: Exact npm, pnpm, Yarn, and Bun verification before quality campaign creation.
+  - Evidence: Focused manager fixtures, live local manager proofs, and the complete repository audit.
