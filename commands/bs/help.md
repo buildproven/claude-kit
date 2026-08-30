@@ -148,6 +148,8 @@ Invoked naturally — Claude Code or Codex picks the right skill from context.
 
 `/bs:quality` uses one exact-manifest deterministic runner for gates, bounded
 review, resume, optional protected merge, and terminal telemetry.
+An exact envelope that exceeds the primary provider's input limit goes once to
+the configured fallback; it is not truncated or replayed to the same provider.
 
 | Old Command           | Replacement                      |
 | --------------------- | -------------------------------- |

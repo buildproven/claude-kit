@@ -133,6 +133,23 @@ function classifyStructuredFailure(raw) {
       };
     }
   }
+  const inputLimit = String(raw).match(
+    /^Error: turn\/start:.*Input exceeds the maximum length of (\d+) characters\..*\(code -32602\).*"input_error_code":"input_too_large".*"max_chars":(\d+),"actual_chars":(\d+)/s,
+  );
+  if (
+    inputLimit &&
+    inputLimit[1] === inputLimit[2] &&
+    Number.isSafeInteger(Number(inputLimit[2])) &&
+    Number.isSafeInteger(Number(inputLimit[3])) &&
+    Number(inputLimit[3]) > Number(inputLimit[2])
+  ) {
+    return {
+      category: "provider-input-too-large",
+      resetAt: null,
+      maxChars: Number(inputLimit[2]),
+      actualChars: Number(inputLimit[3]),
+    };
+  }
   return null;
 }
 

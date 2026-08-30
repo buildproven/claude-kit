@@ -100,6 +100,12 @@ provider-failure attestation. If that retry is also incomplete, it records
 deterministic gates continue to merge authorization. Provider availability is
 not itself a human-intervention gate.
 
+A provider that rejects the exact review envelope because it exceeds that
+provider's input limit is not retried with the same impossible input. The
+runner preserves the complete envelope and immediately tries the configured
+fallback once. If no fallback completes, signed incomplete evidence remains
+fail-closed.
+
 `--verify-app` (BUI-306) is opt-in only — never enabled by default. Every
 other gate (lint/type/build/test/security) proves the code compiles and its
 unit tests pass; none of them boot the app. This flag adds a `verify-app`
