@@ -10,7 +10,7 @@ const crypto = require("node:crypto");
 const PHASES = new Set(["contract", "implementation", "hosted", "validation"]);
 const CLAIMS = new Set(["contract", "local-product", "hosted", "validated"]);
 const NON_PRODUCT_PATH =
-  /^(?:\.github\/|docs?\/|tests?\/|fixtures?\/)|(?:^|\/)(?:__tests__|__fixtures__)\//i;
+  /^(?:\.buildproven\/|\.github\/|docs?\/|tests?\/|fixtures?\/)|(?:^|\/)(?:__tests__|__fixtures__)\//i;
 const NON_PRODUCT_TEST_FILE = /(?:\.test|\.spec)\.[^/]+$/i;
 const NON_PRODUCT_ROOT_NAMES = new Set([
   "AGENTS",
@@ -21,6 +21,7 @@ const NON_PRODUCT_ROOT_NAMES = new Set([
   "LICENSE",
   "README",
   "SECURITY",
+  "HARNESS-CONFIG",
 ]);
 
 function fail(message) {

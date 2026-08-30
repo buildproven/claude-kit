@@ -619,6 +619,20 @@ describe("quality-run public orchestration", () => {
     expect(result.manifest.calls).not.toContain("quality-run-review.sh");
   });
 
+  it("runs an evidence-free contract claim for quality-control configuration", () => {
+    const result = run(
+      fixture({
+        changedFiles: [".buildproven/test-impact.json", "harness-config.json"],
+      }),
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "complete",
+      state: "verified-unmerged",
+    });
+    expect(result.manifest.calls).toContain("quality-run-review.sh");
+  });
+
   it.each([
     ["incomplete tasks", "implementation task is incomplete"],
     ["digest mismatch", "behavioralTests receipt digest does not match"],
