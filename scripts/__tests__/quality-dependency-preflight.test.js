@@ -18,6 +18,12 @@ const BUNDLED_PREFLIGHT = path.resolve(
   "index.js",
 );
 const BOOTSTRAP = path.resolve(__dirname, "..", "quality-bootstrap.sh");
+const PATTERN_CONFIG = path.resolve(
+  __dirname,
+  "..",
+  "..",
+  ".defensive-patterns.json",
+);
 
 function fixture() {
   const root = makeTempDir("quality-dependency-preflight-");
@@ -811,6 +817,12 @@ describe("quality dependency preflight", () => {
     ).toBeLessThan(
       source.indexOf('quality-invocation.js" "${CREATE_ARGS[@]}"'),
     );
+  });
+
+  it("keeps generated bundles out of source-pattern analysis", () => {
+    const config = JSON.parse(fs.readFileSync(PATTERN_CONFIG, "utf8"));
+    expect(config.excludePaths).toContain("scripts/generated/**");
+    expect(config.excludePaths).not.toContain("scripts/**");
   });
 
   it("runs the source-owned bundle without loading parser packages from the candidate", () => {

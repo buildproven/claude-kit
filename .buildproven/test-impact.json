@@ -85,6 +85,7 @@
         "scripts/generated/quality-dependency-preflight/674.index.js",
         "scripts/generated/quality-dependency-preflight/index.js",
         "scripts/__tests__/quality-dependency-preflight.test.js",
+        ".defensive-patterns.json",
         ".prettierignore",
         ".semgrepignore",
         "knip.config.js",

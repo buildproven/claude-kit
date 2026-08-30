@@ -11,6 +11,7 @@
   "excludePaths": [
     "eslint-plugin-defensive/**",
     "scripts/__tests__/**",
+    "scripts/generated/**",
     "node_modules/**",
     "coverage/**",
     "reports/**"
