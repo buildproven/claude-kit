@@ -179,23 +179,38 @@ function packageManager(root, pkg) {
   return candidates[0];
 }
 
-function npmLockedVersion(lock, name) {
+function npmLockedIdentity(lock, name) {
   const relative = `node_modules/${name}`;
   const record = lock.packages?.[relative];
-  if (typeof record?.version === "string") return record.version;
+  if (typeof record?.version === "string") {
+    return { version: record.version, target: null };
+  }
   if (record?.link === true && typeof record.resolved === "string") {
     const target = lock.packages?.[record.resolved];
-    if (typeof target?.version === "string") return target.version;
+    if (typeof target?.version === "string") {
+      return { version: target.version, target: record.resolved };
+    }
   }
   const legacy = lock.dependencies?.[name];
-  return typeof legacy?.version === "string" ? legacy.version : null;
+  return typeof legacy?.version === "string"
+    ? { version: legacy.version, target: null }
+    : null;
+}
+
+function isSubpath(parent, candidate, pathApi = path) {
+  const relative = pathApi.relative(parent, candidate);
+  return (
+    relative === "" ||
+    (!pathApi.isAbsolute(relative) &&
+      relative !== ".." &&
+      !relative.startsWith(`..${pathApi.sep}`))
+  );
 }
 
 function containedRealpath(root, candidate, label) {
   const resolvedRoot = fs.realpathSync(root);
   const resolved = fs.realpathSync(candidate);
-  const relative = path.relative(resolvedRoot, resolved);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`)) {
+  if (!isSubpath(resolvedRoot, resolved)) {
     throw new Error(`${label} escapes the repository`);
   }
   return resolved;
@@ -206,8 +221,7 @@ function validateInstalled(
   name,
   expectedVersion,
   packageRoot,
-  expectedName = name,
-  checkCommandLinks = true,
+  { expectedName = name, checkCommandLinks = true } = {},
 ) {
   const failures = [];
   if (!fs.existsSync(packageRoot)) return [`${name}: package is not installed`];
@@ -230,7 +244,6 @@ function validateInstalled(
         `${name}: installed ${installed.version || "unknown"}, lockfile requires ${expectedVersion}`,
       );
     }
-    if (!checkCommandLinks) return failures;
     for (const [bin, relativeTarget] of packageBinEntries(
       expectedName,
       installed,
@@ -240,14 +253,11 @@ function validateInstalled(
         path.resolve(resolvedRoot, relativeTarget),
         `${name} bin ${bin}`,
       );
-      const targetRelative = path.relative(resolvedRoot, target);
-      if (
-        targetRelative === ".." ||
-        targetRelative.startsWith(`..${path.sep}`)
-      ) {
+      if (!isSubpath(resolvedRoot, target)) {
         failures.push(`${name}: declared bin ${bin} escapes its package`);
         continue;
       }
+      if (!checkCommandLinks) continue;
       const command = path.join(root, "node_modules", ".bin", bin);
       if (!fs.existsSync(command)) {
         failures.push(`${name}: package-local executable ${bin} is missing`);
@@ -265,6 +275,30 @@ function validateInstalled(
     failures.push(`${name}: ${error.message}`);
   }
   return failures;
+}
+
+function validateLocalInstall(root, name, localRoot, expectedVersion) {
+  const installedRoot = path.join(root, "node_modules", name);
+  if (!fs.existsSync(installedRoot))
+    return [`${name}: package is not installed`];
+  try {
+    const resolvedLocal = containedRealpath(
+      root,
+      localRoot,
+      `${name} local package`,
+    );
+    const resolvedInstalled = containedRealpath(
+      root,
+      installedRoot,
+      `${name} installed package`,
+    );
+    if (resolvedInstalled !== resolvedLocal) {
+      return [`${name}: installed link does not match the locked local target`];
+    }
+    return validateInstalled(root, name, expectedVersion, installedRoot);
+  } catch (error) {
+    return [`${name}: ${error.message}`];
+  }
 }
 
 function pnpmPackageIdentity(name, selected) {
@@ -316,8 +350,7 @@ function containedPath(root, candidate) {
   const resolvedCandidate = fs.existsSync(candidate)
     ? fs.realpathSync(candidate)
     : path.resolve(candidate);
-  const relative = path.relative(resolvedRoot, resolvedCandidate);
-  return relative !== ".." && !relative.startsWith(`..${path.sep}`);
+  return isSubpath(resolvedRoot, resolvedCandidate);
 }
 
 function shimNodePath(text) {
@@ -527,7 +560,7 @@ function inspectPnpm(root, dependencies, specs) {
           `${name} package.json`,
         );
         failures.push(
-          ...validateInstalled(root, name, local.version, packageRoot),
+          ...validateLocalInstall(root, name, packageRoot, local.version),
         );
       } catch (error) {
         failures.push(error.message);
@@ -535,6 +568,22 @@ function inspectPnpm(root, dependencies, specs) {
       continue;
     }
     const identity = pnpmPackageIdentity(name, selected);
+    const packageKey = identity.depPath.split("(", 1)[0];
+    const packageRecord = lock.packages?.[packageKey];
+    const snapshotRecord = lock.snapshots?.[identity.depPath];
+    if (
+      !packageRecord ||
+      typeof packageRecord !== "object" ||
+      !snapshotRecord ||
+      typeof snapshotRecord !== "object" ||
+      typeof packageRecord.resolution?.integrity !== "string" ||
+      packageRecord.resolution.integrity.length === 0
+    ) {
+      failures.push(
+        `${name}: pnpm package graph does not bind ${identity.depPath}`,
+      );
+      continue;
+    }
     const version = identity.depPath
       .slice(identity.depPath.lastIndexOf("@") + 1)
       .split("(")[0];
@@ -579,7 +628,7 @@ function inspectPnpm(root, dependencies, specs) {
         name,
         version,
         path.join(root, "node_modules", name),
-        identity.name,
+        { expectedName: identity.name },
       ),
     );
   }
@@ -788,8 +837,7 @@ function inspectYarnPnp(root, rootRecord, lock, dependencies, specs) {
         name,
         record.version,
         path.resolve(root, info.packageLocation),
-        name,
-        false,
+        { expectedName: name, checkCommandLinks: false },
       ),
     );
   }
@@ -947,6 +995,18 @@ function bunLocalPath(root, locator) {
   return path.resolve(root, locator.slice(separator + 1));
 }
 
+function bunOverrideVersion(pkg, name) {
+  const override = pkg.overrides?.[name];
+  if (override === undefined) return { present: false, version: null };
+  const value = String(override);
+  if (exactVersion(value)) return { present: true, version: value };
+  const prefix = `npm:${name}@`;
+  if (value.startsWith(prefix) && exactVersion(value.slice(prefix.length))) {
+    return { present: true, version: value.slice(prefix.length) };
+  }
+  return { present: true, version: null };
+}
+
 function inspectBun(root, pkg, dependencies, specs) {
   if (
     fs.existsSync(path.join(root, "bun.lockb")) &&
@@ -1002,9 +1062,18 @@ function inspectBun(root, pkg, dependencies, specs) {
     }
     const record = lock.packages?.[name];
     const locator = String(record?.[0] || "");
+    const override = bunOverrideVersion(pkg, name);
+    if (override.present && override.version === null) {
+      failures.push(`${name}: unsupported Bun override ${pkg.overrides[name]}`);
+      continue;
+    }
     if (
       /^(?:file|workspace|link):/.test(locator.slice(locator.indexOf("@") + 1))
     ) {
+      if (override.present) {
+        failures.push(`${name}: Bun override does not select the local record`);
+        continue;
+      }
       const localLocator = locator.slice(locator.indexOf("@") + 1);
       const localRoot = bunLocalPath(root, localLocator);
       try {
@@ -1018,7 +1087,7 @@ function inspectBun(root, pkg, dependencies, specs) {
           `${name} package.json`,
         );
         failures.push(
-          ...validateInstalled(root, name, local.version, localRoot),
+          ...validateLocalInstall(root, name, localRoot, local.version),
         );
       } catch (error) {
         failures.push(`${name}: ${error.message}`);
@@ -1043,6 +1112,12 @@ function inspectBun(root, pkg, dependencies, specs) {
     const version = locator.slice(locator.lastIndexOf("@") + 1).split("/")[0];
     if (!exactVersion(version)) {
       failures.push(`${name}: missing or unsupported Bun package record`);
+      continue;
+    }
+    if (override.present && override.version !== version) {
+      failures.push(
+        `${name}: Bun override requires ${override.version}, lock selects ${version}`,
+      );
       continue;
     }
     failures.push(
@@ -1122,24 +1197,43 @@ async function inspectDependencies(root) {
   for (const name of dependencies) {
     const relative = `node_modules/${name}`;
     const installedFile = path.join(root, relative, "package.json");
-    const lockedVersion = npmLockedVersion(lock, name);
+    const lockedIdentity = npmLockedIdentity(lock, name);
     if (lockedRootSpecs[name] !== specs[name]) {
       failures.push(
         `${name}: package.json requires ${specs[name]}, package-lock records ${lockedRootSpecs[name] || "missing"}`,
       );
       continue;
     }
-    if (!lockedVersion) {
+    if (!lockedIdentity) {
       failures.push(`${name}: missing lockfile package record`);
       continue;
     }
+    const installedRoot = path.dirname(installedFile);
+    if (lockedIdentity.target) {
+      try {
+        const lockedTarget = containedRealpath(
+          root,
+          path.resolve(root, lockedIdentity.target),
+          `${name} locked workspace`,
+        );
+        const installedTarget = containedRealpath(
+          root,
+          installedRoot,
+          `${name} installed workspace`,
+        );
+        if (installedTarget !== lockedTarget) {
+          failures.push(
+            `${name}: installed workspace does not match package-lock target`,
+          );
+          continue;
+        }
+      } catch (error) {
+        failures.push(`${name}: ${error.message}`);
+        continue;
+      }
+    }
     failures.push(
-      ...validateInstalled(
-        root,
-        name,
-        lockedVersion,
-        path.dirname(installedFile),
-      ),
+      ...validateInstalled(root, name, lockedIdentity.version, installedRoot),
     );
   }
   failures.push(...(await validateBinDirectory(root)));
@@ -1225,7 +1319,7 @@ async function main(argv = process.argv.slice(2)) {
   }
 }
 
-module.exports = { check, inspectDependencies, telemetryFile };
+module.exports = { check, inspectDependencies, isSubpath, telemetryFile };
 
 if (require.main === module) {
   main().then((code) => {

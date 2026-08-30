@@ -178,7 +178,73 @@ function installYarnPnpFixture(root) {
   return { archive };
 }
 
+function installYarnDirectoryPnpFixture(root) {
+  selectFixtureManager(root, "yarn", "4.18.0");
+  const packageRoot = path.join(
+    root,
+    ".yarn",
+    "unplugged",
+    "eslint",
+    "node_modules",
+    "eslint",
+  );
+  fs.mkdirSync(packageRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(packageRoot, "package.json"),
+    JSON.stringify({ name: "eslint", version: "1.2.3", bin: "missing.js" }),
+  );
+  fs.writeFileSync(
+    path.join(root, "yarn.lock"),
+    '__metadata:\n  version: 10\n"eslint@npm:1.2.3":\n  version: 1.2.3\n  resolution: "eslint@npm:1.2.3"\n"fixture@workspace:.":\n  version: 0.0.0-use.local\n  resolution: "fixture@workspace:."\n  dependencies:\n    eslint: "npm:1.2.3"\n',
+  );
+  fs.writeFileSync(
+    path.join(root, ".yarnrc.yml"),
+    "pnpEnableInlining: false\n",
+  );
+  fs.writeFileSync(
+    path.join(root, ".pnp.data.json"),
+    JSON.stringify({
+      dependencyTreeRoots: [{ name: "fixture", reference: "workspace:." }],
+      packageRegistryData: [
+        [
+          "fixture",
+          [
+            [
+              "workspace:.",
+              {
+                packageLocation: "./",
+                packageDependencies: [["eslint", "npm:1.2.3"]],
+                linkType: "SOFT",
+              },
+            ],
+          ],
+        ],
+        [
+          "eslint",
+          [
+            [
+              "npm:1.2.3",
+              {
+                packageLocation:
+                  "./.yarn/unplugged/eslint/node_modules/eslint/",
+                packageDependencies: [["eslint", "npm:1.2.3"]],
+                linkType: "SOFT",
+              },
+            ],
+          ],
+        ],
+      ],
+    }),
+  );
+}
+
 describe("quality dependency preflight", () => {
+  it("rejects Windows cross-volume candidates with the shared subpath predicate", () => {
+    const { isSubpath } = require(PREFLIGHT);
+    expect(isSubpath("C:\\repo", "D:\\outside\\tool", path.win32)).toBe(false);
+    expect(isSubpath("C:\\repo", "C:\\repo\\tool", path.win32)).toBe(true);
+  });
+
   it("accepts a package repository with no direct dependencies", () => {
     const root = fixture();
     fs.writeFileSync(
@@ -223,7 +289,7 @@ describe("quality dependency preflight", () => {
     selectFixtureManager(root, "pnpm", "11.25.0");
     fs.writeFileSync(
       path.join(root, "pnpm-lock.yaml"),
-      "lockfileVersion: '9.0'\nimporters:\n  .:\n    devDependencies:\n      eslint:\n        specifier: 1.2.3\n        version: 1.2.3\npackages:\n  eslint@1.2.3: {}\nsnapshots:\n  eslint@1.2.3: {}\n",
+      "lockfileVersion: '9.0'\nimporters:\n  .:\n    devDependencies:\n      eslint:\n        specifier: 1.2.3\n        version: 1.2.3\npackages:\n  eslint@1.2.3:\n    resolution: {integrity: sha512-YQ==}\nsnapshots:\n  eslint@1.2.3: {}\n",
     );
     installPnpmFixturePackage(root);
     const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
@@ -268,6 +334,58 @@ describe("quality dependency preflight", () => {
     });
     expect(result.status, result.stderr).toBe(0);
   });
+
+  it("rejects a pnpm importer selection missing from package and snapshot graphs", () => {
+    const root = fixture();
+    selectFixtureManager(root, "pnpm", "11.25.0");
+    fs.writeFileSync(
+      path.join(root, "pnpm-lock.yaml"),
+      "lockfileVersion: '9.0'\nimporters:\n  .:\n    devDependencies:\n      eslint:\n        specifier: 1.2.3\n        version: 1.2.3\npackages: {}\nsnapshots: {}\n",
+    );
+    installPnpmFixturePackage(root);
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/pnpm package graph does not bind/);
+  });
+
+  it.each([
+    {
+      manager: "pnpm",
+      lock: "pnpm-lock.yaml",
+      source:
+        "lockfileVersion: '9.0'\nimporters:\n  .:\n    devDependencies:\n      eslint:\n        specifier: 1.2.3\n        version: link:packages/eslint\npackages: {}\nsnapshots: {}\n",
+    },
+    {
+      manager: "bun",
+      lock: "bun.lock",
+      source:
+        '{"lockfileVersion":1,"workspaces":{"":{"devDependencies":{"eslint":"1.2.3"}}},"packages":{"eslint":["eslint@file:packages/eslint","",{}]}}',
+    },
+  ])(
+    "rejects an uninstalled $manager local dependency",
+    ({ manager, lock, source }) => {
+      const root = fixture();
+      selectFixtureManager(
+        root,
+        manager,
+        manager === "pnpm" ? "11.25.0" : "1.4.0",
+      );
+      const local = path.join(root, "packages", "eslint");
+      fs.mkdirSync(local, { recursive: true });
+      fs.writeFileSync(
+        path.join(local, "package.json"),
+        JSON.stringify({ name: "eslint", version: "1.2.3" }),
+      );
+      fs.writeFileSync(path.join(root, lock), source);
+      const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(78);
+      expect(result.stderr).toMatch(/installed package.*ENOENT|not installed/u);
+    },
+  );
 
   it("reports the repair command for the declared package manager", () => {
     const root = fixture();
@@ -327,6 +445,16 @@ describe("quality dependency preflight", () => {
       encoding: "utf8",
     });
     expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("rejects a directory-backed Yarn PnP package with a missing declared bin", () => {
+    const root = fixture();
+    installYarnDirectoryPnpFixture(root);
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/missing\.js|bin eslint/u);
   });
 
   it("rejects duplicate raw ZIP entries before Yarn path normalization", () => {
@@ -448,7 +576,7 @@ describe("quality dependency preflight", () => {
     selectFixtureManager(root, "pnpm", "11.25.0");
     fs.writeFileSync(
       path.join(root, "pnpm-lock.yaml"),
-      "lockfileVersion: '9.0'\nimporters:\n  .:\n    devDependencies:\n      eslint:\n        specifier: 1.2.3\n        version: 1.2.3(patch_hash=deadbeef)\npackages: {}\nsnapshots: {}\n",
+      "lockfileVersion: '9.0'\nimporters:\n  .:\n    devDependencies:\n      eslint:\n        specifier: 1.2.3\n        version: 1.2.3(patch_hash=deadbeef)\npackages:\n  eslint@1.2.3:\n    resolution: {integrity: sha512-YQ==}\nsnapshots:\n  eslint@1.2.3(patch_hash=deadbeef): {}\n",
     );
     installPnpmFixturePackage(root);
     const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
@@ -488,6 +616,26 @@ describe("quality dependency preflight", () => {
     });
     expect(result.status).toBe(78);
     expect(result.stderr).toMatch(/schema 3 overrides do not match/);
+  });
+
+  it("rejects a Bun schema 3 package record that ignores the effective override", () => {
+    const root = fixture();
+    selectFixtureManager(root, "bun", "1.4.0");
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(root, "package.json"), "utf8"),
+    );
+    pkg.overrides = { eslint: "2.0.0" };
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(pkg));
+    fs.writeFileSync(
+      path.join(root, "bun.lock"),
+      '{"lockfileVersion":3,"overrides":{"eslint":"2.0.0"},"workspaces":{"":{"devDependencies":{"eslint":"1.2.3"}}},"packages":{"eslint":["eslint@1.2.3","",{}]}}',
+    );
+    installFixturePackage(root);
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/override requires 2\.0\.0/);
   });
 
   it("rejects a Bun schema 2 external tarball without integrity", () => {
@@ -601,16 +749,56 @@ describe("quality dependency preflight", () => {
       path.join(root, "package-lock.json"),
       JSON.stringify(lock),
     );
-    const packageRoot = path.join(root, "node_modules", "eslint");
+    const packageRoot = path.join(root, "packages", "eslint");
     fs.mkdirSync(packageRoot, { recursive: true });
     fs.writeFileSync(
       path.join(packageRoot, "package.json"),
       JSON.stringify({ name: "eslint", version: "1.2.3" }),
     );
+    fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
+    fs.symlinkSync(
+      path.relative(path.join(root, "node_modules"), packageRoot),
+      path.join(root, "node_modules", "eslint"),
+    );
     const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
       encoding: "utf8",
     });
     expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("rejects an npm workspace link that resolves to a same-version alternate target", () => {
+    const root = fixture();
+    const lock = {
+      lockfileVersion: 3,
+      packages: {
+        "": { devDependencies: { eslint: "1.2.3" } },
+        "node_modules/eslint": { link: true, resolved: "packages/eslint" },
+        "packages/eslint": { version: "1.2.3" },
+      },
+    };
+    fs.writeFileSync(
+      path.join(root, "package-lock.json"),
+      JSON.stringify(lock),
+    );
+    const locked = path.join(root, "packages", "eslint");
+    const alternate = path.join(root, "packages", "alternate");
+    for (const directory of [locked, alternate]) {
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(
+        path.join(directory, "package.json"),
+        JSON.stringify({ name: "eslint", version: "1.2.3" }),
+      );
+    }
+    fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
+    fs.symlinkSync(
+      path.relative(path.join(root, "node_modules"), alternate),
+      path.join(root, "node_modules", "eslint"),
+    );
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/does not match package-lock target/);
   });
 
   it("wires the preflight before immutable manifest creation", () => {
