@@ -110,11 +110,46 @@ function validateObjectLimits(value, label) {
 
 function validateYamlText(text, label) {
   let tokens = 0;
+  let flowDepth = 0;
+  let lineSequenceDepth = 0;
+  let atLineStart = true;
+  let indentation = 0;
+  const indentationStack = [0];
   for (const token of new YamlLexer().lex(text)) {
-    if (/^\s*$/u.test(token) || token.startsWith("#")) continue;
+    if (token === "\n" || token === "\r\n") {
+      atLineStart = true;
+      indentation = 0;
+      lineSequenceDepth = 0;
+      continue;
+    }
+    if (/^\s*$/u.test(token) || token.startsWith("#")) {
+      if (atLineStart) indentation = token.length;
+      continue;
+    }
     tokens += 1;
     if (tokens > MAX_NODES) {
       throw new Error(`${label} exceeds ${MAX_NODES} pre-parse tokens`);
+    }
+    if (atLineStart) {
+      while (
+        indentationStack.length > 1 &&
+        indentation < indentationStack.at(-1)
+      ) {
+        indentationStack.pop();
+      }
+      if (indentation > indentationStack.at(-1)) {
+        indentationStack.push(indentation);
+      }
+      atLineStart = false;
+    }
+    if (token === "[" || token === "{") flowDepth += 1;
+    if (token === "]" || token === "}") flowDepth -= 1;
+    if (/^-$/u.test(token)) lineSequenceDepth += 1;
+    if (
+      indentationStack.length - 1 + flowDepth + lineSequenceDepth >
+      MAX_DEPTH
+    ) {
+      throw new Error(`${label} exceeds ${MAX_DEPTH} pre-parse levels`);
     }
   }
 }
@@ -512,9 +547,24 @@ async function expectedCommandFiles(target, command, nodePath) {
 async function validateCommandGroup(root, command, target, name) {
   const stat = fs.lstatSync(command);
   if (stat.isSymbolicLink()) {
-    return containedRealpath(root, command, `${name} executable`) === target
-      ? []
-      : [`${name}: executable targets the wrong file`];
+    if (containedRealpath(root, command, `${name} executable`) !== target) {
+      return [`${name}: executable targets the wrong file`];
+    }
+    const expected = await expectedCommandFiles(target, command, []);
+    const failures = [];
+    for (const [file, content] of expected) {
+      if (file === command) continue;
+      if (!fs.existsSync(file)) {
+        failures.push(
+          `${name}: command wrapper ${path.extname(file)} is missing`,
+        );
+      } else if (readText(file, `${name} command wrapper`) !== content) {
+        failures.push(
+          `${name}: command wrapper ${path.extname(file)} differs from the supported template`,
+        );
+      }
+    }
+    return failures;
   }
   const text = readText(command, `${name} executable`);
   const marker = `# cmd-shim-target=${target.replaceAll("\\", "/")}\n`;
@@ -591,10 +641,10 @@ async function validateBinDirectory(root) {
         marker.slice("# cmd-shim-target=".length),
         `${entry} target`,
       );
-      failures.push(
-        ...(await validateCommandGroup(root, command, target, entry)),
-      );
     }
+    failures.push(
+      ...(await validateCommandGroup(root, command, target, entry)),
+    );
     if (!declaredCommandTarget(root, entry, target)) {
       failures.push(
         `${entry}: executable is not declared by its target package`,
@@ -654,6 +704,13 @@ function inspectPnpm(root, dependencies, specs, managerVersion) {
   }
   const lock = locks.at(-1);
   if (!lock?.importers?.["."]) return ["pnpm: root importer is missing"];
+  const modulesFile = path.join(root, "node_modules", ".modules.yaml");
+  const modules = fs.existsSync(modulesFile)
+    ? parseYaml(
+        readText(modulesFile, "pnpm modules state"),
+        "pnpm modules state",
+      )
+    : {};
   const failures = [];
   for (const name of dependencies) {
     const selection = pnpmSelection(lock, name);
@@ -709,13 +766,6 @@ function inspectPnpm(root, dependencies, specs, managerVersion) {
     const version = identity.depPath
       .slice(identity.depPath.lastIndexOf("@") + 1)
       .split("(")[0];
-    const modulesFile = path.join(root, "node_modules", ".modules.yaml");
-    const modules = fs.existsSync(modulesFile)
-      ? parseYaml(
-          readText(modulesFile, "pnpm modules state"),
-          "pnpm modules state",
-        )
-      : {};
     const expectedRoot = path.join(
       root,
       "node_modules",
@@ -968,15 +1018,36 @@ function inspectYarn(root, pkg, dependencies, specs, managerVersion) {
 
 function inspectYarnPnp(root, rootRecord, lock, dependencies, specs) {
   const data = readJson(path.join(root, ".pnp.data.json"), ".pnp.data.json");
-  const rootLocator = data.dependencyTreeRoots?.[0];
   const registry = new Map(
     (data.packageRegistryData || []).map(([name, references]) => [
       name,
       new Map(references),
     ]),
   );
+  const rootLocators = (data.dependencyTreeRoots || []).filter(
+    (locator) =>
+      `${locator?.name}@${locator?.reference}` === rootRecord.resolution,
+  );
+  if (rootLocators.length !== 1) {
+    return ["yarn: exact root package is not unique in .pnp.data.json"];
+  }
+  const [rootLocator] = rootLocators;
   const rootInfo = registry.get(rootLocator?.name)?.get(rootLocator?.reference);
   if (!rootInfo) return ["yarn: root package is missing from .pnp.data.json"];
+  try {
+    if (
+      rootInfo.linkType !== "SOFT" ||
+      containedRealpath(
+        root,
+        path.resolve(root, rootInfo.packageLocation),
+        "Yarn PnP root package",
+      ) !== fs.realpathSync(root)
+    ) {
+      return ["yarn: root package location does not match the repository"];
+    }
+  } catch (error) {
+    return [`yarn: ${error.message}`];
+  }
   const rootDependencies = new Map(rootInfo.packageDependencies || []);
   const failures = [];
   for (const name of dependencies) {
@@ -1314,6 +1385,12 @@ function inspectBun(root, pkg, dependencies, specs, managerVersion) {
     }
     const record = lock.packages[name];
     const locator = String(record?.[0] || "");
+    const locatorPrefix = `${name}@`;
+    if (!locator.startsWith(locatorPrefix)) {
+      failures.push(`${name}: Bun package locator does not bind its name`);
+      continue;
+    }
+    const locatorReference = locator.slice(locatorPrefix.length);
     const override = bunOverrideVersion(pkg, name);
     if (override.present && override.version === null) {
       failures.push(
@@ -1321,14 +1398,12 @@ function inspectBun(root, pkg, dependencies, specs, managerVersion) {
       );
       continue;
     }
-    if (
-      /^(?:file|workspace|link):/.test(locator.slice(locator.indexOf("@") + 1))
-    ) {
+    if (/^(?:file|workspace|link):/.test(locatorReference)) {
       if (override.present) {
         failures.push(`${name}: Bun override does not select the local record`);
         continue;
       }
-      const localLocator = locator.slice(locator.indexOf("@") + 1);
+      const localLocator = locatorReference;
       const localRoot = bunLocalPath(root, localLocator);
       try {
         const contained = containedRealpath(

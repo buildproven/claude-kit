@@ -192,6 +192,10 @@ available. Never replace a removed adapter with package-manager execution.
   states fail.
 - Stale PnP JSON with an inline loader, archive bin traversal, hostile archive
   manifests, and thrown inspection failures all fail with structured evidence.
+- PnP selects the unique repository root instead of trusting workspace order;
+  executable symlinks still require exact Windows sibling wrappers.
+- pnpm reads its invariant modules state once, YAML depth fails before document
+  composition, and scoped Bun local locators bind the declared package name.
 - Mutation-during-read fixtures, parser limit fixtures, ZIP bombs, duplicate or
   unsafe ZIP entries, and POSIX symlink, POSIX shell-shim, and Windows command
   escapes fail closed.

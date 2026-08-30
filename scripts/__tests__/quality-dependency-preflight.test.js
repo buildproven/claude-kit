@@ -571,6 +571,39 @@ describe("quality dependency preflight", () => {
     expect(result.status, result.stderr).toBe(0);
   });
 
+  it("selects the repository PnP root instead of the first workspace root", () => {
+    const root = fixture();
+    installYarnPnpFixture(root);
+    const file = path.join(root, ".pnp.data.json");
+    const data = JSON.parse(fs.readFileSync(file, "utf8"));
+    data.dependencyTreeRoots.unshift({
+      name: "other",
+      reference: "workspace:other",
+    });
+    data.packageRegistryData.unshift([
+      "other",
+      [
+        [
+          "workspace:other",
+          {
+            packageLocation: "./packages/other/",
+            packageDependencies: [["eslint", "npm:1.2.3"]],
+            linkType: "SOFT",
+          },
+        ],
+      ],
+    ]);
+    data.packageRegistryData.find(
+      ([name]) => name === "fixture",
+    )[1][0][1].packageDependencies = [];
+    fs.writeFileSync(file, JSON.stringify(data));
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/PnP reference does not bind yarn\.lock/);
+  });
+
   it("rejects a directory-backed Yarn PnP package with a missing declared bin", () => {
     const root = fixture();
     installYarnDirectoryPnpFixture(root);
@@ -893,6 +926,47 @@ describe("quality dependency preflight", () => {
     expect(result.stderr).toMatch(/forbidden property '__proto__'/);
   });
 
+  it("accepts a scoped Bun workspace locator bound to its installed path", () => {
+    const root = fixture();
+    selectFixtureManager(root, "bun", "1.4.0");
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json")));
+    pkg.devDependencies = { "@scope/tool": "workspace:packages/tool" };
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(pkg));
+    fs.writeFileSync(
+      path.join(root, "bun.lock"),
+      JSON.stringify({
+        lockfileVersion: 1,
+        workspaces: {
+          "": {
+            devDependencies: {
+              "@scope/tool": "workspace:packages/tool",
+            },
+          },
+        },
+        packages: {
+          "@scope/tool": ["@scope/tool@workspace:packages/tool", "", {}],
+        },
+      }),
+    );
+    const local = path.join(root, "packages", "tool");
+    fs.mkdirSync(local, { recursive: true });
+    fs.writeFileSync(
+      path.join(local, "package.json"),
+      JSON.stringify({ name: "@scope/tool", version: "1.2.3" }),
+    );
+    fs.mkdirSync(path.join(root, "node_modules", "@scope"), {
+      recursive: true,
+    });
+    fs.symlinkSync(
+      path.join("..", "..", "packages", "tool"),
+      path.join(root, "node_modules", "@scope", "tool"),
+    );
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("counts scalar JSON values before allocating parsed objects", () => {
     const { validateJsonText } = require(PREFLIGHT);
     const source = `[${"0,".repeat(1_000_000)}0]`;
@@ -907,6 +981,62 @@ describe("quality dependency preflight", () => {
     expect(() => validateYamlText(source, "scalar lock")).toThrow(
       /exceeds 1000000 pre-parse tokens/,
     );
+  });
+
+  it("rejects YAML depth before document composition", () => {
+    const { validateYamlText } = require(PREFLIGHT);
+    let source = "value: 1\n";
+    for (let depth = 0; depth < 130; depth += 1) {
+      source = `level:\n${source
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => `  ${line}`)
+        .join("\n")}\n`;
+    }
+    expect(() => validateYamlText(source, "deep YAML")).toThrow(
+      /exceeds 128 pre-parse levels/,
+    );
+  });
+
+  it("reads pnpm modules state once for all direct dependencies", async () => {
+    const root = fixture();
+    selectFixtureManager(root, "pnpm", "11.25.0");
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json")));
+    pkg.devDependencies.prettier = "2.3.4";
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(pkg));
+    fs.writeFileSync(
+      path.join(root, "pnpm-lock.yaml"),
+      "lockfileVersion: '9.0'\nimporters:\n  .:\n    devDependencies:\n      eslint: {specifier: 1.2.3, version: 1.2.3}\n      prettier: {specifier: 2.3.4, version: 2.3.4}\npackages: {}\nsnapshots: {}\n",
+    );
+    fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
+    const modulesFile = path.join(root, "node_modules", ".modules.yaml");
+    fs.writeFileSync(modulesFile, "virtualStoreDirMaxLength: 120\n");
+    const originalOpenSync = fs.openSync;
+    let reads = 0;
+    fs.openSync = function countedOpen(file, ...args) {
+      if (file === modulesFile) reads += 1;
+      return originalOpenSync.call(this, file, ...args);
+    };
+    try {
+      await require(PREFLIGHT).inspectDependencies(root);
+    } finally {
+      fs.openSync = originalOpenSync;
+    }
+    expect(reads).toBe(1);
+  });
+
+  it("validates Windows wrappers beside a correct command symlink", () => {
+    const root = fixture();
+    installFixturePackage(root);
+    fs.writeFileSync(
+      path.join(root, "node_modules", ".bin", "eslint.cmd"),
+      "@echo malicious\r\n",
+    );
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/\.cmd differs from the supported template/);
   });
 
   it("rejects JSON input deeper than the parser contract", () => {
