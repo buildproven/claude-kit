@@ -2,8 +2,8 @@
 
 ## Status
 
-Accepted for BUI-813 after a high-effort independent security and architecture
-review returned clean on 2026-08-29.
+Accepted for BUI-813. Critical exact-diff review on 2026-08-30 found and closed
+additional version, PnP, archive, parser, and telemetry trust boundaries.
 
 ## Context
 
@@ -53,6 +53,13 @@ lockfile must exist; zero or multiple candidates fail with an instruction to
 add `packageManager`. A declaration, lockfile, or installed-state linker
 conflict always fails.
 
+When `packageManager` is declared, its exact version must be able to consume
+the selected lock schema. The supported minimums are npm 7 for package-lock v2
+and npm 9 for v3/v4; pnpm 9 for lock schema 9; Yarn 4 for schemas 8 through 10;
+and Bun 1.2 for text schema 1 or Bun 1.4 for schemas 2 and 3. An inferred
+manager has no version assertion, so its other schema and state checks remain
+authoritative.
+
 All filesystem objects are opened without following their final path component,
 then checked with `fstat` before and after reading. Symlink targets are resolved
 canonically first and their resolved objects receive the same open and identity
@@ -86,8 +93,12 @@ The initial support boundary is explicit:
   or executes `.pnp.cjs`. Local and soft package locations must be contained.
   An external hard-cache archive is accepted only when its bytes match the Yarn
   lock checksum. A maintained ZIP-aware reader verifies package identity and
-  every declared bin target inside cached archives; directory artifacts receive
-  the same checks. Inline-only PnP stops with an instruction to set
+  every declared bin target inside cached archives; archive package manifests
+  receive the same JSON resource and forbidden-property checks as filesystem
+  manifests, and bin targets must remain under the archive package root.
+  Directory artifacts receive the same checks. PnP requires
+  `pnpEnableInlining: false` even when a stale `.pnp.data.json` exists.
+  Inline-only PnP stops with an instruction to set
   `pnpEnableInlining: false` and reinstall immutably.
 - Bun text lock schemas 1 through 3 are read as JSONC. The root workspace spec,
   effective override, and package resolution must match the manifest, then the
@@ -147,6 +158,8 @@ telemetry remains authoritative.
    by one unambiguous supported lockfile.
 8. Reads bind checks to open object identities and enforce deterministic parser
    and archive resource limits.
+9. Thrown inspection errors become structured failures and use the same
+   telemetry and remediation path as adapter-returned failures.
 
 ## Rollback
 
@@ -175,7 +188,10 @@ available. Never replace a removed adapter with package-manager execution.
 - Bun v3 override fixtures pass, and global-store installations fail with the
   contained-install repair action.
 - Exact manager declarations select their matching retained lockfile; missing,
-  malformed, mismatched, and undeclared ambiguous manager states fail.
+  malformed, schema-incompatible, mismatched, and undeclared ambiguous manager
+  states fail.
+- Stale PnP JSON with an inline loader, archive bin traversal, hostile archive
+  manifests, and thrown inspection failures all fail with structured evidence.
 - Mutation-during-read fixtures, parser limit fixtures, ZIP bombs, duplicate or
   unsafe ZIP entries, and POSIX symlink, POSIX shell-shim, and Windows command
   escapes fail closed.

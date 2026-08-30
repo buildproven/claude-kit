@@ -119,15 +119,22 @@ function installPnpmFixturePackage(root) {
   );
 }
 
-function installYarnPnpFixture(root) {
+function installYarnPnpFixture(
+  root,
+  packageManifest = { name: "eslint", version: "1.2.3", bin: "bin.js" },
+  extraFiles = [],
+) {
   selectFixtureManager(root, "yarn", "4.18.0");
   const zip = new ZipFS(null);
   zip.mkdirpSync("/node_modules/eslint");
   zip.writeFileSync(
     "/node_modules/eslint/package.json",
-    JSON.stringify({ name: "eslint", version: "1.2.3", bin: "bin.js" }),
+    typeof packageManifest === "string"
+      ? packageManifest
+      : JSON.stringify(packageManifest),
   );
   zip.writeFileSync("/node_modules/eslint/bin.js", "#!/usr/bin/env node\n");
+  for (const [file, content] of extraFiles) zip.writeFileSync(file, content);
   zip.writeFileSync("/node_modules/eslint/a.txt", "a");
   zip.writeFileSync("/node_modules/eslint/b.txt", "b");
   const bytes = zip.getBufferAndClose();
@@ -245,6 +252,117 @@ function installYarnDirectoryPnpFixture(root) {
 }
 
 describe("quality dependency preflight", () => {
+  it.each([
+    ["npm", "6.14.0"],
+    ["pnpm", "8.15.0"],
+    ["yarn", "1.22.22"],
+    ["bun", "1.1.0"],
+  ])(
+    "rejects %s versions that cannot consume the selected lock schema",
+    (manager, version) => {
+      const root = fixture();
+      selectFixtureManager(root, manager, version);
+      if (manager !== "npm") {
+        const lockName = {
+          pnpm: "pnpm-lock.yaml",
+          yarn: "yarn.lock",
+          bun: "bun.lock",
+        }[manager];
+        fs.renameSync(
+          path.join(root, "package-lock.json"),
+          path.join(root, lockName),
+        );
+        fs.writeFileSync(
+          path.join(root, lockName),
+          manager === "pnpm"
+            ? "lockfileVersion: '9.0'\n"
+            : manager === "yarn"
+              ? "__metadata:\n  version: 10\n"
+              : '{"lockfileVersion":1,"workspaces":{},"packages":{}}',
+        );
+      }
+      const result = spawnSync(process.execPath, [PREFLIGHT, "--repo", root], {
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(78);
+      expect(result.stderr).toMatch(/incompatible with .* lock schema/);
+    },
+  );
+
+  it("rejects stale PnP data when Yarn uses the inline loader", () => {
+    const root = fixture();
+    installYarnPnpFixture(root);
+    fs.writeFileSync(
+      path.join(root, ".yarnrc.yml"),
+      "pnpEnableInlining: true\n",
+    );
+    const result = spawnSync(process.execPath, [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/pnpEnableInlining: false/);
+  });
+
+  it("rejects Yarn archive bin targets outside the package root", () => {
+    const root = fixture();
+    installYarnPnpFixture(
+      root,
+      { name: "eslint", version: "1.2.3", bin: "../../payload.js" },
+      [["/payload.js", "#!/usr/bin/env node\n"]],
+    );
+    const result = spawnSync(process.execPath, [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/archive declared bin escapes package root/);
+  });
+
+  it("applies JSON safety checks to Yarn archive package manifests", () => {
+    const root = fixture();
+    installYarnPnpFixture(
+      root,
+      '{"name":"eslint","version":"1.2.3","bin":"bin.js","__proto__":{}}',
+    );
+    const result = spawnSync(process.execPath, [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/forbidden property/);
+  });
+
+  it("records structured telemetry for thrown inspection failures", () => {
+    const root = fixture();
+    const telemetry = path.join(root, "state", "preflight.jsonl");
+    fs.writeFileSync(path.join(root, "package.json"), "{");
+    const result = spawnSync(process.execPath, [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+      env: { ...process.env, BS_QUALITY_PREFLIGHT_TELEMETRY_FILE: telemetry },
+    });
+    expect(result.status).toBe(78);
+    const record = JSON.parse(fs.readFileSync(telemetry, "utf8"));
+    expect(record.manager).toBeNull();
+    expect(record.failures).toEqual([
+      expect.stringMatching(/package inspection failed:/),
+    ]);
+  });
+
+  it("preserves the selected manager in telemetry for adapter exceptions", () => {
+    const root = fixture();
+    const telemetry = path.join(root, "state", "preflight.jsonl");
+    installYarnPnpFixture(root);
+    fs.writeFileSync(path.join(root, ".pnp.data.json"), "{");
+    const result = spawnSync(process.execPath, [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+      env: { ...process.env, BS_QUALITY_PREFLIGHT_TELEMETRY_FILE: telemetry },
+    });
+    expect(result.status).toBe(78);
+    const record = JSON.parse(fs.readFileSync(telemetry, "utf8"));
+    expect(record.manager).toBe("yarn");
+    expect(record.failures).toEqual([
+      expect.stringMatching(/yarn inspection failed:/),
+    ]);
+  });
+
   it("rejects Windows cross-volume candidates with the shared subpath predicate", () => {
     const { isSubpath } = require(PREFLIGHT);
     expect(isSubpath("C:\\repo", "D:\\outside\\tool", path.win32)).toBe(false);

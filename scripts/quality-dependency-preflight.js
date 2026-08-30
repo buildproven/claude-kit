@@ -214,6 +214,39 @@ function exactVersion(value) {
   );
 }
 
+function versionParts(value) {
+  return String(value)
+    .split(/[+-]/, 1)[0]
+    .split(".")
+    .map((part) => Number(part));
+}
+
+function managerVersionSupportsSchema(manager, version, schema) {
+  if (!version) return true;
+  const [major, minor] = versionParts(version);
+  if (manager === "npm") {
+    if (schema === 2) return major >= 7;
+    return [3, 4].includes(schema) && major >= 9;
+  }
+  if (manager === "pnpm") return String(schema) === "9.0" && major >= 9;
+  if (manager === "yarn") return [8, 9, 10].includes(schema) && major >= 4;
+  if (manager === "bun") {
+    if (schema === 1) return major > 1 || (major === 1 && minor >= 2);
+    return (
+      [2, 3].includes(schema) && (major > 1 || (major === 1 && minor >= 4))
+    );
+  }
+  return false;
+}
+
+function schemaCompatibilityFailure(manager, version, schema) {
+  return managerVersionSupportsSchema(manager, version, schema)
+    ? []
+    : [
+        `${manager}@${version} is incompatible with ${manager} lock schema ${schema}`,
+      ];
+}
+
 function packageManager(root, pkg) {
   const present = {
     npm: fs.existsSync(path.join(root, "package-lock.json")),
@@ -240,7 +273,7 @@ function packageManager(root, pkg) {
     if (!present[declared]) {
       throw new Error(`${declared}: declared lockfile is missing`);
     }
-    return declared;
+    return { name: declared, version };
   }
   const candidates = SUPPORTED_MANAGERS.filter((manager) => present[manager]);
   if (candidates.length !== 1) {
@@ -248,7 +281,7 @@ function packageManager(root, pkg) {
       `package manager is ${candidates.length === 0 ? "missing" : `ambiguous (${candidates.join(", ")})`}; add an exact packageManager declaration`,
     );
   }
-  return candidates[0];
+  return { name: candidates[0], version: null };
 }
 
 function npmLockedIdentity(lock, name) {
@@ -588,7 +621,7 @@ function pnpmSelection(lock, name) {
   }[name];
 }
 
-function inspectPnpm(root, dependencies, specs) {
+function inspectPnpm(root, dependencies, specs, managerVersion) {
   const text = readText(path.join(root, "pnpm-lock.yaml"), "pnpm-lock.yaml");
   validateYamlText(text, "pnpm-lock.yaml");
   const documents = parseAllDocuments(text, {
@@ -610,6 +643,12 @@ function inspectPnpm(root, dependencies, specs) {
   if (locks.some((lock) => String(lock?.lockfileVersion) !== "9.0")) {
     return ["pnpm: unsupported lockfile schema"];
   }
+  const compatibility = schemaCompatibilityFailure(
+    "pnpm",
+    managerVersion,
+    "9.0",
+  );
+  if (compatibility.length > 0) return compatibility;
   if (locks.length === 2 && !locks[0]?.importers?.["."]?.configDependencies) {
     return ["pnpm: first document is not an environment lockfile"];
   }
@@ -777,7 +816,7 @@ function yarnLocatorSlug(name, reference) {
   return `${ident}-${humanReference}-${locatorHash.slice(0, 10)}`;
 }
 
-function inspectYarn(root, pkg, dependencies, specs) {
+function inspectYarn(root, pkg, dependencies, specs, managerVersion) {
   let lock;
   try {
     const text = readText(path.join(root, "yarn.lock"), "yarn.lock");
@@ -792,6 +831,12 @@ function inspectYarn(root, pkg, dependencies, specs) {
       `yarn: unsupported lock schema ${lock.__metadata?.version || "missing"}`,
     ];
   }
+  const compatibility = schemaCompatibilityFailure(
+    "yarn",
+    managerVersion,
+    Number(lock.__metadata.version),
+  );
+  if (compatibility.length > 0) return compatibility;
   const rootRecord = yarnRootRecord(lock, pkg);
   if (!rootRecord) return ["yarn: root workspace record is missing"];
   const configFile = path.join(root, ".yarnrc.yml");
@@ -800,7 +845,10 @@ function inspectYarn(root, pkg, dependencies, specs) {
     : {};
   const linker = config.nodeLinker || "pnp";
   if (linker === "pnp") {
-    if (!fs.existsSync(path.join(root, ".pnp.data.json"))) {
+    if (
+      config.pnpEnableInlining !== false ||
+      !fs.existsSync(path.join(root, ".pnp.data.json"))
+    ) {
       return [
         "yarn: inline PnP is unsupported; set pnpEnableInlining: false and run yarn install --immutable",
       ];
@@ -1107,14 +1155,33 @@ function validateYarnArchive(root, name, packageLocation, record) {
       ) {
         return [`${name}: Yarn archive expansion limit exceeded`];
       }
-      const installed = JSON.parse(
-        zip.readFileSync(`${inner}/package.json`, "utf8"),
-      );
+      const packageRoot = path.posix.normalize(inner).replace(/\/+$/u, "");
+      const manifestPath = `${packageRoot}/package.json`;
+      if (zip.lstatSync(manifestPath).size > MAX_FILE_BYTES) {
+        return [`${name}: Yarn archive package manifest is too large`];
+      }
+      const manifestText = zip.readFileSync(manifestPath, "utf8");
+      validateJsonText(manifestText, `${name} Yarn archive package manifest`);
+      const installed = JSON.parse(manifestText);
+      validateObjectLimits(installed, `${name} Yarn archive package manifest`);
       if (installed.name !== name || installed.version !== record.version) {
         return [`${name}: Yarn archive identity does not match yarn.lock`];
       }
       for (const [, target] of packageBinEntries(name, installed)) {
-        if (!zip.existsSync(`${inner}/${target}`)) {
+        const portableTarget = String(target).replaceAll("\\", "/");
+        const targetPath = path.posix.normalize(
+          path.posix.join(packageRoot, portableTarget),
+        );
+        if (
+          portableTarget.includes("\0") ||
+          path.posix.isAbsolute(portableTarget) ||
+          (portableTarget.length > 1 && portableTarget[1] === ":") ||
+          (targetPath !== packageRoot &&
+            !targetPath.startsWith(`${packageRoot}/`))
+        ) {
+          return [`${name}: Yarn archive declared bin escapes package root`];
+        }
+        if (!zip.existsSync(targetPath)) {
           return [`${name}: Yarn archive declared bin is missing`];
         }
       }
@@ -1156,7 +1223,7 @@ function bunOverrideVersion(pkg, name) {
   return { present: true, version: null };
 }
 
-function inspectBun(root, pkg, dependencies, specs) {
+function inspectBun(root, pkg, dependencies, specs, managerVersion) {
   if (
     fs.existsSync(path.join(root, "bun.lockb")) &&
     !fs.existsSync(path.join(root, "bun.lock"))
@@ -1192,6 +1259,12 @@ function inspectBun(root, pkg, dependencies, specs) {
       `bun: unsupported lock schema ${lock.lockfileVersion || "missing"}`,
     ];
   }
+  const compatibility = schemaCompatibilityFailure(
+    "bun",
+    managerVersion,
+    lock.lockfileVersion,
+  );
+  if (compatibility.length > 0) return compatibility;
   const bunfigFile = path.join(root, "bunfig.toml");
   if (fs.existsSync(bunfigFile)) {
     const text = readText(bunfigFile, "bunfig.toml");
@@ -1320,9 +1393,9 @@ async function inspectDependencies(root) {
   const dependencies = directDependencies(pkg);
   const specs = dependencySpecs(pkg);
   if (dependencies.length === 0) return { manager: null, failures: [] };
-  let manager;
+  let managerInfo;
   try {
-    manager = packageManager(root, pkg);
+    managerInfo = packageManager(root, pkg);
   } catch (error) {
     const declared = String(pkg.packageManager || "").split("@")[0];
     return {
@@ -1330,38 +1403,66 @@ async function inspectDependencies(root) {
       failures: [error.message],
     };
   }
+  const manager = managerInfo.name;
+  const managerVersion = managerInfo.version;
   if (manager === "pnpm") {
-    return {
-      manager,
-      failures: [
-        ...inspectPnpm(root, dependencies, specs),
-        ...(await validateBinDirectory(root)),
-      ],
-    };
+    try {
+      return {
+        manager,
+        failures: [
+          ...inspectPnpm(root, dependencies, specs, managerVersion),
+          ...(await validateBinDirectory(root)),
+        ],
+      };
+    } catch (error) {
+      return {
+        manager,
+        failures: [`pnpm inspection failed: ${error.message}`],
+      };
+    }
   }
   if (manager === "yarn") {
-    return {
-      manager,
-      failures: [
-        ...inspectYarn(root, pkg, dependencies, specs),
-        ...(await validateBinDirectory(root)),
-      ],
-    };
+    try {
+      return {
+        manager,
+        failures: [
+          ...inspectYarn(root, pkg, dependencies, specs, managerVersion),
+          ...(await validateBinDirectory(root)),
+        ],
+      };
+    } catch (error) {
+      return {
+        manager,
+        failures: [`yarn inspection failed: ${error.message}`],
+      };
+    }
   }
   if (manager === "bun") {
-    return {
-      manager,
-      failures: [
-        ...inspectBun(root, pkg, dependencies, specs),
-        ...(await validateBinDirectory(root)),
-      ],
-    };
+    try {
+      return {
+        manager,
+        failures: [
+          ...inspectBun(root, pkg, dependencies, specs, managerVersion),
+          ...(await validateBinDirectory(root)),
+        ],
+      };
+    } catch (error) {
+      return { manager, failures: [`bun inspection failed: ${error.message}`] };
+    }
   }
   const lockFile = path.join(root, "package-lock.json");
   if (!fs.existsSync(lockFile)) {
     return { manager: "npm", failures: ["package-lock.json is missing"] };
   }
-  const lock = readJson(lockFile, "package-lock.json");
+  let lock;
+  try {
+    lock = readJson(lockFile, "package-lock.json");
+  } catch (error) {
+    return {
+      manager: "npm",
+      failures: [`npm inspection failed: ${error.message}`],
+    };
+  }
   const failures = [];
   if (![2, 3, 4].includes(lock.lockfileVersion)) {
     return {
@@ -1370,6 +1471,14 @@ async function inspectDependencies(root) {
         `npm: unsupported package-lock schema ${lock.lockfileVersion || "missing"}`,
       ],
     };
+  }
+  const compatibility = schemaCompatibilityFailure(
+    "npm",
+    managerVersion,
+    lock.lockfileVersion,
+  );
+  if (compatibility.length > 0) {
+    return { manager: "npm", failures: compatibility };
   }
   const lockedRootSpecs = {
     ...(lock.packages?.[""]?.dependencies || {}),
@@ -1457,7 +1566,15 @@ function recordFailure(root, result, env = process.env) {
 }
 
 async function check(root, env = process.env) {
-  const result = await inspectDependencies(root);
+  let result;
+  try {
+    result = await inspectDependencies(root);
+  } catch (error) {
+    result = {
+      manager: null,
+      failures: [`package inspection failed: ${error.message}`],
+    };
+  }
   if (result.failures.length === 0) return result;
   try {
     recordFailure(root, result, env);
