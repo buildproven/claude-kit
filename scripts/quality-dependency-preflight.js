@@ -61,17 +61,17 @@ function validateObjectLimits(value, label) {
 
 function readBuffer(file, label) {
   try {
-    const stat = fs.lstatSync(file);
-    if (!stat.isFile() || stat.isSymbolicLink()) {
-      throw new Error("must be a regular non-symlink file");
+    if (typeof fs.constants.O_NOFOLLOW !== "number") {
+      throw new Error("this platform cannot guarantee non-symlink reads");
     }
-    if (stat.size > MAX_FILE_BYTES) throw new Error("exceeds 256 MiB");
     const descriptor = fs.openSync(
       file,
-      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0),
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
     );
     try {
       const before = fs.fstatSync(descriptor);
+      if (!before.isFile()) throw new Error("must be a regular file");
+      if (before.size > MAX_FILE_BYTES) throw new Error("exceeds 256 MiB");
       const data = fs.readFileSync(descriptor);
       const after = fs.fstatSync(descriptor);
       if (

@@ -707,7 +707,7 @@ describe("quality dependency preflight", () => {
       encoding: "utf8",
     });
     expect(result.status).toBe(78);
-    expect(result.stderr).toMatch(/regular non-symlink file/);
+    expect(result.stderr).toMatch(/ELOOP|symbolic links encountered/);
   });
 
   it("rejects a file identity that changes during a stable read", async () => {
