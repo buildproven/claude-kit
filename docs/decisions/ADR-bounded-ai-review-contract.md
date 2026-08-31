@@ -75,10 +75,10 @@ from the complete committed diff. Critical selects a general reviewer and a
 distinct specialist or reliability backstop.
 
 Critical attempts provider/model-family diversity when the configured providers
-support it and records the effective identity per slot. Missing diversity is
-recorded as incomplete discovery, not silently called independent evidence and
-not converted into a merge block. This availability behavior is safe because
-the AI status has no merge authority.
+support it and records the effective identity per slot. A bounded
+single-provider fallback can complete with one model family when every selected
+role returns usable evidence; it does not claim model-family independence. This
+availability behavior is safe because the AI status has no merge authority.
 
 Domain selection is a versioned cost-routing heuristic, not a security
 boundary. It consumes the complete changed-file inventory and diff content,
