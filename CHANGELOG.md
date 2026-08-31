@@ -21,6 +21,95 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.10.0](https://github.com/buildproven/claude-kit/compare/v4.9.1...v4.10.0) (2026-08-31)
+
+
+### Features
+
+* add product delivery evidence contracts ([7f29968](https://github.com/buildproven/claude-kit/commit/7f2996899428c6f70cb9b2e3373bf02ce1c2e236))
+
+
+### Bug Fixes
+
+* accept role-complete Claude fallback ([e8884b2](https://github.com/buildproven/claude-kit/commit/e8884b2d95167bec6df2fb15ea17161c83db7789))
+* admit CI budget for every redispatch ([5d01620](https://github.com/buildproven/claude-kit/commit/5d0162090a14694f10e880ccb7d8e540bd9b6bf1))
+* admit CI budget for every redispatch ([e4a90d2](https://github.com/buildproven/claude-kit/commit/e4a90d2774216fdf078da6271e76854870bb4e13))
+* authenticate product completion receipts ([3df7ab5](https://github.com/buildproven/claude-kit/commit/3df7ab5d7f1193d300af6a51e9b359b20d62bd4d))
+* avoid unsafe documentation matching ([c079dfd](https://github.com/buildproven/claude-kit/commit/c079dfd04edfc66d6d38278efb8938b360519e58))
+* bind delivery receipts to revision ([4ad0eb5](https://github.com/buildproven/claude-kit/commit/4ad0eb537fef26cfa8f21d7d7b6944eb28000c3b))
+* bind dependency preflight trust boundaries ([6202a72](https://github.com/buildproven/claude-kit/commit/6202a722b167bf694d602038b830fec53e8d6909))
+* bind dependency selections and command owners ([5e8ffd7](https://github.com/buildproven/claude-kit/commit/5e8ffd76ceffde9f0a94fd880ba37a5abfada3f4))
+* bind MCP lock to process identity ([80984dd](https://github.com/buildproven/claude-kit/commit/80984dda2bf8453c8a6ecf414fa8ef6af0af90ac))
+* bind preflight resource and path budgets ([d910139](https://github.com/buildproven/claude-kit/commit/d910139183fe622fd3e369167d1c7fcd40c864b9))
+* bind preflight to exact package identities ([ac09d4c](https://github.com/buildproven/claude-kit/commit/ac09d4c808e80bd262bd8469a40ae1908a545a2b))
+* bound mutation selector adaptation ([fadabd8](https://github.com/buildproven/claude-kit/commit/fadabd8228163676098bfc81560c52ff3a1a9f70))
+* bound provider cancellation test cleanup ([#444](https://github.com/buildproven/claude-kit/issues/444)) ([4954513](https://github.com/buildproven/claude-kit/commit/4954513d563a158c091ebf038bcd8656713ebfe7))
+* classify quality controls as non-product ([370b815](https://github.com/buildproven/claude-kit/commit/370b8150dcf047935c168bddb4c6973e3c3f9904))
+* classify runtime content as product changes ([0f553da](https://github.com/buildproven/claude-kit/commit/0f553dafca73337b1cb51376ec9d256150f7ace3))
+* close cross-manager preflight review gaps ([e54a3a7](https://github.com/buildproven/claude-kit/commit/e54a3a76b8a5b6858404df12f931d308f855e6ce))
+* close dependency preflight trust gaps ([63aad15](https://github.com/buildproven/claude-kit/commit/63aad15bb211672e6d87605bcf577662bd681fb7))
+* contain MCP profile cache paths ([6f5d76e](https://github.com/buildproven/claude-kit/commit/6f5d76e6dea5c327b286adef4f2973a04cb05514))
+* cover imperative self delegation ([c50e4c7](https://github.com/buildproven/claude-kit/commit/c50e4c742c0b83fad4184a8b134745dd6c3bfa0b))
+* detect backticked self delegation ([2b56a8d](https://github.com/buildproven/claude-kit/commit/2b56a8d4c35f79c1ce0f1cec906545e51ea0d3cc))
+* diagnose CI admission conditions before budget denial ([514b544](https://github.com/buildproven/claude-kit/commit/514b54494f2242dbdc9988818b96d31557a43daf))
+* enforce leading npx local-only option ([c8d95c6](https://github.com/buildproven/claude-kit/commit/c8d95c677d61abfde21e9389a7582cc7bc626d1e))
+* exclude generated bundles from pattern checks ([c74e2eb](https://github.com/buildproven/claude-kit/commit/c74e2ebe4d9924c08580b08a795806b2d2470540))
+* fail closed on implicit product claims ([9764489](https://github.com/buildproven/claude-kit/commit/97644890077a04a7a07194275069bc59209eed0f))
+* fail closed on quality recovery ([ec0abe2](https://github.com/buildproven/claude-kit/commit/ec0abe2a910ff9171438366e3d841d294d63a272))
+* fallback on provider input limits ([f8beb36](https://github.com/buildproven/claude-kit/commit/f8beb36371777c960bfcf032c7724be8047f0a90))
+* fund claude-kit native test gate ([7f19e2e](https://github.com/buildproven/claude-kit/commit/7f19e2e79a2a8c7349b5bc1081f0d6c9d61b1fb0))
+* fund declared long quality gates ([f44a151](https://github.com/buildproven/claude-kit/commit/f44a15166bf2420932eceb017533b9962b48d3c6))
+* handle npm mutation audit forms ([ebfa67f](https://github.com/buildproven/claude-kit/commit/ebfa67fbc5d66c624f9d26c138cf6983b1ec62f4))
+* harden delivery claim evidence ([78bca5d](https://github.com/buildproven/claude-kit/commit/78bca5dab82ea8154050bf7f1ae9e5a358606b70))
+* harden dependency preflight parsing ([8ebe408](https://github.com/buildproven/claude-kit/commit/8ebe40867a9c662636e83e1d74389eb17465eb54))
+* harden MCP cache provenance ([2c8341b](https://github.com/buildproven/claude-kit/commit/2c8341b0ba048b44efabdd7fa69f85ee473c706b))
+* harden quality runtime integrity ([ee1b667](https://github.com/buildproven/claude-kit/commit/ee1b667797789c92b71478742029cc37afa901ee))
+* isolate Codex quality cache by version ([b92472d](https://github.com/buildproven/claude-kit/commit/b92472dca801f0e09d040845929aad1b89c60d7a))
+* keep impact gate budgets focused ([50c869c](https://github.com/buildproven/claude-kit/commit/50c869ceee37d600ec97d2b95b6e3df9cd136fa6))
+* keep provider failure advisory ([d8bdd5a](https://github.com/buildproven/claude-kit/commit/d8bdd5ad9400ca1302e8df33567d91fd090985a9))
+* make green ref-CAS delivery autonomous ([#438](https://github.com/buildproven/claude-kit/issues/438)) ([ab0be94](https://github.com/buildproven/claude-kit/commit/ab0be948bb0eadd472c3a15e088368b90794e404))
+* make status and backlog skills executable ([dcf191a](https://github.com/buildproven/claude-kit/commit/dcf191a37a9c38745fb102cd3e299f0e9b53880f))
+* map Claude review companion tests ([ccce485](https://github.com/buildproven/claude-kit/commit/ccce48510e41c869e6ab8ae18cc8e9d9f3c30416))
+* map quality risk resolver tests ([06a928f](https://github.com/buildproven/claude-kit/commit/06a928f198da4025f4a57ca6295fc9d5e3451f78))
+* narrow quality-control path exemption ([3fd60b6](https://github.com/buildproven/claude-kit/commit/3fd60b646aa02a477df6ef0340757e9d7bbdeb32))
+* normalize Node selector arguments ([7241ba3](https://github.com/buildproven/claude-kit/commit/7241ba36d1fc516c8bad17e09110438751fb60f1))
+* parse mutation runner arguments safely ([9fd27f1](https://github.com/buildproven/claude-kit/commit/9fd27f1f5b2bb3249484f920515dde848b8c6795))
+* permit controlled self-mutation proof ([40ff2ca](https://github.com/buildproven/claude-kit/commit/40ff2ca7e426570459f3eb8a80ce74006ea6bc13))
+* prefer protected workflow controllers ([2bb28d8](https://github.com/buildproven/claude-kit/commit/2bb28d8f26d1ae0bc17ef0be7ff3f0c8ccb71338))
+* preflight required-check dispatch safely ([d3cc863](https://github.com/buildproven/claude-kit/commit/d3cc86325615676575cd8fcd48aafe2ab108a2da))
+* preserve default quality budgets ([25bd530](https://github.com/buildproven/claude-kit/commit/25bd530dba9e048878d4bdce314151a65f5a7ad4))
+* preserve product verification diagnostics ([b2ffd07](https://github.com/buildproven/claude-kit/commit/b2ffd07ab6fc6d9d708b0e731e6b52a0361210a3))
+* preserve provider reset recovery ([d99774d](https://github.com/buildproven/claude-kit/commit/d99774d18fc81669490f16fa2c640265ce67e832))
+* prevent recursive mutation audit tests ([23164c0](https://github.com/buildproven/claude-kit/commit/23164c07399fe000b87101ed26aae38afb1a3994))
+* prevent unadmitted required-check replans ([e647532](https://github.com/buildproven/claude-kit/commit/e6475322aa2620407ef69b23d05bf78cfa2dcce0))
+* read delivery receipts atomically ([f97d4fe](https://github.com/buildproven/claude-kit/commit/f97d4fe3f72e9871c65cee41b2154008562828ad))
+* recognize unprotected green checks ([dc3d844](https://github.com/buildproven/claude-kit/commit/dc3d844daa2b692c64af59ef0a8677cd44f9c609))
+* recover quality after green CI ([9896832](https://github.com/buildproven/claude-kit/commit/9896832e01118fe8787b78bdc2dca1f7c29381fd))
+* reject control bytes in diagnostics ([bfb9598](https://github.com/buildproven/claude-kit/commit/bfb95981da31f16ab1eeee7c57a8c145bcaed53e))
+* reject empty mutation selector plans ([683287a](https://github.com/buildproven/claude-kit/commit/683287ad09d94d2a0949369beb911f38fb149fb8))
+* remove dependency read race ([de0281d](https://github.com/buildproven/claude-kit/commit/de0281d56392eba102dc799629b9aeb0d496fbb7))
+* remove forced opus quality routing ([e9ce6af](https://github.com/buildproven/claude-kit/commit/e9ce6af3d727c02aad6702e6b339f27c2651535b))
+* require Claude fallback model identity ([b096302](https://github.com/buildproven/claude-kit/commit/b096302602c036dd2ac77d5c7846d1fcc9ccfab5))
+* resolve numeric GitHub repository identity ([5c6b079](https://github.com/buildproven/claude-kit/commit/5c6b079da853c8ca3137bc47f1150218b68efbeb))
+* restore mutation target classifier ([1922521](https://github.com/buildproven/claude-kit/commit/1922521a9d401c5a5f8e526a1922a820569e4569))
+* resume quality remediation loop ([f3b700e](https://github.com/buildproven/claude-kit/commit/f3b700e110cf12d30ec78e77f5c9423637ffad5b))
+* separate mutation plan failures ([d749f45](https://github.com/buildproven/claude-kit/commit/d749f4522ea7ca7b8bcac96cfb889da93534e223))
+* separate product preflight from admission ([69f3617](https://github.com/buildproven/claude-kit/commit/69f3617a089b06de8372f9d23870948086c3566f))
+* simplify receipt verification ([c092dc9](https://github.com/buildproven/claude-kit/commit/c092dc9c3c87bd61ec90682b5b1fd6d8e3534bcd))
+* stop stalled quality remediation ([3752618](https://github.com/buildproven/claude-kit/commit/3752618b086825de374a0979b3c7e3c4a9fec231))
+* stream Claude review prompts through stdin ([2fdd551](https://github.com/buildproven/claude-kit/commit/2fdd551b479d889bf414b023dd1e88a1b4c2284f))
+* validate gate timeout input ([d072f1e](https://github.com/buildproven/claude-kit/commit/d072f1ea7beb72b14bec2ac320abc79f77444bcc))
+* verify exact dependency installations ([34504dd](https://github.com/buildproven/claude-kit/commit/34504dd9778b2a2960407a678b6a98a34122824b))
+* wait for CI before local review evidence ([0a2a8fa](https://github.com/buildproven/claude-kit/commit/0a2a8fabf0112fec42bfa48d5ecc09427ad9b6f1))
+
+
+### Performance Improvements
+
+* bound required-check workflow mapping ([ed4fb6d](https://github.com/buildproven/claude-kit/commit/ed4fb6d074bb724f5d3aa57190a08c02c9d013a8))
+* cache verified MCP parity ([1b21e0c](https://github.com/buildproven/claude-kit/commit/1b21e0c8b7e2dbf79b7ef976fb14934dadc37c3f))
+* keep focused quality tests local ([fedd1a1](https://github.com/buildproven/claude-kit/commit/fedd1a1284b2a92cd3ab52b566c0f9b8126cef36))
+* preflight and reuse mutation evidence ([#443](https://github.com/buildproven/claude-kit/issues/443)) ([a935aa7](https://github.com/buildproven/claude-kit/commit/a935aa772c8c88267b7df9b230b6b8eb392f412c))
+
 ## [4.9.1](https://github.com/buildproven/claude-kit/compare/v4.9.0...v4.9.1) (2026-08-26)
 
 
