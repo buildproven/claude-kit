@@ -109,10 +109,13 @@ function reviewAuthorization(manifest) {
   if (manifest.behavior?.approvalRequired) {
     throw new Error("a signed exact-head operator capability is required");
   }
-  if (manifest.reviews.some((review) => review.status === "incomplete")) {
-    throw new Error("required provider review is incomplete; a signed exact-head operator override is required");
-  }
-  return {};
+  return {
+    reviewStatus: manifest.reviews.some(
+      (review) => review.status === "incomplete",
+    )
+      ? "incomplete"
+      : "complete",
+  };
 }
 function judgeContext(manifest) {
   reviewCoverage(manifest);
@@ -794,6 +797,19 @@ describe("quality-run public orchestration", () => {
     });
     expect(result.manifest.reviews[0].status).toBe("incomplete");
     expect(result.manifest.telemetryWrites).toBe(1);
+  });
+
+  it("merges after bounded provider failure when deterministic evidence is green", () => {
+    const result = run(
+      fixture({ incompleteReview: true }, { merge: true, tier: "medium" }),
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "complete",
+      state: "merged",
+      review: { status: "incomplete" },
+    });
+    expect(result.manifest.calls).toContain("quality-stamp-and-merge.sh");
   });
 
   it("resumes the authorized same-range retry after an interrupted incomplete review", () => {
