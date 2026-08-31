@@ -129,6 +129,11 @@ The PRD decomposes work into independently verifiable vertical slices with
 explicit blocking edges. Wide mechanical refactors use expand → migrate →
 contract so the branch stays green.
 
+Product receipt checks on the candidate worker are preflight only. A product
+merge returns the typed `product-admission` external capability until a fresh
+protected verifier supplies admission evidence. Contract-only changes keep the
+normal autonomous merge path.
+
 ### Bug diagnosis
 
 ```bash

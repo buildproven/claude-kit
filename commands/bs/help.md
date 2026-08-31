@@ -154,6 +154,8 @@ review, resume, optional protected merge, and terminal telemetry.
 Product delivery claims also require protected-producer receipts bound to the
 numeric repository ID, exact HEAD, requirements, and artifact. Caller-authored
 digests and candidate-worker verification are not admission evidence.
+Product merges stop at the typed `product-admission` capability unless a fresh
+protected verifier supplies admission evidence; local preflight cannot merge.
 An exact envelope that exceeds the primary provider's input limit goes once to
 the configured fallback; it is not truncated or replayed to the same provider.
 If review-check publication is unavailable, quality waits for exact-head CI

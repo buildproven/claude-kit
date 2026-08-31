@@ -150,7 +150,7 @@ function trustKey(trustedPublicKey) {
   return key;
 }
 
-function payloadKeys(kind) {
+function payloadKeys(kind, expected) {
   const keys = [
     "schemaVersion",
     "issuer",
@@ -168,7 +168,8 @@ function payloadKeys(kind) {
   ];
   if (kind === "behavioralTests") keys.push("command");
   if (
-    ["deploymentReceipt", "hostedJourney", "realUserEvidence"].includes(kind)
+    ["deploymentReceipt", "hostedJourney", "realUserEvidence"].includes(kind) ||
+    expected.deploymentIdentity
   ) {
     keys.push("deploymentIdentity");
   }
@@ -282,7 +283,7 @@ function validatePayload(payload, expected) {
   if (!RECEIPT_KINDS.has(expected.kind)) {
     throw new Error(`unsupported product evidence kind '${expected.kind}'`);
   }
-  if (!exactKeys(payload, payloadKeys(expected.kind))) {
+  if (!exactKeys(payload, payloadKeys(expected.kind, expected))) {
     throw new Error(
       `${expected.kind} receipt has unexpected or missing fields`,
     );

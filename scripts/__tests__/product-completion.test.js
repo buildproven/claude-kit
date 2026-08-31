@@ -100,17 +100,21 @@ function evidence(
 ) {
   dir = mkdtempSync(path.join(dir, "evidence-"));
   const keys = generateKeyPairSync("ed25519");
+  const deploymentBinding =
+    hosted || validated
+      ? { environment: "production", deploymentIdentity: "deploy-123" }
+      : {};
   const behavioralTests = signedReceipt(
     dir,
     "behavioralTests",
-    { command: "npm test -- towns" },
+    { command: "npm test -- towns", ...deploymentBinding },
     keys.privateKey,
     requirementsDigest,
   );
   const acceptanceEvidence = signedReceipt(
     dir,
     "acceptanceEvidence",
-    {},
+    deploymentBinding,
     keys.privateKey,
     requirementsDigest,
   );
@@ -263,6 +267,30 @@ describe("product completion", () => {
     expect(claim(result, "hosted", hosted).valid).toBe(true);
     expect(claim(result, "validated", hosted).valid).toBe(false);
     expect(claim(result, "validated", validated).valid).toBe(true);
+  });
+
+  it("rejects hosted chains whose local receipts name another deployment", () => {
+    const { dir, prd, tasks } = files();
+    const result = validate(prd, tasks);
+    const hosted = evidence(dir, result.requirementsDigest, { hosted: true });
+    rewriteReceipt(hosted, "behavioralTests", (payload) => {
+      payload.deploymentIdentity = "deploy-other";
+    });
+    expect(claim(result, "hosted", hosted).valid).toBe(false);
+  });
+
+  it("accepts an evidence-free contract claim for allowed files", () => {
+    const { prd, tasks } = files();
+    const result = validate(prd, tasks);
+    expect(
+      verifyClaim(
+        result,
+        "contract",
+        ["docs/decisions/ADR-quality-runtime.md", "harness-config.json"],
+        {},
+        {},
+      ),
+    ).toMatchObject({ valid: true, errors: [] });
   });
 
   it("rejects unsigned, untrusted, wrong-repository, and wrong-head receipts", () => {

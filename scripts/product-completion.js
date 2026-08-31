@@ -232,8 +232,10 @@ function verifyClaim(
   const phases = new Set(result.tasks.map((task) => task.phase));
   const sourceChange = changedFiles.some(productionCodeChange);
   const verification = { evidencePath, trustedPublicKey };
-  const indexError = evidenceIndexError(evidence, repository, repositoryId);
-  if (indexError) errors.push(indexError);
+  if (claim !== "contract") {
+    const indexError = evidenceIndexError(evidence, repository, repositoryId);
+    if (indexError) errors.push(indexError);
+  }
   if (claim === "contract") {
     for (const file of changedFiles.filter(productionCodeChange)) {
       errors.push(
@@ -255,6 +257,12 @@ function verifyClaim(
       errors.push(`${claim} claim needs an implementation task`);
     if (!sourceChange)
       errors.push(`${claim} claim needs a production-code change`);
+    const hostedBinding = ["hosted", "validated"].includes(claim)
+      ? {
+          environment: evidence.expectedEnvironment,
+          deploymentIdentity: evidence.deploymentIdentity,
+        }
+      : {};
     errors.push(
       ...receiptErrors(
         localReceipts(
@@ -264,6 +272,7 @@ function verifyClaim(
             repository,
             repositoryId,
             requirementsDigest: result.requirementsDigest,
+            ...hostedBinding,
           },
           verification,
         ),

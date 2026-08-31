@@ -172,6 +172,10 @@ describe("delivery-claim argument wiring", () => {
 
   it("binds product evidence to the numeric REST repository ID", () => {
     const source = fs.readFileSync(SCRIPT, "utf8");
+    expect(source).toContain(
+      'if [ -n "$DELIVERY_EVIDENCE_ARG" ] || [ -n "${RES_PR:-}" ]; then',
+    );
+    expect(source).toContain('if [ -n "$DELIVERY_EVIDENCE_ARG" ]; then');
     expect(source).toContain('gh api "repos/$GITHUB_REPOSITORY"');
     expect(source).toContain("--jq '.id | tostring'");
     expect(source).not.toContain("--json databaseId");

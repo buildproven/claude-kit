@@ -711,16 +711,19 @@ BASE_HEAD_SHA_ARG="${FRESH_BASE_OID:-${PR_BASE_OID:-}}"
 [ -n "$PRODUCT_TASKS_ARG" ] && CREATE_ARGS+=(--product-tasks "$PRODUCT_TASKS_ARG")
 [ -n "$DELIVERY_EVIDENCE_ARG" ] && CREATE_ARGS+=(--delivery-evidence "$DELIVERY_EVIDENCE_ARG")
 [ -n "${RES_PR:-}" ] && CREATE_ARGS+=(--pr "$RES_PR")
-if [ -n "${RES_PR:-}" ]; then
+if [ -n "$DELIVERY_EVIDENCE_ARG" ] || [ -n "${RES_PR:-}" ]; then
   GITHUB_REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || exit 1
-  CREATE_ARGS+=(--github-repo "$GITHUB_REPOSITORY" --head-ref "$PR_HEAD_NAME" \
+  CREATE_ARGS+=(--github-repo "$GITHUB_REPOSITORY")
+fi
+if [ -n "$DELIVERY_EVIDENCE_ARG" ]; then
+  GITHUB_REPOSITORY_ID="$(gh api "repos/$GITHUB_REPOSITORY" \
+    --jq '.id | tostring')" || exit 1
+  CREATE_ARGS+=(--github-repository-id "$GITHUB_REPOSITORY_ID")
+fi
+if [ -n "${RES_PR:-}" ]; then
+  CREATE_ARGS+=(--head-ref "$PR_HEAD_NAME" \
     --head-repository "$PR_HEAD_REPOSITORY" \
     --cross-repository "$PR_IS_CROSS_REPOSITORY")
-  if [ -n "$DELIVERY_EVIDENCE_ARG" ]; then
-    GITHUB_REPOSITORY_ID="$(gh api "repos/$GITHUB_REPOSITORY" \
-      --jq '.id | tostring')" || exit 1
-    CREATE_ARGS+=(--github-repository-id "$GITHUB_REPOSITORY_ID")
-  fi
 fi
 BS_QUALITY_MANIFEST="$(node "$SCRIPT_DIR/quality-invocation.js" "${CREATE_ARGS[@]}")" || exit 1
 BS_QUALITY_REPOSITORY_LEASE_TOKEN=""

@@ -650,6 +650,28 @@ describe("quality-run public orchestration", () => {
     expect(result.manifest.calls).toContain("quality-run-review.sh");
   });
 
+  it("requires protected admission before merging a product claim", () => {
+    const result = run(
+      fixture(
+        {
+          changedFiles: ["src/App.tsx"],
+          productVerifier:
+            "process.stdout.write(JSON.stringify({valid:true,errors:[]}));",
+        },
+        { merge: true },
+      ),
+    );
+    expect(result.status).toBe(3);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "action-required",
+      phase: "product-admission",
+      message: expect.stringContaining(
+        "candidate-worker verification is preflight only",
+      ),
+    });
+    expect(result.manifest.calls).not.toContain("quality-stamp-and-merge.sh");
+  });
+
   it("blocks similarly named harness configuration that is not the exact quality-control file", () => {
     const result = run(fixture({ changedFiles: ["harness-config.js"] }));
     expect(result.status).toBe(1);

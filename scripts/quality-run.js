@@ -475,6 +475,15 @@ async function finishWithoutMerge(manifestPath, invoke, manifest, review) {
 }
 
 async function finishWithMerge(context, manifestPath, manifest, review) {
+  if (deliveryClaim(manifest) !== "contract") {
+    return actionRequired(
+      manifestPath,
+      "product-admission",
+      "protected product-admission verification is required; candidate-worker verification is preflight only",
+      manifest,
+      review,
+    );
+  }
   try {
     quality.reviewAuthorization(manifest);
   } catch (error) {

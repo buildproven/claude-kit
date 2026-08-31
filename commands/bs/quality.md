@@ -97,6 +97,9 @@ producer provenance, and exact artifact. The campaign binds one evidence-index
 digest per HEAD; an authorized HEAD advance archives and renews that binding.
 Local verification is preflight only. Admission uses a trusted verifier on a
 fresh protected worker. This verifier does not weaken or replace quality gates.
+A valid candidate-worker preflight never authorizes a product merge. The runner
+returns `product-admission` as a typed external capability until protected
+admission evidence is available.
 
 `--review-arm native|bespoke` is the bounded Wave 3 experiment control.
 `native` assigns Codex's provider-native structured review with Claude fallback;

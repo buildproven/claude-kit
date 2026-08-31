@@ -54,6 +54,10 @@ literal string `passed`.
 to verify a receipt and does not know signature details. Candidate-worker or
 local verification is a fail-closed preflight only. Admission-grade acceptance
 must rerun the installed verifier on the protected worker described above.
+The local runner never converts that preflight result into merge authority. A
+product-claim merge returns the typed `product-admission` external-capability
+state until a protected admission service is available. Contract-only changes
+can still merge through the normal exact-head quality path.
 Verification
 fails when the trust key is absent, the signature is invalid, the repository,
 HEAD, or requirements digest differs, the result is not successful, or the
@@ -102,6 +106,9 @@ signature conformance vector is in
 - Local, hosted, and real-user claims remain separate evidence levels.
 - Hosted and validated receipt chains use one environment and one deployment
   identity throughout.
+- Behavioral and acceptance receipts omit `deploymentIdentity` for a local
+  claim and must include the selected deployment identity for hosted or
+  validated claims.
 
 ## Rollback
 
