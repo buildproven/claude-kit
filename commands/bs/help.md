@@ -21,6 +21,9 @@ Only an auth/payments, durable-data, public-contract, distributed-consistency,
 cross-repository, or similarly irreversible decision creates an ADR and earns a
 bounded high-effort review.
 
+Critical Claude fallback keeps every selected review role fail-closed, but a
+single available model family does not discard a complete role-bound panel.
+
 An exhausted quality provider retry can cross a legitimate descendant fix only
 through an exact-new-HEAD operator override that names
 `review:provider-exhaustion` and acknowledges the missing review.
@@ -151,6 +154,12 @@ review, resume, optional protected merge, and terminal telemetry.
 Product delivery claims also require protected-producer receipts bound to the
 numeric repository ID, exact HEAD, requirements, and artifact. Caller-authored
 digests and candidate-worker verification are not admission evidence.
+An exact envelope that exceeds the primary provider's input limit goes once to
+the configured fallback; it is not truncated or replayed to the same provider.
+If review-check publication is unavailable, quality waits for exact-head CI
+before it signs local review evidence instead of failing while CI is pending.
+Oversized Claude fallback prompts are streamed through standard input, so host
+argument-list limits cannot turn the fallback into an inconclusive review.
 
 | Old Command           | Replacement                      |
 | --------------------- | -------------------------------- |

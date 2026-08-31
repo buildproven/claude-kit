@@ -30,6 +30,7 @@ const configs = [
       "**/dist/**",
       "**/build/**",
       "**/coverage/**",
+      "scripts/generated/**",
       "**/*.html",
       "**/.venv/**",
       "**/venv/**",

@@ -104,11 +104,14 @@ describe("quality merge gates", () => {
     );
   });
 
-  it("falls back to signed local review evidence only after required CI is green", () => {
+  it("waits for required CI before using local evidence when check publication is unavailable", () => {
     expect(STAMP_AND_MERGE).toMatch(
-      /quality-review-check\.js" publish[\s\S]*CI_ALREADY_GREEN[\s\S]*LOCAL_REVIEW_EVIDENCE=true/,
+      /quality-review-check\.js" publish[\s\S]*LOCAL_REVIEW_EVIDENCE_DEFERRED=true/,
     );
-    expect(STAMP_AND_MERGE).toContain(
+    expect(STAMP_AND_MERGE).toMatch(
+      /quality-required-checks\.js" wait[\s\S]*LOCAL_REVIEW_EVIDENCE_DEFERRED[\s\S]*prepare_local_review_evidence/,
+    );
+    expect(STAMP_AND_MERGE).not.toContain(
       "custom review check publication failed before required CI was green",
     );
     expect(STAMP_AND_MERGE).toContain("QUALITY_LOCAL_REVIEW=true");

@@ -4281,8 +4281,8 @@ function providerFindings(manifest) {
     quorumPanelSize = 0;
     let structuredProviderReports = 0;
     const structuredProviderNames = new Set();
-    const claudeSlotModels = new Set();
     const claudeSlotRoles = new Set();
+    const claudeSlotModels = new Map();
     // Reset too: a malformed agent in round 1 must not be reported against
     // round 2's panel now that the quorum is evaluated inside the loop.
     inconclusiveAgents = [];
@@ -4356,8 +4356,11 @@ function providerFindings(manifest) {
       const resultProvider = item.provider || inventory.provider;
       structuredProviderNames.add(resultProvider);
       if (resultProvider === "claude" && parsed._qualitySlot) {
-        claudeSlotModels.add(parsed._qualitySlot.model);
-        claudeSlotRoles.add(parsed._qualitySlot.role);
+        const { model, role } = parsed._qualitySlot;
+        claudeSlotRoles.add(role);
+        if (typeof model === "string" && model.trim() !== "") {
+          claudeSlotModels.set(role, model);
+        }
       }
       // Preserved primary evidence stays authoritative for its findings, but
       // only the selected panel can contribute a verdict toward that panel's
@@ -4534,11 +4537,12 @@ function providerFindings(manifest) {
       (manifest.reviewContractVersion || 1) >= 2 &&
       manifest.risk.tier === "critical" &&
       inventory.provider === "claude" &&
-      (claudeSlotModels.size < 2 ||
-        manifest.agents.some((agent) => !claudeSlotRoles.has(agent)))
+      manifest.agents.some(
+        (agent) => !claudeSlotRoles.has(agent) || !claudeSlotModels.has(agent),
+      )
     ) {
       throw new Error(
-        "critical Claude discovery lacks two role-bound model families",
+        "critical Claude discovery lacks role-bound model evidence",
       );
     }
     // Fail closed per review, and distinctly from "actionable code findings

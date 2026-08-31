@@ -374,12 +374,13 @@ describe("claude-review-companion.sh", () => {
     const d = tmpdir();
     const bin = path.join(d, "bin");
     const argsFile = path.join(d, "claude-args.txt");
+    const promptFile = path.join(d, "claude-stdin.txt");
     fs.mkdirSync(bin);
     fs.writeFileSync(path.join(d, "diff.txt"), "x\n");
     fs.writeFileSync(path.join(d, "identity.json"), "{}\n");
     fs.writeFileSync(
       path.join(bin, "claude"),
-      `#!/usr/bin/env bash\nprintf '%s\\n' "$@" > "${argsFile}"\nprintf '%s\\n' '{"result":"{\\"verdict\\":\\"approve\\",\\"summary\\":\\"Clean\\",\\"findings\\":[]}","structured_output":{"verdict":"approve","summary":"Clean","findings":[]},"is_error":false,"stop_reason":"end_turn"}'\n`,
+      `#!/usr/bin/env bash\nprintf '%s\\n' "$@" > "${argsFile}"\ncat > "${promptFile}"\nprintf '%s\\n' '{"result":"{\\"verdict\\":\\"approve\\",\\"summary\\":\\"Clean\\",\\"findings\\":[]}","structured_output":{"verdict":"approve","summary":"Clean","findings":[]},"is_error":false,"stop_reason":"end_turn"}'\n`,
       { mode: 0o755 },
     );
 
@@ -407,6 +408,8 @@ describe("claude-review-companion.sh", () => {
     expect(args).not.toContain("https://json-schema.org/draft/2020-12/schema");
     expect(args).toContain("--tools\n\n");
     expect(args).not.toContain("--allowedTools");
+    expect(fs.readFileSync(promptFile, "utf8")).toContain('"diff":"x\\n"');
+    expect(args).not.toContain('"diff":');
   });
 
   it("does not override the governor model for Critical Claude slots", () => {

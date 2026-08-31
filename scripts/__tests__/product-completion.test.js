@@ -16,7 +16,12 @@ import {
   verify as verifySignature,
 } from "node:crypto";
 import Ajv2020 from "ajv/dist/2020.js";
-import { validate, verifyClaim, next } from "../product-completion.js";
+import {
+  validate,
+  verifyClaim,
+  next,
+  productionCodeChange,
+} from "../product-completion.js";
 import { canonicalJson } from "../product-evidence.js";
 
 const HEAD = "a".repeat(40);
@@ -181,6 +186,15 @@ function rewriteReceipt(local, name, mutate) {
 }
 
 describe("product completion", () => {
+  it("requires a phase and an implementation task for user-facing work", () => {
+    const { dir, prd, tasks } = files({ phase: "contract", checked: true });
+    const result = validate(prd, tasks);
+    const local = evidence(dir, result.requirementsDigest);
+    expect(result.valid).toBe(false);
+    expect(claim(result, "local-product", local).valid).toBe(false);
+    expect(next(result).status).toBe("UNVERIFIED");
+  });
+
   it("matches the published schemas and RFC 8785 conformance vector", () => {
     const schemaRoot = path.resolve(import.meta.dirname, "..", "schemas");
     const receiptSchema = JSON.parse(
@@ -281,6 +295,48 @@ describe("product completion", () => {
     expect(
       claim(result, "local-product", fresh, { head: "b".repeat(40) }).valid,
     ).toBe(false);
+  });
+
+  it("rejects test-only source changes", () => {
+    const { dir, prd, tasks } = files();
+    const result = validate(prd, tasks);
+    const local = evidence(dir, result.requirementsDigest);
+    expect(
+      verifyClaim(
+        result,
+        "local-product",
+        ["scripts/__tests__/towns.test.js"],
+        local.value,
+        {
+          head: HEAD,
+          repository: REPOSITORY,
+          repositoryId: REPOSITORY_ID,
+          evidencePath: local.file,
+          trustedPublicKey: local.keys.publicKey,
+        },
+      ).valid,
+    ).toBe(false);
+  });
+
+  it("classifies contract and quality-control files conservatively", () => {
+    for (const file of [
+      "docs/decisions/ADR-quality-runtime.md",
+      ".buildproven/test-impact.json",
+      "harness-config.json",
+    ]) {
+      expect(productionCodeChange(file)).toBe(false);
+    }
+    for (const file of [
+      "src/towns.js",
+      "src/Towns.vue",
+      "src/prompts/system.txt",
+      "src/content/help.mdx",
+      "config/app.json",
+      "harness-config.js",
+      "harness-config.yaml",
+    ]) {
+      expect(productionCodeChange(file)).toBe(true);
+    }
   });
 
   it("rejects receipts replayed against a different PRD or task set", () => {

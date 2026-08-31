@@ -104,10 +104,22 @@
     {
       "paths": [
         "scripts/quality-bootstrap.sh",
+        "scripts/build-quality-dependency-preflight.js",
         "scripts/quality-dependency-preflight.js",
-        "scripts/__tests__/quality-dependency-preflight.test.js"
+        "scripts/generated/quality-dependency-preflight/674.index.js",
+        "scripts/generated/quality-dependency-preflight/index.js",
+        "scripts/__tests__/quality-dependency-preflight.test.js",
+        ".defensive-patterns.json",
+        ".prettierignore",
+        ".semgrepignore",
+        "knip.config.js",
+        "eslint.config.cjs"
       ],
       "commands": [
+        {
+          "executable": "npm",
+          "args": ["run", "check:dependency-preflight"]
+        },
         {
           "executable": "npx",
           "args": [
@@ -244,7 +256,7 @@
       ]
     },
     {
-      "paths": ["scripts/quality-risk-resolve.sh"],
+      "paths": ["harness-config.json", "scripts/quality-risk-resolve.sh"],
       "commands": [
         {
           "executable": "npx",

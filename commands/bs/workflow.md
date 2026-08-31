@@ -15,6 +15,9 @@ Use each runtime's normal medium-effort profile for daily development. The
 quality workflow performs any bounded high-effort adversarial escalation; do
 not select Opus or a Codex power profile for ordinary commands.
 
+If critical review falls back to Claude, all selected roles must complete. The
+fallback can use the configured model family without an automatic Opus route.
+
 `/bs:dev` and `/bs:plan` automatically run the Architecture Decision Gate. An
 ADR is required only for an irreversible boundary (auth/payments, durable data,
 public contracts, distributed consistency, or cross-repo dependencies). It is
@@ -61,6 +64,14 @@ advisory: unavailable or malformed provider output is signed as `incomplete`,
 never presented as a clean review. A run stops for human direction when
 deterministic evidence is unresolved, revision identity is stale, required CI
 fails, or repository policy explicitly requires a human.
+If the primary rejects the exact envelope as too large, quality preserves the
+envelope and tries the configured fallback once instead of replaying the same
+impossible primary request.
+If custom review-check publication is unavailable while exact-head CI is
+pending, quality completes the bounded CI wait before it signs local review
+evidence. A failed CI result remains a hard block.
+Claude fallback prompts use standard input and preserve the exact review
+envelope without placing a large diff in process arguments.
 
 If a bounded provider retry is exhausted and a real descendant fix lands, resume
 the same campaign only with an exact-new-HEAD override accepting

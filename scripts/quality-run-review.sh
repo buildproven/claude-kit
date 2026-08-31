@@ -305,13 +305,14 @@ classify_structured_provider_failure() {
   case "$category" in
     provider-exhaustion) return 75 ;;
     provider-billing) return 79 ;;
+    provider-input-too-large) return 78 ;;
     *) return 1 ;;
   esac
 }
 
 run_codex_review() {
   local bounded normalizer schema raw_file normalized_file error_file rc pass pass_timeout
-  local auth_output prompt_file attempt_started
+  local auth_output prompt_file attempt_started failure_rc
   bounded="$SCRIPT_DIR/quality-run-bounded.sh"
   normalizer="$SCRIPT_DIR/quality-normalize-codex-review.sh"
   schema="$SCRIPT_DIR/schemas/quality-review-output.schema.json"
@@ -385,6 +386,9 @@ run_codex_review() {
           jq '. + {provider: "codex"}' > "$REVIEW_OUT/provider-failure.json"
         return 79
       fi
+      classify_structured_provider_failure codex "$error_file"
+      failure_rc=$?
+      case "$failure_rc" in 75|78|79) return "$failure_rc" ;; esac
       # Codex refreshes MCP OAuth before starting the review. A rejected refresh
       # token prevents the reviewer from running at all, so it is provider
       # unavailability rather than a review or parser failure. Keep this match
@@ -589,11 +593,12 @@ case "$QUALITY_PRIMARY" in
   codex | gemini) PRIMARY_HAS_STRUCTURED_RC4=true ;;
 esac
 # QUALITY_FALLBACK != QUALITY_PRIMARY guards every failure code below (75,
-# 79, 2, 4, 76, 77), not only the rc=4 branch added alongside
+# 78, 79, 2, 4, 76, 77), not only the rc=4 branch added alongside
 # PRIMARY_HAS_STRUCTURED_RC4 — pre-existing behavior, not new with that flag.
 # "Falling back" to the same provider that just failed can never make sense
 # regardless of which rc triggered it, so the guard is correctly universal.
-if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
+if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 78 ] ||
+  [ "$PROVIDER_RC" -eq 79 ] ||
   [ "$PROVIDER_RC" -eq 2 ] || [ "$PROVIDER_RC" -eq 77 ] ||
   { [ "$PROVIDER_RC" -eq 4 ] && [ "$PRIMARY_HAS_STRUCTURED_RC4" = true ]; } ||
   { [ "$PROVIDER_RC" -eq 76 ] && [ "$FALLBACK_ON_TIMEOUT" = 1 ]; }; } &&
@@ -604,6 +609,8 @@ if { [ "$PROVIDER_RC" -eq 75 ] || [ "$PROVIDER_RC" -eq 79 ] ||
     echo "⚠️  [quality] $QUALITY_PRIMARY exhausted${DETAIL:+ — $DETAIL}; switching immediately to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 79 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY reported a billing or credits failure; switching immediately to $QUALITY_FALLBACK." >&2
+  elif [ "$PROVIDER_RC" -eq 78 ]; then
+    echo "⚠️  [quality] $QUALITY_PRIMARY rejected the exact review envelope as too large; switching immediately to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 2 ]; then
     echo "⚠️  [quality] $QUALITY_PRIMARY unavailable; switching immediately to $QUALITY_FALLBACK." >&2
   elif [ "$PROVIDER_RC" -eq 4 ] && [ "$PRIMARY_HAS_STRUCTURED_RC4" = true ]; then
@@ -640,6 +647,7 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
       75) INCOMPLETE_CATEGORY=provider-exhaustion ;;
       76) INCOMPLETE_CATEGORY=provider-timeout ;;
       77) INCOMPLETE_CATEGORY=provider-governor ;;
+      78) INCOMPLETE_CATEGORY=provider-input-too-large ;;
       79) INCOMPLETE_CATEGORY=provider-billing ;;
       *) INCOMPLETE_CATEGORY=provider-error ;;
     esac
@@ -669,7 +677,8 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
     RETRY_STATUS="$(node "$SCRIPT_DIR/quality-invocation.js" \
       review-retry-status "$MANIFEST")" || exit 1
     RETRY_STATE="$(printf '%s' "$RETRY_STATUS" | jq -r '.state')"
-    if [ "$RETRY_STATE" = pending ]; then
+    if [ "$RETRY_STATE" = pending ] &&
+      [ "$INCOMPLETE_CATEGORY" != provider-input-too-large ]; then
       echo "⚠️  [quality] AI discovery incomplete ($INCOMPLETE_CATEGORY); authorizing the one bounded same-range retry." >&2
       node "$SCRIPT_DIR/quality-invocation.js" reserve-incomplete-retry \
         "$MANIFEST" || {
@@ -726,6 +735,10 @@ if [ "$PROVIDER_RC" -ne 0 ]; then
     77)
       echo "❌ MERGE BLOCKED: the invocation-wide provider attempt cap or absolute deadline is exhausted." >&2
       terminal_diagnosis provider-governor
+      ;;
+    78)
+      echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER rejected the exact review envelope as too large $FALLBACK_NOTE." >&2
+      terminal_diagnosis provider-input-too-large "$REVIEW_PROVIDER"
       ;;
     4)
       echo "❌ MERGE BLOCKED: $REVIEW_PROVIDER review was inconclusive $FALLBACK_NOTE." >&2

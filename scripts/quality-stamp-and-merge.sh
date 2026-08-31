@@ -175,6 +175,7 @@ case "$REQUESTED_LOCAL_REVIEW_EVIDENCE" in
   *) echo "❌ MERGE BLOCKED: QUALITY_LOCAL_REVIEW_EVIDENCE must be true or false." >&2; exit 1 ;;
 esac
 LOCAL_REVIEW_EVIDENCE=false
+LOCAL_REVIEW_EVIDENCE_DEFERRED=false
 LOCAL_REVIEW_EVIDENCE_ARTIFACT="$(dirname "$MANIFEST")/local-review-evidence.json"
 prepare_local_review_evidence() {
   node "$SCRIPT_DIR/quality-review-check.js" write-local \
@@ -233,8 +234,8 @@ else
       LOCAL_REVIEW_EVIDENCE=true
       echo "⚠️  [quality] using signed exact-head local review evidence because required CI is already green and custom check publication is unavailable." >&2
     else
-      echo "❌ MERGE BLOCKED: local review evidence requires green required CI or a signed exact-head CI billing condition." >&2
-      exit 1
+      LOCAL_REVIEW_EVIDENCE_DEFERRED=true
+      echo "[quality] local review evidence requested; waiting for required CI before signing it." >&2
     fi
   else
     if ! node "$SCRIPT_DIR/quality-review-check.js" publish --manifest "$MANIFEST" >/dev/null; then
@@ -243,8 +244,8 @@ else
         LOCAL_REVIEW_EVIDENCE=true
         echo "⚠️  [quality] custom review check publication is unavailable; using signed exact-head local review evidence with already-green required CI." >&2
       else
-        echo "❌ MERGE BLOCKED: custom review check publication failed before required CI was green." >&2
-        exit 1
+        LOCAL_REVIEW_EVIDENCE_DEFERRED=true
+        echo "[quality] custom review check publication is unavailable; waiting for required CI before signing local evidence." >&2
       fi
     fi
   fi
@@ -399,6 +400,15 @@ if [ "$RC" -ne 0 ]; then
     node "$SCRIPT_DIR/quality-terminal-status.js" \
       --manifest "$MANIFEST" --category github-ci --detail "$DETAIL" || true
     exit 1
+  fi
+fi
+if [ "$LOCAL_REVIEW_EVIDENCE_DEFERRED" = true ]; then
+  prepare_local_review_evidence
+  LOCAL_REVIEW_EVIDENCE=true
+  if [ "$CI_BILLING_WAIVED" = true ]; then
+    echo "⚠️  [quality] the exact-head CI billing waiver is valid; using signed local review evidence after custom check publication was unavailable." >&2
+  else
+    echo "⚠️  [quality] required CI is green; using signed exact-head local review evidence after custom check publication was unavailable." >&2
   fi
 fi
 [ "$(gh pr view "$PR" --repo "$EXPECTED_REPOSITORY" \

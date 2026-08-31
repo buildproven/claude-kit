@@ -78,6 +78,13 @@ advisory: unavailable or malformed provider output is signed as `incomplete`,
 never presented as a clean review. Deterministic gate or mutation failures,
 stale revision identity, invalid evidence or signatures, required CI failures,
 and explicit human-required policy remain hard merge blocks.
+If custom review-check publication is unavailable while exact-head CI is still
+pending, merge waits for CI and signs local review evidence only after CI is
+green. The pending state is not recorded as a terminal failure.
+Claude fallback review streams the exact prompt through standard input. Large
+diffs do not enter the process argument list or depend on the host ARG_MAX.
+Critical Claude fallback requires usable evidence for every selected role. It
+does not terminal-block only because those roles inherit one model family.
 
 Declare the strongest delivery claim. `contract` is the default only for
 backward-compatible non-product campaigns. Any `local-product`, `hosted`, or
@@ -104,6 +111,12 @@ provider-failure attestation. If that retry is also incomplete, it records
 `reviewStatus: incomplete`, which remains visible in the signed trailers while
 deterministic gates continue to merge authorization. Provider availability is
 not itself a human-intervention gate.
+
+A provider that rejects the exact review envelope because it exceeds that
+provider's input limit is not retried with the same impossible input. The
+runner preserves the complete envelope and immediately tries the configured
+fallback once. If no fallback completes, signed incomplete evidence remains
+fail-closed.
 
 `--verify-app` (BUI-306) is opt-in only — never enabled by default. Every
 other gate (lint/type/build/test/security) proves the code compiles and its

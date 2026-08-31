@@ -1,4 +1,9 @@
 {
+  "checkDefinitions": {
+    "test": {
+      "timeoutMinutes": 15
+    }
+  },
   "scorePolicy": {
     "protectedNonstrictRefCas": "accept-non-atomic-pr-state"
   }
