@@ -422,6 +422,76 @@ describe("quality dependency preflight", () => {
     expect(result.status, result.stderr).toBe(0);
   });
 
+  it("rejects a pnpm selection outside the manifest constraint", () => {
+    const root = fixture();
+    selectFixtureManager(root, "pnpm", "11.25.0");
+    fs.writeFileSync(
+      path.join(root, "pnpm-lock.yaml"),
+      "lockfileVersion: '9.0'\nimporters:\n  .:\n    devDependencies:\n      eslint:\n        specifier: 1.2.3\n        version: 9.9.9\npackages:\n  eslint@9.9.9:\n    resolution: {integrity: sha512-YQ==}\nsnapshots:\n  eslint@9.9.9: {}\n",
+    );
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(
+      /pnpm selection eslint@9\.9\.9 does not satisfy 1\.2\.3/,
+    );
+  });
+
+  it.each([
+    {
+      manager: "npm",
+      version: "11.6.2",
+      lock: "package-lock.json",
+      source: JSON.stringify({
+        lockfileVersion: 3,
+        packages: {
+          "": { devDependencies: { eslint: "1.2.3" } },
+          "node_modules/eslint": { version: "9.9.9" },
+        },
+      }),
+    },
+    {
+      manager: "yarn",
+      version: "4.18.0",
+      lock: "yarn.lock",
+      source:
+        '__metadata:\n  version: 10\n"eslint@npm:1.2.3":\n  version: 9.9.9\n  resolution: "eslint@npm:9.9.9"\n"fixture@workspace:.":\n  version: 0.0.0-use.local\n  resolution: "fixture@workspace:."\n  dependencies:\n    eslint: "npm:1.2.3"\n',
+    },
+    {
+      manager: "bun",
+      version: "1.4.0",
+      lock: "bun.lock",
+      source:
+        '{"lockfileVersion":1,"workspaces":{"":{"devDependencies":{"eslint":"1.2.3"}}},"packages":{"eslint":["eslint@9.9.9","",{}]}}',
+    },
+  ])(
+    "rejects a $manager registry selection outside its manifest constraint",
+    ({ manager, version, lock, source }) => {
+      const root = fixture();
+      selectFixtureManager(root, manager, version);
+      if (lock !== "package-lock.json")
+        fs.rmSync(path.join(root, "package-lock.json"));
+      fs.writeFileSync(path.join(root, lock), source);
+      if (manager === "yarn") {
+        fs.writeFileSync(
+          path.join(root, ".yarnrc.yml"),
+          "nodeLinker: node-modules\n",
+        );
+        fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
+        fs.writeFileSync(
+          path.join(root, "node_modules", ".yarn-state.yml"),
+          '__metadata:\n  version: 1\n"eslint@npm:9.9.9":\n  locations:\n    - "node_modules/eslint"\n',
+        );
+      }
+      const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(78);
+      expect(result.stderr).toMatch(/selection .*does not satisfy 1\.2\.3/);
+    },
+  );
+
   it("accepts exact Yarn node-modules state without loading .pnp.cjs", () => {
     const root = fixture();
     selectFixtureManager(root, "yarn", "4.18.0");
@@ -795,6 +865,72 @@ describe("quality dependency preflight", () => {
     });
     expect(result.status).toBe(78);
     expect(result.stderr).toMatch(/eslint targets the wrong file/);
+  });
+
+  it("rejects a command shim owned by a package absent from the lockfile", () => {
+    const root = fixture();
+    installFixturePackage(root);
+    const rogue = path.join(root, "node_modules", "rogue");
+    fs.mkdirSync(rogue);
+    fs.writeFileSync(
+      path.join(rogue, "package.json"),
+      JSON.stringify({ name: "rogue", version: "9.9.9", bin: "bin.js" }),
+    );
+    fs.writeFileSync(path.join(rogue, "bin.js"), "", { mode: 0o755 });
+    fs.symlinkSync(
+      path.join("..", "rogue", "bin.js"),
+      path.join(root, "node_modules", ".bin", "rogue"),
+    );
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/owner is not bound by the lockfile/);
+  });
+
+  it("accepts a transitive command owner at its exact lock-backed path", () => {
+    const root = fixture();
+    installFixturePackage(root);
+    const helper = path.join(root, "node_modules", "helper");
+    fs.mkdirSync(helper);
+    fs.writeFileSync(
+      path.join(helper, "package.json"),
+      JSON.stringify({ name: "helper", version: "2.0.0", bin: "bin.js" }),
+    );
+    fs.writeFileSync(path.join(helper, "bin.js"), "", { mode: 0o755 });
+    fs.symlinkSync(
+      path.join("..", "helper", "bin.js"),
+      path.join(root, "node_modules", ".bin", "helper"),
+    );
+    const lockFile = path.join(root, "package-lock.json");
+    const lock = JSON.parse(fs.readFileSync(lockFile, "utf8"));
+    lock.packages["node_modules/helper"] = { version: "2.0.0" };
+    fs.writeFileSync(lockFile, JSON.stringify(lock));
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("rejects a command NODE_PATH with a nonexistent leaf under a symlink", async () => {
+    const root = fixture();
+    installFixturePackage(root);
+    const external = makeTempDir("quality-node-path-external-");
+    fs.symlinkSync(external, path.join(root, "escape"));
+    const target = fs.realpathSync(
+      path.join(root, "node_modules", "eslint", "bin.js"),
+    );
+    const command = path.join(root, "node_modules", ".bin", "eslint");
+    fs.unlinkSync(command);
+    const { cmdShim } = await import("@zkochan/cmd-shim");
+    await cmdShim(target, command, {
+      nodePath: [path.join(root, "escape", "pending")],
+    });
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/NODE_PATH escapes the repository/);
   });
 
   it("accepts exact POSIX, CMD, and PowerShell wrappers from the supported generator", async () => {

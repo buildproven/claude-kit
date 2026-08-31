@@ -54,6 +54,7 @@
     "lint-staged": "^17.3.0",
     "pnpm": "11.22.0",
     "prettier": "^3.9.6",
+    "semver": "^7.7.3",
     "smol-toml": "1.8.0",
     "vitest": "^4.0.18",
     "yaml": "2.9.0"

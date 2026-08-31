@@ -14,6 +14,7 @@ const {
 } = require("jsonc-parser");
 const { parseSyml } = require("@yarnpkg/parsers");
 const { ZipFS } = require("@yarnpkg/libzip");
+const semver = require("semver");
 const { Lexer: YamlLexer, parseAllDocuments, parseDocument } = require("yaml");
 const { parse: parseToml } = require("smol-toml");
 
@@ -321,6 +322,42 @@ function exactVersion(value) {
   return coreParts.length === 3 && coreParts.every(semverNumber);
 }
 
+function registrySelectionSatisfies(name, spec, selectedName, version) {
+  let expectedName = name;
+  let range = String(spec);
+  if (range.startsWith("npm:")) {
+    const alias = range.slice("npm:".length);
+    const separator = alias.lastIndexOf("@");
+    if (separator <= 0) return false;
+    expectedName = alias.slice(0, separator);
+    range = alias.slice(separator + 1);
+  }
+  const validRange = semver.validRange(range);
+  return (
+    selectedName === expectedName &&
+    validRange !== null &&
+    semver.satisfies(version, validRange)
+  );
+}
+
+function localSelectionSatisfies(spec, selected, version) {
+  const requirement = String(spec);
+  const locator = String(selected);
+  if (/^(?:file|link|portal):/.test(requirement)) {
+    return locator === requirement;
+  }
+  if (requirement.startsWith("workspace:")) {
+    const selector = requirement.slice("workspace:".length);
+    if (selector === "*") return true;
+    if (selector === "^") return semver.satisfies(version, `^${version}`);
+    if (selector === "~") return semver.satisfies(version, `~${version}`);
+    if (semver.validRange(selector)) return semver.satisfies(version, selector);
+    return locator.replace(/^(?:file|link|workspace):/, "") === selector;
+  }
+  const range = semver.validRange(requirement);
+  return range !== null && semver.satisfies(version, range);
+}
+
 function versionParts(value) {
   return String(value)
     .split(/[+-]/, 1)[0]
@@ -433,7 +470,11 @@ function validateInstalled(
   name,
   expectedVersion,
   packageRoot,
-  { expectedName = name, checkCommandLinks = true } = {},
+  {
+    expectedName = name,
+    checkCommandLinks = true,
+    lockedCommandRoots = null,
+  } = {},
 ) {
   const failures = [];
   if (!fs.existsSync(packageRoot)) return [`${name}: package is not installed`];
@@ -456,6 +497,8 @@ function validateInstalled(
       failures.push(
         `${name}: installed ${installed.version || "unknown"}, lockfile requires ${expectedVersion}`,
       );
+    } else if (lockedCommandRoots) {
+      lockedCommandRoots.add(resolvedRoot);
     }
     for (const [bin, relativeTarget] of packageBinEntries(
       expectedName,
@@ -500,7 +543,13 @@ function validateInstalled(
   return failures;
 }
 
-function validateLocalInstall(root, name, localRoot, expectedVersion) {
+function validateLocalInstall(
+  root,
+  name,
+  localRoot,
+  expectedVersion,
+  lockedCommandRoots = null,
+) {
   const installedRoot = path.join(root, "node_modules", name);
   if (!fs.existsSync(installedRoot))
     return [`${name}: package is not installed`];
@@ -518,7 +567,9 @@ function validateLocalInstall(root, name, localRoot, expectedVersion) {
     if (resolvedInstalled !== resolvedLocal) {
       return [`${name}: installed link does not match the locked local target`];
     }
-    return validateInstalled(root, name, expectedVersion, installedRoot);
+    return validateInstalled(root, name, expectedVersion, installedRoot, {
+      lockedCommandRoots,
+    });
   } catch (error) {
     return [`${name}: ${error.message}`];
   }
@@ -576,6 +627,26 @@ function containedPath(root, candidate) {
   return isSubpath(resolvedRoot, resolvedCandidate);
 }
 
+function addLockedPackageRoot(
+  lockedCommandRoots,
+  root,
+  candidate,
+  expectedVersion,
+) {
+  if (!fs.existsSync(candidate)) return;
+  try {
+    const resolved = containedRealpath(root, candidate, "locked package");
+    const pkg = readJson(
+      path.join(resolved, "package.json"),
+      "locked package.json",
+      root,
+    );
+    if (pkg.version === expectedVersion) lockedCommandRoots.add(resolved);
+  } catch {
+    // The owning manager's direct-package validation reports actionable errors.
+  }
+}
+
 function shimNodePath(text) {
   const line = text
     .split("\n")
@@ -586,6 +657,10 @@ function shimNodePath(text) {
     ? quoted.slice(0, -":$NODE_PATH".length)
     : quoted;
   return value ? value.split(":") : [];
+}
+
+function commandNodePathContained(root, entry) {
+  return fs.existsSync(entry) && containedPath(root, entry);
 }
 
 async function expectedCommandFiles(target, command, nodePath) {
@@ -646,7 +721,7 @@ async function validateCommandGroup(root, command, target, name) {
   }
   const nodePath = shimNodePath(text);
   for (const entry of nodePath) {
-    if (!containedPath(root, entry)) {
+    if (!commandNodePathContained(root, entry)) {
       return [`${name}: executable NODE_PATH escapes the repository`];
     }
   }
@@ -666,7 +741,7 @@ async function validateCommandGroup(root, command, target, name) {
   return failures;
 }
 
-function declaredCommandTarget(root, commandName, target) {
+function declaredCommandOwner(root, commandName, target) {
   const resolvedRoot = fs.realpathSync(root);
   let cursor = path.dirname(target);
   while (containedPath(resolvedRoot, cursor)) {
@@ -679,16 +754,16 @@ function declaredCommandTarget(root, commandName, target) {
             name === commandName && path.resolve(cursor, relative) === target,
         )
       ) {
-        return true;
+        return fs.realpathSync(cursor);
       }
     }
     if (cursor === resolvedRoot) break;
     cursor = path.dirname(cursor);
   }
-  return false;
+  return null;
 }
 
-async function validateBinDirectory(root) {
+async function validateBinDirectory(root, lockedCommandRoots) {
   const binRoot = path.join(root, "node_modules", ".bin");
   if (!fs.existsSync(binRoot)) return [];
   const failures = [];
@@ -718,10 +793,13 @@ async function validateBinDirectory(root) {
     failures.push(
       ...(await validateCommandGroup(root, command, target, entry)),
     );
-    if (!declaredCommandTarget(root, entry, target)) {
+    const owner = declaredCommandOwner(root, entry, target);
+    if (!owner) {
       failures.push(
         `${entry}: executable is not declared by its target package`,
       );
+    } else if (!lockedCommandRoots.has(owner)) {
+      failures.push(`${entry}: executable owner is not bound by the lockfile`);
     }
   }
   for (const entry of entries.filter(
@@ -744,7 +822,13 @@ function pnpmSelection(lock, name) {
   }[name];
 }
 
-function inspectPnpm(root, dependencies, specs, managerVersion) {
+function inspectPnpm(
+  root,
+  dependencies,
+  specs,
+  managerVersion,
+  lockedCommandRoots,
+) {
   const text = readText(path.join(root, "pnpm-lock.yaml"), "pnpm-lock.yaml");
   validateYamlText(text, "pnpm-lock.yaml");
   const documents = parseAllDocuments(text, {
@@ -784,6 +868,27 @@ function inspectPnpm(root, dependencies, specs, managerVersion) {
         "pnpm modules state",
       )
     : {};
+  for (const depPath of Object.keys(lock.snapshots || {})) {
+    const identity = depPath.split("(", 1)[0];
+    const separator = identity.lastIndexOf("@");
+    if (separator <= 0) continue;
+    const packageName = identity.slice(0, separator);
+    const version = identity.slice(separator + 1);
+    if (!exactVersion(version)) continue;
+    addLockedPackageRoot(
+      lockedCommandRoots,
+      root,
+      path.join(
+        root,
+        "node_modules",
+        ".pnpm",
+        pnpmDepPathFilename(depPath, modules.virtualStoreDirMaxLength || 120),
+        "node_modules",
+        packageName,
+      ),
+      version,
+    );
+  }
   const failures = [];
   for (const name of dependencies) {
     const selection = pnpmSelection(lock, name);
@@ -811,8 +916,20 @@ function inspectPnpm(root, dependencies, specs, managerVersion) {
           ),
           `${name} package.json`,
         );
+        if (!localSelectionSatisfies(specs[name], selected, local.version)) {
+          failures.push(
+            `${name}: pnpm local selection ${selected} does not satisfy ${specs[name]}`,
+          );
+          continue;
+        }
         failures.push(
-          ...validateLocalInstall(root, name, packageRoot, local.version),
+          ...validateLocalInstall(
+            root,
+            name,
+            packageRoot,
+            local.version,
+            lockedCommandRoots,
+          ),
         );
       } catch (error) {
         failures.push(error.message);
@@ -839,6 +956,14 @@ function inspectPnpm(root, dependencies, specs, managerVersion) {
     const version = identity.depPath
       .slice(identity.depPath.lastIndexOf("@") + 1)
       .split("(")[0];
+    if (
+      !registrySelectionSatisfies(name, specs[name], identity.name, version)
+    ) {
+      failures.push(
+        `${name}: pnpm selection ${identity.name}@${version} does not satisfy ${specs[name]}`,
+      );
+      continue;
+    }
     const expectedRoot = path.join(
       root,
       "node_modules",
@@ -873,7 +998,7 @@ function inspectPnpm(root, dependencies, specs, managerVersion) {
         name,
         version,
         path.join(root, "node_modules", name),
-        { expectedName: identity.name },
+        { expectedName: identity.name, lockedCommandRoots },
       ),
     );
   }
@@ -939,7 +1064,13 @@ function yarnLocatorSlug(name, reference) {
   return `${ident}-${humanReference}-${locatorHash.slice(0, 10)}`;
 }
 
-function inspectYarn(root, pkg, dependencies, specs, managerVersion) {
+function inspectYarn(
+  root,
+  pkg,
+  dependencies,
+  specs,
+  { managerVersion, lockedCommandRoots },
+) {
   let lock;
   try {
     const text = readText(path.join(root, "yarn.lock"), "yarn.lock");
@@ -993,6 +1124,17 @@ function inspectYarn(root, pkg, dependencies, specs, managerVersion) {
         `yarn: unsupported install-state schema ${state.__metadata?.version || "missing"}`,
       ];
     }
+    for (const record of Object.values(lock)) {
+      if (!record?.resolution || typeof record.version !== "string") continue;
+      for (const location of state[record.resolution]?.locations || []) {
+        addLockedPackageRoot(
+          lockedCommandRoots,
+          root,
+          path.resolve(root, location),
+          record.version,
+        );
+      }
+    }
   }
   const packageMap =
     linker === "pnpm"
@@ -1013,6 +1155,31 @@ function inspectYarn(root, pkg, dependencies, specs, managerVersion) {
     const record = yarnSelectedRecord(lock, name, selector);
     if (!record) {
       failures.push(`${name}: yarn.lock selection is ambiguous or missing`);
+      continue;
+    }
+    const localRecord = /^(?:workspace|file|link|portal):/.test(
+      String(record.resolution).slice(`${name}@`.length),
+    );
+    if (
+      localRecord &&
+      !localSelectionSatisfies(
+        specs[name],
+        String(record.resolution).slice(`${name}@`.length),
+        record.version,
+      )
+    ) {
+      failures.push(
+        `${name}: Yarn local selection does not satisfy ${specs[name]}`,
+      );
+      continue;
+    }
+    if (
+      !localRecord &&
+      !registrySelectionSatisfies(name, specs[name], name, record.version)
+    ) {
+      failures.push(
+        `${name}: Yarn selection ${record.version} does not satisfy ${specs[name]}`,
+      );
       continue;
     }
     if (
@@ -1083,7 +1250,9 @@ function inspectYarn(root, pkg, dependencies, specs, managerVersion) {
       }
     }
     failures.push(
-      ...validateInstalled(root, name, record.version, packageRoot),
+      ...validateInstalled(root, name, record.version, packageRoot, {
+        lockedCommandRoots,
+      }),
     );
   }
   return failures;
@@ -1424,7 +1593,13 @@ function bunOverrideVersion(pkg, name) {
   return { present: true, version: null };
 }
 
-function inspectBun(root, pkg, dependencies, specs, managerVersion) {
+function inspectBun(
+  root,
+  pkg,
+  dependencies,
+  specs,
+  { managerVersion, lockedCommandRoots },
+) {
   if (
     fs.existsSync(path.join(root, "bun.lockb")) &&
     !fs.existsSync(path.join(root, "bun.lock"))
@@ -1497,6 +1672,17 @@ function inspectBun(root, pkg, dependencies, specs, managerVersion) {
     ...(rootWorkspace?.dependencies || {}),
     ...(rootWorkspace?.devDependencies || {}),
   };
+  for (const [packageName, record] of Object.entries(lock.packages || {})) {
+    const locator = String(record?.[0] || "");
+    const version = locator.slice(locator.lastIndexOf("@") + 1).split("/")[0];
+    if (!exactVersion(version)) continue;
+    addLockedPackageRoot(
+      lockedCommandRoots,
+      root,
+      path.join(root, "node_modules", packageName),
+      version,
+    );
+  }
   const failures = [];
   for (const name of dependencies) {
     if (rootSpecs[name] !== specs[name]) {
@@ -1545,8 +1731,22 @@ function inspectBun(root, pkg, dependencies, specs, managerVersion) {
           path.join(contained, "package.json"),
           `${name} package.json`,
         );
+        if (
+          !localSelectionSatisfies(specs[name], locatorReference, local.version)
+        ) {
+          failures.push(
+            `${name}: Bun local selection ${locatorReference} does not satisfy ${specs[name]}`,
+          );
+          continue;
+        }
         failures.push(
-          ...validateLocalInstall(root, name, localRoot, local.version),
+          ...validateLocalInstall(
+            root,
+            name,
+            localRoot,
+            local.version,
+            lockedCommandRoots,
+          ),
         );
       } catch (error) {
         failures.push(`${name}: ${error.message}`);
@@ -1573,6 +1773,15 @@ function inspectBun(root, pkg, dependencies, specs, managerVersion) {
       failures.push(`${name}: missing or unsupported Bun package record`);
       continue;
     }
+    if (
+      !override.present &&
+      !registrySelectionSatisfies(name, specs[name], name, version)
+    ) {
+      failures.push(
+        `${name}: Bun selection ${version} does not satisfy ${specs[name]}`,
+      );
+      continue;
+    }
     if (override.present && override.version !== version) {
       failures.push(
         `${name}: Bun override requires ${override.version}, lock selects ${version}`,
@@ -1585,6 +1794,7 @@ function inspectBun(root, pkg, dependencies, specs, managerVersion) {
         name,
         version,
         path.join(root, "node_modules", name),
+        { lockedCommandRoots },
       ),
     );
   }
@@ -1605,6 +1815,7 @@ async function inspectDependencies(root) {
   const pkg = readJson(packageFile, "package.json");
   const dependencies = directDependencies(pkg);
   const specs = dependencySpecs(pkg);
+  const lockedCommandRoots = new Set();
   if (dependencies.length === 0) {
     const binRoot = path.join(root, "node_modules", ".bin");
     const entries = fs.existsSync(binRoot) ? fs.readdirSync(binRoot) : [];
@@ -1633,8 +1844,14 @@ async function inspectDependencies(root) {
       return {
         manager,
         failures: [
-          ...inspectPnpm(root, dependencies, specs, managerVersion),
-          ...(await validateBinDirectory(root)),
+          ...inspectPnpm(
+            root,
+            dependencies,
+            specs,
+            managerVersion,
+            lockedCommandRoots,
+          ),
+          ...(await validateBinDirectory(root, lockedCommandRoots)),
         ],
       };
     } catch (error) {
@@ -1649,8 +1866,11 @@ async function inspectDependencies(root) {
       return {
         manager,
         failures: [
-          ...inspectYarn(root, pkg, dependencies, specs, managerVersion),
-          ...(await validateBinDirectory(root)),
+          ...inspectYarn(root, pkg, dependencies, specs, {
+            managerVersion,
+            lockedCommandRoots,
+          }),
+          ...(await validateBinDirectory(root, lockedCommandRoots)),
         ],
       };
     } catch (error) {
@@ -1665,8 +1885,11 @@ async function inspectDependencies(root) {
       return {
         manager,
         failures: [
-          ...inspectBun(root, pkg, dependencies, specs, managerVersion),
-          ...(await validateBinDirectory(root)),
+          ...inspectBun(root, pkg, dependencies, specs, {
+            managerVersion,
+            lockedCommandRoots,
+          }),
+          ...(await validateBinDirectory(root, lockedCommandRoots)),
         ],
       };
     } catch (error) {
@@ -1707,6 +1930,20 @@ async function inspectDependencies(root) {
     ...(lock.packages?.[""]?.dependencies || {}),
     ...(lock.packages?.[""]?.devDependencies || {}),
   };
+  for (const [relative, record] of Object.entries(lock.packages || {})) {
+    if (!relative || typeof record !== "object" || record === null) continue;
+    const expectedVersion =
+      record.link === true
+        ? lock.packages?.[record.resolved]?.version
+        : record.version;
+    if (typeof expectedVersion !== "string") continue;
+    addLockedPackageRoot(
+      lockedCommandRoots,
+      root,
+      path.resolve(root, relative),
+      expectedVersion,
+    );
+  }
   for (const name of dependencies) {
     const relative = `node_modules/${name}`;
     const installedFile = path.join(root, relative, "package.json");
@@ -1719,6 +1956,20 @@ async function inspectDependencies(root) {
     }
     if (!lockedIdentity) {
       failures.push(`${name}: missing lockfile package record`);
+      continue;
+    }
+    if (
+      !registrySelectionSatisfies(
+        name,
+        specs[name],
+        name,
+        lockedIdentity.version,
+      ) &&
+      !lockedIdentity.target
+    ) {
+      failures.push(
+        `${name}: npm selection ${lockedIdentity.version} does not satisfy ${specs[name]}`,
+      );
       continue;
     }
     const installedRoot = path.dirname(installedFile);
@@ -1746,10 +1997,12 @@ async function inspectDependencies(root) {
       }
     }
     failures.push(
-      ...validateInstalled(root, name, lockedIdentity.version, installedRoot),
+      ...validateInstalled(root, name, lockedIdentity.version, installedRoot, {
+        lockedCommandRoots,
+      }),
     );
   }
-  failures.push(...(await validateBinDirectory(root)));
+  failures.push(...(await validateBinDirectory(root, lockedCommandRoots)));
   return { manager: "npm", failures };
 }
 

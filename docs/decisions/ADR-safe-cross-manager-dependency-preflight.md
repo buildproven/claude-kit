@@ -112,9 +112,19 @@ On POSIX systems, command symlinks must resolve to the declared contained bin
 target. Regular POSIX shell shims, including pnpm's normal form, must byte-match
 the supported manager's complete template after target and `NODE_PATH` fields
 are normalized; every normalized path must be contained and the target must be
-the declared bin file. On Windows, every generated command wrapper (`.cmd`,
-`.ps1`, and the extensionless shim) receives the same complete-template check.
-Unknown wrapper forms or platforms fail closed.
+the declared bin file. Every `NODE_PATH` entry must already exist; an unresolved
+leaf cannot inherit trust from a lexical path beneath a symlink. The owning
+package root for every command must be present at the exact install location
+recorded by the active lock graph, including transitive command owners. On
+Windows, every generated command wrapper (`.cmd`, `.ps1`, and the extensionless
+shim) receives the same complete-template check. Unknown wrapper forms or
+platforms fail closed.
+
+Registry selections must satisfy the root manifest's SemVer range after npm
+alias resolution. Repeating the manifest specifier in a lockfile is not enough:
+the selected npm, pnpm, Yarn, or Bun version is checked independently. Local
+selections must use a permitted local protocol and bind its exact contained path
+or workspace range.
 
 An unknown lock schema, an unsupported Yarn linker, a missing data artifact,
 an ambiguous selector, a stale manifest spec, a missing package, an identity
@@ -179,6 +189,8 @@ available. Never replace a removed adapter with package-manager execution.
 - Manifest/lock mismatch, stale lock selection, wrong installed identity,
   missing dependency, missing command, unknown schema, unsupported linker,
   path escape, and malformed parser input fail with the manager repair command.
+- Registry selections outside the manifest constraint, local locator/spec
+  mismatches, unlocked command owners, and unresolved `NODE_PATH` entries fail.
 - One- and two-document pnpm fixtures pass; reversed, incomplete, and extra
   document layouts fail.
 - A malicious `.pnp.cjs` fixture cannot create a marker file and inline-only
