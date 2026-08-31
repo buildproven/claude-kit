@@ -731,6 +731,33 @@ describe("quality dependency preflight", () => {
     expect(result.stderr).toMatch(/expanded size differs from metadata/);
   });
 
+  it("rejects aggregate ZIP expansion metadata before inflating the entry", () => {
+    const root = fixture();
+    const { archive } = installYarnPnpFixture(root);
+    const bytes = fs.readFileSync(archive);
+    const entry = Buffer.from("node_modules/eslint/package.json");
+    const centralName = bytes.lastIndexOf(entry);
+    const centralOffset = centralName - 46;
+    const localOffset = bytes.readUInt32LE(centralOffset + 42);
+    const excessive = bytes.length * 100 + 1;
+    bytes.writeUInt32LE(excessive, centralOffset + 24);
+    bytes.writeUInt32LE(excessive, localOffset + 22);
+    fs.writeFileSync(archive, bytes);
+    const lockFile = path.join(root, "yarn.lock");
+    const lock = fs
+      .readFileSync(lockFile, "utf8")
+      .replace(
+        /checksum: test\/[a-f0-9]+/u,
+        `checksum: test/${crypto.createHash("sha512").update(bytes).digest("hex")}`,
+      );
+    fs.writeFileSync(lockFile, lock);
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(78);
+    expect(result.stderr).toMatch(/archive expansion limit exceeded/);
+  });
+
   it("rejects a regular command shim with injected shell code", () => {
     const root = fixture();
     installPnpmFixturePackage(root);
@@ -1175,6 +1202,42 @@ describe("quality dependency preflight", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it("binds the opened installed manifest to its contained path identity", async () => {
+    const root = fixture();
+    installFixturePackage(root);
+    const original = fs.statSync;
+    const spy = vi.spyOn(fs, "statSync").mockImplementation((file) => {
+      const stat = original(file);
+      if (
+        !String(file).endsWith(
+          path.join("node_modules", "eslint", "package.json"),
+        )
+      ) {
+        return stat;
+      }
+      return new Proxy(stat, {
+        get(target, property) {
+          return property === "ino" ? target.ino + 1 : target[property];
+        },
+      });
+    });
+    try {
+      const { inspectDependencies } = require(PREFLIGHT);
+      const result = await inspectDependencies(root);
+      expect(result.failures.join("\n")).toMatch(
+        /opened object does not match the contained path/,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("declares stable-read host support explicitly", () => {
+    const { stableReadsSupported } = require(PREFLIGHT);
+    expect(stableReadsSupported({ O_NOFOLLOW: 1 })).toBe(true);
+    expect(stableReadsSupported({})).toBe(false);
   });
 
   it.each([

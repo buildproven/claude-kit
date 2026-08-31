@@ -140,6 +140,11 @@ telemetry remains authoritative.
 
 ## Invariants
 
+The source-owned preflight runs on Linux and macOS hosts, where Node exposes
+`O_NOFOLLOW` for stable non-symlink reads. Unsupported hosts fail at an explicit
+platform gate. Supported hosts still validate committed Windows command
+wrappers as dependency artifacts; that does not claim Windows host execution.
+
 1. Preflight never executes repository-controlled JavaScript or a package
    manager.
 2. Every accepted dependency binds manifest spec, lock selection, installed or
@@ -200,6 +205,9 @@ available. Never replace a removed adapter with package-manager execution.
 - ZIP expansion is checked against bounded actual output, malformed flow depth
   fails before YAML composition, dependency-free `.bin` state fails closed,
   and package-manager declarations require complete valid SemVer.
+- Aggregate ZIP expansion fails before decompression exceeds its remaining
+  budget, and installed manifest reads bind the opened object to the contained
+  path identity after opening.
 - Mutation-during-read fixtures, parser limit fixtures, ZIP bombs, duplicate or
   unsafe ZIP entries, and POSIX symlink, POSIX shell-shim, and Windows command
   escapes fail closed.

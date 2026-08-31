@@ -25,9 +25,9 @@ const MAX_ZIP_ENTRIES = 50_000;
 const MAX_ZIP_ENTRY_BYTES = 512 * 1024 * 1024;
 const MAX_ZIP_EXPANDED_BYTES = 2 * 1024 * 1024 * 1024;
 
-function readJson(file, label) {
+function readJson(file, label, root = null) {
   try {
-    const text = readText(file, label);
+    const text = readText(file, label, root);
     validateJsonText(text, label);
     const value = JSON.parse(text);
     validateObjectLimits(value, label);
@@ -179,9 +179,13 @@ function validateTomlText(text, label) {
   }
 }
 
-function readBuffer(file, label) {
+function stableReadsSupported(constants = fs.constants) {
+  return typeof constants.O_NOFOLLOW === "number";
+}
+
+function readBuffer(file, label, root = null) {
   try {
-    if (typeof fs.constants.O_NOFOLLOW !== "number") {
+    if (!stableReadsSupported()) {
       throw new Error("this platform cannot guarantee non-symlink reads");
     }
     const descriptor = fs.openSync(
@@ -192,6 +196,20 @@ function readBuffer(file, label) {
       const before = fs.fstatSync(descriptor);
       if (!before.isFile()) throw new Error("must be a regular file");
       if (before.size > MAX_FILE_BYTES) throw new Error("exceeds 256 MiB");
+      if (root) {
+        const resolvedRoot = fs.realpathSync(root);
+        const resolvedFile = fs.realpathSync(file);
+        if (!isSubpath(resolvedRoot, resolvedFile)) {
+          throw new Error("opened object escapes the repository");
+        }
+        const pathIdentity = fs.statSync(resolvedFile);
+        if (
+          before.dev !== pathIdentity.dev ||
+          before.ino !== pathIdentity.ino
+        ) {
+          throw new Error("opened object does not match the contained path");
+        }
+      }
       const data = fs.readFileSync(descriptor);
       const after = fs.fstatSync(descriptor);
       if (
@@ -213,8 +231,8 @@ function readBuffer(file, label) {
   }
 }
 
-function readText(file, label) {
-  return readBuffer(file, label).toString("utf8");
+function readText(file, label, root = null) {
+  return readBuffer(file, label, root).toString("utf8");
 }
 
 function parseYaml(text, label) {
@@ -428,6 +446,7 @@ function validateInstalled(
     const installed = readJson(
       path.join(resolvedRoot, "package.json"),
       `${name} package.json`,
+      root,
     );
     if (installed.name !== expectedName) {
       failures.push(
@@ -1199,6 +1218,10 @@ function inspectRawZip(bytes, name) {
   const end = offset + size;
   const names = new Set();
   let expanded = 0;
+  const aggregateBudget = Math.min(
+    MAX_ZIP_EXPANDED_BYTES,
+    Math.max(bytes.length * 100, 1),
+  );
   for (let index = 0; index < count; index += 1) {
     if (offset + 46 > end || bytes.readUInt32LE(offset) !== centralSignature) {
       throw new Error(`${name}: Yarn archive central directory is invalid`);
@@ -1231,6 +1254,9 @@ function inspectRawZip(bytes, name) {
     }
     if (entrySize > MAX_ZIP_ENTRY_BYTES)
       throw new Error(`${name}: Yarn archive entry is too large`);
+    if (expanded + entrySize > aggregateBudget) {
+      throw new Error(`${name}: Yarn archive expansion limit exceeded`);
+    }
     if ((flags & 0x08) !== 0) {
       throw new Error(
         `${name}: Yarn archive uses an unsupported data descriptor`,
@@ -1265,7 +1291,8 @@ function inspectRawZip(bytes, name) {
       actual = compressed;
     } else if (method === 8) {
       actual = zlib.inflateRawSync(compressed, {
-        maxOutputLength: MAX_ZIP_ENTRY_BYTES + 1,
+        maxOutputLength:
+          Math.min(MAX_ZIP_ENTRY_BYTES, aggregateBudget - expanded) + 1,
       });
     } else {
       throw new Error(`${name}: Yarn archive compression is unsupported`);
@@ -1565,6 +1592,14 @@ function inspectBun(root, pkg, dependencies, specs, managerVersion) {
 }
 
 async function inspectDependencies(root) {
+  if (!stableReadsSupported()) {
+    return {
+      manager: null,
+      failures: [
+        "unsupported host platform: dependency preflight requires O_NOFOLLOW stable reads (Linux or macOS)",
+      ],
+    };
+  }
   const packageFile = path.join(root, "package.json");
   if (!fs.existsSync(packageFile)) return { manager: null, failures: [] };
   const pkg = readJson(packageFile, "package.json");
@@ -1809,6 +1844,7 @@ module.exports = {
   check,
   inspectDependencies,
   isSubpath,
+  stableReadsSupported,
   telemetryFile,
   validateJsonText,
   validateYamlText,
