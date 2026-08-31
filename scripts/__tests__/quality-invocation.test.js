@@ -6441,8 +6441,20 @@ exit 1
     });
   });
 
-  it("accepts a complete critical Claude fallback on one configured model family", () => {
-    const root = repo("critical-single-family-claude-fallback");
+  it.each([
+    {
+      label:
+        "accepts a complete critical Claude fallback on one configured model family",
+      model: "claude-sonnet-5",
+      error: null,
+    },
+    {
+      label: "rejects critical Claude fallback with missing model identity",
+      model: "",
+      error: /lacks role-bound model evidence/,
+    },
+  ])("$label", ({ error, model }) => {
+    const root = repo(`critical-single-family-${model || "missing-model"}`);
     const manifestPath = create(root);
     const agents = ["code-reviewer", "silent-failure-hunter"];
     invocation.withManifestLock(manifestPath, (manifest) => {
@@ -6487,7 +6499,7 @@ exit 1
         _qualitySlot: {
           role,
           provider: "claude",
-          model: "claude-sonnet-5",
+          model,
         },
       };
       writeFileSync(
@@ -6507,25 +6519,31 @@ exit 1
     const diffSha = createHash("sha256")
       .update(readFileSync(path.join(info.artifactDir, "diff.txt")))
       .digest("hex");
-    invocation.withManifestLock(manifestPath, (manifest) => {
-      invocation.recordReview(manifest, {
-        from: info.from,
-        to: info.to,
-        provider: "claude",
-        primary: "codex",
-        fallback: "claude",
-        "artifact-dir": info.artifactDir,
-        "diff-sha": diffSha,
+    const record = () =>
+      invocation.withManifestLock(manifestPath, (manifest) => {
+        invocation.recordReview(manifest, {
+          from: info.from,
+          to: info.to,
+          provider: "claude",
+          primary: "codex",
+          fallback: "claude",
+          "artifact-dir": info.artifactDir,
+          "diff-sha": diffSha,
+        });
       });
-    });
+    if (error) {
+      expect(record).toThrow(error);
+      return;
+    }
+    record();
     for (const name of ["lint", "test", "security"]) {
       recordGateFixture(manifestPath, name);
     }
     recordMutationFixture(manifestPath);
 
-    expect(() =>
-      invocation.judgeContext(invocation.loadManifest(manifestPath).manifest),
-    ).not.toThrow();
+    const evaluate = () =>
+      invocation.judgeContext(invocation.loadManifest(manifestPath).manifest);
+    expect(evaluate).not.toThrow();
   });
 
   it("inventories preserved Codex findings with a complete Claude fallback panel", () => {
