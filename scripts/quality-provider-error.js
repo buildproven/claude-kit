@@ -94,12 +94,96 @@ function hasStructuredExhaustion(raw) {
   return parseJsonLines(raw).some(isExhaustionEvent);
 }
 
-function normalizedResetAt(event) {
+function zonedParts(value, timeZone) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  return Object.fromEntries(
+    formatter
+      .formatToParts(value)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, Number(part.value)]),
+  );
+}
+
+function localTimeToUtc(parts, timeZone) {
+  const desired = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    0,
+  );
+  let candidate = desired;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const observed = zonedParts(new Date(candidate), timeZone);
+    const observedAsUtc = Date.UTC(
+      observed.year,
+      observed.month - 1,
+      observed.day,
+      observed.hour,
+      observed.minute,
+      observed.second,
+    );
+    candidate += desired - observedAsUtc;
+  }
+  const result = new Date(candidate);
+  const observed = zonedParts(result, timeZone);
+  if (
+    observed.year !== parts.year ||
+    observed.month !== parts.month ||
+    observed.day !== parts.day ||
+    observed.hour !== parts.hour ||
+    observed.minute !== parts.minute
+  ) {
+    return null;
+  }
+  return result;
+}
+
+function sessionResetAt(message, now) {
+  const match = String(message).match(
+    /\bresets(?: at)? ([0-9]{1,2}):([0-9]{2})(am|pm) \(([A-Za-z0-9_+\-/]+)\)/i,
+  );
+  if (!match) return null;
+  const hour12 = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour12 < 1 || hour12 > 12 || minute > 59) return null;
+  const hour = (hour12 % 12) + (match[3].toLowerCase() === "pm" ? 12 : 0);
+  const timeZone = match[4].trim();
+  let today;
+  try {
+    today = zonedParts(now, timeZone);
+  } catch {
+    return null;
+  }
+  const target = { ...today, hour, minute };
+  let parsed = localTimeToUtc(target, timeZone);
+  if (!parsed) return null;
+  if (parsed.getTime() <= now.getTime()) {
+    const nextDay = new Date(
+      Date.UTC(today.year, today.month - 1, today.day + 1),
+    );
+    const next = zonedParts(nextDay, "UTC");
+    parsed = localTimeToUtc({ ...next, hour, minute }, timeZone);
+  }
+  return parsed?.toISOString() ?? null;
+}
+
+function normalizedResetAt(event, now = new Date()) {
   const error = event?.error;
   const raw =
     (error && typeof error === "object"
       ? (error.reset_at ?? error.resetAt ?? error.resets_at ?? error.resetsAt)
-      : null) ?? resetAtFromMessage(errorMessage(event));
+      : null) ?? resetAtFromMessage(errorMessage(event), now);
   if (raw === null) return null;
   const epoch =
     typeof raw === "number" && raw < 10_000_000_000 ? raw * 1000 : raw;
@@ -107,17 +191,17 @@ function normalizedResetAt(event) {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
-function resetAtFromMessage(message) {
+function resetAtFromMessage(message, now = new Date()) {
   const marker = "try again at ";
   const start = String(message).toLowerCase().indexOf(marker);
-  if (start === -1) return null;
+  if (start === -1) return sessionResetAt(message, now);
   return String(message)
     .slice(start + marker.length)
     .replace(/(\d)(?:st|nd|rd|th)\b/gi, "$1")
     .trim();
 }
 
-function classifyStructuredFailure(raw) {
+function classifyStructuredFailure(raw, { now = new Date() } = {}) {
   for (const event of parseJsonLines(raw).filter(isErrorEvent)) {
     const codes = values(event).map((value) => String(value).toLowerCase());
     if (codes.some((code) => BILLING_CODES.has(code))) {
@@ -129,7 +213,7 @@ function classifyStructuredFailure(raw) {
     ) {
       return {
         category: "provider-exhaustion",
-        resetAt: normalizedResetAt(event),
+        resetAt: normalizedResetAt(event, now),
       };
     }
   }

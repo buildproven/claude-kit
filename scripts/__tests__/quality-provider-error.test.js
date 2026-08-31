@@ -122,6 +122,25 @@ describe("structured provider failure classification", () => {
     ).toEqual({ category: "provider-exhaustion", resetAt: null });
   });
 
+  it("normalizes Claude's named-zone session reset into a timed recovery", () => {
+    expect(
+      classifyStructuredFailure(
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          api_error_status: 429,
+          result:
+            "You've hit your session limit · resets 8:10pm (America/Chicago)",
+        }),
+        { now: new Date("2026-08-31T00:40:00.000Z") },
+      ),
+    ).toEqual({
+      category: "provider-exhaustion",
+      resetAt: "2026-08-31T01:10:00.000Z",
+    });
+  });
+
   it("recognizes Gemini's root API error envelope", () => {
     expect(
       classifyStructuredFailure(
