@@ -17,6 +17,9 @@ that only adjusts the quality contract.
   all required gates and review phases.
 - As a maintainer, I can change repository quality-control configuration
   without making a false product-delivery claim.
+- As a maintainer, I can finish a campaign when provider review is unavailable
+  after its bounded same-range retry, while the signed incomplete status stays
+  visible.
 
 ## Requirements
 
@@ -27,10 +30,15 @@ that only adjusts the quality contract.
   controls.
 - Unknown application configuration remains product-affecting and fails
   closed.
+- Provider failure remains advisory after the required bounded retry.
+- Deterministic gates, mutation evidence, revision identity, CI, and explicit
+  human-required policy remain hard merge blocks.
 
 ## Acceptance
 
 - The planner regression test proves the funded campaign duration.
 - Product classification tests prove both the narrow exemptions and the
   existing fail-closed behavior.
+- Authorization and orchestration tests prove that signed incomplete review
+  evidence can continue to deterministic merge authorization.
 - The full repository test and security gates pass at the exact candidate head.

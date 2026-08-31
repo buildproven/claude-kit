@@ -9,3 +9,8 @@
   - Phase: implementation
   - Delivers: Quality-control configuration can use the contract claim while unknown application configuration remains fail-closed.
   - Evidence: Classifier unit test and quality-run integration test.
+
+- [x] 3.0 Preserve continuity after provider failure
+  - Phase: implementation
+  - Delivers: A campaign retains signed incomplete review evidence and continues to deterministic merge authorization after the bounded same-range retry.
+  - Evidence: Authorization and quality-run orchestration regression tests.
