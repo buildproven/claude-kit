@@ -5516,6 +5516,7 @@ exit 1
       reviewStatus: "incomplete",
       blockingCount: 0,
       leads: 0,
+      evidenceSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
   });
 
