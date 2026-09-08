@@ -11,7 +11,10 @@ const CLAIMS = new Set(["contract", "local-product", "hosted", "validated"]);
 const NON_PRODUCT_PATH =
   /^(?:\.buildproven\/|\.github\/|docs?\/|tests?\/|fixtures?\/)|(?:^|\/)(?:__tests__|__fixtures__)\//i;
 const NON_PRODUCT_TEST_FILE = /(?:\.test|\.spec)\.[^/]+$/i;
-const NON_PRODUCT_EXACT_PATHS = new Set(["harness-config.json"]);
+const NON_PRODUCT_EXACT_PATHS = new Set([
+  "harness-config.json",
+  "package-lock.json",
+]);
 const NON_PRODUCT_ROOT_NAMES = new Set([
   "AGENTS",
   "CHANGELOG",
