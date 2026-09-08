@@ -351,6 +351,7 @@ describe("product completion", () => {
       "docs/decisions/ADR-quality-runtime.md",
       ".buildproven/test-impact.json",
       "harness-config.json",
+      "package-lock.json",
     ]) {
       expect(productionCodeChange(file)).toBe(false);
     }

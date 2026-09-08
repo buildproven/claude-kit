@@ -450,6 +450,35 @@ function leaseRecord(leaseDirectory) {
   return record;
 }
 
+function orphanedLeaseHasClosedPullRequest(record) {
+  if (fs.existsSync(record.manifestPath)) return false;
+  const view = spawnSync(
+    "gh",
+    [
+      "pr",
+      "view",
+      String(record.pr),
+      "--repo",
+      record.repository,
+      "--json",
+      "state",
+    ],
+    { cwd: stateRoot(), encoding: "utf8", timeout: 30_000 },
+  );
+  if (view.status !== 0) {
+    throw new Error(
+      `orphaned repository lease cannot verify PR closure: ${view.stderr || "gh pr view failed"}`.trim(),
+    );
+  }
+  try {
+    return JSON.parse(view.stdout).state === "CLOSED";
+  } catch (error) {
+    throw new Error("orphaned repository lease returned malformed PR state", {
+      cause: error,
+    });
+  }
+}
+
 function setManifestCredentialRaw(manifestPath, credential) {
   const invocation = require("./quality-invocation");
   invocation.withManifestLockRaw(manifestPath, (manifest) => {
@@ -518,34 +547,46 @@ function acquireOnce(manifestPath, options = {}) {
           const releasedLease = tombstone(paths.lease);
           exactCleanup(releasedLease);
         } else {
-          const credential = loaded.manifest.merge?.repositoryLease;
-          if (
-            current.disposition === "rotation-pending" &&
-            current.priorToken == null &&
-            tupleMatches(current, tuple)
-          ) {
-            return completePending(paths, identity, loaded, current);
-          }
           if (
             current.disposition === "active" &&
-            tupleMatches(current, tuple) &&
-            credential?.token === current.token &&
-            credential?.generation === current.generation
+            orphanedLeaseHasClosedPullRequest(current)
           ) {
-            current.renewedAt = new Date().toISOString();
-            atomicWrite(path.join(paths.lease, "owner.json"), current);
-            return {
-              token: current.token,
-              generation: current.generation,
-              identity,
-            };
+            if (fs.existsSync(paths.mergeGuard)) {
+              const releasedGuard = tombstone(paths.mergeGuard);
+              exactCleanup(releasedGuard);
+            }
+            const releasedLease = tombstone(paths.lease);
+            exactCleanup(releasedLease);
+          } else {
+            const credential = loaded.manifest.merge?.repositoryLease;
+            if (
+              current.disposition === "rotation-pending" &&
+              current.priorToken == null &&
+              tupleMatches(current, tuple)
+            ) {
+              return completePending(paths, identity, loaded, current);
+            }
+            if (
+              current.disposition === "active" &&
+              tupleMatches(current, tuple) &&
+              credential?.token === current.token &&
+              credential?.generation === current.generation
+            ) {
+              current.renewedAt = new Date().toISOString();
+              atomicWrite(path.join(paths.lease, "owner.json"), current);
+              return {
+                token: current.token,
+                generation: current.generation,
+                identity,
+              };
+            }
+            const error = new Error(
+              `repository merge lease is owned by ${current.repository} PR #${current.pr} ` +
+                `(${current.manifestPath}); recover or resume that exact campaign`,
+            );
+            error.code = "LEASE_OWNED";
+            throw error;
           }
-          const error = new Error(
-            `repository merge lease is owned by ${current.repository} PR #${current.pr} ` +
-              `(${current.manifestPath}); recover or resume that exact campaign`,
-          );
-          error.code = "LEASE_OWNED";
-          throw error;
         }
       }
 

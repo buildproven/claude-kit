@@ -486,6 +486,70 @@ describe("repository merge lease", () => {
     lease.release(manifestPath, first.token, "test-complete");
   });
 
+  it("reclaims an orphaned lease only after GitHub confirms its PR is closed", () => {
+    const first = fixture("orphaned-lease-owner");
+    lease.acquire(first.manifestPath);
+    const { manifest } = invocation.loadManifest(first.manifestPath);
+    fs.unlinkSync(first.manifestPath);
+
+    const bin = path.join(sandbox, "orphaned-lease-bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/bin/sh
+printf '%s\\n' '${JSON.stringify({ state: "CLOSED", mergedAt: null })}'
+`,
+      { mode: 0o700 },
+    );
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}:${previousPath}`;
+    try {
+      const successor = fixture("orphaned-lease-successor", {
+        linkedFrom: first,
+        repoKey: first.repoKey,
+        advanceHead: true,
+      });
+      expect(
+        lease.acquire(successor.manifestPath, { waitMs: 0 }),
+      ).toMatchObject({
+        generation: 1,
+        identity: manifest.repo.githubRepository,
+      });
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
+
+  it("keeps an orphaned lease when its PR remains open", () => {
+    const first = fixture("orphaned-open-lease-owner");
+    lease.acquire(first.manifestPath);
+    fs.unlinkSync(first.manifestPath);
+
+    const bin = path.join(sandbox, "orphaned-open-lease-bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+      path.join(bin, "gh"),
+      `#!/bin/sh
+printf '%s\\n' '${JSON.stringify({ state: "OPEN" })}'
+`,
+      { mode: 0o700 },
+    );
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}:${previousPath}`;
+    try {
+      const successor = fixture("orphaned-open-lease-successor", {
+        linkedFrom: first,
+        repoKey: first.repoKey,
+        advanceHead: true,
+      });
+      expect(() =>
+        lease.acquire(successor.manifestPath, { waitMs: 0 }),
+      ).toThrow(/recover or resume/);
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
+
   it("keeps the fencing credential out of CLI verification output", () => {
     const { manifestPath } = fixture("silent-verification");
     const childEnv = {
