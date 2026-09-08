@@ -5230,6 +5230,110 @@ exit 1
     );
   });
 
+  it("archives a prior-head interruption when its descendant advances", () => {
+    const root = repo("interrupted-descendant-advance");
+    const manifestPath = create(root);
+    const interruptedHead = git(root, ["rev-parse", "HEAD"]);
+    invocation.recordTerminalState(
+      manifestPath,
+      "interrupted",
+      "quality run interrupted",
+    );
+    writeFileSync(path.join(root, "fix.js"), "export const fixed = true;\n");
+    git(root, ["add", "fix.js"]);
+    git(root, ["commit", "-q", "-m", "fix: continue after interruption"]);
+    const nextHead = git(root, ["rev-parse", "HEAD"]);
+
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      expect(invocation.advanceHead(manifest, root)).toBe(true);
+    });
+
+    const { manifest } = invocation.loadManifest(manifestPath);
+    expect(manifest.revisions.currentHead).toBe(nextHead);
+    expect(manifest.terminalState).toBeNull();
+    expect(manifest.terminalHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          state: "interrupted",
+          head: interruptedHead,
+          disposition: "superseded-by-descendant",
+          supersededByHead: nextHead,
+        }),
+        expect.objectContaining({
+          event: "reopened-by-descendant",
+          head: nextHead,
+          priorHead: interruptedHead,
+        }),
+      ]),
+    );
+  });
+
+  it("resumes an exact-head interruption without resetting evidence or budgets", () => {
+    const root = repo("interrupted-exact-head-resume");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      manifest.reviews.push({
+        from: manifest.revisions.baseSha,
+        to: manifest.revisions.currentHead,
+        status: "success",
+        provider: "codex",
+        leadCount: 0,
+      });
+      manifest.governor.providerSecondsUsed = 64;
+      manifest.governor.activeExecution = null;
+    });
+    invocation.recordTerminalState(
+      manifestPath,
+      "interrupted",
+      "quality run interrupted",
+    );
+
+    expect(invocation.resumeInterruptedTerminal(manifestPath)).toMatchObject({
+      head: git(root, ["rev-parse", "HEAD"]),
+      terminalEpoch: 1,
+    });
+
+    const { manifest } = invocation.loadManifest(manifestPath);
+    expect(manifest.terminalState).toBeNull();
+    expect(manifest.reviews).toHaveLength(1);
+    expect(manifest.governor.providerSecondsUsed).toBe(64);
+    expect(manifest.terminalHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          state: "interrupted",
+          disposition: "resumed-after-interruption",
+        }),
+        expect.objectContaining({
+          event: "reopened-after-interruption",
+          terminalEpoch: 1,
+        }),
+      ]),
+    );
+  });
+
+  it("does not resume an interruption while execution ownership is active", () => {
+    const root = repo("interrupted-active-execution");
+    const manifestPath = create(root);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      manifest.governor.activeExecution = {
+        kind: "provider",
+        token: "still-active",
+      };
+    });
+    invocation.recordTerminalState(
+      manifestPath,
+      "interrupted",
+      "quality run interrupted",
+    );
+
+    expect(invocation.resumeInterruptedTerminal(manifestPath)).toBeNull();
+    expect(
+      invocation.loadManifest(manifestPath).manifest.terminalState,
+    ).toMatchObject({
+      state: "interrupted",
+    });
+  });
+
   it("reconciles a stale prior-head block after an earlier runner advanced only HEAD", () => {
     const root = repo("stale-blocked-descendant");
     const manifestPath = create(root, ["--merge"]);

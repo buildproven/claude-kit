@@ -60,6 +60,21 @@ function resumeRecoverableTerminal(file) {
   write(file, manifest);
   return manifest.terminalState;
 }
+function resumeInterruptedTerminal(file) {
+  const manifest = read(file);
+  const terminal = manifest.terminalState;
+  if (terminal?.state !== "interrupted" ||
+      terminal.head !== manifest.revisions.currentHead ||
+      manifest.governor?.activeExecution) return null;
+  const epoch = terminalEpoch(manifest) + 1;
+  manifest.terminalHistory ||= [];
+  manifest.terminalHistory.push({ ...terminal, disposition: "resumed-after-interruption" });
+  manifest.terminalHistory.push({ event: "reopened-after-interruption", terminalEpoch: epoch });
+  manifest.terminalEpoch = epoch;
+  delete manifest.terminalState;
+  write(file, manifest);
+  return { head: manifest.revisions.currentHead, terminalEpoch: epoch };
+}
 function clearMergeAdmissionBlock(file) {
   const manifest = read(file);
   if (!manifest.merge?.admissionBlock) return false;
@@ -175,7 +190,7 @@ if (require.main === module) {
   process.stdout.write(inForce + "\\n");
 }
 module.exports = { advanceHead, incompleteRetryStatus, judgeContext, leadDispositionStatus, loadManifest, mutationEvidenceValid, parseJson, recordTerminalState,
-  advanceManifest, changedFiles, clearMergeAdmissionBlock, resolveGreenCiAdmissionBlock, reviewAuthorization, reviewCoverage, resumeRecoverableTerminal, terminalEpoch, validateIdentity, withManifestLock };
+  advanceManifest, changedFiles, clearMergeAdmissionBlock, resolveGreenCiAdmissionBlock, reviewAuthorization, reviewCoverage, resumeInterruptedTerminal, resumeRecoverableTerminal, terminalEpoch, validateIdentity, withManifestLock };
 `;
 
 const FAKE_STEP = `
@@ -774,6 +789,59 @@ describe("quality-run public orchestration", () => {
       state: "interrupted",
     });
     expect(result.manifest.telemetryWrites).toBe(1);
+  });
+
+  it("resumes an exact-head reviewed campaign after host interruption", () => {
+    const entry = fixture({}, { merge: true, tier: "high" });
+    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    manifest.risk.resolved = true;
+    manifest.gates = manifest.requiredGates.map(({ name }) => ({
+      name,
+      status: "success",
+      head: manifest.revisions.currentHead,
+    }));
+    manifest.reviews = [
+      {
+        from: manifest.revisions.baseSha,
+        to: "reviewed-before-interruption",
+        status: "complete",
+        leadCount: 0,
+      },
+    ];
+    manifest.governor.providerSecondsUsed = 64;
+    manifest.governor.activeExecution = null;
+    manifest.terminalEpoch = 1;
+    manifest.terminalState = {
+      state: "interrupted",
+      detail: "quality run interrupted",
+      head: manifest.revisions.currentHead,
+      terminalEpoch: 1,
+    };
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+
+    const result = run(entry);
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "complete",
+      state: "merged",
+    });
+    expect(result.manifest.governor.providerSecondsUsed).toBe(64);
+    expect(result.manifest.calls).toContain("quality-mutation-check.sh");
+    expect(result.manifest.calls).toContain("quality-run-review.sh");
+    expect(result.manifest.calls).toContain("quality-stamp-and-merge.sh");
+    expect(result.manifest.terminalHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          state: "interrupted",
+          disposition: "resumed-after-interruption",
+        }),
+        expect.objectContaining({
+          event: "reopened-after-interruption",
+          terminalEpoch: 2,
+        }),
+      ]),
+    );
   });
 
   it("classifies stale identity as superseded before any phase runs", () => {
