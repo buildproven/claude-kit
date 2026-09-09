@@ -6,6 +6,14 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const impact = require("./test-impact");
 
+function readJson(source, label) {
+  try {
+    return JSON.parse(fs.readFileSync(source, "utf8"));
+  } catch (error) {
+    throw new Error(`cannot read valid ${label} JSON`, { cause: error });
+  }
+}
+
 function repositoryRoot(cwd) {
   if (typeof cwd !== "string" || !cwd || !fs.statSync(cwd).isDirectory()) {
     throw new Error("hook requires an existing cwd directory");
@@ -31,7 +39,7 @@ function legacyPlan(root, files) {
       `configure ${impact.POLICY_FILE} for this repository's affected tests`,
     );
   }
-  const pkg = JSON.parse(fs.readFileSync(packageFile, "utf8"));
+  const pkg = readJson(packageFile, "package");
   if (typeof pkg.scripts?.test !== "string" || !pkg.scripts.test.trim()) {
     throw new Error(
       `configure ${impact.POLICY_FILE}; no repository test command exists`,
@@ -53,7 +61,7 @@ function legacyPlan(root, files) {
 }
 
 function main() {
-  const payload = JSON.parse(fs.readFileSync(0, "utf8"));
+  const payload = readJson(0, "hook input");
   const root = repositoryRoot(payload?.cwd);
   if (!root) return 0;
   const files = impact.workingTreePaths(root);
