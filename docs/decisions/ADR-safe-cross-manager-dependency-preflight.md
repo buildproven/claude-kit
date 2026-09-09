@@ -120,6 +120,39 @@ Windows, every generated command wrapper (`.cmd`, `.ps1`, and the extensionless
 shim) receives the same complete-template check. Unknown wrapper forms or
 platforms fail closed.
 
+BUI-848 compatibility repair: generate complete expected command groups with
+the pinned `@zkochan/cmd-shim` 9.0.7 or 9.0.3 producer (the latter is bundled in
+pnpm 11.5.0). A whole group must match one producer; mixed or modified wrappers
+remain invalid. A wrapper that runs Node against a postinstall-replaced native
+binary is a real installation failure, not an accepted legacy format.
+For pnpm, strip peer qualification before extracting the package version or
+alias separator, while retaining the complete peer-qualified locator for graph
+and installed-path binding.
+
+### BUI-848 absent search-directory correction (proposed)
+
+Fresh pnpm 11.5 installations include optional, nonexistent `node_modules`
+search directories in canonical shims. Rejecting every absent directory blocks
+valid installs. Resolve every existing ancestor through realpath, including any
+symlink, before projecting the missing suffix. Accept only absolute paths whose
+resolved projection stays inside the repository. Dangling symlinks, unreadable
+ancestors, and outside-root projections fail. Existing directories retain their
+realpath containment check. The verifier remains read-only and requires exact
+whole shim templates; it does not create directories or execute a package manager.
+The same-user filesystem threat model above remains unchanged.
+
+Alternatives: require empty directories to be created after every install
+(rejected: moves validator complexity into each consumer); remove existence and
+use lexical containment (rejected: permits a missing leaf under an external
+symlink). Rollback restores missing-directory rejection with its existing error.
+Verification covers a legitimate absent local search path, missing leaves under
+external and dangling symlinks, a contained package link, tampered wrappers, and
+the real clean PodiumFinder install. Independent design review is pending.
+
+The canonical-ancestor-before-projection ordering is an invariant for every
+accepted absent search-directory path. Canonicalization failure is a failure;
+the verifier must not use lexical containment as a substitute.
+
 Registry selections must satisfy the root manifest's SemVer range after npm
 alias resolution. Repeating the manifest specifier in a lockfile is not enough:
 the selected npm, pnpm, Yarn, or Bun version is checked independently. Local

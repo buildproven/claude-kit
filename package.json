@@ -37,12 +37,13 @@
     "@commitlint/config-conventional": "^21.2.0",
     "@eslint/js": "^10.0.1",
     "@vercel/ncc": "0.45.0",
-    "@vitest/coverage-v8": "^4.1.0",
+    "@vitest/coverage-v8": "^4.1.11",
     "@yarnpkg/fslib": "3.1.5",
     "@yarnpkg/libzip": "3.2.2",
     "@yarnpkg/parsers": "3.1.0",
     "@zkochan/cmd-shim": "9.0.7",
     "ajv": "^8.20.0",
+    "cmd-shim-pnpm-11-5": "npm:@zkochan/cmd-shim@9.0.3",
     "eslint": "^10.7.0",
     "eslint-plugin-n": "^18.2.2",
     "eslint-plugin-security": "^4.0.1",
@@ -56,7 +57,7 @@
     "prettier": "^3.9.6",
     "semver": "^7.7.3",
     "smol-toml": "1.8.0",
-    "vitest": "^4.0.18",
+    "vitest": "^4.1.11",
     "yaml": "2.9.0"
   },
   "lint-staged": {
