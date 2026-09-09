@@ -24,6 +24,7 @@
             "vitest",
             "run",
             "scripts/__tests__/product-admission.test.js",
+            "scripts/__tests__/product-evidence-producer.test.js",
             "scripts/__tests__/product-completion.test.js",
             "scripts/__tests__/quality-run.test.js",
             "scripts/__tests__/quality-invocation.test.js",
