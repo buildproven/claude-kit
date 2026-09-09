@@ -291,6 +291,12 @@ function fixture(behavior = {}, { merge = false, tier = "low" } = {}) {
     path.resolve(__dirname, "..", "product-evidence.js"),
     path.join(runtime, "product-evidence.js"),
   );
+  writeFileSync(
+    path.join(runtime, "product-admission.js"),
+    behavior.productAdmission
+      ? `#!/usr/bin/env node\n${behavior.productAdmission}\n`
+      : "#!/usr/bin/env node\nprocess.stderr.write('no protected admission fixture\\n'); process.exitCode = 1;\n",
+  );
   if (behavior.productVerifier) {
     const verifier = path.join(runtime, "product-completion.js");
     writeFileSync(
@@ -673,6 +679,27 @@ describe("quality-run public orchestration", () => {
       ),
     });
     expect(result.manifest.calls).not.toContain("quality-stamp-and-merge.sh");
+  });
+
+  it("merges a product claim only after exact-head protected admission", () => {
+    const result = run(
+      fixture(
+        {
+          changedFiles: ["src/App.tsx"],
+          productVerifier:
+            "process.stdout.write(JSON.stringify({valid:true,errors:[]}));",
+          productAdmission:
+            "process.stdout.write(JSON.stringify({valid:true,checkId:'123'}));",
+        },
+        { merge: true },
+      ),
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "complete",
+      state: "merged",
+    });
+    expect(result.manifest.calls).toContain("quality-stamp-and-merge.sh");
   });
 
   it("blocks similarly named harness configuration that is not the exact quality-control file", () => {
