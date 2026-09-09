@@ -24,6 +24,7 @@ jobs:
           node-version: "24.18.0"
       - name: Download signed producer artifact
         env:
+          GH_TOKEN: ${{ github.token }}
           PRODUCER_RUN: ${{ github.event.workflow_run.id }}
         run: |
           artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PRODUCER_RUN/artifacts" --jq '.artifacts[] | select(.name == "product-evidence-producer-" + env.PRODUCER_RUN) | .id')"
@@ -44,6 +45,7 @@ jobs:
           printf '%s\n' "$marker" > admission-marker.txt
       - name: Publish exact-head admission check
         env:
+          GH_TOKEN: ${{ github.token }}
           PRODUCER_RUN: ${{ github.event.workflow_run.id }}
         run: |
           head="$(node -p 'require("./producer/producer.json").head')"

@@ -25,6 +25,7 @@ jobs:
           node-version: "24.18.0"
       - name: Download source artifact without candidate checkout
         env:
+          GH_TOKEN: ${{ github.token }}
           SOURCE_RUN: ${{ github.event.workflow_run.id }}
         run: |
           artifact_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN/artifacts" --jq '.artifacts[] | select(.name == "product-evidence-source-" + env.SOURCE_RUN) | .id')"
@@ -33,6 +34,7 @@ jobs:
           unzip -q source.zip -d source
       - name: Sign platform-validated receipts
         env:
+          GH_TOKEN: ${{ github.token }}
           PRODUCT_EVIDENCE_PRIVATE_KEY: ${{ secrets.PRODUCT_EVIDENCE_PRIVATE_KEY }}
           PRODUCT_EVIDENCE_WORKFLOW_PATH: .github/workflows/product-evidence-producer.yml
           SOURCE_RUN: ${{ github.event.workflow_run.id }}

@@ -1,5 +1,10 @@
 # Product-evidence admission operator guide
 
+The source bundle contains a JSON request and a JSON array of changed paths;
+Git paths are collected with NUL delimiters to preserve unusual filenames.
+Protected producer and admission API steps use the job-scoped GitHub token
+with the permissions declared in each workflow.
+
 ## Final manual provisioning
 
 This repository contains no private key. Generate two independent Ed25519 key
