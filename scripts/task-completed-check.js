@@ -68,7 +68,7 @@ function main() {
   if (files.length === 0) return 0;
   const configured = fs.existsSync(path.join(root, impact.POLICY_FILE));
   const selected = configured
-    ? impact.plan(files, impact.loadPolicy(root))
+    ? impact.plan(files, impact.loadPolicy(root), { root })
     : files.every((file) => /\.(md|txt)$/.test(file))
       ? { mode: "none", reason: "documentation-only", files, commands: [] }
       : legacyPlan(root, files);

@@ -7,8 +7,8 @@
 
 - [x] 2.0 Share affected-test selection with task completion
   - Phase: implementation
-  - Delivers: Configured affected commands run for staged, unstaged, deleted and untracked changes; failed tests stay failed.
-  - Evidence: task-completed-check and test-impact behavioral tests.
+  - Delivers: Configured affected commands run for staged, unstaged, deleted and untracked changes; failed tests stay failed. Missing implicit test inputs block instead of passing an empty related-test run. Hook, CI and quality producers retain deletions and both rename paths.
+  - Evidence: task-completed-check, test-impact, quality-workflow-bootstrap and quality-invocation behavioral regressions.
 
 - [x] 3.0 Align runtime instructions
   - Phase: implementation

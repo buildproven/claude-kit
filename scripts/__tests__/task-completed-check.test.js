@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  unlinkSync,
+} from "node:fs";
 import path from "node:path";
 import { makeTempDir } from "./helpers/tmp.js";
 
@@ -99,6 +105,30 @@ describe("task completion affected-test contract", () => {
       '["selected"]',
     );
   });
+
+  it.each([false, true])(
+    "blocks unmapped deleted source before an empty related run (staged=%s)",
+    (staged) => {
+      const { root, git } = fixture();
+      writeFileSync(
+        path.join(root, ".buildproven/test-impact.json"),
+        JSON.stringify({ version: 1, jsRunner: "vitest" }),
+      );
+      writeFileSync(
+        path.join(root, "fixture-bin/npx"),
+        "#!/bin/sh\nprintf empty-related-run > observed.json\nexit 0\n",
+        { mode: 0o755 },
+      );
+      git("add", ".");
+      git("commit", "-qm", "related selector fixture");
+      unlinkSync(path.join(root, "tracked.js"));
+      if (staged) git("add", "tracked.js");
+      const result = run(root);
+      expect(result.status, result.stdout + result.stderr).toBe(2);
+      expect(result.stdout + result.stderr).toContain("tracked.js");
+      expect(existsSync(path.join(root, "observed.json"))).toBe(false);
+    },
+  );
 
   it("reports unmapped executable changes as blocked", () => {
     const { root } = fixture();

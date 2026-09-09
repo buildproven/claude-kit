@@ -237,7 +237,13 @@ function plan(changed, rawPolicy = { version: 1 }, options = {}) {
     }
   }
 
-  const js = files.filter((file) => JS_SOURCE.test(file) && !covered.has(file));
+  // Dependency-aware runners cannot prove coverage from a removed input.
+  // Keep missing paths uncovered unless repository policy maps or audits them.
+  const available = (file) =>
+    !options.root || fs.existsSync(path.resolve(options.root, file));
+  const js = files.filter(
+    (file) => JS_SOURCE.test(file) && !covered.has(file) && available(file),
+  );
   if (js.length > 0) {
     if (policy.jsRunner === "node") {
       const directTests = js.filter((file) => NODE_TEST_ENTRY.test(file));
@@ -254,7 +260,11 @@ function plan(changed, rawPolicy = { version: 1 }, options = {}) {
     }
   }
   const pythonTests = files.filter(
-    (file) => PYTHON.test(file) && PYTHON_TEST.test(file) && !covered.has(file),
+    (file) =>
+      PYTHON.test(file) &&
+      PYTHON_TEST.test(file) &&
+      !covered.has(file) &&
+      available(file),
   );
   if (pythonTests.length > 0) {
     commands.push({ executable: "pytest", args: pythonTests });
@@ -422,7 +432,7 @@ function workingTreePaths(root = process.cwd()) {
 function changedPaths(base, head, root = process.cwd()) {
   const output = execFileSync(
     "git",
-    ["diff", "--name-only", "-z", base, head],
+    ["diff", "--name-only", "--no-renames", "-z", base, head],
     { cwd: root, encoding: "buffer", stdio: ["ignore", "pipe", "inherit"] },
   );
   return output.toString("utf8").split("\0").filter(Boolean);
@@ -471,7 +481,7 @@ function main(argv = process.argv.slice(2)) {
   const result = plan(
     files.map((file) => path.normalize(file)),
     loadPolicy(policyRoot),
-    { preferExplicitMappings },
+    { preferExplicitMappings, root: process.cwd() },
   );
   if (shouldExecute) return execute(result);
   console.log(JSON.stringify(result, null, 2));
