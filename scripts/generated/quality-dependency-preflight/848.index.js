@@ -1,9 +1,9 @@
 "use strict";
-exports.id = 674;
-exports.ids = [674];
+exports.id = 848;
+exports.ids = [848];
 exports.modules = {
 
-/***/ 674:
+/***/ 3848:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
@@ -341,15 +341,19 @@ function generateShShim(src, to, opts) {
     let shTarget = node_path__WEBPACK_IMPORTED_MODULE_0__.relative(node_path__WEBPACK_IMPORTED_MODULE_0__.dirname(to), src);
     let shProg = opts.prog && opts.prog.split('\\').join('/');
     let shLongProg;
-    let shLongProgExe = '';
-    let shProgExe = '';
-    let shProgHasExe = false;
     shTarget = shTarget.split('\\').join('/');
     const quotedPathToTarget = node_path__WEBPACK_IMPORTED_MODULE_0__.isAbsolute(shTarget) ? `"${shTarget}"` : `"$basedir/${shTarget}"`;
-    const quotedPathToTarget_win = node_path__WEBPACK_IMPORTED_MODULE_0__.isAbsolute(shTarget) ? `"${shTarget}"` : `"$basedir_win/${shTarget}"`;
-    let shTarget_win = '';
+    // For `.cmd`/`.bat` targets the runtime is `cmd` and args is `/C`. When
+    // Git Bash / MSYS launches a native Win32 process, arguments that look
+    // like POSIX paths are translated — a bare `/C` becomes `C:\`, which
+    // drops the switch and leaves cmd.exe running interactively. Prefixing
+    // with `//` is the MSYS escape: it survives the translation and reaches
+    // cmd.exe as `/C`. Scoped to the cmd runtime so shebang-derived `/C`
+    // args on other shims are passed through unchanged.
     let args = opts.args || '';
-    const isCmdRuntime = opts.prog === 'cmd' || opts.prog === 'cmd.exe';
+    if (opts.prog === 'cmd' || opts.prog === 'cmd.exe') {
+        args = escapeMsysCmdSwitches(args);
+    }
     const shNodePath = normalizePathEnvVar(opts.nodePath).posix;
     if (!shProg) {
         shProg = quotedPathToTarget;
@@ -358,105 +362,41 @@ function generateShShim(src, to, opts) {
     }
     else if (opts.prog === 'node' && opts.nodeExecPath) {
         shProg = `"${opts.nodeExecPath}"`;
-        shTarget = /\.exe$/.test(opts.nodeExecPath) ? quotedPathToTarget_win : quotedPathToTarget;
+        shTarget = quotedPathToTarget;
     }
     else {
-        shProgHasExe = /\.exe$/i.test(shProg);
-        shProgExe = shProgHasExe ? shProg : `${shProg}.exe`;
-        shLongProg = `"$basedir/${shProg}"`;
-        shLongProgExe = `"$basedir/${shProgExe}"`;
+        shLongProg = `"$basedir/${opts.prog}"`;
         shTarget = quotedPathToTarget;
-        shTarget_win = quotedPathToTarget_win;
     }
     let progArgs = opts.progArgs ? `${opts.progArgs.join(` `)} ` : '';
     // #!/bin/sh
-    // # Resolve $0 through symlinks so basedir is the shim's real directory.
-    // # Cap hops at the kernel's ELOOP limit so a cycle cannot hang the shim.
-    // link="$0"
-    // hops=0
-    // while [ -L "$link" ] && [ "$hops" -lt 40 ]; do
-    //   hops=$((hops+1))
-    //   target=$(readlink "$link")
-    //   case "$target" in
-    //     /*) link="$target" ;;
-    //     *)  link="$(dirname "$link")/$target" ;;
-    //   esac
-    // done
-    // basedir=$(dirname "$(echo "$link" | sed -e 's,\\,/,g')")
-    // basedir_win="$basedir"
-    // exe=""
-    // msys=""
+    // basedir=`dirname "$0"`
     //
-    // case `uname -a` in
-    //   *CYGWIN*|*MINGW*|*MSYS*)
-    //     if command -v cygpath > /dev/null 2>&1; then
-    //       basedir_win=`cygpath -w "$basedir"`
-    //     fi
-    //     exe=".exe"
-    //     msys="true"
-    //   ;;
-    //   *WSL2*)
-    //     if command -v wslpath > /dev/null 2>&1; then
-    //       basedir_win="$(wslpath -w "$basedir" 2> /dev/null)"
-    //       if [ $? -ne 0 ] || [ -z "$basedir_win" ]; then
-    //         basedir_win="$basedir"
-    //       else
-    //         exe=".exe"
-    //       fi
-    //     fi
-    //   ;;
+    // case `uname` in
+    //     *CYGWIN*|*MINGW*|*MSYS*)
+    //         if command -v cygpath > /dev/null 2>&1; then
+    //             basedir=`cygpath -w "$basedir"`
+    //         fi
+    //      ;;
     // esac
     //
     // export NODE_PATH="<nodepath>"
     //
     // if [ -x "$basedir/node.exe" ]; then
-    //   exec "$basedir/node.exe"  "$basedir_win/node_modules/npm/bin/npm-cli.js" "$@"
-    // elif [ -x "$basedir/node" ]; then
-    //   exec "$basedir/node"  "$basedir/node_modules/npm/bin/npm-cli.js" "$@"
-    // elif command -v node >/dev/null 2>&1; then
-    //   exec node  "$basedir/node_modules/npm/bin/npm-cli.js" "$@"
-    // elif [ -n "$exe" ] && command -v node.exe >/dev/null 2>&1; then
-    //   exec node.exe  "$basedir_win/node_modules/npm/bin/npm-cli.js" "$@"
+    //   exec "$basedir/node.exe" "$basedir/node_modules/npm/bin/npm-cli.js" "$@"
     // else
-    //   exec node  "$basedir/node_modules/npm/bin/npm-cli.js" "$@"
+    //   exec node "$basedir/node_modules/npm/bin/npm-cli.js" "$@"
     // fi
     let sh = `\
 #!/bin/sh
-# Resolve $0 through symlinks so basedir is the shim's real directory.
-# Cap hops at the kernel's ELOOP limit so a cycle cannot hang the shim.
-link="$0"
-hops=0
-while [ -L "$link" ] && [ "$hops" -lt 40 ]; do
-  hops=$((hops+1))
-  target=$(readlink "$link")
-  case "$target" in
-    /*) link="$target" ;;
-    *)  link="$(dirname "$link")/$target" ;;
-  esac
-done
-basedir=$(dirname "$(echo "$link" | sed -e 's,\\\\,/,g')")
-basedir_win="$basedir"
-exe=""
-msys=""
+basedir=$(dirname "$(echo "$0" | sed -e 's,\\\\,/,g')")
 
-case \`uname -a\` in
-  *CYGWIN*|*MINGW*|*MSYS*)
-    if command -v cygpath > /dev/null 2>&1; then
-      basedir_win=\`cygpath -w "$basedir"\`
-    fi
-    exe=".exe"
-    msys="true"
-  ;;
-  *WSL2*)
-    if command -v wslpath > /dev/null 2>&1; then
-      basedir_win="$(wslpath -w "$basedir" 2> /dev/null)"
-      if [ $? -ne 0 ] || [ -z "$basedir_win" ]; then
-        basedir_win="$basedir"
-      else
-        exe=".exe"
-      fi
-    fi
-  ;;
+case \`uname\` in
+    *CYGWIN*|*MINGW*|*MSYS*)
+        if command -v cygpath > /dev/null 2>&1; then
+            basedir=\`cygpath -w "$basedir"\`
+        fi
+    ;;
 esac
 
 `;
@@ -474,60 +414,25 @@ else
 fi
 `;
     }
-    const generateExecBlock = (execArgs) => {
-        if (shLongProg) {
-            if (shProgHasExe) {
-                return `\
-if [ -x ${shLongProgExe} ]; then
-  exec ${shLongProgExe} ${execArgs} ${shTarget_win} ${progArgs}"$@"
-else
-  exec ${shProgExe} ${execArgs} ${shTarget_win} ${progArgs}"$@"
-fi
-`;
-            }
-            else {
-                return `\
-if [ -n "$exe" ] && [ -x ${shLongProgExe} ]; then
-  exec ${shLongProgExe} ${execArgs} ${shTarget_win} ${progArgs}"$@"
-elif [ -x ${shLongProg} ]; then
-  exec ${shLongProg} ${execArgs} ${shTarget} ${progArgs}"$@"
-elif command -v ${shProg} >/dev/null 2>&1; then
-  exec ${shProg} ${execArgs} ${shTarget} ${progArgs}"$@"
-elif [ -n "$exe" ] && command -v ${shProgExe} >/dev/null 2>&1; then
-  exec ${shProgExe} ${execArgs} ${shTarget_win} ${progArgs}"$@"
-else
-  exec ${shProg} ${execArgs} ${shTarget} ${progArgs}"$@"
-fi
-`;
-            }
-        }
-        else {
-            return `\
-exec ${shProg} ${execArgs} ${shTarget} ${progArgs}"$@"
-exit $?
-`;
-        }
-    };
-    const msysArgs = isCmdRuntime ? escapeMsysCmdSwitches(args) : args;
-    if (msysArgs !== args) {
+    if (shLongProg) {
         sh += `\
-if [ -n "$msys" ]; then
-${indentShellBlock(generateExecBlock(msysArgs))}
+if [ -x ${shLongProg} ]; then
+  exec ${shLongProg} ${args} ${shTarget} ${progArgs}"$@"
 else
-${indentShellBlock(generateExecBlock(args))}
+  exec ${shProg} ${args} ${shTarget} ${progArgs}"$@"
 fi
 `;
     }
     else {
-        sh += generateExecBlock(args);
+        sh += `\
+exec ${shProg} ${args} ${shTarget} ${progArgs}"$@"
+exit $?
+`;
     }
     // Marker used by consumers to detect whether the shim is up-to-date
     // without parsing the script content.
     sh += `# ${shimTarget(src)}\n`;
     return sh;
-}
-function indentShellBlock(script) {
-    return script.split('\n').map(line => line ? `  ${line}` : line).join('\n');
 }
 /**
  * Generate the content of a shim for PowerShell.

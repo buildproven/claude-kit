@@ -579,7 +579,7 @@ function pnpmPackageIdentity(name, selected) {
   if (!selected.startsWith("npm:"))
     return { name, depPath: `${name}@${selected}` };
   const identity = selected.slice("npm:".length);
-  const separator = identity.lastIndexOf("@");
+  const separator = identity.split("(", 1)[0].lastIndexOf("@");
   if (separator <= 0) return { name, depPath: `${name}@${selected}` };
   return {
     name: identity.slice(0, separator),
@@ -663,7 +663,7 @@ function commandNodePathContained(root, entry) {
   return fs.existsSync(entry) && containedPath(root, entry);
 }
 
-async function expectedCommandFiles(target, command, nodePath) {
+async function expectedCommandFiles(target, command, nodePath, cmdShim) {
   const writes = new Map();
   const memoryFs = {
     promises: {
@@ -680,7 +680,6 @@ async function expectedCommandFiles(target, command, nodePath) {
       },
     },
   };
-  const { cmdShim } = await import("@zkochan/cmd-shim");
   await cmdShim(target, command, {
     createCmdFile:
       process.platform === "win32" || fs.existsSync(`${command}.cmd`),
@@ -693,12 +692,35 @@ async function expectedCommandFiles(target, command, nodePath) {
 }
 
 async function validateCommandGroup(root, command, target, name) {
+  const { cmdShim } = await import("@zkochan/cmd-shim");
+  const current = await validateCommandTemplate(
+    root,
+    command,
+    target,
+    name,
+    cmdShim,
+  );
+  if (current.length === 0) return current;
+  // pnpm 11.5 ships 9.0.3. Keep its pinned, exact template supported; do not
+  // normalize arbitrary shell text or execute candidate-controlled wrappers.
+  const { cmdShim: pnpm11Shim } = await import("cmd-shim-pnpm-11-5");
+  const compatible = await validateCommandTemplate(
+    root,
+    command,
+    target,
+    name,
+    pnpm11Shim,
+  );
+  return compatible.length === 0 ? compatible : current;
+}
+
+async function validateCommandTemplate(root, command, target, name, cmdShim) {
   const stat = fs.lstatSync(command);
   if (stat.isSymbolicLink()) {
     if (containedRealpath(root, command, `${name} executable`) !== target) {
       return [`${name}: executable targets the wrong file`];
     }
-    const expected = await expectedCommandFiles(target, command, []);
+    const expected = await expectedCommandFiles(target, command, [], cmdShim);
     const failures = [];
     for (const [file, content] of expected) {
       if (file === command) continue;
@@ -725,7 +747,12 @@ async function validateCommandGroup(root, command, target, name) {
       return [`${name}: executable NODE_PATH escapes the repository`];
     }
   }
-  const expected = await expectedCommandFiles(target, command, nodePath);
+  const expected = await expectedCommandFiles(
+    target,
+    command,
+    nodePath,
+    cmdShim,
+  );
   const failures = [];
   for (const [file, content] of expected) {
     if (!fs.existsSync(file)) {
@@ -953,9 +980,7 @@ function inspectPnpm(
       );
       continue;
     }
-    const version = identity.depPath
-      .slice(identity.depPath.lastIndexOf("@") + 1)
-      .split("(")[0];
+    const version = packageKey.slice(packageKey.lastIndexOf("@") + 1);
     if (
       !registrySelectionSatisfies(name, specs[name], identity.name, version)
     ) {

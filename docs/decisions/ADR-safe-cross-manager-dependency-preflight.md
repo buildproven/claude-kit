@@ -120,6 +120,15 @@ Windows, every generated command wrapper (`.cmd`, `.ps1`, and the extensionless
 shim) receives the same complete-template check. Unknown wrapper forms or
 platforms fail closed.
 
+BUI-848 compatibility repair: generate complete expected command groups with
+the pinned `@zkochan/cmd-shim` 9.0.7 or 9.0.3 producer (the latter is bundled in
+pnpm 11.5.0). A whole group must match one producer; mixed or modified wrappers
+remain invalid. A wrapper that runs Node against a postinstall-replaced native
+binary is a real installation failure, not an accepted legacy format.
+For pnpm, strip peer qualification before extracting the package version or
+alias separator, while retaining the complete peer-qualified locator for graph
+and installed-path binding.
+
 Registry selections must satisfy the root manifest's SemVer range after npm
 alias resolution. Repeating the manifest specifier in a lockfile is not enough:
 the selected npm, pnpm, Yarn, or Bun version is checked independently. Local

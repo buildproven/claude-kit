@@ -88,12 +88,12 @@ function installFixturePackage(root) {
   );
 }
 
-function installPnpmFixturePackage(root) {
+function installPnpmFixturePackage(root, locator = "eslint@1.2.3") {
   const packageRoot = path.join(
     root,
     "node_modules",
     ".pnpm",
-    "eslint@1.2.3",
+    locator,
     "node_modules",
     "eslint",
   );
@@ -110,7 +110,7 @@ function installPnpmFixturePackage(root) {
   );
   fs.writeFileSync(path.join(packageRoot, "bin.js"), "", { mode: 0o755 });
   fs.symlinkSync(
-    path.join(".pnpm", "eslint@1.2.3", "node_modules", "eslint"),
+    path.join(".pnpm", locator, "node_modules", "eslint"),
     path.join(root, "node_modules", "eslint"),
   );
   fs.symlinkSync(
@@ -416,6 +416,38 @@ describe("quality dependency preflight", () => {
       "lockfileVersion: '9.0'\nimporters:\n  .:\n    devDependencies:\n      eslint:\n        specifier: 1.2.3\n        version: 1.2.3\npackages:\n  eslint@1.2.3:\n    resolution: {integrity: sha512-YQ==}\nsnapshots:\n  eslint@1.2.3: {}\n",
     );
     installPnpmFixturePackage(root);
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("compares the package version rather than a nested pnpm peer version", () => {
+    const root = fixture();
+    selectFixtureManager(root, "pnpm", "11.5.0");
+    fs.writeFileSync(
+      path.join(root, "pnpm-lock.yaml"),
+      "lockfileVersion: '9.0'\nimporters:\n  .:\n    devDependencies:\n      eslint:\n        specifier: 1.2.3\n        version: 1.2.3(peer@9.9.9)\npackages:\n  eslint@1.2.3:\n    resolution: {integrity: sha512-YQ==}\nsnapshots:\n  eslint@1.2.3(peer@9.9.9): {}\n",
+    );
+    installPnpmFixturePackage(root, "eslint@1.2.3_peer@9.9.9");
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("preserves the package identity of peer-qualified npm aliases in pnpm", () => {
+    const root = fixture();
+    selectFixtureManager(root, "pnpm", "11.5.0");
+    const pkgFile = path.join(root, "package.json");
+    const pkg = JSON.parse(fs.readFileSync(pkgFile, "utf8"));
+    pkg.devDependencies.eslint = "npm:eslint@1.2.3";
+    fs.writeFileSync(pkgFile, JSON.stringify(pkg));
+    fs.writeFileSync(
+      path.join(root, "pnpm-lock.yaml"),
+      "lockfileVersion: '9.0'\nimporters:\n  .:\n    devDependencies:\n      eslint:\n        specifier: npm:eslint@1.2.3\n        version: npm:eslint@1.2.3(peer@9.9.9)\npackages:\n  eslint@1.2.3:\n    resolution: {integrity: sha512-YQ==}\nsnapshots:\n  eslint@1.2.3(peer@9.9.9): {}\n",
+    );
+    installPnpmFixturePackage(root, "eslint@1.2.3_peer@9.9.9");
     const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
       encoding: "utf8",
     });
@@ -952,6 +984,40 @@ describe("quality dependency preflight", () => {
     });
     expect(result.status, result.stderr).toBe(0);
   });
+
+  it.each([false, true])(
+    "validates pnpm 11.5 wrappers with tampered=%s",
+    async (tampered) => {
+      const root = fixture();
+      installFixturePackage(root);
+      const target = fs.realpathSync(
+        path.join(root, "node_modules", "eslint", "bin.js"),
+      );
+      fs.writeFileSync(target, "#!/usr/bin/env node\n");
+      const command = path.join(root, "node_modules", ".bin", "eslint");
+      fs.unlinkSync(command);
+      const { cmdShim } = await import("cmd-shim-pnpm-11-5");
+      await cmdShim(target, command, {
+        createCmdFile: true,
+        createPwshFile: true,
+        nodePath: [path.join(root, "node_modules")],
+      });
+      if (tampered) {
+        fs.writeFileSync(
+          command,
+          fs
+            .readFileSync(command, "utf8")
+            .replace("exec node", "exec attacker"),
+        );
+      }
+      const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+        encoding: "utf8",
+      });
+      expect(result.status, result.stderr).toBe(tampered ? 78 : 0);
+      if (tampered)
+        expect(result.stderr).toContain("differs from the supported template");
+    },
+  );
 
   it("rejects an orphan executable omitted from its target package manifest", () => {
     const root = fixture();

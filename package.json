@@ -43,6 +43,7 @@
     "@yarnpkg/parsers": "3.1.0",
     "@zkochan/cmd-shim": "9.0.7",
     "ajv": "^8.20.0",
+    "cmd-shim-pnpm-11-5": "npm:@zkochan/cmd-shim@9.0.3",
     "eslint": "^10.7.0",
     "eslint-plugin-n": "^18.2.2",
     "eslint-plugin-security": "^4.0.1",
