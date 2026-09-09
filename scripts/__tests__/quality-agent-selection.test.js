@@ -1,4 +1,11 @@
-const { selectReviewers } = require("../quality-agent-selection");
+const {
+  selectReviewers,
+  selectReviewersForRange,
+} = require("../quality-agent-selection");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 
 describe("quality agent selection", () => {
   it("selects no AI reviewer at low risk", () => {
@@ -63,5 +70,42 @@ describe("quality agent selection", () => {
     expect(result.agents).toEqual(["code-reviewer", "security-auditor"]);
     expect(new Set(result.agents).size).toBe(2);
     expect(result.rule).toBe("security-domain");
+  });
+
+  it("reads review patches larger than Node's default child-process buffer", () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "quality-selector-"));
+    try {
+      const git = (args) =>
+        execFileSync("git", args, {
+          cwd: repo,
+          stdio: "ignore",
+        });
+      git(["init", "--quiet"]);
+      git(["config", "user.name", "Quality Test"]);
+      git(["config", "user.email", "quality@example.invalid"]);
+      fs.writeFileSync(path.join(repo, "fixture.txt"), "base\n");
+      git(["add", "fixture.txt"]);
+      git(["commit", "--quiet", "-m", "base"]);
+      fs.writeFileSync(
+        path.join(repo, "fixture.txt"),
+        `${"x".repeat(1_100_000)}\nset -e\n`,
+      );
+      git(["add", "fixture.txt"]);
+      git(["commit", "--quiet", "-m", "large-patch"]);
+
+      expect(
+        selectReviewersForRange({
+          tier: "high",
+          repo,
+          base: "HEAD~1",
+          head: "HEAD",
+        }),
+      ).toMatchObject({
+        agents: ["silent-failure-hunter"],
+        domain: "reliability",
+      });
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
   });
 });
