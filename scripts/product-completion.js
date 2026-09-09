@@ -25,6 +25,21 @@ const NON_PRODUCT_ROOT_NAMES = new Set([
   "README",
   "SECURITY",
 ]);
+const PROTECTED_INFRASTRUCTURE_BOOTSTRAP = "protected-infrastructure-bootstrap";
+const PROTECTED_INFRASTRUCTURE_PATHS = new Set([
+  ".github/workflows/product-evidence-admission.yml",
+  ".github/workflows/product-evidence-producer.yml",
+  ".github/workflows/product-evidence-source.yml",
+  "docs/prd/bui-836-product-evidence-admission-tasks.md",
+  "docs/prd/bui-836-product-evidence-admission.md",
+  "docs/product-evidence-admission-operator-guide.md",
+  "scripts/__tests__/product-admission.test.js",
+  "scripts/__tests__/quality-run.test.js",
+  "scripts/product-admission.js",
+  "scripts/product-evidence-producer.js",
+  "scripts/product-evidence.js",
+  "scripts/quality-run.js",
+]);
 const EVIDENCE_KEYS = new Set([
   "schemaVersion",
   "repository",
@@ -117,6 +132,10 @@ function validate(prdPath, tasksPath) {
     schemaVersion: 1,
     valid: errors.length === 0,
     userFacing: userFacing(prd),
+    deliveryClass:
+      /^-\s*Delivery:\s*protected-infrastructure-bootstrap\s*$/im.test(prd)
+        ? PROTECTED_INFRASTRUCTURE_BOOTSTRAP
+        : null,
     requirementsDigest,
     tasks,
     errors,
@@ -240,7 +259,28 @@ function verifyClaim(
     if (indexError) errors.push(indexError);
   }
   if (claim === "contract") {
-    for (const file of changedFiles.filter(productionCodeChange)) {
+    const productFiles = changedFiles.filter(productionCodeChange);
+    const bootstrap =
+      result.deliveryClass === PROTECTED_INFRASTRUCTURE_BOOTSTRAP;
+    if (bootstrap && result.userFacing) {
+      errors.push(
+        "protected infrastructure bootstrap cannot declare user-facing work",
+      );
+    }
+    if (
+      bootstrap &&
+      [...PROTECTED_INFRASTRUCTURE_PATHS].some(
+        (file) => !changedFiles.includes(file),
+      )
+    ) {
+      errors.push(
+        "protected infrastructure bootstrap must include the complete admission chain",
+      );
+    }
+    for (const file of productFiles.filter(
+      (candidate) =>
+        !bootstrap || !PROTECTED_INFRASTRUCTURE_PATHS.has(candidate),
+    )) {
       errors.push(
         `contract claim cannot cover product-affecting file '${file}'`,
       );

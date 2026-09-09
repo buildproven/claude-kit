@@ -150,6 +150,74 @@ function trustKey(trustedPublicKey) {
   return key;
 }
 
+function trustedPublicKeyFingerprint(trustedPublicKey) {
+  const der = trustKey(trustedPublicKey).export({
+    format: "der",
+    type: "spki",
+  });
+  return sha256(der);
+}
+
+function verifyAdmissionEnvelope(
+  envelope,
+  expected,
+  { trustedPublicKey } = {},
+) {
+  if (!exactKeys(envelope, ["payload", "signature"])) {
+    throw new Error("product admission envelope has unexpected fields");
+  }
+  const payload = envelope.payload;
+  if (
+    !exactKeys(payload, [
+      "schemaVersion",
+      "issuer",
+      "repository",
+      "repositoryId",
+      "head",
+      "requirementsDigest",
+      "evidenceIndexSha256",
+      "producerRunId",
+      "sourceRunId",
+      "keyFingerprint",
+      "admittedAt",
+    ]) ||
+    payload.schemaVersion !== 1 ||
+    payload.issuer !== "github-actions-product-evidence" ||
+    payload.repository !== expected.repository ||
+    payload.repositoryId !== expected.repositoryId ||
+    payload.head !== expected.head ||
+    payload.requirementsDigest !== expected.requirementsDigest ||
+    payload.evidenceIndexSha256 !== expected.evidenceIndexSha256 ||
+    !/^[1-9][0-9]*$/.test(payload.producerRunId || "") ||
+    !/^[0-9a-f]{64}$/.test(payload.requirementsDigest || "") ||
+    !/^[1-9][0-9]*$/.test(payload.sourceRunId || "") ||
+    !/^[0-9a-f]{64}$/.test(payload.keyFingerprint || "") ||
+    !nonEmptyString(payload.admittedAt) ||
+    Number.isNaN(Date.parse(payload.admittedAt))
+  ) {
+    throw new Error(
+      "product admission has the wrong identity or malformed fields",
+    );
+  }
+  const key = trustKey(trustedPublicKey);
+  if (payload.keyFingerprint !== trustedPublicKeyFingerprint(key)) {
+    throw new Error(
+      "product admission was made with a rotated or untrusted key",
+    );
+  }
+  const signature = decodeBase64(
+    envelope.signature,
+    "product admission signature",
+    true,
+  );
+  if (
+    !crypto.verify(null, Buffer.from(canonicalJson(payload)), key, signature)
+  ) {
+    throw new Error("product admission signature is invalid");
+  }
+  return payload;
+}
+
 function payloadKeys(kind, expected) {
   const keys = [
     "schemaVersion",
@@ -364,5 +432,7 @@ function verifyReceipt(
 module.exports = {
   canonicalJson,
   sha256,
+  trustedPublicKeyFingerprint,
+  verifyAdmissionEnvelope,
   verifyReceipt,
 };
