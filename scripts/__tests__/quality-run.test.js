@@ -718,7 +718,7 @@ describe("quality-run public orchestration", () => {
     });
   });
 
-  it("allows an evidence-free contract claim for declared quality infrastructure", () => {
+  it("blocks an evidence-free contract claim for admission policy code", () => {
     const entry = fixture({
       changedFiles: [
         "docs/prd/bui-822-quality-runtime-unblocking.md",
@@ -744,10 +744,12 @@ describe("quality-run public orchestration", () => {
 
     const result = run(entry);
 
-    expect(result.status).toBe(0);
+    expect(result.status).toBe(1);
     expect(JSON.parse(result.output)).toMatchObject({
-      status: "complete",
-      state: "verified-unmerged",
+      status: "terminal",
+      state: "blocked",
+      message:
+        "contract delivery claim requires product evidence for product-affecting file 'scripts/product-completion.js'",
     });
   });
 

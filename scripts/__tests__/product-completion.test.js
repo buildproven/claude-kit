@@ -409,7 +409,7 @@ describe("product completion", () => {
     }
   });
 
-  it("recognizes a complete quality infrastructure contract", () => {
+  it("recognizes a quality infrastructure contract only for control files", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "quality-infrastructure-"));
     const prd = path.join(dir, "runtime-prd.md");
     const tasks = path.join(dir, "runtime-tasks.md");
@@ -424,17 +424,16 @@ describe("product completion", () => {
     expect(
       isQualityInfrastructure(prd, tasks, [
         "docs/prd/runtime-prd.md",
-        "scripts/product-completion.js",
-        "scripts/quality-run.js",
+        ".buildproven/test-impact.json",
+        "vitest.config.mjs",
         "scripts/__tests__/quality-run.test.js",
       ]),
     ).toBe(true);
     expect(
       isQualityInfrastructure(prd, tasks, [
         "docs/prd/runtime-prd.md",
+        ".buildproven/test-impact.json",
         "scripts/product-completion.js",
-        "scripts/quality-run.js",
-        "scripts/other.js",
       ]),
     ).toBe(false);
   });

@@ -50,8 +50,10 @@ const PROTECTED_INFRASTRUCTURE_PATHS = new Set([
   "scripts/quality-verify-app.sh",
 ]);
 const QUALITY_INFRASTRUCTURE_PATHS = new Set([
-  "scripts/product-completion.js",
-  "scripts/quality-run.js",
+  ".buildproven/test-impact.json",
+  "harness-config.json",
+  "package-lock.json",
+  "vitest.config.mjs",
 ]);
 const EVIDENCE_KEYS = new Set([
   "schemaVersion",
@@ -228,12 +230,8 @@ function isProtectedInfrastructureBootstrap(prdPath, tasksPath, changedFiles) {
 function isQualityInfrastructure(prdPath, tasksPath, changedFiles) {
   if (
     !QUALITY_INFRASTRUCTURE_PATHS.size ||
-    ![...QUALITY_INFRASTRUCTURE_PATHS].every((file) =>
-      changedFiles.includes(file),
-    ) ||
-    changedFiles
-      .filter(productionCodeChange)
-      .some((file) => !QUALITY_INFRASTRUCTURE_PATHS.has(file))
+    !changedFiles.some((file) => QUALITY_INFRASTRUCTURE_PATHS.has(file)) ||
+    changedFiles.some(productionCodeChange)
   ) {
     return false;
   }
@@ -331,25 +329,14 @@ function verifyClaim(
         "protected infrastructure bootstrap must include the complete admission chain",
       );
     }
-    if (
-      qualityInfrastructure &&
-      (!QUALITY_INFRASTRUCTURE_PATHS.size ||
-        ![...QUALITY_INFRASTRUCTURE_PATHS].every((file) =>
-          changedFiles.includes(file),
-        ) ||
-        changedFiles
-          .filter(productionCodeChange)
-          .some((file) => !QUALITY_INFRASTRUCTURE_PATHS.has(file)))
-    ) {
+    if (qualityInfrastructure && changedFiles.some(productionCodeChange)) {
       errors.push(
-        "quality infrastructure delivery must include the complete quality runtime",
+        "quality infrastructure delivery cannot include product-affecting files",
       );
     }
     for (const file of productFiles.filter(
       (candidate) =>
-        (!bootstrap || !PROTECTED_INFRASTRUCTURE_PATHS.has(candidate)) &&
-        (!qualityInfrastructure ||
-          !QUALITY_INFRASTRUCTURE_PATHS.has(candidate)),
+        !bootstrap || !PROTECTED_INFRASTRUCTURE_PATHS.has(candidate),
     )) {
       errors.push(
         `contract claim cannot cover product-affecting file '${file}'`,
