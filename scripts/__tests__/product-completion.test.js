@@ -350,6 +350,8 @@ describe("product completion", () => {
     for (const file of [
       "docs/decisions/ADR-quality-runtime.md",
       ".buildproven/test-impact.json",
+      "config/AGENTS.md",
+      "config/CLAUDE.md",
       "harness-config.json",
       "package-lock.json",
     ]) {

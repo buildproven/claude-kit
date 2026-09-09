@@ -12,6 +12,8 @@ const NON_PRODUCT_PATH =
   /^(?:\.buildproven\/|\.github\/|docs?\/|tests?\/|fixtures?\/)|(?:^|\/)(?:__tests__|__fixtures__)\//i;
 const NON_PRODUCT_TEST_FILE = /(?:\.test|\.spec)\.[^/]+$/i;
 const NON_PRODUCT_EXACT_PATHS = new Set([
+  "config/AGENTS.md",
+  "config/CLAUDE.md",
   "harness-config.json",
   "package-lock.json",
 ]);
