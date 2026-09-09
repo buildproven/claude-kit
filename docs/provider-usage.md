@@ -37,3 +37,16 @@ Legacy `--usage-command` integrations remain supported with the original
 
 Release the slot in the same live launcher process with `release --id
 "$LOOP_ID" --owner-pid "$$"`. Tests use an isolated temporary state directory.
+
+## Overnight progress and cancellation
+
+During provider work, the launcher prints a sanitized heartbeat every 30 seconds
+and atomically refreshes its status JSON with phase, elapsed time, and remaining
+budget. `OVERNIGHT_LOOP_HEARTBEAT_SECONDS` accepts a positive integer override.
+Two missed intervals mean stale progress, not completion. Raw provider output
+stays in the private attempt log; it is not copied into the progress log.
+
+Cancellation waits for bounded provider-group cleanup before releasing the
+admission slot. If the launcher is killed with SIGKILL, the deadline helper
+stops provider work, but the existing legacy lock remains fail-closed. Automatic
+stale-lock recovery is not implemented; BUI-845 tracks the remaining design.

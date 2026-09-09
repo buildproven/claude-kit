@@ -157,6 +157,8 @@ the bare skills directly; a skill never calls a user-only slash command.
 Unattended admission uses `--provider codex|claude` and the bundled CodexBar
 reader. Install CodexBar and sign in locally on each computer; see
 `docs/provider-usage.md`. Stale data or a provider mismatch stops admission.
+Overnight provider work reports phase and remaining time every 30 seconds.
+Cancellation waits for provider cleanup; SIGKILL lock recovery remains manual.
 
 ```bash
 /bs:backlog
