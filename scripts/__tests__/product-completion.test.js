@@ -293,6 +293,41 @@ describe("product completion", () => {
     ).toMatchObject({ valid: true, errors: [] });
   });
 
+  it("accepts the complete protected infrastructure bootstrap chain", () => {
+    const { prd, tasks } = files();
+    writeFileSync(
+      prd,
+      "# Protected admission\n\n## Delivery classification\n\n- Delivery: protected-infrastructure-bootstrap\n",
+    );
+    const result = validate(prd, tasks);
+    const changedFiles = [
+      ".github/workflows/product-evidence-admission.yml",
+      ".github/workflows/product-evidence-producer.yml",
+      ".github/workflows/product-evidence-source.yml",
+      "docs/prd/bui-836-product-evidence-admission-tasks.md",
+      "docs/prd/bui-836-product-evidence-admission.md",
+      "docs/product-evidence-admission-operator-guide.md",
+      "scripts/__tests__/product-admission.test.js",
+      "scripts/__tests__/quality-run.test.js",
+      "scripts/product-admission.js",
+      "scripts/product-evidence-producer.js",
+      "scripts/product-evidence.js",
+      "scripts/quality-run.js",
+    ];
+    expect(verifyClaim(result, "contract", changedFiles, {}, {})).toMatchObject(
+      { valid: true, errors: [] },
+    );
+    expect(
+      verifyClaim(
+        result,
+        "contract",
+        [...changedFiles, "scripts/other.js"],
+        {},
+        {},
+      ),
+    ).toMatchObject({ valid: false });
+  });
+
   it("rejects unsigned, untrusted, wrong-repository, and wrong-head receipts", () => {
     const { dir, prd, tasks } = files();
     const result = validate(prd, tasks);
