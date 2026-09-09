@@ -35,6 +35,14 @@ reserved for external authority. Cleanup and telemetry run from a `finally`
 path and cannot convert a successful merge into a failure or an invalid
 campaign into success.
 
+An orphaned manifest file lock is recovered automatically when the current
+process holds the exact repository metadata guard and the recorded local
+owner PID is confirmed dead. Recovery rechecks the lock identity and contents;
+active, foreign-host, malformed, or uncertain owners remain fenced. Lock age
+alone never authorizes recovery. Standalone mutations without the repository
+guard cannot reclaim another owner's lock. See
+[the lock recovery decision](decisions/ADR-quality-dead-manifest-lock.md).
+
 ## Phase ownership
 
 | Phase            | Deterministic runner responsibility                                                    | Model responsibility                                        |
