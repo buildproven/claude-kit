@@ -24,6 +24,12 @@ this resolver; it finds the installed runtime and fails closed when absent:
 QUALITY_SCRIPTS_DIR="$(for d in "${CLAUDE_PLUGIN_ROOT:-}" "${CLAUDE_KIT_ROOT:-}" "$HOME/.claude" .; do [ -n "$d" ] || continue; resolver="$d/scripts/quality-runtime-dir.sh"; [ -f "$resolver" ] || continue; bash "$resolver"; exit $?; done; echo "quality runtime not found" >&2; exit 1)" || exit $?
 ```
 
+A host interruption remains visible in terminal history. Resuming the exact
+manifest continues unfinished exact-head phases only after the repository lease
+is reacquired and no execution owner remains active. A valid descendant archives
+the prior-head interruption, retains cumulative provider evidence and budgets,
+and reruns revision-bound evidence for the descendant.
+
 Use `reference.md` only when resolving flags, target paths, manifest schema,
 budgets, or history. Read `checklist.md` before gates, leads, remediation, or merge.
 Those references are part of the policy, not optional background reading.

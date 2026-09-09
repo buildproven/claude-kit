@@ -2290,7 +2290,7 @@ function invalidateApproval(manifest, nextHead) {
   };
 }
 
-function supersedePriorHeadBlock(
+function supersedePriorHeadTerminal(
   manifest,
   root,
   nextHead,
@@ -2298,7 +2298,7 @@ function supersedePriorHeadBlock(
 ) {
   const terminal = manifest.terminalState;
   if (
-    terminal?.state !== "blocked" ||
+    !["blocked", "interrupted"].includes(terminal?.state) ||
     terminal.head === nextHead ||
     !/^[0-9a-f]{40}$/.test(terminal.head || "") ||
     (!allowReplay && !isAncestorOf(root, terminal.head, nextHead))
@@ -2372,7 +2372,7 @@ function advanceHead(manifest, root, { acceptedConditions = [] } = {}) {
   assertCurrentReviewStrength(manifest, root);
   if (nextHead === priorHead) {
     const blockedHead = manifest.terminalState?.head;
-    const superseded = supersedePriorHeadBlock(manifest, root, nextHead);
+    const superseded = supersedePriorHeadTerminal(manifest, root, nextHead);
     if (superseded) {
       rearmExecutionForHead(manifest, blockedHead, nextHead);
     }
@@ -2445,7 +2445,7 @@ function advanceHead(manifest, root, { acceptedConditions = [] } = {}) {
   }
   if (replay) recordBaseRebaseCarry(manifest, priorHead, nextHead, replay);
   rearmExecutionForHead(manifest, priorHead, nextHead);
-  supersedePriorHeadBlock(manifest, root, nextHead, Boolean(replay));
+  supersedePriorHeadTerminal(manifest, root, nextHead, Boolean(replay));
   invalidateApproval(manifest, nextHead);
   const completed = completedReviews(manifest);
   const previousReview = completed.at(-1);
@@ -6541,6 +6541,56 @@ function recoveryScope(manifest, terminal) {
   return manifest.approval.scope;
 }
 
+function resumeInterruptedTerminal(manifestPath) {
+  const initial = loadManifest(manifestPath);
+  const initialTerminal = initial.manifest.terminalState;
+  if (
+    initialTerminal?.state !== "interrupted" ||
+    initialTerminal.head !== initial.manifest.revisions.currentHead ||
+    initial.manifest.governor?.activeExecution
+  ) {
+    return null;
+  }
+  let resumed = null;
+  withManifestLock(manifestPath, (manifest) => {
+    const terminal = manifest.terminalState;
+    if (
+      terminal?.state !== "interrupted" ||
+      terminal.head !== manifest.revisions.currentHead ||
+      manifest.governor?.activeExecution
+    ) {
+      return;
+    }
+    if (
+      manifest.terminalHistory !== undefined &&
+      !Array.isArray(manifest.terminalHistory)
+    ) {
+      throw new Error("terminal history is malformed");
+    }
+    const resumedAt = new Date().toISOString();
+    const nextEpoch = terminalEpoch(manifest) + 1;
+    manifest.terminalHistory ??= [];
+    manifest.terminalHistory.push({
+      ...terminal,
+      disposition: "resumed-after-interruption",
+      resumedAt,
+    });
+    manifest.terminalHistory.push({
+      event: "reopened-after-interruption",
+      head: manifest.revisions.currentHead,
+      terminalEpoch: nextEpoch,
+      recordedAt: resumedAt,
+    });
+    manifest.terminalEpoch = nextEpoch;
+    delete manifest.terminalState;
+    resumed = {
+      head: manifest.revisions.currentHead,
+      terminalEpoch: nextEpoch,
+    };
+  });
+  return resumed;
+}
+
 function resumeRecoverableTerminal(manifestPath) {
   const initial = loadManifest(manifestPath);
   if (initial.manifest.options?.merge !== true) return null;
@@ -7241,6 +7291,7 @@ module.exports = {
   clearMergeAdmissionBlock,
   resolveGreenCiAdmissionBlock,
   recoveryScope,
+  resumeInterruptedTerminal,
   resumeRecoverableTerminal,
   terminalEpoch,
   isTerminal,

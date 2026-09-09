@@ -35,6 +35,12 @@ reserved for external authority. Cleanup and telemetry run from a `finally`
 path and cannot convert a successful merge into a failure or an invalid
 campaign into success.
 
+A host interruption is recoverable through the same exact manifest. Recovery
+requires the exact repository lease and no active execution owner. It preserves
+prior reviews, findings, provider use, and budgets, then continues only the
+unfinished exact-head phases. If HEAD advanced, the runner archives the stale
+interruption and reruns descendant-bound gates, mutation evidence, and review.
+
 ## Phase ownership
 
 | Phase            | Deterministic runner responsibility                                                    | Model responsibility                                        |
@@ -53,6 +59,22 @@ match the current revision, a provider result is malformed, or a model omits a
 required finding disposition.
 
 ## Migration plan
+
+### Installed v1 maintenance
+
+The v1 maintenance cohort starts at `2bb28d8` and carries the interruption
+recovery and current Codex argument fixes. Its receipt verifier remains v1.
+This preserves the deployed trust boundary while the separate protected v2
+receipt producer and admission service are not yet available. It does not
+claim v2 verification or authorize an unsigned v2 receipt.
+
+Verify the exact maintenance commit with the interruption, provider, and full
+regression checks before pinning an installation to it. Its integration must
+make that commit reachable from the approved main branch; the installation
+must still verify descent from its prior core pin. Do not substitute an
+unreviewed worktree or copy individual runtime scripts into an installation.
+
+### Orchestrator rollout
 
 1. **Complete:** extract a `quality-run` command that invokes the existing bootstrap,
    selection, gate, review, stamp/merge, and telemetry scripts in this order.

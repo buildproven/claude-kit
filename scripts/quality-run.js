@@ -756,6 +756,14 @@ async function runManifest(manifestPath, dependencies = {}) {
           reviewSummary(resumed),
         );
       }
+      const interruptedRecovery =
+        quality.resumeInterruptedTerminal(manifestPath);
+      if (interruptedRecovery) {
+        const resumed = manifestAt(manifestPath);
+        pinTerminalEpoch(resumed);
+        quality.validateIdentity(resumed, resumed.repo.realpath);
+        return await runOpenCampaign(context, manifestPath, resumed);
+      }
       return {
         status: "terminal",
         state: manifest.terminalState.state,
