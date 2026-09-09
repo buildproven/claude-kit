@@ -28,6 +28,11 @@ or architecture is required.
   - Evidence: `.buildproven/test-impact.json`, `commands/bs/help.md`, and
     `commands/bs/workflow.md`; focused and complete audits passed before this
     documentation-only follow-up.
+- [ ] 3.0 Obtain protected exact-head product evidence and complete admission.
+  - Phase: validation
+  - Delivers: Authenticated acceptance through the existing quality workflow.
+  - Evidence: BUI-836 protected behavioral and acceptance receipts, final
+    independent review, and exact-head admission proof; not yet available.
 
 ## Verification and admission
 
