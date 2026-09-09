@@ -17,10 +17,17 @@ or architecture is required.
 
 ## Implementation tasks
 
-- [x] Reject malformed values in both CLI entrypoints before shifting.
-- [x] Test missing, empty, and option-like values through bounded real CLI calls.
-- [x] Test both valid forms with a real manifest and unchanged manifest bytes.
-- [x] Map shell changes to behavioral tests and document the argument contract.
+- [x] 1.0 Reject malformed values in both CLI entrypoints before shifting.
+  - Phase: implementation
+  - Delivers: Prompt argument errors while valid status remains read-only.
+  - Evidence: `scripts/__tests__/quality-status-cli.test.js` tests both invalid
+    values and valid forms against a real manifest with unchanged bytes.
+- [x] 2.0 Map shell changes to behavioral tests and document the contract.
+  - Phase: implementation
+  - Delivers: Deterministic test selection and actionable CLI instructions.
+  - Evidence: `.buildproven/test-impact.json`, `commands/bs/help.md`, and
+    `commands/bs/workflow.md`; focused and complete audits passed before this
+    documentation-only follow-up.
 
 ## Verification and admission
 
