@@ -154,6 +154,10 @@ normal autonomous merge path.
 The human commands invoke executable `backlog` and `ralph` skills. Agents invoke
 the bare skills directly; a skill never calls a user-only slash command.
 
+Unattended admission uses `--provider codex|claude` and the bundled CodexBar
+reader. Install CodexBar and sign in locally on each computer; see
+`docs/provider-usage.md`. Stale data or a provider mismatch stops admission.
+
 ```bash
 /bs:backlog
 /bs:ralph
