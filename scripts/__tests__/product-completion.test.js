@@ -392,6 +392,7 @@ describe("product completion", () => {
       ".buildproven/test-impact.json",
       "harness-config.json",
       "package-lock.json",
+      "vitest.config.mjs",
     ]) {
       expect(productionCodeChange(file)).toBe(false);
     }

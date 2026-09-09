@@ -14,6 +14,10 @@ const NON_PRODUCT_TEST_FILE = /(?:\.test|\.spec)\.[^/]+$/i;
 const NON_PRODUCT_EXACT_PATHS = new Set([
   "harness-config.json",
   "package-lock.json",
+  // Repository test-runner configuration is a quality-control contract, not
+  // shipped application behavior. Keep this exact allowlist narrow so other
+  // application configuration remains product-affecting by default.
+  "vitest.config.mjs",
 ]);
 const NON_PRODUCT_ROOT_NAMES = new Set([
   "AGENTS",
