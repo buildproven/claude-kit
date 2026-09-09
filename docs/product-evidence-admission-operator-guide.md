@@ -1,7 +1,7 @@
 # Product-evidence admission operator guide
 
 The source bundle contains a JSON request and a JSON array of changed paths;
-Git paths are collected with NUL delimiters to preserve unusual filenames.
+Git paths include deletions and both sides of renames. NUL delimiters preserve unusual filenames.
 Protected producer and admission API steps use the job-scoped GitHub token
 with the permissions declared in each workflow.
 

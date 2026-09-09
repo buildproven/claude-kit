@@ -45,7 +45,7 @@ jobs:
             const request = { schemaVersion: 1, repository: process.env.GITHUB_REPOSITORY, repositoryId: String(process.env.REPOSITORY_ID), pullRequest: p.pullRequest, base: p.base, head: p.head, nonce: p.nonce, behavioralCommand: "npm test", acceptanceCommand: "npm run test:patterns" };
             fs.mkdirSync("product-evidence-source", { mode: 0o700 });
             fs.writeFileSync("product-evidence-source/request.json", JSON.stringify(request) + "\n", { mode: 0o600 });
-            const changedFiles = require("node:child_process").execFileSync("git", ["diff", "--name-only", "--diff-filter=ACMR", "-z", p.base, p.head], { encoding: "utf8" }).split("\0").filter(Boolean);
+            const changedFiles = require("node:child_process").execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", p.base, p.head], { encoding: "utf8" }).split("\0").filter(Boolean);
             fs.writeFileSync("product-evidence-source/changed-files.json", JSON.stringify(changedFiles) + "\n", { mode: 0o600 });
             for (const [from, to] of [[p.prd,"prd.md"],[p.tasks,"tasks.md"],["behavioral-tests.log","behavioral-tests.log"],["acceptance-evidence.log","acceptance-evidence.log"]]) fs.copyFileSync(from, `product-evidence-source/${to}`);
           '
