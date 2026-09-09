@@ -127,12 +127,16 @@ function selectReviewersForRange({ tier, repo, base, head }) {
   const range = `${base}..${head}`;
   const files = execFileSync("git", ["diff", "--name-only", "-z", range], {
     cwd: repo,
+    maxBuffer: 64 * 1024 * 1024,
   })
     .toString()
     .split("\0")
     .filter(Boolean);
   const patch = execFileSync("git", ["diff", "--no-ext-diff", range], {
     cwd: repo,
+    // Match the bounded Git reads in quality-invocation.js. Generated bundles
+    // can legitimately exceed Node's 1 MiB default; never truncate review input.
+    maxBuffer: 64 * 1024 * 1024,
   }).toString();
   return selectReviewers({ tier, files, patches: [patch] });
 }
