@@ -151,6 +151,8 @@ Invoked naturally — Claude Code or Codex picks the right skill from context.
 
 `/bs:quality` uses one exact-manifest deterministic runner for gates, bounded
 review, resume, optional protected merge, and terminal telemetry.
+Status requires an explicit, non-empty manifest path; malformed arguments fail
+promptly without starting or resuming a campaign.
 Product delivery claims also require protected-producer receipts bound to the
 numeric repository ID, exact HEAD, requirements, and artifact. Caller-authored
 digests and candidate-worker verification are not admission evidence.
