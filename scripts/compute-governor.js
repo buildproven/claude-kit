@@ -624,6 +624,8 @@ function workTier(facts) {
 }
 
 function resolve(facts, policy = loadPolicy()) {
+  if (facts?.interface === "native-advisory")
+    return resolveNative(facts, policy);
   assertFacts(facts, policy);
   const boundFacts = canonicalFacts(facts);
   const floor = safetyFloor(facts, policy);
@@ -645,6 +647,168 @@ function resolve(facts, policy = loadPolicy()) {
     promotion: route.startsWith("economy")
       ? "candidate-requires-calibration"
       : "not-applicable",
+  };
+}
+
+function nativeIdentityValid(identity) {
+  return Boolean(
+    identity &&
+    typeof identity.model === "string" &&
+    identity.model.trim().length > 0 &&
+    identity.model === identity.model.trim() &&
+    (identity.effort === null ||
+      (typeof identity.effort === "string" && identity.effort.length > 0)),
+  );
+}
+
+function assertNativeRequest(request) {
+  requireCondition(
+    request?.interface === "native-advisory" &&
+      request.schemaVersion === 1 &&
+      ["tools", "local", "delegation"].includes(request.work),
+    "compute-governor: invalid native advisory request",
+  );
+  assertExactKeys(
+    request,
+    [
+      "interface",
+      "schemaVersion",
+      "work",
+      "facts",
+      "parent",
+      "override",
+      "fork",
+      "capabilities",
+    ],
+    "native advisory request",
+  );
+  requireCondition(
+    nativeIdentityValid(request.parent) &&
+      (request.override === null || nativeIdentityValid(request.override)) &&
+      ["all", "bounded", "none"].includes(request.fork),
+    "compute-governor: invalid native identity or context",
+  );
+  for (const identity of [request.parent, request.override].filter(Boolean)) {
+    assertExactKeys(identity, ["model", "effort"], "native identity");
+  }
+  const caps = request.capabilities;
+  requireCondition(
+    caps &&
+      [true, false, null].includes(caps.delegation) &&
+      [true, false, null].includes(caps.overrides) &&
+      (caps.models === null ||
+        (Array.isArray(caps.models) &&
+          caps.models.every(
+            (model) =>
+              typeof model?.model === "string" &&
+              Array.isArray(model.efforts) &&
+              model.efforts.every(
+                (effort) => effort === null || typeof effort === "string",
+              ),
+          ))),
+    "compute-governor: invalid native capabilities",
+  );
+  assertExactKeys(
+    caps,
+    ["delegation", "overrides", "models"],
+    "native capabilities",
+  );
+  for (const model of caps.models || []) {
+    assertExactKeys(model, ["model", "efforts"], "native model capability");
+  }
+}
+
+function nativeDelegationBlocks(request, requested, plan, policy) {
+  const inherited = request.fork === "all";
+  const blocks = [];
+  if (request.work === "delegation") {
+    const caps = request.capabilities;
+    if (caps.delegation !== true)
+      blocks.push("native delegation unavailable or unknown");
+    if (inherited && request.override !== null) {
+      blocks.push(
+        "full-history forks inherit model and effort; overrides are unsupported",
+      );
+    }
+    if (!inherited && caps.overrides !== true) {
+      blocks.push(
+        "bounded or fresh model override support unavailable or unknown",
+      );
+    }
+    if (
+      !caps.models?.some(
+        (model) =>
+          model.model === requested.model &&
+          model.efforts.includes(requested.effort),
+      )
+    )
+      blocks.push("requested model and effort unavailable or unknown");
+    // Reuse the approved route mappings; availability is not evidence of suitability.
+    if (
+      !ROUTES.some((route) => {
+        const mapping = policy.routes[route].providers[request.facts.provider];
+        return (
+          rank(route) >= rank(plan.route) &&
+          mapping.model === requested.model &&
+          mapping.effort === requested.effort
+        );
+      })
+    )
+      blocks.push(
+        "requested identity does not meet the approved calibrated route floor",
+      );
+  }
+  return blocks;
+}
+
+// Advisory only: no client tool call, provider launch, or execution receipt.
+function resolveNative(request, policy = loadPolicy()) {
+  assertNativeRequest(request);
+  assertFacts(request.facts, policy);
+  const delegation = request.work === "delegation";
+  const plan = delegation
+    ? resolveLaunch(request.facts, policy)
+    : {
+        route: null,
+        promotion: "not-applicable",
+        reasons: ["no additional model required"],
+      };
+  const configured = delegation
+    ? { model: plan.model, effort: plan.effort }
+    : null;
+  const inherited = request.fork === "all";
+  const requested = delegation
+    ? request.override || (inherited ? request.parent : configured)
+    : null;
+  const blocks = nativeDelegationBlocks(request, requested, plan, policy);
+  return {
+    interface: "native-advisory",
+    schemaVersion: 1,
+    policyVersion: policy.policyVersion,
+    work: request.work,
+    status: blocks.length > 0 ? "blocked" : "ready",
+    advisoryOnly: true,
+    parent: { ...request.parent },
+    provider: request.facts.provider,
+    role: request.facts.phase,
+    route: plan.route,
+    promotion: plan.promotion,
+    configured,
+    requested,
+    observed: null,
+    usage: null,
+    context: delegation ? request.fork : null,
+    modelArguments:
+      delegation && !inherited && blocks.length === 0 ? requested : null,
+    reasons: [...plan.reasons, ...blocks],
+    constraints: {
+      preserveParentSelection: true,
+      preservePermissions: true,
+      preserveRequiredContext: true,
+      launches: 0,
+      apiFallback: false,
+      globalQuotaEnforced: false,
+    },
   };
 }
 
@@ -1347,6 +1511,7 @@ module.exports = {
   ROUTES,
   loadPolicy,
   resolve,
+  resolveNative,
   resolveExecution,
   validatePlan,
   validateExecutionPlan,

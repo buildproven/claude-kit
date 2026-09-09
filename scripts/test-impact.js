@@ -397,6 +397,28 @@ function parseCliOptions(options) {
   };
 }
 
+function workingTreePaths(root = process.cwd()) {
+  const queries = [
+    ["diff", "--name-only", "--no-renames", "-z"],
+    ["diff", "--cached", "--name-only", "--no-renames", "-z"],
+    ["ls-files", "--others", "--exclude-standard", "-z"],
+  ];
+  return [
+    ...new Set(
+      queries.flatMap((args) =>
+        execFileSync("git", args, {
+          cwd: root,
+          encoding: "utf8",
+          timeout: 5000,
+          stdio: ["ignore", "pipe", "pipe"],
+        })
+          .split("\0")
+          .filter(Boolean),
+      ),
+    ),
+  ].sort();
+}
+
 function changedPaths(base, head, root = process.cwd()) {
   const output = execFileSync(
     "git",
@@ -467,6 +489,7 @@ module.exports = {
   policyDigest,
   parseCliOptions,
   changedPaths,
+  workingTreePaths,
   validatePolicy,
   explicitTestTargets,
   coalesceExactVitestRuns,
