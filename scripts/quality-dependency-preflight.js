@@ -526,12 +526,9 @@ function validateInstalled(
       ) {
         failures.push(`${name}: executable ${bin} targets the wrong file`);
       } else if (!commandStat.isSymbolicLink()) {
-        const marker = `# cmd-shim-target=${target.replaceAll("\\", "/")}`;
         if (
-          readText(command, `${name} executable ${bin}`)
-            .trimEnd()
-            .split("\n")
-            .at(-1) !== marker
+          shimTarget(root, readText(command, `${name} executable ${bin}`), name)
+            .resolved !== target
         ) {
           failures.push(`${name}: executable ${bin} targets the wrong file`);
         }
@@ -659,8 +656,41 @@ function shimNodePath(text) {
   return value ? value.split(":") : [];
 }
 
+function shimTarget(root, text, name) {
+  const marker = text.trimEnd().split("\n").at(-1);
+  const prefix = "# cmd-shim-target=";
+  if (!marker.startsWith(prefix)) {
+    throw new Error(`${name}: regular executable has no exact target marker`);
+  }
+  const target = marker.slice(prefix.length);
+  if (!path.isAbsolute(target)) {
+    throw new Error(`${name}: command target must be absolute`);
+  }
+  return {
+    target,
+    resolved: containedRealpath(root, target, `${name} target`),
+  };
+}
+
 function commandNodePathContained(root, entry) {
-  return fs.existsSync(entry) && containedPath(root, entry);
+  if (!path.isAbsolute(entry)) return false;
+  const resolvedRoot = fs.realpathSync(root);
+  let cursor = entry;
+  const missing = [];
+  while (true) {
+    try {
+      fs.lstatSync(cursor);
+      const ancestor = fs.realpathSync(cursor);
+      if (!isSubpath(resolvedRoot, ancestor)) return false;
+      return isSubpath(resolvedRoot, path.join(ancestor, ...missing));
+    } catch (error) {
+      if (error?.code !== "ENOENT") return false;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) return false;
+      missing.unshift(path.basename(cursor));
+      cursor = parent;
+    }
+  }
 }
 
 async function expectedCommandFiles(target, command, nodePath, cmdShim) {
@@ -737,9 +767,9 @@ async function validateCommandTemplate(root, command, target, name, cmdShim) {
     return failures;
   }
   const text = readText(command, `${name} executable`);
-  const marker = `# cmd-shim-target=${target.replaceAll("\\", "/")}\n`;
-  if (!text.endsWith(marker)) {
-    return [`${name}: regular executable has no exact target marker`];
+  const marked = shimTarget(root, text, name);
+  if (marked.resolved !== target) {
+    return [`${name}: executable targets the wrong file`];
   }
   const nodePath = shimNodePath(text);
   for (const entry of nodePath) {
@@ -748,7 +778,7 @@ async function validateCommandTemplate(root, command, target, name, cmdShim) {
     }
   }
   const expected = await expectedCommandFiles(
-    target,
+    marked.target,
     command,
     nodePath,
     cmdShim,
@@ -804,18 +834,7 @@ async function validateBinDirectory(root, lockedCommandRoots) {
       target = containedRealpath(root, command, `${entry} executable`);
     } else {
       const text = readText(command, `${entry} executable`);
-      const marker = text.trimEnd().split("\n").at(-1);
-      if (!marker.startsWith("# cmd-shim-target=")) {
-        failures.push(
-          `${entry}: regular executable has no exact target marker`,
-        );
-        continue;
-      }
-      target = containedRealpath(
-        root,
-        marker.slice("# cmd-shim-target=".length),
-        `${entry} target`,
-      );
+      target = shimTarget(root, text, entry).resolved;
     }
     failures.push(
       ...(await validateCommandGroup(root, command, target, entry)),

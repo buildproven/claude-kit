@@ -985,6 +985,24 @@ describe("quality dependency preflight", () => {
     expect(result.status, result.stderr).toBe(0);
   });
 
+  it("accepts a pinned shim whose lexical target resolves through a contained package link", async () => {
+    const root = fixture();
+    installPnpmFixturePackage(root);
+    const target = path.join(root, "node_modules", "eslint", "bin.js");
+    fs.writeFileSync(target, "#!/usr/bin/env node\n");
+    const command = path.join(root, "node_modules", ".bin", "eslint");
+    fs.unlinkSync(command);
+    const { cmdShim } = await import("cmd-shim-pnpm-11-5");
+    await cmdShim(target, command, {
+      createCmdFile: true,
+      createPwshFile: true,
+    });
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it.each([false, true])(
     "validates pnpm 11.5 wrappers with tampered=%s",
     async (tampered) => {
