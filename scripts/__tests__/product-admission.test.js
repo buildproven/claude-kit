@@ -166,9 +166,11 @@ describe("protected product workflow transport", () => {
           path.join(root, "docs/decisions/tasks.md"),
           "- [x] behavior\n",
         );
+        fs.writeFileSync(path.join(root, "deleted source.js"), "export {};\n");
         git("add", ".");
         git("commit", "-qm", "fixture base");
         const base = git("rev-parse", "HEAD");
+        fs.unlinkSync(path.join(root, "deleted source.js"));
         const files = ["source space.js", "source\nline.js", 'source"quote.js'];
         for (const file of files)
           fs.writeFileSync(path.join(root, file), "export {};\n");
@@ -221,7 +223,7 @@ describe("protected product workflow transport", () => {
             pullRequest: 7,
           });
         } else {
-          expect(value.sort()).toEqual(files.sort());
+          expect(value.sort()).toEqual([...files, "deleted source.js"].sort());
         }
       } finally {
         fs.rmSync(root, { recursive: true, force: true });
