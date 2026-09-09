@@ -18,6 +18,10 @@ creates receipts or publishes an admission for the exact candidate HEAD.
 - The quality runner accepts only the valid signed admission bound to its
   repository ID, HEAD, and selected PRD/task digest.
 
+## Delivery classification
+
+- Delivery: protected-infrastructure-bootstrap
+
 ## Acceptance
 
 - Forks, stale heads, altered artifacts, alternate commands, missing keys,
