@@ -32,9 +32,32 @@ jobs:
           node-version: "24.18.0"
           cache: npm
       - name: Run allowlisted behavioral command
+        id: behavioral
+        continue-on-error: true
         run: npm ci && npm test > behavioral-tests.log 2>&1
       - name: Run allowlisted acceptance command
+        id: acceptance
+        if: always()
+        continue-on-error: true
         run: npm run test:patterns > acceptance-evidence.log 2>&1
+      - name: Upload failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-evidence-source-diagnostic-${{ github.run_id }}
+          path: |
+            behavioral-tests.log
+            acceptance-evidence.log
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Enforce evidence command success
+        if: always()
+        env:
+          BEHAVIORAL_OUTCOME: ${{ steps.behavioral.outcome }}
+          ACCEPTANCE_OUTCOME: ${{ steps.acceptance.outcome }}
+        run: |
+          test "$BEHAVIORAL_OUTCOME" = success
+          test "$ACCEPTANCE_OUTCOME" = success
       - name: Build raw evidence bundle
         env:
           PAYLOAD: ${{ toJson(github.event.client_payload) }}
