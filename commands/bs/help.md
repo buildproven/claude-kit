@@ -40,6 +40,12 @@ atomically cancel the update.
 Namespaced commands are human entrypoint wrappers. Agent-visible bare skills
 own executable behavior and never delegate back to a command.
 
+For unattended loops, the runtime takes `--provider codex|claude` and reads
+fresh capacity through CodexBar. Per-computer setup is in
+`docs/provider-usage.md`; no hand-written usage snapshot is required.
+Overnight provider work emits sanitized heartbeat status; raw output remains
+private. See the same guide for cancellation and remaining recovery limits.
+
 ## Instructions
 
 **This command generates its output dynamically from command frontmatter.** Do NOT hardcode command lists.

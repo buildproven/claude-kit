@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # overnight-loop.sh — bounded, project-scoped Linear → Ralph engineering loop.
 set -uo pipefail
+umask 077
 
 if [ -n "${OVERNIGHT_LOOP_ENV_FILE:-}" ]; then
   [ -f "$OVERNIGHT_LOOP_ENV_FILE" ] || { echo "OVERNIGHT_LOOP_ENV_FILE does not exist" >&2; exit 2; }
@@ -19,6 +20,7 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 LINEAR_API_URL="${LINEAR_API_URL:-https://api.linear.app/graphql}"
 RESET_BUFFER_SECONDS="${RESET_BUFFER_SECONDS:-120}"
 FALLBACK_SLEEP_SECONDS="${FALLBACK_SLEEP_SECONDS:-16200}"
+HEARTBEAT_SECONDS="${OVERNIGHT_LOOP_HEARTBEAT_SECONDS:-30}"
 
 MAX_ITEMS=8
 MAX_HOURS=8
@@ -45,6 +47,7 @@ done
 [[ "$MAX_ITEMS" =~ ^[1-9][0-9]*$ ]] || die "--max-items must be a positive integer (got '$MAX_ITEMS')"
 [[ "$MAX_HOURS" =~ ^[1-9][0-9]*$ ]] || die "--max-hours must be a positive integer (got '$MAX_HOURS')"
 [ -n "$LINEAR_PROJECT" ] || die "--linear-project is required (prevents cross-repo backlog execution)"
+[[ "$HEARTBEAT_SECONDS" =~ ^[1-9][0-9]*$ ]] || die "OVERNIGHT_LOOP_HEARTBEAT_SECONDS must be a positive integer"
 
 TARGET_STATE_ID=$("$PYTHON_BIN" -c 'import hashlib,os,sys; print(hashlib.sha256(os.path.realpath(sys.argv[1]).encode()).hexdigest()[:16])' "$TARGET_DIR") \
   || die "cannot derive target state identity"
@@ -63,12 +66,16 @@ attempts=0
 current_issue=""
 terminal_reason="starting"
 exit_status=1
+phase=starting
+provider_started=0
+PROVIDER_PID=""
+STATUS_WRITE_FAILED=0
 
 write_status() {
   STATUS_FILE="$STATUS_FILE" RUN_STARTED="$START_EPOCH" RUN_DEADLINE="$DEADLINE_EPOCH" \
     RUN_TARGET="$TARGET_DIR" RUN_PROJECT="$LINEAR_PROJECT" RUN_ISSUE="$current_issue" \
     RUN_ITEMS="$items_done" RUN_ATTEMPTS="$attempts" RUN_REASON="$terminal_reason" \
-    RUN_EXIT="$exit_status" "$PYTHON_BIN" - <<'PY'
+    RUN_EXIT="$exit_status" RUN_PHASE="$phase" RUN_PROVIDER_STARTED="$provider_started" "$PYTHON_BIN" - <<'PY'
 import json, os, tempfile, time
 path = os.environ["STATUS_FILE"]
 payload = {
@@ -82,6 +89,11 @@ payload = {
     "attempts": int(os.environ["RUN_ATTEMPTS"]),
     "terminalReason": os.environ["RUN_REASON"],
     "exitStatus": int(os.environ["RUN_EXIT"]),
+    "phase": os.environ["RUN_PHASE"],
+    "providerStartedAtEpoch": int(os.environ["RUN_PROVIDER_STARTED"]) or None,
+    "lastHeartbeatAtEpoch": int(time.time()),
+    "elapsedSeconds": max(0, int(time.time()) - int(os.environ["RUN_STARTED"])),
+    "remainingSeconds": max(0, int(os.environ["RUN_DEADLINE"]) - int(time.time())),
 }
 fd, tmp = tempfile.mkstemp(prefix=".overnight-status-", dir=os.path.dirname(path))
 try:
@@ -97,6 +109,7 @@ PY
 }
 
 finish() {
+  phase=finished
   terminal_reason="$1"
   exit_status="$2"
   if ! write_status; then
@@ -205,11 +218,47 @@ sleep_until_reset() {
   sleep "$wait_s"
 }
 
+stop_provider() {
+  if [ -n "$PROVIDER_PID" ]; then
+    kill -TERM "$PROVIDER_PID" 2>/dev/null || true
+    wait "$PROVIDER_PID" 2>/dev/null || true
+    PROVIDER_PID=""
+  fi
+}
+
 cleanup_lock() {
+  stop_provider
   if [ "${LOOP_ADMITTED:-0}" -eq 1 ]; then
     node "$AUTONOMOUS_RUNTIME" release --id "$LOOP_ID" --owner-pid "$$" >/dev/null 2>&1 || true
   fi
   rmdir "$LOCK_DIR" 2>/dev/null || true
+}
+
+run_provider() {
+  local next_heartbeat now result
+  phase=provider-running
+  provider_started=$(date +%s)
+  next_heartbeat="$provider_started"
+  "$PYTHON_BIN" "$RUN_WITH_DEADLINE" --timeout-seconds "$remaining" --watch-parent-pid "$$" -- \
+    "$SCRIPT_DIR/provider-run.sh" "${provider_args[@]}" >"$iteration_log" 2>&1 &
+  PROVIDER_PID=$!
+  while kill -0 "$PROVIDER_PID" 2>/dev/null; do
+    now=$(date +%s)
+    if [ "$now" -ge "$next_heartbeat" ]; then
+      if ! write_status; then
+        stop_provider
+        STATUS_WRITE_FAILED=1
+        return 74
+      fi
+      log "Progress: phase=$phase elapsed=$((now - START_EPOCH))s remaining=$((DEADLINE_EPOCH - now))s attempt=$attempts"
+      next_heartbeat=$((now + HEARTBEAT_SECONDS))
+    fi
+    sleep 1
+  done
+  wait "$PROVIDER_PID"; result=$?
+  PROVIDER_PID=""
+  phase=verifying
+  return "$result"
 }
 
 main() {
@@ -222,10 +271,20 @@ main() {
   command -v "$PYTHON_BIN" >/dev/null 2>&1 || { log "FATAL: python3 not on PATH"; return 1; }
   command -v "$CURL_BIN" >/dev/null 2>&1 || { log "FATAL: curl not on PATH"; return 1; }
   [ -d "$TARGET_DIR" ] && [ -n "$(main_tip)" ] || { log "FATAL: target has no readable main branch: $TARGET_DIR"; return 1; }
-  [ -n "$CLAUDE_USAGE_COMMAND" ] || {
-    log "FATAL: CLAUDE_USAGE_COMMAND is required for unattended work (must emit fiveHourPercent/sevenDayPercent JSON)"
-    return 1
-  }
+  local usage_args=()
+  if [ -n "$CLAUDE_USAGE_COMMAND" ]; then
+    usage_args=(--usage-command "$CLAUDE_USAGE_COMMAND")
+  else
+    # Resolve the same policy as the worker before checking either provider.
+    source "$SCRIPT_DIR/provider-policy.sh"
+    local policy_primary policy_fallback
+    read -r policy_primary policy_fallback < <(bs_provider_load)
+    PROVIDER="${PROVIDER:-$policy_primary}"
+    [ "$PROVIDER" != auto ] || PROVIDER=$(bs_provider_invoker)
+    PROVIDER_FALLBACK="${PROVIDER_FALLBACK:-$policy_fallback}"
+    [ "$PROVIDER" != codex ] || PROVIDER_FALLBACK=none
+    usage_args=(--provider "$PROVIDER" --fallback "$PROVIDER_FALLBACK")
+  fi
 
   local lock_key
   lock_key=$(printf '%s\0%s' "$TARGET_DIR" "$LINEAR_PROJECT" | shasum -a 256 | cut -c1-20)
@@ -239,14 +298,14 @@ main() {
     --kind ralph \
     --id "$LOOP_ID" \
     --owner-pid "$$" \
-    --usage-command "$CLAUDE_USAGE_COMMAND" >/dev/null; then
+    "${usage_args[@]}" >/dev/null; then
     log "FATAL: autonomous-loop admission denied; inspect operator telemetry for the sanitized reason"
     rmdir "$LOCK_DIR" 2>/dev/null || true
     return 1
   fi
   LOOP_ADMITTED=1
   trap cleanup_lock EXIT
-  trap 'exit 130' INT TERM
+  trap 'stop_provider; finish interrupted 130; exit 130' INT TERM
 
   log "=== Overnight loop start: target=$TARGET_DIR project=$LINEAR_PROJECT max_items=$MAX_ITEMS max_hours=$MAX_HOURS ==="
   write_status || { log "FATAL: cannot persist run status"; return 1; }
@@ -286,8 +345,9 @@ main() {
       [ -z "$PROVIDER" ] || provider_args+=(--provider "$PROVIDER")
       [ -z "$PROVIDER_FALLBACK" ] || provider_args+=(--fallback "$PROVIDER_FALLBACK")
     fi
-    "$SCRIPT_DIR/provider-run.sh" "${provider_args[@]}" 2>&1 | tee -a "$LOG_FILE" "$iteration_log" >/dev/null
-    run_rc=${PIPESTATUS[0]}
+    run_provider
+    run_rc=$?
+    if [ "$STATUS_WRITE_FAILED" -eq 1 ]; then finish "status-write-failed" 1; return $?; fi
     rm -f "$prompt_file"
     rm -f "$execution_facts_file"
     main_after=$(main_tip)
