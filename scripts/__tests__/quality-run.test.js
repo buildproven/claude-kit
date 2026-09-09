@@ -674,6 +674,50 @@ describe("quality-run public orchestration", () => {
     expect(result.manifest.calls).toContain("quality-run-review.sh");
   });
 
+  it("allows an evidence-free contract claim for the protected bootstrap chain", () => {
+    const changedFiles = [
+      ".github/workflows/product-evidence-admission.yml",
+      ".github/workflows/product-evidence-producer.yml",
+      ".github/workflows/product-evidence-source.yml",
+      "docs/prd/bui-836-product-evidence-admission-tasks.md",
+      "docs/prd/bui-836-product-evidence-admission.md",
+      "docs/product-evidence-admission-operator-guide.md",
+      "scripts/__tests__/product-admission.test.js",
+      "scripts/__tests__/product-completion.test.js",
+      "scripts/__tests__/quality-run.test.js",
+      "scripts/__tests__/quality-verify-app.test.js",
+      "scripts/product-admission.js",
+      "scripts/product-completion.js",
+      "scripts/product-evidence-producer.js",
+      "scripts/product-evidence.js",
+      "scripts/quality-run.js",
+      "scripts/quality-verify-app.sh",
+    ];
+    const entry = fixture({ changedFiles });
+    const prdDirectory = path.join(
+      path.dirname(entry.manifestPath),
+      "docs",
+      "prd",
+    );
+    mkdirSync(prdDirectory, { recursive: true });
+    writeFileSync(
+      path.join(prdDirectory, "bui-836-product-evidence-admission.md"),
+      "# Protected admission\n\n## Delivery classification\n\n- Delivery: protected-infrastructure-bootstrap\n",
+    );
+    writeFileSync(
+      path.join(prdDirectory, "bui-836-product-evidence-admission-tasks.md"),
+      "- [x] 1.0 Build the protected chain\n  - Phase: implementation\n  - Delivers: protected admission\n  - Evidence: workflow and verifier tests\n",
+    );
+
+    const result = run(entry);
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "complete",
+      state: "verified-unmerged",
+    });
+  });
+
   it("requires protected admission before merging a product claim", () => {
     const result = run(
       fixture(

@@ -308,11 +308,15 @@ describe("product completion", () => {
       "docs/prd/bui-836-product-evidence-admission.md",
       "docs/product-evidence-admission-operator-guide.md",
       "scripts/__tests__/product-admission.test.js",
+      "scripts/__tests__/product-completion.test.js",
       "scripts/__tests__/quality-run.test.js",
+      "scripts/__tests__/quality-verify-app.test.js",
       "scripts/product-admission.js",
+      "scripts/product-completion.js",
       "scripts/product-evidence-producer.js",
       "scripts/product-evidence.js",
       "scripts/quality-run.js",
+      "scripts/quality-verify-app.sh",
     ];
     expect(verifyClaim(result, "contract", changedFiles, {}, {})).toMatchObject(
       { valid: true, errors: [] },

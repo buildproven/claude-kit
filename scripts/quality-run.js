@@ -6,12 +6,19 @@ const fs = require("node:fs");
 const crypto = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const quality = require("./quality-invocation");
-const { productionCodeChange } = require("./product-completion");
+const {
+  isProtectedInfrastructureBootstrap,
+  productionCodeChange,
+} = require("./product-completion");
 
 const ORCHESTRATION_SCHEMA_VERSION = 1;
 const ACTION_REQUIRED_EXIT = 3;
 const WORK_REQUIRED_EXIT = 4;
 const SCRIPT_DIR = __dirname;
+const PROTECTED_BOOTSTRAP_PRD =
+  "docs/prd/bui-836-product-evidence-admission.md";
+const PROTECTED_BOOTSTRAP_TASKS =
+  "docs/prd/bui-836-product-evidence-admission-tasks.md";
 
 function parseArgs(argv) {
   if (argv.length !== 2 || argv[0] !== "--manifest" || !argv[1]) {
@@ -407,10 +414,18 @@ function verifyDeliveryClaim(manifest) {
     !deliveryEvidence
   ) {
     const productFile = changedFiles.find(productionCodeChange);
-    if (productFile) {
+    const bootstrap = isProtectedInfrastructureBootstrap(
+      path.join(manifest.repo.realpath, PROTECTED_BOOTSTRAP_PRD),
+      path.join(manifest.repo.realpath, PROTECTED_BOOTSTRAP_TASKS),
+      changedFiles,
+    );
+    if (productFile && !bootstrap) {
       throw new Error(
         `contract delivery claim requires product evidence for product-affecting file '${productFile}'`,
       );
+    }
+    if (productFile) {
+      return "declared protected infrastructure bootstrap; no product verifier inputs supplied";
     }
     return "declared contract; no product verifier inputs supplied";
   }

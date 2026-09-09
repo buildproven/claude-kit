@@ -34,11 +34,15 @@ const PROTECTED_INFRASTRUCTURE_PATHS = new Set([
   "docs/prd/bui-836-product-evidence-admission.md",
   "docs/product-evidence-admission-operator-guide.md",
   "scripts/__tests__/product-admission.test.js",
+  "scripts/__tests__/product-completion.test.js",
   "scripts/__tests__/quality-run.test.js",
+  "scripts/__tests__/quality-verify-app.test.js",
   "scripts/product-admission.js",
+  "scripts/product-completion.js",
   "scripts/product-evidence-producer.js",
   "scripts/product-evidence.js",
   "scripts/quality-run.js",
+  "scripts/quality-verify-app.sh",
 ]);
 const EVIDENCE_KEYS = new Set([
   "schemaVersion",
@@ -188,6 +192,30 @@ function productionCodeChange(file) {
   );
 }
 
+function protectedInfrastructureBootstrapFiles(changedFiles) {
+  const files = new Set(changedFiles);
+  return (
+    [...PROTECTED_INFRASTRUCTURE_PATHS].every((file) => files.has(file)) &&
+    changedFiles
+      .filter(productionCodeChange)
+      .every((file) => PROTECTED_INFRASTRUCTURE_PATHS.has(file))
+  );
+}
+
+function isProtectedInfrastructureBootstrap(prdPath, tasksPath, changedFiles) {
+  if (!protectedInfrastructureBootstrapFiles(changedFiles)) return false;
+  try {
+    const result = validate(prdPath, tasksPath);
+    return (
+      result.valid &&
+      result.deliveryClass === PROTECTED_INFRASTRUCTURE_BOOTSTRAP &&
+      !result.userFacing
+    );
+  } catch {
+    return false;
+  }
+}
+
 function evidenceIndexError(evidence, repository, repositoryId) {
   if (
     evidence.schemaVersion === 2 &&
@@ -267,12 +295,7 @@ function verifyClaim(
         "protected infrastructure bootstrap cannot declare user-facing work",
       );
     }
-    if (
-      bootstrap &&
-      [...PROTECTED_INFRASTRUCTURE_PATHS].some(
-        (file) => !changedFiles.includes(file),
-      )
-    ) {
+    if (bootstrap && !protectedInfrastructureBootstrapFiles(changedFiles)) {
       errors.push(
         "protected infrastructure bootstrap must include the complete admission chain",
       );
@@ -432,7 +455,9 @@ function main(argv) {
 
 module.exports = {
   next,
+  isProtectedInfrastructureBootstrap,
   parseTasks,
+  protectedInfrastructureBootstrapFiles,
   productionCodeChange,
   validate,
   verifyClaim,
