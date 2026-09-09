@@ -111,6 +111,26 @@ describe("protected product admission", () => {
 });
 
 describe("protected product workflow transport", () => {
+  it("accepts task documents from the decisions contract path", () => {
+    const definition = workflow("source");
+    const step = definition.jobs["collect-product-evidence"].steps.find(
+      (candidate) => candidate.name === "Validate protected request",
+    );
+    const payload = {
+      pullRequest: 7,
+      base: "a".repeat(40),
+      head: "b".repeat(40),
+      nonce: "c".repeat(32),
+      prd: "docs/prd/bui-836-product-evidence-admission.md",
+      tasks: "docs/decisions/bui-836-product-evidence-admission-tasks.md",
+    };
+    const result = spawnSync("bash", ["-e", "-o", "pipefail", "-c", step.run], {
+      encoding: "utf8",
+      env: { ...process.env, PAYLOAD: JSON.stringify(payload) },
+    });
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it.each(["producer", "admission"])(
     "authenticates every %s GitHub CLI step with the job token",
     (name) => {
@@ -140,9 +160,12 @@ describe("protected product workflow transport", () => {
         git("init", "-q");
         git("config", "user.name", "Workflow Test");
         git("config", "user.email", "workflow@example.invalid");
-        fs.mkdirSync(path.join(root, "docs"));
+        fs.mkdirSync(path.join(root, "docs/decisions"), { recursive: true });
         fs.writeFileSync(path.join(root, "docs/prd.md"), "# Product\n");
-        fs.writeFileSync(path.join(root, "docs/tasks.md"), "- [x] behavior\n");
+        fs.writeFileSync(
+          path.join(root, "docs/decisions/tasks.md"),
+          "- [x] behavior\n",
+        );
         git("add", ".");
         git("commit", "-qm", "fixture base");
         const base = git("rev-parse", "HEAD");
@@ -159,7 +182,7 @@ describe("protected product workflow transport", () => {
           base,
           head,
           prd: "docs/prd.md",
-          tasks: "docs/tasks.md",
+          tasks: "docs/decisions/tasks.md",
           nonce: "f".repeat(32),
         };
         const step = workflow("source").jobs[

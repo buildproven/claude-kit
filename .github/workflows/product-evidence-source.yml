@@ -20,7 +20,7 @@ jobs:
         run: |
           node -e '
             const p = JSON.parse(process.env.PAYLOAD);
-            const document = (value) => /^docs\/(?:prd\/)?[a-zA-Z0-9._-]+\.md$/.test(value || "");
+            const document = (value) => /^docs\/(?:(?:prd|decisions)\/)?[a-zA-Z0-9._-]+\.md$/.test(value || "");
             if (!Number.isSafeInteger(p.pullRequest) || p.pullRequest < 1 || !/^[0-9a-f]{40}$/.test(p.base || "") || !/^[0-9a-f]{40}$/.test(p.head || "") || !/^[0-9a-f]{32}$/.test(p.nonce || "") || !document(p.prd) || !document(p.tasks)) process.exit(1);
           '
       - uses: actions/checkout@v7
