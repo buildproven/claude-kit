@@ -1,8 +1,8 @@
-exports.id = 674;
-exports.ids = [674];
+exports.id = 936;
+exports.ids = [936];
 exports.modules = {
 
-/***/ 3116:
+/***/ 5155:
 /***/ ((module, __unused_webpack_exports, __webpack_require__) => {
 
 "use strict";
@@ -22,7 +22,7 @@ module.exports = cmdExtension || '.cmd'
 
 /***/ }),
 
-/***/ 3964:
+/***/ 9240:
 /***/ ((module) => {
 
 "use strict";
@@ -53,13 +53,13 @@ function clone (obj) {
 
 /***/ }),
 
-/***/ 3363:
+/***/ 7044:
 /***/ ((module, __unused_webpack_exports, __webpack_require__) => {
 
 var fs = __webpack_require__(9896)
-var polyfills = __webpack_require__(3501)
-var legacy = __webpack_require__(2270)
-var clone = __webpack_require__(3964)
+var polyfills = __webpack_require__(1569)
+var legacy = __webpack_require__(9978)
+var clone = __webpack_require__(9240)
 
 var util = __webpack_require__(9023)
 
@@ -508,7 +508,7 @@ function retry () {
 
 /***/ }),
 
-/***/ 2270:
+/***/ 9978:
 /***/ ((module, __unused_webpack_exports, __webpack_require__) => {
 
 var Stream = (__webpack_require__(2203).Stream)
@@ -633,7 +633,7 @@ function legacy (fs) {
 
 /***/ }),
 
-/***/ 3501:
+/***/ 1569:
 /***/ ((module, __unused_webpack_exports, __webpack_require__) => {
 
 var constants = __webpack_require__(9140)
@@ -995,7 +995,7 @@ function patch (fs) {
 
 /***/ }),
 
-/***/ 674:
+/***/ 4936:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 "use strict";
@@ -1005,8 +1005,8 @@ function patch (fs) {
 /* unused harmony exports cmdShimIfExists, isShimPointingAt */
 /* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(6760);
 /* harmony import */ var node_util__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(7975);
-/* harmony import */ var graceful_fs__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(3363);
-/* harmony import */ var cmd_extension__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(3116);
+/* harmony import */ var graceful_fs__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(7044);
+/* harmony import */ var cmd_extension__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(5155);
 // On windows, create a .cmd file.
 // Read the #! in the file to see what it uses.  The vast majority
 // of the time, this will be either:

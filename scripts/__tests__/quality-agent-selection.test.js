@@ -1,4 +1,11 @@
-const { selectReviewers } = require("../quality-agent-selection");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { execFileSync } = require("node:child_process");
+const {
+  selectReviewers,
+  selectReviewersForRange,
+} = require("../quality-agent-selection");
 
 describe("quality agent selection", () => {
   it("selects no AI reviewer at low risk", () => {
@@ -63,5 +70,42 @@ describe("quality agent selection", () => {
     expect(result.agents).toEqual(["code-reviewer", "security-auditor"]);
     expect(new Set(result.agents).size).toBe(2);
     expect(result.rule).toBe("security-domain");
+  });
+
+  it("handles a large diff without the child-process buffer truncating selection", () => {
+    const repo = fs.mkdtempSync(
+      path.join(os.tmpdir(), "quality-agent-selection-"),
+    );
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "Quality Test"], {
+      cwd: repo,
+    });
+    execFileSync("git", ["config", "user.email", "quality@example.com"], {
+      cwd: repo,
+    });
+    fs.writeFileSync(path.join(repo, "README.md"), "base\n");
+    execFileSync("git", ["add", "README.md"], { cwd: repo });
+    execFileSync("git", ["commit", "-qm", "base"], { cwd: repo });
+    fs.writeFileSync(
+      path.join(repo, "src.js"),
+      `${"const value = true;\n".repeat(100_000)}// large\n`,
+    );
+    execFileSync("git", ["add", "src.js"], { cwd: repo });
+    execFileSync("git", ["commit", "-qm", "large diff"], { cwd: repo });
+    const base = execFileSync("git", ["rev-parse", "HEAD~1"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).trim();
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).trim();
+    expect(
+      selectReviewersForRange({ tier: "critical", repo, base, head }),
+    ).toEqual({
+      agents: ["code-reviewer", "silent-failure-hunter"],
+      domain: "general",
+      rule: "critical-reliability-backstop",
+    });
   });
 });
