@@ -4,6 +4,24 @@
   "mappings": [
     {
       "paths": [
+        "scripts/quality-status.sh",
+        "scripts/quality-load-root.sh",
+        "scripts/__tests__/quality-status-cli.test.js"
+      ],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/quality-status-cli.test.js",
+            "scripts/__tests__/quality-terminal-status.test.js"
+          ]
+        }
+      ]
+    },
+    {
+      "paths": [
         "scripts/product-completion.js",
         "scripts/product-evidence.js",
         "scripts/schemas/product-evidence-receipt-v2.schema.json",

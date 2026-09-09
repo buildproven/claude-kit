@@ -94,6 +94,9 @@ review, break-glass, CI) without waiting for a failure:
 /bs:quality status --manifest <exact-manifest-path>
 ```
 
+Supply a non-empty path. Missing or option-like values fail immediately;
+prefix a relative path starting with `-` with `./`.
+
 The quality command hands that exact manifest to one deterministic runner. It
 reuses completed exact-head evidence and reports any required operator
 capability as a typed pause.
