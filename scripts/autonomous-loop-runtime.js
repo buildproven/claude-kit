@@ -376,6 +376,25 @@ function admit(options, environment = process.env) {
           usage = require("./provider-usage-adapter.js").readProviderUsage(
             provider,
           );
+          if (
+            options.fallback &&
+            options.fallback !== "none" &&
+            options.fallback !== provider
+          ) {
+            const fallbackUsage =
+              require("./provider-usage-adapter.js").readProviderUsage(
+                options.fallback,
+              );
+            Object.assign(
+              usage.windows,
+              Object.fromEntries(
+                Object.entries(fallbackUsage.windows).map(([window, value]) => [
+                  `${options.fallback}-${window}`,
+                  value,
+                ]),
+              ),
+            );
+          }
         } catch (error) {
           throw new RuntimeError(error.message, "USAGE_UNAVAILABLE");
         }

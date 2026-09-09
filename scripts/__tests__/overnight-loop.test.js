@@ -1,5 +1,11 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { makeTempDir } from "./helpers/tmp.js";
@@ -55,9 +61,7 @@ describe("overnight loop", () => {
   });
 
   it("hands every fresh Ralph child explicit compute facts", () => {
-    const source = execFileSync("sed", ["-n", "250,290p", loop], {
-      encoding: "utf8",
-    });
+    const source = readFileSync(loop, "utf8");
     expect(source).toContain('--phase-request "$execution_facts_file"');
     expect(source).toContain("--caller overnight-ralph");
     expect(source).toContain('if [ "$PROVIDER" = codex ]');
@@ -126,6 +130,7 @@ describe("overnight loop", () => {
           CURL_BIN: join(fx.bin, "curl"),
           LINEAR_API_KEY: "test-token",
           CLAUDE_USAGE_COMMAND: fx.usage,
+          XDG_STATE_HOME: join(fx.root, "operator-state"),
           TMPDIR: fx.root,
         },
       },
