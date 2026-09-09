@@ -19,7 +19,11 @@ node "$HOME/.claude/scripts/autonomous-loop-runtime.js" admit \
 
 Use `--provider claude` when Claude will execute the work. Provider selection
 is explicit; a Claude loop cannot use Codex capacity as evidence. Provider
-fallback requires a new admission check for the replacement provider.
+fallback must be declared with `--fallback claude` or `--fallback codex`;
+admission checks both providers before admitting a loop that can use either.
+The overnight launcher resolves its configured provider automatically and uses
+the same selection for admission and execution. Its Codex phase currently has
+no fallback, so only Codex capacity is checked on that path.
 
 The adapter queries CodexBar automatically, retains only provider and numeric
 capacity windows, and rejects observations older than five minutes or more
