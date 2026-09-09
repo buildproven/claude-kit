@@ -37,3 +37,25 @@ Legacy `--usage-command` integrations remain supported with the original
 
 Release the slot in the same live launcher process with `release --id
 "$LOOP_ID" --owner-pid "$$"`. Tests use an isolated temporary state directory.
+
+## Local acceptance contract
+
+Tracking: BUI-842. These checks describe the delivered local behavior, not
+protected admission receipts or installation on a second physical computer.
+
+- [x] 1.0 Read current capacity for the selected provider without manual snapshots.
+  - Phase: implementation
+  - Delivers: Strict, fresh Codex and Claude usage windows with sanitized errors.
+  - Evidence: `scripts/__tests__/provider-usage-adapter.test.js`; local live probes for both providers.
+- [x] 2.0 Distribute the reader through the normal installer.
+  - Phase: implementation
+  - Delivers: A clean isolated installation can resolve the shipped reader.
+  - Evidence: `scripts/__tests__/autonomous-loop-runtime.test.js` installation contract.
+- [x] 3.0 Admit unattended work using its execution provider.
+  - Phase: implementation
+  - Delivers: Both default-reader launcher paths work without a custom usage command.
+  - Evidence: `scripts/__tests__/overnight-loop.test.js` provider admission cases.
+- [ ] 4.0 Approve and verify the rollout on each target computer.
+  - Phase: validation
+  - Delivers: Final operator review and per-machine authentication/install verification.
+  - Verification: Protected quality admission, final approval, and an authenticated read on each physical computer; not claimed by local fixture tests.
