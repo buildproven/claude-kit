@@ -7,7 +7,7 @@
 
 - [x] 2.0 Correct quality-control path classification
   - Phase: implementation
-  - Delivers: Quality-control configuration can use the contract claim while unknown application configuration remains fail-closed.
+  - Delivers: `.buildproven/`, `harness-config.json`, and `vitest.config.mjs` quality-control configuration can use the contract claim while unknown application configuration remains fail-closed.
   - Evidence: Classifier unit test and quality-run integration test.
 
 - [x] 3.0 Preserve continuity after provider failure
