@@ -34,6 +34,10 @@ that only adjusts the quality contract.
 - Deterministic gates, mutation evidence, revision identity, CI, and explicit
   human-required policy remain hard merge blocks.
 
+## Delivery classification
+
+- Delivery: quality-infrastructure
+
 ## Acceptance
 
 - The planner regression test proves the funded campaign duration.

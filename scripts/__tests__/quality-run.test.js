@@ -718,6 +718,39 @@ describe("quality-run public orchestration", () => {
     });
   });
 
+  it("allows an evidence-free contract claim for declared quality infrastructure", () => {
+    const entry = fixture({
+      changedFiles: [
+        "docs/prd/bui-822-quality-runtime-unblocking.md",
+        "scripts/product-completion.js",
+        "scripts/quality-run.js",
+        "scripts/__tests__/quality-run.test.js",
+      ],
+    });
+    const prdDirectory = path.join(
+      path.dirname(entry.manifestPath),
+      "docs",
+      "prd",
+    );
+    mkdirSync(prdDirectory, { recursive: true });
+    writeFileSync(
+      path.join(prdDirectory, "bui-822-quality-runtime-unblocking.md"),
+      "# Runtime\n\n## Delivery classification\n\n- Delivery: quality-infrastructure\n",
+    );
+    writeFileSync(
+      path.join(prdDirectory, "bui-822-quality-runtime-unblocking-tasks.md"),
+      "- [x] 1.0 Update runtime\n  - Phase: implementation\n  - Delivers: deterministic quality runtime\n  - Evidence: orchestration tests\n",
+    );
+
+    const result = run(entry);
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "complete",
+      state: "verified-unmerged",
+    });
+  });
+
   it("requires protected admission before merging a product claim", () => {
     const result = run(
       fixture(

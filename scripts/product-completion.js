@@ -26,6 +26,7 @@ const NON_PRODUCT_ROOT_NAMES = new Set([
   "SECURITY",
 ]);
 const PROTECTED_INFRASTRUCTURE_BOOTSTRAP = "protected-infrastructure-bootstrap";
+const QUALITY_INFRASTRUCTURE = "quality-infrastructure";
 const PROTECTED_INFRASTRUCTURE_PATHS = new Set([
   ".github/workflows/product-evidence-admission.yml",
   ".github/workflows/product-evidence-producer.yml",
@@ -43,6 +44,10 @@ const PROTECTED_INFRASTRUCTURE_PATHS = new Set([
   "scripts/product-evidence.js",
   "scripts/quality-run.js",
   "scripts/quality-verify-app.sh",
+]);
+const QUALITY_INFRASTRUCTURE_PATHS = new Set([
+  "scripts/product-completion.js",
+  "scripts/quality-run.js",
 ]);
 const EVIDENCE_KEYS = new Set([
   "schemaVersion",
@@ -137,9 +142,9 @@ function validate(prdPath, tasksPath) {
     valid: errors.length === 0,
     userFacing: userFacing(prd),
     deliveryClass:
-      /^-\s*Delivery:\s*protected-infrastructure-bootstrap\s*$/im.test(prd)
-        ? PROTECTED_INFRASTRUCTURE_BOOTSTRAP
-        : null,
+      /^-\s*Delivery:\s*(protected-infrastructure-bootstrap|quality-infrastructure)\s*$/im.exec(
+        prd,
+      )?.[1] || null,
     requirementsDigest,
     tasks,
     errors,
@@ -211,6 +216,26 @@ function isProtectedInfrastructureBootstrap(prdPath, tasksPath, changedFiles) {
       result.deliveryClass === PROTECTED_INFRASTRUCTURE_BOOTSTRAP &&
       !result.userFacing
     );
+  } catch {
+    return false;
+  }
+}
+
+function isQualityInfrastructure(prdPath, tasksPath, changedFiles) {
+  if (
+    !QUALITY_INFRASTRUCTURE_PATHS.size ||
+    ![...QUALITY_INFRASTRUCTURE_PATHS].every((file) =>
+      changedFiles.includes(file),
+    ) ||
+    changedFiles
+      .filter(productionCodeChange)
+      .some((file) => !QUALITY_INFRASTRUCTURE_PATHS.has(file))
+  ) {
+    return false;
+  }
+  try {
+    const result = validate(prdPath, tasksPath);
+    return result.valid && result.deliveryClass === QUALITY_INFRASTRUCTURE;
   } catch {
     return false;
   }
@@ -290,6 +315,8 @@ function verifyClaim(
     const productFiles = changedFiles.filter(productionCodeChange);
     const bootstrap =
       result.deliveryClass === PROTECTED_INFRASTRUCTURE_BOOTSTRAP;
+    const qualityInfrastructure =
+      result.deliveryClass === QUALITY_INFRASTRUCTURE;
     if (bootstrap && result.userFacing) {
       errors.push(
         "protected infrastructure bootstrap cannot declare user-facing work",
@@ -300,9 +327,25 @@ function verifyClaim(
         "protected infrastructure bootstrap must include the complete admission chain",
       );
     }
+    if (
+      qualityInfrastructure &&
+      (!QUALITY_INFRASTRUCTURE_PATHS.size ||
+        ![...QUALITY_INFRASTRUCTURE_PATHS].every((file) =>
+          changedFiles.includes(file),
+        ) ||
+        changedFiles
+          .filter(productionCodeChange)
+          .some((file) => !QUALITY_INFRASTRUCTURE_PATHS.has(file)))
+    ) {
+      errors.push(
+        "quality infrastructure delivery must include the complete quality runtime",
+      );
+    }
     for (const file of productFiles.filter(
       (candidate) =>
-        !bootstrap || !PROTECTED_INFRASTRUCTURE_PATHS.has(candidate),
+        (!bootstrap || !PROTECTED_INFRASTRUCTURE_PATHS.has(candidate)) &&
+        (!qualityInfrastructure ||
+          !QUALITY_INFRASTRUCTURE_PATHS.has(candidate)),
     )) {
       errors.push(
         `contract claim cannot cover product-affecting file '${file}'`,
@@ -456,6 +499,7 @@ function main(argv) {
 module.exports = {
   next,
   isProtectedInfrastructureBootstrap,
+  isQualityInfrastructure,
   parseTasks,
   protectedInfrastructureBootstrapFiles,
   productionCodeChange,

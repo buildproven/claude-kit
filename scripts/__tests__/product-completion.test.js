@@ -17,6 +17,7 @@ import {
 } from "node:crypto";
 import Ajv2020 from "ajv/dist/2020.js";
 import {
+  isQualityInfrastructure,
   validate,
   verifyClaim,
   next,
@@ -405,6 +406,36 @@ describe("product completion", () => {
     ]) {
       expect(productionCodeChange(file)).toBe(true);
     }
+  });
+
+  it("recognizes a complete quality infrastructure contract", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "quality-infrastructure-"));
+    const prd = path.join(dir, "runtime-prd.md");
+    const tasks = path.join(dir, "runtime-tasks.md");
+    writeFileSync(
+      prd,
+      "# Runtime\n\n## Delivery classification\n\n- Delivery: quality-infrastructure\n",
+    );
+    writeFileSync(
+      tasks,
+      "- [x] 1.0 Update runtime\n  - Phase: implementation\n  - Delivers: deterministic quality runtime\n  - Evidence: orchestration tests\n",
+    );
+    expect(
+      isQualityInfrastructure(prd, tasks, [
+        "docs/prd/runtime-prd.md",
+        "scripts/product-completion.js",
+        "scripts/quality-run.js",
+        "scripts/__tests__/quality-run.test.js",
+      ]),
+    ).toBe(true);
+    expect(
+      isQualityInfrastructure(prd, tasks, [
+        "docs/prd/runtime-prd.md",
+        "scripts/product-completion.js",
+        "scripts/quality-run.js",
+        "scripts/other.js",
+      ]),
+    ).toBe(false);
   });
 
   it("rejects receipts replayed against a different PRD or task set", () => {
