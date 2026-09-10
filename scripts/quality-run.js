@@ -201,6 +201,158 @@ function verifyDeliveryEvidenceDigest(manifest, evidencePath) {
   }
 }
 
+function verifyProtectedProductAdmission(manifest) {
+  const evidencePath = manifest.options?.deliveryEvidence;
+  verifyDeliveryEvidenceDigest(manifest, evidencePath);
+  const requirementsDigest = crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        prdSha256: crypto
+          .createHash("sha256")
+          .update(fs.readFileSync(manifest.options.productPrd))
+          .digest("hex"),
+        tasksSha256: crypto
+          .createHash("sha256")
+          .update(fs.readFileSync(manifest.options.productTasks))
+          .digest("hex"),
+      }),
+    )
+    .digest("hex");
+  const result = spawnSync(
+    process.execPath,
+    [
+      script("product-admission.js"),
+      "verify-remote",
+      deliveryRepository(manifest),
+      deliveryRepositoryId(manifest),
+      manifest.revisions.currentHead,
+      requirementsDigest,
+      manifest.deliveryEvidenceBinding.sha256,
+    ],
+    { cwd: manifest.repo.realpath, encoding: "utf8" },
+  );
+  if (result.error) {
+    throw new Error(
+      `protected product admission could not start: ${result.error.message}`,
+    );
+  }
+  if (result.status !== 0) {
+    const detail = (result.stderr || result.stdout || "").trim();
+    throw new Error(
+      `protected product admission rejected this exact head${detail ? `: ${detail}` : ""}`,
+    );
+  }
+  try {
+    const response = JSON.parse(result.stdout);
+    if (response.valid !== true || typeof response.checkId !== "string") {
+      throw new Error("protected product admission returned an invalid result");
+    }
+    return response;
+  } catch (error) {
+    if (
+      error.message === "protected product admission returned an invalid result"
+    )
+      throw error;
+    throw new Error(
+      "protected product admission returned malformed structured output",
+      { cause: error },
+    );
+  }
+}
+
+function trackedRepositoryPath(manifest, file, label) {
+  const relative = path.relative(manifest.repo.realpath, path.resolve(file));
+  if (
+    !relative ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error(
+      `${label} must be a tracked file inside the candidate repository`,
+    );
+  }
+  const tracked = spawnSync(
+    "git",
+    ["ls-files", "--error-unmatch", "--", relative],
+    {
+      cwd: manifest.repo.realpath,
+      encoding: "utf8",
+    },
+  );
+  if (tracked.status !== 0) {
+    throw new Error(
+      `${label} must be committed on the candidate head before protected admission`,
+    );
+  }
+  return relative;
+}
+
+function requestProtectedProductAdmission(manifest) {
+  const prd = trackedRepositoryPath(
+    manifest,
+    manifest.options.productPrd,
+    "product PRD",
+  );
+  const tasks = trackedRepositoryPath(
+    manifest,
+    manifest.options.productTasks,
+    "product tasks",
+  );
+  const requirementsDigest = crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        prdSha256: crypto
+          .createHash("sha256")
+          .update(fs.readFileSync(manifest.options.productPrd))
+          .digest("hex"),
+        tasksSha256: crypto
+          .createHash("sha256")
+          .update(fs.readFileSync(manifest.options.productTasks))
+          .digest("hex"),
+      }),
+    )
+    .digest("hex");
+  if (
+    manifest.productAdmissionRequest?.head === manifest.revisions.currentHead &&
+    manifest.productAdmissionRequest.requirementsDigest === requirementsDigest
+  ) {
+    return false;
+  }
+  const nonce = crypto.randomBytes(16).toString("hex");
+  const result = spawnSync(
+    "gh",
+    [
+      "api",
+      "--method",
+      "POST",
+      `repos/${deliveryRepository(manifest)}/dispatches`,
+      "-f",
+      "event_type=product-evidence-request",
+      "-F",
+      `client_payload[pullRequest]=${manifest.repo.pr}`,
+      "-f",
+      `client_payload[base]=${manifest.revisions.baseSha}`,
+      "-f",
+      `client_payload[head]=${manifest.revisions.currentHead}`,
+      "-f",
+      `client_payload[prd]=${prd}`,
+      "-f",
+      `client_payload[tasks]=${tasks}`,
+      "-f",
+      `client_payload[nonce]=${nonce}`,
+    ],
+    { cwd: manifest.repo.realpath, encoding: "utf8" },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      `could not request protected product admission: ${(result.stderr || "").trim()}`,
+    );
+  }
+  return { requirementsDigest, nonce };
+}
+
 function verifierFailure(result) {
   if (result.error) {
     return `product verifier could not start (${result.error.code || "process error"})`;
@@ -255,7 +407,13 @@ function verifyDeliveryClaim(manifest) {
     !productTasks &&
     !deliveryEvidence
   ) {
-    const productFile = changedFiles.find(productionCodeChange);
+    const productFile = changedFiles.find((file) =>
+      productionCodeChange(file, {
+        repo: manifest.repo.realpath,
+        base: manifest.revisions.baseSha,
+        head: manifest.revisions.currentHead,
+      }),
+    );
     if (productFile) {
       throw new Error(
         `contract delivery claim requires product evidence for product-affecting file '${productFile}'`,
@@ -287,6 +445,10 @@ function verifyDeliveryClaim(manifest) {
       productTasks,
       "--changed-files",
       changedFilesPath,
+      "--repo",
+      manifest.repo.realpath,
+      "--base",
+      manifest.revisions.baseSha,
       "--evidence",
       deliveryEvidence,
       "--evidence-sha256",
@@ -318,6 +480,44 @@ function actionRequired(manifestPath, phase, message, manifest, review) {
     head: manifest.revisions.currentHead,
     review,
   };
+}
+
+function prepareProductAdmission(manifestPath) {
+  const manifest = manifestAt(manifestPath);
+  if (deliveryClaim(manifest) === "contract") return null;
+
+  // Validate the candidate-owned receipt before spending gate or provider
+  // budget. Protected admission is still authoritative, but its request can
+  // run while deterministic gates execute instead of being discovered after
+  // all local work has already finished.
+  verifyDeliveryClaim(manifest);
+  if (manifest.options?.merge !== true) return null;
+  try {
+    verifyProtectedProductAdmission(manifest);
+    return null;
+  } catch (error) {
+    let request;
+    try {
+      request = requestProtectedProductAdmission(manifest);
+    } catch (requestError) {
+      return actionRequired(
+        manifestPath,
+        "product-admission",
+        `${error.message}; ${requestError.message}; candidate-worker verification is preflight only`,
+        manifest,
+      );
+    }
+    if (request) {
+      quality.withManifestLock(manifestPath, (current) => {
+        current.productAdmissionRequest = {
+          head: current.revisions.currentHead,
+          requirementsDigest: request.requirementsDigest,
+          requestedAt: new Date().toISOString(),
+        };
+      });
+    }
+    return null;
+  }
 }
 
 function workRequired(manifestPath, phase, message, manifest, detail = {}) {
@@ -372,6 +572,8 @@ function invocationRuntime(manifestPath, execute) {
 }
 
 async function runDeterministicPhases(manifestPath, invoke) {
+  const admission = prepareProductAdmission(manifestPath);
+  if (admission) return admission;
   let manifest = manifestAt(manifestPath);
   if (manifest.risk?.resolved !== true) {
     await invoke("risk", "bash", [
@@ -476,13 +678,39 @@ async function finishWithoutMerge(manifestPath, invoke, manifest, review) {
 
 async function finishWithMerge(context, manifestPath, manifest, review) {
   if (deliveryClaim(manifest) !== "contract") {
-    return actionRequired(
-      manifestPath,
-      "product-admission",
-      "protected product-admission verification is required; candidate-worker verification is preflight only",
-      manifest,
-      review,
-    );
+    try {
+      verifyProtectedProductAdmission(manifest);
+    } catch (error) {
+      let requested = false;
+      try {
+        const request = requestProtectedProductAdmission(manifest);
+        if (request) {
+          quality.withManifestLock(manifestPath, (current) => {
+            current.productAdmissionRequest = {
+              head: current.revisions.currentHead,
+              requirementsDigest: request.requirementsDigest,
+              requestedAt: new Date().toISOString(),
+            };
+          });
+          requested = true;
+        }
+      } catch (requestError) {
+        return actionRequired(
+          manifestPath,
+          "product-admission",
+          `${error.message}; ${requestError.message}; candidate-worker verification is preflight only`,
+          manifest,
+          review,
+        );
+      }
+      return actionRequired(
+        manifestPath,
+        "product-admission",
+        `${error.message}; ${requested ? "protected evidence has been requested" : "protected evidence is pending"}; candidate-worker verification is preflight only`,
+        manifest,
+        review,
+      );
+    }
   }
   try {
     quality.reviewAuthorization(manifest);
@@ -755,7 +983,11 @@ function dispositionArtifactMatches(artifact, judge, context) {
 
 async function runOpenCampaign(context, manifestPath, manifest) {
   updateOrchestration(manifestPath, "validate", "success");
-  await runDeterministicPhases(manifestPath, context.runtime.invoke);
+  const admission = await runDeterministicPhases(
+    manifestPath,
+    context.runtime.invoke,
+  );
+  if (admission) return admission;
   await ensureReview(manifestPath, context.runtime.invoke);
   manifest = manifestAt(manifestPath);
   quality.reviewCoverage(manifest);
@@ -813,6 +1045,14 @@ async function runManifest(manifestPath, dependencies = {}) {
           resumed,
           reviewSummary(resumed),
         );
+      }
+      const interruptedRecovery =
+        quality.resumeInterruptedTerminal(manifestPath);
+      if (interruptedRecovery) {
+        const resumed = manifestAt(manifestPath);
+        pinTerminalEpoch(resumed);
+        quality.validateIdentity(resumed, resumed.repo.realpath);
+        return await runOpenCampaign(context, manifestPath, resumed);
       }
       return {
         status: "terminal",

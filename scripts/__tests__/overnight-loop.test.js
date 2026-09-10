@@ -3,8 +3,8 @@ import {
   chmodSync,
   copyFileSync,
   mkdirSync,
-  writeFileSync,
   readFileSync,
+  writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -103,6 +103,102 @@ describe("overnight loop", () => {
     },
   );
 
+  it.each([
+    { providerExit: 76, expired: false, reason: "agent-deadline", attempts: 1 },
+    {
+      providerExit: 124,
+      expired: false,
+      reason: "agent-deadline",
+      attempts: 1,
+    },
+    {
+      providerExit: 75,
+      expired: false,
+      reason: "limit-reset-past-deadline",
+      attempts: 1,
+    },
+    { providerExit: 91, expired: true, reason: "max-hours", attempts: 0 },
+  ])(
+    "fails unfinished work with $reason (provider $providerExit)",
+    ({ providerExit, expired, reason, attempts }) => {
+      const fx = fixture();
+      const stateDir = join(fx.root, "state");
+      const copiedLoop = join(fx.setup, "scripts/overnight-loop.sh");
+      copyFileSync(loop, copiedLoop);
+      executable(
+        join(fx.setup, "scripts/provider-run.sh"),
+        `exit ${providerExit}`,
+      );
+      executable(join(fx.bin, "ccusage"), "exit 1");
+      if (expired) {
+        executable(
+          join(fx.bin, "date"),
+          `
+        if [ "$1" != +%s ]; then exec /bin/date "$@"; fi
+        count=0
+        [ ! -f '${fx.root}/clock-count' ] || read -r count < '${fx.root}/clock-count'
+        count=$((count + 1))
+        printf '%s' "$count" > '${fx.root}/clock-count'
+        if [ "$count" -le 2 ]; then echo 1000; else echo 5000; fi
+      `,
+        );
+      }
+      executable(
+        join(fx.bin, "curl"),
+        `
+      case "$*" in
+        *'query($identifier:'*) printf '%s' '{"data":{"issue":{"identifier":"BUI-42","state":{"name":"Backlog"},"project":{"name":"claude-kit"}}}}' ;;
+        *) printf '%s' '{"data":{"issues":{"nodes":[{"identifier":"BUI-42","priority":1,"project":{"name":"claude-kit"}}],"pageInfo":{"hasNextPage":false}}}}' ;;
+      esac
+    `,
+      );
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `
+      test_loop="$2"
+      set -- --linear-project claude-kit --target-dir "$1" --max-hours 1
+      OVERNIGHT_LOOP_LIB_ONLY=1 source "$test_loop"
+      main
+    `,
+          "terminal-test",
+          fx.target,
+          copiedLoop,
+        ],
+        {
+          encoding: "utf8",
+          timeout: 15000,
+          env: {
+            ...process.env,
+            PATH: `${fx.bin}:${process.env.PATH}`,
+            CURL_BIN: join(fx.bin, "curl"),
+            CCUSAGE_BIN: join(fx.bin, "ccusage"),
+            LINEAR_API_KEY: "fixture-token",
+            CLAUDE_USAGE_COMMAND: fx.usage,
+            FALLBACK_SLEEP_SECONDS: "7200",
+            OVERNIGHT_LOOP_STATE_DIR: stateDir,
+            XDG_STATE_HOME: join(fx.root, "admission"),
+            TMPDIR: fx.root,
+          },
+        },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(1);
+      expect(
+        JSON.parse(
+          readFileSync(join(stateDir, "overnight-loop-status.json"), "utf8"),
+        ),
+      ).toMatchObject({
+        currentIssue: "BUI-42",
+        terminalReason: reason,
+        exitStatus: 1,
+        itemsMerged: 0,
+        attempts,
+      });
+    },
+  );
+
   it("requires an explicit Linear project", () => {
     const result = spawnSync("bash", [loop, "--dry-run"], { encoding: "utf8" });
     expect(result.status).toBe(2);
@@ -179,7 +275,6 @@ describe("overnight loop", () => {
           CURL_BIN: join(fx.bin, "curl"),
           LINEAR_API_KEY: "test-token",
           CLAUDE_USAGE_COMMAND: fx.usage,
-          XDG_STATE_HOME: join(fx.root, "operator-state"),
           TMPDIR: fx.root,
         },
       },
