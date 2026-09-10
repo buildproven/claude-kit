@@ -457,6 +457,43 @@ describe("quality dependency preflight", () => {
     expect(result.status, result.stderr).toBe(0);
   });
 
+  it("parses scoped pnpm package versions before peer suffixes", () => {
+    const { pnpmDepPathIdentity, pnpmPackageIdentity } = require(PREFLIGHT);
+    const depPath = "@axe-core/playwright@4.13.0(playwright-core@1.63.0)";
+    expect(pnpmDepPathIdentity(depPath)).toEqual({
+      name: "@axe-core/playwright",
+      version: "4.13.0",
+    });
+    expect(pnpmPackageIdentity("axe", "npm:" + depPath)).toEqual({
+      name: "@axe-core/playwright",
+      depPath,
+    });
+  });
+
+  it("accepts pnpm command shims whose marker uses the project symlink", async () => {
+    const root = fixture();
+    selectFixtureManager(root, "pnpm", "11.25.0");
+    fs.writeFileSync(
+      path.join(root, "pnpm-lock.yaml"),
+      "lockfileVersion: '9.0'\nimporters:\n  .:\n    devDependencies:\n      eslint:\n        specifier: 1.2.3\n        version: 1.2.3\npackages:\n  eslint@1.2.3:\n    resolution: {integrity: sha512-YQ==}\nsnapshots:\n  eslint@1.2.3: {}\n",
+    );
+    installPnpmFixturePackage(root);
+    const command = path.join(root, "node_modules", ".bin", "eslint");
+    fs.unlinkSync(command);
+    for (const suffix of [".cmd", ".ps1"]) {
+      fs.rmSync(`${command}${suffix}`, { force: true });
+    }
+    const { cmdShim } = await import("@zkochan/cmd-shim");
+    await cmdShim(path.join(root, "node_modules", "eslint", "bin.js"), command);
+    for (const suffix of [".cmd", ".ps1"]) {
+      fs.rmSync(`${command}${suffix}`, { force: true });
+    }
+    const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+      encoding: "utf8",
+    });
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("rejects a pnpm selection outside the manifest constraint", () => {
     const root = fixture();
     selectFixtureManager(root, "pnpm", "11.25.0");
@@ -882,6 +919,30 @@ describe("quality dependency preflight", () => {
     expect(result.status).toBe(78);
     expect(result.stderr).toMatch(/differs from the supported template/);
   });
+
+  it.each(["injected-command", "comment-decoy"])(
+    "rejects a shim with %s even when it names the correct target",
+    async (variant) => {
+      const root = fixture();
+      installPnpmFixturePackage(root);
+      const target = path.join(root, "node_modules", "eslint", "bin.js");
+      const command = path.join(root, "node_modules", ".bin", "eslint");
+      fs.unlinkSync(command);
+      const { cmdShim } = await import("@zkochan/cmd-shim");
+      await cmdShim(target, command);
+      const template = fs.readFileSync(command, "utf8");
+      const content =
+        variant === "injected-command"
+          ? template.replace("#!/bin/sh\n", "#!/bin/sh\nprintf injected >&2\n")
+          : `#!/bin/sh\nprintf injected >&2\n# exec "$basedir/../eslint/bin.js"\n# cmd-shim-target=${target}\n`;
+      fs.writeFileSync(command, content);
+      const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(78);
+      expect(result.stderr).toMatch(/differs from the supported template/);
+    },
+  );
 
   it("rejects an exact regular shim that targets a different command owner", async () => {
     const root = fixture();

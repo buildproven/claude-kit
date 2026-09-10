@@ -54,6 +54,55 @@ function fixture() {
 }
 
 describe("overnight loop", () => {
+  it.each(["codex", "claude"])(
+    "admits a %s loop with the shipped reader and no custom usage command",
+    (provider) => {
+      const fx = fixture();
+      const requestLog = join(fx.root, "usage-provider.txt");
+      executable(
+        join(fx.bin, "codexbar"),
+        `printf '%s' "$3" > '${requestLog}'\nprintf '%s' '[{"provider":"${provider}","usage":{"updatedAt":"${new Date().toISOString()}","primary":{"usedPercent":10}}}]'`,
+      );
+      executable(
+        join(fx.bin, "curl"),
+        `printf '%s' '{"data":{"issues":{"nodes":[]}}}'`,
+      );
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          loop,
+          "--linear-project",
+          "test",
+          "--target-dir",
+          fx.target,
+          "--provider",
+          provider,
+          "--fallback",
+          "none",
+          "--dry-run",
+        ],
+        {
+          encoding: "utf8",
+          timeout: 10000,
+          env: {
+            ...process.env,
+            PATH: `${fx.bin}:${process.env.PATH}`,
+            BS_PROVIDER_PRIMARY: provider,
+            BS_PROVIDER_FALLBACK: "none",
+            CLAUDE_USAGE_COMMAND: "",
+            CURL_BIN: join(fx.bin, "curl"),
+            LINEAR_API_KEY: "test-token",
+            XDG_STATE_HOME: join(fx.root, "state"),
+            TMPDIR: fx.root,
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("reason=backlog-drained");
+      expect(readFileSync(requestLog, "utf8")).toBe(provider);
+    },
+  );
+
   it.each([
     { providerExit: 76, expired: false, reason: "agent-deadline", attempts: 1 },
     {
@@ -157,9 +206,7 @@ describe("overnight loop", () => {
   });
 
   it("hands every fresh Ralph child explicit compute facts", () => {
-    const source = execFileSync("sed", ["-n", "250,290p", loop], {
-      encoding: "utf8",
-    });
+    const source = readFileSync(loop, "utf8");
     expect(source).toContain('--phase-request "$execution_facts_file"');
     expect(source).toContain("--caller overnight-ralph");
     expect(source).toContain('if [ "$PROVIDER" = codex ]');

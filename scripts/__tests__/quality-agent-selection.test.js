@@ -1,3 +1,4 @@
+const { makeTempDir } = require("./helpers/tmp.js");
 const { execFileSync, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const { mkdtempSync, readFileSync, writeFileSync } = fs;
@@ -19,6 +20,34 @@ function git(cwd, args) {
 }
 
 describe("quality agent selection", () => {
+  it("classifies security content beyond the first MiB of a generated diff", () => {
+    const repo = makeTempDir("review-selection-large-diff-");
+    const git = (...args) =>
+      execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+    git("init", "-b", "main");
+    git("config", "user.name", "Test");
+    git("config", "user.email", "test@example.com");
+    git("commit", "--allow-empty", "-m", "chore: base");
+    const base = git("rev-parse", "HEAD");
+    writeFileSync(
+      path.join(repo, "generated.txt"),
+      "x".repeat(1100000) + "\nauthentication\n",
+    );
+    git("add", "generated.txt");
+    git("commit", "-m", "chore: generated data");
+    expect(
+      selectReviewersForRange({
+        tier: "high",
+        repo,
+        base,
+        head: git("rev-parse", "HEAD"),
+      }),
+    ).toMatchObject({
+      agents: ["security-auditor"],
+      domain: "security",
+    });
+  });
+
   it("selects no AI reviewer at low risk", () => {
     expect(
       selectReviewers({
@@ -170,5 +199,41 @@ describe("quality agent selection", () => {
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }
+  });
+  it("handles a large diff without the child-process buffer truncating selection", () => {
+    const repo = fs.mkdtempSync(
+      path.join(os.tmpdir(), "quality-agent-selection-"),
+    );
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "Quality Test"], {
+      cwd: repo,
+    });
+    execFileSync("git", ["config", "user.email", "quality@example.com"], {
+      cwd: repo,
+    });
+    fs.writeFileSync(path.join(repo, "README.md"), "base\n");
+    execFileSync("git", ["add", "README.md"], { cwd: repo });
+    execFileSync("git", ["commit", "-qm", "base"], { cwd: repo });
+    fs.writeFileSync(
+      path.join(repo, "src.js"),
+      `${"const value = true;\n".repeat(100_000)}// large\n`,
+    );
+    execFileSync("git", ["add", "src.js"], { cwd: repo });
+    execFileSync("git", ["commit", "-qm", "large diff"], { cwd: repo });
+    const base = execFileSync("git", ["rev-parse", "HEAD~1"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).trim();
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).trim();
+    expect(
+      selectReviewersForRange({ tier: "critical", repo, base, head }),
+    ).toEqual({
+      agents: ["code-reviewer", "silent-failure-hunter"],
+      domain: "general",
+      rule: "critical-reliability-backstop",
+    });
   });
 });
