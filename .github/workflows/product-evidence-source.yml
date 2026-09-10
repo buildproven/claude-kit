@@ -23,11 +23,12 @@ jobs:
             const document = (value) => /^docs\/(?:(?:prd|decisions)\/)?[a-zA-Z0-9._-]+\.md$/.test(value || "");
             if (!Number.isSafeInteger(p.pullRequest) || p.pullRequest < 1 || !/^[0-9a-f]{40}$/.test(p.base || "") || !/^[0-9a-f]{40}$/.test(p.head || "") || !/^[0-9a-f]{32}$/.test(p.nonce || "") || !document(p.prd) || !document(p.tasks)) process.exit(1);
           '
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.client_payload.head }}
           fetch-depth: 0
-      - uses: actions/setup-node@v7
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "24.18.0"
           cache: npm
@@ -49,7 +50,7 @@ jobs:
             fs.writeFileSync("product-evidence-source/changed-files.json", JSON.stringify(changedFiles) + "\n", { mode: 0o600 });
             for (const [from, to] of [[p.prd,"prd.md"],[p.tasks,"tasks.md"],["behavioral-tests.log","behavioral-tests.log"],["acceptance-evidence.log","acceptance-evidence.log"]]) fs.copyFileSync(from, `product-evidence-source/${to}`);
           '
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: product-evidence-source-${{ github.run_id }}
           path: product-evidence-source

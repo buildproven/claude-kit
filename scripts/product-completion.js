@@ -372,7 +372,13 @@ function verifyClaim(
     );
     if (error) errors.push(`validated claim ${error}`);
   }
-  return { schemaVersion: 1, claim, valid: errors.length === 0, errors };
+  return {
+    schemaVersion: 1,
+    claim,
+    valid: errors.length === 0,
+    requirementsDigest: result.requirementsDigest,
+    errors,
+  };
 }
 
 function next(result) {

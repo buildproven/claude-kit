@@ -148,6 +148,24 @@ describe("protected product workflow transport", () => {
     },
   );
 
+  it.each(["source", "producer", "admission"])(
+    "pins privileged %s workflow actions and disables checkout credentials",
+    (name) => {
+      const definition = workflow(name);
+      for (const job of Object.values(definition.jobs)) {
+        for (const step of job.steps) {
+          if (!step.uses) continue;
+          expect(step.uses).toMatch(
+            /^actions\/(?:checkout|setup-node|upload-artifact)@[0-9a-f]{40}$/,
+          );
+          if (step.uses.startsWith("actions/checkout@")) {
+            expect(step.with?.["persist-credentials"]).toBe(false);
+          }
+        }
+      }
+    },
+  );
+
   it.each(["request.json", "changed-files.json"])(
     "emits producer-readable %s from the real source bundle step",
     (artifact) => {

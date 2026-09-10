@@ -262,7 +262,10 @@ describe("product completion", () => {
       hosted: true,
       validated: true,
     });
-    expect(claim(result, "local-product", local).valid).toBe(true);
+    expect(claim(result, "local-product", local)).toMatchObject({
+      valid: true,
+      requirementsDigest: result.requirementsDigest,
+    });
     expect(claim(result, "hosted", local).valid).toBe(false);
     expect(claim(result, "hosted", hosted).valid).toBe(true);
     expect(claim(result, "validated", hosted).valid).toBe(false);

@@ -228,6 +228,7 @@ function verifyProtectedProductAdmission(manifest) {
       deliveryRepositoryId(manifest),
       manifest.revisions.currentHead,
       requirementsDigest,
+      manifest.deliveryEvidenceBinding.sha256,
     ],
     { cwd: manifest.repo.realpath, encoding: "utf8" },
   );
