@@ -389,6 +389,7 @@ describe("product completion", () => {
       "package-lock.json",
       "core",
       "scripts/ci-workflow-contract.js",
+      "vitest.config.mjs",
     ]) {
       expect(productionCodeChange(file)).toBe(false);
     }
