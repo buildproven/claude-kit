@@ -36,19 +36,34 @@ jobs:
         timeout-minutes: 4
         env:
           ZSH_PROVENANCE: ${{ runner.temp }}/product-evidence-zsh-version.log
+          ZSH_PACKAGE_DIR: ${{ runner.temp }}/product-evidence-zsh-packages
         run: |
           if ! command -v zsh >/dev/null 2>&1; then
-            timeout 30s sudo apt-get update
-            timeout 150s sudo env DEBIAN_FRONTEND=noninteractive apt-get \
-              -o Acquire::http::Timeout=15 \
-              -o Acquire::https::Timeout=15 \
-              -o Acquire::Retries=3 \
-              install --yes zsh
+            mkdir -p "$ZSH_PACKAGE_DIR"
+            timeout 60s curl --fail --location --retry 3 --connect-timeout 10 \
+              --output "$ZSH_PACKAGE_DIR/zsh-common.deb" \
+              https://archive.ubuntu.com/ubuntu/pool/main/z/zsh/zsh-common_5.9-6ubuntu2_all.deb
+            timeout 60s curl --fail --location --retry 3 --connect-timeout 10 \
+              --output "$ZSH_PACKAGE_DIR/zsh.deb" \
+              https://archive.ubuntu.com/ubuntu/pool/main/z/zsh/zsh_5.9-6ubuntu2_amd64.deb
+            printf '%s  %s\n' \
+              56d160585b417af0cc04d7372f74a3b734609d7cc43ef8ea6e92bfdfc27f77c3 \
+              "$ZSH_PACKAGE_DIR/zsh-common.deb" | sha256sum --check --strict
+            printf '%s  %s\n' \
+              bd5cc8dd3a01a6db38c0a815d75202c356a9c7f378674ba7bed9bc86dcba8af0 \
+              "$ZSH_PACKAGE_DIR/zsh.deb" | sha256sum --check --strict
+            sudo dpkg --install "$ZSH_PACKAGE_DIR/zsh-common.deb" "$ZSH_PACKAGE_DIR/zsh.deb"
           fi
-          command -v zsh >/dev/null 2>&1
+          ZSH_PATH="$(command -v zsh)"
+          test "$(dpkg-query --showformat='${Version}' --show zsh)" = '5.9-6ubuntu2'
+          test "$(dpkg-query --showformat='${Version}' --show zsh-common)" = '5.9-6ubuntu2'
+          test "$(sha256sum "$ZSH_PATH" | cut -d ' ' -f 1)" = 'f88db3dd0a2909ed62cdb645dbb7b56a6bee5abbe310751dc0f549a811222f46'
           {
+            printf 'zsh-path=%s\n' "$ZSH_PATH"
+            printf 'zsh-binary-sha256=%s\n' "$(sha256sum "$ZSH_PATH" | cut -d ' ' -f 1)"
             zsh --version
             printf 'zsh-package=%s\n' "$(dpkg-query --showformat='${Version}' --show zsh)"
+            printf 'zsh-common-package=%s\n' "$(dpkg-query --showformat='${Version}' --show zsh-common)"
           } > "$ZSH_PROVENANCE"
       - name: Upload environment provenance
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -60,12 +75,17 @@ jobs:
       - name: Run allowlisted behavioral command
         id: behavioral
         continue-on-error: true
-        run: npm ci && npm test > behavioral-tests.log 2>&1
+        run: "{ npm ci && npm test; } > behavioral-tests.log 2>&1"
       - name: Run allowlisted acceptance command
         id: acceptance
         if: always()
         continue-on-error: true
         run: npm run test:patterns > acceptance-evidence.log 2>&1
+      - name: Validate failure diagnostics
+        if: always()
+        run: |
+          test -f behavioral-tests.log
+          test -f acceptance-evidence.log
       - name: Upload failure diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

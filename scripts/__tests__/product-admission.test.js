@@ -267,17 +267,37 @@ describe("protected product workflow transport", () => {
     expect(provenanceIndex).toBeGreaterThan(installIndex);
     expect(step?.["timeout-minutes"]).toBe(4);
     expect(step?.run).toContain("command -v zsh");
-    expect(step?.run).toMatch(/timeout 30s sudo apt-get update/);
     expect(step?.run).toMatch(
-      /timeout 150s sudo env DEBIAN_FRONTEND=noninteractive apt-get/,
+      /archive\.ubuntu\.com\/ubuntu\/pool\/main\/z\/zsh\/zsh-common_5\.9-6ubuntu2_all\.deb/,
     );
-    expect(step?.run).toMatch(/Acquire::http::Timeout=15/);
-    expect(step?.run).toMatch(/Acquire::https::Timeout=15/);
-    expect(step?.run).toMatch(/Acquire::Retries=3/);
+    expect(step?.run).toMatch(
+      /archive\.ubuntu\.com\/ubuntu\/pool\/main\/z\/zsh\/zsh_5\.9-6ubuntu2_amd64\.deb/,
+    );
+    expect(step?.run).toContain(
+      "56d160585b417af0cc04d7372f74a3b734609d7cc43ef8ea6e92bfdfc27f77c3",
+    );
+    expect(step?.run).toContain(
+      "bd5cc8dd3a01a6db38c0a815d75202c356a9c7f378674ba7bed9bc86dcba8af0",
+    );
+    expect(step?.run).toContain(
+      "f88db3dd0a2909ed62cdb645dbb7b56a6bee5abbe310751dc0f549a811222f46",
+    );
+    expect(step?.run).toContain("sha256sum --check --strict");
+    expect(step?.run).toContain("sudo dpkg --install");
+    expect(step?.run).toContain("= '5.9-6ubuntu2'");
     expect(step?.run).toContain("ZSH_PROVENANCE");
     expect(steps[provenanceIndex]?.with?.["if-no-files-found"]).toBe("error");
     expect(steps[provenanceIndex]?.uses).toMatch(
       /^actions\/upload-artifact@[0-9a-f]{40}$/,
     );
+    const behavioral = steps.find((candidate) => candidate.id === "behavioral");
+    expect(behavioral?.run).toContain(
+      "{ npm ci && npm test; } > behavioral-tests.log 2>&1",
+    );
+    const diagnostics = steps.find(
+      (candidate) => candidate.name === "Validate failure diagnostics",
+    );
+    expect(diagnostics?.run).toContain("test -f behavioral-tests.log");
+    expect(diagnostics?.run).toContain("test -f acceptance-evidence.log");
   });
 });
