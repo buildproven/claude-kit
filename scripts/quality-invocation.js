@@ -1530,6 +1530,45 @@ function manifestIdentity(manifest) {
   };
 }
 
+function gateRequirementsDigest(requiredGates) {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(canonicalJson(requiredGates)))
+    .digest("hex");
+}
+
+function gateEvidenceDigest(gates) {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(canonicalJson(gates)))
+    .digest("hex");
+}
+
+function carryableGate(manifest, gate) {
+  const required = manifest.requiredGates.find(
+    (candidate) => candidate.name === gate.name,
+  );
+  if (!required || gate.policyDigest !== gateRequirementsDigest([required])) {
+    return false;
+  }
+  if (gate.name === "test") return validTestGate(manifest, gate);
+  return (
+    gate.status === "success" &&
+    gateMatchesRequirement(gate, required) &&
+    validGateArtifact(gate)
+  );
+}
+
+function gateEvidenceCarryEligible(manifest) {
+  const current = manifest.gates.filter(
+    (gate) => gate.head === manifest.revisions.currentHead,
+  );
+  return manifest.requiredGates.every((required) => {
+    const gate = current.find((candidate) => candidate.name === required.name);
+    return gate ? carryableGate(manifest, gate) : false;
+  });
+}
+
 function canFailOverProvider(existing, existingIdentity, campaignIdentity) {
   const sameWork =
     JSON.stringify(canonicalJson(identityWithoutProvider(existingIdentity))) ===
@@ -1587,6 +1626,15 @@ function supersedingManifest(
   const manifestPath = path.join(stateRoot, "invocation.json");
   if (fs.existsSync(manifestPath)) return manifestPath;
   const now = new Date().toISOString();
+  const carriesGateEvidence =
+    transition === "providerRecoveryOf" && gateEvidenceCarryEligible(existing);
+  const carriedGates = carriesGateEvidence
+    ? existing.gates.filter(
+        (gate) =>
+          gate.head === existing.revisions.currentHead &&
+          carryableGate(existing, gate),
+      )
+    : [];
   const manifest = {
     schemaVersion: SCHEMA_VERSION,
     reviewContractVersion: REVIEW_CONTRACT_VERSION,
@@ -1629,14 +1677,27 @@ function supersedingManifest(
     provider: campaignIdentity.provider,
     reviews: [],
     governor: buildGovernor(campaignIdentity.head),
-    requiredGates: discoverRequiredGates(
-      campaignIdentity.root,
-      campaignIdentity.options,
-      campaignIdentity.head,
-      campaignIdentity.baseSha,
-    ),
+    requiredGates: carriesGateEvidence
+      ? existing.requiredGates
+      : discoverRequiredGates(
+          campaignIdentity.root,
+          campaignIdentity.options,
+          campaignIdentity.head,
+          campaignIdentity.baseSha,
+        ),
     requiredGatesPolicyVersion: REQUIRED_GATES_POLICY_VERSION,
-    gates: [],
+    gates: carriedGates,
+    ...(carriesGateEvidence
+      ? {
+          gateEvidenceCarry: {
+            sourceInvocationId: existing.invocationId,
+            sourceManifestPath: existingPath,
+            head: existing.revisions.currentHead,
+            requiredGatesDigest: gateRequirementsDigest(existing.requiredGates),
+            gatesDigest: gateEvidenceDigest(carriedGates),
+          },
+        }
+      : {}),
     supersedes: {
       invocationId: existing.invocationId,
       manifestPath: existingPath,
@@ -2483,6 +2544,15 @@ function advanceHead(manifest, root, { acceptedConditions = [] } = {}) {
     }
   }
   if (replay) recordBaseRebaseCarry(manifest, priorHead, nextHead, replay);
+  if (manifest.gateEvidenceCarry) {
+    manifest.gateEvidenceCarryHistory ??= [];
+    manifest.gateEvidenceCarryHistory.push({
+      ...manifest.gateEvidenceCarry,
+      retiredAt: new Date().toISOString(),
+      retiredHead: nextHead,
+    });
+    delete manifest.gateEvidenceCarry;
+  }
   rearmExecutionForHead(manifest, priorHead, nextHead);
   supersedePriorHeadTerminal(manifest, root, nextHead, Boolean(replay));
   invalidateApproval(manifest, nextHead);
@@ -5515,6 +5585,15 @@ function recordGate(manifest, options) {
     (gate) =>
       gate.head !== manifest.revisions.currentHead || gate.name !== name,
   );
+  if (manifest.gateEvidenceCarry) {
+    manifest.gateEvidenceCarryHistory ??= [];
+    manifest.gateEvidenceCarryHistory.push({
+      ...manifest.gateEvidenceCarry,
+      retiredAt: new Date().toISOString(),
+      retiredReason: `gate-replaced:${name}`,
+    });
+    delete manifest.gateEvidenceCarry;
+  }
   manifest.gates.push({
     name,
     source,
@@ -5523,6 +5602,9 @@ function recordGate(manifest, options) {
     status,
     reason,
     failureCode,
+    policyDigest: gateRequirementsDigest(
+      manifest.requiredGates.filter((gate) => gate.name === name),
+    ),
     log,
     logSha256: sha256File(log),
     completedAt: new Date().toISOString(),
@@ -5790,12 +5872,46 @@ function gateMatchesRequirement(gate, required) {
   );
 }
 
+function testEvidenceChainValid(manifest, required, gateHead) {
+  let predecessor = required?.predecessorEvidence || null;
+  let descendantHead = gateHead;
+  const seen = new Set();
+  while (predecessor) {
+    if (
+      !predecessor.head ||
+      seen.has(predecessor.head) ||
+      predecessor.status !== "success" ||
+      !predecessor.log ||
+      !predecessor.logSha256 ||
+      !predecessor.source ||
+      !predecessor.command ||
+      !predecessor.policyDigest ||
+      !predecessor.requiredGatesDigest ||
+      !isAncestorOf(manifest.repo.realpath, predecessor.head, descendantHead) ||
+      !fs.existsSync(predecessor.log) ||
+      sha256File(predecessor.log) !== predecessor.logSha256
+    ) {
+      return false;
+    }
+    seen.add(predecessor.head);
+    descendantHead = predecessor.head;
+    predecessor = predecessor.predecessor || null;
+  }
+  return true;
+}
+
 function validTestGate(manifest, gate) {
   if (!validGateArtifact(gate)) return false;
   const required = manifest.requiredGates.find(
     (candidate) => candidate.name === "test",
   );
   if (!gateMatchesRequirement(gate, required)) return false;
+  if (
+    gate.policyDigest &&
+    gate.policyDigest !== gateRequirementsDigest([required])
+  )
+    return false;
+  if (!testEvidenceChainValid(manifest, required, gate.head)) return false;
   if (gate.status === "success") return true;
   return Boolean(
     manifest.requiredGates.find((required) => required.name === "test")
@@ -5806,10 +5922,62 @@ function validTestGate(manifest, gate) {
   );
 }
 
+function validReusableTestGate(manifest, gate, required) {
+  const predecessor = required?.predecessorEvidence;
+  if (
+    gateMatchesRequirement(gate, required) &&
+    gate.policyDigest === gateRequirementsDigest([required])
+  ) {
+    return validTestGate(manifest, gate);
+  }
+  if (!predecessor || !predecessor.policyDigest) return false;
+  if (
+    gate.status !== "success" ||
+    !validGateArtifact(gate) ||
+    predecessor.head !== gate.head ||
+    predecessor.source !== gate.source ||
+    predecessor.command !== gate.command ||
+    predecessor.policyDigest !== gate.policyDigest ||
+    predecessor.log !== gate.log ||
+    predecessor.logSha256 !== gate.logSha256
+  ) {
+    return false;
+  }
+  return testEvidenceChainValid(manifest, required, gate.head);
+}
+
+function verifyGateEvidenceCarry(manifest) {
+  const carry = manifest.gateEvidenceCarry;
+  if (!carry) return;
+  if (
+    carry.sourceInvocationId === manifest.invocationId ||
+    carry.head !== manifest.revisions.currentHead ||
+    carry.requiredGatesDigest !== gateRequirementsDigest(manifest.requiredGates)
+  ) {
+    throw new Error("gate evidence carry identity is invalid");
+  }
+  const current = manifest.gates.filter(
+    (gate) => gate.head === manifest.revisions.currentHead,
+  );
+  if (
+    current.length !== manifest.requiredGates.length ||
+    carry.gatesDigest !== gateEvidenceDigest(current)
+  ) {
+    throw new Error("gate evidence carry digest is invalid");
+  }
+  for (const required of manifest.requiredGates) {
+    const gate = current.find((candidate) => candidate.name === required.name);
+    if (!gate || !carryableGate(manifest, gate)) {
+      throw new Error(`carried ${required.name} gate evidence is invalid`);
+    }
+  }
+}
+
 // acceptedConditions is only ever non-empty on the operator-override path
 // (see reviewAuthorization); the normal path always calls this with no
 // arguments, so a caller cannot widen the normal merge path by accident.
 function verifyGateEvidence(manifest, acceptedConditions = []) {
+  verifyGateEvidenceCarry(manifest);
   const current = manifest.gates.filter(
     (gate) => gate.head === manifest.revisions.currentHead,
   );
@@ -7101,19 +7269,28 @@ function advanceManifestTransaction(manifestArg, manifest, rawArgs) {
         { head: nextHead, acceptedConditions },
       );
     }
+    const priorTestRequirement = locked.requiredGates.find(
+      (required) => required.name === "test",
+    );
     advanceHead(locked, manifest.repo.realpath, { acceptedConditions });
     validateIdentity(locked, manifest.repo.realpath);
     const gateBase = isAncestorOf(locked.repo.realpath, priorHead, nextHead)
       ? priorHead
       : effectiveBaseSha(locked);
-    const reusableTestGate = [...locked.gates]
-      .reverse()
-      .find(
-        (gate) =>
-          gate.name === "test" &&
-          gate.status === "success" &&
-          isAncestorOf(locked.repo.realpath, gate.head, nextHead),
-      );
+    const testRequirement = locked.requiredGates.find(
+      (required) => required.name === "test",
+    );
+    const reusableTestGate = [...locked.gates].reverse().find(
+      (gate) =>
+        gate.name === "test" &&
+        gate.status === "success" &&
+        validReusableTestGate(
+          locked,
+          gate,
+          locked.requiredGates.find((required) => required.name === "test"),
+        ) &&
+        isAncestorOf(locked.repo.realpath, gate.head, nextHead),
+    );
     const reuseTestEvidence = Boolean(
       reusableTestGate &&
       nextHead !== reusableTestGate.head &&
@@ -7123,7 +7300,14 @@ function advanceManifestTransaction(manifestArg, manifest, rawArgs) {
         nextHead,
       ).includes(".buildproven/test-impact.json"),
     );
-    const discoveryBase = reuseTestEvidence ? reusableTestGate.head : gateBase;
+    const recomputeTestEvidence = Boolean(
+      testRequirement && nextHead !== priorHead && !reuseTestEvidence,
+    );
+    const discoveryBase = reuseTestEvidence
+      ? reusableTestGate.head
+      : recomputeTestEvidence
+        ? effectiveBaseSha(locked)
+        : gateBase;
     const discovered = discoverRequiredGates(
       locked.repo.realpath,
       {
@@ -7134,10 +7318,33 @@ function advanceManifestTransaction(manifestArg, manifest, rawArgs) {
       discoveryBase,
     );
     const replaceNames = new Set();
-    if (reuseTestEvidence) replaceNames.add("test");
+    if (reuseTestEvidence || recomputeTestEvidence) replaceNames.add("test");
     locked.requiredGates = locked[NEEDS_REQUIRED_GATES_MIGRATION]
       ? discovered
       : unionRequiredGates(locked.requiredGates, discovered, replaceNames);
+    if (reuseTestEvidence) {
+      const test = locked.requiredGates.find(
+        (required) => required.name === "test",
+      );
+      if (test) {
+        const priorPredecessor = priorTestRequirement?.predecessorEvidence;
+        test.predecessorEvidence = {
+          head: reusableTestGate.head,
+          status: reusableTestGate.status,
+          source: reusableTestGate.source,
+          command: reusableTestGate.command,
+          policyDigest: reusableTestGate.policyDigest,
+          requiredGatesDigest: gateRequirementsDigest([priorTestRequirement]),
+          log: reusableTestGate.log,
+          logSha256: reusableTestGate.logSha256,
+          evidenceDigest: gateEvidenceDigest([reusableTestGate]),
+          predecessor:
+            priorPredecessor?.head === reusableTestGate.head
+              ? priorPredecessor.predecessor || null
+              : priorPredecessor || null,
+        };
+      }
+    }
     locked.requiredGatesPolicyVersion = REQUIRED_GATES_POLICY_VERSION;
     locked[NEEDS_REQUIRED_GATES_MIGRATION] = false;
     if (priorMutation && nextHead !== priorHead) {
@@ -7371,6 +7578,7 @@ module.exports = {
   reviewDiffBuffer,
   reviewInfo,
   reviewCoverage,
+  verifyGateEvidence,
   incompleteRetryStatus,
   reserveIncompleteRetry,
   reviewIdentity,

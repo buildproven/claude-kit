@@ -200,7 +200,11 @@ function produce(input) {
   const references = {};
   for (const [kind, artifactName, command] of [
     ["behavioralTests", "behavioral-tests.log", request.behavioralCommand],
-    ["acceptanceEvidence", "acceptance-evidence.log", null],
+    [
+      "acceptanceEvidence",
+      "acceptance-evidence.log",
+      request.acceptanceCommand,
+    ],
   ]) {
     const artifact = fs.readFileSync(
       path.join(input.outputDirectory, artifactName),
