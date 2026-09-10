@@ -674,6 +674,45 @@ describe("quality-run public orchestration", () => {
     expect(result.manifest.calls).toContain("quality-run-review.sh");
   });
 
+  it("runs all quality gates and review for committed dependency maintenance", () => {
+    const entry = fixture({
+      changedFiles: ["package.json", "package-lock.json"],
+    });
+    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    const cwd = manifest.repo.realpath;
+    const git = (...args) => {
+      const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+      expect(result.status).toBe(0);
+      return result.stdout.trim();
+    };
+    git("init", "-q");
+    git("config", "user.email", "test@example.com");
+    git("config", "user.name", "Test");
+    writeFileSync(
+      path.join(cwd, "package.json"),
+      JSON.stringify({ devDependencies: { vitest: "3" } }),
+    );
+    git("add", "package.json");
+    git("commit", "-qm", "base");
+    manifest.revisions.baseSha = git("rev-parse", "HEAD");
+    writeFileSync(
+      path.join(cwd, "package.json"),
+      JSON.stringify({ devDependencies: { vitest: "4" } }),
+    );
+    git("add", "package.json");
+    git("commit", "-qm", "candidate");
+    manifest.revisions.currentHead = git("rev-parse", "HEAD");
+    manifest.revisions.initialHead = manifest.revisions.currentHead;
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+    const result = run(entry);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.output).state).toBe("verified-unmerged");
+    expect(result.manifest.calls).toContain("quality-run-review.sh");
+    expect(result.manifest.gates.map((gate) => gate.name)).toEqual(
+      expect.arrayContaining(["lint", "test", "security"]),
+    );
+  });
+
   it("requires protected admission before merging a product claim", () => {
     const result = run(
       fixture(

@@ -407,7 +407,13 @@ function verifyDeliveryClaim(manifest) {
     !productTasks &&
     !deliveryEvidence
   ) {
-    const productFile = changedFiles.find(productionCodeChange);
+    const productFile = changedFiles.find((file) =>
+      productionCodeChange(file, {
+        repo: manifest.repo.realpath,
+        base: manifest.revisions.baseSha,
+        head: manifest.revisions.currentHead,
+      }),
+    );
     if (productFile) {
       throw new Error(
         `contract delivery claim requires product evidence for product-affecting file '${productFile}'`,
@@ -439,6 +445,10 @@ function verifyDeliveryClaim(manifest) {
       productTasks,
       "--changed-files",
       changedFilesPath,
+      "--repo",
+      manifest.repo.realpath,
+      "--base",
+      manifest.revisions.baseSha,
       "--evidence",
       deliveryEvidence,
       "--evidence-sha256",
