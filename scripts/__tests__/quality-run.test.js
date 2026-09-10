@@ -644,7 +644,7 @@ describe("quality-run public orchestration", () => {
       status: "terminal",
       state: "blocked",
     });
-    expect(result.manifest.calls).not.toContain("quality-run-review.sh");
+    expect(result.manifest.calls || []).not.toContain("quality-run-review.sh");
     expect(result.manifest.telemetryWrites).toBe(1);
   });
 
@@ -783,7 +783,7 @@ describe("quality-run public orchestration", () => {
     expect(JSON.parse(result.output).message).toContain(
       "delivery evidence changed without a HEAD advance",
     );
-    expect(result.manifest.calls).not.toContain("quality-run-review.sh");
+    expect(result.manifest.calls || []).not.toContain("quality-run-review.sh");
   });
 
   it("classifies malformed verifier output without exposing it", () => {
