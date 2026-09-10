@@ -340,6 +340,16 @@ function registrySelectionSatisfies(name, spec, selectedName, version) {
   );
 }
 
+function installedVersionMatches(installed, locked) {
+  if (typeof installed !== "string" || typeof locked !== "string") return false;
+  // npm normalizes a publisher's leading v in the lockfile, but preserves the
+  // original package manifest. Keep prerelease and build identity exact.
+  const normalized = installed.startsWith("v") ? installed.slice(1) : installed;
+  return (
+    exactVersion(normalized) && exactVersion(locked) && normalized === locked
+  );
+}
+
 function localSelectionSatisfies(spec, selected, version) {
   const requirement = String(spec);
   const locator = String(selected);
@@ -493,7 +503,7 @@ function validateInstalled(
       failures.push(
         `${name}: installed package is named ${installed.name || "missing"}, lockfile requires ${expectedName}`,
       );
-    } else if (installed.version !== expectedVersion) {
+    } else if (!installedVersionMatches(installed.version, expectedVersion)) {
       failures.push(
         `${name}: installed ${installed.version || "unknown"}, lockfile requires ${expectedVersion}`,
       );
@@ -667,7 +677,9 @@ function addLockedPackageRoot(
       "locked package.json",
       root,
     );
-    if (pkg.version === expectedVersion) lockedCommandRoots.add(resolved);
+    if (installedVersionMatches(pkg.version, expectedVersion)) {
+      lockedCommandRoots.add(resolved);
+    }
   } catch {
     // The owning manager's direct-package validation reports actionable errors.
   }
@@ -1581,7 +1593,10 @@ function validateYarnArchive(root, name, packageLocation, record) {
       validateJsonText(manifestText, `${name} Yarn archive package manifest`);
       const installed = JSON.parse(manifestText);
       validateObjectLimits(installed, `${name} Yarn archive package manifest`);
-      if (installed.name !== name || installed.version !== record.version) {
+      if (
+        installed.name !== name ||
+        !installedVersionMatches(installed.version, record.version)
+      ) {
         return [`${name}: Yarn archive identity does not match yarn.lock`];
       }
       for (const [, target] of packageBinEntries(name, installed)) {

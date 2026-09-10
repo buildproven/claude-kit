@@ -35,6 +35,12 @@ reserved for external authority. Cleanup and telemetry run from a `finally`
 path and cannot convert a successful merge into a failure or an invalid
 campaign into success.
 
+A host interruption is recoverable through the same exact manifest. Recovery
+requires the exact repository lease and no active execution owner. It preserves
+prior reviews, findings, provider use, and budgets, then continues only the
+unfinished exact-head phases. If HEAD advanced, the runner archives the stale
+interruption and reruns descendant-bound gates, mutation evidence, and review.
+
 ## Phase ownership
 
 | Phase            | Deterministic runner responsibility                                                    | Model responsibility                                        |

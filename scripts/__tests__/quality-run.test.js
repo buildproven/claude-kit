@@ -60,6 +60,21 @@ function resumeRecoverableTerminal(file) {
   write(file, manifest);
   return manifest.terminalState;
 }
+function resumeInterruptedTerminal(file) {
+  const manifest = read(file);
+  const terminal = manifest.terminalState;
+  if (terminal?.state !== "interrupted" ||
+      terminal.head !== manifest.revisions.currentHead ||
+      manifest.governor?.activeExecution) return null;
+  const epoch = terminalEpoch(manifest) + 1;
+  manifest.terminalHistory ||= [];
+  manifest.terminalHistory.push({ ...terminal, disposition: "resumed-after-interruption" });
+  manifest.terminalHistory.push({ event: "reopened-after-interruption", terminalEpoch: epoch });
+  manifest.terminalEpoch = epoch;
+  delete manifest.terminalState;
+  write(file, manifest);
+  return { head: manifest.revisions.currentHead, terminalEpoch: epoch };
+}
 function clearMergeAdmissionBlock(file) {
   const manifest = read(file);
   if (!manifest.merge?.admissionBlock) return false;
@@ -175,7 +190,7 @@ if (require.main === module) {
   process.stdout.write(inForce + "\\n");
 }
 module.exports = { advanceHead, incompleteRetryStatus, judgeContext, leadDispositionStatus, loadManifest, mutationEvidenceValid, parseJson, recordTerminalState,
-  advanceManifest, changedFiles, clearMergeAdmissionBlock, resolveGreenCiAdmissionBlock, reviewAuthorization, reviewCoverage, resumeRecoverableTerminal, terminalEpoch, validateIdentity, withManifestLock };
+  advanceManifest, changedFiles, clearMergeAdmissionBlock, resolveGreenCiAdmissionBlock, reviewAuthorization, reviewCoverage, resumeInterruptedTerminal, resumeRecoverableTerminal, terminalEpoch, validateIdentity, withManifestLock };
 `;
 
 const FAKE_STEP = `
@@ -290,6 +305,12 @@ function fixture(behavior = {}, { merge = false, tier = "low" } = {}) {
   copyFileSync(
     path.resolve(__dirname, "..", "product-evidence.js"),
     path.join(runtime, "product-evidence.js"),
+  );
+  writeFileSync(
+    path.join(runtime, "product-admission.js"),
+    behavior.productAdmission
+      ? `#!/usr/bin/env node\n${behavior.productAdmission}\n`
+      : "#!/usr/bin/env node\nprocess.stderr.write('no protected admission fixture\\n'); process.exitCode = 1;\n",
   );
   if (behavior.productVerifier) {
     const verifier = path.join(runtime, "product-completion.js");
@@ -623,7 +644,7 @@ describe("quality-run public orchestration", () => {
       status: "terminal",
       state: "blocked",
     });
-    expect(result.manifest.calls).not.toContain("quality-run-review.sh");
+    expect(result.manifest.calls || []).not.toContain("quality-run-review.sh");
     expect(result.manifest.telemetryWrites).toBe(1);
   });
 
@@ -653,6 +674,45 @@ describe("quality-run public orchestration", () => {
     expect(result.manifest.calls).toContain("quality-run-review.sh");
   });
 
+  it("runs all quality gates and review for committed dependency maintenance", () => {
+    const entry = fixture({
+      changedFiles: ["package.json", "package-lock.json"],
+    });
+    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    const cwd = manifest.repo.realpath;
+    const git = (...args) => {
+      const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+      expect(result.status).toBe(0);
+      return result.stdout.trim();
+    };
+    git("init", "-q");
+    git("config", "user.email", "test@example.com");
+    git("config", "user.name", "Test");
+    writeFileSync(
+      path.join(cwd, "package.json"),
+      JSON.stringify({ devDependencies: { vitest: "3" } }),
+    );
+    git("add", "package.json");
+    git("commit", "-qm", "base");
+    manifest.revisions.baseSha = git("rev-parse", "HEAD");
+    writeFileSync(
+      path.join(cwd, "package.json"),
+      JSON.stringify({ devDependencies: { vitest: "4" } }),
+    );
+    git("add", "package.json");
+    git("commit", "-qm", "candidate");
+    manifest.revisions.currentHead = git("rev-parse", "HEAD");
+    manifest.revisions.initialHead = manifest.revisions.currentHead;
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+    const result = run(entry);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.output).state).toBe("verified-unmerged");
+    expect(result.manifest.calls).toContain("quality-run-review.sh");
+    expect(result.manifest.gates.map((gate) => gate.name)).toEqual(
+      expect.arrayContaining(["lint", "test", "security"]),
+    );
+  });
+
   it("requires protected admission before merging a product claim", () => {
     const result = run(
       fixture(
@@ -672,7 +732,47 @@ describe("quality-run public orchestration", () => {
         "candidate-worker verification is preflight only",
       ),
     });
-    expect(result.manifest.calls).not.toContain("quality-stamp-and-merge.sh");
+    expect(result.manifest.calls || []).not.toContain(
+      "quality-stamp-and-merge.sh",
+    );
+    expect(result.manifest.calls || []).not.toContain("quality-run-review.sh");
+  });
+
+  it("does not request protected admission for a non-merge product review", () => {
+    const result = run(
+      fixture({
+        changedFiles: ["src/App.tsx"],
+        productVerifier:
+          "process.stdout.write(JSON.stringify({valid:true,errors:[]}));",
+      }),
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "complete",
+      state: "verified-unmerged",
+    });
+    expect(result.manifest.calls).toContain("quality-run-review.sh");
+  });
+
+  it("merges a product claim only after exact-head protected admission", () => {
+    const result = run(
+      fixture(
+        {
+          changedFiles: ["src/App.tsx"],
+          productVerifier:
+            "process.stdout.write(JSON.stringify({valid:true,errors:[]}));",
+          productAdmission:
+            "process.stdout.write(JSON.stringify({valid:true,checkId:'123'}));",
+        },
+        { merge: true },
+      ),
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "complete",
+      state: "merged",
+    });
+    expect(result.manifest.calls).toContain("quality-stamp-and-merge.sh");
   });
 
   it("blocks similarly named harness configuration that is not the exact quality-control file", () => {
@@ -722,7 +822,7 @@ describe("quality-run public orchestration", () => {
     expect(JSON.parse(result.output).message).toContain(
       "delivery evidence changed without a HEAD advance",
     );
-    expect(result.manifest.calls).not.toContain("quality-run-review.sh");
+    expect(result.manifest.calls || []).not.toContain("quality-run-review.sh");
   });
 
   it("classifies malformed verifier output without exposing it", () => {
@@ -774,6 +874,59 @@ describe("quality-run public orchestration", () => {
       state: "interrupted",
     });
     expect(result.manifest.telemetryWrites).toBe(1);
+  });
+
+  it("resumes an exact-head reviewed campaign after host interruption", () => {
+    const entry = fixture({}, { merge: true, tier: "high" });
+    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    manifest.risk.resolved = true;
+    manifest.gates = manifest.requiredGates.map(({ name }) => ({
+      name,
+      status: "success",
+      head: manifest.revisions.currentHead,
+    }));
+    manifest.reviews = [
+      {
+        from: manifest.revisions.baseSha,
+        to: "reviewed-before-interruption",
+        status: "complete",
+        leadCount: 0,
+      },
+    ];
+    manifest.governor.providerSecondsUsed = 64;
+    manifest.governor.activeExecution = null;
+    manifest.terminalEpoch = 1;
+    manifest.terminalState = {
+      state: "interrupted",
+      detail: "quality run interrupted",
+      head: manifest.revisions.currentHead,
+      terminalEpoch: 1,
+    };
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
+
+    const result = run(entry);
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "complete",
+      state: "merged",
+    });
+    expect(result.manifest.governor.providerSecondsUsed).toBe(64);
+    expect(result.manifest.calls).toContain("quality-mutation-check.sh");
+    expect(result.manifest.calls).toContain("quality-run-review.sh");
+    expect(result.manifest.calls).toContain("quality-stamp-and-merge.sh");
+    expect(result.manifest.terminalHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          state: "interrupted",
+          disposition: "resumed-after-interruption",
+        }),
+        expect.objectContaining({
+          event: "reopened-after-interruption",
+          terminalEpoch: 2,
+        }),
+      ]),
+    );
   });
 
   it("classifies stale identity as superseded before any phase runs", () => {
