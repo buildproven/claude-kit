@@ -177,11 +177,7 @@ describe("protected product workflow transport", () => {
         git("add", ".");
         git("commit", "-qm", "fixture candidate");
         const head = git("rev-parse", "HEAD");
-        for (const log of [
-          "behavioral-tests.log",
-          "acceptance-evidence.log",
-          "zsh-version.log",
-        ])
+        for (const log of ["behavioral-tests.log", "acceptance-evidence.log"])
           fs.writeFileSync(path.join(root, log), "passed\n");
         const payload = {
           pullRequest: 7,

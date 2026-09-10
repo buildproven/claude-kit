@@ -10,8 +10,8 @@ runner and installs the exact Ubuntu `zsh` and `zsh-common` package version
 tests include shell-parent checks; the normal Quality workflow already
 provisions `zsh`, so the evidence worker must use the same test environment.
 Installation has bounded network and package-manager timeouts, and the
-installed version is recorded in the evidence bundle. The artifact action is
-referenced by its immutable commit SHA. Failed behavioral or acceptance
+installed version is recorded in the diagnostic artifact. The artifact action
+is referenced by its immutable commit SHA. Failed behavioral or acceptance
 commands remain blocking, and their logs are uploaded for diagnosis.
 
 ## Verification
