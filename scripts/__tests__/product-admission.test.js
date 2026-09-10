@@ -248,4 +248,23 @@ describe("protected product workflow transport", () => {
       }
     },
   );
+
+  it("pins and bounds the source worker's zsh installation", () => {
+    const definition = workflow("source");
+    const step = definition.jobs["collect-product-evidence"].steps.find(
+      (candidate) =>
+        candidate.name === "Install zsh for shell-isolation regressions",
+    );
+    expect(step?.run).toContain("zsh_package_version='5.9-6ubuntu2'");
+    expect(step?.run).toMatch(/timeout 30s sudo apt-get update/);
+    expect(step?.run).toMatch(
+      /timeout 150s sudo env DEBIAN_FRONTEND=noninteractive apt-get/,
+    );
+    expect(step?.run).toMatch(/Acquire::http::Timeout=15/);
+    expect(step?.run).toMatch(/Acquire::https::Timeout=15/);
+    expect(step?.run).toMatch(/Acquire::Retries=3/);
+    expect(step?.run).toContain(
+      'test "$(dpkg-query --showformat=\'${Version}\' --show zsh)" = "$zsh_package_version"',
+    );
+  });
 });
