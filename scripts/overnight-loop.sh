@@ -259,7 +259,7 @@ main() {
   local error_streak=0 now remaining main_before main_after run_rc receipt issue_state iteration_log provider_output_dir
   while [ "$items_done" -lt "$MAX_ITEMS" ]; do
     now=$(date +%s)
-    [ "$now" -lt "$DEADLINE_EPOCH" ] || { finish "max-hours" 0; return $?; }
+    [ "$now" -lt "$DEADLINE_EPOCH" ] || { finish "max-hours" 1; return $?; }
     attempts=$((attempts + 1))
     [ "$attempts" -le $((MAX_ITEMS * 3)) ] || { finish "attempt-cap" 1; return $?; }
     remaining=$((DEADLINE_EPOCH - now))
@@ -306,10 +306,10 @@ main() {
       log "ERROR: inconsistent outcome for $current_issue: receipt=${receipt:-none} Linear=$issue_state rc=$run_rc"
       finish "inconsistent-receipt" 1; return $?
     fi
-    if [ "$run_rc" -eq 124 ]; then finish "agent-deadline" 1; return $?; fi
+    if [ "$run_rc" -eq 76 ] || [ "$run_rc" -eq 124 ]; then finish "agent-deadline" 1; return $?; fi
     if [ "$run_rc" -eq 75 ]; then
       if sleep_until_reset; then continue; fi
-      finish "limit-reset-past-deadline" 0; return $?
+      finish "limit-reset-past-deadline" 1; return $?
     fi
 
     error_streak=$((error_streak + 1))
