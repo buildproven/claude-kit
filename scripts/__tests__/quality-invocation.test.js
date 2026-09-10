@@ -720,6 +720,38 @@ describe("required gate reuse", () => {
     const required = invocation.unionRequiredGates([fullTest], [focusedTest]);
     expect(required).toEqual([fullTest]);
   });
+
+  it("recomputes the full test range when predecessor evidence is invalid", () => {
+    const root = repo("invalid-predecessor-test-evidence");
+    const manifestPath = create(root);
+    recordGateFixture(manifestPath, "test");
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      const required = manifest.requiredGates.find(
+        (gate) => gate.name === "test",
+      );
+      const gate = manifest.gates.find(
+        (candidate) => candidate.name === "test",
+      );
+      required.source = focusedTest.source;
+      required.command = focusedTest.command;
+      gate.source = focusedTest.source;
+      gate.command = focusedTest.command;
+      gate.policyDigest = "0".repeat(64);
+      writeFileSync(gate.log, "tampered predecessor evidence\n");
+    });
+    writeFileSync(
+      path.join(root, "new-file.js"),
+      "export const next = true;\n",
+    );
+    git(root, ["add", "new-file.js"]);
+    git(root, ["commit", "-q", "-m", "fix: add new test surface"]);
+
+    invocation.advanceManifest(manifestPath);
+    const advanced = invocation.loadManifest(manifestPath).manifest;
+    expect(
+      advanced.requiredGates.find((gate) => gate.name === "test").source,
+    ).toBe("package-script:test");
+  });
 });
 
 describe("quality invocation manifest", () => {

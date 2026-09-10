@@ -1544,6 +1544,31 @@ function gateEvidenceDigest(gates) {
     .digest("hex");
 }
 
+function carryableGate(manifest, gate) {
+  const required = manifest.requiredGates.find(
+    (candidate) => candidate.name === gate.name,
+  );
+  if (!required || gate.policyDigest !== gateRequirementsDigest([required])) {
+    return false;
+  }
+  if (gate.name === "test") return validTestGate(manifest, gate);
+  return (
+    gate.status === "success" &&
+    gateMatchesRequirement(gate, required) &&
+    validGateArtifact(gate)
+  );
+}
+
+function gateEvidenceCarryEligible(manifest) {
+  const current = manifest.gates.filter(
+    (gate) => gate.head === manifest.revisions.currentHead,
+  );
+  return manifest.requiredGates.every((required) => {
+    const gate = current.find((candidate) => candidate.name === required.name);
+    return gate ? carryableGate(manifest, gate) : false;
+  });
+}
+
 function canFailOverProvider(existing, existingIdentity, campaignIdentity) {
   const sameWork =
     JSON.stringify(canonicalJson(identityWithoutProvider(existingIdentity))) ===
@@ -1606,7 +1631,7 @@ function supersedingManifest(
     ? existing.gates.filter(
         (gate) =>
           gate.head === existing.revisions.currentHead &&
-          gate.status === "success",
+          carryableGate(existing, gate),
       )
     : [];
   const manifest = {
@@ -1823,6 +1848,7 @@ function providerRecoveryEligibility(
   } catch {
     return null;
   }
+  if (!gateEvidenceCarryEligible(existing)) return null;
   const attempted = providerRecoveryProviders(existing);
   const candidates = [
     campaignIdentity.provider.primaryOverride,
@@ -2518,6 +2544,15 @@ function advanceHead(manifest, root, { acceptedConditions = [] } = {}) {
     }
   }
   if (replay) recordBaseRebaseCarry(manifest, priorHead, nextHead, replay);
+  if (manifest.gateEvidenceCarry) {
+    manifest.gateEvidenceCarryHistory ??= [];
+    manifest.gateEvidenceCarryHistory.push({
+      ...manifest.gateEvidenceCarry,
+      retiredAt: new Date().toISOString(),
+      retiredHead: nextHead,
+    });
+    delete manifest.gateEvidenceCarry;
+  }
   rearmExecutionForHead(manifest, priorHead, nextHead);
   supersedePriorHeadTerminal(manifest, root, nextHead, Boolean(replay));
   invalidateApproval(manifest, nextHead);
@@ -5550,6 +5585,15 @@ function recordGate(manifest, options) {
     (gate) =>
       gate.head !== manifest.revisions.currentHead || gate.name !== name,
   );
+  if (manifest.gateEvidenceCarry) {
+    manifest.gateEvidenceCarryHistory ??= [];
+    manifest.gateEvidenceCarryHistory.push({
+      ...manifest.gateEvidenceCarry,
+      retiredAt: new Date().toISOString(),
+      retiredReason: `gate-replaced:${name}`,
+    });
+    delete manifest.gateEvidenceCarry;
+  }
   manifest.gates.push({
     name,
     source,
@@ -5864,18 +5908,13 @@ function verifyGateEvidenceCarry(manifest) {
   );
   if (
     current.length !== manifest.requiredGates.length ||
-    current.some((gate) => gate.status !== "success") ||
     carry.gatesDigest !== gateEvidenceDigest(current)
   ) {
     throw new Error("gate evidence carry digest is invalid");
   }
   for (const required of manifest.requiredGates) {
     const gate = current.find((candidate) => candidate.name === required.name);
-    if (
-      !gate ||
-      gate.policyDigest !== gateRequirementsDigest([required]) ||
-      !validGateArtifact(gate)
-    ) {
+    if (!gate || !carryableGate(manifest, gate)) {
       throw new Error(`carried ${required.name} gate evidence is invalid`);
     }
   }
@@ -7182,6 +7221,9 @@ function advanceManifestTransaction(manifestArg, manifest, rawArgs) {
     const gateBase = isAncestorOf(locked.repo.realpath, priorHead, nextHead)
       ? priorHead
       : effectiveBaseSha(locked);
+    const testRequirement = locked.requiredGates.find(
+      (required) => required.name === "test",
+    );
     const reusableTestGate = [...locked.gates]
       .reverse()
       .find(
@@ -7204,7 +7246,14 @@ function advanceManifestTransaction(manifestArg, manifest, rawArgs) {
         nextHead,
       ).includes(".buildproven/test-impact.json"),
     );
-    const discoveryBase = reuseTestEvidence ? reusableTestGate.head : gateBase;
+    const recomputeTestEvidence = Boolean(
+      testRequirement && nextHead !== priorHead && !reuseTestEvidence,
+    );
+    const discoveryBase = reuseTestEvidence
+      ? reusableTestGate.head
+      : recomputeTestEvidence
+        ? effectiveBaseSha(locked)
+        : gateBase;
     const discovered = discoverRequiredGates(
       locked.repo.realpath,
       {
@@ -7215,7 +7264,7 @@ function advanceManifestTransaction(manifestArg, manifest, rawArgs) {
       discoveryBase,
     );
     const replaceNames = new Set();
-    if (reuseTestEvidence) replaceNames.add("test");
+    if (reuseTestEvidence || recomputeTestEvidence) replaceNames.add("test");
     locked.requiredGates = locked[NEEDS_REQUIRED_GATES_MIGRATION]
       ? discovered
       : unionRequiredGates(locked.requiredGates, discovered, replaceNames);

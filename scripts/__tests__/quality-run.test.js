@@ -699,6 +699,22 @@ describe("quality-run public orchestration", () => {
     expect(result.manifest.calls || []).not.toContain("quality-run-review.sh");
   });
 
+  it("does not request protected admission for a non-merge product review", () => {
+    const result = run(
+      fixture({
+        changedFiles: ["src/App.tsx"],
+        productVerifier:
+          "process.stdout.write(JSON.stringify({valid:true,errors:[]}));",
+      }),
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "complete",
+      state: "verified-unmerged",
+    });
+    expect(result.manifest.calls).toContain("quality-run-review.sh");
+  });
+
   it("merges a product claim only after exact-head protected admission", () => {
     const result = run(
       fixture(

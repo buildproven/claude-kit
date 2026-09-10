@@ -480,6 +480,7 @@ function prepareProductAdmission(manifestPath) {
   // run while deterministic gates execute instead of being discovered after
   // all local work has already finished.
   verifyDeliveryClaim(manifest);
+  if (manifest.options?.merge !== true) return null;
   try {
     verifyProtectedProductAdmission(manifest);
     return null;
