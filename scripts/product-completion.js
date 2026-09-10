@@ -14,6 +14,10 @@ const NON_PRODUCT_TEST_FILE = /(?:\.test|\.spec)\.[^/]+$/i;
 const NON_PRODUCT_EXACT_PATHS = new Set([
   "harness-config.json",
   "package-lock.json",
+  // claude-setup records the shared quality/agent runtime as a submodule
+  // gitlink. The exact `core` path is contract infrastructure, not product
+  // application behavior.
+  "core",
 ]);
 const NON_PRODUCT_ROOT_NAMES = new Set([
   "AGENTS",
