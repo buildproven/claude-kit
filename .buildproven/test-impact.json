@@ -4,14 +4,12 @@
   "mappings": [
     {
       "paths": [
-        "scripts/product-completion.js",
         "scripts/product-evidence.js",
         "scripts/product-admission.js",
         "scripts/product-evidence-producer.js",
         "scripts/schemas/product-evidence-receipt-v2.schema.json",
         "scripts/schemas/product-delivery-evidence-index-v2.schema.json",
         "scripts/schemas/product-evidence-v2-conformance.json",
-        "scripts/__tests__/product-completion.test.js",
         ".github/workflows/product-evidence-admission.yml",
         ".github/workflows/product-evidence-producer.yml",
         ".github/workflows/product-evidence-source.yml",
@@ -24,11 +22,59 @@
             "vitest",
             "run",
             "scripts/__tests__/product-admission.test.js",
-            "scripts/__tests__/product-evidence-producer.test.js",
-            "scripts/__tests__/product-completion.test.js",
-            "scripts/__tests__/quality-run.test.js",
-            "scripts/__tests__/quality-invocation.test.js",
-            "scripts/__tests__/quality-runtime-dir.test.js"
+            "scripts/__tests__/product-evidence-producer.test.js"
+          ]
+        }
+      ]
+    },
+    {
+      "paths": [
+        "scripts/product-completion.js",
+        "scripts/__tests__/product-completion.test.js",
+        "docs/decisions/ADR-authenticated-product-completion-receipts.md"
+      ],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/product-completion.test.js"
+          ]
+        }
+      ]
+    },
+    {
+      "paths": [
+        "scripts/quality-run.js",
+        "scripts/__tests__/quality-run.test.js",
+        "docs/prd/bui-822-quality-runtime-unblocking.md",
+        "docs/prd/bui-822-quality-runtime-unblocking-tasks.md"
+      ],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/quality-run.test.js"
+          ]
+        }
+      ]
+    },
+    {
+      "paths": [
+        "scripts/quality-agent-selection.js",
+        "scripts/quality-select-agents.sh",
+        "scripts/__tests__/quality-agent-selection.test.js"
+      ],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/quality-agent-selection.test.js"
           ]
         }
       ]
@@ -44,11 +90,18 @@
       "commands": [
         {
           "executable": "npx",
-          "args": ["vitest", "run", "scripts/__tests__/csc-lint.test.js"]
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/csc-lint.test.js"
+          ]
         },
         {
           "executable": "python3",
-          "args": ["scripts/csc_lint.py", "--strict"]
+          "args": [
+            "scripts/csc_lint.py",
+            "--strict"
+          ]
         }
       ]
     },
@@ -60,7 +113,11 @@
       "commands": [
         {
           "executable": "npx",
-          "args": ["vitest", "run", "scripts/__tests__/vcycle-creator.test.js"]
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/vcycle-creator.test.js"
+          ]
         }
       ]
     },
@@ -96,7 +153,9 @@
       ]
     },
     {
-      "paths": ["scripts/quality-mutation-check.sh"],
+      "paths": [
+        "scripts/quality-mutation-check.sh"
+      ],
       "commands": [
         {
           "executable": "npx",
@@ -125,7 +184,10 @@
       "commands": [
         {
           "executable": "npm",
-          "args": ["run", "check:dependency-preflight"]
+          "args": [
+            "run",
+            "check:dependency-preflight"
+          ]
         },
         {
           "executable": "npx",
@@ -139,7 +201,9 @@
       ]
     },
     {
-      "paths": [".github/workflows/quality.yml"],
+      "paths": [
+        ".github/workflows/quality.yml"
+      ],
       "commands": [
         {
           "executable": "npx",
@@ -152,7 +216,9 @@
       ]
     },
     {
-      "paths": ["scripts/setup-codex-skill-profile.sh"],
+      "paths": [
+        "scripts/setup-codex-skill-profile.sh"
+      ],
       "commands": [
         {
           "executable": "npx",
@@ -165,7 +231,9 @@
       ]
     },
     {
-      "paths": ["scripts/quality-required-checks.js"],
+      "paths": [
+        "scripts/quality-required-checks.js"
+      ],
       "commands": [
         {
           "executable": "npx",
@@ -178,7 +246,9 @@
       ]
     },
     {
-      "paths": ["scripts/quality-review-plan.sh"],
+      "paths": [
+        "scripts/quality-review-plan.sh"
+      ],
       "commands": [
         {
           "executable": "npx",
@@ -229,7 +299,9 @@
       ]
     },
     {
-      "paths": ["scripts/quality-wrapper.js"],
+      "paths": [
+        "scripts/quality-wrapper.js"
+      ],
       "commands": [
         {
           "executable": "npx",
@@ -263,7 +335,10 @@
       ]
     },
     {
-      "paths": ["harness-config.json", "scripts/quality-risk-resolve.sh"],
+      "paths": [
+        "harness-config.json",
+        "scripts/quality-risk-resolve.sh"
+      ],
       "commands": [
         {
           "executable": "npx",
@@ -304,25 +379,39 @@
       ]
     },
     {
-      "paths": ["README.md", "commands/**/*.md"],
+      "paths": [
+        "README.md",
+        "commands/**/*.md"
+      ],
       "commands": [
         {
           "executable": "npm",
-          "args": ["run", "check:commands"]
+          "args": [
+            "run",
+            "check:commands"
+          ]
         }
       ]
     },
     {
-      "paths": ["agents/**/*.md", "skills/**/*.md"],
+      "paths": [
+        "agents/**/*.md",
+        "skills/**/*.md"
+      ],
       "commands": [
         {
           "executable": "npm",
-          "args": ["run", "test:patterns"]
+          "args": [
+            "run",
+            "test:patterns"
+          ]
         }
       ]
     },
     {
-      "paths": ["scripts/block-push-main.sh"],
+      "paths": [
+        "scripts/block-push-main.sh"
+      ],
       "commands": [
         {
           "executable": "npx",
@@ -365,7 +454,9 @@
       "commands": [
         {
           "executable": "npm",
-          "args": ["test"]
+          "args": [
+            "test"
+          ]
         }
       ]
     }
@@ -373,7 +464,9 @@
   "fallback": [
     {
       "executable": "npm",
-      "args": ["test"]
+      "args": [
+        "test"
+      ]
     }
   ]
 }
