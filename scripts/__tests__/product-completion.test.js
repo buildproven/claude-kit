@@ -388,6 +388,7 @@ describe("product completion", () => {
       "harness-config.json",
       "package-lock.json",
       "core",
+      "scripts/ci-workflow-contract.js",
     ]) {
       expect(productionCodeChange(file)).toBe(false);
     }

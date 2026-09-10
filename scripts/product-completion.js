@@ -18,6 +18,7 @@ const NON_PRODUCT_EXACT_PATHS = new Set([
   // gitlink. The exact `core` path is contract infrastructure, not product
   // application behavior.
   "core",
+  "scripts/ci-workflow-contract.js",
 ]);
 const NON_PRODUCT_ROOT_NAMES = new Set([
   "AGENTS",
