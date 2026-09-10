@@ -110,6 +110,23 @@
     },
     {
       "paths": [
+        "scripts/quality-agent-selection.js",
+        "scripts/quality-select-agents.sh",
+        "scripts/__tests__/quality-agent-selection.test.js"
+      ],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/quality-agent-selection.test.js"
+          ]
+        }
+      ]
+    },
+    {
+      "paths": [
         "scripts/quality-bootstrap.sh",
         "scripts/build-quality-dependency-preflight.js",
         "scripts/quality-dependency-preflight.js",
