@@ -23,6 +23,18 @@ jobs:
             const document = (value) => /^docs\/(?:(?:prd|decisions)\/)?[a-zA-Z0-9._-]+\.md$/.test(value || "");
             if (!Number.isSafeInteger(p.pullRequest) || p.pullRequest < 1 || !/^[0-9a-f]{40}$/.test(p.base || "") || !/^[0-9a-f]{40}$/.test(p.head || "") || !/^[0-9a-f]{32}$/.test(p.nonce || "") || !document(p.prd) || !document(p.tasks)) process.exit(1);
           '
+      - name: Install zsh for shell-isolation regressions
+        run: |
+          if command -v zsh >/dev/null 2>&1; then
+            zsh --version
+            exit 0
+          fi
+          timeout 30s sudo apt-get update
+          timeout 150s sudo env DEBIAN_FRONTEND=noninteractive apt-get \
+            -o Acquire::http::Timeout=15 \
+            -o Acquire::https::Timeout=15 \
+            -o Acquire::Retries=3 \
+            install --yes zsh
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.client_payload.head }}
@@ -32,9 +44,32 @@ jobs:
           node-version: "24.18.0"
           cache: npm
       - name: Run allowlisted behavioral command
+        id: behavioral
+        continue-on-error: true
         run: npm ci && npm test > behavioral-tests.log 2>&1
       - name: Run allowlisted acceptance command
+        id: acceptance
+        if: always()
+        continue-on-error: true
         run: npm run test:patterns > acceptance-evidence.log 2>&1
+      - name: Upload failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-evidence-source-diagnostic-${{ github.run_id }}
+          path: |
+            behavioral-tests.log
+            acceptance-evidence.log
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Enforce evidence command success
+        if: always()
+        env:
+          BEHAVIORAL_OUTCOME: ${{ steps.behavioral.outcome }}
+          ACCEPTANCE_OUTCOME: ${{ steps.acceptance.outcome }}
+        run: |
+          test "$BEHAVIORAL_OUTCOME" = success
+          test "$ACCEPTANCE_OUTCOME" = success
       - name: Build raw evidence bundle
         env:
           PAYLOAD: ${{ toJson(github.event.client_payload) }}
