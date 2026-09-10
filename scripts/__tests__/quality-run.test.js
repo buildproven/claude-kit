@@ -693,7 +693,10 @@ describe("quality-run public orchestration", () => {
         "candidate-worker verification is preflight only",
       ),
     });
-    expect(result.manifest.calls).not.toContain("quality-stamp-and-merge.sh");
+    expect(result.manifest.calls || []).not.toContain(
+      "quality-stamp-and-merge.sh",
+    );
+    expect(result.manifest.calls || []).not.toContain("quality-run-review.sh");
   });
 
   it("merges a product claim only after exact-head protected admission", () => {

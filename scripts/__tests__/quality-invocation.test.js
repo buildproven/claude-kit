@@ -1459,9 +1459,25 @@ describe("quality invocation manifest", () => {
         reason: "exact-head discovery exhausted its configured provider set",
       },
       providerRecovery: { attemptedProviders: ["claude", "codex"] },
-      gates: [],
+      gateEvidenceCarry: {
+        sourceInvocationId: JSON.parse(readFileSync(predecessor, "utf8"))
+          .invocationId,
+        head: JSON.parse(readFileSync(predecessor, "utf8")).revisions
+          .currentHead,
+      },
+      gates: expect.arrayContaining(
+        JSON.parse(readFileSync(predecessor, "utf8")).gates,
+      ),
       reviews: [],
     });
+    const recoveredManifest = JSON.parse(readFileSync(recovered, "utf8"));
+    expect(() =>
+      invocation.verifyGateEvidence(recoveredManifest),
+    ).not.toThrow();
+    recoveredManifest.gateEvidenceCarry.gatesDigest = "0".repeat(64);
+    expect(() => invocation.verifyGateEvidence(recoveredManifest)).toThrow(
+      /gate evidence carry digest is invalid/,
+    );
     expect(() =>
       create(root, ["--primary", "claude", "--fallback", "codex"]),
     ).toThrow(/deterministic quality campaign identity collision/);

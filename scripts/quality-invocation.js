@@ -1530,6 +1530,20 @@ function manifestIdentity(manifest) {
   };
 }
 
+function gateRequirementsDigest(requiredGates) {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(canonicalJson(requiredGates)))
+    .digest("hex");
+}
+
+function gateEvidenceDigest(gates) {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(canonicalJson(gates)))
+    .digest("hex");
+}
+
 function canFailOverProvider(existing, existingIdentity, campaignIdentity) {
   const sameWork =
     JSON.stringify(canonicalJson(identityWithoutProvider(existingIdentity))) ===
@@ -1587,6 +1601,14 @@ function supersedingManifest(
   const manifestPath = path.join(stateRoot, "invocation.json");
   if (fs.existsSync(manifestPath)) return manifestPath;
   const now = new Date().toISOString();
+  const carriesGateEvidence = transition === "providerRecoveryOf";
+  const carriedGates = carriesGateEvidence
+    ? existing.gates.filter(
+        (gate) =>
+          gate.head === existing.revisions.currentHead &&
+          gate.status === "success",
+      )
+    : [];
   const manifest = {
     schemaVersion: SCHEMA_VERSION,
     reviewContractVersion: REVIEW_CONTRACT_VERSION,
@@ -1629,14 +1651,27 @@ function supersedingManifest(
     provider: campaignIdentity.provider,
     reviews: [],
     governor: buildGovernor(campaignIdentity.head),
-    requiredGates: discoverRequiredGates(
-      campaignIdentity.root,
-      campaignIdentity.options,
-      campaignIdentity.head,
-      campaignIdentity.baseSha,
-    ),
+    requiredGates: carriesGateEvidence
+      ? existing.requiredGates
+      : discoverRequiredGates(
+          campaignIdentity.root,
+          campaignIdentity.options,
+          campaignIdentity.head,
+          campaignIdentity.baseSha,
+        ),
     requiredGatesPolicyVersion: REQUIRED_GATES_POLICY_VERSION,
-    gates: [],
+    gates: carriedGates,
+    ...(carriesGateEvidence
+      ? {
+          gateEvidenceCarry: {
+            sourceInvocationId: existing.invocationId,
+            sourceManifestPath: existingPath,
+            head: existing.revisions.currentHead,
+            requiredGatesDigest: gateRequirementsDigest(existing.requiredGates),
+            gatesDigest: gateEvidenceDigest(carriedGates),
+          },
+        }
+      : {}),
     supersedes: {
       invocationId: existing.invocationId,
       manifestPath: existingPath,
@@ -5523,6 +5558,9 @@ function recordGate(manifest, options) {
     status,
     reason,
     failureCode,
+    policyDigest: gateRequirementsDigest(
+      manifest.requiredGates.filter((gate) => gate.name === name),
+    ),
     log,
     logSha256: sha256File(log),
     completedAt: new Date().toISOString(),
@@ -5796,6 +5834,11 @@ function validTestGate(manifest, gate) {
     (candidate) => candidate.name === "test",
   );
   if (!gateMatchesRequirement(gate, required)) return false;
+  if (
+    gate.policyDigest &&
+    gate.policyDigest !== gateRequirementsDigest([required])
+  )
+    return false;
   if (gate.status === "success") return true;
   return Boolean(
     manifest.requiredGates.find((required) => required.name === "test")
@@ -5806,10 +5849,43 @@ function validTestGate(manifest, gate) {
   );
 }
 
+function verifyGateEvidenceCarry(manifest) {
+  const carry = manifest.gateEvidenceCarry;
+  if (!carry) return;
+  if (
+    carry.sourceInvocationId === manifest.invocationId ||
+    carry.head !== manifest.revisions.currentHead ||
+    carry.requiredGatesDigest !== gateRequirementsDigest(manifest.requiredGates)
+  ) {
+    throw new Error("gate evidence carry identity is invalid");
+  }
+  const current = manifest.gates.filter(
+    (gate) => gate.head === manifest.revisions.currentHead,
+  );
+  if (
+    current.length !== manifest.requiredGates.length ||
+    current.some((gate) => gate.status !== "success") ||
+    carry.gatesDigest !== gateEvidenceDigest(current)
+  ) {
+    throw new Error("gate evidence carry digest is invalid");
+  }
+  for (const required of manifest.requiredGates) {
+    const gate = current.find((candidate) => candidate.name === required.name);
+    if (
+      !gate ||
+      gate.policyDigest !== gateRequirementsDigest([required]) ||
+      !validGateArtifact(gate)
+    ) {
+      throw new Error(`carried ${required.name} gate evidence is invalid`);
+    }
+  }
+}
+
 // acceptedConditions is only ever non-empty on the operator-override path
 // (see reviewAuthorization); the normal path always calls this with no
 // arguments, so a caller cannot widen the normal merge path by accident.
 function verifyGateEvidence(manifest, acceptedConditions = []) {
+  verifyGateEvidenceCarry(manifest);
   const current = manifest.gates.filter(
     (gate) => gate.head === manifest.revisions.currentHead,
   );
@@ -7112,6 +7188,11 @@ function advanceManifestTransaction(manifestArg, manifest, rawArgs) {
         (gate) =>
           gate.name === "test" &&
           gate.status === "success" &&
+          validTestGate(locked, gate) &&
+          gate.policyDigest ===
+            gateRequirementsDigest([
+              locked.requiredGates.find((required) => required.name === "test"),
+            ]) &&
           isAncestorOf(locked.repo.realpath, gate.head, nextHead),
       );
     const reuseTestEvidence = Boolean(
@@ -7371,6 +7452,7 @@ module.exports = {
   reviewDiffBuffer,
   reviewInfo,
   reviewCoverage,
+  verifyGateEvidence,
   incompleteRetryStatus,
   reserveIncompleteRetry,
   reviewIdentity,

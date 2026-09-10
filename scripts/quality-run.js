@@ -471,6 +471,43 @@ function actionRequired(manifestPath, phase, message, manifest, review) {
   };
 }
 
+function prepareProductAdmission(manifestPath) {
+  const manifest = manifestAt(manifestPath);
+  if (deliveryClaim(manifest) === "contract") return null;
+
+  // Validate the candidate-owned receipt before spending gate or provider
+  // budget. Protected admission is still authoritative, but its request can
+  // run while deterministic gates execute instead of being discovered after
+  // all local work has already finished.
+  verifyDeliveryClaim(manifest);
+  try {
+    verifyProtectedProductAdmission(manifest);
+    return null;
+  } catch (error) {
+    let request;
+    try {
+      request = requestProtectedProductAdmission(manifest);
+    } catch (requestError) {
+      return actionRequired(
+        manifestPath,
+        "product-admission",
+        `${error.message}; ${requestError.message}; candidate-worker verification is preflight only`,
+        manifest,
+      );
+    }
+    if (request) {
+      quality.withManifestLock(manifestPath, (current) => {
+        current.productAdmissionRequest = {
+          head: current.revisions.currentHead,
+          requirementsDigest: request.requirementsDigest,
+          requestedAt: new Date().toISOString(),
+        };
+      });
+    }
+    return null;
+  }
+}
+
 function workRequired(manifestPath, phase, message, manifest, detail = {}) {
   const { review, ...resultDetail } = detail;
   updateOrchestration(manifestPath, phase, "work-required", message);
@@ -523,6 +560,8 @@ function invocationRuntime(manifestPath, execute) {
 }
 
 async function runDeterministicPhases(manifestPath, invoke) {
+  const admission = prepareProductAdmission(manifestPath);
+  if (admission) return admission;
   let manifest = manifestAt(manifestPath);
   if (manifest.risk?.resolved !== true) {
     await invoke("risk", "bash", [
@@ -932,7 +971,11 @@ function dispositionArtifactMatches(artifact, judge, context) {
 
 async function runOpenCampaign(context, manifestPath, manifest) {
   updateOrchestration(manifestPath, "validate", "success");
-  await runDeterministicPhases(manifestPath, context.runtime.invoke);
+  const admission = await runDeterministicPhases(
+    manifestPath,
+    context.runtime.invoke,
+  );
+  if (admission) return admission;
   await ensureReview(manifestPath, context.runtime.invoke);
   manifest = manifestAt(manifestPath);
   quality.reviewCoverage(manifest);
