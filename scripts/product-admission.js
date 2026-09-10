@@ -156,7 +156,13 @@ function ghJson(args) {
   return parseJson(result.stdout, "GitHub admission response");
 }
 
-function verifyRemote({ repository, repositoryId, head, requirementsDigest }) {
+function verifyRemote({
+  repository,
+  repositoryId,
+  head,
+  requirementsDigest,
+  evidenceIndexSha256,
+}) {
   const response = ghJson([
     "api",
     `repos/${repository}/commits/${head}/check-runs`,
@@ -183,7 +189,7 @@ function verifyRemote({ repository, repositoryId, head, requirementsDigest }) {
           repositoryId,
           head,
           requirementsDigest,
-          evidenceIndexSha256: envelope.payload?.evidenceIndexSha256,
+          evidenceIndexSha256,
         },
         { trustedPublicKey: admissionPublicKey() },
       );
@@ -223,12 +229,12 @@ function main(argv) {
     return;
   }
   if (command === "verify-remote") {
-    if (args.length !== 4)
+    if (args.length !== 5)
       throw new Error(
-        "usage: product-admission.js verify-remote <repository> <repository-id> <head> <requirements-sha256>",
+        "usage: product-admission.js verify-remote <repository> <repository-id> <head> <requirements-sha256> <evidence-sha256>",
       );
     process.stdout.write(
-      `${JSON.stringify(verifyRemote({ repository: args[0], repositoryId: args[1], head: args[2], requirementsDigest: args[3] }))}\n`,
+      `${JSON.stringify(verifyRemote({ repository: args[0], repositoryId: args[1], head: args[2], requirementsDigest: args[3], evidenceIndexSha256: args[4] }))}\n`,
     );
     return;
   }
