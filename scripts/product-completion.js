@@ -5,7 +5,6 @@
 // It classifies what a PRD/task set proves; it does not alter gate or merge policy.
 const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
-const { isDeepStrictEqual } = require("node:util");
 const { sha256, verifyReceipt } = require("./product-evidence");
 
 const PHASES = new Set(["contract", "implementation", "hosted", "validation"]);
@@ -227,7 +226,8 @@ function dependencyMaintenance(file, context = {}) {
   return [...fields].every(
     (field) =>
       dependencyFields.has(field) ||
-      isDeepStrictEqual(manifests[0][field], manifests[1][field]),
+      JSON.stringify(manifests[0][field]) ===
+        JSON.stringify(manifests[1][field]),
   );
 }
 

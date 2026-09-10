@@ -6,7 +6,8 @@ work. This required customer acceptance receipts even for dependency maintenance
 Classify existing manifests by comparing their committed base and candidate JSON.
 Changes limited to dependencies, devDependencies, optionalDependencies,
 peerDependencies, overrides, or resolutions are `dependency-maintenance`.
-Object property order and whitespace do not change manifest behavior. All other
+Whitespace is ignored, but nested property order is preserved because conditional
+exports and imports use it to choose an entrypoint. All other
 fields, including scripts, exports, engines, module type, workspaces, package
 manager settings, and framework configuration remain product-affecting. Added,
 deleted, invalid, unavailable, or non-regular manifests fail closed. Classification

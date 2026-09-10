@@ -567,6 +567,20 @@ describe("committed dependency maintenance", () => {
     expect(productionCodeChange("src/app.js", context)).toBe(true);
   });
 
+  it("requires product admission when conditional export order changes", () => {
+    const context = revisions(
+      {
+        exports: { default: "./fallback.js", node: "./node.js" },
+        devDependencies: { vitest: "3" },
+      },
+      {
+        exports: { node: "./node.js", default: "./fallback.js" },
+        devDependencies: { vitest: "4" },
+      },
+    );
+    expect(productionCodeChange("package.json", context)).toBe(true);
+  });
+
   it.each([
     "scripts",
     "exports",
