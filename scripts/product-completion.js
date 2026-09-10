@@ -19,6 +19,7 @@ const NON_PRODUCT_EXACT_PATHS = new Set([
   // application behavior.
   "core",
   "scripts/ci-workflow-contract.js",
+  "vitest.config.mjs",
 ]);
 const NON_PRODUCT_ROOT_NAMES = new Set([
   "AGENTS",
