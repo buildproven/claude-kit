@@ -6,10 +6,15 @@
       "paths": [
         "scripts/product-completion.js",
         "scripts/product-evidence.js",
+        "scripts/product-admission.js",
+        "scripts/product-evidence-producer.js",
         "scripts/schemas/product-evidence-receipt-v2.schema.json",
         "scripts/schemas/product-delivery-evidence-index-v2.schema.json",
         "scripts/schemas/product-evidence-v2-conformance.json",
         "scripts/__tests__/product-completion.test.js",
+        ".github/workflows/product-evidence-admission.yml",
+        ".github/workflows/product-evidence-producer.yml",
+        ".github/workflows/product-evidence-source.yml",
         "docs/decisions/ADR-authenticated-product-completion-receipts.md"
       ],
       "commands": [
@@ -18,6 +23,8 @@
           "args": [
             "vitest",
             "run",
+            "scripts/__tests__/product-admission.test.js",
+            "scripts/__tests__/product-evidence-producer.test.js",
             "scripts/__tests__/product-completion.test.js",
             "scripts/__tests__/quality-run.test.js",
             "scripts/__tests__/quality-invocation.test.js",

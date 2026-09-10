@@ -644,7 +644,7 @@ describe("quality-run public orchestration", () => {
       status: "terminal",
       state: "blocked",
     });
-    expect(result.manifest.calls).not.toContain("quality-run-review.sh");
+    expect(result.manifest.calls || []).not.toContain("quality-run-review.sh");
     expect(result.manifest.telemetryWrites).toBe(1);
   });
 
@@ -772,7 +772,26 @@ describe("quality-run public orchestration", () => {
         "candidate-worker verification is preflight only",
       ),
     });
-    expect(result.manifest.calls).not.toContain("quality-stamp-and-merge.sh");
+    expect(result.manifest.calls || []).not.toContain(
+      "quality-stamp-and-merge.sh",
+    );
+    expect(result.manifest.calls || []).not.toContain("quality-run-review.sh");
+  });
+
+  it("does not request protected admission for a non-merge product review", () => {
+    const result = run(
+      fixture({
+        changedFiles: ["src/App.tsx"],
+        productVerifier:
+          "process.stdout.write(JSON.stringify({valid:true,errors:[]}));",
+      }),
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.output)).toMatchObject({
+      status: "complete",
+      state: "verified-unmerged",
+    });
+    expect(result.manifest.calls).toContain("quality-run-review.sh");
   });
 
   it("merges a product claim only after exact-head protected admission", () => {
@@ -843,7 +862,7 @@ describe("quality-run public orchestration", () => {
     expect(JSON.parse(result.output).message).toContain(
       "delivery evidence changed without a HEAD advance",
     );
-    expect(result.manifest.calls).not.toContain("quality-run-review.sh");
+    expect(result.manifest.calls || []).not.toContain("quality-run-review.sh");
   });
 
   it("classifies malformed verifier output without exposing it", () => {

@@ -263,7 +263,10 @@ describe("product completion", () => {
       hosted: true,
       validated: true,
     });
-    expect(claim(result, "local-product", local).valid).toBe(true);
+    expect(claim(result, "local-product", local)).toMatchObject({
+      valid: true,
+      requirementsDigest: result.requirementsDigest,
+    });
     expect(claim(result, "hosted", local).valid).toBe(false);
     expect(claim(result, "hosted", hosted).valid).toBe(true);
     expect(claim(result, "validated", hosted).valid).toBe(false);
@@ -392,6 +395,8 @@ describe("product completion", () => {
       ".buildproven/test-impact.json",
       "harness-config.json",
       "package-lock.json",
+      "core",
+      "scripts/ci-workflow-contract.js",
       "vitest.config.mjs",
     ]) {
       expect(productionCodeChange(file)).toBe(false);
@@ -426,6 +431,8 @@ describe("product completion", () => {
         "docs/prd/runtime-prd.md",
         ".buildproven/test-impact.json",
         "vitest.config.mjs",
+        "scripts/quality-agent-selection.js",
+        "scripts/quality-select-agents.sh",
         "scripts/__tests__/quality-run.test.js",
       ]),
     ).toBe(true);

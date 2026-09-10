@@ -17,6 +17,11 @@ const NON_PRODUCT_EXACT_PATHS = new Set([
   // Repository test-runner configuration is a quality-control contract, not
   // shipped application behavior. Keep this exact allowlist narrow so other
   // application configuration remains product-affecting by default.
+  // claude-setup records the shared quality/agent runtime as a submodule
+  // gitlink. The exact `core` path is contract infrastructure, not product
+  // application behavior.
+  "core",
+  "scripts/ci-workflow-contract.js",
   "vitest.config.mjs",
 ]);
 const NON_PRODUCT_ROOT_NAMES = new Set([
@@ -53,6 +58,8 @@ const QUALITY_INFRASTRUCTURE_PATHS = new Set([
   ".buildproven/test-impact.json",
   "harness-config.json",
   "package-lock.json",
+  "scripts/quality-agent-selection.js",
+  "scripts/quality-select-agents.sh",
   "vitest.config.mjs",
 ]);
 const EVIDENCE_KEYS = new Set([
@@ -228,10 +235,11 @@ function isProtectedInfrastructureBootstrap(prdPath, tasksPath, changedFiles) {
 }
 
 function isQualityInfrastructure(prdPath, tasksPath, changedFiles) {
+  const productFiles = changedFiles.filter(productionCodeChange);
   if (
     !QUALITY_INFRASTRUCTURE_PATHS.size ||
     !changedFiles.some((file) => QUALITY_INFRASTRUCTURE_PATHS.has(file)) ||
-    changedFiles.some(productionCodeChange)
+    productFiles.some((file) => !QUALITY_INFRASTRUCTURE_PATHS.has(file))
   ) {
     return false;
   }
@@ -329,7 +337,10 @@ function verifyClaim(
         "protected infrastructure bootstrap must include the complete admission chain",
       );
     }
-    if (qualityInfrastructure && changedFiles.some(productionCodeChange)) {
+    if (
+      qualityInfrastructure &&
+      productFiles.some((file) => !QUALITY_INFRASTRUCTURE_PATHS.has(file))
+    ) {
       errors.push(
         "quality infrastructure delivery cannot include product-affecting files",
       );
@@ -423,7 +434,13 @@ function verifyClaim(
     );
     if (error) errors.push(`validated claim ${error}`);
   }
-  return { schemaVersion: 1, claim, valid: errors.length === 0, errors };
+  return {
+    schemaVersion: 1,
+    claim,
+    valid: errors.length === 0,
+    requirementsDigest: result.requirementsDigest,
+    errors,
+  };
 }
 
 function next(result) {
