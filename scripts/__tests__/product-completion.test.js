@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
   mkdtempSync,
@@ -21,6 +22,7 @@ import {
   verifyClaim,
   next,
   productionCodeChange,
+  classifyChange,
 } from "../product-completion.js";
 import { canonicalJson } from "../product-evidence.js";
 
@@ -509,5 +511,97 @@ describe("product completion", () => {
       `- [ ] 1.0 Confirm data source\n  - Phase: contract\n  - Delivers: A confirmed source.\n  - Evidence: source decision\n\n- [x] 2.0 Find similar towns\n  - Phase: implementation\n  - Delivers: A user receives ten explainable alternatives.\n  - Evidence: browser journey + API behavior test\n`,
     );
     expect(next(validate(prd, tasks)).status).toBe("next-contract");
+  });
+});
+
+describe("committed dependency maintenance", () => {
+  function revisions(before, after, file = "package.json") {
+    const repo = mkdtempSync(path.join(tmpdir(), "manifest-maintenance-"));
+    const git = (...args) =>
+      execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
+    git("init", "-q");
+    git("config", "user.email", "test@example.com");
+    git("config", "user.name", "Test");
+    writeFileSync(
+      path.join(repo, file),
+      typeof before === "string" ? before : JSON.stringify(before),
+    );
+    git("add", ".");
+    git("commit", "-qm", "base");
+    const base = git("rev-parse", "HEAD");
+    if (after === null) unlinkSync(path.join(repo, file));
+    else
+      writeFileSync(
+        path.join(repo, file),
+        typeof after === "string" ? after : JSON.stringify(after),
+      );
+    git("add", "-A");
+    git("commit", "--allow-empty", "-qm", "head");
+    return { repo, base, head: git("rev-parse", "HEAD") };
+  }
+
+  it("admits dependency updates/removals and overrides without customer evidence", () => {
+    const context = revisions(
+      {
+        name: "app",
+        dependencies: { unused: "1" },
+        devDependencies: { vitest: "3" },
+      },
+      {
+        name: "app",
+        dependencies: {},
+        devDependencies: { vitest: "4" },
+        overrides: { nested: { vulnerable: "2" } },
+      },
+    );
+    expect(classifyChange("package.json", context).kind).toBe(
+      "dependency-maintenance",
+    );
+    expect(productionCodeChange("package.json", context)).toBe(false);
+    // A dirty worktree must not change the decision for the committed candidate.
+    writeFileSync(
+      path.join(context.repo, "package.json"),
+      JSON.stringify({ scripts: { start: "evil" } }),
+    );
+    expect(productionCodeChange("package.json", context)).toBe(false);
+    expect(productionCodeChange("src/app.js", context)).toBe(true);
+  });
+
+  it.each([
+    "scripts",
+    "exports",
+    "type",
+    "engines",
+    "packageManager",
+    "workspaces",
+    "config",
+    "peerDependenciesMeta",
+  ])(
+    "requires product admission for mixed dependency and %s changes",
+    (field) => {
+      const context = revisions(
+        { dependencies: { lib: "1" } },
+        { dependencies: { lib: "2" }, [field]: "changed" },
+      );
+      expect(productionCodeChange("package.json", context)).toBe(true);
+    },
+  );
+
+  it("fails closed for missing context, deleted, malformed, and newly added manifests", () => {
+    expect(productionCodeChange("package.json")).toBe(true);
+    expect(productionCodeChange("package.json", revisions({}, null))).toBe(
+      true,
+    );
+    expect(productionCodeChange("package.json", revisions({}, "{bad"))).toBe(
+      true,
+    );
+    const context = revisions({}, { dependencies: {} });
+    expect(
+      productionCodeChange("package.json", {
+        ...context,
+        base: "0".repeat(40),
+      }),
+    ).toBe(true);
+    expect(productionCodeChange("new/package.json", context)).toBe(true);
   });
 });

@@ -4,6 +4,8 @@
 // Product delivery evidence is deliberately separate from quality correctness.
 // It classifies what a PRD/task set proves; it does not alter gate or merge policy.
 const fs = require("node:fs");
+const { spawnSync } = require("node:child_process");
+const { isDeepStrictEqual } = require("node:util");
 const { sha256, verifyReceipt } = require("./product-evidence");
 
 const PHASES = new Set(["contract", "implementation", "hosted", "validation"]);
@@ -181,7 +183,75 @@ function receiptRecord(value, label, expected, options) {
   }
 }
 
-function productionCodeChange(file) {
+// Only committed, complete manifests can establish dependency maintenance.
+function dependencyMaintenance(file, context = {}) {
+  const { repo, base, head } = context;
+  if (
+    !repo ||
+    !/^[a-f0-9]{40}$/.test(base || "") ||
+    !/^[a-f0-9]{40}$/.test(head || "")
+  )
+    return false;
+  const manifests = [];
+  for (const revision of [base, head]) {
+    const entry = spawnSync("git", ["ls-tree", revision, "--", file], {
+      cwd: repo,
+      encoding: "utf8",
+    });
+    if (entry.status !== 0 || !/^100(?:644|755) blob /.test(entry.stdout || ""))
+      return false;
+    const result = spawnSync("git", ["show", `${revision}:${file}`], {
+      cwd: repo,
+      encoding: "utf8",
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    if (result.status !== 0) return false;
+    try {
+      const manifest = JSON.parse(result.stdout);
+      if (!manifest || typeof manifest !== "object" || Array.isArray(manifest))
+        return false;
+      manifests.push(manifest);
+    } catch {
+      return false;
+    }
+  }
+  const dependencyFields = new Set([
+    "dependencies",
+    "devDependencies",
+    "optionalDependencies",
+    "peerDependencies",
+    "overrides",
+    "resolutions",
+  ]);
+  const fields = new Set(manifests.flatMap(Object.keys));
+  return [...fields].every(
+    (field) =>
+      dependencyFields.has(field) ||
+      isDeepStrictEqual(manifests[0][field], manifests[1][field]),
+  );
+}
+
+function classifyChange(file, context) {
+  if (
+    typeof file === "string" &&
+    /(?:^|\/)package\.json$/.test(file) &&
+    dependencyMaintenance(file, context)
+  ) {
+    return {
+      kind: "dependency-maintenance",
+      reason: "committed manifests differ only in dependency fields",
+    };
+  }
+  return productionCodePath(file)
+    ? { kind: "product", reason: "product-affecting path or manifest settings" }
+    : { kind: "contract", reason: "documentation, tests, or infrastructure" };
+}
+
+function productionCodeChange(file, context) {
+  return classifyChange(file, context).kind === "product";
+}
+
+function productionCodePath(file) {
   if (typeof file !== "string" || file.length === 0) return false;
   if (NON_PRODUCT_EXACT_PATHS.has(file)) return false;
   const rootName = file.includes("/")
@@ -253,19 +323,31 @@ function verifyClaim(
   claim,
   changedFiles,
   evidence,
-  { head, evidencePath, repository, repositoryId, trustedPublicKey } = {},
+  {
+    head,
+    base,
+    repo,
+    evidencePath,
+    repository,
+    repositoryId,
+    trustedPublicKey,
+  } = {},
 ) {
   if (!CLAIMS.has(claim)) fail(`invalid delivery claim '${claim}'`);
   const errors = [...result.errors];
   const phases = new Set(result.tasks.map((task) => task.phase));
-  const sourceChange = changedFiles.some(productionCodeChange);
+  const sourceChange = changedFiles.some((file) =>
+    productionCodeChange(file, { repo, base, head }),
+  );
   const verification = { evidencePath, trustedPublicKey };
   if (claim !== "contract") {
     const indexError = evidenceIndexError(evidence, repository, repositoryId);
     if (indexError) errors.push(indexError);
   }
   if (claim === "contract") {
-    const productFiles = changedFiles.filter(productionCodeChange);
+    const productFiles = changedFiles.filter((file) =>
+      productionCodeChange(file, { repo, base, head }),
+    );
     const bootstrap =
       result.deliveryClass === PROTECTED_INFRASTRUCTURE_BOOTSTRAP;
     if (bootstrap && result.userFacing) {
@@ -427,6 +509,8 @@ function main(argv) {
       readJson(args.evidence, "evidence", args["evidence-sha256"]),
       {
         head: args.head,
+        base: args.base,
+        repo: args.repo,
         evidencePath: args.evidence,
         repository: args.repository,
         repositoryId: args["repository-id"],
@@ -443,6 +527,7 @@ function main(argv) {
 }
 
 module.exports = {
+  classifyChange,
   next,
   parseTasks,
   productionCodeChange,
