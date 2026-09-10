@@ -433,6 +433,7 @@ describe("product completion", () => {
         "docs/prd/runtime-prd.md",
         ".buildproven/test-impact.json",
         "vitest.config.mjs",
+        "scripts/product-completion.js",
         "scripts/quality-agent-selection.js",
         "scripts/quality-select-agents.sh",
         "scripts/__tests__/quality-run.test.js",
@@ -444,7 +445,7 @@ describe("product completion", () => {
         ".buildproven/test-impact.json",
         "scripts/product-completion.js",
       ]),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       isQualityInfrastructure(prd, tasks, [
         "docs/prd/runtime-prd.md",

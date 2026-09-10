@@ -37,11 +37,7 @@
       "commands": [
         {
           "executable": "npx",
-          "args": [
-            "vitest",
-            "run",
-            "scripts/__tests__/quality-run.test.js"
-          ]
+          "args": ["vitest", "run", "scripts/__tests__/quality-run.test.js"]
         }
       ]
     },
@@ -63,9 +59,7 @@
       ]
     },
     {
-      "paths": [
-        ".github/workflows/product-evidence-source.yml"
-      ],
+      "paths": [".github/workflows/product-evidence-source.yml"],
       "commands": [
         {
           "executable": "npx",
@@ -89,18 +83,11 @@
       "commands": [
         {
           "executable": "npx",
-          "args": [
-            "vitest",
-            "run",
-            "scripts/__tests__/csc-lint.test.js"
-          ]
+          "args": ["vitest", "run", "scripts/__tests__/csc-lint.test.js"]
         },
         {
           "executable": "python3",
-          "args": [
-            "scripts/csc_lint.py",
-            "--strict"
-          ]
+          "args": ["scripts/csc_lint.py", "--strict"]
         }
       ]
     },
@@ -112,11 +99,7 @@
       "commands": [
         {
           "executable": "npx",
-          "args": [
-            "vitest",
-            "run",
-            "scripts/__tests__/vcycle-creator.test.js"
-          ]
+          "args": ["vitest", "run", "scripts/__tests__/vcycle-creator.test.js"]
         }
       ]
     },
@@ -152,9 +135,7 @@
       ]
     },
     {
-      "paths": [
-        "scripts/quality-mutation-check.sh"
-      ],
+      "paths": ["scripts/quality-mutation-check.sh"],
       "commands": [
         {
           "executable": "npx",
@@ -200,10 +181,7 @@
       "commands": [
         {
           "executable": "npm",
-          "args": [
-            "run",
-            "check:dependency-preflight"
-          ]
+          "args": ["run", "check:dependency-preflight"]
         },
         {
           "executable": "npx",
@@ -217,9 +195,7 @@
       ]
     },
     {
-      "paths": [
-        ".github/workflows/quality.yml"
-      ],
+      "paths": [".github/workflows/quality.yml"],
       "commands": [
         {
           "executable": "npx",
@@ -232,9 +208,7 @@
       ]
     },
     {
-      "paths": [
-        "scripts/setup-codex-skill-profile.sh"
-      ],
+      "paths": ["scripts/setup-codex-skill-profile.sh"],
       "commands": [
         {
           "executable": "npx",
@@ -247,9 +221,7 @@
       ]
     },
     {
-      "paths": [
-        "scripts/quality-required-checks.js"
-      ],
+      "paths": ["scripts/quality-required-checks.js"],
       "commands": [
         {
           "executable": "npx",
@@ -262,9 +234,7 @@
       ]
     },
     {
-      "paths": [
-        "scripts/quality-review-plan.sh"
-      ],
+      "paths": ["scripts/quality-review-plan.sh"],
       "commands": [
         {
           "executable": "npx",
@@ -315,9 +285,7 @@
       ]
     },
     {
-      "paths": [
-        "scripts/quality-wrapper.js"
-      ],
+      "paths": ["scripts/quality-wrapper.js"],
       "commands": [
         {
           "executable": "npx",
@@ -351,10 +319,7 @@
       ]
     },
     {
-      "paths": [
-        "harness-config.json",
-        "scripts/quality-risk-resolve.sh"
-      ],
+      "paths": ["harness-config.json", "scripts/quality-risk-resolve.sh"],
       "commands": [
         {
           "executable": "npx",
@@ -395,39 +360,25 @@
       ]
     },
     {
-      "paths": [
-        "README.md",
-        "commands/**/*.md"
-      ],
+      "paths": ["README.md", "commands/**/*.md"],
       "commands": [
         {
           "executable": "npm",
-          "args": [
-            "run",
-            "check:commands"
-          ]
+          "args": ["run", "check:commands"]
         }
       ]
     },
     {
-      "paths": [
-        "agents/**/*.md",
-        "skills/**/*.md"
-      ],
+      "paths": ["agents/**/*.md", "skills/**/*.md"],
       "commands": [
         {
           "executable": "npm",
-          "args": [
-            "run",
-            "test:patterns"
-          ]
+          "args": ["run", "test:patterns"]
         }
       ]
     },
     {
-      "paths": [
-        "scripts/block-push-main.sh"
-      ],
+      "paths": ["scripts/block-push-main.sh"],
       "commands": [
         {
           "executable": "npx",
@@ -470,9 +421,7 @@
       "commands": [
         {
           "executable": "npm",
-          "args": [
-            "test"
-          ]
+          "args": ["test"]
         }
       ]
     }
@@ -480,9 +429,7 @@
   "fallback": [
     {
       "executable": "npm",
-      "args": [
-        "test"
-      ]
+      "args": ["test"]
     }
   ]
 }

@@ -59,6 +59,10 @@ const QUALITY_INFRASTRUCTURE_PATHS = new Set([
   ".buildproven/test-impact.json",
   "harness-config.json",
   "package-lock.json",
+  // The completion classifier is part of the quality admission runtime. A
+  // quality-infrastructure claim may change this policy module, while the
+  // consumer application remains outside the allowlist.
+  "scripts/product-completion.js",
   "scripts/quality-agent-selection.js",
   "scripts/quality-select-agents.sh",
   "vitest.config.mjs",
