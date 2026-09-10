@@ -182,6 +182,18 @@ function receiptRecord(value, label, expected, options) {
   }
 }
 
+function dependencyMap(value, nested = false, depth = 0) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || depth > 20)
+    return false;
+  return Object.entries(value).every(
+    ([name, spec]) =>
+      name.trim() !== "" &&
+      (typeof spec === "string"
+        ? spec.trim() !== ""
+        : nested && dependencyMap(spec, true, depth + 1)),
+  );
+}
+
 // Only committed, complete manifests can establish dependency maintenance.
 function dependencyMaintenance(file, context = {}) {
   const { repo, base, head } = context;
@@ -223,10 +235,14 @@ function dependencyMaintenance(file, context = {}) {
     "resolutions",
   ]);
   const fields = new Set(manifests.flatMap(Object.keys));
-  return [...fields].every(
-    (field) =>
-      dependencyFields.has(field) ||
-      JSON.stringify(manifests[0][field]) ===
+  return [...fields].every((field) =>
+    dependencyFields.has(field)
+      ? manifests.every(
+          (manifest) =>
+            !Object.hasOwn(manifest, field) ||
+            dependencyMap(manifest[field], field === "overrides"),
+        )
+      : JSON.stringify(manifests[0][field]) ===
         JSON.stringify(manifests[1][field]),
   );
 }

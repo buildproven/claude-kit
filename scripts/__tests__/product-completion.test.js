@@ -567,6 +567,18 @@ describe("committed dependency maintenance", () => {
     expect(productionCodeChange("src/app.js", context)).toBe(true);
   });
 
+  it.each([
+    ["dependencies", 42],
+    ["devDependencies", []],
+    ["optionalDependencies", { lib: null }],
+    ["peerDependencies", { lib: "" }],
+    ["overrides", { lib: { nested: 4 } }],
+    ["resolutions", { lib: {} }],
+  ])("rejects malformed %s values", (field, value) => {
+    const context = revisions({}, { [field]: value });
+    expect(productionCodeChange("package.json", context)).toBe(true);
+  });
+
   it("requires product admission when conditional export order changes", () => {
     const context = revisions(
       {
