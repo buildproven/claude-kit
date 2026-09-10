@@ -29,23 +29,6 @@
     },
     {
       "paths": [
-        "scripts/product-completion.js",
-        "scripts/__tests__/product-completion.test.js",
-        "docs/decisions/ADR-authenticated-product-completion-receipts.md"
-      ],
-      "commands": [
-        {
-          "executable": "npx",
-          "args": [
-            "vitest",
-            "run",
-            "scripts/__tests__/product-completion.test.js"
-          ]
-        }
-      ]
-    },
-    {
-      "paths": [
         "scripts/quality-run.js",
         "scripts/__tests__/quality-run.test.js",
         "docs/prd/bui-822-quality-runtime-unblocking.md",
@@ -64,9 +47,9 @@
     },
     {
       "paths": [
-        "scripts/quality-agent-selection.js",
-        "scripts/quality-select-agents.sh",
-        "scripts/__tests__/quality-agent-selection.test.js"
+        "scripts/product-completion.js",
+        "scripts/__tests__/product-completion.test.js",
+        "docs/decisions/ADR-authenticated-product-completion-receipts.md"
       ],
       "commands": [
         {
@@ -74,7 +57,23 @@
           "args": [
             "vitest",
             "run",
-            "scripts/__tests__/quality-agent-selection.test.js"
+            "scripts/__tests__/product-completion.test.js"
+          ]
+        }
+      ]
+    },
+    {
+      "paths": [
+        ".github/workflows/product-evidence-source.yml"
+      ],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/product-admission.test.js",
+            "scripts/__tests__/product-evidence-producer.test.js"
           ]
         }
       ]
@@ -163,6 +162,23 @@
             "vitest",
             "run",
             "scripts/__tests__/quality-mutation-check.test.js"
+          ]
+        }
+      ]
+    },
+    {
+      "paths": [
+        "scripts/quality-agent-selection.js",
+        "scripts/quality-select-agents.sh",
+        "scripts/__tests__/quality-agent-selection.test.js"
+      ],
+      "commands": [
+        {
+          "executable": "npx",
+          "args": [
+            "vitest",
+            "run",
+            "scripts/__tests__/quality-agent-selection.test.js"
           ]
         }
       ]

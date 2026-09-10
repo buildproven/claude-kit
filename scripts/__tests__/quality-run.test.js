@@ -674,116 +674,43 @@ describe("quality-run public orchestration", () => {
     expect(result.manifest.calls).toContain("quality-run-review.sh");
   });
 
-  it("allows an evidence-free contract claim for the protected bootstrap chain", () => {
-    const changedFiles = [
-      ".github/workflows/product-evidence-admission.yml",
-      ".github/workflows/product-evidence-producer.yml",
-      ".github/workflows/product-evidence-source.yml",
-      "docs/prd/bui-836-product-evidence-admission-tasks.md",
-      "docs/prd/bui-836-product-evidence-admission.md",
-      "docs/product-evidence-admission-operator-guide.md",
-      "scripts/__tests__/product-admission.test.js",
-      "scripts/__tests__/product-completion.test.js",
-      "scripts/__tests__/quality-run.test.js",
-      "scripts/__tests__/quality-verify-app.test.js",
-      "scripts/product-admission.js",
-      "scripts/product-completion.js",
-      "scripts/product-evidence-producer.js",
-      "scripts/product-evidence.js",
-      "scripts/quality-run.js",
-      "scripts/quality-verify-app.sh",
-    ];
-    const entry = fixture({ changedFiles });
-    const prdDirectory = path.join(
-      path.dirname(entry.manifestPath),
-      "docs",
-      "prd",
-    );
-    mkdirSync(prdDirectory, { recursive: true });
-    writeFileSync(
-      path.join(prdDirectory, "bui-836-product-evidence-admission.md"),
-      "# Protected admission\n\n## Delivery classification\n\n- Delivery: protected-infrastructure-bootstrap\n",
-    );
-    writeFileSync(
-      path.join(prdDirectory, "bui-836-product-evidence-admission-tasks.md"),
-      "- [x] 1.0 Build the protected chain\n  - Phase: implementation\n  - Delivers: protected admission\n  - Evidence: workflow and verifier tests\n",
-    );
-
-    const result = run(entry);
-
-    expect(result.status).toBe(0);
-    expect(JSON.parse(result.output)).toMatchObject({
-      status: "complete",
-      state: "verified-unmerged",
-    });
-  });
-
-  it("blocks an evidence-free contract claim for admission policy code", () => {
+  it("runs all quality gates and review for committed dependency maintenance", () => {
     const entry = fixture({
-      changedFiles: [
-        "docs/prd/bui-822-quality-runtime-unblocking.md",
-        "scripts/product-completion.js",
-        "scripts/quality-run.js",
-        "scripts/__tests__/quality-run.test.js",
-      ],
+      changedFiles: ["package.json", "package-lock.json"],
     });
-    const prdDirectory = path.join(
-      path.dirname(entry.manifestPath),
-      "docs",
-      "prd",
-    );
-    mkdirSync(prdDirectory, { recursive: true });
+    const manifest = JSON.parse(readFileSync(entry.manifestPath, "utf8"));
+    const cwd = manifest.repo.realpath;
+    const git = (...args) => {
+      const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+      expect(result.status).toBe(0);
+      return result.stdout.trim();
+    };
+    git("init", "-q");
+    git("config", "user.email", "test@example.com");
+    git("config", "user.name", "Test");
     writeFileSync(
-      path.join(prdDirectory, "bui-822-quality-runtime-unblocking.md"),
-      "# Runtime\n\n## Delivery classification\n\n- Delivery: quality-infrastructure\n",
+      path.join(cwd, "package.json"),
+      JSON.stringify({ devDependencies: { vitest: "3" } }),
     );
+    git("add", "package.json");
+    git("commit", "-qm", "base");
+    manifest.revisions.baseSha = git("rev-parse", "HEAD");
     writeFileSync(
-      path.join(prdDirectory, "bui-822-quality-runtime-unblocking-tasks.md"),
-      "- [x] 1.0 Update runtime\n  - Phase: implementation\n  - Delivers: deterministic quality runtime\n  - Evidence: orchestration tests\n",
+      path.join(cwd, "package.json"),
+      JSON.stringify({ devDependencies: { vitest: "4" } }),
     );
-
+    git("add", "package.json");
+    git("commit", "-qm", "candidate");
+    manifest.revisions.currentHead = git("rev-parse", "HEAD");
+    manifest.revisions.initialHead = manifest.revisions.currentHead;
+    writeFileSync(entry.manifestPath, JSON.stringify(manifest));
     const result = run(entry);
-
-    expect(result.status).toBe(1);
-    expect(JSON.parse(result.output)).toMatchObject({
-      status: "terminal",
-      state: "blocked",
-      message:
-        "contract delivery claim requires product evidence for product-affecting file 'scripts/product-completion.js'",
-    });
-  });
-
-  it("allows an evidence-free contract claim for the quality selector runtime", () => {
-    const entry = fixture({
-      changedFiles: [
-        "docs/prd/bui-822-quality-runtime-unblocking.md",
-        "scripts/quality-agent-selection.js",
-        "scripts/quality-select-agents.sh",
-        "scripts/__tests__/quality-agent-selection.test.js",
-      ],
-    });
-    const prdDirectory = path.join(
-      path.dirname(entry.manifestPath),
-      "docs",
-      "prd",
-    );
-    mkdirSync(prdDirectory, { recursive: true });
-    writeFileSync(
-      path.join(prdDirectory, "bui-822-quality-runtime-unblocking.md"),
-      "# Runtime\n\n## Delivery classification\n\n- Delivery: quality-infrastructure\n",
-    );
-    writeFileSync(
-      path.join(prdDirectory, "bui-822-quality-runtime-unblocking-tasks.md"),
-      "- [x] 1.0 Update selector\n  - Phase: implementation\n  - Delivers: deterministic selector\n  - Evidence: selector regression test\n",
-    );
-
-    const result = run(entry);
-
     expect(result.status).toBe(0);
-    expect(JSON.parse(result.output)).toMatchObject({
-      status: "complete",
-      state: "verified-unmerged",
-    });
+    expect(JSON.parse(result.output).state).toBe("verified-unmerged");
+    expect(result.manifest.calls).toContain("quality-run-review.sh");
+    expect(result.manifest.gates.map((gate) => gate.name)).toEqual(
+      expect.arrayContaining(["lint", "test", "security"]),
+    );
   });
 
   it("requires protected admission before merging a product claim", () => {

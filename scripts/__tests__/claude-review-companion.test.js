@@ -871,7 +871,10 @@ wait "$helper"
           "--agents",
           "code-reviewer",
           "--timeout",
-          "1",
+          // Python startup can exceed one second when the complete suite is
+          // running in parallel. Keep the provider timeout short while giving
+          // the fixture enough time to publish its detached-child handshake.
+          "5",
         ],
         { env: { PATH: `${bin}:${process.env.PATH}` } },
       );

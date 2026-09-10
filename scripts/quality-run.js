@@ -6,37 +6,12 @@ const fs = require("node:fs");
 const crypto = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const quality = require("./quality-invocation");
-const {
-  isProtectedInfrastructureBootstrap,
-  isQualityInfrastructure,
-  productionCodeChange,
-} = require("./product-completion");
+const { productionCodeChange } = require("./product-completion");
 
 const ORCHESTRATION_SCHEMA_VERSION = 1;
 const ACTION_REQUIRED_EXIT = 3;
 const WORK_REQUIRED_EXIT = 4;
 const SCRIPT_DIR = __dirname;
-const PROTECTED_BOOTSTRAP_PRD =
-  "docs/prd/bui-836-product-evidence-admission.md";
-const PROTECTED_BOOTSTRAP_TASKS =
-  "docs/prd/bui-836-product-evidence-admission-tasks.md";
-
-function qualityInfrastructurePrd(manifest, changedFiles) {
-  for (const file of changedFiles) {
-    if (!/^docs\/prd\/[^/]+\.md$/i.test(file)) continue;
-    const tasks = file.replace(/\.md$/i, "-tasks.md");
-    if (
-      isQualityInfrastructure(
-        path.join(manifest.repo.realpath, file),
-        path.join(manifest.repo.realpath, tasks),
-        changedFiles,
-      )
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
 
 function parseArgs(argv) {
   if (argv.length !== 2 || argv[0] !== "--manifest" || !argv[1]) {
@@ -432,25 +407,17 @@ function verifyDeliveryClaim(manifest) {
     !productTasks &&
     !deliveryEvidence
   ) {
-    const productFile = changedFiles.find(productionCodeChange);
-    const bootstrap = isProtectedInfrastructureBootstrap(
-      path.join(manifest.repo.realpath, PROTECTED_BOOTSTRAP_PRD),
-      path.join(manifest.repo.realpath, PROTECTED_BOOTSTRAP_TASKS),
-      changedFiles,
+    const productFile = changedFiles.find((file) =>
+      productionCodeChange(file, {
+        repo: manifest.repo.realpath,
+        base: manifest.revisions.baseSha,
+        head: manifest.revisions.currentHead,
+      }),
     );
-    const qualityInfrastructure = qualityInfrastructurePrd(
-      manifest,
-      changedFiles,
-    );
-    if (productFile && !bootstrap && !qualityInfrastructure) {
+    if (productFile) {
       throw new Error(
         `contract delivery claim requires product evidence for product-affecting file '${productFile}'`,
       );
-    }
-    if (productFile) {
-      return bootstrap
-        ? "declared protected infrastructure bootstrap; no product verifier inputs supplied"
-        : "declared quality infrastructure contract; no product verifier inputs supplied";
     }
     return "declared contract; no product verifier inputs supplied";
   }
@@ -478,6 +445,10 @@ function verifyDeliveryClaim(manifest) {
       productTasks,
       "--changed-files",
       changedFilesPath,
+      "--repo",
+      manifest.repo.realpath,
+      "--base",
+      manifest.revisions.baseSha,
       "--evidence",
       deliveryEvidence,
       "--evidence-sha256",
