@@ -8476,7 +8476,50 @@ exit 1
         JSON.parse(readFileSync(manifestPath, "utf8")),
       ),
     ).not.toThrow();
-    const predecessorLog = testGate.predecessorEvidence.log;
+    const h1 = JSON.parse(readFileSync(manifestPath, "utf8"));
+    invocation.advanceManifest(manifestPath);
+    invocation.advanceManifest(manifestPath);
+    const resumed = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(resumed.requiredGates.find((gate) => gate.name === "test")).toEqual(
+      h1.requiredGates.find((gate) => gate.name === "test"),
+    );
+
+    writeFileSync(path.join(root, "third-fix.js"), "export const third = 1;\n");
+    git(root, ["add", "third-fix.js"]);
+    git(root, ["commit", "-q", "-m", "fix: third descendant"]);
+    invocation.advanceManifest(manifestPath);
+    const chained = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const chainedTest = chained.requiredGates.find(
+      (gate) => gate.name === "test",
+    );
+    expect(chainedTest.predecessorEvidence.head).toBe(h1.revisions.currentHead);
+
+    const thirdFocusedLog = path.join(
+      path.dirname(manifestPath),
+      "third-focused-test.gate.log",
+    );
+    writeFileSync(thirdFocusedLog, "third focused test passed\n");
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      const required = manifest.requiredGates.find(
+        (gate) => gate.name === "test",
+      );
+      invocation.recordGate(manifest, {
+        name: "test",
+        source: required.source,
+        command: required.command,
+        log: thirdFocusedLog,
+      });
+    });
+    for (const gate of JSON.parse(readFileSync(manifestPath, "utf8"))
+      .requiredGates) {
+      if (gate.name !== "test") recordGateFixture(manifestPath, gate.name);
+    }
+    expect(() =>
+      invocation.verifyGateEvidence(
+        JSON.parse(readFileSync(manifestPath, "utf8")),
+      ),
+    ).not.toThrow();
+    const predecessorLog = chainedTest.predecessorEvidence.log;
     writeFileSync(predecessorLog, "tampered predecessor coverage\n");
     expect(() =>
       invocation.verifyGateEvidence(

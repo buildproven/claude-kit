@@ -5924,7 +5924,13 @@ function validTestGate(manifest, gate) {
 
 function validReusableTestGate(manifest, gate, required) {
   const predecessor = required?.predecessorEvidence;
-  if (!predecessor) return validTestGate(manifest, gate);
+  if (
+    gateMatchesRequirement(gate, required) &&
+    gate.policyDigest === gateRequirementsDigest([required])
+  ) {
+    return validTestGate(manifest, gate);
+  }
+  if (!predecessor || !predecessor.policyDigest) return false;
   if (
     gate.status !== "success" ||
     !validGateArtifact(gate) ||
