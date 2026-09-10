@@ -133,6 +133,9 @@ function selectReviewersForRange({ tier, repo, base, head }) {
     .filter(Boolean);
   const patch = execFileSync("git", ["diff", "--no-ext-diff", range], {
     cwd: repo,
+    // Large but valid review diffs can exceed Node's 1 MiB default. Keep the
+    // selector deterministic while allowing the complete patch to be read.
+    maxBuffer: 64 * 1024 * 1024,
   }).toString();
   return selectReviewers({ tier, files, patches: [patch] });
 }
