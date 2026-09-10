@@ -1,8 +1,13 @@
 const { execFileSync, spawnSync } = require("node:child_process");
-const { mkdtempSync, readFileSync, writeFileSync } = require("node:fs");
-const { tmpdir } = require("node:os");
+const fs = require("node:fs");
+const { mkdtempSync, readFileSync, writeFileSync } = fs;
+const os = require("node:os");
+const { tmpdir } = os;
 const path = require("node:path");
-const { selectReviewers } = require("../quality-agent-selection");
+const {
+  selectReviewers,
+  selectReviewersForRange,
+} = require("../quality-agent-selection");
 
 const ROOT = path.resolve(__dirname, "..", "..");
 const INVOCATION = path.join(ROOT, "scripts", "quality-invocation.js");
@@ -128,5 +133,42 @@ describe("quality agent selection", () => {
       domain: "policy-exempt",
       rule: "low-no-ai",
     });
+  });
+
+  it("reads review patches larger than Node's default child-process buffer", () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "quality-selector-"));
+    try {
+      const git = (args) =>
+        execFileSync("git", args, {
+          cwd: repo,
+          stdio: "ignore",
+        });
+      git(["init", "--quiet"]);
+      git(["config", "user.name", "Quality Test"]);
+      git(["config", "user.email", "quality@example.invalid"]);
+      fs.writeFileSync(path.join(repo, "fixture.txt"), "base\n");
+      git(["add", "fixture.txt"]);
+      git(["commit", "--quiet", "-m", "base"]);
+      fs.writeFileSync(
+        path.join(repo, "fixture.txt"),
+        `${"x".repeat(1_100_000)}\nset -e\n`,
+      );
+      git(["add", "fixture.txt"]);
+      git(["commit", "--quiet", "-m", "large-patch"]);
+
+      expect(
+        selectReviewersForRange({
+          tier: "high",
+          repo,
+          base: "HEAD~1",
+          head: "HEAD",
+        }),
+      ).toMatchObject({
+        agents: ["silent-failure-hunter"],
+        domain: "reliability",
+      });
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
   });
 });
