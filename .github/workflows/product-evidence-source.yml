@@ -11,7 +11,7 @@ jobs:
   collect-product-evidence:
     # This worker intentionally runs the candidate. It has no secrets and only
     # emits raw logs; a different protected worker validates and signs them.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Validate protected request
@@ -25,16 +25,19 @@ jobs:
           '
       - name: Install zsh for shell-isolation regressions
         run: |
-          if command -v zsh >/dev/null 2>&1; then
-            zsh --version
-            exit 0
+          zsh_package_version='5.9-8ubuntu3'
+          installed_version="$(dpkg-query --showformat='${Version}' --show zsh 2>/dev/null || true)"
+          if [ "$installed_version" != "$zsh_package_version" ]; then
+            timeout 30s sudo apt-get update
+            timeout 150s sudo env DEBIAN_FRONTEND=noninteractive apt-get \
+              -o Acquire::http::Timeout=15 \
+              -o Acquire::https::Timeout=15 \
+              -o Acquire::Retries=3 \
+              install --yes "zsh=$zsh_package_version" "zsh-common=$zsh_package_version"
           fi
-          timeout 30s sudo apt-get update
-          timeout 150s sudo env DEBIAN_FRONTEND=noninteractive apt-get \
-            -o Acquire::http::Timeout=15 \
-            -o Acquire::https::Timeout=15 \
-            -o Acquire::Retries=3 \
-            install --yes zsh
+          test "$(dpkg-query --showformat='${Version}' --show zsh)" = "$zsh_package_version"
+          zsh --version | tee zsh-version.log
+          printf 'zsh-package=%s\n' "$zsh_package_version" >> zsh-version.log
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.client_payload.head }}
@@ -54,12 +57,13 @@ jobs:
         run: npm run test:patterns > acceptance-evidence.log 2>&1
       - name: Upload failure diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: product-evidence-source-diagnostic-${{ github.run_id }}
           path: |
             behavioral-tests.log
             acceptance-evidence.log
+            zsh-version.log
           if-no-files-found: warn
           retention-days: 7
       - name: Enforce evidence command success
@@ -84,7 +88,7 @@ jobs:
             fs.writeFileSync("product-evidence-source/changed-files.json", JSON.stringify(changedFiles) + "\n", { mode: 0o600 });
             for (const [from, to] of [[p.prd,"prd.md"],[p.tasks,"tasks.md"],["behavioral-tests.log","behavioral-tests.log"],["acceptance-evidence.log","acceptance-evidence.log"]]) fs.copyFileSync(from, `product-evidence-source/${to}`);
           '
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: product-evidence-source-${{ github.run_id }}
           path: product-evidence-source

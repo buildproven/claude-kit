@@ -4,12 +4,15 @@
 
 ## Decision
 
-The protected Product Evidence Source worker installs `zsh` before running the
-candidate suite. The claude-kit regression tests include shell-parent checks;
-the normal Quality workflow already provisions `zsh`, so the evidence worker
-must use the same test environment. Installation has bounded network and
-package-manager timeouts. Failed behavioral or acceptance commands remain
-blocking, and their logs are uploaded for diagnosis.
+The protected Product Evidence Source worker runs on the fixed Ubuntu 24.04
+runner and installs the exact Ubuntu `zsh` and `zsh-common` package version
+`5.9-8ubuntu3` before running the candidate suite. The claude-kit regression
+tests include shell-parent checks; the normal Quality workflow already
+provisions `zsh`, so the evidence worker must use the same test environment.
+Installation has bounded network and package-manager timeouts, and the
+installed version is recorded in the evidence bundle. The artifact action is
+referenced by its immutable commit SHA. Failed behavioral or acceptance
+commands remain blocking, and their logs are uploaded for diagnosis.
 
 ## Verification
 
