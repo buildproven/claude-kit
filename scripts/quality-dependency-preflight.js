@@ -775,7 +775,9 @@ async function validateCommandGroup(root, command, target, name) {
       return [`${name}: executable NODE_PATH escapes the repository`];
     }
   }
-  const expected = await expectedCommandFiles(target, command, nodePath);
+  // The marker is already proven to resolve to the locked target. Generate
+  // the complete template using its lexical path, as pnpm does for symlinks.
+  const expected = await expectedCommandFiles(markerPath, command, nodePath);
   const failures = [];
   for (const [file, content] of expected) {
     if (!fs.existsSync(file)) {
@@ -783,30 +785,12 @@ async function validateCommandGroup(root, command, target, name) {
         `${name}: command wrapper ${path.extname(file) || "POSIX"} is missing`,
       );
     } else if (readText(file, `${name} command wrapper`) !== content) {
-      if (
-        path.extname(file) === "" &&
-        markerPath !== null &&
-        posixShimReferencesMarker(text, command, markerPath)
-      ) {
-        continue;
-      }
       failures.push(
         `${name}: command wrapper ${path.extname(file) || "POSIX"} differs from the supported template`,
       );
     }
   }
   return failures;
-}
-
-function posixShimReferencesMarker(text, command, markerPath) {
-  const relativeTarget = path
-    .relative(path.dirname(command), markerPath)
-    .split(path.sep)
-    .join("/");
-  const targetExpression = `"$basedir/${relativeTarget}"`;
-  return text
-    .split("\n")
-    .some((line) => line.includes("exec ") && line.includes(targetExpression));
 }
 
 function declaredCommandOwner(root, commandName, target) {

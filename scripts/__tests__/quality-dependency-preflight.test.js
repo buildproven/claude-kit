@@ -885,6 +885,30 @@ describe("quality dependency preflight", () => {
     expect(result.stderr).toMatch(/differs from the supported template/);
   });
 
+  it.each(["injected-command", "comment-decoy"])(
+    "rejects a shim with %s even when it names the correct target",
+    async (variant) => {
+      const root = fixture();
+      installPnpmFixturePackage(root);
+      const target = path.join(root, "node_modules", "eslint", "bin.js");
+      const command = path.join(root, "node_modules", ".bin", "eslint");
+      fs.unlinkSync(command);
+      const { cmdShim } = await import("@zkochan/cmd-shim");
+      await cmdShim(target, command);
+      const template = fs.readFileSync(command, "utf8");
+      const content =
+        variant === "injected-command"
+          ? template.replace("#!/bin/sh\n", "#!/bin/sh\nprintf injected >&2\n")
+          : `#!/bin/sh\nprintf injected >&2\n# exec "$basedir/../eslint/bin.js"\n# cmd-shim-target=${target}\n`;
+      fs.writeFileSync(command, content);
+      const result = spawnSync("node", [PREFLIGHT, "--repo", root], {
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(78);
+      expect(result.stderr).toMatch(/differs from the supported template/);
+    },
+  );
+
   it("rejects an exact regular shim that targets a different command owner", async () => {
     const root = fixture();
     installFixturePackage(root);
