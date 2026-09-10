@@ -536,13 +536,24 @@ function validateInstalled(
       ) {
         failures.push(`${name}: executable ${bin} targets the wrong file`);
       } else if (!commandStat.isSymbolicLink()) {
-        const marker = `# cmd-shim-target=${target.replaceAll("\\", "/")}`;
-        if (
-          readText(command, `${name} executable ${bin}`)
-            .trimEnd()
-            .split("\n")
-            .at(-1) !== marker
-        ) {
+        const markerPrefix = "# cmd-shim-target=";
+        const marker = readText(command, `${name} executable ${bin}`)
+          .trimEnd()
+          .split("\n")
+          .at(-1);
+        let markerTarget = null;
+        if (marker?.startsWith(markerPrefix)) {
+          try {
+            markerTarget = containedRealpath(
+              root,
+              marker.slice(markerPrefix.length),
+              `${name} executable marker`,
+            );
+          } catch {
+            markerTarget = null;
+          }
+        }
+        if (markerTarget !== target) {
           failures.push(`${name}: executable ${bin} targets the wrong file`);
         }
       }
@@ -589,11 +600,26 @@ function pnpmPackageIdentity(name, selected) {
   if (!selected.startsWith("npm:"))
     return { name, depPath: `${name}@${selected}` };
   const identity = selected.slice("npm:".length);
-  const separator = identity.lastIndexOf("@");
+  const separator = pnpmPackageSeparator(identity);
   if (separator <= 0) return { name, depPath: `${name}@${selected}` };
   return {
     name: identity.slice(0, separator),
     depPath: identity,
+  };
+}
+
+function pnpmPackageSeparator(identity) {
+  const scopeEnd = identity.startsWith("@") ? identity.indexOf("/") : -1;
+  return identity.indexOf("@", scopeEnd + 1);
+}
+
+function pnpmDepPathIdentity(depPath) {
+  const identity = depPath.split("(", 1)[0];
+  const separator = pnpmPackageSeparator(identity);
+  if (separator <= 0) return { name: identity, version: "" };
+  return {
+    name: identity.slice(0, separator),
+    version: identity.slice(separator + 1),
   };
 }
 
@@ -672,7 +698,16 @@ function shimNodePath(text) {
 }
 
 function commandNodePathContained(root, entry) {
-  return fs.existsSync(entry) && containedPath(root, entry);
+  // pnpm emits optional NODE_PATH entries for peer locations that may not
+  // exist in a flat install. Missing entries are inert; validate only paths
+  // that resolve so a normal pnpm shim is not rejected as an escape.
+  let cursor = entry;
+  while (!fs.existsSync(cursor)) {
+    const parent = path.dirname(cursor);
+    if (parent === cursor) return false;
+    cursor = parent;
+  }
+  return containedPath(root, cursor);
 }
 
 async function expectedCommandFiles(target, command, nodePath) {
@@ -727,8 +762,23 @@ async function validateCommandGroup(root, command, target, name) {
     return failures;
   }
   const text = readText(command, `${name} executable`);
-  const marker = `# cmd-shim-target=${target.replaceAll("\\", "/")}\n`;
-  if (!text.endsWith(marker)) {
+  const markerPrefix = "# cmd-shim-target=";
+  const marker = text.trimEnd().split("\n").at(-1);
+  let markerTarget = null;
+  let markerPath = null;
+  if (marker?.startsWith(markerPrefix)) {
+    markerPath = marker.slice(markerPrefix.length);
+    try {
+      markerTarget = containedRealpath(
+        root,
+        markerPath,
+        `${name} executable marker`,
+      );
+    } catch {
+      markerTarget = null;
+    }
+  }
+  if (markerTarget !== target) {
     return [`${name}: regular executable has no exact target marker`];
   }
   const nodePath = shimNodePath(text);
@@ -737,7 +787,9 @@ async function validateCommandGroup(root, command, target, name) {
       return [`${name}: executable NODE_PATH escapes the repository`];
     }
   }
-  const expected = await expectedCommandFiles(target, command, nodePath);
+  // The marker is already proven to resolve to the locked target. Generate
+  // the complete template using its lexical path, as pnpm does for symlinks.
+  const expected = await expectedCommandFiles(markerPath, command, nodePath);
   const failures = [];
   for (const [file, content] of expected) {
     if (!fs.existsSync(file)) {
@@ -881,11 +933,8 @@ function inspectPnpm(
       )
     : {};
   for (const depPath of Object.keys(lock.snapshots || {})) {
-    const identity = depPath.split("(", 1)[0];
-    const separator = identity.lastIndexOf("@");
-    if (separator <= 0) continue;
-    const packageName = identity.slice(0, separator);
-    const version = identity.slice(separator + 1);
+    const { name: packageName, version } = pnpmDepPathIdentity(depPath);
+    if (!packageName || !version) continue;
     if (!exactVersion(version)) continue;
     addLockedPackageRoot(
       lockedCommandRoots,
@@ -965,9 +1014,7 @@ function inspectPnpm(
       );
       continue;
     }
-    const version = identity.depPath
-      .slice(identity.depPath.lastIndexOf("@") + 1)
-      .split("(")[0];
+    const { version } = pnpmDepPathIdentity(identity.depPath);
     if (
       !registrySelectionSatisfies(name, specs[name], identity.name, version)
     ) {
@@ -2112,6 +2159,8 @@ module.exports = {
   check,
   inspectDependencies,
   isSubpath,
+  pnpmDepPathIdentity,
+  pnpmPackageIdentity,
   stableReadsSupported,
   telemetryFile,
   validateJsonText,

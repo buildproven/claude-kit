@@ -200,4 +200,40 @@ describe("quality agent selection", () => {
       fs.rmSync(repo, { recursive: true, force: true });
     }
   });
+  it("handles a large diff without the child-process buffer truncating selection", () => {
+    const repo = fs.mkdtempSync(
+      path.join(os.tmpdir(), "quality-agent-selection-"),
+    );
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "Quality Test"], {
+      cwd: repo,
+    });
+    execFileSync("git", ["config", "user.email", "quality@example.com"], {
+      cwd: repo,
+    });
+    fs.writeFileSync(path.join(repo, "README.md"), "base\n");
+    execFileSync("git", ["add", "README.md"], { cwd: repo });
+    execFileSync("git", ["commit", "-qm", "base"], { cwd: repo });
+    fs.writeFileSync(
+      path.join(repo, "src.js"),
+      `${"const value = true;\n".repeat(100_000)}// large\n`,
+    );
+    execFileSync("git", ["add", "src.js"], { cwd: repo });
+    execFileSync("git", ["commit", "-qm", "large diff"], { cwd: repo });
+    const base = execFileSync("git", ["rev-parse", "HEAD~1"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).trim();
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).trim();
+    expect(
+      selectReviewersForRange({ tier: "critical", repo, base, head }),
+    ).toEqual({
+      agents: ["code-reviewer", "silent-failure-hunter"],
+      domain: "general",
+      rule: "critical-reliability-backstop",
+    });
+  });
 });
