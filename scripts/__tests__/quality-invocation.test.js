@@ -1515,6 +1515,49 @@ describe("quality invocation manifest", () => {
     ).toThrow(/deterministic quality campaign identity collision/);
   });
 
+  it("recovers legacy gate evidence with fresh gates when carry is unsupported", () => {
+    const root = repo("provider-exhaustion-legacy-gates");
+    const predecessor = create(root, [
+      "--primary",
+      "codex",
+      "--fallback",
+      "claude",
+    ]);
+    for (const gate of JSON.parse(readFileSync(predecessor, "utf8"))
+      .requiredGates) {
+      recordGateFixture(predecessor, gate.name);
+    }
+    invocation.withManifestLock(predecessor, (manifest) => {
+      for (const gate of manifest.gates) delete gate.policyDigest;
+      manifest.governor.providerAttempts.push({ provider: "codex" });
+      manifest.reviews.push({
+        status: "incomplete",
+        failedProvider: "claude",
+        failureCategory: "provider-exhaustion",
+        leadCount: 0,
+      });
+    });
+    invocation.recordTerminalState(
+      predecessor,
+      "provider-incomplete",
+      "retry-exhausted:provider-exhaustion",
+    );
+
+    const recovered = create(root, [
+      "--primary",
+      "gemini",
+      "--fallback",
+      "codex",
+    ]);
+    const manifest = JSON.parse(readFileSync(recovered, "utf8"));
+    expect(recovered).not.toBe(predecessor);
+    expect(manifest.gates).toEqual([]);
+    expect(manifest.gateEvidenceCarry).toBeUndefined();
+    expect(manifest.requiredGates).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "test" })]),
+    );
+  });
+
   it("resumes after review without treating provider evidence as configuration drift", () => {
     const root = repo("reviewed-provider-identity");
     const env = {
@@ -8407,6 +8450,39 @@ exit 1
         .update(readFileSync(path.join(root, ".buildproven/test-impact.json")))
         .digest("hex"),
     );
+
+    const focusedLog = path.join(
+      path.dirname(manifestPath),
+      "focused-test.gate.log",
+    );
+    writeFileSync(focusedLog, "focused test passed\n");
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      const required = manifest.requiredGates.find(
+        (gate) => gate.name === "test",
+      );
+      invocation.recordGate(manifest, {
+        name: "test",
+        source: required.source,
+        command: required.command,
+        log: focusedLog,
+      });
+    });
+    for (const gate of JSON.parse(readFileSync(manifestPath, "utf8"))
+      .requiredGates) {
+      if (gate.name !== "test") recordGateFixture(manifestPath, gate.name);
+    }
+    expect(() =>
+      invocation.verifyGateEvidence(
+        JSON.parse(readFileSync(manifestPath, "utf8")),
+      ),
+    ).not.toThrow();
+    const predecessorLog = testGate.predecessorEvidence.log;
+    writeFileSync(predecessorLog, "tampered predecessor coverage\n");
+    expect(() =>
+      invocation.verifyGateEvidence(
+        JSON.parse(readFileSync(manifestPath, "utf8")),
+      ),
+    ).toThrow(/required test gate evidence is missing or stale/);
   });
 
   it("drops a stale inferred python:mypy gate on a v2->v3 migration when the diff doesn't touch .py (BUI-467)", () => {

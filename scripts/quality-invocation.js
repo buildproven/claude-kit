@@ -1626,7 +1626,8 @@ function supersedingManifest(
   const manifestPath = path.join(stateRoot, "invocation.json");
   if (fs.existsSync(manifestPath)) return manifestPath;
   const now = new Date().toISOString();
-  const carriesGateEvidence = transition === "providerRecoveryOf";
+  const carriesGateEvidence =
+    transition === "providerRecoveryOf" && gateEvidenceCarryEligible(existing);
   const carriedGates = carriesGateEvidence
     ? existing.gates.filter(
         (gate) =>
@@ -1848,7 +1849,6 @@ function providerRecoveryEligibility(
   } catch {
     return null;
   }
-  if (!gateEvidenceCarryEligible(existing)) return null;
   const attempted = providerRecoveryProviders(existing);
   const candidates = [
     campaignIdentity.provider.primaryOverride,
@@ -5872,6 +5872,34 @@ function gateMatchesRequirement(gate, required) {
   );
 }
 
+function testEvidenceChainValid(manifest, required, gateHead) {
+  let predecessor = required?.predecessorEvidence || null;
+  let descendantHead = gateHead;
+  const seen = new Set();
+  while (predecessor) {
+    if (
+      !predecessor.head ||
+      seen.has(predecessor.head) ||
+      predecessor.status !== "success" ||
+      !predecessor.log ||
+      !predecessor.logSha256 ||
+      !predecessor.source ||
+      !predecessor.command ||
+      !predecessor.policyDigest ||
+      !predecessor.requiredGatesDigest ||
+      !isAncestorOf(manifest.repo.realpath, predecessor.head, descendantHead) ||
+      !fs.existsSync(predecessor.log) ||
+      sha256File(predecessor.log) !== predecessor.logSha256
+    ) {
+      return false;
+    }
+    seen.add(predecessor.head);
+    descendantHead = predecessor.head;
+    predecessor = predecessor.predecessor || null;
+  }
+  return true;
+}
+
 function validTestGate(manifest, gate) {
   if (!validGateArtifact(gate)) return false;
   const required = manifest.requiredGates.find(
@@ -5883,6 +5911,7 @@ function validTestGate(manifest, gate) {
     gate.policyDigest !== gateRequirementsDigest([required])
   )
     return false;
+  if (!testEvidenceChainValid(manifest, required, gate.head)) return false;
   if (gate.status === "success") return true;
   return Boolean(
     manifest.requiredGates.find((required) => required.name === "test")
@@ -5891,6 +5920,24 @@ function validTestGate(manifest, gate) {
     typeof gate.reason === "string" &&
     gate.reason.trim() !== "",
   );
+}
+
+function validReusableTestGate(manifest, gate, required) {
+  const predecessor = required?.predecessorEvidence;
+  if (!predecessor) return validTestGate(manifest, gate);
+  if (
+    gate.status !== "success" ||
+    !validGateArtifact(gate) ||
+    predecessor.head !== gate.head ||
+    predecessor.source !== gate.source ||
+    predecessor.command !== gate.command ||
+    predecessor.policyDigest !== gate.policyDigest ||
+    predecessor.log !== gate.log ||
+    predecessor.logSha256 !== gate.logSha256
+  ) {
+    return false;
+  }
+  return testEvidenceChainValid(manifest, required, gate.head);
 }
 
 function verifyGateEvidenceCarry(manifest) {
@@ -7216,6 +7263,9 @@ function advanceManifestTransaction(manifestArg, manifest, rawArgs) {
         { head: nextHead, acceptedConditions },
       );
     }
+    const priorTestRequirement = locked.requiredGates.find(
+      (required) => required.name === "test",
+    );
     advanceHead(locked, manifest.repo.realpath, { acceptedConditions });
     validateIdentity(locked, manifest.repo.realpath);
     const gateBase = isAncestorOf(locked.repo.realpath, priorHead, nextHead)
@@ -7224,19 +7274,17 @@ function advanceManifestTransaction(manifestArg, manifest, rawArgs) {
     const testRequirement = locked.requiredGates.find(
       (required) => required.name === "test",
     );
-    const reusableTestGate = [...locked.gates]
-      .reverse()
-      .find(
-        (gate) =>
-          gate.name === "test" &&
-          gate.status === "success" &&
-          validTestGate(locked, gate) &&
-          gate.policyDigest ===
-            gateRequirementsDigest([
-              locked.requiredGates.find((required) => required.name === "test"),
-            ]) &&
-          isAncestorOf(locked.repo.realpath, gate.head, nextHead),
-      );
+    const reusableTestGate = [...locked.gates].reverse().find(
+      (gate) =>
+        gate.name === "test" &&
+        gate.status === "success" &&
+        validReusableTestGate(
+          locked,
+          gate,
+          locked.requiredGates.find((required) => required.name === "test"),
+        ) &&
+        isAncestorOf(locked.repo.realpath, gate.head, nextHead),
+    );
     const reuseTestEvidence = Boolean(
       reusableTestGate &&
       nextHead !== reusableTestGate.head &&
@@ -7268,6 +7316,29 @@ function advanceManifestTransaction(manifestArg, manifest, rawArgs) {
     locked.requiredGates = locked[NEEDS_REQUIRED_GATES_MIGRATION]
       ? discovered
       : unionRequiredGates(locked.requiredGates, discovered, replaceNames);
+    if (reuseTestEvidence) {
+      const test = locked.requiredGates.find(
+        (required) => required.name === "test",
+      );
+      if (test) {
+        const priorPredecessor = priorTestRequirement?.predecessorEvidence;
+        test.predecessorEvidence = {
+          head: reusableTestGate.head,
+          status: reusableTestGate.status,
+          source: reusableTestGate.source,
+          command: reusableTestGate.command,
+          policyDigest: reusableTestGate.policyDigest,
+          requiredGatesDigest: gateRequirementsDigest([priorTestRequirement]),
+          log: reusableTestGate.log,
+          logSha256: reusableTestGate.logSha256,
+          evidenceDigest: gateEvidenceDigest([reusableTestGate]),
+          predecessor:
+            priorPredecessor?.head === reusableTestGate.head
+              ? priorPredecessor.predecessor || null
+              : priorPredecessor || null,
+        };
+      }
+    }
     locked.requiredGatesPolicyVersion = REQUIRED_GATES_POLICY_VERSION;
     locked[NEEDS_REQUIRED_GATES_MIGRATION] = false;
     if (priorMutation && nextHead !== priorHead) {
