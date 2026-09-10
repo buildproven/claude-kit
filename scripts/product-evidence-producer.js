@@ -21,6 +21,7 @@ const BUNDLE_FILES = [
   "changed-files.json",
   "behavioral-tests.log",
   "acceptance-evidence.log",
+  "zsh-version.log",
 ];
 
 function exactKeys(value, expected) {

@@ -6,7 +6,7 @@
 
 The protected Product Evidence Source worker runs on the fixed Ubuntu 24.04
 runner and installs the exact Ubuntu `zsh` and `zsh-common` package version
-`5.9-8ubuntu3` before running the candidate suite. The claude-kit regression
+`5.9-6ubuntu2` before running the candidate suite. The claude-kit regression
 tests include shell-parent checks; the normal Quality workflow already
 provisions `zsh`, so the evidence worker must use the same test environment.
 Installation has bounded network and package-manager timeouts, and the
