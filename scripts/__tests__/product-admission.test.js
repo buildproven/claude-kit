@@ -251,11 +251,22 @@ describe("protected product workflow transport", () => {
 
   it("pins and bounds the source worker's zsh installation", () => {
     const definition = workflow("source");
-    const step = definition.jobs["collect-product-evidence"].steps.find(
+    const steps = definition.jobs["collect-product-evidence"].steps;
+    const checkoutIndex = steps.findIndex((candidate) =>
+      candidate.uses?.startsWith("actions/checkout@"),
+    );
+    const installIndex = steps.findIndex(
       (candidate) =>
         candidate.name === "Install zsh for shell-isolation regressions",
     );
-    expect(step?.run).toContain("zsh_package_version='5.9-6ubuntu2'");
+    const provenanceIndex = steps.findIndex(
+      (candidate) => candidate.name === "Upload environment provenance",
+    );
+    const step = steps[installIndex];
+    expect(installIndex).toBeGreaterThan(checkoutIndex);
+    expect(provenanceIndex).toBeGreaterThan(installIndex);
+    expect(step?.["timeout-minutes"]).toBe(4);
+    expect(step?.run).toContain("command -v zsh");
     expect(step?.run).toMatch(/timeout 30s sudo apt-get update/);
     expect(step?.run).toMatch(
       /timeout 150s sudo env DEBIAN_FRONTEND=noninteractive apt-get/,
@@ -263,8 +274,10 @@ describe("protected product workflow transport", () => {
     expect(step?.run).toMatch(/Acquire::http::Timeout=15/);
     expect(step?.run).toMatch(/Acquire::https::Timeout=15/);
     expect(step?.run).toMatch(/Acquire::Retries=3/);
-    expect(step?.run).toContain(
-      'test "$(dpkg-query --showformat=\'${Version}\' --show zsh)" = "$zsh_package_version"',
+    expect(step?.run).toContain("ZSH_PROVENANCE");
+    expect(steps[provenanceIndex]?.with?.["if-no-files-found"]).toBe("error");
+    expect(steps[provenanceIndex]?.uses).toMatch(
+      /^actions\/upload-artifact@[0-9a-f]{40}$/,
     );
   });
 });

@@ -23,21 +23,6 @@ jobs:
             const document = (value) => /^docs\/(?:(?:prd|decisions)\/)?[a-zA-Z0-9._-]+\.md$/.test(value || "");
             if (!Number.isSafeInteger(p.pullRequest) || p.pullRequest < 1 || !/^[0-9a-f]{40}$/.test(p.base || "") || !/^[0-9a-f]{40}$/.test(p.head || "") || !/^[0-9a-f]{32}$/.test(p.nonce || "") || !document(p.prd) || !document(p.tasks)) process.exit(1);
           '
-      - name: Install zsh for shell-isolation regressions
-        run: |
-          zsh_package_version='5.9-6ubuntu2'
-          installed_version="$(dpkg-query --showformat='${Version}' --show zsh 2>/dev/null || true)"
-          if [ "$installed_version" != "$zsh_package_version" ]; then
-            timeout 30s sudo apt-get update
-            timeout 150s sudo env DEBIAN_FRONTEND=noninteractive apt-get \
-              -o Acquire::http::Timeout=15 \
-              -o Acquire::https::Timeout=15 \
-              -o Acquire::Retries=3 \
-              install --yes "zsh=$zsh_package_version" "zsh-common=$zsh_package_version"
-          fi
-          test "$(dpkg-query --showformat='${Version}' --show zsh)" = "$zsh_package_version"
-          zsh --version | tee zsh-version.log
-          printf 'zsh-package=%s\n' "$zsh_package_version" >> zsh-version.log
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.client_payload.head }}
@@ -47,6 +32,31 @@ jobs:
         with:
           node-version: "24.18.0"
           cache: npm
+      - name: Install zsh for shell-isolation regressions
+        timeout-minutes: 4
+        env:
+          ZSH_PROVENANCE: ${{ runner.temp }}/product-evidence-zsh-version.log
+        run: |
+          if ! command -v zsh >/dev/null 2>&1; then
+            timeout 30s sudo apt-get update
+            timeout 150s sudo env DEBIAN_FRONTEND=noninteractive apt-get \
+              -o Acquire::http::Timeout=15 \
+              -o Acquire::https::Timeout=15 \
+              -o Acquire::Retries=3 \
+              install --yes zsh
+          fi
+          command -v zsh >/dev/null 2>&1
+          {
+            zsh --version
+            printf 'zsh-package=%s\n' "$(dpkg-query --showformat='${Version}' --show zsh)"
+          } > "$ZSH_PROVENANCE"
+      - name: Upload environment provenance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: product-evidence-source-environment-${{ github.run_id }}
+          path: ${{ runner.temp }}/product-evidence-zsh-version.log
+          if-no-files-found: error
+          retention-days: 7
       - name: Run allowlisted behavioral command
         id: behavioral
         continue-on-error: true
@@ -64,8 +74,7 @@ jobs:
           path: |
             behavioral-tests.log
             acceptance-evidence.log
-            zsh-version.log
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 7
       - name: Enforce evidence command success
         if: always()

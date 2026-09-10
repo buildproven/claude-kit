@@ -5,14 +5,15 @@
 ## Decision
 
 The protected Product Evidence Source worker runs on the fixed Ubuntu 24.04
-runner and installs the exact Ubuntu `zsh` and `zsh-common` package version
-`5.9-6ubuntu2` before running the candidate suite. The claude-kit regression
-tests include shell-parent checks; the normal Quality workflow already
-provisions `zsh`, so the evidence worker must use the same test environment.
-Installation has bounded network and package-manager timeouts, and the
-installed version is recorded in the diagnostic artifact. The artifact action
-is referenced by its immutable commit SHA. Failed behavioral or acceptance
-commands remain blocking, and their logs are uploaded for diagnosis.
+runner and provisions `zsh` with the same bounded package flow as the normal
+Quality workflow before running the candidate suite. The exact package version
+is recorded as environment provenance; the workflow does not depend on a
+mutable historical apt version remaining available. Checkout runs before this
+setup, and the provenance artifact is uploaded before candidate code runs, so
+checkout cleanup and candidate writes cannot alter the trusted record. The
+artifact action is referenced by its immutable commit SHA. Failed behavioral
+or acceptance commands remain blocking, and their logs are uploaded for
+diagnosis.
 
 ## Verification
 
