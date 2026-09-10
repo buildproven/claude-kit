@@ -443,6 +443,13 @@ describe("product completion", () => {
         "scripts/product-completion.js",
       ]),
     ).toBe(false);
+    expect(
+      isQualityInfrastructure(prd, tasks, [
+        "docs/prd/runtime-prd.md",
+        ".buildproven/test-impact.json",
+        "scripts/quality-unknown.sh",
+      ]),
+    ).toBe(false);
   });
 
   it("rejects receipts replayed against a different PRD or task set", () => {
