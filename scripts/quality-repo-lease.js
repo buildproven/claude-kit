@@ -12,6 +12,7 @@ const STALE_MS = 6 * 60 * 60 * 1000;
 const RECOVERY_OVERRIDE_ENV = "BS_QUALITY_LEASE_RECOVERY_OVERRIDE";
 const DEFAULT_WAIT_MS = 30_000;
 const SLEEP_BUFFER = new SharedArrayBuffer(4);
+const heldMetadataGuards = new Map();
 
 function sleep(milliseconds) {
   Atomics.wait(new Int32Array(SLEEP_BUFFER), 0, 0, milliseconds);
@@ -378,10 +379,23 @@ function withMetadataGuard(manifest, operation, timeoutMs) {
   const paths = pathsFor(identity, manifest);
   acquireGuard(paths.metadataGuard, timeoutMs);
   try {
+    heldMetadataGuards.set(
+      paths.metadataGuard,
+      guardOwner(paths.metadataGuard),
+    );
     return operation(paths, identity);
   } finally {
+    heldMetadataGuards.delete(paths.metadataGuard);
     releaseGuard(paths.metadataGuard);
   }
+}
+
+function hasMetadataGuard(manifest) {
+  if (!manifest.repo?.githubRepository) return false;
+  const paths = pathsFor(repositoryIdentity(manifest), manifest);
+  const held = heldMetadataGuards.get(paths.metadataGuard);
+  if (!held) return false;
+  return sameGuardOwner(guardOwner(paths.metadataGuard), held);
 }
 
 function loadManifest(manifestPath) {
@@ -1955,6 +1969,7 @@ module.exports = {
   verify,
   withManifestMutation,
   withMetadataGuard,
+  hasMetadataGuard,
   _acquireGuard: acquireGuard,
   _atomicWrite: atomicWrite,
   _recoverDeadGuard: recoverDeadGuard,

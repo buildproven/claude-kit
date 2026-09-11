@@ -6370,11 +6370,71 @@ function reviewAuthorization(manifest) {
   };
 }
 
-function openManifestLock(lock) {
+function manifestLockSnapshot(lock) {
+  const descriptor = fs.openSync(
+    lock,
+    fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+  );
+  try {
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile() || stat.uid !== process.geteuid?.()) return null;
+    return { stat, body: fs.readFileSync(descriptor, "utf8") };
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function deadLocalManifestOwner(body) {
+  let owner;
+  try {
+    owner = JSON.parse(body);
+  } catch (error) {
+    if (error instanceof SyntaxError) return false;
+    throw error;
+  }
+  if (
+    owner?.hostname !== os.hostname() ||
+    !Number.isSafeInteger(owner.pid) ||
+    owner.pid < 1 ||
+    typeof owner.acquiredAt !== "string" ||
+    !Number.isFinite(Date.parse(owner.acquiredAt))
+  )
+    return false;
+  try {
+    process.kill(owner.pid, 0);
+    return false;
+  } catch (error) {
+    return error.code === "ESRCH";
+  }
+}
+
+function recoverDeadManifestLock(lock, file) {
+  const { manifest } = loadManifest(file);
+  const lease = require("./quality-repo-lease");
+  if (!lease.hasMetadataGuard(manifest)) return false;
+  const observed = manifestLockSnapshot(lock);
+  if (!observed || !deadLocalManifestOwner(observed.body)) return false;
+  const current = manifestLockSnapshot(lock);
+  if (
+    !current ||
+    !lease.hasMetadataGuard(manifest) ||
+    current.stat.dev !== observed.stat.dev ||
+    current.stat.ino !== observed.stat.ino ||
+    current.body !== observed.body
+  )
+    return false;
+  fs.unlinkSync(lock);
+  return true;
+}
+
+function openManifestLock(lock, file) {
   try {
     return fs.openSync(lock, "wx", 0o600);
   } catch (error) {
     if (error.code === "EEXIST") {
+      if (recoverDeadManifestLock(lock, file)) {
+        return fs.openSync(lock, "wx", 0o600);
+      }
       throw new Error(
         "quality manifest is locked; stale locks require explicit operator cleanup",
         { cause: error },
@@ -6386,13 +6446,16 @@ function openManifestLock(lock) {
 
 function withManifestLockRaw(file, mutation) {
   const lock = `${path.resolve(file)}.lock`;
-  const descriptor = openManifestLock(lock);
+  const descriptor = openManifestLock(lock, file);
   try {
     fs.writeFileSync(
       descriptor,
       `${JSON.stringify({
         pid: process.pid,
         hostname: os.hostname(),
+        processStartedAt: new Date(
+          Date.now() - process.uptime() * 1000,
+        ).toISOString(),
         acquiredAt: new Date().toISOString(),
       })}\n`,
     );
@@ -6528,7 +6591,7 @@ function recordTerminalState(manifestPath, state, detail = null, options = {}) {
     ).terminalState.state;
   }
   const lock = `${path.resolve(manifestPath)}.lock`;
-  const descriptor = openManifestLock(lock);
+  const descriptor = openManifestLock(lock, manifestPath);
   try {
     const loaded = loadManifest(manifestPath);
     const result = write(loaded.manifest);
