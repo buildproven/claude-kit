@@ -19,6 +19,7 @@ import {
 import Ajv2020 from "ajv/dist/2020.js";
 import {
   isQualityInfrastructure,
+  qualityInfrastructureChange,
   validate,
   verifyClaim,
   next,
@@ -451,6 +452,21 @@ describe("product completion", () => {
         "docs/prd/runtime-prd.md",
         ".buildproven/test-impact.json",
         "scripts/quality-unknown.sh",
+      ]),
+    ).toBe(false);
+  });
+
+  it("supports the runner preflight before PRD evidence is available", () => {
+    expect(
+      qualityInfrastructureChange([
+        "docs/prd/runtime-prd.md",
+        "scripts/product-completion.js",
+      ]),
+    ).toBe(true);
+    expect(
+      qualityInfrastructureChange([
+        "scripts/product-completion.js",
+        "config/application.json",
       ]),
     ).toBe(false);
   });
