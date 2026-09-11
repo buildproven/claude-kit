@@ -21,3 +21,8 @@ nonzero exit was saved as a generic blocked terminal.
   a review, an active execution, or a prior selection recovery stays blocked.
 - The recovery archive records old and new selector digests and increments the
   terminal epoch under the existing manifest lease.
+
+Runtime cohort reads open files with no-follow, nonblocking descriptors, validate
+the opened file, and hash that descriptor. A symlink swap after canonical path
+validation must fail closed. Transitive shell dependencies include complete
+relative paths and JSON review schemas; schema changes invalidate recovery.

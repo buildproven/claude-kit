@@ -755,6 +755,101 @@ describe("required gate reuse", () => {
 });
 
 describe("quality invocation manifest", () => {
+  it("seals transitive non-selector runtime dependencies", () => {
+    const runtime = makeTempDir("selection-runtime-");
+    const runtimeRoot = realpathSync(runtime);
+    const nonSelector = [
+      "quality-run.js",
+      "quality-risk-resolve.sh",
+      "quality-runtime-plan.js",
+      "quality-run-gate.sh",
+      "quality-run-review.sh",
+      "quality-mutation-check.sh",
+      "quality-authorize-review-round.sh",
+      "quality-stamp-and-merge.sh",
+    ];
+    writeFileSync(
+      path.join(runtime, "quality-select-agents.sh"),
+      "#!/usr/bin/env bash\n",
+    );
+    writeFileSync(
+      path.join(runtime, "quality-run.js"),
+      'require("./quality-invocation.js");\n',
+    );
+    writeFileSync(
+      path.join(runtime, "quality-invocation.js"),
+      "module.exports = {};\n",
+    );
+    for (const file of nonSelector.slice(1)) {
+      writeFileSync(path.join(runtime, file), "#!/usr/bin/env bash\n");
+    }
+
+    mkdirSync(path.join(runtime, "schemas"));
+    writeFileSync(
+      path.join(runtime, "schemas", "review.json"),
+      '{"type":"object"}',
+    );
+    writeFileSync(
+      path.join(runtime, "quality-run-review.sh"),
+      'schema="$SCRIPT_DIR/schemas/review.json"\n',
+    );
+    const before = invocation.selectionRuntimeDigests(runtimeRoot);
+    writeFileSync(
+      path.join(runtime, "quality-invocation.js"),
+      "module.exports = { repaired: true };\n",
+    );
+    const after = invocation.selectionRuntimeDigests(runtimeRoot);
+
+    expect(after.selector).toBe(before.selector);
+    expect(after.remaining).not.toBe(before.remaining);
+    writeFileSync(
+      path.join(runtime, "schemas", "review.json"),
+      '{"type":"array"}',
+    );
+    const schemaChanged = invocation.selectionRuntimeDigests(runtimeRoot);
+    expect(schemaChanged.remaining).not.toBe(after.remaining);
+    expect(schemaChanged.selector).toBe(after.selector);
+  });
+
+  it("rejects a runtime file replaced with a symlink after canonical validation", () => {
+    const runtime = realpathSync(makeTempDir("selection-race-"));
+    const files = [
+      "quality-select-agents.sh",
+      "quality-run.js",
+      "quality-risk-resolve.sh",
+      "quality-runtime-plan.js",
+      "quality-run-gate.sh",
+      "quality-run-review.sh",
+      "quality-mutation-check.sh",
+      "quality-authorize-review-round.sh",
+      "quality-stamp-and-merge.sh",
+    ];
+    for (const file of files)
+      writeFileSync(path.join(runtime, file), "// fixture\n");
+    const target = path.join(runtime, files[0]);
+    const replacement = path.join(runtime, "replacement.sh");
+    writeFileSync(replacement, "// untrusted replacement\n");
+    const filesystem = require("node:fs");
+    const canonicalize = filesystem.realpathSync;
+    const inspect = vi
+      .spyOn(filesystem, "realpathSync")
+      .mockImplementation((file, ...args) => {
+        const result = canonicalize(file, ...args);
+        if (file === target) {
+          unlinkSync(target);
+          symlinkSync(replacement, target);
+        }
+        return result;
+      });
+    try {
+      expect(() => invocation.selectionRuntimeDigests(runtime)).toThrow(
+        /ELOOP/,
+      );
+    } finally {
+      inspect.mockRestore();
+    }
+  });
+
   it("reopens one unexecuted selector terminal only after its selector cohort changes", () => {
     const root = repo("selection-recovery");
     const manifestPath = create(root, ["--merge"]);

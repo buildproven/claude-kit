@@ -6797,26 +6797,43 @@ function recoveryDigest(value) {
 // relative name and bytes. The fixed cohorts are deliberate: an unlisted,
 // missing, linked, or non-regular file fails closed rather than becoming an
 // implicit recovery dependency.
-function runtimeCohortDigest(files, cohort, discoverDependencies = false) {
+function runtimeCohortDigest(
+  files,
+  cohort,
+  discoverDependencies = false,
+  runtimeDir = __dirname,
+) {
   const pending = [...files];
   const seen = new Set();
   const entries = [];
   while (pending.length > 0) {
     const relative = pending.pop();
     if (seen.has(relative)) continue;
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(relative)) {
+    if (
+      !relative
+        .split("/")
+        .every((segment) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment))
+    ) {
       throw new Error(`${cohort} runtime dependency name is malformed`);
     }
-    const candidate = path.join(__dirname, relative);
-    const stat = fs.lstatSync(candidate);
-    if (!stat.isFile() || stat.isSymbolicLink()) {
-      throw new Error(`${cohort} runtime dependency is not a regular file`);
-    }
+    const candidate = path.join(runtimeDir, relative);
     const canonical = fs.realpathSync(candidate);
     if (canonical !== candidate) {
       throw new Error(`${cohort} runtime dependency is not canonical`);
     }
-    const bytes = fs.readFileSync(candidate);
+    const descriptor = fs.openSync(
+      candidate,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+    );
+    let bytes;
+    try {
+      if (!fs.fstatSync(descriptor).isFile()) {
+        throw new Error(`${cohort} runtime dependency is not a regular file`);
+      }
+      bytes = fs.readFileSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
     const source = bytes.toString("utf8");
     seen.add(relative);
     entries.push([relative, bytes]);
@@ -6838,10 +6855,15 @@ function runtimeCohortDigest(files, cohort, discoverDependencies = false) {
       }
     } else if (relative.endsWith(".sh")) {
       const references = source.matchAll(
-        /\$(?:SCRIPT_DIR|script_dir)\/([A-Za-z0-9._-]+)/g,
+        /\$(?:SCRIPT_DIR|script_dir)\/([A-Za-z0-9._/-]+)/g,
       );
-      for (const reference of references) pending.push(reference[1]);
-    } else {
+      for (const reference of references) {
+        // Directory navigation computes KIT_ROOT; it does not read a source
+        // dependency. File references, including nested schemas, are sealed.
+        if (reference[1] === "..") continue;
+        pending.push(reference[1]);
+      }
+    } else if (!relative.endsWith(".json")) {
       throw new Error(`${cohort} runtime dependency type is unsupported`);
     }
   }
@@ -6854,10 +6876,20 @@ function runtimeCohortDigest(files, cohort, discoverDependencies = false) {
   return hash.digest("hex");
 }
 
-function selectionRuntimeDigests() {
+function selectionRuntimeDigests(runtimeDir = __dirname) {
   return {
-    selector: runtimeCohortDigest(SELECTION_RUNTIME_FILES, "selector", true),
-    remaining: runtimeCohortDigest(NON_SELECTION_RUNTIME_FILES, "non-selector"),
+    selector: runtimeCohortDigest(
+      SELECTION_RUNTIME_FILES,
+      "selector",
+      true,
+      runtimeDir,
+    ),
+    remaining: runtimeCohortDigest(
+      NON_SELECTION_RUNTIME_FILES,
+      "non-selector",
+      true,
+      runtimeDir,
+    ),
   };
 }
 
@@ -7855,6 +7887,7 @@ module.exports = {
   clearMergeAdmissionBlock,
   resolveGreenCiAdmissionBlock,
   recoveryScope,
+  selectionRuntimeDigests,
   recordPreReviewSelectionFailure,
   resumePreReviewSelectionFailure,
   resumeInterruptedTerminal,
