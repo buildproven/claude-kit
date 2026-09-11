@@ -6,7 +6,10 @@ const fs = require("node:fs");
 const crypto = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const quality = require("./quality-invocation");
-const { productionCodeChange } = require("./product-completion");
+const {
+  productionCodeChange,
+  qualityInfrastructureChange,
+} = require("./product-completion");
 
 const ORCHESTRATION_SCHEMA_VERSION = 1;
 const ACTION_REQUIRED_EXIT = 3;
@@ -414,7 +417,12 @@ function verifyDeliveryClaim(manifest) {
         head: manifest.revisions.currentHead,
       }),
     );
-    if (productFile) {
+    const qualityOnly = qualityInfrastructureChange(changedFiles, {
+      repo: manifest.repo.realpath,
+      base: manifest.revisions.baseSha,
+      head: manifest.revisions.currentHead,
+    });
+    if (productFile && !qualityOnly) {
       throw new Error(
         `contract delivery claim requires product evidence for product-affecting file '${productFile}'`,
       );

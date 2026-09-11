@@ -32,6 +32,7 @@ function fixture() {
     "provider-run.sh",
     "provider-policy.sh",
     "autonomous-loop-runtime.js",
+    "provider-usage-adapter.js",
   ]) {
     copyFileSync(join(repo, "scripts", name), join(setup, "scripts", name));
     chmodSync(join(setup, "scripts", name), 0o755);

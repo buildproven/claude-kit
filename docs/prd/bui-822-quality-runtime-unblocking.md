@@ -26,13 +26,19 @@ that only adjusts the quality contract.
 - Claude Kit declares a 15-minute native test-gate timeout.
 - The planner reserves that gate duration separately from review and
   verification time.
-- `.buildproven/` files and `harness-config.json` are non-product quality
-  controls.
+- `.buildproven/` files, `harness-config.json`, the repository's
+  `vitest.config.mjs`, and the quality agent-selection runtime are quality
+  controls. These paths can use the quality-infrastructure contract only when
+  the approved change contains no other production files.
 - Unknown application configuration remains product-affecting and fails
   closed.
 - Provider failure remains advisory after the required bounded retry.
 - Deterministic gates, mutation evidence, revision identity, CI, and explicit
   human-required policy remain hard merge blocks.
+
+## Delivery classification
+
+- Delivery: quality-infrastructure
 
 ## Acceptance
 

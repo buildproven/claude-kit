@@ -18,6 +18,8 @@ import {
 } from "node:crypto";
 import Ajv2020 from "ajv/dist/2020.js";
 import {
+  isQualityInfrastructure,
+  qualityInfrastructureChange,
   validate,
   verifyClaim,
   next,
@@ -313,11 +315,15 @@ describe("product completion", () => {
       "docs/prd/bui-836-product-evidence-admission.md",
       "docs/product-evidence-admission-operator-guide.md",
       "scripts/__tests__/product-admission.test.js",
+      "scripts/__tests__/product-completion.test.js",
       "scripts/__tests__/quality-run.test.js",
+      "scripts/__tests__/quality-verify-app.test.js",
       "scripts/product-admission.js",
+      "scripts/product-completion.js",
       "scripts/product-evidence-producer.js",
       "scripts/product-evidence.js",
       "scripts/quality-run.js",
+      "scripts/quality-verify-app.sh",
     ];
     expect(verifyClaim(result, "contract", changedFiles, {}, {})).toMatchObject(
       { valid: true, errors: [] },
@@ -409,6 +415,78 @@ describe("product completion", () => {
     ]) {
       expect(productionCodeChange(file)).toBe(true);
     }
+  });
+
+  it("recognizes a quality infrastructure contract only for control files", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "quality-infrastructure-"));
+    const prd = path.join(dir, "runtime-prd.md");
+    const tasks = path.join(dir, "runtime-tasks.md");
+    writeFileSync(
+      prd,
+      "# Runtime\n\n## Delivery classification\n\n- Delivery: quality-infrastructure\n",
+    );
+    writeFileSync(
+      tasks,
+      "- [x] 1.0 Update runtime\n  - Phase: implementation\n  - Delivers: deterministic quality runtime\n  - Evidence: orchestration tests\n",
+    );
+    expect(
+      isQualityInfrastructure(prd, tasks, [
+        "docs/prd/runtime-prd.md",
+        ".buildproven/test-impact.json",
+        "vitest.config.mjs",
+        "scripts/product-completion.js",
+        "scripts/quality-agent-selection.js",
+        "scripts/quality-select-agents.sh",
+        "scripts/__tests__/quality-run.test.js",
+      ]),
+    ).toBe(true);
+    expect(
+      isQualityInfrastructure(prd, tasks, [
+        "docs/prd/runtime-prd.md",
+        ".buildproven/test-impact.json",
+        "scripts/product-completion.js",
+      ]),
+    ).toBe(true);
+    expect(
+      isQualityInfrastructure(prd, tasks, [
+        "docs/prd/runtime-prd.md",
+        ".buildproven/test-impact.json",
+        "scripts/quality-unknown.sh",
+      ]),
+    ).toBe(false);
+  });
+
+  it("supports the runner preflight before PRD evidence is available", () => {
+    expect(
+      qualityInfrastructureChange([
+        "docs/prd/runtime-prd.md",
+        "scripts/product-completion.js",
+      ]),
+    ).toBe(true);
+    expect(
+      qualityInfrastructureChange([
+        "scripts/product-completion.js",
+        "config/application.json",
+      ]),
+    ).toBe(false);
+  });
+
+  it("accepts the quality completion classifier under a quality contract", () => {
+    const { prd, tasks } = files();
+    writeFileSync(
+      prd,
+      "# Runtime\n\n## Delivery classification\n\n- Delivery: quality-infrastructure\n",
+    );
+    const result = validate(prd, tasks);
+    expect(
+      verifyClaim(
+        result,
+        "contract",
+        ["docs/prd/runtime-prd.md", "scripts/product-completion.js"],
+        {},
+        {},
+      ),
+    ).toMatchObject({ valid: true, errors: [] });
   });
 
   it("rejects receipts replayed against a different PRD or task set", () => {

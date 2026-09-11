@@ -15,6 +15,9 @@ const NON_PRODUCT_TEST_FILE = /(?:\.test|\.spec)\.[^/]+$/i;
 const NON_PRODUCT_EXACT_PATHS = new Set([
   "harness-config.json",
   "package-lock.json",
+  // Repository test-runner configuration is a quality-control contract, not
+  // shipped application behavior. Keep this exact allowlist narrow so other
+  // application configuration remains product-affecting by default.
   // claude-setup records the shared quality/agent runtime as a submodule
   // gitlink. The exact `core` path is contract infrastructure, not product
   // application behavior.
@@ -33,6 +36,7 @@ const NON_PRODUCT_ROOT_NAMES = new Set([
   "SECURITY",
 ]);
 const PROTECTED_INFRASTRUCTURE_BOOTSTRAP = "protected-infrastructure-bootstrap";
+const QUALITY_INFRASTRUCTURE = "quality-infrastructure";
 const PROTECTED_INFRASTRUCTURE_PATHS = new Set([
   ".github/workflows/product-evidence-admission.yml",
   ".github/workflows/product-evidence-producer.yml",
@@ -41,11 +45,27 @@ const PROTECTED_INFRASTRUCTURE_PATHS = new Set([
   "docs/prd/bui-836-product-evidence-admission.md",
   "docs/product-evidence-admission-operator-guide.md",
   "scripts/__tests__/product-admission.test.js",
+  "scripts/__tests__/product-completion.test.js",
   "scripts/__tests__/quality-run.test.js",
+  "scripts/__tests__/quality-verify-app.test.js",
   "scripts/product-admission.js",
+  "scripts/product-completion.js",
   "scripts/product-evidence-producer.js",
   "scripts/product-evidence.js",
   "scripts/quality-run.js",
+  "scripts/quality-verify-app.sh",
+]);
+const QUALITY_INFRASTRUCTURE_PATHS = new Set([
+  ".buildproven/test-impact.json",
+  "harness-config.json",
+  "package-lock.json",
+  // The completion classifier is part of the quality admission runtime. A
+  // quality-infrastructure claim may change this policy module, while the
+  // consumer application remains outside the allowlist.
+  "scripts/product-completion.js",
+  "scripts/quality-agent-selection.js",
+  "scripts/quality-select-agents.sh",
+  "vitest.config.mjs",
 ]);
 const EVIDENCE_KEYS = new Set([
   "schemaVersion",
@@ -140,9 +160,9 @@ function validate(prdPath, tasksPath) {
     valid: errors.length === 0,
     userFacing: userFacing(prd),
     deliveryClass:
-      /^-\s*Delivery:\s*protected-infrastructure-bootstrap\s*$/im.test(prd)
-        ? PROTECTED_INFRASTRUCTURE_BOOTSTRAP
-        : null,
+      /^-\s*Delivery:\s*(protected-infrastructure-bootstrap|quality-infrastructure)\s*$/im.exec(
+        prd,
+      )?.[1] || null,
     requirementsDigest,
     tasks,
     errors,
@@ -280,6 +300,57 @@ function productionCodePath(file) {
   );
 }
 
+function protectedInfrastructureBootstrapFiles(changedFiles) {
+  const files = new Set(changedFiles);
+  return (
+    [...PROTECTED_INFRASTRUCTURE_PATHS].every((file) => files.has(file)) &&
+    changedFiles
+      .filter(productionCodeChange)
+      .every((file) => PROTECTED_INFRASTRUCTURE_PATHS.has(file))
+  );
+}
+
+function isProtectedInfrastructureBootstrap(prdPath, tasksPath, changedFiles) {
+  if (!protectedInfrastructureBootstrapFiles(changedFiles)) return false;
+  try {
+    const result = validate(prdPath, tasksPath);
+    return (
+      result.valid &&
+      result.deliveryClass === PROTECTED_INFRASTRUCTURE_BOOTSTRAP &&
+      !result.userFacing
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isQualityInfrastructure(prdPath, tasksPath, changedFiles) {
+  if (!qualityInfrastructureChange(changedFiles)) return false;
+  try {
+    const result = validate(prdPath, tasksPath);
+    return result.valid && result.deliveryClass === QUALITY_INFRASTRUCTURE;
+  } catch {
+    return false;
+  }
+}
+
+// The quality runner uses this path-only predicate before product evidence is
+// available. Keep it identical to the classifier's product-file boundary so
+// quality-control changes can reach the PRD-aware verifier without being
+// rejected by the generic product preflight.
+function qualityInfrastructureChange(changedFiles, context = {}) {
+  if (!Array.isArray(changedFiles) || !QUALITY_INFRASTRUCTURE_PATHS.size) {
+    return false;
+  }
+  const productFiles = changedFiles.filter((file) =>
+    productionCodeChange(file, context),
+  );
+  return (
+    changedFiles.some((file) => QUALITY_INFRASTRUCTURE_PATHS.has(file)) &&
+    productFiles.every((file) => QUALITY_INFRASTRUCTURE_PATHS.has(file))
+  );
+}
+
 function evidenceIndexError(evidence, repository, repositoryId) {
   if (
     evidence.schemaVersion === 2 &&
@@ -366,24 +437,31 @@ function verifyClaim(
     );
     const bootstrap =
       result.deliveryClass === PROTECTED_INFRASTRUCTURE_BOOTSTRAP;
+    const qualityInfrastructure =
+      result.deliveryClass === QUALITY_INFRASTRUCTURE;
     if (bootstrap && result.userFacing) {
       errors.push(
         "protected infrastructure bootstrap cannot declare user-facing work",
       );
     }
-    if (
-      bootstrap &&
-      [...PROTECTED_INFRASTRUCTURE_PATHS].some(
-        (file) => !changedFiles.includes(file),
-      )
-    ) {
+    if (bootstrap && !protectedInfrastructureBootstrapFiles(changedFiles)) {
       errors.push(
         "protected infrastructure bootstrap must include the complete admission chain",
       );
     }
+    if (
+      qualityInfrastructure &&
+      productFiles.some((file) => !QUALITY_INFRASTRUCTURE_PATHS.has(file))
+    ) {
+      errors.push(
+        "quality infrastructure delivery cannot include product-affecting files",
+      );
+    }
     for (const file of productFiles.filter(
       (candidate) =>
-        !bootstrap || !PROTECTED_INFRASTRUCTURE_PATHS.has(candidate),
+        (!bootstrap || !PROTECTED_INFRASTRUCTURE_PATHS.has(candidate)) &&
+        (!qualityInfrastructure ||
+          !QUALITY_INFRASTRUCTURE_PATHS.has(candidate)),
     )) {
       errors.push(
         `contract claim cannot cover product-affecting file '${file}'`,
@@ -545,7 +623,11 @@ function main(argv) {
 module.exports = {
   classifyChange,
   next,
+  isProtectedInfrastructureBootstrap,
+  isQualityInfrastructure,
+  qualityInfrastructureChange,
   parseTasks,
+  protectedInfrastructureBootstrapFiles,
   productionCodeChange,
   validate,
   verifyClaim,
