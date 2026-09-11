@@ -7,7 +7,8 @@ repository metadata guard. Require a regular lock owned by the effective user,
 the exact local hostname, a valid PID and acquisition timestamp, and positive
 ESRCH liveness evidence.
 
-Re-read the lock through a no-follow descriptor, compare device, inode, and
+Open the lock through a no-follow, nonblocking descriptor before validating
+its type and owner with fstat. Re-read through another descriptor, compare device, inode, and
 body while the guard remains held, then unlink and acquire with exclusive
 creation. A competing legacy writer that acquires first remains the owner.
 

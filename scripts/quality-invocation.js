@@ -6371,15 +6371,13 @@ function reviewAuthorization(manifest) {
 }
 
 function manifestLockSnapshot(lock) {
-  const stat = fs.lstatSync(lock);
-  if (!stat.isFile() || stat.uid !== process.geteuid?.()) return null;
   const descriptor = fs.openSync(
     lock,
-    fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+    fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
   );
   try {
-    const opened = fs.fstatSync(descriptor);
-    if (opened.dev !== stat.dev || opened.ino !== stat.ino) return null;
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile() || stat.uid !== process.geteuid?.()) return null;
     return { stat, body: fs.readFileSync(descriptor, "utf8") };
   } finally {
     fs.closeSync(descriptor);
