@@ -5,6 +5,7 @@ import {
   mkdirSync,
   writeFileSync,
   readlinkSync,
+  realpathSync,
   existsSync,
   symlinkSync,
 } from "node:fs";
@@ -97,7 +98,35 @@ describe("setup-claude-sync.sh", () => {
       expect(profile).toContain(`name: ${name}`);
       expect(profile).toContain("model: inherit");
       expect(profile).toContain(`effort: ${effort}`);
+      // Neutral profiles inherit the parent's available tools. A fixed allowlist
+      // removes WebSearch and MCP tools needed by research tasks.
+      expect(profile).not.toMatch(/^(tools|disallowedTools|permissionMode):/m);
     }
+  });
+
+  it("resolves native request documentation and advice from an unrelated installed cwd", () => {
+    const cfg = sandbox();
+    expect(run(["--repair"], cfg).code).toBe(0);
+    const governor = path.join(cfg, "scripts", "compute-governor.js");
+    const reference = path.resolve(
+      path.dirname(realpathSync(governor)),
+      "../docs/compute-governor.md",
+    );
+    const doc = readFileSync(reference, "utf8");
+    const request = JSON.parse(doc.match(/```json\n([\s\S]*?)\n```/)[1]);
+    const result = JSON.parse(
+      execFileSync(process.execPath, [governor, "resolve", "-"], {
+        cwd: makeTempDir("native-consumer-"),
+        input: JSON.stringify(request),
+        encoding: "utf8",
+      }),
+    );
+    expect(result).toMatchObject({
+      status: "ready",
+      modelArguments: { model: "gpt-5.6-luna", reasoning_effort: "medium" },
+      observed: null,
+      usage: null,
+    });
   });
 
   // The regression that shipped to main: invoked via the installed symlink,

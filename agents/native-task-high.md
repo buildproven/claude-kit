@@ -1,7 +1,6 @@
 ---
 name: native-task-high
 description: Bounded high-effort native task worker. Use only with a ready native advisory decision that selects high effort.
-tools: Read, Write, Edit, Glob, Grep, Bash
 model: inherit
 effort: high
 ---

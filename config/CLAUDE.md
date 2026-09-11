@@ -33,7 +33,8 @@
 - Batch independent tool calls in parallel.
 - Keep small work local. Before substantial independent native delegation, use
   the `compute-governor resolve|explain` `native-advisory` request from
-  `docs/compute-governor.md` with complete facts, full task text, planned paths,
+  the governor source's `../docs/compute-governor.md` (resolve its installed
+  symlink first) with complete facts, full task text, planned paths,
   parent identity, and actual client capabilities.
 - Use model and reasoning arguments only from a ready bounded/fresh decision.
   Claude Task uses the returned `subagent_type` and model alias; its

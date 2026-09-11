@@ -6,6 +6,12 @@ change the interactive builder model.
 
 ## Native advisory selection
 
+For an installed caller, locate `scripts/compute-governor.js` under the active
+plugin, project `.claude`, or `~/.claude` directory. Resolve that symlink to the
+source script. This reference is `../docs/compute-governor.md` relative to its
+source directory, regardless of the caller's working directory. Invoke
+`node <installed-governor> resolve <request.json>` with the request below.
+
 Native Codex and Claude delegation can call `resolve` or `explain` with the
 separate `native-advisory` request. The result launches nothing and is not a V1
 or V2 execution plan.
@@ -57,7 +63,11 @@ For a fresh or bounded Codex worker, consume ready `modelArguments` through
 `modelArguments` names the Task `subagent_type` and model alias. The selected task profile supplies its
 effort; Task has no per-call effort control. The kit profiles are
 `native-task-low`, `native-task-medium`, and `native-task-high`, all with
-`model: inherit` and their named `effort:` frontmatter. Claude uses the built-in
+`model: inherit` and their named `effort:` frontmatter. They omit `tools` and
+`permissionMode` so the client inherits the parent's available tool surface and
+permissions, including available WebSearch and MCP tools. Confirm required task
+tools are available before delegating; a ready model pair does not prove tool
+availability. See [Claude subagent tools](https://code.claude.com/docs/en/sub-agents#available-tools). Claude uses the built-in
 `general-purpose` type for the Haiku/null-effort pair. Declare only installed
 profiles in `capabilities.profiles`, then inspect `/tasks` to confirm the
 effective model and effort. Do not mutate global model settings. A full-history

@@ -304,9 +304,12 @@ Check `docs/dev_guide/CONVENTIONS.md` first if present. Use direct tools for
 small lookups. Delegate only a bounded independent task that justifies its
 coordination cost and current authority.
 
-Before native delegation, resolve the `native-advisory` request in
-`docs/compute-governor.md`. Supply complete facts, the full task text, planned
-paths, parent identity, and the live client's capabilities. Only a ready
+Before native delegation, find the installed `scripts/compute-governor.js`
+under the active plugin, project `.claude`, or `~/.claude` directory. Resolve
+its symlink to the source script and read `../docs/compute-governor.md` relative
+to that source script's directory. Use its `native-advisory` request with
+`node <installed-governor> resolve <request.json>`. Supply complete facts, the
+full task text, planned paths, parent identity, and live client capabilities. Only a ready
 bounded/fresh decision may supply Task or `spawn_agent` model/effort arguments.
 Claude Task uses the returned profile and model alias; the profile supplies
 effort. Confirm the effective identity in `/tasks`. Preserve full-history

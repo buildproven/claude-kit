@@ -39,8 +39,10 @@ override.
 
 Claude Task obtains the selected effort from one of the neutral native task
 profiles (`native-task-low`, `native-task-medium`, or `native-task-high`), not
-from a global setting or an unrelated specialist. The caller passes the ready
-model alias and profile name, then checks `/tasks` for the effective identity.
+from a global setting or an unrelated specialist. The neutral profiles inherit available parent tools and permissions; they do
+not impose a developer-only tool allowlist on research tasks. Callers check the
+required task tools before spawning. The caller passes the ready model alias
+and profile name, then checks `/tasks` for the effective identity.
 The built-in `general-purpose` type covers the Haiku/null-effort pair.
 
 ## Consequences

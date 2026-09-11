@@ -113,7 +113,10 @@ For a specific Sentry issue ID:
    `node <kit-scripts>/worktree-manager.js create --repo <repo> --branch fix/sentry-<issue-id> --creator bs:triage --purpose <issue-id> --lock-reason bs:triage/<issue-id>`
 4. Generate and record a one-paragraph root-cause hypothesis with a bounded
    native subagent only when the task is independent. First resolve the complete
-   `native-advisory` request from `docs/compute-governor.md`; use Task or
+   `native-advisory` request: resolve the installed `scripts/compute-governor.js`
+   symlink under the active plugin, project `.claude`, or `~/.claude` directory.
+   Read `../docs/compute-governor.md` relative to that source script's directory
+   and invoke `node <installed-governor> resolve <request.json>`. Use Task or
    `spawn_agent` arguments only when the decision is ready. Claude Task uses the
    returned profile and model alias, then confirms effective effort in `/tasks`.
    Reading a stack trace can continue locally if a native capability is

@@ -1,7 +1,6 @@
 ---
 name: native-task-medium
 description: Bounded medium-effort native task worker. Use only with a ready native advisory decision that selects medium effort.
-tools: Read, Write, Edit, Glob, Grep, Bash
 model: inherit
 effort: medium
 ---

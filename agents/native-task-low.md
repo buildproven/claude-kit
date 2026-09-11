@@ -1,7 +1,6 @@
 ---
 name: native-task-low
 description: Bounded low-effort native task worker. Use only with a ready native advisory decision that selects low effort.
-tools: Read, Write, Edit, Glob, Grep, Bash
 model: inherit
 effort: low
 ---
