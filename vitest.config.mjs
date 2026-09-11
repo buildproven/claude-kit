@@ -12,9 +12,10 @@ export default {
     testTimeout: 60_000,
     hookTimeout: 60_000,
     // These integration suites create Git repositories, worktrees, and npm
-    // subprocesses. Eight workers keep the complete suite inside the quality
-    // gate's bounded execution allowance without changing test scope.
-    maxWorkers: 8,
+    // subprocesses. Four workers prevent resource contention from turning
+    // independent child-process checks into false timeout failures while
+    // keeping the complete suite inside the quality gate's bounded allowance.
+    maxWorkers: 4,
     include: [
       "scripts/__tests__/**/*.test.js",
       "eslint-plugin-defensive/__tests__/**/*.test.js",
