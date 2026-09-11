@@ -455,6 +455,24 @@ describe("product completion", () => {
     ).toBe(false);
   });
 
+  it("accepts the quality completion classifier under a quality contract", () => {
+    const { prd, tasks } = files();
+    writeFileSync(
+      prd,
+      "# Runtime\n\n## Delivery classification\n\n- Delivery: quality-infrastructure\n",
+    );
+    const result = validate(prd, tasks);
+    expect(
+      verifyClaim(
+        result,
+        "contract",
+        ["docs/prd/runtime-prd.md", "scripts/product-completion.js"],
+        {},
+        {},
+      ),
+    ).toMatchObject({ valid: true, errors: [] });
+  });
+
   it("rejects receipts replayed against a different PRD or task set", () => {
     const original = files();
     const originalResult = validate(original.prd, original.tasks);

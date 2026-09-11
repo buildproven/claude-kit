@@ -449,7 +449,9 @@ function verifyClaim(
     }
     for (const file of productFiles.filter(
       (candidate) =>
-        !bootstrap || !PROTECTED_INFRASTRUCTURE_PATHS.has(candidate),
+        (!bootstrap || !PROTECTED_INFRASTRUCTURE_PATHS.has(candidate)) &&
+        (!qualityInfrastructure ||
+          !QUALITY_INFRASTRUCTURE_PATHS.has(candidate)),
     )) {
       errors.push(
         `contract claim cannot cover product-affecting file '${file}'`,
