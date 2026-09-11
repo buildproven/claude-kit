@@ -45,6 +45,22 @@ MUTATION_BASE="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" muta
 REUSED_ARTIFACT_SHA="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" mutationCarry.artifactSha256 2>/dev/null || true)"
 AVOIDED_SECONDS="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" mutationCarry.avoidedSeconds 2>/dev/null || true)"
 case "$AVOIDED_SECONDS" in ''|*[!0-9]*) AVOIDED_SECONDS=0 ;; esac
+# A skip artifact proves that the prior revision had no executable source to
+# revert; it is not a red-capable mutation proof. Reusing its base would make
+# the next revision's no-mutable-source artifact claim an invalid prior proof
+# and fail closed during identity validation. Start those revisions from the
+# campaign base. Only an observed mutation failure can carry its proven base.
+if [ "$MUTATION_BASE" != "$BASE" ] && [ -n "$REUSED_ARTIFACT_SHA" ]; then
+  MUTATION_CARRY_ARTIFACT="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" mutationCarry.artifactPath 2>/dev/null || true)"
+  MUTATION_CARRY_METHOD="$(jq -r '.method // empty' "$MUTATION_CARRY_ARTIFACT" 2>/dev/null || true)"
+  case "$MUTATION_CARRY_METHOD" in
+    no-mutable-source|gitlink-skip)
+      MUTATION_BASE="$BASE"
+      REUSED_ARTIFACT_SHA=""
+      AVOIDED_SECONDS=0
+      ;;
+  esac
+fi
 STATE_ROOT="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" stateRoot)"
 INVOCATION_ID="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" invocationId)"
 CHECK_SECONDS="$(node "$SCRIPT_DIR/quality-invocation.js" field "$MANIFEST" risk.runtime.checkSeconds)"
