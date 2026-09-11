@@ -92,6 +92,7 @@ jobs:
                 },
               },
               repository: process.env.GITHUB_REPOSITORY,
+              repositoryId: process.env.GITHUB_REPOSITORY_ID,
               workflowCommit: process.env.GITHUB_SHA,
               runId: process.env.GITHUB_RUN_ID,
               runAttempt: process.env.GITHUB_RUN_ATTEMPT,
