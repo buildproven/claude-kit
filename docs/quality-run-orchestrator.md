@@ -60,6 +60,22 @@ required finding disposition.
 
 ## Migration plan
 
+### Installed v1 maintenance
+
+The v1 maintenance cohort starts at `2bb28d8` and carries the interruption
+recovery and current Codex argument fixes. Its receipt verifier remains v1.
+This preserves the deployed trust boundary while the separate protected v2
+receipt producer and admission service are not yet available. It does not
+claim v2 verification or authorize an unsigned v2 receipt.
+
+Verify the exact maintenance commit with the interruption, provider, and full
+regression checks before pinning an installation to it. Its integration must
+make that commit reachable from the approved main branch; the installation
+must still verify descent from its prior core pin. Do not substitute an
+unreviewed worktree or copy individual runtime scripts into an installation.
+
+### Orchestrator rollout
+
 1. **Complete:** extract a `quality-run` command that invokes the existing bootstrap,
    selection, gate, review, stamp/merge, and telemetry scripts in this order.
    It writes phase transitions to the existing invocation manifest.
