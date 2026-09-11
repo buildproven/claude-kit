@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   canonicalJson,
   sha256,
@@ -304,7 +305,11 @@ describe("repository-scoped product trust", () => {
       const raced = rootOwnedFs({
         fstatSync(descriptor) {
           const stat = fs.fstatSync(descriptor);
-          return withStat(stat, { ino: stat.ino + 1 });
+          return withStat(stat, {
+            ino: stat.ino + 1,
+            uid: 0,
+            mode: stat.mode & ~0o022,
+          });
         },
       });
       expect(() =>
@@ -435,6 +440,66 @@ describe("privileged product-trust installation", () => {
           fsImpl,
         }),
       ).toThrow(/symbolic link/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a FIFO trust target without waiting for a writer", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "product-trust-fifo-"));
+    const staging = path.join(dir, "reviewed.json");
+    const target = path.join(dir, "product-trust.json");
+    const keys = crypto.generateKeyPairSync("ed25519");
+    const value = registry([
+      repositoryRow(
+        "buildproven/claude-kit",
+        "1175614110",
+        keys.publicKey,
+        crypto.generateKeyPairSync("ed25519").publicKey,
+      ),
+    ]);
+    fs.writeFileSync(staging, value);
+    const made = spawnSync("mkfifo", [target], { encoding: "utf8" });
+    expect(made.status, made.stderr).toBe(0);
+    let opened = false;
+    const fsImpl = rootOwnedFs({
+      lstatSync(file, ...args) {
+        // The pathname previously named a regular file. The attacker replaces
+        // it with a FIFO immediately before the real open.
+        const stat = fs.lstatSync(
+          file === target && !opened ? staging : file,
+          ...args,
+        );
+        return withStat(stat, { uid: 0, mode: stat.mode & ~0o022 });
+      },
+      openSync(file, flags, ...args) {
+        if (file === target) {
+          if (!(flags & fs.constants.O_NONBLOCK)) {
+            throw new Error("trust target open would wait for a FIFO writer");
+          }
+          opened = true;
+        }
+        return fs.openSync(file, flags, ...args);
+      },
+    });
+    try {
+      expect(() =>
+        installProductTrust({
+          stagingFile: staging,
+          targetFile: target,
+          expectedSHA256: sha256(value),
+          fsImpl,
+        }),
+      ).toThrow(/regular file/);
+      opened = false;
+      const identity = expected("buildproven/claude-kit", "1175614110");
+      expect(() =>
+        verifyAdmissionEnvelope(
+          admission(keys.privateKey, keys.publicKey, identity),
+          identity,
+          { trustRoot: target, fsImpl },
+        ),
+      ).toThrow(/regular file/);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -30,13 +30,6 @@ function assertSafeDirectory(directory, fsImpl) {
 }
 
 function readInstalledRegistry(targetFile, fsImpl) {
-  const stat = fsImpl.lstatSync(targetFile);
-  if (stat.isSymbolicLink()) {
-    throw new Error("product trust target must not be a symbolic link");
-  }
-  if (!stat.isFile())
-    throw new Error("product trust target must be a regular file");
-  assertSafeRootOwned(stat, "product trust target");
   const noFollow = fsImpl.constants?.O_NOFOLLOW;
   if (!noFollow) {
     throw new Error(
@@ -47,16 +40,31 @@ function readInstalledRegistry(targetFile, fsImpl) {
   try {
     descriptor = fsImpl.openSync(
       targetFile,
-      fsImpl.constants.O_RDONLY | noFollow,
+      fsImpl.constants.O_RDONLY | noFollow | fsImpl.constants.O_NONBLOCK,
     );
     const opened = fsImpl.fstatSync(descriptor);
+    if (!opened.isFile()) {
+      throw new Error("product trust target must be a regular file");
+    }
     const after = fsImpl.lstatSync(targetFile);
-    if (!sameFile(stat, opened) || !sameFile(opened, after)) {
+    if (!sameFile(opened, after) || after.isSymbolicLink()) {
       throw new Error("product trust target changed while it was opened");
     }
     assertSafeRootOwned(opened, "opened product trust target");
     assertSafeRootOwned(after, "product trust target");
     return fsImpl.readFileSync(descriptor);
+  } catch (error) {
+    if (descriptor !== undefined && error.code === "ENOENT") {
+      throw new Error("product trust target changed while it was read", {
+        cause: error,
+      });
+    }
+    if (error.code === "ELOOP") {
+      throw new Error("product trust target must not be a symbolic link", {
+        cause: error,
+      });
+    }
+    throw error;
   } finally {
     if (descriptor !== undefined) fsImpl.closeSync(descriptor);
   }

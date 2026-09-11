@@ -34,8 +34,9 @@ legacy installations and isolated protected workers. If a registry exists,
 missing entries, mismatched name/ID, malformed data, wrong ownership or unsafe
 permissions fail closed. Never fall back to singleton after a registry error.
 On POSIX require a root-owned regular registry file and root-owned directory,
-with no group/other write permission and no symlink; verify the opened file's
-identity against lstat to reject replacement races. On platforms without a
+with no group/other write permission and no symlink; open without following symlinks or waiting on a FIFO, validate the descriptor,
+then compare its identity against lstat and read through the descriptor to reject
+replacement races. On platforms without a
 supported ownership check, registry mode fails explicitly until a native
 permission verifier exists; existing legacy behavior remains available.
 

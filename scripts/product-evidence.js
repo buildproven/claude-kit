@@ -168,7 +168,10 @@ function assertSafeRegistryDirectory(directory, fsImpl) {
   validateRootOwnedPath(parent, "product trust registry directory");
 }
 
-function readOpenedRegistryFile(file, before, fsImpl) {
+function readSafeRegistryFile(
+  file,
+  { fsImpl = fs, platform = process.platform } = {},
+) {
   const noFollow = fsImpl.constants?.O_NOFOLLOW;
   if (!noFollow) {
     throw new Error(
@@ -177,16 +180,31 @@ function readOpenedRegistryFile(file, before, fsImpl) {
   }
   let descriptor;
   try {
-    descriptor = fsImpl.openSync(file, fsImpl.constants.O_RDONLY | noFollow);
+    descriptor = fsImpl.openSync(
+      file,
+      fsImpl.constants.O_RDONLY | noFollow | fsImpl.constants.O_NONBLOCK,
+    );
+    if (platform === "win32") {
+      throw new Error(
+        "repository product trust needs a native ownership verifier on this platform",
+      );
+    }
+    assertSafeRegistryDirectory(path.dirname(file), fsImpl);
     const opened = fsImpl.fstatSync(descriptor);
+    assertSafeRegistryFile(opened, "opened product trust registry");
     const after = fsImpl.lstatSync(file);
-    if (!sameFile(before, opened) || !sameFile(opened, after)) {
+    if (!sameFile(opened, after)) {
       throw new Error("product trust registry changed while it was opened");
     }
-    assertSafeRegistryFile(opened, "opened product trust registry");
     assertSafeRegistryFile(after, "product trust registry");
     return fsImpl.readFileSync(descriptor);
   } catch (error) {
+    if (descriptor === undefined && error.code === "ENOENT") return null;
+    if (error.code === "ELOOP") {
+      throw new Error("product trust registry must not be a symbolic link", {
+        cause: error,
+      });
+    }
     if (
       error.message === "product trust registry changed while it was opened"
     ) {
@@ -198,32 +216,6 @@ function readOpenedRegistryFile(file, before, fsImpl) {
   } finally {
     if (descriptor !== undefined) fsImpl.closeSync(descriptor);
   }
-}
-
-function readSafeRegistryFile(
-  file,
-  { fsImpl = fs, platform = process.platform } = {},
-) {
-  let before;
-  try {
-    before = fsImpl.lstatSync(file);
-  } catch (error) {
-    if (error.code === "ENOENT") return null;
-    throw new Error(
-      `product trust registry cannot be inspected: ${error.message}`,
-      {
-        cause: error,
-      },
-    );
-  }
-  if (platform === "win32") {
-    throw new Error(
-      "repository product trust needs a native ownership verifier on this platform",
-    );
-  }
-  assertSafeRegistryFile(before, "product trust registry");
-  assertSafeRegistryDirectory(path.dirname(file), fsImpl);
-  return readOpenedRegistryFile(file, before, fsImpl);
 }
 
 function publicKeyFromSpki(encoded, label) {
