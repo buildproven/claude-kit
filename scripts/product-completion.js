@@ -34,6 +34,7 @@ const NON_PRODUCT_ROOT_NAMES = new Set([
 ]);
 const PROTECTED_INFRASTRUCTURE_BOOTSTRAP = "protected-infrastructure-bootstrap";
 const PROTECTED_INFRASTRUCTURE_PATHS = new Set([
+  ".github/workflows/product-admission-public-key.yml",
   ".github/workflows/product-evidence-admission.yml",
   ".github/workflows/product-evidence-producer.yml",
   ".github/workflows/product-evidence-source.yml",
