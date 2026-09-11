@@ -81,6 +81,25 @@ describe("setup-claude-sync.sh", () => {
     expect(stdout).toMatch(/hook scripts resolve/);
   });
 
+  it("makes each native Claude effort profile available in an isolated install", () => {
+    const cfg = sandbox();
+    expect(run(["--repair"], cfg).code).toBe(0);
+
+    for (const [name, effort] of [
+      ["native-task-low", "low"],
+      ["native-task-medium", "medium"],
+      ["native-task-high", "high"],
+    ]) {
+      const profile = readFileSync(
+        path.join(cfg, "agents", `${name}.md`),
+        "utf8",
+      );
+      expect(profile).toContain(`name: ${name}`);
+      expect(profile).toContain("model: inherit");
+      expect(profile).toContain(`effort: ${effort}`);
+    }
+  });
+
   // The regression that shipped to main: invoked via the installed symlink,
   // REPO_ROOT collapsed to the config dir, so --repair unlinked the working
   // link and recreated it pointing at itself. ELOOP, all 14 hooks dead, and the

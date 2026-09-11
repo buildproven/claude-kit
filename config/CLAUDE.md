@@ -31,6 +31,15 @@
 - Use TodoWrite for complex multi-step tasks.
 - Use Grep/Glob instead of bash search. Read files before editing.
 - Batch independent tool calls in parallel.
+- Keep small work local. Before substantial independent native delegation, use
+  the `compute-governor resolve|explain` `native-advisory` request from
+  `docs/compute-governor.md` with complete facts, full task text, planned paths,
+  parent identity, and actual client capabilities.
+- Use model and reasoning arguments only from a ready bounded/fresh decision.
+  Claude Task uses the returned `subagent_type` and model alias; its
+  `native-task-*` profile sets effort. Check `/tasks` for the effective identity.
+  Full-history forks retain their parent. A blocked decision is visible: do not
+  substitute a global default; continue safe local work when possible.
 
 ## Known Mistakes
 
