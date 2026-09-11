@@ -663,7 +663,11 @@ describe("quality-run public orchestration", () => {
   it("runs an evidence-free contract claim for quality-control configuration", () => {
     const result = run(
       fixture({
-        changedFiles: [".buildproven/test-impact.json", "harness-config.json"],
+        changedFiles: [
+          ".buildproven/test-impact.json",
+          "harness-config.json",
+          "scripts/product-completion.js",
+        ],
       }),
     );
     expect(result.status).toBe(0);

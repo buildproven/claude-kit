@@ -325,20 +325,30 @@ function isProtectedInfrastructureBootstrap(prdPath, tasksPath, changedFiles) {
 }
 
 function isQualityInfrastructure(prdPath, tasksPath, changedFiles) {
-  const productFiles = changedFiles.filter(productionCodeChange);
-  if (
-    !QUALITY_INFRASTRUCTURE_PATHS.size ||
-    !changedFiles.some((file) => QUALITY_INFRASTRUCTURE_PATHS.has(file)) ||
-    productFiles.some((file) => !QUALITY_INFRASTRUCTURE_PATHS.has(file))
-  ) {
-    return false;
-  }
+  if (!qualityInfrastructureChange(changedFiles)) return false;
   try {
     const result = validate(prdPath, tasksPath);
     return result.valid && result.deliveryClass === QUALITY_INFRASTRUCTURE;
   } catch {
     return false;
   }
+}
+
+// The quality runner uses this path-only predicate before product evidence is
+// available. Keep it identical to the classifier's product-file boundary so
+// quality-control changes can reach the PRD-aware verifier without being
+// rejected by the generic product preflight.
+function qualityInfrastructureChange(changedFiles, context = {}) {
+  if (!Array.isArray(changedFiles) || !QUALITY_INFRASTRUCTURE_PATHS.size) {
+    return false;
+  }
+  const productFiles = changedFiles.filter((file) =>
+    productionCodeChange(file, context),
+  );
+  return (
+    changedFiles.some((file) => QUALITY_INFRASTRUCTURE_PATHS.has(file)) &&
+    productFiles.every((file) => QUALITY_INFRASTRUCTURE_PATHS.has(file))
+  );
 }
 
 function evidenceIndexError(evidence, repository, repositoryId) {
@@ -615,6 +625,7 @@ module.exports = {
   next,
   isProtectedInfrastructureBootstrap,
   isQualityInfrastructure,
+  qualityInfrastructureChange,
   parseTasks,
   protectedInfrastructureBootstrapFiles,
   productionCodeChange,
