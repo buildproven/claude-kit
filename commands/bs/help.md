@@ -9,6 +9,11 @@ model: haiku
 
 # /bs:help Command
 
+Native model routing is advisory and uses the shared compute governor. It does
+not change the active chat model. If a worker cannot be admitted, continue safe
+local work; see `docs/compute-governor.md`. Quality levels are risk floors, not
+six/ten-agent panels or percentage-quality guarantees.
+
 ## Model routing
 
 Daily commands inherit the configured runtime default (Sonnet/medium in Claude

@@ -4,6 +4,72 @@ Compute Governor gives fresh autonomous workers one explicit model, effort,
 access profile, runtime cap, prompt hash, and exact Git revision. It does not
 change the interactive builder model.
 
+## Native advisory interface
+
+Ordinary Codex and Claude sessions can use `resolve` or `explain` with
+`interface: "native-advisory"` and `schemaVersion: 1`. This is a separate
+advisory envelope; the existing v1/v2 execution contracts are unchanged.
+Both commands return the same decision and launch nothing:
+
+```bash
+node ~/.claude/scripts/compute-governor.js explain native-request.json
+```
+
+```json
+{
+  "interface": "native-advisory",
+  "schemaVersion": 1,
+  "work": "delegation",
+  "facts": {
+    "provider": "codex",
+    "phase": "scan",
+    "readOnly": true,
+    "localized": true
+  },
+  "parent": { "model": "gpt-6-astra", "effort": "high" },
+  "override": null,
+  "fork": "bounded",
+  "capabilities": {
+    "delegation": true,
+    "overrides": true,
+    "models": [{ "model": "gpt-5.6-terra", "efforts": ["medium", "high"] }]
+  }
+}
+```
+
+The caller supplies capabilities from its current native tool contract; this
+example is not a model availability catalog. Unknown capability flags or model
+availability use `null`. `models: []` means no available models. Availability
+includes supported effort values for each model. No unavailable or unknown
+capability produces usable `modelArguments`.
+
+`work` distinguishes `tools`, `local` coordinator work, and `delegation`.
+Tools and local work require no additional model. The task role is the existing
+facts `phase`; risk, approved mappings and economy calibration all reuse the
+existing governor policy. Economy remains candidate-only: native advice uses
+the calibrated standard floor. Sensitive review retains the critical floor.
+
+`parent` records the current selected coordinator and is never changed.
+`override` is an explicit child model/effort choice, or `null`. `fork: "all"`
+inherits the parent's model and effort and emits no model arguments; any
+explicit override blocks that fork. `bounded` and `none` require supported
+override capabilities. Callers must preserve permissions and required context;
+they must not discard required history just to enable a model override.
+
+`configured` is the approved policy mapping; `requested` is the proposed child
+identity after inheritance or explicit choice. An unavailable identity or one
+that cannot be shown to meet the approved route floor stays visible and returns
+`blocked`; it is never silently replaced. Models outside approved policy
+mappings therefore need policy review before native delegation advice is ready.
+The decision's `observed` and `usage` fields remain `null`: advice supplies no
+execution or usage evidence. `ready` means advisory inputs passed validation,
+not permission to launch, proof of completion, or merge authority. The caller
+still needs delegation authorization under its active instructions.
+
+This interface makes no native tool calls, changes no client settings, uses no
+API-backed paid fallback, and does not enforce a global quota across unmanaged
+windows. Its constraints are explicit caller obligations, not sandbox claims.
+
 ## Phase-v2 workers
 
 Schema v2 covers `scan`, `plan`, `implement`, `verify`, `remediate`, `diagnose`,
