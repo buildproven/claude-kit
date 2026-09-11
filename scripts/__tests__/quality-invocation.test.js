@@ -755,6 +755,114 @@ describe("required gate reuse", () => {
 });
 
 describe("quality invocation manifest", () => {
+  it("reopens one unexecuted selector terminal only after its selector cohort changes", () => {
+    const root = repo("selection-recovery");
+    const manifestPath = create(root, ["--merge"]);
+    const terminal = invocation.recordPreReviewSelectionFailure(
+      manifestPath,
+      "panel failed with exit 7",
+      7,
+    );
+    expect(terminal).toMatchObject({
+      state: "blocked",
+      failureCode: "pre-review-selection-failed",
+      phase: "panel",
+      selectorExitCode: 7,
+      terminalEpoch: 0,
+    });
+    expect(terminal.selectionRecovery.execution).toEqual({
+      gateCount: 0,
+      reviewCount: 0,
+      gateSecondsUsed: 0,
+      providerSecondsUsed: 0,
+      activeSecondsUsed: 0,
+      providerAttempts: 0,
+      authorizedAttempts: 0,
+      roundsUsed: 0,
+    });
+
+    // The fixture changes the sealed prior selector digest. A real repair
+    // changes the exact source cohort that creates this digest.
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      manifest.terminalState.selectionRecovery.selectorRuntimeDigest =
+        "0".repeat(64);
+    });
+
+    const first = invocation.resumePreReviewSelectionFailure(manifestPath);
+    const second = invocation.resumePreReviewSelectionFailure(manifestPath);
+    const resumed = invocation.loadManifest(manifestPath).manifest;
+    expect(first).toMatchObject({ terminalEpoch: 1 });
+    expect(second).toBeNull();
+    expect(resumed.terminalState).toBeNull();
+    expect(resumed.selectionRecovery).toMatchObject({ terminalEpoch: 0 });
+    expect(resumed.terminalHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          disposition: "superseded-by-selection-recovery",
+        }),
+        expect.objectContaining({
+          event: "reopened-by-selection-recovery",
+          terminalEpoch: 1,
+        }),
+      ]),
+    );
+  });
+
+  it.each([
+    {
+      label: "unchanged selector cohort",
+      mutate: () => {},
+    },
+    {
+      label: "changed non-selector runtime cohort",
+      mutate: (manifest) => {
+        manifest.terminalState.selectionRecovery.remainingRuntimeDigest =
+          "1".repeat(64);
+      },
+    },
+    {
+      label: "gate evidence",
+      mutate: (manifest) => {
+        manifest.gates.push({ name: "lint", status: "success" });
+      },
+    },
+    {
+      label: "an active execution",
+      mutate: (manifest) => {
+        manifest.governor.activeExecution = { kind: "gate", name: "lint" };
+      },
+    },
+  ])("does not reopen a selector terminal with $label", ({ label, mutate }) => {
+    const root = repo(`selection-recovery-refuse-${label}`);
+    const manifestPath = create(root, ["--merge"]);
+    invocation.recordPreReviewSelectionFailure(manifestPath, "panel failed", 2);
+    invocation.withManifestLock(manifestPath, mutate);
+
+    expect(invocation.resumePreReviewSelectionFailure(manifestPath)).toBeNull();
+    expect(
+      invocation.loadManifest(manifestPath).manifest.terminalState,
+    ).toMatchObject({
+      failureCode: "pre-review-selection-failed",
+      phase: "panel",
+    });
+  });
+
+  it("refuses to checkpoint selector failure after gate or provider evidence", () => {
+    const root = repo("selection-recovery-executed");
+    const manifestPath = create(root, ["--merge"]);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      manifest.governor.providerAttempts.push({ provider: "codex" });
+    });
+
+    expect(() =>
+      invocation.recordPreReviewSelectionFailure(
+        manifestPath,
+        "panel failed",
+        1,
+      ),
+    ).toThrow(/zero execution evidence/);
+  });
+
   it("binds the exact delivery-evidence index digest to the current HEAD", () => {
     const root = repo("delivery-evidence-digest");
     const evidence = path.join(root, "evidence.json");

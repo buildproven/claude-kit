@@ -562,7 +562,11 @@ function invocationRuntime(manifestPath, execute) {
     if (result.code !== 0) {
       throw Object.assign(
         new Error(`${phase} failed with exit ${result.code}`),
-        { phase },
+        {
+          phase,
+          exitCode: result.code,
+          preReviewSelectionFailure: phase === "panel",
+        },
       );
     }
     updateOrchestration(manifestPath, phase, "success");
@@ -826,6 +830,24 @@ async function recordFailure(context, manifestPath, error) {
     };
   }
   if (
+    error.preReviewSelectionFailure === true &&
+    Number.isInteger(error.exitCode) &&
+    error.exitCode !== 0 &&
+    !manifest.terminalState
+  ) {
+    const terminal = quality.recordPreReviewSelectionFailure(
+      manifestPath,
+      error.message,
+      error.exitCode,
+    );
+    return {
+      status: "terminal",
+      state: terminal.state,
+      message: error.message,
+      head: manifest.revisions.currentHead,
+    };
+  }
+  if (
     !manifest.terminalState ||
     manifest.terminalState.state === "recovering"
   ) {
@@ -1049,6 +1071,14 @@ async function runManifest(manifestPath, dependencies = {}) {
       const interruptedRecovery =
         quality.resumeInterruptedTerminal(manifestPath);
       if (interruptedRecovery) {
+        const resumed = manifestAt(manifestPath);
+        pinTerminalEpoch(resumed);
+        quality.validateIdentity(resumed, resumed.repo.realpath);
+        return await runOpenCampaign(context, manifestPath, resumed);
+      }
+      const selectionRecovery =
+        quality.resumePreReviewSelectionFailure(manifestPath);
+      if (selectionRecovery) {
         const resumed = manifestAt(manifestPath);
         pinTerminalEpoch(resumed);
         quality.validateIdentity(resumed, resumed.repo.realpath);
