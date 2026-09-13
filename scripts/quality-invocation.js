@@ -27,6 +27,7 @@ const REQUIRED_GATES_POLICY_VERSION = 3;
 const MAX_AGENT_TARGET = 9;
 const DELIVERY_CLAIMS = new Set([
   "contract",
+  "engineering",
   "local-product",
   "hosted",
   "validated",
@@ -645,7 +646,13 @@ function changedFiles(root, baseSha, head) {
     // containing non-ASCII bytes (core.quotePath's default), which would
     // otherwise break a suffix check like .endsWith(".py") on a path such
     // as "café.py".
-    return git(root, ["diff", "-z", "--name-only", `${baseSha}..${head}`])
+    return git(root, [
+      "diff",
+      "-z",
+      "--name-only",
+      "--no-renames",
+      `${baseSha}..${head}`,
+    ])
       .split("\0")
       .filter(Boolean);
   } catch {
@@ -1130,7 +1137,11 @@ function discoverRequiredGates(
   const verifyAppGate = discoverVerifyAppGate(options, nativeGates);
   if (verifyAppGate) required.push(verifyAppGate);
   return required.map((gate) => {
-    if (gate.source.startsWith("test-impact:")) return gate;
+    if (
+      gate.source.startsWith("test-impact:") &&
+      gate.testImpactMode !== "audit"
+    )
+      return gate;
     const timeoutSeconds = gateTimeouts.get(gate.name);
     return timeoutSeconds ? { ...gate, timeoutSeconds } : gate;
   });
@@ -6023,28 +6034,40 @@ function validMutationArtifact(manifest, artifact) {
   const candidateBase = artifact.candidateBase || artifact.base;
   if (candidateBase !== artifact.base) {
     const carry = manifest.mutationCarry;
+    const rebaseCarry = manifest.revisions.baseRebaseCarry;
+    const freshRebaseProof = Boolean(
+      rebaseCarry &&
+      rebaseCarry.head === artifact.head &&
+      rebaseCarry.baseSha === candidateBase &&
+      carry?.priorHead === rebaseCarry.priorHead &&
+      artifact.reusedArtifactSha256 === null &&
+      artifact.avoidedSeconds === 0,
+    );
     if (
-      !carry ||
-      carry.priorHead !== candidateBase ||
-      carry.artifactSha256 !== artifact.reusedArtifactSha256 ||
-      !fs.existsSync(carry.artifactPath) ||
-      sha256File(carry.artifactPath) !== carry.artifactSha256
+      !freshRebaseProof &&
+      (!carry ||
+        carry.priorHead !== candidateBase ||
+        carry.artifactSha256 !== artifact.reusedArtifactSha256 ||
+        !fs.existsSync(carry.artifactPath) ||
+        sha256File(carry.artifactPath) !== carry.artifactSha256)
     ) {
       return false;
     }
-    const prior = parseJson(
-      fs.readFileSync(carry.artifactPath, "utf8"),
-      "prior mutation evidence artifact",
-    );
-    if (
-      prior.invocationId !== manifest.invocationId ||
-      prior.base !== manifest.revisions.baseSha ||
-      prior.head !== candidateBase ||
-      prior.tier !== manifest.risk.tier ||
-      !validMutationPaths(prior.mutatedPaths) ||
-      prior.testFailureObserved !== true
-    ) {
-      return false;
+    if (!freshRebaseProof) {
+      const prior = parseJson(
+        fs.readFileSync(carry.artifactPath, "utf8"),
+        "prior mutation evidence artifact",
+      );
+      if (
+        prior.invocationId !== manifest.invocationId ||
+        prior.base !== manifest.revisions.baseSha ||
+        prior.head !== candidateBase ||
+        prior.tier !== manifest.risk.tier ||
+        !validMutationPaths(prior.mutatedPaths) ||
+        prior.testFailureObserved !== true
+      ) {
+        return false;
+      }
     }
   }
   if (["gitlink-skip", "no-mutable-source"].includes(artifact.method)) {
@@ -6370,11 +6393,80 @@ function reviewAuthorization(manifest) {
   };
 }
 
-function openManifestLock(lock) {
+function manifestLockSnapshot(lock) {
+  const descriptor = fs.openSync(
+    lock,
+    fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+  );
+  try {
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile() || stat.uid !== process.geteuid?.()) return null;
+    return { stat, body: fs.readFileSync(descriptor, "utf8") };
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function deadLocalManifestOwner(body) {
+  let owner;
+  try {
+    owner = JSON.parse(body);
+  } catch (error) {
+    if (error instanceof SyntaxError) return false;
+    throw error;
+  }
+  if (
+    owner?.hostname !== os.hostname() ||
+    !Number.isSafeInteger(owner.pid) ||
+    owner.pid < 1 ||
+    typeof owner.acquiredAt !== "string" ||
+    !Number.isFinite(Date.parse(owner.acquiredAt))
+  )
+    return false;
+  try {
+    process.kill(owner.pid, 0);
+    return false;
+  } catch (error) {
+    return error.code === "ESRCH";
+  }
+}
+
+function recoverDeadManifestLock(lock, file) {
+  const { manifest } = loadManifest(file);
+  const lease = require("./quality-repo-lease");
+  if (!lease.hasMetadataGuard(manifest)) return false;
+  const observed = manifestLockSnapshot(lock);
+  if (!observed || !deadLocalManifestOwner(observed.body)) return false;
+  const current = manifestLockSnapshot(lock);
+  if (
+    !current ||
+    !lease.hasMetadataGuard(manifest) ||
+    current.stat.dev !== observed.stat.dev ||
+    current.stat.ino !== observed.stat.ino ||
+    current.body !== observed.body
+  )
+    return false;
+  fs.unlinkSync(lock);
+  return true;
+}
+
+function withManifestMetadataGuard(file, operation) {
+  const { manifest } = loadManifest(file);
+  if (manifest.options?.merge !== true || !manifest.repo?.githubRepository)
+    return operation();
+  const lease = require("./quality-repo-lease");
+  if (lease.hasMetadataGuard(manifest)) return operation();
+  return lease.withMetadataGuard(manifest, operation);
+}
+
+function openManifestLock(lock, file) {
   try {
     return fs.openSync(lock, "wx", 0o600);
   } catch (error) {
     if (error.code === "EEXIST") {
+      if (recoverDeadManifestLock(lock, file)) {
+        return fs.openSync(lock, "wx", 0o600);
+      }
       throw new Error(
         "quality manifest is locked; stale locks require explicit operator cleanup",
         { cause: error },
@@ -6384,15 +6476,18 @@ function openManifestLock(lock) {
   }
 }
 
-function withManifestLockRaw(file, mutation) {
+function withManifestLockRawGuarded(file, mutation) {
   const lock = `${path.resolve(file)}.lock`;
-  const descriptor = openManifestLock(lock);
+  const descriptor = openManifestLock(lock, file);
   try {
     fs.writeFileSync(
       descriptor,
       `${JSON.stringify({
         pid: process.pid,
         hostname: os.hostname(),
+        processStartedAt: new Date(
+          Date.now() - process.uptime() * 1000,
+        ).toISOString(),
         acquiredAt: new Date().toISOString(),
       })}\n`,
     );
@@ -6409,6 +6504,12 @@ function withManifestLockRaw(file, mutation) {
     fs.closeSync(descriptor);
     fs.unlinkSync(lock);
   }
+}
+
+function withManifestLockRaw(file, mutation) {
+  return withManifestMetadataGuard(file, () =>
+    withManifestLockRawGuarded(file, mutation),
+  );
 }
 
 function withManifestLock(file, mutation) {
@@ -6527,17 +6628,19 @@ function recordTerminalState(manifestPath, state, detail = null, options = {}) {
       write,
     ).terminalState.state;
   }
-  const lock = `${path.resolve(manifestPath)}.lock`;
-  const descriptor = openManifestLock(lock);
-  try {
-    const loaded = loadManifest(manifestPath);
-    const result = write(loaded.manifest);
-    saveManifestMidTransaction(loaded.manifestPath, loaded.manifest);
-    return result;
-  } finally {
-    fs.closeSync(descriptor);
-    fs.unlinkSync(lock);
-  }
+  return withManifestMetadataGuard(manifestPath, () => {
+    const lock = `${path.resolve(manifestPath)}.lock`;
+    const descriptor = openManifestLock(lock, manifestPath);
+    try {
+      const loaded = loadManifest(manifestPath);
+      const result = write(loaded.manifest);
+      saveManifestMidTransaction(loaded.manifestPath, loaded.manifest);
+      return result;
+    } finally {
+      fs.closeSync(descriptor);
+      fs.unlinkSync(lock);
+    }
+  });
 }
 
 function recordMergeAdmissionBlockedTerminal(
@@ -6770,6 +6873,502 @@ function recoveryScope(manifest, terminal) {
   // accepted-condition shape; recovery only requires that its blocked
   // admission conditions remain covered by that signed capability.
   return manifest.approval.scope;
+}
+
+const PRE_REVIEW_SELECTION_FAILURE = "pre-review-selection-failed";
+const SELECTION_RUNTIME_FILES = Object.freeze(["quality-select-agents.sh"]);
+const NON_SELECTION_RUNTIME_FILES = Object.freeze([
+  "quality-run.js",
+  "quality-risk-resolve.sh",
+  "quality-runtime-plan.js",
+  "quality-run-gate.sh",
+  "quality-run-review.sh",
+  "quality-mutation-check.sh",
+  "quality-authorize-review-round.sh",
+  "quality-stamp-and-merge.sh",
+]);
+
+function recoveryDigest(value) {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(canonicalJson(value)))
+    .digest("hex");
+}
+
+function sameRuntimeInode(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function readCanonicalRuntimeFile(runtimeDir, relative, cohort) {
+  const segments = relative.split("/");
+  const directories = [runtimeDir];
+  for (let index = 1; index < segments.length; index += 1) {
+    directories.push(path.join(runtimeDir, ...segments.slice(0, index)));
+  }
+  const openedDirectories = [];
+  let fileDescriptor = null;
+  try {
+    for (const directory of directories) {
+      const descriptor = fs.openSync(
+        directory,
+        fs.constants.O_RDONLY |
+          fs.constants.O_NOFOLLOW |
+          fs.constants.O_NONBLOCK,
+      );
+      const stat = fs.fstatSync(descriptor);
+      if (!stat.isDirectory() || fs.realpathSync(directory) !== directory) {
+        fs.closeSync(descriptor);
+        throw new Error(`${cohort} runtime ancestry is not canonical`);
+      }
+      openedDirectories.push({ descriptor, directory, stat });
+    }
+    const candidate = path.join(runtimeDir, relative);
+    if (fs.realpathSync(candidate) !== candidate) {
+      throw new Error(`${cohort} runtime dependency is not canonical`);
+    }
+    fileDescriptor = fs.openSync(
+      candidate,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+    );
+    const fileStat = fs.fstatSync(fileDescriptor);
+    if (!fileStat.isFile()) {
+      throw new Error(`${cohort} runtime dependency is not a regular file`);
+    }
+    for (const opened of openedDirectories) {
+      const current = fs.lstatSync(opened.directory);
+      if (!current.isDirectory() || !sameRuntimeInode(current, opened.stat)) {
+        throw new Error(`${cohort} runtime ancestry changed during inspection`);
+      }
+    }
+    const currentFile = fs.lstatSync(candidate);
+    if (!currentFile.isFile() || !sameRuntimeInode(currentFile, fileStat)) {
+      throw new Error(`${cohort} runtime dependency changed during inspection`);
+    }
+    return fs.readFileSync(fileDescriptor);
+  } finally {
+    if (fileDescriptor !== null) fs.closeSync(fileDescriptor);
+    for (const opened of openedDirectories.reverse()) {
+      fs.closeSync(opened.descriptor);
+    }
+  }
+}
+
+// The runner and its shell entrypoint can be upgraded while a terminal
+// manifest exists. Hash each explicitly owned source file by its canonical
+// relative name and bytes. The fixed cohorts are deliberate: an unlisted,
+// missing, linked, or non-regular file fails closed rather than becoming an
+// implicit recovery dependency.
+function runtimeCohortDigest(
+  files,
+  cohort,
+  discoverDependencies = false,
+  runtimeDir = __dirname,
+) {
+  const pending = [...files];
+  const seen = new Set();
+  const entries = [];
+  while (pending.length > 0) {
+    const relative = pending.pop();
+    if (seen.has(relative)) continue;
+    if (
+      !relative
+        .split("/")
+        .every((segment) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment))
+    ) {
+      throw new Error(`${cohort} runtime dependency name is malformed`);
+    }
+    const bytes = readCanonicalRuntimeFile(runtimeDir, relative, cohort);
+    const source = bytes.toString("utf8");
+    seen.add(relative);
+    entries.push([relative, bytes]);
+    if (!discoverDependencies) continue;
+    if (relative.endsWith(".js")) {
+      const calls = source.matchAll(/\brequire\(\s*([^)]*?)\s*\)/g);
+      for (const call of calls) {
+        const argument = call[1];
+        const match = argument.match(/^(["'])(\.\/[^"']+)\1$/);
+        if (!match) {
+          if (/^(["'])(?:node:)?[A-Za-z0-9:_-]+\1$/.test(argument)) {
+            continue;
+          }
+          throw new Error(`${cohort} runtime has an unknown dependency`);
+        }
+        const basename = match[2].slice(2);
+        const resolved = basename.endsWith(".js") ? basename : `${basename}.js`;
+        pending.push(resolved);
+      }
+    } else if (relative.endsWith(".sh")) {
+      const references = source.matchAll(
+        /\$(?:SCRIPT_DIR|script_dir)\/([A-Za-z0-9._/-]+)/g,
+      );
+      for (const reference of references) {
+        // Directory navigation computes KIT_ROOT; it does not read a source
+        // dependency. File references, including nested schemas, are sealed.
+        if (reference[1] === "..") continue;
+        pending.push(reference[1]);
+      }
+    } else if (!relative.endsWith(".json")) {
+      throw new Error(`${cohort} runtime dependency type is unsupported`);
+    }
+  }
+  const hash = crypto.createHash("sha256");
+  for (const [relative, bytes] of entries.sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    hash.update(relative).update("\0").update(bytes).update("\0");
+  }
+  return hash.digest("hex");
+}
+
+function selectionRuntimeDigests(runtimeDir = __dirname) {
+  return {
+    selector: runtimeCohortDigest(
+      SELECTION_RUNTIME_FILES,
+      "selector",
+      true,
+      runtimeDir,
+    ),
+    remaining: runtimeCohortDigest(
+      NON_SELECTION_RUNTIME_FILES,
+      "non-selector",
+      true,
+      runtimeDir,
+    ),
+  };
+}
+
+function zeroSelectionExecution(manifest) {
+  const governor = manifest.governor || {};
+  return (
+    manifest.panel == null &&
+    Array.isArray(manifest.gates) &&
+    manifest.gates.length === 0 &&
+    Array.isArray(manifest.reviews) &&
+    manifest.reviews.length === 0 &&
+    !manifest.mutation &&
+    !manifest.judge &&
+    !governor.activeExecution &&
+    governor.gateSecondsUsed === 0 &&
+    governor.providerSecondsUsed === 0 &&
+    governor.activeSecondsUsed === 0 &&
+    governor.roundsUsed === 0 &&
+    Array.isArray(governor.providerAttempts) &&
+    governor.providerAttempts.length === 0 &&
+    Array.isArray(governor.authorizedAttempts) &&
+    governor.authorizedAttempts.length === 0
+  );
+}
+
+function selectionRecoveryCheckpoint(manifest) {
+  const lease = manifest.merge?.repositoryLease;
+  if (
+    manifest.options?.merge !== true ||
+    !Number.isSafeInteger(lease?.generation) ||
+    lease.generation < 1
+  ) {
+    throw new Error("selection recovery requires the exact repository lease");
+  }
+  if (!zeroSelectionExecution(manifest)) {
+    throw new Error("selection recovery requires zero execution evidence");
+  }
+  const runtime = selectionRuntimeDigests();
+  return {
+    schemaVersion: 1,
+    repository: {
+      key: manifest.repo.key,
+      githubRepository: manifest.repo.githubRepository,
+      realpath: manifest.repo.realpath,
+    },
+    revisions: {
+      baseSha: manifest.revisions.baseSha,
+      head: manifest.revisions.currentHead,
+    },
+    terminalEpoch: terminalEpoch(manifest),
+    leaseGeneration: lease.generation,
+    riskDigest: recoveryDigest(manifest.risk),
+    reviewPolicyDigest: manifest.risk?.reviewPolicyDigest || null,
+    requiredGatesDigest: recoveryDigest(manifest.requiredGates),
+    selectorRuntimeDigest: runtime.selector,
+    remainingRuntimeDigest: runtime.remaining,
+    execution: {
+      gateCount: manifest.gates.length,
+      reviewCount: manifest.reviews.length,
+      gateSecondsUsed: manifest.governor.gateSecondsUsed,
+      providerSecondsUsed: manifest.governor.providerSecondsUsed,
+      activeSecondsUsed: manifest.governor.activeSecondsUsed,
+      providerAttempts: manifest.governor.providerAttempts.length,
+      authorizedAttempts: manifest.governor.authorizedAttempts.length,
+      roundsUsed: manifest.governor.roundsUsed,
+    },
+  };
+}
+
+function sameSelectionRecoveryCheckpoint(manifest, checkpoint) {
+  if (!checkpoint || checkpoint.schemaVersion !== 1) return false;
+  const current = selectionRecoveryCheckpoint(manifest);
+  return (
+    checkpoint.repository?.key === current.repository.key &&
+    checkpoint.repository?.githubRepository ===
+      current.repository.githubRepository &&
+    checkpoint.repository?.realpath === current.repository.realpath &&
+    checkpoint.revisions?.baseSha === current.revisions.baseSha &&
+    checkpoint.revisions?.head === current.revisions.head &&
+    checkpoint.terminalEpoch === current.terminalEpoch &&
+    checkpoint.leaseGeneration === current.leaseGeneration &&
+    checkpoint.riskDigest === current.riskDigest &&
+    checkpoint.reviewPolicyDigest === current.reviewPolicyDigest &&
+    checkpoint.requiredGatesDigest === current.requiredGatesDigest &&
+    checkpoint.remainingRuntimeDigest === current.remainingRuntimeDigest &&
+    JSON.stringify(checkpoint.execution) === JSON.stringify(current.execution)
+  );
+}
+
+function recordPreReviewSelectionFailure(manifestPath, detail, exitCode) {
+  if (!Number.isInteger(exitCode) || exitCode === 0) {
+    throw new Error(
+      "selection failure requires an actual nonzero selector exit",
+    );
+  }
+  let terminal;
+  withManifestLock(manifestPath, (manifest) => {
+    validateIdentity(manifest, manifest.repo.realpath);
+    if (manifest.terminalState) {
+      terminal = manifest.terminalState;
+      return;
+    }
+    const checkpoint = selectionRecoveryCheckpoint(manifest);
+    terminal = {
+      state: "blocked",
+      failureCode: PRE_REVIEW_SELECTION_FAILURE,
+      phase: "panel",
+      selectorExitCode: exitCode,
+      detail: String(detail).slice(0, 500),
+      head: manifest.revisions.currentHead,
+      terminalEpoch: terminalEpoch(manifest),
+      selectionRecovery: checkpoint,
+      recordedAt: new Date().toISOString(),
+    };
+    manifest.terminalState = terminal;
+  });
+  return terminal;
+}
+
+function resumePreReviewSelectionFailure(manifestPath) {
+  const initial = loadManifest(manifestPath).manifest;
+  const terminal = initial.terminalState;
+  if (
+    terminal?.state !== "blocked" ||
+    terminal.failureCode !== PRE_REVIEW_SELECTION_FAILURE ||
+    terminal.phase !== "panel" ||
+    terminal.head !== initial.revisions.currentHead ||
+    terminal.terminalEpoch !== terminalEpoch(initial) ||
+    initial.selectionRecovery
+  ) {
+    return null;
+  }
+  let resumed = null;
+  withManifestLock(manifestPath, (manifest) => {
+    const currentTerminal = manifest.terminalState;
+    const checkpointMatches = (() => {
+      try {
+        return sameSelectionRecoveryCheckpoint(
+          manifest,
+          currentTerminal?.selectionRecovery,
+        );
+      } catch {
+        // A malformed or changed runtime/execution cohort is ineligible. Keep
+        // its typed terminal intact so the operator can inspect the failure.
+        return false;
+      }
+    })();
+    if (
+      currentTerminal?.state !== "blocked" ||
+      currentTerminal.failureCode !== PRE_REVIEW_SELECTION_FAILURE ||
+      currentTerminal.phase !== "panel" ||
+      currentTerminal.head !== manifest.revisions.currentHead ||
+      currentTerminal.terminalEpoch !== terminalEpoch(manifest) ||
+      manifest.selectionRecovery ||
+      !checkpointMatches
+    ) {
+      return;
+    }
+    const currentRuntime = selectionRuntimeDigests();
+    if (
+      currentTerminal.selectionRecovery.selectorRuntimeDigest ===
+      currentRuntime.selector
+    ) {
+      return;
+    }
+    if (
+      manifest.terminalHistory !== undefined &&
+      !Array.isArray(manifest.terminalHistory)
+    ) {
+      throw new Error("terminal history is malformed");
+    }
+    const recoveredAt = new Date().toISOString();
+    const nextEpoch = terminalEpoch(manifest) + 1;
+    manifest.terminalHistory ??= [];
+    manifest.terminalHistory.push({
+      ...currentTerminal,
+      disposition: "superseded-by-selection-recovery",
+      recoveredAt,
+      newSelectorRuntimeDigest: currentRuntime.selector,
+    });
+    manifest.terminalHistory.push({
+      event: "reopened-by-selection-recovery",
+      head: manifest.revisions.currentHead,
+      terminalEpoch: nextEpoch,
+      oldSelectorRuntimeDigest:
+        currentTerminal.selectionRecovery.selectorRuntimeDigest,
+      newSelectorRuntimeDigest: currentRuntime.selector,
+      recordedAt: recoveredAt,
+    });
+    manifest.selectionRecovery = {
+      schemaVersion: 1,
+      terminalEpoch: currentTerminal.terminalEpoch,
+      oldSelectorRuntimeDigest:
+        currentTerminal.selectionRecovery.selectorRuntimeDigest,
+      newSelectorRuntimeDigest: currentRuntime.selector,
+      recoveredAt,
+    };
+    manifest.terminalEpoch = nextEpoch;
+    delete manifest.terminalState;
+    delete manifest.panel;
+    resumed = {
+      head: manifest.revisions.currentHead,
+      terminalEpoch: nextEpoch,
+    };
+  });
+  return resumed;
+}
+
+function mergeReadRecoveryEligible(manifest) {
+  const terminal = manifest.terminalState;
+  const orchestration = manifest.orchestration;
+  const failure = manifest.merge?.readFailure;
+  const historical = terminal?.detail === "merge admission failed with exit 1";
+  const typed =
+    terminal?.detail === "ci-admission-read-failed" &&
+    failure?.kind === "ci-admission-read-failed" &&
+    failure.exitCode === 75 &&
+    failure.head === manifest.revisions.currentHead;
+  return Boolean(
+    manifest.options?.merge === true &&
+    manifest.merge?.repositoryLease &&
+    terminal?.state === "blocked" &&
+    terminal.head === manifest.revisions.currentHead &&
+    (historical || typed) &&
+    !manifest.merge.readRecovery &&
+    !manifest.merge.admissionBlock &&
+    !terminal.mergeAdmissionConditions &&
+    !manifest.governor?.activeExecution &&
+    orchestration?.head === terminal.head &&
+    orchestration.phase === "merge" &&
+    orchestration.steps?.merge?.status === "running" &&
+    orchestration.steps.merge.attempts === 1,
+  );
+}
+
+// Only the caller that commits this transition receives a continuation grant.
+// A persisted recovering sentinel cannot reconstruct that grant after a crash.
+function resumeMergeReadFailure(manifestPath, dependencies = {}) {
+  const initial = loadManifest(manifestPath).manifest;
+  if (!mergeReadRecoveryEligible(initial)) return null;
+  const readPullRequest =
+    dependencies.readPullRequest ||
+    ((manifest) =>
+      parseJson(
+        execFileSync(
+          "gh",
+          [
+            "pr",
+            "view",
+            String(manifest.repo.pr),
+            "--repo",
+            manifest.repo.githubRepository,
+            "--json",
+            "state,headRefOid",
+          ],
+          { cwd: manifest.repo.realpath, encoding: "utf8", timeout: 30000 },
+        ),
+        "current pull request",
+      ));
+  const readChecks =
+    dependencies.readChecks ||
+    ((manifest) =>
+      parseJson(
+        execFileSync(
+          "gh",
+          [
+            "pr",
+            "checks",
+            String(manifest.repo.pr),
+            "--repo",
+            manifest.repo.githubRepository,
+            "--json",
+            "state",
+          ],
+          { cwd: manifest.repo.realpath, encoding: "utf8", timeout: 30000 },
+        ),
+        "current pull request checks",
+      ));
+  let grant = null;
+  require("./quality-repo-lease").withManifestMutation(
+    manifestPath,
+    process.env.BS_QUALITY_REPOSITORY_LEASE_TOKEN,
+    (manifest) => {
+      if (!mergeReadRecoveryEligible(manifest)) return;
+      validateIdentity(manifest, manifest.repo.realpath);
+      verifyGateEvidence(manifest);
+      reviewAuthorization(manifest);
+      const pr = readPullRequest(manifest);
+      if (
+        pr?.state !== "OPEN" ||
+        pr.headRefOid !== manifest.revisions.currentHead
+      )
+        throw new Error("merge-read recovery requires the open exact-head PR");
+      const checks = readChecks(manifest);
+      if (
+        !Array.isArray(checks) ||
+        checks.length === 0 ||
+        checks.some(
+          (check) => !["SUCCESS", "SKIPPED", "NEUTRAL"].includes(check?.state),
+        )
+      )
+        throw new Error(
+          "merge-read recovery requires current nonempty green checks",
+        );
+      if (
+        manifest.terminalHistory !== undefined &&
+        !Array.isArray(manifest.terminalHistory)
+      )
+        throw new Error("terminal history is malformed");
+      const recordedAt = new Date().toISOString();
+      const epoch = terminalEpoch(manifest) + 1;
+      manifest.terminalHistory ??= [];
+      manifest.terminalHistory.push({
+        ...manifest.terminalState,
+        disposition: "reentered-merge-read-failure",
+        supersededAt: recordedAt,
+      });
+      manifest.terminalEpoch = epoch;
+      manifest.merge.readRecovery = {
+        head: manifest.revisions.currentHead,
+        terminalEpoch: epoch,
+        recordedAt,
+      };
+      manifest.terminalState = {
+        state: "recovering",
+        head: manifest.revisions.currentHead,
+        terminalEpoch: epoch,
+        recordedAt,
+        recovery: { kind: "merge-read-failure" },
+      };
+      grant = { head: manifest.revisions.currentHead, terminalEpoch: epoch };
+    },
+    { requireIdle: true },
+  );
+  return grant;
 }
 
 function resumeInterruptedTerminal(manifestPath) {
@@ -7561,7 +8160,11 @@ module.exports = {
   clearMergeAdmissionBlock,
   resolveGreenCiAdmissionBlock,
   recoveryScope,
+  selectionRuntimeDigests,
+  recordPreReviewSelectionFailure,
+  resumePreReviewSelectionFailure,
   resumeInterruptedTerminal,
+  resumeMergeReadFailure,
   resumeRecoverableTerminal,
   terminalEpoch,
   isTerminal,
