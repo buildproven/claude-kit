@@ -300,14 +300,21 @@ independent oracle—not from recomputing the implementation.
 
 ### Step 6: Explore Before Implementing (Medium/Complex)
 
-Check `docs/dev_guide/CONVENTIONS.md` first if present. Then use a Sonnet
-Explore subagent (a per-call override, not a frontmatter pin):
+Check `docs/dev_guide/CONVENTIONS.md` first if present. Use direct tools for
+small lookups. Delegate only a bounded independent task that justifies its
+coordination cost and current authority.
 
-```javascript
-Task(subagent_type: "Explore",
-     model: "sonnet",
-     prompt: `Explore [feature area]. Return file roles, patterns, dependencies, constraints, and an approach.`)
-```
+Before native delegation, find the installed `scripts/compute-governor.js`
+under the active plugin, project `.claude`, or `~/.claude` directory. Resolve
+its symlink to the source script and read `../docs/compute-governor.md` relative
+to that source script's directory. Use its `native-advisory` request with
+`node <installed-governor> resolve <request.json>`. Supply complete facts, the
+full task text, planned paths, parent identity, and live client capabilities. Only a ready
+bounded/fresh decision may supply Task or `spawn_agent` model/effort arguments.
+Claude Task uses the returned profile and model alias; the profile supplies
+effort. Confirm the effective identity in `/tasks`. Preserve full-history
+inheritance. A blocked result does not block safe local work and must not be
+replaced with a global model default.
 
 ### Step 7: Development
 
