@@ -1,3 +1,5 @@
+import { makeTempDir } from "./helpers/tmp.js";
+
 const { changedPaths, execute, loadPolicy, plan } = require("../test-impact");
 const {
   mkdtempSync,
@@ -11,6 +13,39 @@ const { execFileSync, spawnSync } = require("node:child_process");
 const ROOT = path.resolve(__dirname, "..", "..");
 
 describe("cross-language test impact", () => {
+  it.each(["deleted.js", "tests/test_deleted.py"])(
+    "requires explicit coverage for missing %s when repository context is supplied",
+    (file) => {
+      const root = makeTempDir("missing-impact-");
+      expect(plan([file], { version: 1 }, { root })).toMatchObject({
+        mode: "unmapped",
+        uncovered: [file],
+        commands: [],
+      });
+    },
+  );
+
+  it.each(["mappings", "audits"])(
+    "preserves explicit %s for deleted source",
+    (kind) => {
+      const root = makeTempDir("missing-mapped-impact-");
+      const command = { executable: "node", args: ["surviving.test.js"] };
+      const policy = {
+        version: 1,
+        [kind]: [
+          {
+            paths: ["deleted.js"],
+            commands: [command],
+            ...(kind === "audits" ? { reason: "source removal audit" } : {}),
+          },
+        ],
+      };
+      expect(plan(["deleted.js"], policy, { root })).toMatchObject({
+        mode: kind === "audits" ? "audit" : "focused",
+        commands: [command],
+      });
+    },
+  );
   it("uses Vitest dependency-aware related tests for JS and TS", () => {
     expect(plan(["src/a.ts", "lib/b.js"])).toMatchObject({
       mode: "focused",

@@ -31,6 +31,13 @@
 - Use TodoWrite for complex multi-step tasks.
 - Use Grep/Glob instead of bash search. Read files before editing.
 - Batch independent tool calls in parallel.
+- Keep small tasks local. Use bounded native workers only for useful independent
+  work; preserve the user's selected coordinator model and required context.
+- For substantial native delegation, use the installed compute governor's
+  native-advisory resolve/explain contract (see `docs/compute-governor.md`).
+  Capability/model advice does not grant permission or merge authority.
+- If delegation advice is blocked but local work is safe, continue locally.
+  Diagnose repeated failures; do not request human restarts for routine recovery.
 
 ## Known Mistakes
 

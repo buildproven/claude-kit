@@ -300,14 +300,23 @@ independent oracle—not from recomputing the implementation.
 
 ### Step 6: Explore Before Implementing (Medium/Complex)
 
-Check `docs/dev_guide/CONVENTIONS.md` first if present. Then use a Sonnet
-Explore subagent (a per-call override, not a frontmatter pin):
+Check `docs/dev_guide/CONVENTIONS.md` first if present. Use direct tools for
+small lookups. Delegate only a bounded independent task that justifies its
+context and coordination cost, when current instructions permit delegation.
 
-```javascript
-Task(subagent_type: "Explore",
-     model: "sonnet",
-     prompt: `Explore [feature area]. Return file roles, patterns, dependencies, constraints, and an approach.`)
-```
+For native delegation, use the installed `compute-governor.js resolve` with
+the `native-advisory` request documented in `docs/compute-governor.md`.
+Supply capabilities from the actual client tool contract, not a remembered
+model list. Preserve the selected parent model and required context. Only
+use returned model arguments when advice is ready and the client supports
+them; never feed native advice into the v1/v2 headless launch contract.
+
+Blocked advice is not a blocked task. If the parent can safely do the work,
+continue locally with direct tools and the selected model. If missing authority
+or capability genuinely prevents the required action, report that exact gap.
+Do not repeatedly invoke the resolver or ask the operator to restart ordinary
+work. Record requested and observed worker models separately; unknown is not
+proof. Return concise source evidence from workers, not full transcripts.
 
 ### Step 7: Development
 

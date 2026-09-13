@@ -7,6 +7,10 @@ category: development
 model: haiku
 ---
 
+Native delegation uses the shared compute-governor advisory contract. Small
+tasks stay local; unavailable delegation falls back to safe local work without
+a human restart. This does not relax quality, product admission or merge checks.
+
 # Daily Development Workflow
 
 ## Model routing
