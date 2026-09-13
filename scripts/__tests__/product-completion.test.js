@@ -306,7 +306,6 @@ describe("product completion", () => {
     );
     const result = validate(prd, tasks);
     const changedFiles = [
-      ".github/workflows/product-admission-public-key.yml",
       ".github/workflows/product-evidence-admission.yml",
       ".github/workflows/product-evidence-producer.yml",
       ".github/workflows/product-evidence-source.yml",
