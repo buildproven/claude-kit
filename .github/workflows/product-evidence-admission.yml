@@ -16,10 +16,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.repository.default_branch }}
-      - uses: actions/setup-node@v7
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "24.18.0"
       - name: Download signed producer artifact
@@ -38,9 +39,9 @@ jobs:
           PRODUCT_ADMISSION_WORKFLOW_PATH: .github/workflows/product-evidence-admission.yml
         run: |
           test -n "$PRODUCT_EVIDENCE_PUBLIC_KEY"
-          install -d -m 0755 /etc/claude-kit
-          printf '%s\n' "$PRODUCT_EVIDENCE_PUBLIC_KEY" > /etc/claude-kit/product-evidence-public-key
-          chmod 0644 /etc/claude-kit/product-evidence-public-key
+          sudo install -d -m 0755 /etc/claude-kit
+          printf '%s\n' "$PRODUCT_EVIDENCE_PUBLIC_KEY" | sudo tee /etc/claude-kit/product-evidence-public-key >/dev/null
+          sudo chmod 0644 /etc/claude-kit/product-evidence-public-key
           marker="$(node scripts/product-admission.js create producer admission.json)"
           printf '%s\n' "$marker" > admission-marker.txt
       - name: Publish exact-head admission check

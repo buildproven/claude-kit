@@ -6,11 +6,14 @@ const fs = require("node:fs");
 const crypto = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const quality = require("./quality-invocation");
+const runnerOwnership = require("./quality-runner-ownership");
 const { productionCodeChange } = require("./product-completion");
+const { assertEngineeringPolicy } = require("./engineering-delivery-policy");
 
 const ORCHESTRATION_SCHEMA_VERSION = 1;
 const ACTION_REQUIRED_EXIT = 3;
 const WORK_REQUIRED_EXIT = 4;
+const BUSY_EXIT = 5;
 const SCRIPT_DIR = __dirname;
 
 function parseArgs(argv) {
@@ -89,6 +92,7 @@ function runProcess(command, args, options = {}) {
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: process.env,
+      detached: process.platform !== "win32",
       stdio: ["inherit", "pipe", "pipe"],
     });
     options.onChild?.(child);
@@ -228,6 +232,7 @@ function verifyProtectedProductAdmission(manifest) {
       deliveryRepositoryId(manifest),
       manifest.revisions.currentHead,
       requirementsDigest,
+      manifest.deliveryEvidenceBinding.sha256,
     ],
     { cwd: manifest.repo.realpath, encoding: "utf8" },
   );
@@ -389,6 +394,16 @@ function verifierFailure(result) {
   return errors.slice(0, 10).join("; ");
 }
 
+function verifyEngineeringDeliveryClaim(manifest, productInputs) {
+  if (productInputs.some(Boolean)) {
+    throw new Error(
+      "engineering delivery claim cannot carry product acceptance inputs",
+    );
+  }
+  const policy = assertEngineeringPolicy(manifest);
+  return `declared engineering at protected policy ${policy.policyRevision}; product acceptance not established`;
+}
+
 function verifyDeliveryClaim(manifest) {
   const claim = deliveryClaim(manifest);
   const { productPrd, productTasks, deliveryEvidence } = manifest.options || {};
@@ -400,13 +415,26 @@ function verifyDeliveryClaim(manifest) {
   if (changedFiles === null) {
     throw new Error("delivery claim cannot classify the exact candidate diff");
   }
+  if (claim === "engineering") {
+    return verifyEngineeringDeliveryClaim(manifest, [
+      productPrd,
+      productTasks,
+      deliveryEvidence,
+    ]);
+  }
   if (
     claim === "contract" &&
     !productPrd &&
     !productTasks &&
     !deliveryEvidence
   ) {
-    const productFile = changedFiles.find(productionCodeChange);
+    const productFile = changedFiles.find((file) =>
+      productionCodeChange(file, {
+        repo: manifest.repo.realpath,
+        base: manifest.revisions.baseSha,
+        head: manifest.revisions.currentHead,
+      }),
+    );
     if (productFile) {
       throw new Error(
         `contract delivery claim requires product evidence for product-affecting file '${productFile}'`,
@@ -438,6 +466,10 @@ function verifyDeliveryClaim(manifest) {
       productTasks,
       "--changed-files",
       changedFilesPath,
+      "--repo",
+      manifest.repo.realpath,
+      "--base",
+      manifest.revisions.baseSha,
       "--evidence",
       deliveryEvidence,
       "--evidence-sha256",
@@ -471,6 +503,48 @@ function actionRequired(manifestPath, phase, message, manifest, review) {
   };
 }
 
+function prepareProductAdmission(manifestPath) {
+  const manifest = manifestAt(manifestPath);
+  if (deliveryClaim(manifest) === "contract") return null;
+  if (deliveryClaim(manifest) === "engineering") {
+    verifyDeliveryClaim(manifest);
+    return null;
+  }
+
+  // Validate the candidate-owned receipt before spending gate or provider
+  // budget. Protected admission is still authoritative, but its request can
+  // run while deterministic gates execute instead of being discovered after
+  // all local work has already finished.
+  verifyDeliveryClaim(manifest);
+  if (manifest.options?.merge !== true) return null;
+  try {
+    verifyProtectedProductAdmission(manifest);
+    return null;
+  } catch (error) {
+    let request;
+    try {
+      request = requestProtectedProductAdmission(manifest);
+    } catch (requestError) {
+      return actionRequired(
+        manifestPath,
+        "product-admission",
+        `${error.message}; ${requestError.message}; candidate-worker verification is preflight only`,
+        manifest,
+      );
+    }
+    if (request) {
+      quality.withManifestLock(manifestPath, (current) => {
+        current.productAdmissionRequest = {
+          head: current.revisions.currentHead,
+          requirementsDigest: request.requirementsDigest,
+          requestedAt: new Date().toISOString(),
+        };
+      });
+    }
+    return null;
+  }
+}
+
 function workRequired(manifestPath, phase, message, manifest, detail = {}) {
   const { review, ...resultDetail } = detail;
   updateOrchestration(manifestPath, phase, "work-required", message);
@@ -493,7 +567,16 @@ function invocationRuntime(manifestPath, execute) {
   };
   const onSignal = (signal) => {
     interruptedSignal ||= signal;
-    if (activeChild && !activeChild.killed) activeChild.kill(signal);
+    if (!activeChild || activeChild.killed) return;
+    if (process.platform !== "win32") {
+      try {
+        process.kill(-activeChild.pid, signal);
+        return;
+      } catch (error) {
+        if (error.code !== "ESRCH") throw error;
+      }
+    }
+    activeChild.kill(signal);
   };
   const assertNotInterrupted = (result) => {
     if (!interruptedSignal && !result.signal) return;
@@ -513,7 +596,11 @@ function invocationRuntime(manifestPath, execute) {
     if (result.code !== 0) {
       throw Object.assign(
         new Error(`${phase} failed with exit ${result.code}`),
-        { phase },
+        {
+          phase,
+          exitCode: result.code,
+          preReviewSelectionFailure: phase === "panel",
+        },
       );
     }
     updateOrchestration(manifestPath, phase, "success");
@@ -523,6 +610,8 @@ function invocationRuntime(manifestPath, execute) {
 }
 
 async function runDeterministicPhases(manifestPath, invoke) {
+  const admission = prepareProductAdmission(manifestPath);
+  if (admission) return admission;
   let manifest = manifestAt(manifestPath);
   if (manifest.risk?.resolved !== true) {
     await invoke("risk", "bash", [
@@ -626,7 +715,7 @@ async function finishWithoutMerge(manifestPath, invoke, manifest, review) {
 }
 
 async function finishWithMerge(context, manifestPath, manifest, review) {
-  if (deliveryClaim(manifest) !== "contract") {
+  if (!["contract", "engineering"].includes(deliveryClaim(manifest))) {
     try {
       verifyProtectedProductAdmission(manifest);
     } catch (error) {
@@ -738,6 +827,8 @@ async function finishWithMerge(context, manifestPath, manifest, review) {
         { terminalContractFailure: true },
       );
     }
+    if (!afterMerge.governor?.activeExecution)
+      context.ownership.acceptTypedPause();
     return actionRequired(
       manifestPath,
       "merge",
@@ -756,7 +847,22 @@ async function finishWithMerge(context, manifestPath, manifest, review) {
       head: afterMerge.revisions.currentHead,
     };
   }
-  throw new Error(`merge admission failed with exit ${merge.code}`);
+  quality.withManifestLock(manifestPath, (locked) => {
+    locked.merge.readFailure = {
+      kind:
+        merge.code === 75 ? "ci-admission-read-failed" : "merge-process-failed",
+      head: expectedHead,
+      exitCode: merge.code,
+      stdout: (merge.stdout || "").slice(-8192),
+      stderr: (merge.stderr || "").slice(-8192),
+      recordedAt: new Date().toISOString(),
+    };
+  });
+  throw new Error(
+    merge.code === 75
+      ? "ci-admission-read-failed"
+      : `merge admission failed with exit ${merge.code}`,
+  );
 }
 
 async function recordFailure(context, manifestPath, error) {
@@ -766,10 +872,38 @@ async function recordFailure(context, manifestPath, error) {
   } catch {
     throw error;
   }
+  if (
+    manifest.terminalState?.recovery?.kind === "merge-read-failure" &&
+    !context.mergeReadRecoveryGranted
+  ) {
+    return {
+      status: "terminal",
+      state: manifest.terminalState.state,
+      head: manifest.revisions.currentHead,
+    };
+  }
   if (error.terminalContractFailure && manifest.terminalState) {
     return {
       status: "contract-failed",
       observedTerminalState: manifest.terminalState.state,
+      message: error.message,
+      head: manifest.revisions.currentHead,
+    };
+  }
+  if (
+    error.preReviewSelectionFailure === true &&
+    Number.isInteger(error.exitCode) &&
+    error.exitCode !== 0 &&
+    !manifest.terminalState
+  ) {
+    const terminal = quality.recordPreReviewSelectionFailure(
+      manifestPath,
+      error.message,
+      error.exitCode,
+    );
+    return {
+      status: "terminal",
+      state: terminal.state,
       message: error.message,
       head: manifest.revisions.currentHead,
     };
@@ -932,7 +1066,11 @@ function dispositionArtifactMatches(artifact, judge, context) {
 
 async function runOpenCampaign(context, manifestPath, manifest) {
   updateOrchestration(manifestPath, "validate", "success");
-  await runDeterministicPhases(manifestPath, context.runtime.invoke);
+  const admission = await runDeterministicPhases(
+    manifestPath,
+    context.runtime.invoke,
+  );
+  if (admission) return admission;
   await ensureReview(manifestPath, context.runtime.invoke);
   manifest = manifestAt(manifestPath);
   quality.reviewCoverage(manifest);
@@ -955,19 +1093,68 @@ async function runOpenCampaign(context, manifestPath, manifest) {
 }
 
 async function runManifest(manifestPath, dependencies = {}) {
-  const execute = dependencies.runProcess || runProcess;
+  // Validate before canonicalizing: a symlinked manifest remains forbidden.
+  const initial = quality.loadManifest(manifestPath);
+  manifestPath = fs.realpathSync(initial.manifestPath);
+  const ownership = runnerOwnership.acquireRunner(manifestPath);
+  if (!ownership)
+    return {
+      status: "busy",
+      reason: "runner-owned",
+      head: initial.manifest.revisions.currentHead,
+    };
+  if (manifestAt(manifestPath).governor?.activeExecution) {
+    // This invocation has not dispatched a child. Release only its new lock;
+    // existing governor reconciliation, not admission, owns orphan expiry.
+    ownership.release(false);
+    return {
+      status: "busy",
+      reason: "active-execution",
+      head: initial.manifest.revisions.currentHead,
+    };
+  }
+  const execute = (...args) =>
+    ownership.execute(dependencies.runProcess || runProcess, ...args);
   const runtime = invocationRuntime(manifestPath, execute);
-  const context = { execute, runtime };
+  const context = { execute, runtime, ownership };
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
-  for (const signal of signals) process.on(signal, runtime.onSignal);
+  const signalHandlers = new Map(
+    signals.map((signal) => [
+      signal,
+      () => {
+        ownership.markSignalUncertain();
+        runtime.onSignal(signal);
+      },
+    ]),
+  );
+  for (const [signal, handler] of signalHandlers) process.on(signal, handler);
   try {
     let manifest = manifestAt(manifestPath);
+    if (manifest.terminalState?.recovery?.kind === "merge-read-failure") {
+      return {
+        status: "terminal",
+        state: manifest.terminalState.state,
+        head: manifest.revisions.currentHead,
+      };
+    }
     pinRepositoryLease(manifest);
     quality.advanceManifest(manifestPath);
     manifest = manifestAt(manifestPath);
     pinTerminalEpoch(manifest);
     quality.validateIdentity(manifest, manifest.repo.realpath);
     if (manifest.terminalState) {
+      const mergeReadRecovery = quality.resumeMergeReadFailure(manifestPath);
+      if (mergeReadRecovery) {
+        context.mergeReadRecoveryGranted = true;
+        const resumed = manifestAt(manifestPath);
+        pinTerminalEpoch(resumed);
+        return await finishWithMerge(
+          context,
+          manifestPath,
+          resumed,
+          reviewSummary(resumed),
+        );
+      }
       const ciRecovery = quality.resolveGreenCiAdmissionBlock(manifestPath);
       if (ciRecovery) {
         const resumed = manifestAt(manifestPath);
@@ -999,6 +1186,14 @@ async function runManifest(manifestPath, dependencies = {}) {
         quality.validateIdentity(resumed, resumed.repo.realpath);
         return await runOpenCampaign(context, manifestPath, resumed);
       }
+      const selectionRecovery =
+        quality.resumePreReviewSelectionFailure(manifestPath);
+      if (selectionRecovery) {
+        const resumed = manifestAt(manifestPath);
+        pinTerminalEpoch(resumed);
+        quality.validateIdentity(resumed, resumed.repo.realpath);
+        return await runOpenCampaign(context, manifestPath, resumed);
+      }
       return {
         status: "terminal",
         state: manifest.terminalState.state,
@@ -1009,7 +1204,9 @@ async function runManifest(manifestPath, dependencies = {}) {
   } catch (error) {
     return await recordFailure(context, manifestPath, error);
   } finally {
-    for (const signal of signals) process.off(signal, runtime.onSignal);
+    for (const [signal, handler] of signalHandlers)
+      process.off(signal, handler);
+    ownership.release();
   }
 }
 
@@ -1018,7 +1215,9 @@ async function main() {
     const manifestPath = parseArgs(process.argv.slice(2));
     const result = await runManifest(manifestPath);
     emit(result);
-    if (result.status === "action-required") {
+    if (result.status === "busy") {
+      process.exitCode = BUSY_EXIT;
+    } else if (result.status === "action-required") {
       process.exitCode = ACTION_REQUIRED_EXIT;
     } else if (result.status === "work-required") {
       process.exitCode = WORK_REQUIRED_EXIT;
@@ -1044,6 +1243,7 @@ module.exports = {
   pinRepositoryLease,
   reviewSummary,
   runManifest,
+  writeAllSync: runnerOwnership.writeAllSync,
 };
 
 if (require.main === module) main();

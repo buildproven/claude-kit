@@ -200,7 +200,11 @@ function produce(input) {
   const references = {};
   for (const [kind, artifactName, command] of [
     ["behavioralTests", "behavioral-tests.log", request.behavioralCommand],
-    ["acceptanceEvidence", "acceptance-evidence.log", null],
+    [
+      "acceptanceEvidence",
+      "acceptance-evidence.log",
+      request.acceptanceCommand,
+    ],
   ]) {
     const artifact = fs.readFileSync(
       path.join(input.outputDirectory, artifactName),
@@ -223,7 +227,7 @@ function produce(input) {
         runnerIsolation: "fresh-protected",
       },
       artifact: { path: artifactName, sha256: sha256(artifact) },
-      ...(command ? { command } : {}),
+      ...(kind === "behavioralTests" && command ? { command } : {}),
     };
     const receiptName = `${kind}.receipt.json`;
     writeJson(

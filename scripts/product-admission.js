@@ -11,12 +11,6 @@ const {
   verifyAdmissionEnvelope,
 } = require("./product-evidence");
 
-const ADMISSION_TRUST_ROOTS = Object.freeze({
-  darwin:
-    "/Library/Application Support/claude-kit/product-admission-public-key",
-  linux: "/etc/claude-kit/product-admission-public-key",
-  win32: "C:\\ProgramData\\claude-kit\\product-admission-public-key",
-});
 const MARKER = "buildproven-product-admission:v1:";
 
 function readJson(file, label) {
@@ -37,21 +31,6 @@ function parseJson(value, label) {
       cause: error,
     });
   }
-}
-
-function admissionPublicKey() {
-  const file = ADMISSION_TRUST_ROOTS[process.platform];
-  if (!file)
-    throw new Error(`product admission is unsupported on ${process.platform}`);
-  const bytes = Buffer.from(fs.readFileSync(file, "utf8").trim(), "base64");
-  const key = crypto.createPublicKey({
-    key: bytes,
-    format: "der",
-    type: "spki",
-  });
-  if (key.asymmetricKeyType !== "ed25519")
-    throw new Error("product admission trust root is not Ed25519");
-  return key;
 }
 
 function privateKey(encoded) {
@@ -156,7 +135,13 @@ function ghJson(args) {
   return parseJson(result.stdout, "GitHub admission response");
 }
 
-function verifyRemote({ repository, repositoryId, head, requirementsDigest }) {
+function verifyRemote({
+  repository,
+  repositoryId,
+  head,
+  requirementsDigest,
+  evidenceIndexSha256,
+}) {
   const response = ghJson([
     "api",
     `repos/${repository}/commits/${head}/check-runs`,
@@ -176,17 +161,13 @@ function verifyRemote({ repository, repositoryId, head, requirementsDigest }) {
       const envelope = JSON.parse(
         Buffer.from(summary.slice(MARKER.length), "base64url").toString("utf8"),
       );
-      const payload = verifyAdmissionEnvelope(
-        envelope,
-        {
-          repository,
-          repositoryId,
-          head,
-          requirementsDigest,
-          evidenceIndexSha256: envelope.payload?.evidenceIndexSha256,
-        },
-        { trustedPublicKey: admissionPublicKey() },
-      );
+      const payload = verifyAdmissionEnvelope(envelope, {
+        repository,
+        repositoryId,
+        head,
+        requirementsDigest,
+        evidenceIndexSha256,
+      });
       return { valid: true, checkId: String(check.id), admission: payload };
     } catch {
       /* inspect all exact-head checks before failing closed */
@@ -223,12 +204,12 @@ function main(argv) {
     return;
   }
   if (command === "verify-remote") {
-    if (args.length !== 4)
+    if (args.length !== 5)
       throw new Error(
-        "usage: product-admission.js verify-remote <repository> <repository-id> <head> <requirements-sha256>",
+        "usage: product-admission.js verify-remote <repository> <repository-id> <head> <requirements-sha256> <evidence-sha256>",
       );
     process.stdout.write(
-      `${JSON.stringify(verifyRemote({ repository: args[0], repositoryId: args[1], head: args[2], requirementsDigest: args[3] }))}\n`,
+      `${JSON.stringify(verifyRemote({ repository: args[0], repositoryId: args[1], head: args[2], requirementsDigest: args[3], evidenceIndexSha256: args[4] }))}\n`,
     );
     return;
   }
