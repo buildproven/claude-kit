@@ -4,6 +4,7 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
+  renameSync,
   rmSync,
   realpathSync,
   readFileSync,
@@ -11,7 +12,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -687,6 +688,47 @@ describe("quality changed-file coverage", () => {
   });
 });
 
+describe("mutationEvidenceValid — BUI-914 exact-head acknowledgement", () => {
+  const highTier = (approval) => ({
+    risk: { resolved: true, tier: "high" },
+    revisions: { currentHead: "a".repeat(40) },
+    approval,
+  });
+
+  it("accepts a mutation:missing acknowledgement bound to the current head", () => {
+    // BUI-914 added the --i-understand-missing-mutation flag, but nothing
+    // consumed acceptedConditions on this path: the approval attached,
+    // validated, and then changed nothing. The campaign still blocked.
+    const manifest = highTier({
+      acceptedConditions: ["mutation:missing"],
+      head: "a".repeat(40),
+    });
+    expect(invocation.mutationEvidenceValid(manifest)).toBe(true);
+  });
+
+  it("refuses an acknowledgement bound to a different head", () => {
+    // An acceptance must not survive a rebase or a new commit: the operator
+    // judged the diff they were shown, not whatever replaced it.
+    const manifest = highTier({
+      acceptedConditions: ["mutation:missing"],
+      head: "b".repeat(40),
+    });
+    expect(invocation.mutationEvidenceValid(manifest)).toBe(false);
+  });
+
+  it("refuses an approval that accepted some other condition", () => {
+    const manifest = highTier({
+      acceptedConditions: ["gate:security"],
+      head: "a".repeat(40),
+    });
+    expect(invocation.mutationEvidenceValid(manifest)).toBe(false);
+  });
+
+  it("refuses when there is no approval at all", () => {
+    expect(invocation.mutationEvidenceValid(highTier(undefined))).toBe(false);
+  });
+});
+
 describe("mutationEvidenceValid — BUI-603 #1 fail-closed on unresolved risk", () => {
   it("returns false for an unresolved risk contract by default", () => {
     const manifest = { risk: { resolved: false } };
@@ -778,6 +820,390 @@ describe("required gate reuse", () => {
 });
 
 describe("quality invocation manifest", () => {
+  it("seals transitive non-selector runtime dependencies", () => {
+    const runtime = makeTempDir("selection-runtime-");
+    const runtimeRoot = realpathSync(runtime);
+    const nonSelector = [
+      "quality-run.js",
+      "quality-risk-resolve.sh",
+      "quality-runtime-plan.js",
+      "quality-run-gate.sh",
+      "quality-run-review.sh",
+      "quality-mutation-check.sh",
+      "quality-authorize-review-round.sh",
+      "quality-stamp-and-merge.sh",
+    ];
+    writeFileSync(
+      path.join(runtime, "quality-select-agents.sh"),
+      "#!/usr/bin/env bash\n",
+    );
+    writeFileSync(
+      path.join(runtime, "quality-run.js"),
+      'require("./quality-invocation.js");\n',
+    );
+    writeFileSync(
+      path.join(runtime, "quality-invocation.js"),
+      "module.exports = {};\n",
+    );
+    for (const file of nonSelector.slice(1)) {
+      writeFileSync(path.join(runtime, file), "#!/usr/bin/env bash\n");
+    }
+
+    mkdirSync(path.join(runtime, "schemas"));
+    writeFileSync(
+      path.join(runtime, "schemas", "review.json"),
+      '{"type":"object"}',
+    );
+    writeFileSync(
+      path.join(runtime, "quality-run-review.sh"),
+      'schema="$SCRIPT_DIR/schemas/review.json"\n',
+    );
+    const before = invocation.selectionRuntimeDigests(runtimeRoot);
+    writeFileSync(
+      path.join(runtime, "quality-invocation.js"),
+      "module.exports = { repaired: true };\n",
+    );
+    const after = invocation.selectionRuntimeDigests(runtimeRoot);
+
+    expect(after.selector).toBe(before.selector);
+    expect(after.remaining).not.toBe(before.remaining);
+    writeFileSync(
+      path.join(runtime, "schemas", "review.json"),
+      '{"type":"array"}',
+    );
+    const schemaChanged = invocation.selectionRuntimeDigests(runtimeRoot);
+    expect(schemaChanged.remaining).not.toBe(after.remaining);
+    expect(schemaChanged.selector).toBe(after.selector);
+  });
+
+  it("rejects a runtime file replaced with a symlink after canonical validation", () => {
+    const runtime = realpathSync(makeTempDir("selection-race-"));
+    const files = [
+      "quality-select-agents.sh",
+      "quality-run.js",
+      "quality-risk-resolve.sh",
+      "quality-runtime-plan.js",
+      "quality-run-gate.sh",
+      "quality-run-review.sh",
+      "quality-mutation-check.sh",
+      "quality-authorize-review-round.sh",
+      "quality-stamp-and-merge.sh",
+    ];
+    for (const file of files)
+      writeFileSync(path.join(runtime, file), "// fixture\n");
+    const target = path.join(runtime, files[0]);
+    const replacement = path.join(runtime, "replacement.sh");
+    writeFileSync(replacement, "// untrusted replacement\n");
+    const filesystem = require("node:fs");
+    const canonicalize = filesystem.realpathSync;
+    const inspect = vi
+      .spyOn(filesystem, "realpathSync")
+      .mockImplementation((file, ...args) => {
+        const result = canonicalize(file, ...args);
+        if (file === target) {
+          unlinkSync(target);
+          symlinkSync(replacement, target);
+        }
+        return result;
+      });
+    try {
+      expect(() => invocation.selectionRuntimeDigests(runtime)).toThrow(
+        /ELOOP/,
+      );
+    } finally {
+      inspect.mockRestore();
+    }
+  });
+
+  it("rejects an intermediate runtime directory swapped after validation", () => {
+    const runtime = realpathSync(makeTempDir("selection-ancestry-race-"));
+    const files = [
+      "quality-select-agents.sh",
+      "quality-run.js",
+      "quality-risk-resolve.sh",
+      "quality-runtime-plan.js",
+      "quality-run-gate.sh",
+      "quality-run-review.sh",
+      "quality-mutation-check.sh",
+      "quality-authorize-review-round.sh",
+      "quality-stamp-and-merge.sh",
+    ];
+    for (const file of files)
+      writeFileSync(path.join(runtime, file), "// fixture\n");
+    mkdirSync(path.join(runtime, "schemas"));
+    writeFileSync(path.join(runtime, "schemas", "review.json"), "trusted\n");
+    writeFileSync(
+      path.join(runtime, "quality-run-review.sh"),
+      'schema="$SCRIPT_DIR/schemas/review.json"\n',
+    );
+    const replacement = path.join(runtime, "replacement");
+    mkdirSync(replacement);
+    writeFileSync(path.join(replacement, "review.json"), "substituted\n");
+    const target = path.join(runtime, "schemas", "review.json");
+    const filesystem = require("node:fs");
+    const open = filesystem.openSync;
+    let swapped = false;
+    const inspect = vi
+      .spyOn(filesystem, "openSync")
+      .mockImplementation((file, ...args) => {
+        if (file === target && !swapped) {
+          swapped = true;
+          renameSync(path.join(runtime, "schemas"), path.join(runtime, "held"));
+          symlinkSync(replacement, path.join(runtime, "schemas"));
+        }
+        return open(file, ...args);
+      });
+    try {
+      expect(() => invocation.selectionRuntimeDigests(runtime)).toThrow(
+        /ancestry changed during inspection/,
+      );
+    } finally {
+      inspect.mockRestore();
+    }
+  });
+
+  it("reopens one unexecuted selector terminal only after its selector cohort changes", () => {
+    const root = repo("selection-recovery");
+    const manifestPath = create(root, ["--merge"]);
+    const terminal = invocation.recordPreReviewSelectionFailure(
+      manifestPath,
+      "panel failed with exit 7",
+      7,
+    );
+    expect(terminal).toMatchObject({
+      state: "blocked",
+      failureCode: "pre-review-selection-failed",
+      phase: "panel",
+      selectorExitCode: 7,
+      terminalEpoch: 0,
+    });
+    expect(terminal.selectionRecovery.execution).toEqual({
+      gateCount: 0,
+      reviewCount: 0,
+      gateSecondsUsed: 0,
+      providerSecondsUsed: 0,
+      activeSecondsUsed: 0,
+      providerAttempts: 0,
+      authorizedAttempts: 0,
+      roundsUsed: 0,
+    });
+
+    // The fixture changes the sealed prior selector digest. A real repair
+    // changes the exact source cohort that creates this digest.
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      manifest.terminalState.selectionRecovery.selectorRuntimeDigest =
+        "0".repeat(64);
+    });
+
+    const first = invocation.resumePreReviewSelectionFailure(manifestPath);
+    const second = invocation.resumePreReviewSelectionFailure(manifestPath);
+    const resumed = invocation.loadManifest(manifestPath).manifest;
+    expect(first).toMatchObject({ terminalEpoch: 1 });
+    expect(second).toBeNull();
+    expect(resumed.terminalState).toBeNull();
+    expect(resumed.selectionRecovery).toMatchObject({ terminalEpoch: 0 });
+    expect(resumed.terminalHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          disposition: "superseded-by-selection-recovery",
+        }),
+        expect.objectContaining({
+          event: "reopened-by-selection-recovery",
+          terminalEpoch: 1,
+        }),
+      ]),
+    );
+  });
+
+  it.each([
+    {
+      label: "unchanged selector cohort",
+      mutate: () => {},
+    },
+    {
+      label: "changed non-selector runtime cohort",
+      mutate: (manifest) => {
+        manifest.terminalState.selectionRecovery.remainingRuntimeDigest =
+          "1".repeat(64);
+      },
+    },
+    {
+      label: "gate evidence",
+      mutate: (manifest) => {
+        manifest.gates.push({ name: "lint", status: "success" });
+      },
+    },
+    {
+      label: "an active execution",
+      mutate: (manifest) => {
+        manifest.governor.activeExecution = { kind: "gate", name: "lint" };
+      },
+    },
+  ])("does not reopen a selector terminal with $label", ({ label, mutate }) => {
+    const root = repo(`selection-recovery-refuse-${label}`);
+    const manifestPath = create(root, ["--merge"]);
+    invocation.recordPreReviewSelectionFailure(manifestPath, "panel failed", 2);
+    invocation.withManifestLock(manifestPath, mutate);
+
+    expect(invocation.resumePreReviewSelectionFailure(manifestPath)).toBeNull();
+    expect(
+      invocation.loadManifest(manifestPath).manifest.terminalState,
+    ).toMatchObject({
+      failureCode: "pre-review-selection-failed",
+      phase: "panel",
+    });
+  });
+
+  it("refuses to checkpoint selector failure after gate or provider evidence", () => {
+    const root = repo("selection-recovery-executed");
+    const manifestPath = create(root, ["--merge"]);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      manifest.governor.providerAttempts.push({ provider: "codex" });
+    });
+
+    expect(() =>
+      invocation.recordPreReviewSelectionFailure(
+        manifestPath,
+        "panel failed",
+        1,
+      ),
+    ).toThrow(/zero execution evidence/);
+  });
+
+  it.each(["live", "remote", "malformed", "unavailable", "replaced"])(
+    "preserves an uncertain manifest lock owner: %s",
+    (kind) => {
+      const root = repo(`manifest-lock-${kind}`);
+      const manifestPath = create(root, ["--merge"]);
+      const child = spawnSync(process.execPath, ["-e", "process.exit(0)"], {
+        encoding: "utf8",
+      });
+      expect(child.status).toBe(0);
+      const body =
+        kind === "malformed"
+          ? "incomplete"
+          : JSON.stringify({
+              pid: kind === "live" ? process.pid : child.pid,
+              hostname: kind === "remote" ? "another-host" : hostname(),
+              acquiredAt: "2020-01-01T00:00:00.000Z",
+            });
+      writeFileSync(`${manifestPath}.lock`, body);
+      let expectedBody = body;
+      const inspect = ["unavailable", "replaced"].includes(kind)
+        ? vi.spyOn(process, "kill").mockImplementation((pid) => {
+            expect(pid).toBe(child.pid);
+            if (kind === "replaced") {
+              expectedBody = JSON.stringify({
+                pid: process.pid,
+                hostname: hostname(),
+              });
+              writeFileSync(`${manifestPath}.lock`, expectedBody);
+            }
+            throw Object.assign(new Error("fixture process inspection"), {
+              code: kind === "replaced" ? "ESRCH" : "EPERM",
+            });
+          })
+        : null;
+      try {
+        expect(() =>
+          invocation.withManifestLock(manifestPath, () => {}),
+        ).toThrow(/locked/);
+        expect(readFileSync(`${manifestPath}.lock`, "utf8")).toBe(expectedBody);
+      } finally {
+        inspect?.mockRestore();
+      }
+    },
+  );
+
+  it("recovers a dead manifest writer under the exact repository guard", async () => {
+    const root = repo("dead-manifest-writer");
+    const manifestPath = create(root, ["--merge"]);
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      manifest.governor.providerSecondsUsed = 64;
+    });
+    const before = invocation.loadManifest(manifestPath).manifest;
+    const child = spawnSync(
+      process.execPath,
+      [
+        "-e",
+        "require(process.argv[1]).withManifestLockRaw(process.argv[2], () => process.exit(23))",
+        INVOCATION,
+        manifestPath,
+      ],
+      { encoding: "utf8", env: process.env },
+    );
+    expect(child.status).toBe(23);
+    expect(existsSync(`${manifestPath}.lock`)).toBe(true);
+
+    const resume = () =>
+      new Promise((resolve, reject) => {
+        const worker = spawn(
+          process.execPath,
+          [
+            "-e",
+            "require(process.argv[1]).withManifestLock(process.argv[2], m => { m.governor.providerSecondsUsed += 1; m.governor.lastActivityAt = '2026-09-11T00:00:00.000Z'; })",
+            INVOCATION,
+            manifestPath,
+          ],
+          { env: process.env, stdio: ["ignore", "ignore", "pipe"] },
+        );
+        let stderr = "";
+        worker.stderr.on("data", (chunk) => {
+          stderr += chunk;
+        });
+        worker.on("error", reject);
+        worker.on("close", (code) =>
+          code === 0
+            ? resolve()
+            : reject(new Error(`resume failed (${code}): ${stderr}`)),
+        );
+      });
+    await Promise.all([resume(), resume()]);
+
+    const after = invocation.loadManifest(manifestPath).manifest;
+    expect(after.governor.providerSecondsUsed).toBe(66);
+    expect(after.reviews).toEqual(before.reviews);
+    expect(after.governor.lastActivityAt).toBe("2026-09-11T00:00:00.000Z");
+    expect(existsSync(`${manifestPath}.lock`)).toBe(false);
+  });
+
+  it("serializes a competing raw manifest writer before dead-lock recovery", async () => {
+    const root = repo("manifest-writer-serialization");
+    const manifestPath = create(root, ["--merge"]);
+    const worker = spawn(
+      process.execPath,
+      [
+        "-e",
+        "require(process.argv[1]).withManifestLockRaw(process.argv[2], m => { m.governor.providerSecondsUsed += 1; process.stdout.write('locked\\n'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500); })",
+        INVOCATION,
+        manifestPath,
+      ],
+      { env: process.env, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    const workerExit = new Promise((resolve, reject) => {
+      worker.once("error", reject);
+      worker.once("close", (code) =>
+        code === 0
+          ? resolve()
+          : reject(new Error(`raw manifest writer exited ${code}`)),
+      );
+    });
+    await new Promise((resolve, reject) => {
+      worker.once("error", reject);
+      worker.stdout.once("data", resolve);
+    });
+
+    invocation.withManifestLock(manifestPath, (manifest) => {
+      manifest.governor.providerSecondsUsed += 1;
+    });
+    await workerExit;
+
+    expect(
+      invocation.loadManifest(manifestPath).manifest.governor
+        .providerSecondsUsed,
+    ).toBe(2);
+  });
+
   it("persists the engineering claim without product evidence inputs", () => {
     const root = repo("engineering-delivery-claim");
     const manifestPath = create(root, ["--delivery-claim", "engineering"]);
@@ -1007,21 +1433,77 @@ describe("quality invocation manifest", () => {
     expect(manifest.governor).not.toHaveProperty("validationDeadlineEpoch");
   });
 
-  it("keeps terminal fencing and signing secrets out of repository gates", () => {
+  it("passes only named build variables into repository gates", () => {
+    // This previously asserted that six quality-internal names were stripped
+    // while an arbitrary QUALITY_GATE_MARKER survived — an open allowlist
+    // wearing a deny-list's clothes. Every AWS_*, GITHUB_TOKEN and operator
+    // .env export passed straight through (BUI-743).
     const environment = invocation.repositoryGateEnvironment({
       PATH: "/bin",
-      QUALITY_GATE_MARKER: "visible",
+      HOME: "/Users/operator",
+      NODE_ENV: "test",
+      npm_config_cache: "/cache",
+      QUALITY_GATE_MARKER: "arbitrary",
       BS_QUALITY_TERMINAL_EPOCH: "3",
       BS_QUALITY_REPOSITORY_LEASE_TOKEN: "lease-secret",
       QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY: "review-secret",
-      QUALITY_REVIEW_EVIDENCE_PRIVATE_KEY_FILE: "/private/review-key",
-      QUALITY_APPROVAL_PRIVATE_KEY: "approval-secret",
       QUALITY_APPROVAL_PRIVATE_KEY_FILE: "/private/approval-key",
     });
 
     expect(environment).toEqual({
       PATH: "/bin",
-      QUALITY_GATE_MARKER: "visible",
+      HOME: "/Users/operator",
+      NODE_ENV: "test",
+      npm_config_cache: "/cache",
+    });
+  });
+
+  it("withholds operator credentials from repository gates", () => {
+    // The names below are the shape of a real operator environment: cloud
+    // keys, provider tokens, and entries from a .env that holds 106 of them.
+    // None of them is a variable a build or test gate needs.
+    const secrets = {
+      AWS_ACCESS_KEY_ID: "leak",
+      AWS_SECRET_ACCESS_KEY: "leak",
+      GITHUB_TOKEN: "leak",
+      GH_TOKEN: "leak",
+      OPENAI_API_KEY: "leak",
+      ANTHROPIC_API_KEY: "leak",
+      STRIPE_SECRET_KEY: "leak",
+      TWITTER_ACCESS_TOKEN_SECRET: "leak",
+      LINKEDIN_PRIMARY_CLIENT_SECRET: "leak",
+      VERCEL_TOKEN: "leak",
+      NPM_TOKEN: "leak",
+      DATABASE_PASSWORD: "leak",
+      SESSION_COOKIE: "leak",
+      MY_APP_PRIVATE_KEY: "leak",
+    };
+    const environment = invocation.repositoryGateEnvironment({
+      PATH: "/bin",
+      ...secrets,
+    });
+
+    expect(environment).toEqual({ PATH: "/bin" });
+    for (const name of Object.keys(secrets)) {
+      expect(environment).not.toHaveProperty(name);
+    }
+  });
+
+  it("does not let a toolchain prefix smuggle a credential through", () => {
+    // npm_config_* and YARN_* are admitted as caches and feature flags, so a
+    // credential hiding in that namespace must still be refused by name.
+    const environment = invocation.repositoryGateEnvironment({
+      PATH: "/bin",
+      npm_config_cache: "/cache",
+      npm_config__authToken: "leak",
+      NPM_CONFIG_PASSWORD: "leak",
+      YARN_NPM_AUTH_TOKEN: "leak",
+      HOMEBREW_GITHUB_API_TOKEN: "leak",
+    });
+
+    expect(environment).toEqual({
+      PATH: "/bin",
+      npm_config_cache: "/cache",
     });
   });
 
@@ -8672,8 +9154,10 @@ exit 1
           lint: "node --check file.js",
           test: "node --test",
           "security:audit": "node --check file.js",
-          build:
-            "node -e \"require('fs').writeFileSync(process.env.QUALITY_GATE_MARKER, 'built')\"",
+          // The gate environment is a closed allowlist (BUI-743), so a gate
+          // cannot receive an ad-hoc marker variable. The path is known here,
+          // so write it into the script itself.
+          build: `node -e "require('fs').writeFileSync(process.argv[1], 'built')" ${JSON.stringify(marker)}`,
           typecheck: "node --check file.js",
           "test:consumer": "node --check file.js",
         },
@@ -8725,7 +9209,7 @@ exit 1
       [RUN_GATE, "--manifest", manifest, "--name", "build"],
       {
         cwd: root,
-        env: { ...process.env, QUALITY_GATE_MARKER: marker },
+        env: { ...process.env },
       },
     );
     expect(readFileSync(marker, "utf8")).toBe("built");
@@ -8745,7 +9229,7 @@ exit 1
     const gateScript = path.join(root, "gate-hang.sh");
     writeFileSync(
       gateScript,
-      '#!/usr/bin/env bash\n(sleep 3; printf late > "$QUALITY_GATE_MARKER") &\nwait\n',
+      `#!/usr/bin/env bash\n(sleep 3; printf late > ${JSON.stringify(marker)}) &\nwait\n`,
     );
     chmodSync(gateScript, 0o755);
     const packageFile = path.join(root, "package.json");
@@ -8766,7 +9250,7 @@ exit 1
       [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
       {
         cwd: root,
-        env: { ...process.env, QUALITY_GATE_MARKER: marker },
+        env: { ...process.env },
         encoding: "utf8",
       },
     );
@@ -8915,7 +9399,7 @@ exit 1
     const gateScript = path.join(root, "gate-slow.sh");
     writeFileSync(
       gateScript,
-      '#!/usr/bin/env bash\nsleep 2\nprintf passed > "$QUALITY_GATE_MARKER"\n',
+      `#!/usr/bin/env bash\nsleep 2\nprintf passed > ${JSON.stringify(marker)}\n`,
     );
     chmodSync(gateScript, 0o755);
     const packageFile = path.join(root, "package.json");
@@ -8936,7 +9420,7 @@ exit 1
       [RUN_GATE, "--manifest", manifestPath, "--name", "build"],
       {
         cwd: root,
-        env: { ...process.env, QUALITY_GATE_MARKER: marker },
+        env: { ...process.env },
         encoding: "utf8",
       },
     );
