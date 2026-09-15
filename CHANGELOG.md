@@ -21,6 +21,13 @@ All notable changes to claude-kit are documented here.
   artifact inventory, and fail-closed merge evidence as Claude and Codex
   (#139).
 
+## [4.10.2](https://github.com/buildproven/agent-kit/compare/v4.10.1...v4.10.2) (2026-09-15)
+
+
+### Bug Fixes
+
+* build every lease recovery command from one function ([#536](https://github.com/buildproven/agent-kit/issues/536)) ([dde5720](https://github.com/buildproven/agent-kit/commit/dde5720b11f05e5ad1cffdb863bf17111513bcec))
+
 ## [4.10.1](https://github.com/buildproven/agent-kit/compare/v4.10.0...v4.10.1) (2026-09-15)
 
 
