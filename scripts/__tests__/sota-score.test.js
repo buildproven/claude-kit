@@ -60,11 +60,16 @@ describe("SOTA rubric 3.0 scorer", () => {
     //
     // The version half is the part under this repository's control, so pin
     // that and let the age half report honestly.
-    expect(output.categories.currency.score).toBeGreaterThanOrEqual(6);
-    expect(output.categories.currency.score).toBeLessThanOrEqual(10);
-    if (output.categories.currency.score < 10) {
-      expect(output.categories.currency.gap).toMatch(/older than 30 days/);
-    }
+    // Deterministic: the score is the SUM of two independent components, so
+    // assert each rather than a range. A range admits a regression that awards
+    // 2 for age instead of 0 or 4 -- the category would report 8 with an
+    // "older than 30 days" gap and the test would still pass, which the
+    // cross-model review caught in the first version of this fix.
+    const { score, gap } = output.categories.currency;
+    const ageCredit = score - 6;
+    expect(ageCredit === 0 || ageCredit === 4).toBe(true);
+    if (ageCredit === 0) expect(gap).toMatch(/older than 30 days/);
+    else expect(gap).toBeNull();
   });
 
   it("fails settings validity closed when the live schema is unavailable", () => {
