@@ -50,7 +50,26 @@ describe("SOTA rubric 3.0 scorer", () => {
     expect(CURRENT_BASELINE).toBe("2.1.233");
     expect(output.categories.currency.details).toBeUndefined();
     expect(output.categories.currency.pinned).toBe("2.1.233");
-    expect(output.categories.currency.score).toBe(10);
+
+    // Currency is 6 points for the version pin plus 4 for a rubric reviewed
+    // within 30 days. Asserting a flat 10 made this a time bomb: it passed
+    // for 30 days after each rubric review and then failed on day 31 with no
+    // code change, which is a calendar failure masquerading as a defect. It
+    // did exactly that here -- the rubric was last reviewed 2026-08-16 and
+    // this broke on 2026-09-16, day 31.
+    //
+    // The version half is the part under this repository's control, so pin
+    // that and let the age half report honestly.
+    // Deterministic: the score is the SUM of two independent components, so
+    // assert each rather than a range. A range admits a regression that awards
+    // 2 for age instead of 0 or 4 -- the category would report 8 with an
+    // "older than 30 days" gap and the test would still pass, which the
+    // cross-model review caught in the first version of this fix.
+    const { score, gap } = output.categories.currency;
+    const ageCredit = score - 6;
+    expect(ageCredit === 0 || ageCredit === 4).toBe(true);
+    if (ageCredit === 0) expect(gap).toMatch(/older than 30 days/);
+    else expect(gap).toBeNull();
   });
 
   it("fails settings validity closed when the live schema is unavailable", () => {
