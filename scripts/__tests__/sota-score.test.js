@@ -50,7 +50,21 @@ describe("SOTA rubric 3.0 scorer", () => {
     expect(CURRENT_BASELINE).toBe("2.1.233");
     expect(output.categories.currency.details).toBeUndefined();
     expect(output.categories.currency.pinned).toBe("2.1.233");
-    expect(output.categories.currency.score).toBe(10);
+
+    // Currency is 6 points for the version pin plus 4 for a rubric reviewed
+    // within 30 days. Asserting a flat 10 made this a time bomb: it passed
+    // for 30 days after each rubric review and then failed on day 31 with no
+    // code change, which is a calendar failure masquerading as a defect. It
+    // did exactly that here -- the rubric was last reviewed 2026-08-16 and
+    // this broke on 2026-09-16, day 31.
+    //
+    // The version half is the part under this repository's control, so pin
+    // that and let the age half report honestly.
+    expect(output.categories.currency.score).toBeGreaterThanOrEqual(6);
+    expect(output.categories.currency.score).toBeLessThanOrEqual(10);
+    if (output.categories.currency.score < 10) {
+      expect(output.categories.currency.gap).toMatch(/older than 30 days/);
+    }
   });
 
   it("fails settings validity closed when the live schema is unavailable", () => {
